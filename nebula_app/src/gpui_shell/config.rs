@@ -270,7 +270,9 @@ fn apply_theme(palette: &mut Palette, theme: nebula_settings::ThemeName) {
         if let Some(selection) = exact.selection_background {
             palette.selection = rgba8(selection);
         }
-        palette.selection_foreground = exact.selection_foreground.map(rgba8);
+        if let Some(selection_foreground) = exact.selection_foreground {
+            palette.selection_foreground = Some(rgba8(selection_foreground));
+        }
         return;
     }
     if term.is_light {
@@ -552,6 +554,7 @@ fn build_palette(raw: &RawColors) -> Palette {
         // 用户显式选区色保持主应用的不透明语义。
         palette.selection = selection;
     }
+    palette.selection_foreground = raw.selection.foreground.as_deref().and_then(parse_rgb);
 
     let ansi8 = |group: &RawAnsi8| -> [Option<gpui::Rgba>; 8] {
         [
@@ -604,7 +607,10 @@ fn build_palette(raw: &RawColors) -> Palette {
 
 #[cfg(test)]
 mod tests {
-    use super::{Settings, apply_theme, resolve_ui_language, rgba8, runtime_background};
+    use super::{
+        RawColors, Settings, apply_theme, build_palette, resolve_ui_language, rgba8,
+        runtime_background,
+    };
     use crate::display::UiLanguage;
     use crate::gpui_shell::terminal::colors::Palette;
     use nebula_settings::{LanguagePref, ThemeName};
@@ -650,6 +656,68 @@ mod tests {
         assert_eq!(palette.ansi[0], rgba8([4, 5, 6]));
         assert_eq!(palette.cursor, rgba8([7, 8, 9]));
         assert_eq!(palette.selection_foreground, None);
+    }
+
+    #[test]
+    fn explicit_selection_colors_are_loaded_together() {
+        let raw: RawColors = toml::from_str(
+            r##"
+            [selection]
+            foreground = "#102030"
+            background = "0xe5e9f0"
+            "##,
+        )
+        .unwrap();
+        let palette = build_palette(&raw);
+
+        assert_eq!(palette.selection_foreground, Some(rgba8([0x10, 0x20, 0x30])));
+        assert_eq!(palette.selection, rgba8([0xe5, 0xe9, 0xf0]));
+    }
+
+    #[test]
+    fn invalid_or_relative_selection_foreground_keeps_default() {
+        for foreground in ["#invalid", "#fff", "CellForeground", "CellBackground"] {
+            let raw: RawColors = toml::from_str(&format!(
+                "[selection]\nforeground = {foreground:?}\nbackground = \"#e5e9f0\"\n"
+            ))
+            .unwrap();
+            let palette = build_palette(&raw);
+
+            assert_eq!(palette.selection_foreground, None, "{foreground}");
+            assert_eq!(palette.selection, rgba8([0xe5, 0xe9, 0xf0]));
+        }
+    }
+
+    #[test]
+    fn theme_without_selection_colors_preserves_user_foreground() {
+        let foreground = rgba8([0x10, 0x20, 0x30]);
+        let background = rgba8([0xe5, 0xe9, 0xf0]);
+        for theme in [ThemeName::Nebula, ThemeName::Paper] {
+            let mut palette = Palette {
+                selection_foreground: Some(foreground),
+                selection: background,
+                ..Palette::default()
+            };
+
+            apply_theme(&mut palette, theme);
+
+            assert_eq!(palette.selection_foreground, Some(foreground));
+            assert_eq!(palette.selection, background);
+        }
+    }
+
+    #[test]
+    fn theme_with_selection_colors_keeps_its_existing_precedence() {
+        let mut palette = Palette {
+            selection_foreground: Some(rgba8([1, 2, 3])),
+            selection: rgba8([4, 5, 6]),
+            ..Palette::default()
+        };
+
+        apply_theme(&mut palette, ThemeName::Nord);
+
+        assert_eq!(palette.selection_foreground, Some(rgba8([0x2e, 0x34, 0x40])));
+        assert_eq!(palette.selection, rgba8([0xe5, 0xe9, 0xf0]));
     }
 
     #[test]
