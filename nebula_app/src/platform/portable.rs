@@ -3,16 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
+use super::Launch;
 use crate::i18n::{Message, UiLanguage};
 
 const MARKER: &str = ".pebrel-portable";
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum Launch {
-    Installed,
-    Portable,
-    Quit,
-}
 
 pub(super) fn prepare(gui_launch: bool, explicit_config: bool) -> io::Result<Launch> {
     // Explicit launch configuration remains authoritative, including test isolation.

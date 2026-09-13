@@ -185,7 +185,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Load command line options.
     let options = Options::new();
-    match platform::startup::prepare_data(&options) {
+    let startup = platform::startup::prepare_data(&options).and_then(|launch| {
+        use platform::startup::Launch;
+        match launch {
+            Launch::Installed => nebula_settings::migrate_legacy_data().map(|_| true),
+            Launch::Portable => Ok(true),
+            Launch::Quit => Ok(false),
+        }
+    });
+    match startup {
         Ok(true) => {},
         Ok(false) => return Ok(()),
         Err(error) => {

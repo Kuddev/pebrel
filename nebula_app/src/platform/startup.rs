@@ -2,21 +2,27 @@
 #[path = "portable.rs"]
 mod portable;
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Launch {
+    Installed,
+    Portable,
+    Quit,
+}
+
 /// Resolve storage before migration, logging, cached paths or worker startup.
-pub(crate) fn prepare_data(options: &crate::cli::Options) -> std::io::Result<bool> {
+pub(crate) fn prepare_data(options: &crate::cli::Options) -> std::io::Result<Launch> {
     #[cfg(target_os = "macos")]
-    match portable::prepare(
-        options.subcommands.is_none() && !options.daemon,
-        options.config_file.is_some(),
-    )? {
-        portable::Launch::Portable => return Ok(true),
-        portable::Launch::Quit => return Ok(false),
-        portable::Launch::Installed => {},
+    {
+        portable::prepare(
+            options.subcommands.is_none() && !options.daemon,
+            options.config_file.is_some(),
+        )
     }
     #[cfg(not(target_os = "macos"))]
-    let _ = options;
-    nebula_settings::migrate_legacy_data()?;
-    Ok(true)
+    {
+        let _ = options;
+        Ok(Launch::Installed)
+    }
 }
 
 /// Surface a pre-logger failure for a GUI launch; the caller also returns it on stderr.
