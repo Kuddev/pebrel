@@ -110,6 +110,7 @@ impl Settings {
     pub fn load(theme: nebula_settings::ThemeName) -> Self {
         let runtime = RuntimeSettings::load();
         let ui_language = resolve_ui_language(runtime.language);
+        ui_language.activate();
         let path = find_config_file();
         let mut load_notice = None;
         let raw = path

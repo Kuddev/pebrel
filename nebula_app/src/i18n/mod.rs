@@ -1,9 +1,31 @@
 mod format;
 mod locale;
 
+macro_rules! t {
+    ($key:literal $(,)?) => {
+        $crate::i18n::UiLanguage::current().tr($key)
+    };
+    ($key:literal, $($name:ident = $value:expr),+ $(,)?) => {{
+        let language = $crate::i18n::UiLanguage::current();
+        let args = [$(
+            (stringify!($name), format!("{}", $value)),
+        )+];
+        let refs = args.iter().map(|(name, value)| (*name, value.as_str())).collect::<Vec<_>>();
+        language.tr_args($key, &refs)
+    }};
+}
+
+pub(crate) use t;
+
 pub use locale::system_locale;
 
 include!(concat!(env!("OUT_DIR"), "/translations.rs"));
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Sentinel so an unset cache cannot collapse to `UiLanguage::ZhCn` (index 0).
+const UNSET: usize = usize::MAX;
+static CURRENT_LANGUAGE: AtomicUsize = AtomicUsize::new(UNSET);
 
 impl LanguagePreference {
     pub fn parse(value: &str) -> Option<Self> {
@@ -15,11 +37,24 @@ impl LanguagePreference {
     }
 
     pub fn resolved(self) -> UiLanguage {
-        self.explicit().unwrap_or_else(|| UiLanguage::for_locale(system_locale().as_deref()))
+        let language = self.explicit().unwrap_or_else(|| UiLanguage::for_locale(system_locale().as_deref()));
+        language.activate();
+        language
     }
 }
 
 impl UiLanguage {
+    /// Process-wide UI language for toasts, tray menus, and other threads
+    /// that cannot read GPUI application state.
+    pub fn current() -> Self {
+        Self::ALL.get(CURRENT_LANGUAGE.load(Ordering::Relaxed)).copied().unwrap_or(Self::EnUs)
+    }
+
+    /// Pin the process-wide UI language after settings resolve.
+    pub fn activate(self) {
+        CURRENT_LANGUAGE.store(self as usize, Ordering::Relaxed);
+    }
+
     pub fn for_locale(locale: Option<&str>) -> Self {
         locale
             .and_then(nebula_settings::LanguagePref::from_locale)

@@ -97,12 +97,12 @@ pub(super) fn hover_from_hint<T: EventListener>(
         point_to_viewport_from(origin, start).filter(|vp| vp.line < rows && vp.column.0 < cols);
     let (anchor_row, anchor_col) =
         vp.map(|vp| (vp.line as u16, vp.column.0 as u16)).unwrap_or((0, 0));
-    const HINT: &str = " · Ctrl+点击";
+    let click_hint = crate::i18n::UiLanguage::current().text(crate::i18n::Message::TerminalCtrlClick);
     let width = |s: &str| -> usize { s.chars().map(|c| c.width().unwrap_or(0)).sum() };
     let target = crate::display::strip_file_scheme(&uri);
-    let budget = cols.saturating_sub(width(HINT) + 1);
+    let budget = cols.saturating_sub(width(click_hint) + 1);
     let target = crate::display::fit_tail(&target, budget);
-    Some(LinkHover { hint, preview: format!("{target}{HINT}"), anchor_row, anchor_col })
+    Some(LinkHover { hint, preview: format!("{target}{click_hint}"), anchor_row, anchor_col })
 }
 
 pub(super) fn open_hint<T: EventListener>(hint: &HintMatch, term: &Term<T>, cx: &App) {

@@ -23,6 +23,8 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 
+use crate::i18n::t;
+
 /// 代理握手预算为 10 秒：超时后应明确报错，而不是让
 /// 连接卡片永远转圈。
 const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,20 +78,20 @@ impl ProxyLink {
         if let Some(rest) = strip_prefix_ignore_case(value, "jump:") {
             let target = rest.trim();
             if target.is_empty() {
-                return Err("jump: 后面需要写跳板主机，例如 jump:user@bastion".to_owned());
+                return Err(t!("ssh.proxy.jump_host_required").to_string());
             }
             if target.contains(',') {
-                return Err("暂不支持多级跳板链（jump: 只能写一台主机）".to_owned());
+                return Err(t!("ssh.proxy.jump_chain_unsupported").to_string());
             }
             return Ok(Self::Jump(target.to_owned()));
         }
         if let Some(rest) = strip_prefix_ignore_case(value, "command:") {
             let command = rest.trim();
             if command.is_empty() {
-                return Err("command: 后面需要填写代理命令".to_owned());
+                return Err(t!("ssh.proxy.command_required").to_string());
             }
             if !command.contains("%h") || !command.contains("%p") {
-                return Err("自定义代理命令必须同时包含 %h（目标主机）和 %p（目标端口）".to_owned());
+                return Err(t!("ssh.proxy.command_placeholders").to_string());
             }
             return Ok(Self::Command(command.to_owned()));
         }
@@ -97,9 +99,7 @@ impl ProxyLink {
             return ProxyServer::parse_url(value).map(Self::Server);
         }
         ProxyServer::parse_url(&format!("socks5://{value}")).map(Self::Server).map_err(|_| {
-            format!(
-                "无法识别的代理地址: {value}（支持 socks5:// / http:// / host:port / jump:主机）"
-            )
+            t!("ssh.proxy.unrecognized", value = value).to_string()
         })
     }
 
@@ -169,11 +169,11 @@ pub struct LocalProxyEndpoint {
 }
 
 impl LocalProxyEndpoint {
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> String {
         match self.protocol {
-            LocalProxyProtocol::Socks5 => "本机 SOCKS5 代理",
-            LocalProxyProtocol::Http => "本机 HTTP 代理",
-            LocalProxyProtocol::Mixed => "本机混合代理",
+            LocalProxyProtocol::Socks5 => t!("ssh.proxy.local_socks5").to_string(),
+            LocalProxyProtocol::Http => t!("ssh.proxy.local_http").to_string(),
+            LocalProxyProtocol::Mixed => t!("ssh.proxy.local_mixed").to_string(),
         }
     }
 
@@ -299,10 +299,10 @@ fn render_proxy_command(template: &str, target_host: &str, target_port: u16) -> 
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
     {
-        return Err(proxy_err("自定义代理命令的目标主机包含不安全字符"));
+        return Err(proxy_err(&t!("ssh.proxy.custom_command_unsafe_host")));
     }
     if !template.contains("%h") || !template.contains("%p") {
-        return Err(proxy_err("自定义代理命令必须同时包含 %h 和 %p"));
+        return Err(proxy_err(&t!("ssh.proxy.custom_command_need_placeholders")));
     }
     Ok(template.replace("%h", target_host).replace("%p", &target_port.to_string()))
 }
@@ -332,9 +332,9 @@ pub async fn connect_command(
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|err| proxy_err(&format!("无法启动自定义代理命令: {err}")))?;
-    let stdin = child.stdin.take().ok_or_else(|| proxy_err("自定义代理命令没有 stdin"))?;
-    let stdout = child.stdout.take().ok_or_else(|| proxy_err("自定义代理命令没有 stdout"))?;
+        .map_err(|err| proxy_err(&t!("ssh.proxy.custom_command_spawn_failed", error = &err.to_string())))?;
+    let stdin = child.stdin.take().ok_or_else(|| proxy_err(&t!("ssh.proxy.custom_command_no_stdin")))?;
+    let stdout = child.stdout.take().ok_or_else(|| proxy_err(&t!("ssh.proxy.custom_command_no_stdout")))?;
     Ok(CommandStream { child, stdin, stdout })
 }
 
@@ -374,11 +374,11 @@ impl ProxyServer {
         let url = url.trim();
         let (scheme, rest) = url
             .split_once("://")
-            .ok_or_else(|| "代理地址缺少协议前缀（socks5:// 或 http://）".to_owned())?;
+            .ok_or_else(|| t!("ssh.proxy.missing_scheme").to_string())?;
         let (scheme, default_port) = match scheme.to_ascii_lowercase().as_str() {
             "socks5" | "socks5h" | "socks" => (ProxyScheme::Socks5, 1080),
             "http" => (ProxyScheme::HttpConnect, 8080),
-            other => return Err(format!("不支持的代理协议 {other}（支持 socks5 / http）")),
+            other => return Err(t!("ssh.proxy.unsupported_scheme", scheme = other).to_string()),
         };
         let rest = rest.trim_end_matches('/');
         let (userinfo, host_port) = match rest.rsplit_once('@') {
@@ -397,7 +397,7 @@ impl ProxyServer {
         };
         let (host, port) = split_host_port(host_port, default_port)?;
         if host.is_empty() {
-            return Err("代理地址缺少主机名".to_owned());
+            return Err(t!("ssh.proxy.missing_host").to_string());
         }
         Ok(Self { scheme, host, port, username, password })
     }
@@ -428,9 +428,9 @@ impl ProxyServer {
 fn split_host_port(host_port: &str, default_port: u16) -> Result<(String, u16), String> {
     if let Some(rest) = host_port.strip_prefix('[') {
         let (host, suffix) =
-            rest.split_once(']').ok_or_else(|| format!("无效的 IPv6 代理地址: {host_port}"))?;
+            rest.split_once(']').ok_or_else(|| t!("ssh.proxy.invalid_ipv6", address = host_port).to_string())?;
         let port = match suffix.strip_prefix(':') {
-            Some(port) => port.parse().map_err(|_| format!("无效的代理端口: {port}"))?,
+            Some(port) => port.parse().map_err(|_| t!("ssh.proxy.invalid_port", port = port).to_string())?,
             None => default_port,
         };
         return Ok((host.to_owned(), port));
@@ -439,7 +439,7 @@ fn split_host_port(host_port: &str, default_port: u16) -> Result<(String, u16), 
         // 不带方括号但含多个冒号 = 裸 IPv6，整段当主机。
         Some((host, _)) if host.contains(':') => Ok((host_port.to_owned(), default_port)),
         Some((host, port)) => {
-            let port = port.parse().map_err(|_| format!("无效的代理端口: {port}"))?;
+            let port = port.parse().map_err(|_| t!("ssh.proxy.invalid_port", port = port).to_string())?;
             Ok((host.to_owned(), port))
         },
         None => Ok((host_port.to_owned(), default_port)),
@@ -502,7 +502,7 @@ impl SshProxyConfig {
     ) -> Result<Option<ProxyLink>, String> {
         if let Some(jump) = config_proxy_jump.map(str::trim).filter(|value| !value.is_empty()) {
             if jump.contains(',') {
-                return Err(format!("暂不支持多级跳板链（ProxyJump {jump}）"));
+                return Err(t!("ssh.proxy.jump_chain_proxyjump", jump = jump).to_string());
             }
             return Ok(Some(ProxyLink::Jump(jump.to_owned())));
         }
@@ -510,7 +510,7 @@ impl SshProxyConfig {
             ProxyMode::Off => Ok(None),
             ProxyMode::Custom => {
                 if self.url.trim().is_empty() {
-                    return Err("代理模式为自定义，但未填写代理地址".to_owned());
+                    return Err(t!("ssh.proxy.custom_mode_missing_address").to_string());
                 }
                 ProxyLink::parse(&self.url).map(Some)
             },
@@ -651,10 +651,10 @@ pub async fn connect(
     target_port: u16,
 ) -> io::Result<TcpStream> {
     if proxy.port == 0 || target_port == 0 {
-        return Err(proxy_err("代理和目标端口必须在 1–65535 之间"));
+        return Err(proxy_err(&t!("ssh.proxy.port_range")));
     }
     crate::ssh_profiles::validate_ssh_destination(target_host)
-        .map_err(|_| proxy_err("代理目标主机名无效"))?;
+        .map_err(|_| proxy_err(&t!("ssh.proxy.target_host_invalid")))?;
     tokio::time::timeout(PROXY_CONNECT_TIMEOUT, async {
         let mut stream = TcpStream::connect((proxy.host.as_str(), proxy.port)).await?;
         // russh 的 connect 会给自己的 socket 设 nodelay；走 connect_stream
@@ -674,7 +674,7 @@ pub async fn connect(
     .map_err(|_| {
         io::Error::new(
             io::ErrorKind::TimedOut,
-            format!("代理握手超时（{} 秒无响应）", PROXY_CONNECT_TIMEOUT.as_secs()),
+            t!("ssh.proxy.handshake_timeout", seconds = PROXY_CONNECT_TIMEOUT.as_secs()).to_string(),
         )
     })?
 }
@@ -694,7 +694,7 @@ async fn socks5_handshake(
     let mut reply = [0u8; 2];
     stream.read_exact(&mut reply).await?;
     if reply[0] != 0x05 {
-        return Err(proxy_err("对端不是 SOCKS5 代理（版本应答不符）"));
+        return Err(proxy_err(&t!("ssh.proxy.not_socks5")));
     }
     match reply[1] {
         0x00 => {},
@@ -702,7 +702,7 @@ async fn socks5_handshake(
             let username = proxy.username.as_deref().unwrap_or_default().as_bytes();
             let password = proxy.password.as_deref().unwrap_or_default().as_bytes();
             if username.len() > 255 || password.len() > 255 {
-                return Err(proxy_err("SOCKS5 用户名/密码超过 255 字节"));
+                return Err(proxy_err(&t!("ssh.proxy.credentials_too_long")));
             }
             let mut request = Vec::with_capacity(3 + username.len() + password.len());
             request.push(0x01);
@@ -714,11 +714,11 @@ async fn socks5_handshake(
             let mut auth_reply = [0u8; 2];
             stream.read_exact(&mut auth_reply).await?;
             if auth_reply[0] != 0x01 || auth_reply[1] != 0x00 {
-                return Err(proxy_err("SOCKS5 代理拒绝了用户名/密码"));
+                return Err(proxy_err(&t!("ssh.proxy.auth_rejected")));
             }
         },
-        0xFF => return Err(proxy_err("SOCKS5 代理要求认证，但未配置用户名/密码")),
-        method => return Err(proxy_err(&format!("SOCKS5 代理要求不支持的认证方式 {method:#04x}"))),
+        0xFF => return Err(proxy_err(&t!("ssh.proxy.auth_required"))),
+        method => return Err(proxy_err(&t!("ssh.proxy.unsupported_auth", method = &format!("{method:#04x}")))),
     }
 
     let mut request = vec![0x05, 0x01, 0x00];
@@ -734,7 +734,7 @@ async fn socks5_handshake(
         Err(_) => {
             let host = target_host.as_bytes();
             if host.len() > 255 {
-                return Err(proxy_err("目标主机名超过 255 字节"));
+                return Err(proxy_err(&t!("ssh.proxy.host_too_long")));
             }
             request.push(0x03);
             request.push(host.len() as u8);
@@ -747,7 +747,7 @@ async fn socks5_handshake(
     let mut head = [0u8; 4];
     stream.read_exact(&mut head).await?;
     if head[0] != 0x05 || head[2] != 0x00 {
-        return Err(proxy_err("SOCKS5 CONNECT 应答格式无效"));
+        return Err(proxy_err(&t!("ssh.proxy.connect_reply_invalid")));
     }
     if head[1] != 0x00 {
         return Err(proxy_err(socks5_reply_message(head[1])));
@@ -761,7 +761,7 @@ async fn socks5_handshake(
             stream.read_exact(&mut len).await?;
             usize::from(len[0])
         },
-        atyp => return Err(proxy_err(&format!("SOCKS5 应答携带未知地址类型 {atyp:#04x}"))),
+        atyp => return Err(proxy_err(&t!("ssh.proxy.unknown_address_type", atyp = &format!("{atyp:#04x}")))),
     };
     let mut remainder = vec![0u8; addr_len + 2];
     stream.read_exact(&mut remainder).await?;
@@ -770,15 +770,15 @@ async fn socks5_handshake(
 
 fn socks5_reply_message(code: u8) -> &'static str {
     match code {
-        0x01 => "SOCKS5 代理内部错误",
-        0x02 => "SOCKS5 代理规则拒绝了此连接",
-        0x03 => "SOCKS5 代理无法到达目标网络",
-        0x04 => "SOCKS5 代理无法到达目标主机",
-        0x05 => "目标主机拒绝连接（经由 SOCKS5 代理）",
-        0x06 => "SOCKS5 连接超时（TTL 过期）",
-        0x07 => "SOCKS5 代理不支持 CONNECT 命令",
-        0x08 => "SOCKS5 代理不支持该地址类型",
-        _ => "SOCKS5 代理返回未知错误",
+        0x01 => t!("ssh.proxy.socks5_reply.general_failure"),
+        0x02 => t!("ssh.proxy.socks5_reply.not_allowed"),
+        0x03 => t!("ssh.proxy.socks5_reply.network_unreachable"),
+        0x04 => t!("ssh.proxy.socks5_reply.host_unreachable"),
+        0x05 => t!("ssh.proxy.socks5_reply.connection_refused"),
+        0x06 => t!("ssh.proxy.socks5_reply.ttl_expired"),
+        0x07 => t!("ssh.proxy.socks5_reply.command_unsupported"),
+        0x08 => t!("ssh.proxy.socks5_reply.address_type_unsupported"),
+        _ => t!("ssh.proxy.socks5_reply.unknown"),
     }
 }
 
@@ -810,7 +810,7 @@ async fn http_connect_handshake(
     let mut byte = [0u8; 1];
     while !response.ends_with(b"\r\n\r\n") {
         if response.len() > 16 * 1024 {
-            return Err(proxy_err("HTTP 代理应答头超长"));
+            return Err(proxy_err(&t!("ssh.proxy.http_header_too_long")));
         }
         stream.read_exact(&mut byte).await?;
         response.push(byte[0]);
@@ -821,13 +821,13 @@ async fn http_connect_handshake(
     let protocol = status_parts.next();
     let status = status_parts.next().and_then(|code| code.parse::<u16>().ok());
     if !matches!(protocol, Some("HTTP/1.0" | "HTTP/1.1")) {
-        return Err(proxy_err("HTTP 代理应答协议无效"));
+        return Err(proxy_err(&t!("ssh.proxy.http_protocol_invalid")));
     }
     match status {
         Some(200..=299) => Ok(()),
-        Some(407) => Err(proxy_err("HTTP 代理要求认证（407），请检查用户名/密码")),
-        Some(code) => Err(proxy_err(&format!("HTTP 代理拒绝建立隧道（{code}）"))),
-        None => Err(proxy_err("HTTP 代理应答无法解析")),
+        Some(407) => Err(proxy_err(&t!("ssh.proxy.http_auth_required"))),
+        Some(code) => Err(proxy_err(&t!("ssh.proxy.http_tunnel_rejected", status = code))),
+        None => Err(proxy_err(&t!("ssh.proxy.http_unparseable"))),
     }
 }
 

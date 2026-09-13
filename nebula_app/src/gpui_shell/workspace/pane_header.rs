@@ -262,6 +262,7 @@ impl NebulaWorkspace {
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.base_font_size_px).unwrap_or(15.0);
         let title_px = label_px * 0.78;
+        let language = crate::gpui_shell::config::ui_language(cx);
         let PaneTitle { logo, glyph, text } = self.pane_title(view, cx, dark);
         let group: SharedString = format!("pane-header-{pane_id}").into();
         let icon_ink = if focused { ink } else { muted };
@@ -360,9 +361,9 @@ impl NebulaWorkspace {
                             .xsmall()
                             .selected(broadcast)
                             .tooltip(if broadcast {
-                                "关闭广播输入"
+                                language.tr("workspace.pane.stop_broadcast_input")
                             } else {
-                                "广播输入到本标签全部分栏"
+                                language.tr("workspace.pane.broadcast_input_tooltip")
                             })
                             .child(broadcast_mark(
                                 title_px,
@@ -387,9 +388,9 @@ impl NebulaWorkspace {
                             .xsmall()
                             .selected(zoomed)
                             .tooltip(if zoomed {
-                                "退出独占 (Ctrl+Shift+Enter)"
+                                language.tr("workspace.pane.exit_zen_mode")
                             } else {
-                                "独占放大 (Ctrl+Shift+Enter)"
+                                language.tr("workspace.pane.zen_mode")
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -402,7 +403,7 @@ impl NebulaWorkspace {
                             .icon(Icon::new(IconName::Close).text_color(icon_ink))
                             .ghost()
                             .xsmall()
-                            .tooltip("关闭此分栏")
+                            .tooltip(language.tr("workspace.pane.close"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.request_close_pane(tab_ix, pane_id, window, cx);
@@ -434,11 +435,15 @@ impl NebulaWorkspace {
         // toast 而不是消息栏：开关本身没有待办动作，只需要在开启的一刻说清
         // 影响面。关闭时不打扰。
         if on {
+            let language = crate::gpui_shell::config::ui_language(cx);
             crate::gpui_shell::toast::toast(
                 window,
                 cx,
                 crate::display::ToastKind::Info,
-                format!("广播输入已开启：键入将同步到本标签的 {count} 个分栏"),
+                language.tr_args(
+                    "workspace.pane.broadcast_enabled",
+                    &[("count", &count.to_string())],
+                ),
             );
         }
         cx.notify();
@@ -666,6 +671,7 @@ impl NebulaWorkspace {
         let drag = self.pane_drag.as_ref().filter(|drag| drag.active)?;
         let (x, y, detach) = (drag.x, drag.y, drag.detach);
         let theme = cx.theme();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let hint_bg = if detach { theme.primary } else { theme.muted };
         let hint_fg = if detach { theme.primary_foreground } else { theme.muted_foreground };
         Some(
@@ -694,11 +700,11 @@ impl NebulaWorkspace {
                         .bg(hint_bg)
                         .text_size(px(11.0))
                         .text_color(hint_fg)
-                        .child(if detach {
-                            "松手：拉出为独立标签"
+                        .child(language.tr(if detach {
+                            "workspace.pane.extract_release"
                         } else {
-                            "拖到终端区外可拉出"
-                        }),
+                            "workspace.pane.extract_drag_hint"
+                        })),
                 )
                 .into_any_element(),
         )

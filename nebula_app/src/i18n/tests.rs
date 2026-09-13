@@ -81,3 +81,19 @@ fn measure_static_catalog_costs() {
     }
     eprintln!("key lookup: {} ns/op", started.elapsed().as_nanos() / count);
 }
+
+#[test]
+fn language_cache_defaults_to_english_and_round_trips() {
+    use std::sync::atomic::Ordering;
+
+    let previous = super::CURRENT_LANGUAGE.load(Ordering::Relaxed);
+    super::CURRENT_LANGUAGE.store(super::UNSET, Ordering::Relaxed);
+    assert_eq!(UiLanguage::current(), UiLanguage::EnUs);
+    super::CURRENT_LANGUAGE.store(usize::MAX - 1, Ordering::Relaxed);
+    assert_eq!(UiLanguage::current(), UiLanguage::EnUs);
+    UiLanguage::FrFr.activate();
+    assert_eq!(UiLanguage::current(), UiLanguage::FrFr);
+    UiLanguage::ZhCn.activate();
+    assert_eq!(UiLanguage::current(), UiLanguage::ZhCn);
+    super::CURRENT_LANGUAGE.store(previous, Ordering::Relaxed);
+}

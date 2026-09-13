@@ -14,7 +14,7 @@ pub(super) fn pick_file(owner: &Window, title: &str, filters: &[FileFilter]) -> 
 pub(super) fn pick_file_unowned(title: &str, filters: &[FileFilter]) -> Option<PathBuf> {
     let mut dialog = FileDialog::new().set_title(title);
     for filter in filters {
-        dialog = dialog.add_filter(filter.name, filter.extensions);
+        dialog = dialog.add_filter(crate::i18n::UiLanguage::current().tr(filter.name), filter.extensions);
     }
     dialog.pick_file()
 }
@@ -43,7 +43,7 @@ pub(super) fn save_file(
 fn dialog(owner: &Window, title: &str, filters: &[FileFilter]) -> FileDialog {
     let mut dialog = FileDialog::new().set_title(title).set_parent(owner.native_window());
     for filter in filters {
-        dialog = dialog.add_filter(filter.name, filter.extensions);
+        dialog = dialog.add_filter(crate::i18n::UiLanguage::current().tr(filter.name), filter.extensions);
     }
     dialog
 }

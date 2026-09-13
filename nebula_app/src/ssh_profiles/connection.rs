@@ -2,6 +2,8 @@ use std::net::Ipv6Addr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::t;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SshHostProxyMode {
@@ -60,27 +62,27 @@ impl SshConnectionOptions {
         validate_ssh_destination(destination)?;
         if self.has_custom_proxy() {
             validate_host(&self.normalized_proxy_host()).map_err(|_| {
-                "代理地址无效，请只填写主机名或 IP，不要包含协议、端口或密码".to_owned()
+                t!("ssh.connection.proxy_host_invalid").to_string()
             })?;
             if self.effective_proxy_port() == 0 {
-                return Err("代理端口必须在 1–65535 之间".to_owned());
+                return Err(t!("ssh.connection.proxy_port_range").to_string());
             }
             let username = self.proxy_username.trim();
             if username.chars().any(char::is_control) {
-                return Err("代理用户名不能包含控制字符".to_owned());
+                return Err(t!("ssh.connection.proxy_username_control").to_string());
             }
             if self.proxy_mode == SshHostProxyMode::Socks5 && username.len() > 255 {
-                return Err("SOCKS5 用户名不能超过 255 字节".to_owned());
+                return Err(t!("ssh.connection.socks5_username_too_long").to_string());
             }
             if self.proxy_mode == SshHostProxyMode::Http && username.contains(':') {
-                return Err("HTTP 代理用户名不能包含冒号".to_owned());
+                return Err(t!("ssh.connection.http_username_colon").to_string());
             }
         }
         if self.jump_mode == SshHostJumpMode::Host {
             validate_ssh_destination(&self.jump_host)
-                .map_err(|_| "跳板地址无效，请填写单个 SSH 别名或 user@host:port".to_owned())?;
+                .map_err(|_| t!("ssh.connection.jump_host_invalid").to_string())?;
             if normalized_destination(&self.jump_host) == normalized_destination(destination) {
-                return Err("不能将目标主机自身设为跳板".to_owned());
+                return Err(t!("ssh.connection.jump_is_self").to_string());
             }
         }
         Ok(())
@@ -126,29 +128,29 @@ pub(crate) fn validate_ssh_destination(value: &str) -> Result<(), String> {
                 || ",;&|<>\"'`\\?#".contains(character)
         })
     {
-        return Err("SSH 地址为空或包含不允许的字符".to_owned());
+        return Err(t!("ssh.connection.destination_empty_or_chars").to_string());
     }
     let address = value.strip_prefix("ssh://").unwrap_or(value);
     if address.starts_with('-') {
-        return Err("SSH 地址不能以选项前缀开头".to_owned());
+        return Err(t!("ssh.connection.destination_option_prefix").to_string());
     }
     let host_port = if let Some((username, host)) = address.rsplit_once('@') {
         if username.is_empty() || username.contains(['@', ':', '/', '[', ']']) {
-            return Err("SSH 用户名无效".to_owned());
+            return Err(t!("ssh.connection.username_invalid").to_string());
         }
         host
     } else {
         address
     };
     let (host, port) = if let Some(rest) = host_port.strip_prefix('[') {
-        let (host, suffix) = rest.split_once(']').ok_or("IPv6 地址缺少右方括号")?;
+        let (host, suffix) = rest.split_once(']').ok_or_else(|| t!("ssh.connection.ipv6_missing_bracket").to_string())?;
         if host.parse::<Ipv6Addr>().is_err() {
-            return Err("IPv6 地址无效".to_owned());
+            return Err(t!("ssh.connection.ipv6_invalid").to_string());
         }
         let port = if suffix.is_empty() {
             None
         } else {
-            Some(suffix.strip_prefix(':').ok_or("SSH 端口格式无效")?)
+            Some(suffix.strip_prefix(':').ok_or_else(|| t!("ssh.connection.port_format").to_string())?)
         };
         (host, port)
     } else if let Some((host, port)) = host_port.rsplit_once(':') {
@@ -158,22 +160,22 @@ pub(crate) fn validate_ssh_destination(value: &str) -> Result<(), String> {
     };
     validate_host(host)?;
     if port.is_some_and(|port| port.parse::<u16>().map_or(true, |port| port == 0)) {
-        return Err("SSH 端口必须在 1–65535 之间".to_owned());
+        return Err(t!("ssh.connection.port_range").to_string());
     }
     Ok(())
 }
 
 fn validate_host(host: &str) -> Result<(), String> {
     if host.is_empty() || host.starts_with('-') || host.len() > 253 {
-        return Err("主机名无效".to_owned());
+        return Err(t!("ssh.connection.hostname_invalid").to_string());
     }
     if host.contains(':') {
-        host.parse::<Ipv6Addr>().map_err(|_| "IPv6 地址无效".to_owned())?;
+        host.parse::<Ipv6Addr>().map_err(|_| t!("ssh.connection.ipv6_invalid").to_string())?;
     } else if host
         .chars()
         .any(|character| !character.is_alphanumeric() && !matches!(character, '.' | '-' | '_'))
     {
-        return Err("主机名包含不允许的字符".to_owned());
+        return Err(t!("ssh.connection.hostname_chars").to_string());
     }
     Ok(())
 }

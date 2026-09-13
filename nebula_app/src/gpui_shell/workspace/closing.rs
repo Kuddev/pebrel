@@ -43,19 +43,30 @@ impl NebulaWorkspace {
         }
         self.window_close_confirm_open = true;
 
-        let body: SharedString = format!("{process} 仍在运行，关闭窗口会中止它。").into();
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let body: SharedString = format!(
+            "{process}{}",
+            language.pick(
+                " 仍在运行，关闭窗口会中止它。",
+                " is still running. Closing the window will stop it.",
+            ),
+        )
+        .into();
         let confirm_workspace = cx.entity().downgrade();
         let close_workspace = confirm_workspace.clone();
+        let title = language.pick("关闭窗口？", "Close window?");
+        let close_label = language.text(crate::i18n::Message::CommonClose);
+        let cancel_label = language.text(crate::i18n::Message::CommonCancel);
         window.open_dialog(cx, move |dialog, window, _cx| {
             let confirm_workspace = confirm_workspace.clone();
             let close_workspace = close_workspace.clone();
             confirm_dialog(
                 dialog,
                 window,
-                "关闭窗口？",
+                title,
                 body.clone(),
-                "关闭",
-                "取消",
+                close_label,
+                cancel_label,
                 ButtonVariant::Danger,
             )
             .on_ok(move |_, window, cx| {

@@ -161,8 +161,8 @@ impl SettingsPane {
             .when(custom, |page| page.child(self.proxy_address_row(cx)))
             .child(self.switch_row(
                 "terminal_proxy",
-                "系统代理",
-                "启用时，新建终端的 HTTP(S)_PROXY 会接入系统代理。",
+                language.text(crate::i18n::Message::NetworkUiSystemProxy),
+                language.text(crate::i18n::Message::NetworkUiSystemProxyDescription),
                 self.runtime.terminal_proxy,
                 cx,
             ))

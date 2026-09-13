@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::i18n::UiLanguage;
 use crate::update_check::UpdateAsset;
 
 const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/Kuddev/pebrel/releases/download/";
@@ -90,15 +91,15 @@ pub(crate) fn run(asset: UpdateAsset) {
 pub(crate) fn launch_ready(asset: &UpdateAsset) -> Result<(), String> {
     let path = match status(asset) {
         DownloadStatus::Ready { path, .. } => path,
-        _ => return Err("安装包尚未下载并通过校验".to_owned()),
+        _ => return Err(UiLanguage::current().tr("update.installer_not_verified").to_owned()),
     };
     let (_, expected_path) = download_paths(asset)?;
     if path != expected_path || !path.is_file() {
-        return Err("已校验的安装包不存在或路径已改变".to_owned());
+        return Err(UiLanguage::current().tr("update.verified_installer_missing").to_owned());
     }
     // Ready 只表示下载完成时通过过校验；安装前再读一遍，避免缓存文件在
     // 弹窗等待用户确认期间被替换后仍直接执行。
-    verify_file(&path, asset).map_err(|error| format!("安装前重新校验失败：{error}"))?;
+    verify_file(&path, asset).map_err(|error| UiLanguage::current().tr_args("update.preinstall_verify_failed", &[("error", error.as_str())]))?;
 
     #[cfg(windows)]
     {
@@ -112,14 +113,14 @@ pub(crate) fn launch_ready(asset: &UpdateAsset) -> Result<(), String> {
             .stderr(Stdio::null())
             .creation_flags(CREATE_NEW_PROCESS_GROUP)
             .spawn()
-            .map_err(|error| format!("无法启动更新安装包：{error}"))?;
+            .map_err(|error| UiLanguage::current().tr_args("update.installer_launch_failed", &[("error", &error.to_string())]))?;
         Ok(())
     }
 
     #[cfg(not(windows))]
     {
         let _ = path;
-        Err("当前平台暂不支持应用内安装更新".to_owned())
+        Err(UiLanguage::current().tr("update.in_app_install_unsupported").to_owned())
     }
 }
 
@@ -127,8 +128,8 @@ fn download_and_verify(asset: &UpdateAsset) -> Result<(PathBuf, u64), String> {
     validate_asset(asset)?;
     let (partial_path, final_path) = download_paths(asset)?;
     let _download_lock = crate::atomic_file::try_lifetime_lock(&final_path)
-        .map_err(|error| format!("无法锁定更新下载目录：{error}"))?
-        .ok_or_else(|| "另一个 Pebrel 进程正在下载这项更新".to_owned())?;
+        .map_err(|error| UiLanguage::current().tr_args("update.download_lock_failed", &[("error", &error.to_string())]))?
+        .ok_or_else(|| UiLanguage::current().tr("update.download_busy").to_owned())?;
 
     if final_path.is_file()
         && let Ok(bytes) = verify_file(&final_path, asset)
@@ -138,7 +139,7 @@ fn download_and_verify(asset: &UpdateAsset) -> Result<(PathBuf, u64), String> {
 
     let result = download_to_partial(asset, &partial_path).and_then(|bytes| {
         crate::atomic_file::replace(&partial_path, &final_path)
-            .map_err(|error| format!("无法保存已校验的更新安装包：{error}"))?;
+            .map_err(|error| UiLanguage::current().tr_args("update.save_verified_installer_failed", &[("error", &error.to_string())]))?;
         Ok((final_path.clone(), bytes))
     });
     if result.is_err() {
@@ -158,17 +159,17 @@ fn download_to_partial(asset: &UpdateAsset, partial_path: &Path) -> Result<u64, 
         .header("Accept", "application/octet-stream")
         .header("Accept-Encoding", "identity")
         .call()
-        .map_err(|error| format!("下载安装包失败：{error}"))?;
+        .map_err(|error| UiLanguage::current().tr_args("update.installer_download_failed", &[("error", &error.to_string())]))?;
 
     let response_size = response.body().content_length();
     if let (Some(expected), Some(actual)) = (asset.size, response_size)
         && expected != actual
     {
-        return Err(format!("安装包长度与 release 元数据不一致（{actual} / {expected} 字节）"));
+        return Err(UiLanguage::current().tr_args("update.installer_length_mismatch", &[("actual", &actual.to_string()), ("expected", &expected.to_string())]));
     }
     let total = asset.size.or(response_size);
     if total.is_some_and(|bytes| bytes > MAX_INSTALLER_BYTES) {
-        return Err("安装包超过 512 MiB 安全上限".to_owned());
+        return Err(UiLanguage::current().tr("update.installer_too_large").to_owned());
     }
 
     let mut output = OpenOptions::new()
@@ -176,20 +177,20 @@ fn download_to_partial(asset: &UpdateAsset, partial_path: &Path) -> Result<u64, 
         .truncate(true)
         .write(true)
         .open(partial_path)
-        .map_err(|error| format!("无法创建更新临时文件：{error}"))?;
+        .map_err(|error| UiLanguage::current().tr_args("update.temp_file_create_failed", &[("error", &error.to_string())]))?;
     let mut reader = response.body_mut().as_reader();
     let mut hasher = Sha256::new();
     let mut downloaded = 0_u64;
     let mut pe_header = Vec::with_capacity(2);
     let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_BYTES];
     loop {
-        let read = reader.read(&mut buffer).map_err(|error| format!("读取安装包失败：{error}"))?;
+        let read = reader.read(&mut buffer).map_err(|error| UiLanguage::current().tr_args("update.installer_read_failed", &[("error", &error.to_string())]))?;
         if read == 0 {
             break;
         }
         downloaded = downloaded.saturating_add(read as u64);
         if downloaded > MAX_INSTALLER_BYTES {
-            return Err("安装包超过 512 MiB 安全上限".to_owned());
+            return Err(UiLanguage::current().tr("update.installer_too_large").to_owned());
         }
         if pe_header.len() < 2 {
             let take = (2 - pe_header.len()).min(read);
@@ -198,27 +199,27 @@ fn download_to_partial(asset: &UpdateAsset, partial_path: &Path) -> Result<u64, 
         hasher.update(&buffer[..read]);
         output
             .write_all(&buffer[..read])
-            .map_err(|error| format!("写入更新临时文件失败：{error}"))?;
+            .map_err(|error| UiLanguage::current().tr_args("update.temp_file_write_failed", &[("error", &error.to_string())]))?;
         set_progress(asset, downloaded, total);
     }
-    output.sync_all().map_err(|error| format!("同步更新临时文件失败：{error}"))?;
+    output.sync_all().map_err(|error| UiLanguage::current().tr_args("update.temp_file_sync_failed", &[("error", &error.to_string())]))?;
 
     verify_download(downloaded, &pe_header, hasher.finalize(), asset)?;
     Ok(downloaded)
 }
 
 fn verify_file(path: &Path, asset: &UpdateAsset) -> Result<u64, String> {
-    let mut file = File::open(path).map_err(|error| format!("无法读取更新缓存：{error}"))?;
-    let metadata = file.metadata().map_err(|error| format!("无法读取更新缓存大小：{error}"))?;
+    let mut file = File::open(path).map_err(|error| UiLanguage::current().tr_args("update.cache_read_failed", &[("error", &error.to_string())]))?;
+    let metadata = file.metadata().map_err(|error| UiLanguage::current().tr_args("update.cache_size_read_failed", &[("error", &error.to_string())]))?;
     let bytes = metadata.len();
     if bytes > MAX_INSTALLER_BYTES {
-        return Err("更新缓存超过 512 MiB 安全上限".to_owned());
+        return Err(UiLanguage::current().tr("update.cache_too_large").to_owned());
     }
     let mut hasher = Sha256::new();
     let mut pe_header = Vec::with_capacity(2);
     let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_BYTES];
     loop {
-        let read = file.read(&mut buffer).map_err(|error| format!("读取更新缓存失败：{error}"))?;
+        let read = file.read(&mut buffer).map_err(|error| UiLanguage::current().tr_args("update.cache_content_read_failed", &[("error", &error.to_string())]))?;
         if read == 0 {
             break;
         }
@@ -239,18 +240,18 @@ fn verify_download(
     asset: &UpdateAsset,
 ) -> Result<(), String> {
     if bytes == 0 || asset.size.is_some_and(|expected| expected != bytes) {
-        return Err(format!("安装包长度校验失败（实际 {bytes} 字节）"));
+        return Err(UiLanguage::current().tr_args("update.installer_length_verify_failed", &[("bytes", &bytes.to_string())]));
     }
     if pe_header != b"MZ" {
-        return Err("下载内容不是 Windows PE 安装包".to_owned());
+        return Err(UiLanguage::current().tr("update.not_windows_installer").to_owned());
     }
-    let expected = asset.sha256.as_deref().ok_or_else(|| "release 未提供 SHA-256".to_owned())?;
+    let expected = asset.sha256.as_deref().ok_or_else(|| UiLanguage::current().tr("update.release_missing_sha256").to_owned())?;
     let mut actual = String::with_capacity(64);
     for byte in digest.as_ref() {
         let _ = write!(&mut actual, "{byte:02x}");
     }
     if !actual.eq_ignore_ascii_case(expected) {
-        return Err(format!("安装包 SHA-256 校验失败（实际 {actual}）"));
+        return Err(UiLanguage::current().tr_args("update.sha256_verify_failed", &[("actual", actual.as_str())]));
     }
     Ok(())
 }
@@ -265,7 +266,7 @@ fn set_progress(asset: &UpdateAsset, downloaded: u64, total: Option<u64>) {
 fn download_paths(asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
     let directory = nebula_settings::settings_dir().join("updates");
     std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("无法创建更新下载目录：{error}"))?;
+        .map_err(|error| UiLanguage::current().tr_args("update.download_directory_create_failed", &[("error", &error.to_string())]))?;
     let final_path = directory.join(&asset.name);
     let partial_path = directory.join(format!("{}.part", asset.name));
     Ok((partial_path, final_path))
@@ -273,7 +274,7 @@ fn download_paths(asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
 
 fn validate_asset(asset: &UpdateAsset) -> Result<(), String> {
     if !cfg!(all(windows, target_arch = "x86_64")) {
-        return Err("当前平台没有可用的自动更新安装包".to_owned());
+        return Err(UiLanguage::current().tr("update.no_installer_for_platform").to_owned());
     }
     validate_windows_asset_contract(asset)
 }
@@ -285,25 +286,25 @@ fn validate_windows_asset_contract(asset: &UpdateAsset) -> Result<(), String> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
     {
-        return Err("release 版本号不符合安装包命名规则".to_owned());
+        return Err(UiLanguage::current().tr("update.invalid_release_version").to_owned());
     }
     if !crate::update_check::windows_x64_installer_names(&asset.version).contains(&asset.name) {
-        return Err("release 资产不是当前平台的精确安装包".to_owned());
+        return Err(UiLanguage::current().tr("update.wrong_platform_asset").to_owned());
     }
     let trusted_url = [RELEASE_DOWNLOAD_PREFIX, LEGACY_RELEASE_DOWNLOAD_PREFIX]
         .iter()
         .any(|prefix| asset.download_url == format!("{prefix}v{}/{}", asset.version, asset.name));
     if !trusted_url {
-        return Err("release 安装包 URL 不属于 Pebrel 官方仓库".to_owned());
+        return Err(UiLanguage::current().tr("update.untrusted_installer_url").to_owned());
     }
     if asset.size.is_some_and(|bytes| bytes == 0 || bytes > MAX_INSTALLER_BYTES) {
-        return Err("release 安装包大小无效".to_owned());
+        return Err(UiLanguage::current().tr("update.invalid_installer_size").to_owned());
     }
     let hash = asset.sha256.as_deref().ok_or_else(|| {
-        "release 未提供可验证的 SHA-256；为避免执行未知安装包，已停止自动下载".to_owned()
+        UiLanguage::current().tr("update.unverifiable_sha256").to_owned()
     })?;
     if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("release 提供的 SHA-256 格式无效".to_owned());
+        return Err(UiLanguage::current().tr("update.invalid_sha256_format").to_owned());
     }
     Ok(())
 }

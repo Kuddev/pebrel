@@ -2,6 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::i18n::t;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryAction {
     None,
@@ -45,21 +47,26 @@ impl UserFacingError {
     }
 
     pub fn message(&self) -> String {
-        let mut message =
-            format!("{}\n原因：{}\n建议：{}", self.title, self.cause, self.suggestion);
+        let body = t!("ux.error.body",
+            title = &self.title,
+            cause = &self.cause,
+            suggestion = &self.suggestion
+        );
+        let mut message = body.to_string();
+
         let action = match self.retry {
             RetryAction::None => None,
-            RetryAction::Retry => Some("操作：请重试"),
-            RetryAction::OpenSettings => Some("操作：打开设置检查配置"),
-            RetryAction::OpenLogs => Some("操作：打开日志查看诊断信息"),
+            RetryAction::Retry => Some(t!("ux.error.retry")),
+            RetryAction::OpenSettings => Some(t!("ux.error.open_settings")),
+            RetryAction::OpenLogs => Some(t!("ux.error.open_logs")),
         };
         if let Some(action) = action {
             message.push('\n');
             message.push_str(action);
         }
         if let Some(details) = &self.details {
-            message.push_str("\n详情：");
-            message.push_str(details);
+            message.push('\n');
+            message.push_str(&t!("ux.error.details", details = details));
         }
         message
     }

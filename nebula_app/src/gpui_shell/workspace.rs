@@ -46,6 +46,7 @@ use gpui_component::notification::Notification;
 use nebula_split::{DIVIDER_GAP, HIT_SLOP, RemoveOutcome, SplitDirection, SplitNav, SplitTree};
 
 mod agents;
+mod i18n;
 mod closing;
 mod command_manager;
 mod keyboard_bindings;
@@ -640,26 +641,21 @@ impl QuickJumpFilter {
 
     fn label(self, language: crate::display::UiLanguage) -> &'static str {
         match self {
-            Self::All => language.pick("全部", "All"),
-            Self::Opened => language.pick("已打开", "Opened"),
-            Self::Folders => language.pick("文件夹", "Folders"),
+            Self::All => language.text(crate::i18n::Message::CommonAll),
+            Self::Opened => language.tr("workspace.quick_jump.filter.opened"),
+            Self::Folders => language.tr("workspace.quick_jump.filter.folders"),
             Self::Ssh => "SSH",
-            Self::Agents => language.pick("智能体", "Agents"),
+            Self::Agents => language.tr("workspace.quick_jump.filter.agents"),
         }
     }
 
     fn placeholder(self, language: crate::display::UiLanguage) -> &'static str {
         match self {
-            Self::All => language.pick(
-                "搜索标签页、分屏、目录、SSH 或 AI 会话…",
-                "Search tabs, panes, folders, SSH or agent sessions...",
-            ),
-            Self::Opened => {
-                language.pick("搜索已打开的标签页和分屏…", "Search open tabs and panes...")
-            },
-            Self::Folders => language.pick("搜索常用文件夹…", "Search frequent folders..."),
-            Self::Ssh => language.pick("搜索 SSH 主机…", "Search SSH hosts..."),
-            Self::Agents => language.pick("搜索智能体会话…", "Search agent sessions..."),
+            Self::All => language.tr("workspace.quick_jump.search.all"),
+            Self::Opened => language.tr("workspace.quick_jump.search.opened"),
+            Self::Folders => language.tr("workspace.quick_jump.search.folders"),
+            Self::Ssh => language.tr("workspace.quick_jump.search.ssh"),
+            Self::Agents => language.tr("workspace.quick_jump.search.agents"),
         }
     }
 
@@ -693,13 +689,14 @@ impl WorkspacePaletteFilter {
 
     fn placeholder(self, language: crate::display::UiLanguage) -> &'static str {
         match self {
-            Self::Launcher(crate::display::command_palette::LauncherFilter::All) => language
-                .pick("搜索 Shell、配置和 SSH 主机…", "Search shells, profiles and SSH hosts..."),
+            Self::Launcher(crate::display::command_palette::LauncherFilter::All) => {
+                language.tr("workspace.launcher.search.all")
+            },
             Self::Launcher(crate::display::command_palette::LauncherFilter::Ssh) => {
-                language.pick("搜索 SSH 主机…", "Search SSH hosts...")
+                language.tr("workspace.quick_jump.search.ssh")
             },
             Self::Launcher(crate::display::command_palette::LauncherFilter::Shell) => {
-                language.pick("搜索 Shell 和配置…", "Search shells and profiles...")
+                language.tr("workspace.launcher.search.shell")
             },
             Self::QuickJump(filter) => filter.placeholder(language),
         }
@@ -751,8 +748,7 @@ pub(super) fn reveal_in_file_manager(path: &Path) {
 }
 
 fn workspace_ui_language() -> crate::display::UiLanguage {
-    crate::display::LanguagePreference::from(nebula_settings::RuntimeSettings::load().language)
-        .resolved()
+    crate::display::UiLanguage::current()
 }
 
 fn new_tab_insert_index(
@@ -1089,14 +1085,15 @@ impl NebulaWorkspace {
                     cx.notify();
                 }
             });
-        let command_palette_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索命令…"));
-        let command_manager_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索已保存命令…"));
+        let language = workspace_ui_language();
+        let command_palette_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(language.tr("workspace.search.commands"))
+        });
+        let command_manager_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(language.tr("workspace.search.saved_commands"))
+        });
         let file_tree_search_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(
-                workspace_ui_language().pick("搜索文件和文件夹…", "Search files and folders..."),
-            )
+            InputState::new(window, cx).placeholder(language.tr("workspace.files.search.placeholder"))
         });
         let git_commit_input = vcs_panel::CommitInput::new(window, cx);
         let command_palette_subscription = cx.subscribe_in(
@@ -1861,17 +1858,18 @@ impl NebulaWorkspace {
             self.close_pane(tab_ix, pane_id, window, cx);
             return;
         };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
+        let (body, title, close_label, cancel_label) =
+            i18n::close_dialog_text(crate::gpui_shell::config::ui_language(cx), &process, false);
         let workspace = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, window, _cx| {
             let workspace = workspace.clone();
             confirm_dialog(
                 dialog,
                 window,
-                "关闭此分栏？",
+                title,
                 body.clone(),
-                "关闭",
-                "取消",
+                close_label,
+                cancel_label,
                 ButtonVariant::Danger,
             )
             .on_ok(move |_, window, cx| {
@@ -1888,17 +1886,18 @@ impl NebulaWorkspace {
             self.close_tab(tab_ix, window, cx);
             return;
         };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
+        let (body, title, close_label, cancel_label) =
+            i18n::close_dialog_text(crate::gpui_shell::config::ui_language(cx), &process, true);
         let workspace = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, window, _cx| {
             let workspace = workspace.clone();
             confirm_dialog(
                 dialog,
                 window,
-                "关闭此标签页？",
+                title,
                 body.clone(),
-                "关闭",
-                "取消",
+                close_label,
+                cancel_label,
                 ButtonVariant::Danger,
             )
             .on_ok(move |_, window, cx| {
@@ -2000,7 +1999,7 @@ impl NebulaWorkspace {
                         window,
                         cx,
                         ToastKind::Warning,
-                        format!("连续多次启动未完成恢复，已跳过；现场保存在 {}", path.display()),
+                        i18n::restore_repeated_failure(workspace_ui_language(), &path),
                     );
                 }
             }
@@ -2019,11 +2018,7 @@ impl NebulaWorkspace {
         }
         self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
         self.focus_active(window, cx);
-        let text = if crashed {
-            format!("上次未正常退出，已恢复 {restored} 个标签")
-        } else {
-            format!("已恢复 {restored} 个标签")
-        };
+        let text = i18n::restore_notice(workspace_ui_language(), crashed, restored);
         crate::gpui_shell::toast::toast(window, cx, ToastKind::Success, text);
         cx.notify();
         true
@@ -2686,7 +2681,7 @@ impl NebulaWorkspace {
                         .glyph;
                         WorkspacePaletteRow {
                             group_order: usize::MAX,
-                            group: language.pick("SSH 主机", "SSH HOSTS").to_owned(),
+                            group: language.tr("workspace.palette.group.ssh_hosts").to_owned(),
                             label: host.clone(),
                             hint: "SSH".to_owned(),
                             hint_style: WorkspacePaletteHintStyle::Metadata,
@@ -2780,7 +2775,7 @@ impl NebulaWorkspace {
         self.launcher_filter = crate::display::command_palette::LauncherFilter::All;
         self.quick_jump_filter = None;
         self.reset_palette_query(
-            workspace_ui_language().pick("输入命令…", "Type a command..."),
+            workspace_ui_language().tr("workspace.palette.command.placeholder"),
             window,
             cx,
         );
@@ -3150,7 +3145,9 @@ impl NebulaWorkspace {
             return custom.into();
         }
         match &self.tabs[ix] {
-            WorkspaceTab::Settings { .. } => "设置".into(),
+            WorkspaceTab::Settings { .. } => crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::CommonSettings)
+                .into(),
             WorkspaceTab::Image { view } => view.read(cx).title.clone().into(),
             WorkspaceTab::Document { view, .. } => view.read(cx).tab_title().into(),
             WorkspaceTab::Code { view, .. } => view.read(cx).tab_title(cx).into(),
@@ -3395,13 +3392,13 @@ impl NebulaWorkspace {
                     window,
                     cx,
                     crate::display::ToastKind::Success,
-                    format!("已导出到 {}", path.display()),
+                    workspace_ui_language().tr_args("workspace.export.success", &[("path", &path.display().to_string())]),
                 ),
                 Err(error) => crate::gpui_shell::toast::toast(
                     window,
                     cx,
                     crate::display::ToastKind::Warning,
-                    format!("工作区导出失败：{error}"),
+                    workspace_ui_language().tr_args("workspace.export.failed", &[("error", &error.to_string())]),
                 ),
             });
         })

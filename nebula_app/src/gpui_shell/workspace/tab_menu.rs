@@ -134,10 +134,11 @@ impl NebulaWorkspace {
         color: Option<Rgb>,
         tab_count: usize,
     ) -> PopupMenu {
+        let language = crate::i18n::UiLanguage::current();
         if ai_fork {
             let target = workspace.clone();
             menu = menu
-                .item(PopupMenuItem::new("分叉 AI 会话").icon(IconName::Bot).on_click(
+                .item(PopupMenuItem::new(language.tr("workspace.tab.fork_ai_session")).icon(IconName::Bot).on_click(
                     move |_, window, cx| {
                         if let Some(workspace) = target.upgrade() {
                             workspace.update(cx, |workspace, cx| {
@@ -155,7 +156,7 @@ impl NebulaWorkspace {
             let split_right = workspace.clone();
             let split_down = workspace.clone();
             menu = menu
-                .item(PopupMenuItem::new("复制标签页").icon(IconName::Copy).on_click(
+                .item(PopupMenuItem::new(language.text(crate::i18n::Message::CommonDuplicateTab)).icon(IconName::Copy).on_click(
                     move |_, window, cx| {
                         if let Some(workspace) = duplicate.upgrade() {
                             workspace.update(cx, |workspace, cx| {
@@ -165,7 +166,7 @@ impl NebulaWorkspace {
                     },
                 ))
                 .item(
-                    PopupMenuItem::new("移到新窗口")
+                    PopupMenuItem::new(language.tr("workspace.tab.move_to_new_window"))
                         .icon(IconName::ExternalLink)
                         .on_click(move |_, _, cx| {
                             if let Some(workspace) = move_to_window.upgrade() {
@@ -175,7 +176,7 @@ impl NebulaWorkspace {
                             }
                         }),
                 )
-                .item(PopupMenuItem::new("导出为工作区…").icon(IconName::Inbox).on_click(
+                .item(PopupMenuItem::new(language.tr("workspace.tab.export_as_workspace")).icon(IconName::Inbox).on_click(
                     move |_, window, cx| {
                         if let Some(workspace) = export.upgrade() {
                             workspace.update(cx, |workspace, cx| {
@@ -188,7 +189,7 @@ impl NebulaWorkspace {
                 // `action` 只用来渲染键帽：handler 存在时组件不会 dispatch
                 // 它（见 PopupMenu::confirm），所以命令仍然作用在 `ix` 上。
                 .item(
-                    PopupMenuItem::new("左右分屏")
+                    PopupMenuItem::new(language.tr("workspace.tab.split_left_right"))
                         .icon(IconName::PanelRight)
                         .action(Box::new(SplitRight))
                         .on_click(move |_, window, cx| {
@@ -205,7 +206,7 @@ impl NebulaWorkspace {
                         }),
                 )
                 .item(
-                    PopupMenuItem::new("上下分屏")
+                    PopupMenuItem::new(language.tr("workspace.tab.split_up_down"))
                         .icon(IconName::PanelBottom)
                         .action(Box::new(SplitDown))
                         .on_click(move |_, window, cx| {
@@ -232,7 +233,7 @@ impl NebulaWorkspace {
             // 分屏两项）。首/末位灰掉而不是隐藏——菜单条目忽隐忽现比灰掉
             // 更难认。
             .item(
-                PopupMenuItem::new("向左移动")
+                PopupMenuItem::new(language.tr("workspace.tab.move_left"))
                     .icon(IconName::ArrowLeft)
                     .action(Box::new(MoveTabLeft))
                     .disabled(ix == 0)
@@ -246,7 +247,7 @@ impl NebulaWorkspace {
                     }),
             )
             .item(
-                PopupMenuItem::new("向右移动")
+                PopupMenuItem::new(language.tr("workspace.tab.move_right"))
                     .icon(IconName::ArrowRight)
                     .action(Box::new(MoveTabRight))
                     .disabled(ix + 1 >= tab_count)
@@ -261,7 +262,7 @@ impl NebulaWorkspace {
             )
             .separator()
             .item(
-                PopupMenuItem::new("重命名")
+                PopupMenuItem::new(language.text(crate::i18n::Message::CommonRename))
                     .icon(IconName::ALargeSmall)
                     .action(Box::new(RenameActiveTab))
                     .on_click(move |_, window, cx| {
@@ -273,7 +274,7 @@ impl NebulaWorkspace {
                     }),
             )
             .item(
-                PopupMenuItem::new("关闭")
+                PopupMenuItem::new(language.text(crate::i18n::Message::CommonClose))
                     .icon(IconName::Close)
                     .action(Box::new(CloseActiveTerminal))
                     .on_click(move |_, window, cx| {
@@ -295,7 +296,7 @@ impl NebulaWorkspace {
         ix: usize,
         current: Option<Rgb>,
     ) -> PopupMenu {
-        menu.separator().item(PopupMenuItem::label("标签颜色")).item(PopupMenuItem::element(
+        menu.separator().item(PopupMenuItem::label(crate::i18n::UiLanguage::current().tr("workspace.tab.color"))).item(PopupMenuItem::element(
             move |_, cx| {
                 let swatches = std::iter::once(None)
                     .chain(crate::display::context_menu::TAB_COLORS.into_iter().map(Some));
