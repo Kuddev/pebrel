@@ -15,6 +15,16 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use log::warn;
 
+use crate::i18n::UiLanguage;
+
+fn tr(key: &'static str) -> &'static str {
+    UiLanguage::current().tr(key)
+}
+
+fn tr_args(key: &'static str, args: &[(&str, &str)]) -> String {
+    UiLanguage::current().tr_args(key, args)
+}
+
 /// 同步配置文件（位于 `nebula_data_dir()`）。独立于被同步的
 /// `nebula_settings.txt`——同步管道自身的配置不应被同步覆盖。
 const CONFIG_FILE: &str = "pebrel_sync.txt";
@@ -173,7 +183,7 @@ impl SyncConfig {
             self.allow_http as u8,
             self.auto_pull as u8,
         );
-        std::fs::write(config_path(), text).map_err(|err| format!("写入同步配置失败：{err}"))
+        std::fs::write(config_path(), text).map_err(|err| tr_args("sync.config_write_failed", &[("error", &err.to_string())]))
     }
 }
 
@@ -195,7 +205,7 @@ pub fn store_password(username: &str, secret: &str) -> Result<(), String> {
         username,
         secret.trim().as_bytes(),
     )
-    .map_err(|err| format!("保存到凭据管理器失败：{err}"))
+    .map_err(|err| tr_args("sync.credential_store_failed", &[("error", &err.to_string())]))
 }
 
 /// E2E 口令入库前先过弱口令闸——拒绝的口令连凭据管理器都不该进，
@@ -211,17 +221,17 @@ pub fn store_passphrase(username: &str, secret: &str) -> Result<(), String> {
         username,
         secret.trim().as_bytes(),
     )
-    .map_err(|err| format!("保存到凭据管理器失败：{err}"))
+    .map_err(|err| tr_args("sync.credential_store_failed", &[("error", &err.to_string())]))
 }
 
 #[cfg(not(windows))]
 pub fn store_password(_username: &str, _secret: &str) -> Result<(), String> {
-    Err("此平台请设环境变量 NEBULA_WEBDAV_PASSWORD".to_owned())
+    Err(tr("sync.set_webdav_password_env").to_owned())
 }
 
 #[cfg(not(windows))]
 pub fn store_passphrase(_username: &str, _secret: &str) -> Result<(), String> {
-    Err("此平台请设环境变量 NEBULA_SYNC_PASSPHRASE".to_owned())
+    Err(tr("sync.set_passphrase_env").to_owned())
 }
 
 /// WebDAV 密码：环境变量 → Windows 凭据管理器。明文永不落盘。
@@ -262,17 +272,17 @@ fn passphrase_weakness(
     webdav_password: &str,
 ) -> Option<&'static str> {
     if passphrase.chars().count() < 8 {
-        return Some("同步口令太短（至少 8 个字符）");
+        return Some(tr("sync.passphrase_too_short"));
     }
     let lower = passphrase.to_lowercase();
     if WEAK_PASSPHRASES.contains(&lower.as_str()) {
-        return Some("同步口令在常见弱口令表里，请换一个");
+        return Some(tr("sync.passphrase_weak"));
     }
     if !username.is_empty() && lower == username.to_lowercase() {
-        return Some("同步口令不能与 WebDAV 用户名相同");
+        return Some(tr("sync.passphrase_matches_username"));
     }
     if passphrase == webdav_password {
-        return Some("同步口令不能与 WebDAV 密码相同（服务商可解密，端到端失效）");
+        return Some(tr("sync.passphrase_matches_password"));
     }
     None
 }
@@ -304,7 +314,7 @@ fn seal(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new((&key).into());
     let ciphertext = cipher
         .encrypt(&Nonce::try_from(&nonce[..]).expect("nonce 长度固定"), plaintext)
-        .map_err(|_| "加密失败".to_owned())?;
+        .map_err(|_| tr("sync.encryption_failed").to_owned())?;
     let mut packet = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN + ciphertext.len());
     packet.extend_from_slice(MAGIC);
     packet.extend_from_slice(&salt);
@@ -316,7 +326,7 @@ fn seal(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
 /// 封包 → 明文。口令错误与包损坏都表现为 GCM 认证失败，同一句人话。
 fn open_packet(packet: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
     if packet.len() < MAGIC.len() + SALT_LEN + NONCE_LEN || &packet[..MAGIC.len()] != MAGIC {
-        return Err("远端文件不是 Pebrel 同步包（或版本不兼容）".to_owned());
+        return Err(tr("sync.invalid_remote_packet").to_owned());
     }
     let salt = &packet[MAGIC.len()..MAGIC.len() + SALT_LEN];
     let nonce = &packet[MAGIC.len() + SALT_LEN..MAGIC.len() + SALT_LEN + NONCE_LEN];
@@ -325,7 +335,7 @@ fn open_packet(packet: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new((&key).into());
     cipher
         .decrypt(&Nonce::try_from(nonce).expect("nonce 长度已由封包头校验"), ciphertext)
-        .map_err(|_| "解密失败：同步口令不一致或文件损坏".to_owned())
+        .map_err(|_| tr("sync.decryption_failed").to_owned())
 }
 
 // ---- payload ----
@@ -389,7 +399,7 @@ fn payload_to_json(payload: &SyncPayload) -> Vec<u8> {
 
 fn payload_from_json(bytes: &[u8]) -> Result<SyncPayload, String> {
     let value: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|err| format!("同步包内容损坏：{err}"))?;
+        serde_json::from_slice(bytes).map_err(|err| tr_args("sync.payload_corrupt", &[("error", &err.to_string())]))?;
     let modified = value["modified"].as_u64().unwrap_or(0);
     let device = value["device"].as_str().unwrap_or("unknown").to_owned();
     let mut settings = Vec::new();
@@ -553,7 +563,7 @@ fn write_history(lines: &[String]) -> Result<(), String> {
             text.push('\n');
         }
         std::fs::write(history_file_path(file_name), text)
-            .map_err(|err| format!("写入历史失败：{err}"))?;
+            .map_err(|err| tr_args("sync.history_write_failed", &[("error", &err.to_string())]))?;
     }
     Ok(())
 }
@@ -584,7 +594,7 @@ fn fetch_remote(cfg: &SyncConfig, password: &str, passphrase: &str) -> Result<Re
         .get(&cfg.url)
         .header("Authorization", &basic_auth(cfg, password))
         .call()
-        .map_err(|err| format!("连接失败：{err}"))?;
+        .map_err(|err| tr_args("sync.connection_failed", &[("error", &err.to_string())]))?;
     match response.status().as_u16() {
         200 => {
             let etag = response
@@ -593,13 +603,13 @@ fn fetch_remote(cfg: &SyncConfig, password: &str, passphrase: &str) -> Result<Re
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
             let body =
-                response.body_mut().read_to_vec().map_err(|err| format!("读取远端失败：{err}"))?;
+                response.body_mut().read_to_vec().map_err(|err| tr_args("sync.remote_read_failed", &[("error", &err.to_string())]))?;
             let payload = payload_from_json(&open_packet(&body, passphrase)?)?;
             Ok(Remote { payload: Some(payload), etag })
         },
         404 => Ok(Remote { payload: None, etag: None }),
-        401 | 403 => Err("认证失败：检查 WebDAV 用户名/密码".to_owned()),
-        status => Err(format!("远端返回 HTTP {status}")),
+        401 | 403 => Err(tr("sync.webdav_auth_failed").to_owned()),
+        status => Err(tr_args("sync.remote_http_status", &[("status", &status.to_string())])),
     }
 }
 
@@ -615,29 +625,29 @@ fn put_remote(
         Some(etag) => request.header("If-Match", etag),
         None => request.header("If-None-Match", "*"),
     };
-    let response = request.send(packet).map_err(|err| format!("上传失败：{err}"))?;
+    let response = request.send(packet).map_err(|err| tr_args("sync.upload_failed", &[("error", &err.to_string())]))?;
     match response.status().as_u16() {
         200 | 201 | 204 => Ok(true),
         412 => Ok(false),
-        401 | 403 => Err("认证失败：检查 WebDAV 用户名/密码".to_owned()),
-        status => Err(format!("远端返回 HTTP {status}")),
+        401 | 403 => Err(tr("sync.webdav_auth_failed").to_owned()),
+        status => Err(tr_args("sync.remote_http_status", &[("status", &status.to_string())])),
     }
 }
 
 fn preflight() -> Result<(SyncConfig, String, String), String> {
     let cfg = SyncConfig::load();
     if !cfg.configured() {
-        return Err(format!("未配置：在 {} 写入 url= 与 username=", config_path().display()));
+        return Err(tr_args("sync.not_configured", &[("path", &config_path().display().to_string())]));
     }
     if !cfg.url.starts_with("https://") && !cfg.allow_http {
-        return Err("已拒绝：url 不是 HTTPS（自建内网服务可写 allow_http=1 豁免）".to_owned());
+        return Err(tr("sync.https_required").to_owned());
     }
     let password =
-        webdav_password().ok_or("缺少 WebDAV 密码：设 NEBULA_WEBDAV_PASSWORD 环境变量")?;
+        webdav_password().ok_or(tr("sync.webdav_password_missing"))?;
     let passphrase =
-        sync_passphrase().ok_or("缺少端到端加密口令：设 NEBULA_SYNC_PASSPHRASE 环境变量")?;
+        sync_passphrase().ok_or(tr("sync.passphrase_missing"))?;
     if let Some(reason) = passphrase_weakness(&passphrase, &cfg.username, &password) {
-        return Err(format!("已拒绝同步：{reason}"));
+        return Err(tr_args("sync.rejected", &[("reason", reason)]));
     }
     Ok((cfg, password, passphrase))
 }
@@ -659,7 +669,7 @@ fn apply_local(merged: &SyncPayload, current_text: &str) -> Result<bool, String>
     let new_text = apply_to_settings_text(merged, current_text);
     if new_text != current_text {
         std::fs::write(settings_file_path(), new_text)
-            .map_err(|err| format!("写入设置失败：{err}"))?;
+            .map_err(|err| tr_args("sync.settings_write_failed", &[("error", &err.to_string())]))?;
     }
     let local_history = history_tail();
     if merged.history != local_history {
@@ -685,11 +695,13 @@ pub fn push() -> Result<SyncOutcome, String> {
     let packet = seal(&payload_to_json(&local), &passphrase)?;
     if put_remote(&cfg, &password, &packet, remote.etag.as_deref())? {
         return Ok(SyncOutcome {
-            message: format!(
-                "同步已推送（{} 项设置、{} 条键位、{} 条历史）",
-                local.settings.len(),
-                local.keybinds.len(),
-                local.history.len()
+            message: tr_args(
+                "sync.push_success",
+                &[
+                    ("settings", &local.settings.len().to_string()),
+                    ("keybinds", &local.keybinds.len().to_string()),
+                    ("history", &local.history.len().to_string()),
+                ],
             ),
             history_changed,
         });
@@ -704,10 +716,10 @@ pub fn push() -> Result<SyncOutcome, String> {
     let packet = seal(&payload_to_json(&local), &passphrase)?;
     if put_remote(&cfg, &password, &packet, fresh.etag.as_deref())? {
         Ok(SyncOutcome {
-            message: "同步已推送（已并入远端并发修改）".to_owned(), history_changed
+            message: tr("sync.push_merged").to_owned(), history_changed
         })
     } else {
-        Err("远端持续变化，稍后再试".to_owned())
+        Err(tr("sync.remote_keeps_changing").to_owned())
     }
 }
 
@@ -718,7 +730,7 @@ pub fn pull() -> Result<SyncOutcome, String> {
     let remote = fetch_remote(&cfg, &password, &passphrase)?;
     let Some(remote_payload) = remote.payload else {
         return Ok(SyncOutcome {
-            message: "远端为空：先在这台机器推送一次".to_owned(),
+            message: tr("sync.remote_empty").to_owned(),
             history_changed: false,
         });
     };
@@ -728,15 +740,17 @@ pub fn pull() -> Result<SyncOutcome, String> {
     let history_changed = apply_local(&merged, &text)?;
     if !settings_before && !history_changed {
         return Ok(SyncOutcome {
-            message: "已是最新（与远端一致）".to_owned(), history_changed
+            message: tr("sync.up_to_date").to_owned(), history_changed
         });
     }
     Ok(SyncOutcome {
-        message: format!(
-            "已拉取 {} 的设置（{} 条键位、{} 条历史）",
-            remote_payload.device,
-            merged.keybinds.len(),
-            merged.history.len()
+        message: tr_args(
+            "sync.pull_success",
+            &[
+                ("device", remote_payload.device.as_str()),
+                ("keybinds", &merged.keybinds.len().to_string()),
+                ("history", &merged.history.len().to_string()),
+            ],
         ),
         history_changed,
     })

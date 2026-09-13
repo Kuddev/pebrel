@@ -24,6 +24,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(feature = "legacy-shell")]
 use crate::event::EventProxy;
 use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, ProxyTestRoute};
+use crate::i18n::t;
 
 mod exec;
 mod lifecycle;
@@ -199,10 +200,10 @@ impl SshDestination {
         let original = value.trim().to_owned();
         let address = original.strip_prefix("ssh://").unwrap_or(&original).to_owned();
         let (user, host_port) = address.rsplit_once('@').ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "SSH 地址需要包含 user@host")
+            io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.address_needs_user_host"))
         })?;
         if user.is_empty() || host_port.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "SSH 地址不完整"));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.address_incomplete")));
         }
 
         let (host, port) = parse_host_port(host_port)?;
@@ -223,7 +224,7 @@ impl SshDestination {
         crate::ssh_profiles::validate_ssh_destination(&original)
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
         if original.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "SSH 地址为空"));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.address_empty")));
         }
 
         // OpenSSH 不把裸 `user@host:port` 识别为端口语法，而会原样输出成
@@ -249,7 +250,7 @@ impl SshDestination {
         let (host, port) = parse_host_port(address)?;
         let user = std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "无法确定 SSH 用户名"))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.username_undetermined")))?;
         Ok(Self {
             original,
             user,
@@ -290,12 +291,12 @@ fn parse_host_port(host_port: &str) -> io::Result<(String, u16)> {
     let (host, port) = if let Some(rest) = host_port.strip_prefix('[') {
         let (host, suffix) = rest
             .split_once(']')
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "无效的 IPv6 SSH 地址"))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.ipv6_invalid")))?;
         let port = suffix
             .strip_prefix(':')
             .map(str::parse)
             .transpose()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "无效的 SSH 端口"))?
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.port_invalid")))?
             .unwrap_or(22);
         (host.to_owned(), port)
     } else if let Some((host, port)) = host_port.rsplit_once(':') {
@@ -304,14 +305,14 @@ fn parse_host_port(host_port: &str) -> io::Result<(String, u16)> {
         } else {
             let port = port
                 .parse()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "无效的 SSH 端口"))?;
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.port_invalid")))?;
             (host.to_owned(), port)
         }
     } else {
         (host_port.to_owned(), 22)
     };
     if host.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "SSH 主机为空"));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.host_empty")));
     }
     Ok((host, port))
 }
@@ -437,7 +438,7 @@ impl client::Handler for ClientHandler {
                         self.port,
                         server_public_key,
                     ) {
-                        warn!("保存 SSH 主机密钥失败: {err}");
+                        warn!("{}", t!("ssh.session.host_config_failed", error = err));
                     }
                     Ok(true)
                 } else {
@@ -445,7 +446,7 @@ impl client::Handler for ClientHandler {
                 }
             },
             Err(err) => {
-                warn!("SSH 主机密钥验证失败: {err}");
+                warn!("{}", t!("ssh.host_key.changed", host = &self.host, port = self.port, detail = err));
                 if self.allow_prompt {
                     show_host_key_changed(&self.host, self.port, &err.to_string());
                 }
@@ -468,7 +469,7 @@ pub(crate) fn runtime() -> io::Result<&'static tokio::runtime::Runtime> {
             .map_err(|err| err.to_string())
     }) {
         Ok(runtime) => Ok(runtime),
-        Err(err) => Err(io::Error::other(format!("SSH Runtime 初始化失败: {err}"))),
+        Err(err) => Err(io::Error::other(t!("ssh.session.runtime_init_failed", error = err))),
     }
 }
 
@@ -560,7 +561,7 @@ async fn resolve_connection_route(
         let global = crate::ssh_proxy::SshProxyConfig::load_global();
         let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
         let profiles = crate::ssh_profiles::SshProfiles::load(&path)
-            .map_err(|err| format!("读取 SSH 主机配置失败: {err}"))?;
+            .map_err(|err| t!("ssh.session.host_config_failed", error = err).to_string())?;
         route::resolve_route_with(
             destination,
             profile,
@@ -569,17 +570,17 @@ async fn resolve_connection_route(
             proxy_password.as_deref(),
             &mut |spec| {
                 let destination = SshDestination::resolve(spec)
-                    .map_err(|err| format!("解析跳板地址失败: {err}"))?;
+                    .map_err(|err| t!("ssh.session.jump_parse_failed", error = err).to_string())?;
                 Ok((destination, profiles.for_destination(spec)))
             },
             &mut |target| {
                 crate::ssh_credentials::load_generic_secret(target)
-                    .map_err(|err| format!("读取代理凭据失败，请重新保存代理密码: {err}"))
+                    .map_err(|err| t!("ssh.session.proxy_credential_failed", error = err).to_string())
             },
         )
     })
     .await
-    .map_err(|err| format!("解析 SSH 连接路径任务失败: {err}"))?
+    .map_err(|err| t!("ssh.session.route_parse_failed", error = err).to_string())?
     .map_err(Into::into)
 }
 
@@ -593,7 +594,7 @@ async fn authenticated_route<H: SshEventHost>(
         if unattended { None } else { connection_pool().lock().await.get(&key).cloned() };
     if let Some(existing) = existing {
         if !existing.is_closed() {
-            info!("复用已认证 SSH 连接: {key}");
+            info!("{}", t!("ssh.session.reuse_authenticated_connection", key = key));
             return Ok(AcquiredSession {
                 key,
                 session: existing,
@@ -678,22 +679,22 @@ async fn open_transport(
     let mut jump_sessions = Vec::new();
     let session = match &route.transport {
         RouteTransport::Server(server) => {
-            info!("经代理 {} 连接 {}:{}", server.display(), destination.host, destination.port);
+            info!("{}", t!("ssh.session.connect_via_proxy", proxy = server.display(), host = &destination.host, port = destination.port));
             let stream = lifecycle::network(
                 "proxy connection",
                 crate::ssh_proxy::connect(server, &destination.host, destination.port),
             )
             .await
-            .map_err(|err| format!("经代理 {} 连接失败: {err}", server.display()))?;
+            .map_err(|err| t!("ssh.session.proxy_connect_failed", proxy = server.display(), error = err).to_string())?;
             handshake.connect(client::connect_stream(config, stream, handler)).await?
         },
         RouteTransport::Jump(jump) => {
             let spec = &jump.destination.original;
-            info!("经跳板 {spec} 连接 {}:{}", destination.host, destination.port);
+            info!("{}", t!("ssh.session.connect_via_jump_host", spec = spec, host = &destination.host, port = destination.port));
             let acquired =
                 Box::pin(authenticated_route(jump, None::<&NoopSshEventHost>, unattended))
                     .await
-                    .map_err(|err| format!("连接跳板 {spec} 失败: {err}"))?;
+                    .map_err(|err| t!("ssh.session.jump_connect_failed", jump = spec, error = err).to_string())?;
             let channel = lifecycle::network(
                 "jump channel",
                 acquired.session.channel_open_direct_tcpip(
@@ -705,10 +706,7 @@ async fn open_transport(
             )
             .await
             .map_err(|err| {
-                format!(
-                    "经跳板 {spec} 转发到 {}:{} 失败: {err}",
-                    destination.host, destination.port
-                )
+                t!("ssh.session.jump_forward_failed", jump = spec, host = &destination.host, port = destination.port, error = err)
             })?;
             jump_sessions = acquired.jump_sessions;
             jump_sessions.push(acquired.session);
@@ -717,13 +715,13 @@ async fn open_transport(
                 .await?
         },
         RouteTransport::Command(command) => {
-            info!("经自定义命令连接 {}:{}", destination.host, destination.port);
+            info!("{}", t!("ssh.session.connect_via_custom_command", host = &destination.host, port = destination.port));
             let stream = lifecycle::network(
                 "proxy command",
                 crate::ssh_proxy::connect_command(command, &destination.host, destination.port),
             )
             .await
-            .map_err(|err| format!("自定义代理命令启动失败: {err}"))?;
+            .map_err(|err| t!("ssh.session.custom_command_spawn_failed", error = err).to_string())?;
             handshake.connect(client::connect_stream(config, stream, handler)).await?
         },
         RouteTransport::Direct => {
@@ -759,9 +757,7 @@ async fn authenticate(
     let key_count =
         plan.iter().filter(|method| matches!(method, AuthMethod::PrivateKey(_))).count();
     if profile.auth == crate::ssh_profiles::SshAuthMode::Auto && key_count >= 3 {
-        warn!(
-            "自动认证将尝试 {key_count} 把私钥；若服务器触发 MaxAuthTries，请在 SSH Profile 中明确指定密钥"
-        );
+        warn!("{}", t!("ssh.session.auto_max_auth_tries", key_count = key_count));
     }
 
     let mut reusable_password = None;
@@ -860,7 +856,7 @@ async fn authenticate(
 /// 失败）。
 ///
 /// `budget` 到点即放弃：远端可能因为负载或磁盘卡住不回话，而调用方是 UI，
-/// 不能无限等。超时返回错误而不是空字符串——"问不到"和"答案是空"必须分开。
+/// Timeout semantics: must not wait indefinitely. Return error on timeout rather than empty string.
 pub(crate) async fn exec_capture(
     raw_destination: &str,
     command: &str,
@@ -876,7 +872,7 @@ pub(crate) async fn exec_capture(
         Ok::<_, io::Error>((destination, profiles.for_destination(&raw)))
     })
     .await
-    .map_err(|err| format!("SSH 地址解析任务失败: {err}"))??;
+    .map_err(|err| t!("ssh.session.address_resolve_failed", error = err).to_string())??;
 
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
     let channel = lifecycle::network("exec channel", session.channel_open_session()).await?;
@@ -895,10 +891,10 @@ pub(crate) async fn open_sftp(
         Ok::<_, io::Error>((destination, profiles.for_destination(&raw)))
     })
     .await
-    .map_err(|err| format!("SSH 地址解析任务失败: {err}"))??;
+    .map_err(|err| t!("ssh.session.address_resolve_failed", error = err).to_string())??;
 
     if let Some(proxy_jump) = destination.proxy_jump.as_deref() {
-        info!("SFTP 将经跳板 {proxy_jump} 建立");
+        info!("{}", t!("ssh.session.sftp_via_jump_host", proxy_jump = proxy_jump));
     }
 
     // SFTP 面板自己有加载态，不参与终端 pane 的连接卡片。
@@ -976,7 +972,7 @@ async fn run_test(request: SshTestRequest) -> SshTestResult {
         })
         .await
         .map_err(|err| -> SessionError {
-            format!("SSH 地址解析任务失败: {err}").into()
+            t!("ssh.session.address_resolve_failed", error = err).to_string().into()
         })??;
         let profile = crate::ssh_profiles::SshProfileAuth {
             destination: request.destination.clone(),
@@ -995,7 +991,7 @@ async fn run_test(request: SshTestRequest) -> SshTestResult {
     let (ok, message) = match outcome {
         Ok(Ok(())) => (true, String::new()),
         Ok(Err(err)) => (false, err.to_string()),
-        Err(_) => (false, format!("连接超时（{} 秒无响应）", TEST_TIMEOUT.as_secs())),
+        Err(_) => (false, t!("ssh.session.connect_timeout", seconds = TEST_TIMEOUT.as_secs()).to_string()),
     };
     SshTestResult {
         request_id,
@@ -1230,7 +1226,7 @@ async fn proxy_test_stream(
                     let profile = crate::ssh_profiles::SshProfiles::load(&path)
                         .map_err(|error| ProxyTestFailure::JumpResolve {
                             target: spec.clone(),
-                            error: format!("读取 SSH 主机配置失败: {error}"),
+                            error: t!("ssh.session.host_config_failed", error = error).to_string(),
                         })?
                         .for_destination(&spec);
                     Ok::<_, ProxyTestFailure>((destination, profile))
@@ -1370,12 +1366,12 @@ async fn test_authenticate(
     }
     clear_secret(&mut stored_password);
     if !local_key_errors.is_empty() {
-        return Err(format!("私钥无法使用：{}", local_key_errors.join("；")).into());
+        return Err(t!("ssh.session.keys_unusable", error = local_key_errors.join("；")).to_string().into());
     }
     if interactive_skipped {
-        return Err("服务器可达，但此配置需要连接时交互输入（密码/MFA），测试无法替你完成".into());
+        return Err(t!("ssh.session.interactive_required").to_string().into());
     }
-    Err("认证未通过：请检查密码、私钥或服务器端授权".into())
+    Err(t!("ssh.session.auth_failed").to_string().into())
 }
 
 fn auth_failure(
@@ -1390,26 +1386,26 @@ fn auth_failure(
         && !local_key_errors.is_empty()
         && local_key_errors.len() >= key_count
     {
-        return format!("私钥无法使用：{}", local_key_errors.join("；"));
+        return t!("ssh.session.keys_unusable", error = local_key_errors.join("；")).to_string();
     }
     let message = match mode {
-        SshAuthMode::Auto if key_count >= 3 => format!(
-            "服务器拒绝了自动认证；已尝试 {key_count} 把私钥，可能触发 MaxAuthTries，请明确选择一把密钥"
-        ),
-        SshAuthMode::Auto => "服务器拒绝了所有可用的 SSH 认证方式".to_owned(),
-        SshAuthMode::Password => "服务器拒绝了密码认证，未回退到其他认证方式".to_owned(),
-        SshAuthMode::PublicKey if key_count == 0 => {
-            "密钥认证没有可用的私钥，请选择私钥文件或配置 IdentityFile".to_owned()
+        SshAuthMode::Auto if key_count >= 3 => {
+            t!("ssh.session.auto_max_auth_tries", key_count = key_count).to_string()
         },
-        SshAuthMode::PublicKey => "服务器拒绝了指定的私钥，未回退到密码认证".to_owned(),
+        SshAuthMode::Auto => t!("ssh.session.auto_rejected").to_string(),
+        SshAuthMode::Password => t!("ssh.session.password_rejected").to_string(),
+        SshAuthMode::PublicKey if key_count == 0 => {
+            t!("ssh.session.no_private_keys").to_string()
+        },
+        SshAuthMode::PublicKey => t!("ssh.session.public_key_rejected").to_string(),
         SshAuthMode::KeyboardInteractive => {
-            "服务器拒绝了 keyboard-interactive 认证，未回退到密码认证".to_owned()
+            t!("ssh.session.keyboard_interactive_rejected").to_string()
         },
     };
     if local_key_errors.is_empty() {
         message
     } else {
-        format!("{message}（本地密钥问题：{}）", local_key_errors.join("；"))
+        format!("{message}{}", t!("ssh.session.local_key_problems_suffix", error = local_key_errors.join("；")))
     }
 }
 
@@ -1441,8 +1437,8 @@ async fn try_private_key(
     let private_key = match std::fs::read(path) {
         Ok(private_key) => private_key,
         Err(err) => {
-            warn!("无法读取 SSH 私钥 {}: {err}", path.display());
-            local_errors.push(format!("{}: 无法读取（{err}）", path.display()));
+            warn!("{}", t!("ssh.session.key_unreadable", path = path.display(), error = err));
+            local_errors.push(t!("ssh.session.key_unreadable", path = path.display(), error = err).to_string());
             return Ok(false);
         },
     };
@@ -1452,8 +1448,8 @@ async fn try_private_key(
         Ok(key) => Some(key),
         Err(err) if key_needs_passphrase(&err, &private_key) => None,
         Err(err) => {
-            warn!("SSH 私钥 {} 无法解析: {err}", path.display());
-            local_errors.push(format!("{}: 无法解析（{err}）", path.display()));
+            warn!("{}", t!("ssh.session.key_unparseable", path = path.display(), error = err));
+            local_errors.push(t!("ssh.session.key_unparseable", path = path.display(), error = err).to_string());
             return Ok(false);
         },
     };
@@ -1479,10 +1475,10 @@ async fn try_private_key(
 
     if key.is_none() {
         if !allow_prompt {
-            local_errors.push(format!("{}: 私钥受口令保护，测试无法替你输入口令", path.display()));
+            local_errors.push(t!("ssh.session.key_passphrase_protected", path = path.display()).to_string());
             return Ok(false);
         }
-        let prompt = format!("密钥口令: {}", path.display());
+        let prompt = t!("ssh.session.key_passphrase_prompt", path = path.display()).to_string();
         if let Some((mut passphrase, save)) = prompt_secret(prompt, None, true).await? {
             let text = zeroize::Zeroizing::new(String::from_utf8_lossy(&passphrase).into_owned());
             key = russh::keys::load_secret_key(path, Some(&text)).ok();
@@ -1492,7 +1488,7 @@ async fn try_private_key(
             passphrase.fill(0);
         }
         if key.is_none() {
-            local_errors.push(format!("{}: 密钥口令不正确或已取消", path.display()));
+            local_errors.push(t!("ssh.session.key_passphrase_wrong", path = path.display()).to_string());
         }
     }
     let Some(key) = key else { return Ok(false) };
@@ -1625,7 +1621,7 @@ async fn prompt_secret(
             .map(|response| response.map(|(value, save)| (zeroize::Zeroizing::new(value), save)))
     })
     .await
-    .map_err(|err| io::Error::other(format!("凭据输入任务失败: {err}")))?
+    .map_err(|err| io::Error::other(t!("ssh.session.credential_prompt_failed", error = err)))?
 }
 
 fn clear_secret(secret: &mut Option<Vec<u8>>) {
@@ -1638,7 +1634,7 @@ fn clear_secret(secret: &mut Option<Vec<u8>>) {
 fn remote_hook_token() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)
-        .map_err(|err| io::Error::other(format!("生成 SSH Hook 令牌失败: {err}")))?;
+        .map_err(|err| io::Error::other(t!("ssh.session.hook_token_failed", error = err)))?;
     let mut token = String::with_capacity(32);
     for byte in bytes {
         use std::fmt::Write as _;
@@ -1682,7 +1678,7 @@ fn confirm_new_host_legacy(host: &str, port: u16, _key: &ssh_key::PublicKey) -> 
 
 #[cfg(not(windows))]
 fn show_host_key_changed(host: &str, port: u16, detail: &str) {
-    log::error!("{host}:{port} 的主机密钥与已保存记录不一致，连接已终止: {detail}");
+    log::error!("{}", t!("ssh.host_key.changed", host = host, port = port, detail = detail));
 }
 
 #[cfg(windows)]
@@ -1693,9 +1689,7 @@ fn confirm_new_host_legacy(host: &str, port: u16, key: &ssh_key::PublicKey) -> b
     };
 
     let fingerprint = key.fingerprint(ssh_key::HashAlg::Sha256);
-    let text = wide(&format!(
-        "首次连接到 {host}:{port}。\n\n主机密钥：{fingerprint}\n\n是否信任并保存此主机密钥？"
-    ));
+    let text = wide(&t!("ssh.host_key.first_connect", host = host, port = port, fingerprint = fingerprint).to_string());
     let title = wide("Nebula SSH");
     unsafe {
         MessageBoxW(
@@ -1713,9 +1707,7 @@ fn show_host_key_changed(host: &str, port: u16, detail: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
     };
-    let text = wide(&format!(
-        "{host}:{port} 的主机密钥与已保存记录不一致。\n\n连接已终止，以避免连接到错误的主机。\n\n{detail}"
-    ));
+    let text = wide(&t!("ssh.host_key.changed", host = host, port = port, detail = detail).to_string());
     let title = wide("Nebula SSH");
     unsafe {
         MessageBoxW(

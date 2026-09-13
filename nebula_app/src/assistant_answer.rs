@@ -40,13 +40,16 @@ impl AssistantAnswer {
         }
     }
 
-    pub fn notice(&self) -> Option<String> {
+    pub fn notice(&self, language: crate::i18n::UiLanguage) -> Option<String> {
         match self {
             Self::Complete(_) => None,
-            Self::Missing => Some("未收到完整回答原文；保留终端内容，不从屏幕猜测。".into()),
-            Self::TooLarge { bytes } => Some(format!(
-                "回答原文共 {bytes} 字节，超过 {} KiB 阅读上限；未截断渲染，请在终端查看。",
-                MAX_ANSWER_BYTES / 1024
+            Self::Missing => Some(language.text(crate::i18n::Message::AnswerMissing).into()),
+            Self::TooLarge { bytes } => Some(language.format(
+                crate::i18n::Message::AnswerTooLarge,
+                &[
+                    ("bytes", &bytes.to_string()),
+                    ("limit", &(MAX_ANSWER_BYTES / 1024).to_string()),
+                ],
             )),
         }
     }
@@ -172,7 +175,12 @@ mod tests {
             let answer = AssistantAnswer::from_hook(provider, &payload(provider, &source)).unwrap();
             assert_eq!(answer, AssistantAnswer::TooLarge { bytes: source.len() });
             assert!(answer.source().is_none());
-            assert!(answer.notice().unwrap().contains("未截断"));
+            assert!(
+                answer
+                    .notice(crate::i18n::UiLanguage::EnUs)
+                    .unwrap()
+                    .contains("not truncated")
+            );
         }
     }
 

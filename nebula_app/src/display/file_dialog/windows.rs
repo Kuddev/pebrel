@@ -123,7 +123,7 @@ fn build_filter_buffer(filters: &[FileFilter]) -> Vec<u16> {
     let mut buffer = Vec::new();
     for filter in filters {
         let patterns = filter.patterns.join(";");
-        let label = format!("{} ({patterns})", filter.name);
+        let label = format!("{} ({patterns})", crate::i18n::UiLanguage::current().tr(filter.name));
         buffer.extend(label.encode_utf16());
         buffer.push(0);
         buffer.extend(patterns.encode_utf16());

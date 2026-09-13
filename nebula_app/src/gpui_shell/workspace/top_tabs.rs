@@ -94,7 +94,10 @@ pub(super) fn top_new_tab_control(
         Button::new("top-new-tab")
             .icon(IconName::Plus)
             .ghost()
-            .tooltip("新建终端 (Ctrl+Shift+T)")
+            .tooltip(
+            crate::i18n::UiLanguage::current()
+                .text(crate::i18n::Message::ChromeNewTerminalCtrlShiftT),
+        )
             .on_click(on_click),
     )
 }
@@ -105,7 +108,7 @@ pub(super) fn top_tabs_menu_button(settings_active: bool) -> Button {
         .icon(IconName::EllipsisVertical)
         .ghost()
         .selected(settings_active)
-        .tooltip("更多")
+        .tooltip(crate::i18n::UiLanguage::current().text(crate::i18n::Message::ChromeMore))
 }
 
 /// 紧邻 TabView 的操作按钮占满同一条 34px 行，再在槽内居中 32px 按钮。
@@ -130,6 +133,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
@@ -544,7 +548,7 @@ impl NebulaWorkspace {
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_start(scroll_x))
-                                        .tooltip("向左翻标签")
+                                        .tooltip(language.text(crate::i18n::Message::ChromeScrollTabsLeft))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 -1.0,
@@ -592,7 +596,7 @@ impl NebulaWorkspace {
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_end(scroll_x, strip_w, tab_viewport_w))
-                                        .tooltip("向右翻标签")
+                                        .tooltip(language.text(crate::i18n::Message::ChromeScrollTabsRight))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 1.0,
@@ -623,7 +627,7 @@ impl NebulaWorkspace {
                                     let settings = menu_workspace.clone();
                                     menu.external_link_icon(false)
                                         .item(
-                                            PopupMenuItem::new("新建窗口")
+                                            PopupMenuItem::new(language.text(crate::i18n::Message::CommonNewWindow))
                                                 .icon(IconName::Plus)
                                                 .action(Box::new(NewWindow))
                                                 .on_click(move |_, _, cx| {
@@ -637,7 +641,7 @@ impl NebulaWorkspace {
                                                 }),
                                         )
                                         .item(
-                                            PopupMenuItem::new("选择终端")
+                                            PopupMenuItem::new(language.text(crate::i18n::Message::ChromeSelectTerminal))
                                                 .icon(IconName::SquareTerminal)
                                                 .action(Box::new(ToggleShellPicker))
                                                 .on_click(move |_, window, cx| {
@@ -650,7 +654,7 @@ impl NebulaWorkspace {
                                         )
                                         .separator()
                                         .item(
-                                            PopupMenuItem::new("设置")
+                                            PopupMenuItem::new(language.text(crate::i18n::Message::CommonSettings))
                                                 .icon(IconName::Settings)
                                                 .action(Box::new(OpenSettings))
                                                 .on_click(move |_, window, cx| {
@@ -680,7 +684,7 @@ impl NebulaWorkspace {
                             )
                             .ghost()
                             .selected(self.command_manager_open)
-                            .tooltip("命令列表")
+                            .tooltip(language.text(crate::i18n::Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),
@@ -694,7 +698,7 @@ impl NebulaWorkspace {
                             })
                             .ghost()
                             .selected(files_active)
-                            .tooltip("目录树 (Ctrl+Shift+F)")
+                            .tooltip(language.text(crate::i18n::Message::ChromeFileTree))
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_file_tree(cx))),
                     )
                     .child(
@@ -702,7 +706,7 @@ impl NebulaWorkspace {
                             .icon(IconName::Github)
                             .ghost()
                             .selected(git_active)
-                            .tooltip("Git 状态 (Ctrl+Shift+G)")
+                            .tooltip(language.text(crate::i18n::Message::ChromeGitStatus))
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_git_tree(cx))),
                     ),
             )

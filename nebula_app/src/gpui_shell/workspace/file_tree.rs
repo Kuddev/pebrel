@@ -320,28 +320,22 @@ impl NebulaWorkspace {
         let indexed_more = if self.side_panel.file_index_truncated() { "+" } else { "" };
         let search_status = if search_active {
             Some(if search_error {
-                language.pick("正则表达式无效", "Invalid regular expression").to_owned()
+                language.tr("files.search.invalid_regex").to_owned()
             } else if self.side_panel.file_index_status()
                 == crate::display::side_panel::FileIndexStatus::Building
             {
-                language.pick("正在建立文件索引…", "Building file index...").to_owned()
+                language.tr("files.search.building_index_status").to_owned()
             } else if search_pending {
-                language.pick("正在搜索…", "Searching...").to_owned()
+                language.tr("files.search.searching_status").to_owned()
             } else {
-                match language {
-                    crate::display::UiLanguage::ZhCn => format!(
-                        "{} 个结果 · 已索引 {}{} 项",
-                        self.side_panel.file_search_total(),
-                        indexed_count,
-                        indexed_more
-                    ),
-                    _ => format!(
-                        "{} results · {}{} indexed",
-                        self.side_panel.file_search_total(),
-                        indexed_count,
-                        indexed_more
-                    ),
-                }
+                language.tr_args(
+                    "files.search.result_summary",
+                    &[
+                        ("results", &self.side_panel.file_search_total().to_string()),
+                        ("indexed", &indexed_count.to_string()),
+                        ("suffix", indexed_more),
+                    ],
+                )
             })
         } else {
             None
@@ -381,7 +375,7 @@ impl NebulaWorkspace {
                                     .ghost()
                                     .xsmall()
                                     .selected(search_options.match_case)
-                                    .tooltip(language.pick("区分大小写", "Match case"))
+                                    .tooltip(language.tr("files.search.match_case"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.side_panel.toggle_file_search_match_case();
                                         this.file_tree_scroll
@@ -395,7 +389,7 @@ impl NebulaWorkspace {
                                     .ghost()
                                     .xsmall()
                                     .selected(search_options.whole_word)
-                                    .tooltip(language.pick("全词匹配", "Match whole word"))
+                                    .tooltip(language.tr("files.search.whole_word"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.side_panel.toggle_file_search_whole_word();
                                         this.file_tree_scroll
@@ -409,9 +403,7 @@ impl NebulaWorkspace {
                                     .ghost()
                                     .xsmall()
                                     .selected(search_options.regex)
-                                    .tooltip(
-                                        language.pick("使用正则表达式", "Use regular expression"),
-                                    )
+                                    .tooltip(language.tr("files.search.regex"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.side_panel.toggle_file_search_regex();
                                         this.file_tree_scroll
@@ -435,7 +427,7 @@ impl NebulaWorkspace {
         let root = root_dir
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "等待终端上报工作目录…".to_owned());
+            .unwrap_or_else(|| language.tr("files.tree.waiting_for_cwd").to_owned());
         let row_count = self.side_panel.file_rows().len();
         let empty = self.file_tree_empty_state();
         let scroll_handle = self.file_tree_scroll.clone();
@@ -470,7 +462,7 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(root_dir.is_none())
-                            .tooltip("在此新建终端")
+                            .tooltip(language.text(crate::i18n::Message::FilesOpenTerminalHere))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 // WSL 树根要开的是**来宾**终端：宿主那份拼写只是
                                 // 展开用的键，在来宾的 shell 里不存在。
@@ -497,7 +489,7 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(root_dir.is_none())
-                            .tooltip("在资源管理器中打开")
+                            .tooltip(language.tr("files.tree.open_in_explorer"))
                             .on_click(cx.listener(|this, _, _, _cx| {
                                 let wsl = this
                                     .side_panel
@@ -526,7 +518,7 @@ impl NebulaWorkspace {
                             .icon(IconName::Redo2)
                             .ghost()
                             .xsmall()
-                            .tooltip("跟随当前终端并刷新 (Alt+R)")
+                            .tooltip(language.tr("files.tree.follow_refresh"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.side_panel.request_refresh();
                                 // 刷新同时恢复“跟随当前 pane”；否则点过 `..` 后
@@ -540,7 +532,7 @@ impl NebulaWorkspace {
                             .icon(IconName::Close)
                             .ghost()
                             .xsmall()
-                            .tooltip("关闭目录树 (Ctrl+Shift+F)")
+                            .tooltip(language.tr("files.tree.close"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_file_tree(cx);
                             })),
@@ -620,54 +612,55 @@ impl NebulaWorkspace {
     /// 目录仍然是空的；"读不到"和"确实是空的"必须分开说，否则用户没法判断该
     /// 重试还是该换目录。
     fn file_tree_empty_state(&self) -> Option<crate::ux::EmptyState> {
+        let language = super::workspace_ui_language();
         if self.side_panel.file_rows().iter().any(|row| !row.is_parent) {
             return None;
         }
         if !self.side_panel.search.trim().is_empty() {
             return Some(if let Some(error) = self.side_panel.file_search_error() {
                 crate::ux::EmptyState::new(
-                    "正则表达式无效",
+                    language.tr("files.search.invalid_regex"),
                     error.to_owned(),
-                    "修改表达式，或关闭右侧的 .* 选项。",
+                    language.tr("files.empty.invalid_regex_hint"),
                 )
             } else if self.side_panel.file_search_pending() {
                 crate::ux::EmptyState::new(
-                    "正在建立索引",
-                    "文件名索引正在后台准备，界面仍可继续使用。",
-                    "索引完成后会自动显示当前查询的结果。",
+                    language.tr("files.empty.building_index_title"),
+                    language.tr("files.empty.building_index_body"),
+                    language.tr("files.empty.building_index_hint"),
                 )
             } else {
                 crate::ux::EmptyState::new(
-                    "没有匹配的文件",
-                    "当前目录的索引中没有符合条件的文件或文件夹。",
-                    "修改查询，或关闭大小写、全词、正则选项后重试。",
+                    language.tr("files.empty.no_matches_title"),
+                    language.tr("files.empty.no_matches_body"),
+                    language.tr("files.empty.no_matches_hint"),
                 )
             });
         }
         Some(if self.side_panel.snapshot_pending() {
             crate::ux::EmptyState::new(
-                "正在读取目录",
-                "还在枚举当前工作目录的内容。",
-                "稍等一下，或点右上角重新跟随。",
+                language.tr("files.empty.reading_title"),
+                language.tr("files.empty.reading_body"),
+                language.tr("files.empty.reading_hint"),
             )
         } else if self.side_panel.enumeration_failed() {
             // 读不到 ≠ 目录是空的。WSL 冷启动可能耗尽预算，那时必须给可重试的提示。
             crate::ux::EmptyState::new(
-                "读取目录失败",
-                "枚举这个目录时被系统拒绝，或超出了单次预算。",
-                "点右上角重新跟随重试，或换一个目录。",
+                language.tr("files.empty.read_failed_title"),
+                language.tr("files.empty.read_failed_body"),
+                language.tr("files.empty.read_failed_hint"),
             )
         } else if self.side_panel.root().is_none() {
             crate::ux::EmptyState::new(
-                "没有可浏览的目录",
-                "当前终端尚未报告工作目录。",
-                "在终端中进入一个目录后点击右上角跟随。",
+                language.tr("files.empty.no_directory_title"),
+                language.tr("files.empty.no_directory_body"),
+                language.tr("files.empty.no_directory_hint"),
             )
         } else {
             crate::ux::EmptyState::new(
-                "此目录为空",
-                "当前工作目录中没有可显示的文件。",
-                "在终端创建文件，或选择其他目录。",
+                language.tr("files.empty.directory_empty_title"),
+                language.tr("files.empty.directory_empty_body"),
+                language.tr("files.empty.directory_empty_hint"),
             )
         })
     }
@@ -773,8 +766,9 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let language = crate::gpui_shell::config::ui_language(cx);
         if !path.exists() {
-            self.side_panel.set_notice("路径已不存在".to_owned());
+            self.side_panel.set_notice(language.tr("files.delete.path_missing").to_owned());
             cx.notify();
             return;
         }
@@ -783,13 +777,15 @@ impl NebulaWorkspace {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        let title: SharedString =
-            format!("删除 {}？", crate::display::truncate_tab_label(&name, 28)).into();
-        let body: SharedString = if is_dir {
-            "文件夹及其全部内容会移入回收站。".into()
-        } else {
-            "文件会移入回收站。".into()
-        };
+        let name = crate::display::truncate_tab_label(&name, 28);
+        let title: SharedString = language
+            .tr_args("files.delete.title", &[("name", &name)])
+            .into();
+        let body: SharedString = language
+            .tr(if is_dir { "files.delete.folder_body" } else { "files.delete.file_body" })
+            .into();
+        let delete_label = language.text(crate::i18n::Message::CommonDelete);
+        let cancel_label = language.text(crate::i18n::Message::CommonCancel);
         let workspace = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, window, _cx| {
             let workspace = workspace.clone();
@@ -799,8 +795,8 @@ impl NebulaWorkspace {
                 window,
                 title.clone(),
                 body.clone(),
-                "删除",
-                "取消",
+                delete_label,
+                cancel_label,
                 ButtonVariant::Danger,
             )
             .on_ok(move |_, _, cx| {
@@ -810,7 +806,10 @@ impl NebulaWorkspace {
                             this.side_panel.request_refresh();
                             this.sync_side_panel_to_active(false, cx);
                         },
-                        Err(error) => this.side_panel.set_notice(format!("删除失败：{error}")),
+                        Err(error) => this.side_panel.set_notice(
+                            super::workspace_ui_language()
+                                .tr_args("files.delete.failed", &[("error", &error.to_string())]),
+                        ),
                     }
                     cx.notify();
                 });
@@ -876,7 +875,7 @@ fn file_tree_popup_menu(
     if let Some(guest_path) = guest_path {
         let copy_guest = guest_path.clone();
         let copy =
-            PopupMenuItem::new("复制 Linux 路径").icon(IconName::Copy).on_click(move |_, _, cx| {
+            PopupMenuItem::new(language.tr("files.copy_linux_path")).icon(IconName::Copy).on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(copy_guest.clone()));
             });
         let Some(distro) = wsl_distro else { return menu.item(copy) };
@@ -884,7 +883,7 @@ fn file_tree_popup_menu(
             let open_here = workspace.clone();
             let open_distro = distro.clone();
             let open_guest = guest_path.clone();
-            PopupMenuItem::new("在此处打开终端").icon(IconName::SquareTerminal).on_click(
+            PopupMenuItem::new(language.text(crate::i18n::Message::FilesOpenTerminalHere)).icon(IconName::SquareTerminal).on_click(
                 move |_, window, cx| {
                     if let Some(workspace) = open_here.upgrade() {
                         workspace.update(cx, |this, cx| {
@@ -901,7 +900,7 @@ fn file_tree_popup_menu(
         } else {
             let open = workspace.clone();
             let open_guest = guest_path.clone();
-            PopupMenuItem::new("打开").icon(IconName::File).on_click(move |_, window, cx| {
+            PopupMenuItem::new(language.text(crate::i18n::Message::CommonOpen)).icon(IconName::File).on_click(move |_, window, cx| {
                 if let Some(workspace) = open.upgrade() {
                     workspace.update(cx, |this, cx| {
                         this.open_wsl_document_path(open_guest.clone(), window, cx);
@@ -912,7 +911,7 @@ fn file_tree_popup_menu(
         let reveal_path = crate::shell_detect::wsl_unc_path(&distro, &guest_path);
         return menu
             .item(first)
-            .item(PopupMenuItem::new("在资源管理器中显示").icon(IconName::FolderOpen).on_click(
+            .item(PopupMenuItem::new(language.text(crate::i18n::Message::FilesRevealInExplorer)).icon(IconName::FolderOpen).on_click(
                 move |_, _, _| {
                     super::reveal_in_file_manager(&reveal_path);
                 },
@@ -922,7 +921,7 @@ fn file_tree_popup_menu(
     let first = if is_dir {
         let open_here = workspace.clone();
         let dir = path.clone();
-        PopupMenuItem::new("在此处打开终端").icon(IconName::SquareTerminal).on_click(
+        PopupMenuItem::new(language.text(crate::i18n::Message::FilesOpenTerminalHere)).icon(IconName::SquareTerminal).on_click(
             move |_, window, cx| {
                 if let Some(workspace) = open_here.upgrade() {
                     workspace.update(cx, |this, cx| {
@@ -934,7 +933,7 @@ fn file_tree_popup_menu(
     } else {
         let open = workspace.clone();
         let file = path.clone();
-        PopupMenuItem::new("打开").icon(IconName::File).on_click(move |_, window, cx| {
+        PopupMenuItem::new(language.text(crate::i18n::Message::CommonOpen)).icon(IconName::File).on_click(move |_, window, cx| {
             if let Some(workspace) = open.upgrade() {
                 workspace.update(cx, |this, cx| {
                     this.open_document_path(file.clone(), window, cx);
@@ -968,18 +967,18 @@ fn file_tree_popup_menu(
     });
     let delete = workspace;
     menu.item(first)
-        .item(PopupMenuItem::new("在资源管理器中显示").icon(IconName::FolderOpen).on_click(
+        .item(PopupMenuItem::new(language.text(crate::i18n::Message::FilesRevealInExplorer)).icon(IconName::FolderOpen).on_click(
             move |_, _, _| {
                 super::reveal_in_file_manager(&reveal_path);
             },
         ))
-        .item(PopupMenuItem::new("复制路径").icon(IconName::Copy).on_click(move |_, _, cx| {
+        .item(PopupMenuItem::new(language.tr("files.copy_path")).icon(IconName::Copy).on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(copy_path.display().to_string()));
         }))
         .separator()
         // 忽略在删除上面：两者都改工作区，但删除不可逆，危险的排最后。
         .when_some(ignore_item, |menu, item| menu.item(item))
-        .item(PopupMenuItem::new("删除").icon(IconName::Delete).on_click(move |_, window, cx| {
+        .item(PopupMenuItem::new(language.text(crate::i18n::Message::CommonDelete)).icon(IconName::Delete).on_click(move |_, window, cx| {
             if let Some(workspace) = delete.upgrade() {
                 workspace.update(cx, |this, cx| {
                     this.request_delete_file_tree_path(path.clone(), window, cx);

@@ -4,6 +4,7 @@ mod broadcast;
 mod confirmation;
 mod cwd_report;
 mod image_paste;
+mod i18n;
 mod notifications;
 mod path_drop;
 mod pointer;
@@ -39,7 +40,8 @@ use super::mouse_protocol;
 use super::session::{self, TerminalSession};
 use super::suggest;
 use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
-use crate::gpui_shell::config::Settings;
+use crate::gpui_shell::config::{ui_language as settings_ui_language, Settings};
+use crate::i18n::{Message, UiLanguage};
 use crate::gpui_shell::prelude::{ActiveTheme as _, Colorize as _};
 use crate::{config::UiConfig, font_install::REQUIRED_FONT_FAMILY};
 
@@ -142,14 +144,11 @@ fn paste_needs_confirmation(text: &str, mode: TermMode) -> bool {
     has_line_break || has_unsafe_control || starts_privileged_command
 }
 
-/// 当前 UI 语言。`RuntimeSettings` 每次读盘，所以只在用户动作（复制提示、
-/// 粘贴确认）时取，不进渲染热路径。
-fn ui_language() -> crate::display::UiLanguage {
-    crate::display::LanguagePreference::from(nebula_settings::RuntimeSettings::load().language)
-        .resolved()
+/// 终端视图对宿主（Panel/Workspace）暴露的状态变化。
+pub(super) fn ui_language() -> crate::display::UiLanguage {
+    crate::display::UiLanguage::current()
 }
 
-/// 终端视图对宿主（Panel/Workspace）暴露的状态变化。
 pub enum TerminalViewEvent {
     /// OSC 标题变化，宿主应刷新 Tab 标题。
     TitleChanged,
@@ -725,8 +724,7 @@ impl TerminalView {
                 (Some(session), None)
             },
             Err(err) => {
-                let what = if is_ssh { "SSH 会话启动失败" } else { "PTY 启动失败" };
-                (None, Some(format!("{what}: {err}")))
+                (None, Some(i18n::start_failed(is_ssh, &err.to_string())))
             },
         };
 
@@ -946,13 +944,13 @@ impl TerminalView {
                 self.write_bytes(formatter(self.window_size).into_bytes());
             },
             TermEvent::ChildExit(code) => {
-                self.mark_exited(format!("进程已退出（{code:?}）"), cx);
+                self.mark_exited(i18n::process_exited(code), cx);
             },
             TermEvent::PtyFailure(reason) => {
-                self.mark_exited(format!("PTY 故障：{reason}"), cx);
+                self.mark_exited(i18n::pty_fault(&reason), cx);
             },
             TermEvent::Exit => {
-                self.mark_exited(String::from("会话已结束"), cx);
+                self.mark_exited(i18n::session_ended(), cx);
             },
             TermEvent::CwdReport(_) => {
                 // 标准 OSC 7 / 9;9 的目录上报。只动 cwd，`NEBULA|` 标题带来的
@@ -1518,7 +1516,7 @@ impl TerminalView {
             // 原始按键可能紧接着再次到来；先清除选区，下一次 Copy 才能按
             // “未处理”传播回终端，而不是重复复制并再次弹 toast。
             session.term.lock().selection = None;
-            let message = ui_language()
+            let message = UiLanguage::current()
                 .format(crate::i18n::Message::CommonCopiedLines, &[("lines", &lines.to_string())]);
             crate::gpui_shell::toast::toast(window, cx, crate::display::ToastKind::Info, message);
             cx.notify();
@@ -2170,6 +2168,7 @@ impl Render for TerminalView {
             }
         }
         if let Some(answer) = self.answers.latest.clone() {
+            let language = settings_ui_language(cx);
             let provider = if answer.provider == "claude" { "Claude Code" } else { "Codex" };
             return div()
                 .size_full()
@@ -2184,10 +2183,10 @@ impl Render for TerminalView {
                         .gap_2()
                         .items_center()
                         .bg(cx.theme().background)
-                        .child(div().text_xs().child(format!("{provider} · 回答")))
+                        .child(div().text_xs().child(i18n::answer_label(language, provider)))
                         .child(
                             crate::gpui_shell::prelude::Button::new("answer-open")
-                                .label("阅读")
+                                .label(language.text(Message::AnswerRead))
                                 .small()
                                 .on_click(
                                     cx.listener(|view, _, window, cx| view.open_answer(window, cx)),

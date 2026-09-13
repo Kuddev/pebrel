@@ -290,15 +290,19 @@ impl SettingsPane {
         let picker = self.appearance_picker.as_ref().unwrap();
         let language = crate::gpui_shell::config::ui_language(cx);
         let colors = AppearanceColors::current(cx);
-        let filters: &[(&'static str, &'static str)] = if picker.draft.is_theme() {
-            &[("全部", "All"), ("浅色", "Light"), ("深色", "Dark")]
+        let filters: &[crate::i18n::Message] = if picker.draft.is_theme() {
+            &[
+                crate::i18n::Message::CommonAll,
+                crate::i18n::Message::CommonLight,
+                crate::i18n::Message::CommonDark,
+            ]
         } else {
             &[
-                ("全部", "All"),
-                ("中性", "Neutral"),
-                ("蓝色", "Blue"),
-                ("紫色", "Violet"),
-                ("青绿", "Green"),
+                crate::i18n::Message::CommonAll,
+                crate::i18n::Message::AppearanceNeutral,
+                crate::i18n::Message::AppearanceBlue,
+                crate::i18n::Message::AppearanceViolet,
+                crate::i18n::Message::AppearanceGreen,
             ]
         };
         let count = picker.draft.choices(picker.filter).len();
@@ -309,10 +313,10 @@ impl SettingsPane {
             .border_b_1()
             .border_color(colors.line)
             .flex_shrink_0()
-            .children(filters.iter().enumerate().map(|(index, (chinese, english))| {
+            .children(filters.iter().enumerate().map(|(index, message)| {
                 let selected = picker.filter == index;
                 Button::new(("appearance-filter", index))
-                    .label(language.pick(chinese, english))
+                    .label(language.text(*message))
                     .ghost()
                     .h(px(27.0))
                     .px(px(if compact { 7.0 } else { 10.0 }))
@@ -330,14 +334,17 @@ impl SettingsPane {
             .when(!compact, |filters| {
                 filters.child(
                     div().flex_1().text_right().text_size(px(10.5)).text_color(colors.muted).child(
-                        format!(
-                            "{count} {}",
-                            if picker.draft.is_theme() {
-                                language.pick("款主题", "themes")
-                            } else {
-                                language.pick("款配色", "colors")
-                            }
-                        ),
+                        if picker.draft.is_theme() {
+                            language.format(
+                                crate::i18n::Message::AppearanceThemeCount,
+                                &[("count", &count.to_string())],
+                            )
+                        } else {
+                            language.format(
+                                crate::i18n::Message::AppearanceColorCount,
+                                &[("count", &count.to_string())],
+                            )
+                        }
                     ),
                 )
             })
