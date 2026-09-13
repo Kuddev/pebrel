@@ -133,6 +133,15 @@ pebrel config check
 生成的 Lua 配置使用 `require 'pebrel'` 与 `pebrel.config_builder()`。
 重载失败时继续使用上一份有效配置。设置与示例见 [Lua 配置指南](docs/lua-configuration.md)。
 
+在 **设置 → 终端 → 提醒** 中，**通知显示时长** 可选择 **保留原有时长**、
+5、10、30、90 秒，或 **保持常驻**。默认保留已有行为：短提示显示 5 秒，消息
+提醒显示 90 秒，更新通知保持常驻。该选项独立于是否显示 AI 提醒的开关，保存后
+对所有新显示或刷新的应用内卡片生效。隐藏卡片不会同意或拒绝请求，也不会改变
+任务状态；请求仍可在对应终端中处理，更新仍可在设置中查看。系统通知不受影响。
+持久化键为 `notification_duration`，可取 `default`、`5`、`10`、`30`、`90`
+或 `persistent`。
+可查看[通知显示时长菜单示例](docs/screenshots/notification-duration.png)。
+
 ## 构建
 
 安装项目固定的 Rust 工具链与对应平台依赖后运行：

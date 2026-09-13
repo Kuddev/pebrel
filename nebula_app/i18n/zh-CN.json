@@ -19,10 +19,19 @@
       "backup": "备份"
     },
     "notifications": {
+      "duration": "通知显示时长",
+      "duration_description": "选择应用内通知自动关闭的时间，或保持常驻。",
+      "duration_details": "对新显示或刷新的应用内卡片生效。默认保留原有时长：短提示 5 秒，消息提醒 90 秒，更新通知常驻。关闭卡片不会同意或拒绝确认，也不会改变任务状态；系统通知不受影响。",
+      "duration_default": "保留原有时长",
+      "duration_five": "5 秒",
+      "duration_ten": "10 秒",
+      "duration_thirty": "30 秒",
+      "duration_ninety": "90 秒",
+      "duration_persistent": "保持常驻",
       "ai_messages": "AI 消息弹窗",
       "ai_messages_description": "显示右下角的 AI 弹窗，不影响系统通知。",
       "ai_messages_details": "关闭后收起已有的应用内 AI 弹窗，并停止显示新的完成和确认弹窗。Windows 系统通知及标签状态提示仍保留，终端输出和终端内的确认请求不受影响。",
-      "save_failed": "无法保存 AI 弹窗设置：{error}"
+      "save_failed": "无法保存通知设置：{error}"
     },
     "network": {
       "title": "网络代理",

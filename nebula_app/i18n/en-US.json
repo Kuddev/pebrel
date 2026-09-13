@@ -19,10 +19,19 @@
       "backup": "Backup"
     },
     "notifications": {
+      "duration": "Notification duration",
+      "duration_description": "Choose when in-app notifications close, or keep them until dismissed.",
+      "duration_details": "Applies to new or refreshed in-app cards. Defaults: short toasts 5 seconds, banners 90 seconds, update notices until dismissed. Closing a card never answers a confirmation or changes task state. System notifications are unchanged.",
+      "duration_default": "Use defaults",
+      "duration_five": "5 seconds",
+      "duration_ten": "10 seconds",
+      "duration_thirty": "30 seconds",
+      "duration_ninety": "90 seconds",
+      "duration_persistent": "Until dismissed",
       "ai_messages": "AI message toasts",
       "ai_messages_description": "Show AI toasts in the lower-right corner. System notifications are unaffected.",
       "ai_messages_details": "Turning this off dismisses existing in-app AI toasts and hides new completion and confirmation toasts. System notifications, including Windows notifications, and tab status indicators are unchanged. Terminal output and confirmation requests in the terminal remain available.",
-      "save_failed": "Could not save the AI toast setting: {error}"
+      "save_failed": "Could not save the notification setting: {error}"
     },
     "network": {
       "title": "Network proxy",

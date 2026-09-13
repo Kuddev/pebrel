@@ -96,6 +96,7 @@ fn localized_select_labels_keep_stable_value_cardinality() {
         ("cursor_shape", &["beam", "underline", "block", "hollow"]),
         ("tabs_position", &["sidebar", "top"]),
         ("bell", &["off", "visual", "sound", "both"]),
+        ("notification_duration", nebula_settings::NotificationDuration::VALUES),
     ];
     for (key, values) in cases {
         for language in crate::display::UiLanguage::ALL {

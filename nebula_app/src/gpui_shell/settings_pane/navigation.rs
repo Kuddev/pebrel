@@ -28,7 +28,7 @@ pub(super) const SECTION_IDS: [&str; 10] = [
 pub(super) const SECTION_SEARCH_TERMS: [&str; 10] = [
     "application app 应用 update 更新 version 版本 github support 支持",
     "appearance 外观 theme 主题 font 字体 opacity 透明度 background 背景 cursor 光标 icon 图标",
-    "profiles 配置文件 shell terminal 终端 completion 补全 startup 启动 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声",
+    "profiles 配置文件 shell terminal 终端 completion 补全 startup 启动 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 duration timeout persistent auto-dismiss 时长 秒 常驻 自动关闭",
     "providers provider ai 供应商 模型 api",
     "ssh host 主机 remote 远程 connection 连接",
     "network 网络 proxy 代理 connectivity 连接",

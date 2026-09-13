@@ -55,6 +55,7 @@ mod initialization;
 mod keymap;
 mod localization;
 mod navigation;
+mod notifications;
 mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
@@ -605,6 +606,9 @@ impl SettingsPane {
         // sk.accent）。闭框/背景都不带文字色，包一层就能继承下去；右侧
         // chevron 在组件内自带 muted，不会被染色。
         let control = div()
+            .when(key == "notification_duration", |control| {
+                control.debug_selector(|| "notification-duration-select".to_owned())
+            })
             .w(px(SETTINGS_SELECT_WIDTH))
             .text_color(cx.theme().link)
             .children(select.map(|state| Select::new(&state)));
@@ -665,6 +669,7 @@ impl SettingsPane {
             "powerline" => flag!(powerline),
             "ghost" => flag!(ghost),
             "ai_toasts" => flag!(ai_toasts),
+            "notification_duration" => pick!(notification_duration),
             "cjk_bold_regular" => flag!(cjk_bold_regular),
             "fetch" => flag!(fetch),
             "keep_session" => flag!(keep_session),
@@ -1009,6 +1014,12 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::SettingsNotificationsAiMessages),
                 help("ai_toasts", language),
                 self.runtime.ai_toasts,
+                cx,
+            ))
+            .child(self.select_row(
+                "notification_duration",
+                language.text(crate::i18n::Message::SettingsNotificationsDuration),
+                help("notification_duration", language),
                 cx,
             ))
             .child(self.select_row(

@@ -147,6 +147,17 @@ The generated Lua configuration uses `require 'pebrel'` and
 `pebrel.config_builder()`. Invalid reloads retain the last valid configuration.
 See the [Lua configuration guide](docs/lua-configuration.md) for settings and examples.
 
+In **Settings → Terminal → Alerts**, **Notification duration** selects **Use defaults**,
+5, 10, 30, or 90 seconds, or **Until dismissed**. The default preserves existing
+lifetimes: short toasts last 5 seconds, message banners 90 seconds, and update
+notices remain until dismissed. The saved preference applies to all newly shown
+or refreshed in-app cards, independently of the AI-toast visibility switch.
+Hiding a card never approves or rejects a request or changes task state; requests
+remain available in their terminals and updates in Settings. System notifications
+are unchanged. The persisted key is `notification_duration`, with values `default`,
+`5`, `10`, `30`, `90`, or `persistent`.
+See the [notification duration menu](docs/screenshots/notification-duration.png).
+
 ## Build
 
 With the pinned Rust toolchain and the platform dependencies installed:

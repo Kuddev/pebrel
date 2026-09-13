@@ -12,7 +12,7 @@ const UPDATE_DIALOG_STATUS_HEIGHT: f32 = 280.0;
 
 struct UpdateNotification;
 
-/// 自动检查只在右下角提示，不抢终端焦点；更新是待办，因此保持到用户处理。
+/// 自动检查只在右下角提示，不抢终端焦点；默认常驻，也遵循通知时长设置。
 pub(crate) fn show_update_notification(
     result: crate::update_check::UpdateCheckResult,
     window: &mut Window,
@@ -31,7 +31,6 @@ pub(crate) fn show_update_notification(
     let notification = Notification::warning(message)
         .id::<UpdateNotification>()
         .title(title)
-        .autohide(false)
         .w_auto()
         .min_w(px(300.0))
         .max_w(px(440.0))
@@ -49,7 +48,7 @@ pub(crate) fn show_update_notification(
         result.latest,
         result.current
     );
-    crate::gpui_shell::toast::push_notification(window, cx, notification);
+    crate::gpui_shell::toast::push_notification(window, cx, notification, None);
 }
 
 fn start_update_download(
@@ -148,7 +147,6 @@ fn show_download_outcome_notification(
     notification = notification
         .id::<UpdateNotification>()
         .title(title)
-        .autohide(false)
         .w_auto()
         .min_w(px(320.0))
         .max_w(px(460.0))
@@ -161,7 +159,7 @@ fn show_download_outcome_notification(
                 }),
             )
         });
-    crate::gpui_shell::toast::push_notification(window, cx, notification);
+    crate::gpui_shell::toast::push_notification(window, cx, notification, None);
 }
 
 /// 关闭、Esc 与遮罩点击均走“3 天后提醒”；这正是新 Dialog 的取消合同。
