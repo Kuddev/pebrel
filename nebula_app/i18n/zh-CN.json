@@ -426,13 +426,14 @@
     },
     "delete": {
       "path_missing": "路径已不存在",
-      "failed": "删除失败：{error}",
       "title": "删除 {name}？",
       "folder_body": "文件夹及其全部内容会移入回收站。",
       "file_body": "文件会移入回收站。"
     },
     "copy_linux_path": "复制 Linux 路径",
-    "copy_path": "复制路径"
+    "copy_path": "复制路径",
+    "path_unavailable": "路径已不存在",
+    "delete_failed": "删除失败：{error}"
   },
   "recipe": {
     "title": "布局配方",
@@ -774,7 +775,7 @@
     "commit": "提交",
     "stage_all": "全部暂存",
     "pull": "拉取",
-    "push_ahead": "推送 ↑{ahead}",
+    "push_ahead": "推送 ↑{count}",
     "push": "推送",
     "add": "添加",
     "update": "更新",
@@ -807,7 +808,30 @@
     "release_lock": "释放锁定",
     "add_to_ignore": "加入忽略列表…",
     "rename": "重命名…",
-    "edit_conflicts": "编辑冲突"
+    "edit_conflicts": "编辑冲突",
+    "no_branch": "(无分支)",
+    "resolve_in_merge_editor": "在三栏合并器中解决",
+    "graph": "线路",
+    "history_graph": "历史线路",
+    "commit_placeholder": "提交信息…",
+    "follow_directory": "回到终端当前目录",
+    "not_repository": "当前目录不在 Git/SVN 仓库中",
+    "toggle_git": "Git 状态 (Ctrl+Shift+G)",
+    "time_now": "刚刚",
+    "time_minute": "1 分钟前",
+    "time_minutes": "{count} 分钟前",
+    "time_hour": "1 小时前",
+    "time_hours": "{count} 小时前",
+    "time_day": "1 天前",
+    "time_days": "{count} 天前",
+    "time_month": "1 个月前",
+    "time_months": "{count} 个月前",
+    "time_year": "1 年前",
+    "time_years": "{count} 年前",
+    "directory_unavailable": "所选目录不可用",
+    "following_directory": "所选目录不可用，已跟随当前目录",
+    "command_failed": "{program} 失败",
+    "task_start_failed": "无法启动版本控制任务: {error}"
   },
   "backup_remote": {
     "config_write_failed": "写入备份配置失败：{error}",
