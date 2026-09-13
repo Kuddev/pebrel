@@ -23,7 +23,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[cfg(feature = "legacy-shell")]
 use crate::event::EventProxy;
-use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, ProxyTestRoute};
+use crate::proxy_test::{
+    NetworkTestTarget, ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, ProxyTestRoute,
+};
 
 mod exec;
 mod lifecycle;
@@ -1045,9 +1047,6 @@ pub fn spawn_test(
 
 // ---- 设置→网络：真实出网测试 ----
 
-const NETWORK_TEST_HOST: &str = "example.com";
-const NETWORK_TEST_PORT: u16 = 80;
-
 trait NetworkTestStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> NetworkTestStream for T {}
 
@@ -1104,9 +1103,10 @@ fn proxy_test_pair(
     }
 }
 
-async fn run_proxy_test(request_id: u64) -> ProxyTestResult {
+async fn run_proxy_test(request_id: u64, target: NetworkTestTarget) -> ProxyTestResult {
     let started = std::time::Instant::now();
-    let outcome = proxy_test_pair(tokio::time::timeout(TEST_TIMEOUT, proxy_test_once()).await);
+    let outcome =
+        proxy_test_pair(tokio::time::timeout(TEST_TIMEOUT, proxy_test_once(&target)).await);
     ProxyTestResult { request_id, outcome, elapsed_ms: started.elapsed().as_millis() as u64 }
 }
 
@@ -1115,10 +1115,11 @@ async fn run_proxy_test(request_id: u64) -> ProxyTestResult {
 /// [`proxy_test_once`]。
 pub fn start_proxy_test(
     request_id: u64,
+    target: NetworkTestTarget,
 ) -> io::Result<tokio::sync::oneshot::Receiver<ProxyTestResult>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     runtime()?.spawn(async move {
-        let _ = sender.send(run_proxy_test(request_id).await);
+        let _ = sender.send(run_proxy_test(request_id, target).await);
     });
     Ok(receiver)
 }
@@ -1133,7 +1134,7 @@ pub fn spawn_proxy_test(
     window_id: winit::window::WindowId,
 ) -> io::Result<()> {
     runtime()?.spawn(async move {
-        let result = run_proxy_test(request_id).await;
+        let result = run_proxy_test(request_id, NetworkTestTarget::default()).await;
         let _ = proxy.send_event(crate::event::Event::new(
             crate::event::EventType::ProxyTestDone {
                 request_id: result.request_id,
@@ -1146,12 +1147,12 @@ pub fn spawn_proxy_test(
     Ok(())
 }
 
-async fn proxy_test_once() -> Result<ProxyTestRoute, ProxyTestFailure> {
+async fn proxy_test_once(target: &NetworkTestTarget) -> Result<ProxyTestRoute, ProxyTestFailure> {
     let global = tokio::task::spawn_blocking(crate::ssh_proxy::SshProxyConfig::load_global)
         .await
         .map_err(|error| ProxyTestFailure::LoadSettings(error.to_string()))?;
     let link = global
-        .resolve(None, NETWORK_TEST_HOST)
+        .resolve(None, target.host())
         .map_err(|error| ProxyTestFailure::InvalidSettings(error.to_string()))?;
     let route = match &link {
         Some(crate::ssh_proxy::ProxyLink::Server(server)) => {
@@ -1162,11 +1163,22 @@ async fn proxy_test_once() -> Result<ProxyTestRoute, ProxyTestFailure> {
         None if global.mode == crate::ssh_proxy::ProxyMode::Custom => ProxyTestRoute::DirectAddress,
         None => ProxyTestRoute::Direct,
     };
-    let mut stream = proxy_test_stream(link.as_ref()).await?;
+    let mut stream = proxy_test_stream(link.as_ref(), target).await?;
+    if target.is_https() {
+        use tokio_rustls::rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+        let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+        let name = ServerName::try_from(target.host().to_owned())
+            .map_err(|error| ProxyTestFailure::SendRequest(error.to_string()))?;
+        stream = Box::new(
+            tokio_rustls::TlsConnector::from(Arc::new(config))
+                .connect(name, stream)
+                .await
+                .map_err(|error| ProxyTestFailure::SendRequest(error.to_string()))?,
+        );
+    }
     stream
-        .write_all(
-            b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\nUser-Agent: Nebula-Network-Test\r\n\r\n",
-        )
+        .write_all(target.request().as_bytes())
         .await
         .map_err(|error| ProxyTestFailure::SendRequest(error.to_string()))?;
     stream.flush().await.map_err(|error| ProxyTestFailure::SendRequest(error.to_string()))?;
@@ -1183,26 +1195,18 @@ async fn proxy_test_once() -> Result<ProxyTestRoute, ProxyTestFailure> {
         }
         response.extend_from_slice(&chunk[..read]);
     }
-    let head = String::from_utf8_lossy(&response);
-    let status_line = head.lines().next().unwrap_or_default();
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|value| value.parse::<u16>().ok())
-        .ok_or_else(|| ProxyTestFailure::InvalidHttpStatusLine(status_line.to_owned()))?;
-    if !(200..500).contains(&status) {
-        return Err(ProxyTestFailure::HttpStatus { status });
-    }
+    crate::proxy_test::check_http_response(&String::from_utf8_lossy(&response))?;
     Ok(route)
 }
 
 async fn proxy_test_stream(
     link: Option<&crate::ssh_proxy::ProxyLink>,
+    target: &NetworkTestTarget,
 ) -> Result<Box<dyn NetworkTestStream>, ProxyTestFailure> {
     use crate::ssh_proxy::ProxyLink;
     match link {
         Some(ProxyLink::Server(server)) => {
-            crate::ssh_proxy::connect(server, NETWORK_TEST_HOST, NETWORK_TEST_PORT)
+            crate::ssh_proxy::connect(server, target.host(), target.port())
                 .await
                 .map(|stream| Box::new(stream) as Box<dyn NetworkTestStream>)
                 .map_err(|error| ProxyTestFailure::ProxyServer {
@@ -1211,7 +1215,7 @@ async fn proxy_test_stream(
                 })
         },
         Some(ProxyLink::Command(command)) => {
-            crate::ssh_proxy::connect_command(command, NETWORK_TEST_HOST, NETWORK_TEST_PORT)
+            crate::ssh_proxy::connect_command(command, target.host(), target.port())
                 .await
                 .map(|stream| Box::new(stream) as Box<dyn NetworkTestStream>)
                 .map_err(|error| ProxyTestFailure::CustomCommand(error.to_string()))
@@ -1252,12 +1256,7 @@ async fn proxy_test_stream(
             )?;
             let channel = jump
                 .session
-                .channel_open_direct_tcpip(
-                    NETWORK_TEST_HOST,
-                    u32::from(NETWORK_TEST_PORT),
-                    "127.0.0.1",
-                    0,
-                )
+                .channel_open_direct_tcpip(target.host(), u32::from(target.port()), "127.0.0.1", 0)
                 .await
                 .map_err(|error| ProxyTestFailure::JumpChannel {
                     target: spec.clone(),
@@ -1270,7 +1269,7 @@ async fn proxy_test_stream(
                 _jump_sessions: sessions,
             }))
         },
-        None => tokio::net::TcpStream::connect((NETWORK_TEST_HOST, NETWORK_TEST_PORT))
+        None => tokio::net::TcpStream::connect((target.host(), target.port()))
             .await
             .map(|stream| Box::new(stream) as Box<dyn NetworkTestStream>)
             .map_err(|error| ProxyTestFailure::Direct(error.to_string())),
