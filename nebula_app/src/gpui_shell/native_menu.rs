@@ -8,7 +8,7 @@ use crate::i18n::{Message, UiLanguage};
 gpui::actions!(native_menu, [Quit, Hide, HideOthers, ShowAll]);
 
 pub(super) fn init(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| windowing::quit_all(cx));
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
@@ -60,7 +60,11 @@ fn menus(language: UiLanguage) -> Vec<Menu> {
             MenuItem::os_action(text(Message::CommonCopy), input::Copy, OsAction::Copy),
             MenuItem::os_action(text(Message::CommonPaste), input::Paste, OsAction::Paste),
             MenuItem::separator(),
-            MenuItem::os_action(text(Message::CommonSelectAll), input::SelectAll, OsAction::SelectAll),
+            MenuItem::os_action(
+                text(Message::CommonSelectAll),
+                input::SelectAll,
+                OsAction::SelectAll,
+            ),
         ]),
         Menu::new(text(Message::MenuView)).items([
             MenuItem::action(text(Message::MenuCommandPalette), ToggleCommandPalette),

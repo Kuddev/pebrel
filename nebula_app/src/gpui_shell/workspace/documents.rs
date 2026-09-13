@@ -4,6 +4,73 @@ use super::super::file_editor::TextFileView;
 use super::*;
 use crate::i18n::Message;
 
+/// A discard decision authorizes only the draft that was shown to the user.
+/// Tab close, window close and application quit share this check.
+#[derive(Default)]
+pub(super) struct DocumentCloseApproval {
+    discarded: Vec<(Entity<TextFileView>, SharedString)>,
+}
+
+impl DocumentCloseApproval {
+    pub(super) fn allows(&self, file: &Entity<TextFileView>, cx: &App) -> bool {
+        let view = file.read(cx);
+        !view.is_saving()
+            && (!view.is_dirty()
+                || self
+                    .discarded
+                    .iter()
+                    .any(|(approved, draft)| approved == file && *draft == view.draft(cx)))
+    }
+
+    pub(super) fn extend(&mut self, other: Self) {
+        self.discarded.extend(other.discarded);
+    }
+}
+
+pub(super) async fn approve_file_close(
+    files: &[Entity<TextFileView>],
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) -> Option<DocumentCloseApproval> {
+    let mut approval = DocumentCloseApproval::default();
+    for file in files {
+        if cx.update(|cx| file.read(cx).is_saving()) {
+            return None;
+        }
+        if !cx.update(|cx| file.read(cx).is_dirty()) {
+            continue;
+        }
+        let (prompt, draft) = handle
+            .update(cx, |_, window, cx| {
+                let language = crate::gpui_shell::config::ui_language(cx);
+                let draft = file.read(cx).draft(cx);
+                let prompt = window.prompt(
+                    gpui::PromptLevel::Warning,
+                    language.text(Message::EditorCloseTitle),
+                    Some(&file.read(cx).source_label()),
+                    &[
+                        language.text(Message::EditorSave),
+                        language.text(Message::EditorDiscard),
+                        language.text(Message::EditorCancel),
+                    ],
+                    cx,
+                );
+                (prompt, draft)
+            })
+            .ok()?;
+        match prompt.await {
+            Ok(0) => {
+                if !file.update(cx, |file, cx| file.save(cx)).await {
+                    return None;
+                }
+            },
+            Ok(1) => approval.discarded.push((file.clone(), draft)),
+            _ => return None,
+        }
+    }
+    Some(approval)
+}
+
 impl WorkspaceTab {
     pub(super) fn file_editor(&self, cx: &App) -> Option<Entity<TextFileView>> {
         match self {
@@ -15,6 +82,10 @@ impl WorkspaceTab {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn document_editors(&self, cx: &App) -> Vec<Entity<TextFileView>> {
+        self.tabs.iter().filter_map(|tab| tab.file_editor(cx)).collect()
+    }
+
     pub(super) fn guard_file_tab_close(
         &mut self,
         index: usize,
@@ -40,9 +111,8 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> bool {
         let files: Vec<_> = self
-            .tabs
-            .iter()
-            .filter_map(|tab| tab.file_editor(cx))
+            .document_editors(cx)
+            .into_iter()
             .filter(|file| file.read(cx).is_dirty() || file.read(cx).is_saving())
             .collect();
         if files.is_empty() {
@@ -67,52 +137,15 @@ impl NebulaWorkspace {
         self.window_close_confirm_open = true;
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
-            let mut accepted = true;
-            let mut discarded = Vec::new();
-            for file in &files {
-                let prompt = handle.update(cx, |_, window, cx| {
-                    let language = crate::gpui_shell::config::ui_language(cx);
-                    let draft = file.read(cx).draft(cx);
-                    let prompt = window.prompt(
-                        gpui::PromptLevel::Warning,
-                        language.text(Message::EditorCloseTitle),
-                        Some(&file.read(cx).source_label()),
-                        &[
-                            language.text(Message::EditorSave),
-                            language.text(Message::EditorDiscard),
-                            language.text(Message::EditorCancel),
-                        ],
-                        cx,
-                    );
-                    (prompt, draft)
-                });
-                let Ok((prompt, draft)) = prompt else {
-                    accepted = false;
-                    break;
-                };
-                match prompt.await {
-                    Ok(0) => {
-                        let task = file.update(cx, |file, cx| file.save(cx));
-                        if !task.await {
-                            accepted = false;
-                            break;
-                        }
-                    },
-                    Ok(1) => discarded.push((file.clone(), draft)),
-                    _ => {
-                        accepted = false;
-                        break;
-                    },
-                }
-            }
+            let approval = approve_file_close(&files, handle, cx).await;
             let _ = handle.update(cx, |_, window, cx| {
                 let _ =
                     this.update(cx, |workspace, cx| {
                         workspace.window_close_confirm_open = false;
-                        if !accepted {
+                        let Some(approval) = approval else {
                             cx.notify();
                             return;
-                        }
+                        };
                         let relevant = if whole_window {
                             workspace
                                 .tabs
@@ -122,14 +155,7 @@ impl NebulaWorkspace {
                         } else {
                             files.clone()
                         };
-                        if relevant.iter().any(|file| {
-                            let view = file.read(cx);
-                            view.is_saving()
-                                || (view.is_dirty()
-                                    && !discarded.iter().any(|(approved, draft)| {
-                                        approved == file && *draft == view.draft(cx)
-                                    }))
-                        }) {
+                        if relevant.iter().any(|file| !approval.allows(file, cx)) {
                             cx.notify();
                             return;
                         }

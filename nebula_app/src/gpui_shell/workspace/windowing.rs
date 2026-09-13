@@ -38,6 +38,12 @@ use crate::runtime_api::{
     ApiError, RuntimeCommand, RuntimeDispatch, RuntimeSnapshot, RuntimeWindow,
 };
 
+mod quit;
+pub(crate) use quit::quit_all;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod quit_tests;
+
 /// 新窗口的首帧内容。只有进程的第一个窗口恢复全局 session；其它窗口必须
 /// 明确创建一个新终端或暂时保持空白，不能把同一份 session 重放多次。
 pub(crate) enum WorkspaceStartup {
@@ -1273,41 +1279,6 @@ pub(super) fn save_current_window_session(
     }
     let session = combined_session(Some((runtime_window_id, session)), cx);
     cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason);
-}
-
-pub(crate) fn quit_all(cx: &mut App) {
-    if cx.global::<WindowRegistry>().quit_pending {
-        return;
-    }
-    cx.global_mut::<WindowRegistry>().quit_pending = true;
-    let entries = cx.global::<WindowRegistry>().entries.clone();
-    let panes = entries
-        .iter()
-        .filter(|entry| entry.role == WindowRole::Regular)
-        .filter_map(|entry| {
-            entry.workspace.update(cx, |workspace, cx| workspace.prepare_session_save(cx)).ok()
-        })
-        .flatten()
-        .collect::<Vec<_>>();
-    cx.spawn(async move |cx| {
-        super::closing::wait_for_session_ids(&panes, cx).await;
-        cx.update(finish_quit_all);
-    })
-    .detach();
-}
-
-fn finish_quit_all(cx: &mut App) {
-    save_combined_session(cx, true);
-    prune_entries(cx);
-    let entries = cx.global::<WindowRegistry>().entries.clone();
-    for entry in entries {
-        let workspace = entry.workspace.clone();
-        let _ = entry.handle.update(cx, move |_, _window, cx| {
-            let _ = workspace.update(cx, |workspace, cx| workspace.shutdown_terminal_panes(cx));
-        });
-    }
-    crate::tray::shutdown();
-    cx.quit();
 }
 
 pub(crate) fn move_tab_to_new_window(payload: CrossWindowTabDrag, cx: &mut App) {
