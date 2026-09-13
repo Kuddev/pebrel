@@ -27,7 +27,7 @@ pub struct Palette {
     /// 选区叠加色。主应用默认是反色语义；本壳以半透明叠加近似，
     /// 用户显式配置 `colors.selection.background` 时用不透明具体色。
     pub selection: Rgba,
-    /// 主题明确声明的选区文字色；普通 Nebula 主题保留原字色。
+    /// 主题或用户明确声明的选区文字色；未声明时保留原字色。
     pub selection_foreground: Option<Rgba>,
     /// ANSI 0-15。
     pub ansi: [Rgba; 16],
