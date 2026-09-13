@@ -8,6 +8,9 @@ use nebula_settings::ThemeName;
 
 mod syntax;
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod selection_tests;
+
 struct DocumentColors {
     background: Hsla,
     foreground: Hsla,
@@ -647,7 +650,10 @@ fn apply_skin_tokens(chrome: NebulaTheme, cx: &mut App) {
     // 焦点 / 选择 / 链接 / 拖拽。
     theme.ring = ink(sk.accent);
     theme.caret = ink(sk.accent);
-    theme.selection = wash(sk.accent_soft);
+    // TextView paints selection over glyphs. Match gpui-component's 0.3 alpha
+    // cap instead of passing through the opaque selected surface from Skin.
+    let selection = wash(sk.accent_soft);
+    theme.selection = selection.alpha(selection.a.min(0.3));
     theme.link = ink(sk.accent);
     theme.link_hover = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.10);
     theme.link_active = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.18);
