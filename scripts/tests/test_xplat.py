@@ -18,7 +18,7 @@ class XplatIsolationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="nebula-xplat-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo with spaces"
         self.scripts = self.repo / "scripts/xplat"
         shutil.copytree(ROOT / "scripts/xplat", self.scripts)
