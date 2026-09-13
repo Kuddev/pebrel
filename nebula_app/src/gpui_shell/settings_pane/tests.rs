@@ -5,7 +5,7 @@ use super::*;
 fn ai_toast_setting_is_searchable_and_has_a_visible_switch(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        let mut settings = crate::gpui_shell::config::Settings::load(ThemeName::Nord);
+        let mut settings = crate::gpui_shell::config::Settings::load(false);
         settings.ai_toasts = true;
         cx.set_global(settings);
     });

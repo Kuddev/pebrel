@@ -30,7 +30,7 @@ impl SettingsPane {
         let ssh_undo_seq = self.ssh_undo_seq.wrapping_add(1);
         let backup_seq = self.backup_seq.wrapping_add(1);
         let settings = crate::gpui_shell::config::Settings::load(
-            crate::gpui_shell::theme::effective_theme_name(cx),
+            crate::gpui_shell::theme::system_is_light(cx),
         );
         gpui_component::set_locale(settings.ui_language.gpui_component_locale());
         cx.set_global(settings);

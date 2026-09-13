@@ -126,7 +126,7 @@ impl SettingsPane {
         self.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists::load();
         self.backup_remote = crate::backup_remote::BackupRemoteConfig::load();
         let settings = crate::gpui_shell::config::Settings::load(
-            crate::gpui_shell::theme::effective_theme_name(cx),
+            crate::gpui_shell::theme::system_is_light(cx),
         );
         cx.set_global(settings);
         cx.emit(SettingsPaneEvent::Changed);

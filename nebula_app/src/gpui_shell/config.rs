@@ -37,10 +37,12 @@ pub(crate) const fn effective_cursor_blink(configured: Option<bool>) -> bool {
     }
 }
 
-/// 应用启动时装载一次的全局设置。
+/// 应用启动及设置、系统外观变化时更新的全局设置。
 pub struct Settings {
     /// 已解析的界面语言。GPUI 组件只读这个内存全局，渲染路径不得重复读盘。
     pub ui_language: UiLanguage,
+    pub theme: nebula_settings::ThemeName,
+    pub panel_resize: bool,
     pub font_family: String,
     pub font_bold_family: String,
     pub font_italic_family: String,
@@ -104,11 +106,14 @@ fn resolve_ui_language(preference: nebula_settings::LanguagePref) -> UiLanguage 
 }
 
 impl Settings {
-    /// `theme`：**生效**主题（follow_system 折算后，见
-    /// `theme::effective_theme_name`）。不在这里自行读 RuntimeSettings 的
-    /// 原始主题，否则 chrome 层与终端 palette 会在跟随系统时分家。
-    pub fn load(theme: nebula_settings::ThemeName) -> Self {
+    /// 同一次设置读取解析生效主题，供 chrome 与终端 palette 共用。
+    pub fn load(system_is_light: bool) -> Self {
         let runtime = RuntimeSettings::load();
+        let theme = crate::gpui_shell::theme::resolve_theme_name(
+            runtime.theme,
+            runtime.follow_system_theme,
+            system_is_light,
+        );
         let ui_language = resolve_ui_language(runtime.language);
         let path = find_config_file();
         let mut load_notice = None;
@@ -160,6 +165,8 @@ impl Settings {
 
         Settings {
             ui_language,
+            theme,
+            panel_resize: runtime.panel_resize,
             font_bold_family: secondary(&raw.font.bold),
             font_italic_family: secondary(&raw.font.italic),
             font_bold_italic_family: secondary(&raw.font.bold_italic),
@@ -626,6 +633,23 @@ mod tests {
         assert_eq!(resolve_ui_language(LanguagePref::EnUs), UiLanguage::EnUs);
     }
 
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn render_preferences_read_current_settings(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            for (theme, language) in
+                [(ThemeName::Nord, UiLanguage::ZhCn), (ThemeName::Paper, UiLanguage::EnUs)]
+            {
+                let mut settings = Settings::load(false);
+                settings.theme = theme;
+                settings.ui_language = language;
+                cx.set_global(settings);
+                assert_eq!(crate::gpui_shell::theme::effective_theme_name(cx), theme);
+                assert_eq!(super::ui_language(cx), language);
+            }
+        });
+    }
+
     #[test]
     fn system_theme_owns_terminal_background_while_following_system() {
         let custom = Some([0x0f, 0x11, 0x1a]);
@@ -635,7 +659,7 @@ mod tests {
 
     #[test]
     fn missing_cursor_blink_key_enables_term_blinking() {
-        let mut settings = Settings::load(ThemeName::Nebula);
+        let mut settings = Settings::load(false);
         settings.cursor_blink = None;
         assert!(settings.term_config().default_cursor_style.blinking);
 

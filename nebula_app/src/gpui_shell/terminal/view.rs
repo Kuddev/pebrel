@@ -1378,8 +1378,7 @@ impl TerminalView {
             ));
             return;
         }
-        let theme = crate::gpui_shell::theme::effective_theme_name(cx);
-        cx.set_global(Settings::load(theme));
+        cx.set_global(Settings::load(crate::gpui_shell::theme::system_is_light(cx)));
         self.apply_settings(cx);
         cx.emit(TerminalViewEvent::FontSizeChanged);
         cx.notify();

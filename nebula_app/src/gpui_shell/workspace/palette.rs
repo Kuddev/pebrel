@@ -29,7 +29,7 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let overlay = theme.overlay;
         let mono_family = theme.mono_font_family.clone();
-        let language = workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let palette_filters = if self.shell_picker_open {
             Some((
                 WorkspacePaletteFilter::Launcher(self.launcher_filter),
