@@ -6,7 +6,9 @@
 //! 读的是落盘后的 `SshProxyConfig::load_global`。
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{Context, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
+use gpui::{
+    AppContext as _, Context, IntoElement, ParentElement as _, SharedString, Styled as _, div, px,
+};
 use gpui_component::input::InputEvent;
 use nebula_settings::ProxyModeName;
 
