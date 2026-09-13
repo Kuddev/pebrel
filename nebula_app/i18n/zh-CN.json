@@ -1,4 +1,11 @@
 {
+  "workspace": {
+    "project": {
+      "open": "打开项目文件夹…",
+      "picking": "正在选择项目文件夹…",
+      "open_failed": "无法打开项目文件夹。请检查目录是否存在且可访问，然后重试。"
+    }
+  },
   "language": {
     "self_name": "简体中文",
     "system": "跟随系统",

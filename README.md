@@ -136,6 +136,16 @@ automatic local AI-hook setup, and automatic update installation. These integrat
 are not yet available on Linux or macOS. See [installation details](INSTALL.md) for
 platform requirements and upgrading an existing Nebula installation.
 
+## Open a project folder
+
+Click **Open project folder…** in the upper-left toolbar, in either sidebar or
+top-tab layout. You can also focus the button with Tab and activate it with Enter.
+Choose a folder to open a new terminal tab there using your default shell. The
+chosen folder takes precedence over a saved profile's startup directory for this
+new tab only; existing terminals and the saved profile are unchanged. Canceling
+does nothing. A missing or inaccessible folder shows a warning and can be retried.
+See the [dark/sidebar and light/top-tab toolbar examples](docs/screenshots/project-folder-entry.png).
+
 ## Configure
 
 ```sh
