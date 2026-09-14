@@ -8,7 +8,7 @@ use super::{
 /// id-keyed Nerd Font 字形（与设置页下拉、命令面板同一口径）。
 ///
 /// `has_brand` 为真时返回 `None`——贴图已经画了，两个都留同行会出现两个图标。
-fn fallback_shell_glyph(id: &str, has_brand: bool) -> Option<char> {
+pub(super) fn fallback_shell_glyph(id: &str, has_brand: bool) -> Option<char> {
     if has_brand {
         return None;
     }

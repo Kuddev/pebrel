@@ -55,7 +55,7 @@ mod initialization;
 mod keymap;
 mod localization;
 mod navigation;
-mod shell_picker;
+pub(crate) mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
 mod status;
