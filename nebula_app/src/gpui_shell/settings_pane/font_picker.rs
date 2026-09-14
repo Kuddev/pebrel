@@ -587,9 +587,7 @@ mod interaction_tests {
     fn dropdown_arrow_toggles_and_search_filters_without_navigation_click(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
-            cx.set_global(crate::gpui_shell::config::Settings::load(
-                nebula_settings::ThemeName::Nord,
-            ));
+            cx.set_global(crate::gpui_shell::config::Settings::load(false));
         });
         let mut pane = None;
         let (_, mut cx) = cx.add_window_view(|window, cx| {

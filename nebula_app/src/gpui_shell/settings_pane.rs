@@ -226,7 +226,7 @@ impl SettingsPane {
         persist_keys(updates)?;
         self.runtime = RuntimeSettings::load();
         let settings = crate::gpui_shell::config::Settings::load(
-            crate::gpui_shell::theme::effective_theme_name(cx),
+            crate::gpui_shell::theme::system_is_light(cx),
         );
         gpui_component::set_locale(settings.ui_language.gpui_component_locale());
         cx.set_global(settings);

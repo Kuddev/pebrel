@@ -1435,7 +1435,7 @@ impl NebulaWorkspace {
     /// follow_system 折算）、逐终端刷新、重建 chrome 令牌。
     fn apply_runtime_settings(&mut self, cx: &mut Context<Self>) {
         let settings = crate::gpui_shell::config::Settings::load(
-            crate::gpui_shell::theme::effective_theme_name(cx),
+            crate::gpui_shell::theme::system_is_light(cx),
         );
         cx.set_global(settings);
         for tab in &self.tabs {
@@ -4117,7 +4117,7 @@ impl Render for NebulaWorkspace {
                             // 侧栏拖宽热区（旧壳 `panel_resize` 设置门控）：贴在
                             // 侧栏右缘、零布局宽，不挤压终端卡。
                             !self.sidebar_collapsed
-                                && nebula_settings::RuntimeSettings::load().panel_resize,
+                                && cx.global::<crate::gpui_shell::config::Settings>().panel_resize,
                             |row| {
                                 row.child(
                                     div().relative().w_0().h_full().flex_shrink_0().child(

@@ -62,7 +62,9 @@ impl NebulaWorkspace {
             return self.tab_presentation(index, cx, dark);
         }
         TabPresentation {
-            title: super::workspace_ui_language().text(crate::i18n::Message::CommonSettings).into(),
+            title: crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::CommonSettings)
+                .into(),
             is_settings: true,
             activity: SidebarActivity::Idle,
             logo_image: None,

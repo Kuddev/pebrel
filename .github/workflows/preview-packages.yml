@@ -165,8 +165,8 @@ jobs:
       - name: Test real Bash and Zsh startup contracts
         run: python3 -m unittest scripts.tests.test_shell_integration -v
 
-      - name: Test SSH confirmation and password dialogs
-        run: cargo test --locked -p nebula --features gpui-test-support dialog
+      - name: Test all GPUI application and interaction contracts
+        run: cargo test --locked -p nebula --features gpui-test-support
 
       - name: Build GPUI release binary
         run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
@@ -347,8 +347,8 @@ jobs:
           python3 -m unittest scripts.tests.test_shell_integration
           scripts.conformance.tests.test_posix_lifecycle -v
 
-      - name: Test SSH confirmation and password dialogs
-        run: cargo test --locked -p nebula --features gpui-test-support dialog
+      - name: Test all GPUI application and interaction contracts
+        run: cargo test --locked -p nebula --features gpui-test-support
 
       - name: Release completed test artifacts before building the package
         run: |
@@ -499,8 +499,8 @@ jobs:
           cache-on-failure: true
       - name: Test workspace natively
         run: cargo test --locked --workspace
-      - name: Test SSH confirmation and password dialogs
-        run: cargo test --locked -p nebula --features gpui-test-support dialog
+      - name: Test all GPUI application and interaction contracts
+        run: cargo test --locked -p nebula --features gpui-test-support
       - name: Build GPUI comparison binary
         run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
       - name: Run Windows conformance
