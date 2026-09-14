@@ -27,6 +27,8 @@ pub mod notifications;
 pub mod shell;
 pub mod shell_integration;
 pub mod startup;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod window_chrome;
 
 pub use capabilities::CAPABILITIES;
 
