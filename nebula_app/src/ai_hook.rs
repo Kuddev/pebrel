@@ -867,6 +867,18 @@ fn background_task_summary(payload: &Value) -> Option<AiBackgroundTasks> {
     Some(AiBackgroundTasks { active, total })
 }
 
+/// 数出这批后台活儿里有多少还在跑。
+///
+/// 旧实现只认 `type == "subagent"`，其余类型一律跳过。而 Claude Code 给后台 bash
+/// 的类型名是 `local_bash`（同族还有 `monitor` / `workflow` / `mcp_task` /
+/// `in_process_teammate` …），于是「跑着一条后台命令、回合先结束」这个最常见、也
+/// 最容易被误报成「任务完成」的形状，永远数出 `active = 0`：`TurnDone` 的守卫不
+/// 触发，命令还在跑就先弹了完成通知。
+///
+/// `background_tasks` 本身就是「在飞」的集合——字段说明写着 *In-flight background
+/// work … Empty array when nothing is in flight*，它的存在就是为了让 hook 区分
+/// 「真的收工」和「在等后台活儿把自己叫醒」。所以这里不再按类型过滤，只看每笔的
+/// 状态。
 fn count_background_tasks(value: &Value, active: &mut u32, total: &mut u32) {
     match value {
         Value::Array(values) => {
@@ -875,27 +887,93 @@ fn count_background_tasks(value: &Value, active: &mut u32, total: &mut u32) {
             }
         },
         Value::Object(task) => {
-            if let Some(kind) = task.get("type").and_then(Value::as_str) {
-                if !kind.eq_ignore_ascii_case("subagent") {
-                    return;
-                }
+            if is_task_entry(task) {
                 *total = total.saturating_add(1);
-                if task.get("status").and_then(Value::as_str).is_some_and(|status| {
-                    matches!(
-                        status.to_ascii_lowercase().as_str(),
-                        "running" | "processing" | "in_progress" | "active"
-                    )
-                }) {
+                if task_is_in_flight(task) {
                     *active = active.saturating_add(1);
                 }
                 return;
             }
+            // 既没有类型也没有状态的中间层对象（旧 wire 形状的包装）继续往下找。
             for value in task.values() {
                 count_background_tasks(value, active, total);
             }
         },
         _ => {},
     }
+}
+
+/// 任务条目的终态词表。
+///
+/// 取值不是猜的：本机 claude 2.1.270 二进制里出现过的 `status:"…"` 字面量是
+/// `failed` / `success` / `pending` / `completed` / `running` / `killed` / `idle` /
+/// `stopped` / `cancelled` / `aborted` / `exited`。这里取其中的终态，再补上同族词
+/// （`done` / `finished` / `error` / `canceled` …）。
+///
+/// 判反的代价不对称：漏掉一个终态，`active` 会永远大于 0，pane 停在「工作中」、
+/// 完成通知不再弹，`runtime_api` 那边连 `agent.delegate` 的完成回调都不会触发——
+/// 比早弹一条通知更难发现。多留的词最多只是让一笔刚结束的活儿多算一拍。
+const TERMINAL_TASK_STATUSES: &[&str] = &[
+    "completed",
+    "complete",
+    "done",
+    "success",
+    "succeeded",
+    "finished",
+    "exited",
+    "failed",
+    "failure",
+    "error",
+    "timeout",
+    "timed_out",
+    "expired",
+    "terminated",
+    "cancelled",
+    "canceled",
+    "stopped",
+    "killed",
+    "aborted",
+    // 任务自己说 idle，就是没在干活——它仍留在集合里只是注册表还没清扫。
+    "idle",
+];
+
+/// 这一笔是任务条目，还是需要继续往下找的中间层包装。
+///
+/// 只认**字符串**字段：`{"type": null}`、`{"type": {"name": …}}` 既不是任务也没有
+/// 状态，放行给下一层递归（旧实现按 `as_str()` 判断，本次改动一度退化成
+/// `is_some()`，会把一个 null 凭空当成一笔在飞任务）。
+fn is_task_entry(task: &serde_json::Map<String, Value>) -> bool {
+    task.get("type").and_then(Value::as_str).is_some()
+        || task.get("status").and_then(Value::as_str).is_some()
+}
+
+/// 这一笔后台活儿是否还在跑。
+///
+/// 读不到状态就按还在跑处理：这个集合本身就是「在飞」的任务。
+fn task_is_in_flight(task: &serde_json::Map<String, Value>) -> bool {
+    if is_idle_teammate(task) {
+        return false;
+    }
+    match task.get("status").and_then(Value::as_str) {
+        Some(status) => {
+            !TERMINAL_TASK_STATUSES.contains(&status.to_ascii_lowercase().as_str())
+        },
+        None => true,
+    }
+}
+
+/// 闲置的 `in_process_teammate`：`status` 会一直挂着 `running`
+/// （anthropics/claude-code#85955），只有它自己的 `isIdle` 说得准——这也正是
+/// Claude Code 内部的判据（`type === "in_process_teammate" && status ===
+/// "running" && !isIdle`）。
+///
+/// **只对 teammate 生效**：别的类型没有 `isIdle` 的约定，拿它压掉一笔在跑的
+/// `local_bash` 就是谎报完成，正好是这次要修的那个毛病。
+fn is_idle_teammate(task: &serde_json::Map<String, Value>) -> bool {
+    task.get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("in_process_teammate"))
+        && task.get("isIdle").and_then(Value::as_bool) == Some(true)
 }
 
 fn sanitized_raw_context(payload: &Value) -> Option<String> {
@@ -1177,16 +1255,75 @@ mod remote_tests {
         assert!(!summary.contains("selected source"));
     }
 
+    /// `background_tasks` 里的**每一笔**在飞的活儿都算数，不只是 subagent。
+    ///
+    /// 2026-09-14：旧实现只认 `type == "subagent"`，而 Claude Code 给后台 bash 的
+    /// 类型名是 `local_bash`——「跑着后台命令、回合先结束」于是永远数出 active=0，
+    /// `TurnDone` 的守卫不触发，用户在命令还在跑时就收到「回合完成」。
+    /// 类型名取自本机 claude 2.1.270 二进制里的集合：`local_bash` / `subagent` /
+    /// `monitor` / `workflow` / `mcp_task` / `in_process_teammate` / `local_agent` /
+    /// `remote_agent` / `dream` / `auto_mode_scan` / `cloud_session`。
     #[test]
-    fn claude_stop_reports_running_background_subagents() {
+    fn claude_stop_counts_every_in_flight_background_task() {
         let raw = br#"nebula-hook/1 source=claude pane=3
-{"session_id":"s","hook_event_name":"Stop","background_tasks":[{"type":"subagent","status":"running"},{"type":"subagent","status":"completed"},{"type":"other","status":"running"}]}"#;
+{"session_id":"s","hook_event_name":"Stop","background_tasks":[{"type":"local_bash","status":"running"},{"type":"subagent","status":"completed"},{"type":"monitor","status":"running"},{"type":"mcp_task","status":"cancelled"}]}"#;
         let event = parse_remote_envelope(raw, Some(3)).unwrap();
         assert_eq!(event.kind, AiHookKind::TurnDone);
-        assert_eq!(event.active_background_tasks(), 1);
-        assert_eq!(event.background_tasks.unwrap().total, 2);
+        assert_eq!(event.active_background_tasks(), 2, "local_bash 与 monitor 都还在跑");
+        assert_eq!(event.background_tasks.unwrap().total, 4);
         assert!(capabilities_for("claude").background_tasks);
         assert!(!capabilities_for("pi").attention_context);
+    }
+
+    /// 空数组 = 真的收工：守卫必须放行，否则完成通知永远不弹。
+    #[test]
+    fn empty_background_tasks_leave_the_turn_done() {
+        let raw = br#"nebula-hook/1 source=claude pane=3
+{"session_id":"s","hook_event_name":"Stop","background_tasks":[]}"#;
+        let event = parse_remote_envelope(raw, Some(3)).unwrap();
+        assert_eq!(event.active_background_tasks(), 0);
+        assert_eq!(event.background_tasks.unwrap().total, 0);
+    }
+
+    /// 闲置的 `in_process_teammate` 会一直挂 `status: "running"`
+    /// （anthropics/claude-code#85955），只有它自己的 `isIdle` 能说明它没在干活。
+    /// 少了这道判据，pane 会永远停在「还在跑」，完成通知再也弹不出来。
+    #[test]
+    fn idle_in_process_teammate_does_not_hold_the_turn_open() {
+        let raw = br#"nebula-hook/1 source=claude pane=3
+{"session_id":"s","hook_event_name":"Stop","background_tasks":[{"type":"in_process_teammate","status":"running","isIdle":true},{"type":"in_process_teammate","status":"running","isIdle":false}]}"#;
+        let event = parse_remote_envelope(raw, Some(3)).unwrap();
+        assert_eq!(event.active_background_tasks(), 1, "只有没闲置的那个算在跑");
+    }
+
+    /// 终态词表必须覆盖真实取值：`success` / `exited` 是从本机 claude 2.1.270 里
+    /// 读到的字面量，漏掉它们会让 pane 永远停在「工作中」——完成通知不再弹，
+    /// `agent.delegate` 的完成回调也不会触发，比早弹一条更难发现。
+    #[test]
+    fn finished_background_tasks_do_not_hold_the_turn_open() {
+        for status in ["completed", "success", "exited", "failed", "killed", "cancelled", "idle"]
+        {
+            let payload = serde_json::json!({
+                "session_id": "s",
+                "hook_event_name": "Stop",
+                "background_tasks": [{ "type": "local_bash", "status": status }],
+            });
+            let raw = format!("nebula-hook/1 source=claude pane=3\n{payload}");
+            let event = parse_remote_envelope(raw.as_bytes(), Some(3)).unwrap();
+            assert_eq!(event.active_background_tasks(), 0, "status={status} 是终态");
+            assert_eq!(event.background_tasks.unwrap().total, 1, "它仍然算一笔任务");
+        }
+    }
+
+    /// 两个形状陷阱：`{"type": null}` 不是任务（不能凭空造出一笔在飞的活儿），
+    /// `isIdle` 只对 teammate 有约定（别拿它压掉一笔在跑的 `local_bash`）。
+    #[test]
+    fn malformed_task_shapes_do_not_manufacture_in_flight_work() {
+        let raw = br#"nebula-hook/1 source=claude pane=3
+{"session_id":"s","hook_event_name":"Stop","background_tasks":[{"type":null},{"type":"local_bash","status":"running","isIdle":true}]}"#;
+        let event = parse_remote_envelope(raw, Some(3)).unwrap();
+        assert_eq!(event.active_background_tasks(), 1, "isIdle 不适用于 local_bash");
+        assert_eq!(event.background_tasks.unwrap().total, 1, "null 型别不算任务");
     }
 
     #[test]
