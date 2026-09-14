@@ -9,14 +9,36 @@
 
 use super::*;
 
+/// 侧栏「快速访问」的一行快照。
+///
+/// `location` 是预先算好的「开在哪儿」那一列。渲染路径**不允许**自己算它：
+/// 侧栏是逐帧重绘的热路径，而 `profile_location` 里对 WSL 入口要做两次 argv
+/// 扫描再加一次格式化，逐帧逐行重算等于把刷新时一次就能定下来的活儿搬进每帧。
+#[derive(Clone)]
+pub(super) struct QuickAccessRow {
+    pub(super) profile: crate::config::ui_config::Profile,
+    pub(super) location: String,
+}
+
 /// 读一次 store，转成侧栏与选择器共用的 `Profile` 形状。
 ///
 /// 单独成函数是为了让刷新点只有一处：渲染路径**不允许**调它（侧栏是逐帧
 /// 重绘的热路径，每帧解析一遍 JSON 不可接受）。
-pub(super) fn load_quick_access_profiles() -> Vec<crate::config::ui_config::Profile> {
+fn load_quick_access_profiles() -> Vec<crate::config::ui_config::Profile> {
     crate::terminal_profiles::TerminalProfiles::load()
         .map(|store| store.as_config_profiles())
         .unwrap_or_default()
+}
+
+/// 读一次 store，转成侧栏渲染用的行快照（含预先算好的显示文本）。
+pub(super) fn load_quick_access_rows() -> Vec<QuickAccessRow> {
+    load_quick_access_profiles()
+        .into_iter()
+        .map(|profile| QuickAccessRow {
+            location: super::shell_picker::profile_location(&profile),
+            profile,
+        })
+        .collect()
 }
 
 /// 由一个选中的目录造一条 profile。
@@ -63,34 +85,63 @@ fn quick_access_profile_for(
     })
 }
 
+/// 侧栏一行那个「×」要递进 store 的删除键。
+///
+/// 行本身拿 [`crate::config::ui_config::Profile::settings_id`] 当渲染键——那是
+/// 设置页引用默认 shell 的键，形如 `profile:<shell>|<store id>`。删除走的是
+/// [`crate::terminal_profiles::TerminalProfiles::remove`]，它按**裸 id** 比较：
+/// 把渲染键递过去，`remove` 只会返回 false，于是 × 点得动、却什么都不发生。
+///
+/// 两个键各有各的用途，别顺手混用。
+fn quick_access_store_id(profile: &crate::config::ui_config::Profile) -> Option<&str> {
+    profile.terminal_profile_id.as_deref()
+}
+
 impl NebulaWorkspace {
     /// 刷新「快速访问」的行快照。初始化与 `TerminalProfilesChanged` 各调一次。
     pub(super) fn refresh_quick_access(&mut self) {
-        self.quick_access = load_quick_access_profiles();
+        self.quick_access = load_quick_access_rows();
     }
 
     /// 删掉一条 profile 并落盘，然后让侧栏与 Ctrl+K 选择器同时刷新。
     ///
+    /// `store_id` 是 [`quick_access_store_id`] 给出的裸 id，不是行的渲染键。
+    ///
     /// 不拦截「有 tab 正在用这条 profile」的情况：`LaunchSession::Profile` 是
     /// 启动快照（内嵌而非按 id 引用），已经开出去的终端不受影响。
+    ///
+    /// 每次点击都必须留下可感知的结果（`docs/project-constraints.md` 要求
+    /// 「触发 → 执行 → 可感知结果」闭环）：删掉了那行就消失；store 里本来就没有
+    /// 那一条，刷新把它从屏幕上抹掉；落盘失败则弹提示说明原因与下一步——静默
+    /// return 正是「× 点了没反应」当初的样子。
     pub(super) fn remove_quick_access_profile(
         &mut self,
-        id: &str,
+        store_id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let language = crate::gpui_shell::config::ui_language(cx);
         let mut store = match crate::terminal_profiles::TerminalProfiles::load() {
             Ok(store) => store,
             Err(error) => {
                 log::warn!("quick access: 读取 terminal profiles 失败: {error}");
+                Self::warn_quick_access_write_failed(&language, window, cx);
                 return;
             },
         };
-        if !store.remove(id) {
+        if !store.remove(store_id) {
+            // 不是失败，是屏幕落后于真相（多半是另一个窗口删掉了同一条）。刷新让
+            // 那行消失，而不是留一个再也点不动的按钮在侧栏里。
+            log::warn!("quick access: 没有 id 为 {store_id} 的 profile");
+            self.refresh_quick_access();
+            self.refresh_shell_if_open(window, cx);
+            cx.notify();
             return;
         }
         if let Err(error) = store.save() {
             log::warn!("quick access: 写入 terminal profiles 失败: {error}");
+            // 内存里删掉了、盘上没删掉：这一次点击必须让用户知道它没生效。
+            Self::warn_quick_access_write_failed(&language, window, cx);
             return;
         }
         self.refresh_quick_access();
@@ -162,20 +213,43 @@ impl NebulaWorkspace {
             log::warn!("quick access: 无法为 {directory:?} 生成 profile");
             return;
         };
+        let language = crate::gpui_shell::config::ui_language(cx);
         let mut store = match crate::terminal_profiles::TerminalProfiles::load() {
             Ok(store) => store,
             Err(error) => {
                 log::warn!("quick access: 读取 terminal profiles 失败: {error}");
+                Self::warn_quick_access_write_failed(&language, window, cx);
                 return;
             },
         };
         if let Err(error) = store.add(profile).and_then(|()| store.save()) {
             log::warn!("quick access: 写入 terminal profiles 失败: {error}");
+            Self::warn_quick_access_write_failed(&language, window, cx);
             return;
         }
         self.refresh_quick_access();
         self.refresh_shell_if_open(window, cx);
         cx.notify();
+    }
+
+    /// 增删「快速访问」落盘失败时的统一出口：说明原因，并给出可执行的下一步。
+    ///
+    /// 只写日志不够——用户点了 × 或 `+`，屏幕上必须发生点什么（见
+    /// `docs/project-constraints.md` 的可感知结果要求）。
+    fn warn_quick_access_write_failed(
+        language: &crate::display::UiLanguage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::gpui_shell::toast::toast(
+            window,
+            cx,
+            crate::gpui_shell::toast::ToastKind::Warning,
+            language.pick(
+                "保存失败：配置被占用或不可写。关掉其它 Pebrel 窗口后再试一次",
+                "Save failed: the profile store is locked or read-only. Close other Pebrel windows and retry",
+            ),
+        );
     }
 
     /// 「快速访问」区。行高与标签页行一致——两列内容上下相邻，行高不同一眼就看出来。
@@ -273,7 +347,7 @@ impl NebulaWorkspace {
         // 先克隆一份再遍历：`cx.listener` 要可变借用 `cx`，不能与
         // `self.quick_access` 的借用同时存在。
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
-        for profile in self.quick_access.clone() {
+        for QuickAccessRow { profile, location } in self.quick_access.clone() {
             // 图标口径与 Ctrl+K 选择器一致：`shell_id` 决定品牌贴图，没有贴图时
             // 回落 Nerd Font 字形。WSL 的发行版名就在 shell_id 里
             // （`wsl:Ubuntu`），所以 Ubuntu 项目拿到的就是 Ubuntu 圆标。
@@ -285,17 +359,16 @@ impl NebulaWorkspace {
                 1.0,
             );
             let glyph = super::shell_picker::fallback_shell_glyph(&icon_id, icon.is_some());
-            // 右侧显示目录而不是可执行文件——这一列回答的是「开在哪儿」，
-            // 与选择器里的同一列保持同一口径。
-            let detail = profile
-                .cwd
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|| profile.command.clone());
+            // 右侧显示目录而不是可执行文件——这一列回答的是「开在哪儿」，与
+            // 选择器共用 `profile_location`，但**在刷新时就算好**（见
+            // `QuickAccessRow`）：渲染路径不重复做这件事。
+            let detail = location;
 
             // 每行一个独立的 hover 作用域：共用一个名字会让所有行的 × 一起显隐。
             let hover_group: SharedString = format!("qa-row-hover-{id}").into();
-            let delete_id = id.clone();
+            // 删除键与渲染键不是同一个东西，理由见 `quick_access_store_id`。
+            // 克隆成 owned：闭包要 `'static`，借不到这一轮循环里的 `profile`。
+            let delete_id = quick_access_store_id(&profile).map(str::to_owned);
             rows.push(
                 h_flex()
                     .id(SharedString::from(format!("qa-row-{id}")))
@@ -359,18 +432,22 @@ impl NebulaWorkspace {
                             .pr_1()
                             .invisible()
                             .group_hover(hover_group.clone(), |slot| slot.visible())
-                            .child(
-                                Button::new(SharedString::from(format!("qa-del-{id}")))
-                                    .icon(IconName::Close)
-                                    .ghost()
-                                    .xsmall()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.remove_quick_access_profile(
-                                            &delete_id, window, cx,
-                                        );
-                                    })),
-                            ),
+                            .when_some(delete_id, |slot, delete_id| {
+                                // 没有 store id 的行删不掉（`remove` 认不出它），
+                                // 那就别摆一个点了没反应的 × 出来。
+                                slot.child(
+                                    Button::new(SharedString::from(format!("qa-del-{id}")))
+                                        .icon(IconName::Close)
+                                        .ghost()
+                                        .xsmall()
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.remove_quick_access_profile(
+                                                &delete_id, window, cx,
+                                            );
+                                        })),
+                                )
+                            }),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         // 走弹窗那条同一路径：`profile.cwd` 在
@@ -384,5 +461,44 @@ impl NebulaWorkspace {
 
         section = section.children(rows);
         section.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quick_access_store_id;
+
+    /// 「快速访问」的 × 必须按 store 的裸 id 删。渲染键
+    /// （[`crate::config::ui_config::Profile::settings_id`]）带 `profile:<shell>|`
+    /// 前缀，是设置页引用默认 shell 的键——递进 `remove` 只会静默返回 false，
+    /// 也就是「× 点得动但删不掉」的成因。这条测试把两个键的分工钉住。
+    #[test]
+    fn quick_access_delete_is_keyed_by_the_store_id() {
+        let mut store = crate::terminal_profiles::TerminalProfiles::default();
+        store
+            .add(crate::terminal_profiles::TerminalProfile {
+                id: r"qa-d:\tools\demo".to_owned(),
+                name: "demo".to_owned(),
+                // `validate` 只要求绝对路径，不要求这个文件真的存在。
+                command: std::env::temp_dir().join("wsl.exe"),
+                args: vec!["-d".to_owned(), "Ubuntu".to_owned()],
+                cwd: None,
+                shell_id: "wsl:Ubuntu".to_owned(),
+            })
+            .unwrap();
+
+        let rows = store.as_config_profiles();
+        let row = &rows[0];
+        let render_key = row.settings_id().expect("导入的 profile 一定有设置键");
+        let delete_id = quick_access_store_id(row).expect("store id").to_owned();
+
+        // 反例：渲染键删不掉任何东西——修之前 × 走的就是这条路。
+        assert_ne!(render_key, delete_id, "渲染键与删除键不是同一个东西");
+        assert!(!store.remove(&render_key), "渲染键不是删除键");
+
+        // 正例：store 自己的裸 id 才认。
+        assert_eq!(delete_id, r"qa-d:\tools\demo");
+        assert!(store.remove(&delete_id));
+        assert!(store.profiles().is_empty());
     }
 }

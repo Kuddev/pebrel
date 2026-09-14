@@ -15,6 +15,33 @@ pub(super) fn fallback_shell_glyph(id: &str, has_brand: bool) -> Option<char> {
     crate::shell_detect::icon_for_id(id).chars().next()
 }
 
+/// 一行 profile 右侧「开在哪儿」的显示串。
+///
+/// 这一列回答的是「这一行会开在哪儿」，不是「用哪个可执行文件」：用户给项目建的
+/// 入口，看到 `D:\huozigemima` 或 `/home/me/project` 才认得出是哪一行。所以优先
+/// `cwd`。
+///
+/// WSL 入口的 `cwd` 是空的（目录随 `--cd` 直接带给来宾，宿主侧没有对应目录，见
+/// `quick_access_profile_for`），这时显示 `Ubuntu:/home/me/project`——和 Git 视图里
+/// [`crate::shell_detect::WslCwd`] 的写法一致，也就是终端真正会落到的地方。少了这
+/// 一步，WSL 行会显示 `C:\Windows\System32\wsl.exe`，等于什么都没说。
+///
+/// 两条都取不到（`scan_directory` 导入的 profile 恒无 `cwd`）才回落到命令路径：
+/// 右列宁可显示可执行文件，也不能空着。
+///
+/// 侧栏「快速访问」与 Ctrl+K 选择器共用本函数，两处的这一列因此不会各说各话。
+pub(super) fn profile_location(profile: &crate::config::ui_config::Profile) -> String {
+    if let Some(cwd) = profile.cwd.as_ref() {
+        return cwd.to_string_lossy().into_owned();
+    }
+    if let Some(distro) = crate::shell_detect::wsl_launch_distro(&profile.command, &profile.args) {
+        if let Some(guest) = crate::shell_detect::wsl_launch_guest(&profile.command, &profile.args) {
+            return format!("{distro}:{guest}");
+        }
+    }
+    profile.command.clone()
+}
+
 /// 新建终端弹窗的行：已检测 shell + SSH 主机，分组对照旧壳
 /// `CommandPalette::open_profiles`（推荐 / 所有 Shell / SSH 主机）。
 /// 三点菜单与 Ctrl+K 打开的是这份列表，不是通用命令面板。
@@ -65,25 +92,14 @@ pub(super) fn shell_palette_rows(
         // 借用在 `profile` 被移进 action 之前结束。
         let icon_glyph = fallback_shell_glyph(icon_id, icon.is_some());
         let label = profile.name.clone();
-        // 右侧那一列回答的是「这一行会开在哪儿」，不是「用哪个可执行文件」。
-        // profile 配了 `cwd` 就显示它——用户给项目建的入口，看到 `D:\huozigemima`
-        // 或 `/home/me/project` 才认得出是哪一行；显示 `wsl.exe` 等于没说。
-        // 没有 `cwd` 的（`scan_directory` 导入的 profile 恒为 None）回落到命令
-        // 路径：右列宁可显示可执行文件，也不能空着。
-        let directory = profile.cwd.as_ref().map(|path| path.to_string_lossy().into_owned());
-        let hint = directory.clone().unwrap_or_else(|| profile.command.clone());
+        let hint = profile_location(&profile);
         Some(WorkspacePaletteRow {
             group_order: if is_default { 0 } else { 1 },
             group: if is_default { recommended.to_owned() } else { all_shells.to_owned() },
-            // 目录也进搜索串：项目名记不住时，敲目录名是最自然的找法。
-            search: format!(
-                "{} {} {} {} shell profile",
-                profile.name,
-                id,
-                profile.command,
-                directory.as_deref().unwrap_or_default()
-            )
-            .to_lowercase(),
+            // 目录也进搜索串：项目名记不住时，敲目录名是最自然的找法。命令路径不
+            // 再单列一份——`profile_location` 取不到 cwd 时给出的就是它，重复只会
+            // 让同一个路径在搜索串里出现两次。
+            search: format!("{} {} {} shell profile", profile.name, id, hint).to_lowercase(),
             label,
             hint,
             hint_style: WorkspacePaletteHintStyle::Metadata,
