@@ -25,6 +25,14 @@
       "save_failed": "Could not save the AI toast setting: {error}"
     },
     "network": {
+      "custom_title": "Custom network test",
+      "custom_hint": "Enter an HTTP(S) URL. Sends GET through the current proxy settings; only 2xx succeeds. Redirects are reported without following them. Domain-based region labels do not locate servers.",
+      "custom_apply": "Apply and test",
+      "custom_invalid": "Enter a valid HTTP(S) URL without credentials or a fragment.",
+      "region_domestic": "Domestic (domain rule)",
+      "region_international": "International (domain rule)",
+      "region_unknown": "Unknown region",
+      "test_details": "{url} · {method} · {region}",
       "title": "Network proxy",
       "mode": {
         "label": "Proxy mode",

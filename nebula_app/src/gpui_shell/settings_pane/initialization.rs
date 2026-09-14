@@ -510,6 +510,7 @@ impl SettingsPane {
             proxy_url_input,
             proxy_protocol_select,
             proxy_test_seq: 0,
+            proxy_test_target: crate::proxy_test::NetworkTestTarget::default(),
             proxy_test_status: crate::display::ProxyTestStatus::Idle,
             provider_store,
             provider_inputs,

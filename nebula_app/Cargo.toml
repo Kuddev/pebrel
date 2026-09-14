@@ -122,6 +122,9 @@ toml.workspace = true
 toml_edit.workspace = true
 ttf-parser = { version = "=0.25.1", default-features = false, features = ["opentype-layout", "std"] }
 tokio = { version = "1", features = ["fs", "io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
+# HTTPS probes must use the same SSH/proxy stream. Reuse the locked TLS stack.
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1.0.9"
 unicode-width = "0.2.0"
 # Assistant fix requests: blocking HTTP on a background OS thread (spec 001).
 # ureq over reqwest: no tokio coupling for one short JSON POST, small tree.

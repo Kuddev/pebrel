@@ -19,6 +19,14 @@
       "backup": "備份"
     },
     "network": {
+      "custom_title": "自訂網路測試",
+      "custom_hint": "輸入 HTTP(S) 網址，依目前代理設定傳送 GET；僅 2xx 表示成功，重新導向只回報、不跟隨。境內／境外依網域辨識，不代表伺服器所在地。",
+      "custom_apply": "套用並測試",
+      "custom_invalid": "請輸入有效的 HTTP(S) 網址，不含帳號密碼或片段識別。",
+      "region_domestic": "中國大陸（網域規則）",
+      "region_international": "中國大陸以外（網域規則）",
+      "region_unknown": "地區未知",
+      "test_details": "{url} · {method} · {region}",
       "title": "網路代理",
       "mode": {
         "label": "代理模式",
