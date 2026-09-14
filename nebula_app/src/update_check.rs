@@ -271,12 +271,7 @@ fn fetch_latest_release() -> Result<LatestRelease, String> {
         "Accept: application/vnd.github+json",
         RELEASES_API,
     ]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::platform::process::hidden_command(&mut command);
     let output = command.output().map_err(|error| format!("无法启动 curl：{error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);

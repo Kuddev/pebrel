@@ -173,11 +173,7 @@ fn probe_wsl(
 ) -> Option<String> {
     let mut command = Command::new("wsl.exe");
     command.args(wsl_probe_args(distro, user, pane_id, instance));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::platform::process::hidden_command(&mut command);
     run_probe_command(command)
 }
 

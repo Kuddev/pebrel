@@ -655,7 +655,7 @@ fn read_worktree_file(key: &MergeKey) -> Result<Vec<u8>, String> {
         GitLocation::Wsl { distro, root } => {
             let path = join_guest_path(root, &key.relative_path);
             let mut command = Command::new("wsl.exe");
-            let output = hidden_command(&mut command)
+            let output = crate::platform::process::hidden_command(&mut command)
                 .args(["-d", distro, "--", "cat", "--", path.as_str()])
                 .output()
                 .map_err(|error| format!("无法从 WSL 读取冲突文件: {error}"))?;
@@ -677,7 +677,7 @@ fn write_conflict_result(key: &MergeKey, result: String) -> Result<(), String> {
         GitLocation::Wsl { distro, root } => {
             let path = join_guest_path(root, &key.relative_path);
             let mut command = Command::new("wsl.exe");
-            let mut child = hidden_command(&mut command)
+            let mut child = crate::platform::process::hidden_command(&mut command)
                 .args(["-d", distro, "--", "sh", "-c", "cat > \"$1\"", "nebula", path.as_str()])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
@@ -725,19 +725,10 @@ fn git_command(location: &GitLocation, args: &[&str]) -> Result<std::process::Ou
             command
         },
     };
-    hidden_command(&mut command)
+    crate::platform::process::hidden_command(&mut command)
         .args(args)
         .output()
         .map_err(|error| format!("无法运行 git: {error}"))
-}
-
-fn hidden_command(command: &mut Command) -> &mut Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(0x0800_0000);
-    }
-    command
 }
 
 fn first_command_error(stderr: &[u8], fallback: &str) -> String {
@@ -761,13 +752,15 @@ mod tests {
     use super::*;
 
     fn git(root: &Path, args: &[&str]) -> std::process::Output {
-        Command::new("git")
+        // 测试二进制没有控制台：不加这个 flag，每条 git 都会在用户屏幕上弹一个
+        // 终端窗口（见 `platform::process`）。
+        let mut command = Command::new("git");
+        command
             .arg("-C")
             .arg(root)
             .args(["-c", "user.name=Nebula Test", "-c", "user.email=nebula@example.invalid"])
-            .args(args)
-            .output()
-            .expect("run git")
+            .args(args);
+        crate::platform::process::hidden_command(&mut command).output().expect("run git")
     }
 
     fn commit(root: &Path, message: &str) {

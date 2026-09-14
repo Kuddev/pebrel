@@ -285,11 +285,7 @@ impl SidePanel {
             std::thread::Builder::new().name("nebula-vcs-op".into()).spawn(move || {
                 let mut cmd = std::process::Command::new(&program);
                 cmd.args(&args).current_dir(&root);
-                #[cfg(windows)]
-                {
-                    use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                }
+                crate::platform::process::hidden_command(&mut cmd);
                 let msg = match cmd.output() {
                     Ok(out) if out.status.success() => PanelNotice::default(),
                     Ok(out) => {
@@ -367,11 +363,8 @@ impl SidePanel {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW 不会隐藏 Tortoise GUI。
-        }
+        // 只压掉它自己的控制台；TortoiseProc 的 GUI 窗口照旧出现。
+        crate::platform::process::hidden_command(&mut command);
         match command.spawn() {
             Ok(_) => {
                 self.set_op_error(String::new());
@@ -850,12 +843,8 @@ pub(crate) fn run_git(
     location: &str,
     timeout: Option<Duration>,
 ) -> Option<String> {
-    // Suppress the console window that `Command` flashes on Windows GUI apps.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    // 从 GUI 进程起子进程时闪的那个控制台窗口，见 `platform::process`。
+    crate::platform::process::hidden_command(&mut cmd);
     let out = match command_output_with_timeout(cmd, timeout) {
         Ok(output) => output,
         Err(error) => {
@@ -1088,11 +1077,7 @@ pub(crate) fn read_svn_cli(root: &Path) -> Option<GitInfo> {
         let mut cmd = Command::new("svn");
         // 交互式认证提示会把无头子进程挂死；快照必须是非交互的。
         cmd.arg("--non-interactive").args(args).current_dir(root);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
+        crate::platform::process::hidden_command(&mut cmd);
         let out = cmd.output().ok()?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);

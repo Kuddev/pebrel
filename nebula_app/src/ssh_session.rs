@@ -366,11 +366,7 @@ fn find_ssh() -> PathBuf {
 fn ssh_config_output(target: &str) -> io::Result<std::process::Output> {
     let mut command = Command::new(find_ssh());
     command.arg("-G").arg("--").arg(target);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    }
+    crate::platform::process::hidden_command(&mut command);
     command.output()
 }
 

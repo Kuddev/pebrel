@@ -24,6 +24,7 @@ pub mod fonts;
 #[cfg(all(windows, feature = "gpui-shell"))]
 pub(crate) mod keyboard;
 pub mod notifications;
+pub(crate) mod process;
 pub mod shell;
 pub mod shell_integration;
 pub mod startup;
