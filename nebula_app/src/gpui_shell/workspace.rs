@@ -55,6 +55,7 @@ mod file_tree;
 mod key_actions;
 mod notifications;
 mod palette;
+mod palette_support;
 mod pane_header;
 mod quick_jump;
 mod quick_terminal;
@@ -2952,40 +2953,6 @@ impl NebulaWorkspace {
             input.set_placeholder(filter.placeholder(workspace_ui_language()), window, cx);
         });
         cx.notify();
-    }
-
-    fn launcher_chip_counts(
-        &self,
-    ) -> [(crate::display::command_palette::LauncherFilter, usize); 3] {
-        use crate::display::command_palette::LauncherFilter;
-        let rows = self.palette_override.as_deref().unwrap_or(&[]);
-        let shell = rows
-            .iter()
-            .filter(|row| {
-                matches!(
-                    row.action,
-                    WorkspacePaletteAction::LaunchShell(_)
-                        | WorkspacePaletteAction::LaunchProfile(_)
-                )
-            })
-            .count();
-        let ssh = rows
-            .iter()
-            .filter(|row| matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_)))
-            .count();
-        [
-            (LauncherFilter::All, shell + ssh),
-            (LauncherFilter::Ssh, ssh),
-            (LauncherFilter::Shell, shell),
-        ]
-    }
-
-    fn quick_jump_chip_counts(&self) -> [(QuickJumpFilter, usize); 5] {
-        let rows = self.palette_override.as_deref().unwrap_or(&[]);
-        QuickJumpFilter::ALL.map(|filter| {
-            let count = rows.iter().filter(|row| filter.matches(&row.action)).count();
-            (filter, count)
-        })
     }
 
     /// 从弹窗选中的 shell 起一个新终端。走共享 v4 launch 身份，因此冷恢复
