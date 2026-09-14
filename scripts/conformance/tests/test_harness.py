@@ -139,7 +139,7 @@ class ArchiveSafetyTests(unittest.TestCase):
 
     def test_macos_bundle_resolves_declared_executable_and_rejects_other_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "Pebrel Preview.app"
+            root = Path(directory).resolve() / "Pebrel Preview.app"
             binary = root / "Contents" / "MacOS" / "pebrel"
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b"fixture")

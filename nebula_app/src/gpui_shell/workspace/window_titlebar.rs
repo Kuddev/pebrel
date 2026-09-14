@@ -87,6 +87,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let top_tabs = self.tabs_position == nebula_settings::TabsPositionName::Top;
+        let native_layout = crate::platform::window_chrome::layout(window);
         let bar = TitleBar::new()
             // Leave 8px above and below the existing 32px controls.
             .h(px(48.0))
@@ -94,8 +95,11 @@ impl NebulaWorkspace {
             .when(settings_active, |bar| {
                 bar.border_b_1().border_color(crate::gpui_shell::theme::settings_hairline(cx))
             })
+            .when(top_tabs && native_layout.is_none(), |bar| {
+                bar.pl(px(top_tabs::TOP_TAB_LEFT_INSET))
+            })
             .when(top_tabs, |bar| {
-                bar.pl(px(top_tabs::TOP_TAB_LEFT_INSET)).child(self.render_top_title_bar(
+                bar.child(self.render_top_title_bar(
                     files_active,
                     git_active,
                     settings_active,
@@ -111,6 +115,14 @@ impl NebulaWorkspace {
                     cx,
                 ))
             });
+
+        // AppKit owns both the control group and its geometry. Read the live
+        // frames so system layout, resize and full-screen transitions agree.
+        let bar = if let Some((height, inset)) = native_layout {
+            bar.h(px(height)).pl(px(inset))
+        } else {
+            bar
+        };
 
         div()
             .relative()

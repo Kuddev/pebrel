@@ -1,9 +1,11 @@
-name: Linux Lua configuration
+name: Full native tests
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - "**/*.rs"
+      - "scripts/**/*.py"
       - "**/Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -11,6 +13,7 @@ on:
   pull_request:
     paths:
       - "**/*.rs"
+      - "scripts/**/*.py"
       - "**/Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -20,26 +23,66 @@ permissions:
   contents: read
 
 jobs:
-  ubuntu-24-04:
-    runs-on: ubuntu-24.04
+  native-tests:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-26, macos-26-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      PYTHONUTF8: "1"
+      CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
       - name: Install native dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake pkg-config libasound2-dev libdbus-1-dev libudev-dev \
+            build-essential cmake pkg-config zsh libasound2-dev libdbus-1-dev libudev-dev \
             libfontconfig1-dev libfreetype6-dev \
             libegl1-mesa-dev libgl1-mesa-dev \
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xinput-dev libxcb-xkb-dev libxi-dev
+      - name: Require the AppKit SDK used by this PR
+        if: runner.os == 'macOS'
+        run: |
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          test "${sdk_version%%.*}" -ge 26
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
       - uses: Swatinem/rust-cache@v2
-      - name: Test Lua configuration on Wayland and X11 build
-        run: |
-          cargo test --locked -p nebula config::
-      - name: Check Linux release build
-        run: cargo check --workspace --release
+      - name: Test native titlebar alignment
+        if: runner.os == 'macOS'
+        run: >-
+          cargo test --locked -p nebula --bin pebrel --features gpui-test-support platform::window_chrome::macos::tests::
+      - name: Test all Python helpers
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s scripts/tests -v
+      - name: Test all conformance harness helpers
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s scripts/conformance/tests -v
+      - name: Test the full Rust workspace
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --workspace
+      - name: Test all GPUI product and interaction cases
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p nebula --bin pebrel --features gpui-test-support
+      - name: Check source architecture
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: python scripts/check_architecture.py
+      - name: Test translation and allocation contracts
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: cargo test --locked --manifest-path tools/i18n-contract/Cargo.toml
+      - name: Check the release workspace
+        if: ${{ !cancelled() }}
+        run: cargo check --locked --workspace --release
