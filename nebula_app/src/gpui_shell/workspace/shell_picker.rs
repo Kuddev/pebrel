@@ -65,12 +65,25 @@ pub(super) fn shell_palette_rows(
         // 借用在 `profile` 被移进 action 之前结束。
         let icon_glyph = fallback_shell_glyph(icon_id, icon.is_some());
         let label = profile.name.clone();
-        let hint = profile.command.clone();
+        // 右侧那一列回答的是「这一行会开在哪儿」，不是「用哪个可执行文件」。
+        // profile 配了 `cwd` 就显示它——用户给项目建的入口，看到 `D:\huozigemima`
+        // 或 `/home/me/project` 才认得出是哪一行；显示 `wsl.exe` 等于没说。
+        // 没有 `cwd` 的（`scan_directory` 导入的 profile 恒为 None）回落到命令
+        // 路径：右列宁可显示可执行文件，也不能空着。
+        let directory = profile.cwd.as_ref().map(|path| path.to_string_lossy().into_owned());
+        let hint = directory.clone().unwrap_or_else(|| profile.command.clone());
         Some(WorkspacePaletteRow {
             group_order: if is_default { 0 } else { 1 },
             group: if is_default { recommended.to_owned() } else { all_shells.to_owned() },
-            search: format!("{} {} {} shell profile", profile.name, id, profile.command)
-                .to_lowercase(),
+            // 目录也进搜索串：项目名记不住时，敲目录名是最自然的找法。
+            search: format!(
+                "{} {} {} {} shell profile",
+                profile.name,
+                id,
+                profile.command,
+                directory.as_deref().unwrap_or_default()
+            )
+            .to_lowercase(),
             label,
             hint,
             hint_style: WorkspacePaletteHintStyle::Metadata,
