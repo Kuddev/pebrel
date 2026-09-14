@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, macos-15, macos-15-intel]
+        os: [ubuntu-24.04, windows-2022, macos-26, macos-26-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -52,17 +52,37 @@ jobs:
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xinput-dev libxcb-xkb-dev libxi-dev
+      - name: Require the AppKit SDK used by this PR
+        if: runner.os == 'macOS'
+        run: |
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          test "${sdk_version%%.*}" -ge 26
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
       - uses: Swatinem/rust-cache@v2
+      - name: Test native titlebar alignment
+        if: runner.os == 'macOS'
+        run: >-
+          cargo test --locked -p nebula --bin pebrel --features gpui-test-support platform::window_chrome::macos::tests::
       - name: Test all Python helpers
+        if: ${{ !cancelled() }}
         run: python -m unittest discover -s scripts/tests -v
       - name: Test all conformance harness helpers
+        if: ${{ !cancelled() }}
         run: python -m unittest discover -s scripts/conformance/tests -v
       - name: Test the full Rust workspace
+        if: ${{ !cancelled() }}
         run: cargo test --locked --workspace
       - name: Test all GPUI product and interaction cases
+        if: ${{ !cancelled() }}
         run: cargo test --locked -p nebula --features gpui-test-support
+      - name: Check source architecture
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: python scripts/check_architecture.py
+      - name: Test translation and allocation contracts
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: cargo test --locked --manifest-path tools/i18n-contract/Cargo.toml
       - name: Check the release workspace
+        if: ${{ !cancelled() }}
         run: cargo check --locked --workspace --release

@@ -29,7 +29,11 @@ role = sys.argv[2]
 if role != 'grandchild':
     next_role = 'child' if role == 'parent' else 'grandchild'
     subprocess.Popen([sys.executable, '-I', '-S', __file__, str(root), next_role])
-(root / (role + '.pid')).write_text(str(os.getpid()))
+# Publish the PID only after the contents are complete. The parent polls for
+# file existence, so creating the final path first exposes an empty file.
+pid_path = root / (role + '.pid.tmp')
+pid_path.write_text(str(os.getpid()))
+pid_path.replace(root / (role + '.pid'))
 while True:
     if role == 'parent' and (root / 'exit').exists():
         code = root / 'exit-code'

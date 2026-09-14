@@ -105,6 +105,30 @@ Files successfully loaded through `require` are added to the live-reload watch
 list. Extra local files can be registered with
 `pebrel.add_to_config_reload_watch_list(path)`.
 
+## Terminal Selection Colors (TOML Compatibility)
+
+For a legacy `pebrel.toml` configuration, the GPUI terminal accepts explicit
+selection foreground and background colors in `#rrggbb` or `0xrrggbb` form:
+
+```toml
+[colors.selection]
+foreground = "#102030"
+background = "#e5e9f0"
+```
+
+Previously the GPUI adapter loaded the selection background but ignored the
+foreground, which could leave selected text unreadable against a custom
+background. It also cleared a custom foreground when applying a theme such as
+Paper that does not declare selection colors. Both values now survive loading
+and themes that do not override them. A theme that explicitly declares selection
+colors, such as Nord, retains its existing precedence.
+
+Missing or invalid foreground colors keep the existing fallback. Relative
+`CellForeground` / `CellBackground` values are not added by this change. The
+regression tests cover parsing and theme precedence; this does not change the
+answer reader's selection overlay, formula selection layout, or the default
+selection contrast. No new setting, dependency, or per-frame work is introduced.
+
 ## Platform Values
 
 The module exposes stable runtime paths and platform data:
