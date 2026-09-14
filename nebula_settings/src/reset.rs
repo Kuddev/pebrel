@@ -40,6 +40,7 @@ const RESET_KEYS: &[&str] = &[
     "restore_session",
     "resume_ai",
     "tray",
+    "silent_start",
     "blur",
     "opacity",
     "background",

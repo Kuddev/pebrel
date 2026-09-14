@@ -61,6 +61,13 @@ jobs:
         with:
           toolchain: "1.97.1"
       - uses: Swatinem/rust-cache@v2
+      - name: Test silent startup requirements
+        run: >-
+          cargo test --locked -p nebula --bin pebrel --features gpui-test-support platform::startup::tests::
+      - name: Test startup parsing and reset coverage
+        if: ${{ !cancelled() }}
+        run: >-
+          cargo test --locked -p nebula-settings
       - name: Test native titlebar alignment
         if: runner.os == 'macOS'
         run: >-
@@ -76,7 +83,7 @@ jobs:
         run: cargo test --locked --workspace
       - name: Test all GPUI product and interaction cases
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p nebula --bin pebrel --features gpui-test-support
+        run: cargo test --locked -p nebula --features gpui-test-support
       - name: Check source architecture
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: python scripts/check_architecture.py
