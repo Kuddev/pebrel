@@ -93,7 +93,8 @@ class ScrollbackCompletionTests(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
-                    timeout=10,
+                    # Include cold shell startup on shared CI runners; this checks output, not latency.
+                    timeout=60,
                     check=True,
                 )
                 self.assertEqual(
