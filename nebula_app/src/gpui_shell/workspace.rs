@@ -55,7 +55,9 @@ mod file_tree;
 mod key_actions;
 mod notifications;
 mod palette;
+mod palette_support;
 mod pane_header;
+mod quick_access;
 mod quick_jump;
 mod quick_terminal;
 mod recipes;
@@ -699,7 +701,10 @@ impl WorkspacePaletteFilter {
                 language.pick("搜索 SSH 主机…", "Search SSH hosts...")
             },
             Self::Launcher(crate::display::command_palette::LauncherFilter::Shell) => {
-                language.pick("搜索 Shell 和配置…", "Search shells and profiles...")
+                language.pick("搜索 Shell…", "Search shells...")
+            },
+            Self::Launcher(crate::display::command_palette::LauncherFilter::Profiles) => {
+                language.pick("搜索配置…", "Search profiles...")
             },
             Self::QuickJump(filter) => filter.placeholder(language),
         }
@@ -860,6 +865,13 @@ pub struct NebulaWorkspace {
     sidebar_collapsed: bool,
     /// 只折叠 TABS 分区，不影响整个左栏；与旧壳分区标题的 chevron 同义。
     tabs_section_collapsed: bool,
+    /// 侧栏「快速访问」区是否折叠。与标签页分区同样只存内存，重启回到展开。
+    quick_access_collapsed: bool,
+    /// 「快速访问」的行快照（含预先算好的显示文本）。侧栏是逐帧重绘的热路径，
+    /// 不能每帧读 `terminal_profiles.json`，也不该每帧重算「开在哪儿」；由
+    /// [`Self::refresh_quick_access`] 在初始化、增删与 `TerminalProfilesChanged`
+    /// 时刷新。
+    quick_access: Vec<quick_access::QuickAccessRow>,
     /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进 48px 标题栏。
     tabs_position: nebula_settings::TabsPositionName,
     /// 运行时持久化的侧栏逻辑宽；布局、初始窗口和折叠动画必须同源。
@@ -1162,6 +1174,8 @@ impl NebulaWorkspace {
             settings_restore_side_panel_open: false,
             sidebar_collapsed: false,
             tabs_section_collapsed: false,
+            quick_access_collapsed: false,
+            quick_access: quick_access::load_quick_access_rows(),
             tabs_position: runtime.tabs_position,
             sidebar_width,
             sidebar_fold_armed: false,
@@ -2356,7 +2370,12 @@ impl NebulaWorkspace {
                 // 键位编辑器可能改了 keybind= 表：注入/撤销随之热更新。
                 self.apply_custom_keybinds(cx);
             },
-            SettingsPaneEvent::TerminalProfilesChanged => self.refresh_shell_if_open(window, cx),
+            SettingsPaneEvent::TerminalProfilesChanged => {
+                // 侧栏「快速访问」与 Ctrl+K 选择器读同一份 store：任一处增删都要
+                // 让两处同步，否则又是一个「两个口径」。
+                self.refresh_quick_access();
+                self.refresh_shell_if_open(window, cx)
+            },
             SettingsPaneEvent::LaunchSsh(host) => {
                 self.add_ssh_terminal(host.clone(), window, cx);
             },
@@ -2716,11 +2735,10 @@ impl NebulaWorkspace {
                             matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_))
                         },
                         crate::display::command_palette::LauncherFilter::Shell => {
-                            matches!(
-                                row.action,
-                                WorkspacePaletteAction::LaunchShell(_)
-                                    | WorkspacePaletteAction::LaunchProfile(_)
-                            )
+                            matches!(row.action, WorkspacePaletteAction::LaunchShell(_))
+                        },
+                        crate::display::command_palette::LauncherFilter::Profiles => {
+                            matches!(row.action, WorkspacePaletteAction::LaunchProfile(_))
                         },
                     };
                     if !keep {
@@ -2954,40 +2972,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    fn launcher_chip_counts(
-        &self,
-    ) -> [(crate::display::command_palette::LauncherFilter, usize); 3] {
-        use crate::display::command_palette::LauncherFilter;
-        let rows = self.palette_override.as_deref().unwrap_or(&[]);
-        let shell = rows
-            .iter()
-            .filter(|row| {
-                matches!(
-                    row.action,
-                    WorkspacePaletteAction::LaunchShell(_)
-                        | WorkspacePaletteAction::LaunchProfile(_)
-                )
-            })
-            .count();
-        let ssh = rows
-            .iter()
-            .filter(|row| matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_)))
-            .count();
-        [
-            (LauncherFilter::All, shell + ssh),
-            (LauncherFilter::Ssh, ssh),
-            (LauncherFilter::Shell, shell),
-        ]
-    }
-
-    fn quick_jump_chip_counts(&self) -> [(QuickJumpFilter, usize); 5] {
-        let rows = self.palette_override.as_deref().unwrap_or(&[]);
-        QuickJumpFilter::ALL.map(|filter| {
-            let count = rows.iter().filter(|row| filter.matches(&row.action)).count();
-            (filter, count)
-        })
-    }
-
     /// 从弹窗选中的 shell 起一个新终端。走共享 v4 launch 身份，因此冷恢复
     /// 拿得回真正的启动命令，侧栏短标也跟着对。
     fn launch_palette_shell(
@@ -3012,7 +2996,9 @@ impl NebulaWorkspace {
         self.add_terminal_with(launch, cwd, None, window, cx);
     }
 
-    fn launch_palette_profile(
+    /// 起一个 profile 终端。弹窗与侧栏「快速访问」共用这一处——开头的
+    /// `dismiss_palette_state` 只重置几个标志位，面板没开时调用是幂等的。
+    pub(super) fn launch_palette_profile(
         &mut self,
         profile: crate::config::ui_config::Profile,
         window: &mut Window,
