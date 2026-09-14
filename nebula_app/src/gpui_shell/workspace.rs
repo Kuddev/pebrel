@@ -63,6 +63,7 @@ mod remote_files;
 mod residency;
 mod send_to_chat;
 mod session_persistence;
+pub(crate) mod shell_launch;
 mod shell_picker;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
@@ -1254,8 +1255,25 @@ impl NebulaWorkspace {
                     this.add_terminal(window, cx);
                 }
             },
-            windowing::WorkspaceStartup::NewTerminal { cwd } => {
-                this.add_terminal_at(cwd, None, window, cx);
+            windowing::WorkspaceStartup::NewTerminal { cwd, shell_id } => match shell_id {
+                // 命令行指名了 shell（右键菜单「在 Pebrel 中打开（Ubuntu）」就走这里）：
+                // 解析成启动身份后交给与侧栏/选择器同一个终点。
+                Some(shell_id) => {
+                    // 冷启动时 main.rs 已经校验过一次；走到这里的失败（解析器
+                    // 与菜单不同步、IPC 直连）至少要留痕，并且用默认 shell 把
+                    // 标签开出来——不能因为一个坏 id 让用户连终端都没有。
+                    let launch = match shell_launch::resolve_shell_id(&shell_id) {
+                        Ok(launch) => launch,
+                        Err(error) => {
+                            log::warn!("shell id 解析失败，改用默认 shell: {error}");
+                            crate::session::LaunchSession::Default
+                        },
+                    };
+                    this.add_terminal_with(launch, cwd, None, window, cx);
+                },
+                None => {
+                    this.add_terminal_at(cwd, None, window, cx);
+                },
             },
             windowing::WorkspaceStartup::Empty => {},
         }
@@ -1335,51 +1353,7 @@ impl NebulaWorkspace {
         crate::shell_detect::shell_short_tag(&crate::platform::shell::default_shell_id()).into()
     }
 
-    /// 冻结“新建这一刻”的默认 Shell 为共享 v4 launch 身份。
-    ///
-    /// 旧壳通过 `TabLaunch::Shell` 保存同样的 name/program/args；GPUI 以前只
-    /// 保存 UI 短标，冷恢复时因此失去了真正的启动命令。检测失败才保留
-    /// `Default`，让跨机器工作区按 schema 的既有降级规则使用当地默认值。
-    fn configured_local_launch(cx: &App) -> crate::session::LaunchSession {
-        let shell_id = cx
-            .try_global::<crate::gpui_shell::config::Settings>()
-            .and_then(|settings| settings.shell_id.clone());
-        let Some(shell_id) = shell_id.filter(|id| !id.trim().is_empty()) else {
-            return crate::session::LaunchSession::Default;
-        };
-        if let Some(detected) = crate::shell_detect::detect_shells()
-            .into_iter()
-            .find(|shell| shell.id.eq_ignore_ascii_case(&shell_id))
-        {
-            let shell = detected.shell();
-            return crate::session::LaunchSession::Shell {
-                name: detected.name,
-                program: shell.program().to_owned(),
-                args: shell.args().to_vec(),
-            };
-        }
-        crate::terminal_profiles::TerminalProfiles::load()
-            .ok()
-            .and_then(|store| {
-                store.as_config_profiles().into_iter().find(|profile| {
-                    profile.settings_id().is_some_and(|id| id.eq_ignore_ascii_case(&shell_id))
-                })
-            })
-            .map(Self::profile_launch_session)
-            .unwrap_or(crate::session::LaunchSession::Default)
-    }
 
-    fn profile_launch_session(
-        profile: crate::config::ui_config::Profile,
-    ) -> crate::session::LaunchSession {
-        crate::session::LaunchSession::Profile {
-            name: profile.name,
-            command: profile.command,
-            args: profile.args,
-            cwd: profile.cwd.map(|path| path.to_string_lossy().into_owned()),
-            shell_id: profile.shell_id,
-        }
-    }
 
     /// 把共享会话 launch 还原为一次 GPUI PTY 启动。只有首 Pane 使用 Tab 的
     /// launch；其它分屏继续沿用旧壳合同，按当前默认 Shell 重建。
@@ -1524,7 +1498,7 @@ impl NebulaWorkspace {
         // 默认 shell 只在“创建新 Tab”的这一刻取样，并把实际 program/args
         // 一起冻结进 Tab launch。设置页随后改默认值只影响下一次创建；冷
         // 恢复也按本 Tab 的 launch 重建，不会把混合工作区抹成同一种 shell。
-        let launch_session = Self::configured_local_launch(cx);
+        let launch_session = shell_launch::configured_local_launch(cx);
         self.add_terminal_with(launch_session, cwd, command, window, cx)
     }
 
@@ -3019,7 +2993,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.dismiss_palette_state();
-        let launch = Self::profile_launch_session(profile);
+        let launch = shell_launch::profile_launch_session(profile);
         let cwd = Self::startup_directory().or_else(|| {
             self.tabs
                 .get(self.active)
@@ -4356,6 +4330,27 @@ impl Render for NebulaWorkspace {
             // 焦点而不画任何东西——终端看着就像卡死了。
             .children(Root::render_dialog_layer(window, cx))
             .children(crate::gpui_shell::toast::render_layer(window, cx))
+    }
+}
+
+/// `wsl:<发行版>` / 裸 `wsl` 的 id 语义：显示名与 argv 尾部。
+///
+/// 与可执行文件的查找分开，好让 id 语义能脱离"本机装没装 WSL"来测。
+/// 只认 `wsl:` 前缀（大小写不敏感）；只写 `wsl:` 不给发行版名不算命中，
+/// 交给调用方回落——`wsl.exe` 没有"空发行版"这回事。
+fn wsl_launch_args(shell_id: &str) -> Option<(String, Vec<String>)> {
+    let trimmed = shell_id.trim();
+    let distro = trimmed
+        .get(..4)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("wsl:"))
+        .map(|_| trimmed[4..].trim())
+        .filter(|distro| !distro.is_empty());
+    match distro {
+        Some(distro) => {
+            Some((format!("WSL · {distro}"), vec!["-d".to_owned(), distro.to_owned()]))
+        },
+        None if trimmed.eq_ignore_ascii_case("wsl") => Some(("WSL".to_owned(), Vec::new())),
+        None => None,
     }
 }
 

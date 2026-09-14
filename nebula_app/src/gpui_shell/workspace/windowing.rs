@@ -42,7 +42,9 @@ use crate::runtime_api::{
 /// 明确创建一个新终端或暂时保持空白，不能把同一份 session 重放多次。
 pub(crate) enum WorkspaceStartup {
     RestoreOrDefault,
-    NewTerminal { cwd: Option<PathBuf> },
+    /// 开一个新终端标签。`shell_id` 来自命令行 `--shell`（或驻留交接里同一字段）：
+    /// 有值时按它解析启动身份，而不是用设置里的默认 shell。
+    NewTerminal { cwd: Option<PathBuf>, shell_id: Option<String> },
     Empty,
 }
 
@@ -250,10 +252,17 @@ pub(crate) fn open_initial_window(
     ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
     shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
     initial_cwd: Option<PathBuf>,
+    shell_id: Option<String>,
 ) {
-    let startup = match initial_cwd {
-        Some(cwd) => WorkspaceStartup::NewTerminal { cwd: Some(cwd) },
-        None => WorkspaceStartup::RestoreOrDefault,
+    let startup = match (initial_cwd, shell_id) {
+        (Some(cwd), shell_id) => WorkspaceStartup::NewTerminal { cwd: Some(cwd), shell_id },
+        // 指名了 shell 就必须建标签，哪怕没给目录：`--shell` 是显式请求，不能
+        // 因为缺 cwd 就退回去恢复上次会话、把它悄悄丢掉。跳过会话恢复与
+        // "带了 `--working-directory` 就不恢复"是同一条既有契约。
+        (None, Some(shell_id)) => {
+            WorkspaceStartup::NewTerminal { cwd: None, shell_id: Some(shell_id) }
+        },
+        (None, None) => WorkspaceStartup::RestoreOrDefault,
     };
     open_workspace_window(
         cx,
@@ -431,7 +440,7 @@ fn open_workspace_window(
 pub(crate) fn open_new_window(cx: &mut App, cwd: Option<PathBuf>) -> gpui::Result<(u64, u64)> {
     let (window_id, workspace) = open_workspace_window(
         cx,
-        WorkspaceStartup::NewTerminal { cwd },
+        WorkspaceStartup::NewTerminal { cwd, shell_id: None },
         None,
         None,
         true,
@@ -441,10 +450,17 @@ pub(crate) fn open_new_window(cx: &mut App, cwd: Option<PathBuf>) -> gpui::Resul
     Ok((window_id, pane_id))
 }
 
-fn open_runtime_window(cx: &mut App, cwd: Option<PathBuf>) -> gpui::Result<(u64, u64)> {
+/// 新窗口形态的运行时请求（`window.create`，以及 UseNew 下的 `tab.new`)。
+/// `shell_id` 跟着命令行/交接一路传到这里，语义与
+/// [`WorkspaceStartup::NewTerminal`] 的同一字段一致。
+fn open_runtime_window(
+    cx: &mut App,
+    cwd: Option<PathBuf>,
+    shell_id: Option<String>,
+) -> gpui::Result<(u64, u64)> {
     let (window_id, workspace) = open_workspace_window(
         cx,
-        WorkspaceStartup::NewTerminal { cwd },
+        WorkspaceStartup::NewTerminal { cwd, shell_id },
         None,
         None,
         false,
@@ -858,8 +874,8 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             );
             return;
         },
-        RuntimeCommand::NewWindow { cwd } => {
-            let response = open_runtime_window(cx, cwd.clone())
+        RuntimeCommand::NewWindow { cwd, shell_id } => {
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone())
                 .map_err(|error| ApiError::new("window_create_failed", error.to_string()))
                 .map(|(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
@@ -871,11 +887,11 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             dispatch.respond(response);
             return;
         },
-        RuntimeCommand::NewTab { window_id: None, cwd }
+        RuntimeCommand::NewTab { window_id: None, cwd, shell_id }
             if nebula_settings::RuntimeSettings::load().windowing_behavior
                 == nebula_settings::WindowingBehaviorName::UseNew =>
         {
-            let response = open_runtime_window(cx, cwd.clone())
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone())
                 .map_err(|error| ApiError::new("window_create_failed", error.to_string()))
                 .map(|(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
@@ -926,8 +942,11 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
         Err(error)
             if matches!(dispatch.command, RuntimeCommand::NewTab { window_id: None, .. }) =>
         {
-            let RuntimeCommand::NewTab { cwd, .. } = &dispatch.command else { unreachable!() };
-            let response = open_runtime_window(cx, cwd.clone())
+            let RuntimeCommand::NewTab { cwd, shell_id, .. } = &dispatch.command
+            else {
+                unreachable!()
+            };
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone())
                 .map_err(|create| {
                     ApiError::new(
                         "window_create_failed",
@@ -1713,14 +1732,14 @@ mod tests {
             RuntimeWindowPolicy::Focus
         );
         assert_eq!(
-            runtime_window_policy(&RuntimeCommand::NewWindow { cwd: None }),
+            runtime_window_policy(&RuntimeCommand::NewWindow { cwd: None, shell_id: None }),
             RuntimeWindowPolicy::CreateWithoutActivation
         );
 
         let preserve = vec![
             RuntimeCommand::Snapshot,
             RuntimeCommand::CloseWindow { window_id: Some(1) },
-            RuntimeCommand::NewTab { window_id: Some(1), cwd: None },
+            RuntimeCommand::NewTab { window_id: Some(1), cwd: None, shell_id: None },
             RuntimeCommand::CloseTab { window_id: Some(1), tab_index: 0 },
             RuntimeCommand::RenameTab {
                 window_id: Some(1),

@@ -75,7 +75,7 @@ pub(crate) enum GpuiShellEvent {
 ///
 /// GPUI 拥有自己的消息循环：主窗形态从主线程调用（winit 不启动）；
 /// spike 形态从专用线程调用。一个进程内只允许调用一次。
-pub fn run_shell(initial_cwd: Option<std::path::PathBuf>) {
+pub fn run_shell(initial_cwd: Option<std::path::PathBuf>, shell_id: Option<String>) {
     let (shell_tx, shell_rx) = std::sync::mpsc::channel();
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::ssh_prompt::install({
@@ -118,12 +118,20 @@ pub fn run_shell(initial_cwd: Option<std::path::PathBuf>) {
             let behavior = nebula_settings::RuntimeSettings::load().windowing_behavior;
             let handed_over = match behavior {
                 nebula_settings::WindowingBehaviorName::UseNew => {
-                    crate::runtime_api::try_open_window_existing(initial_cwd.as_deref())
+                    crate::runtime_api::try_open_window_existing(
+                        initial_cwd.as_deref(),
+                        shell_id.as_deref(),
+                    )
                 },
-                _ => initial_cwd.as_deref().map_or_else(
-                    crate::runtime_api::try_open_default_tab_existing,
-                    crate::runtime_api::try_open_directory_existing,
-                ),
+                _ => match initial_cwd.as_deref() {
+                    Some(dir) => crate::runtime_api::try_open_directory_existing(
+                        dir,
+                        shell_id.as_deref(),
+                    ),
+                    None => {
+                        crate::runtime_api::try_open_default_tab_existing(shell_id.as_deref())
+                    },
+                },
             };
             if handed_over {
                 crate::tray::shutdown();
@@ -147,7 +155,7 @@ pub fn run_shell(initial_cwd: Option<std::path::PathBuf>) {
             crate::ai_hook::spawn_config_guard();
             init(cx);
             cx.activate(true);
-            open_main_window(cx, ai_events, shell_rx, runtime_hub, initial_cwd);
+            open_main_window(cx, ai_events, shell_rx, runtime_hub, initial_cwd, shell_id);
         });
     crate::tray::shutdown();
 }
@@ -220,9 +228,10 @@ fn open_main_window(
     shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
     runtime_hub: crate::runtime_api::RuntimeHub,
     initial_cwd: Option<std::path::PathBuf>,
+    shell_id: Option<String>,
 ) {
     workspace::windowing::initialize(cx, runtime_hub);
-    workspace::windowing::open_initial_window(cx, ai_events, shell_events, initial_cwd);
+    workspace::windowing::open_initial_window(cx, ai_events, shell_events, initial_cwd, shell_id);
 }
 
 /// 按 `tray` 设置挂上或摘掉系统托盘图标（旧壳 `tray::set_enabled`）。

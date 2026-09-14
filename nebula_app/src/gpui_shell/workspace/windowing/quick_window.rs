@@ -62,7 +62,7 @@ pub(crate) fn toggle_quick_terminal_window(cx: &mut App) {
         } else {
             let _ = open_workspace_window(
                 cx,
-                WorkspaceStartup::NewTerminal { cwd: None },
+                WorkspaceStartup::NewTerminal { cwd: None, shell_id: None },
                 None,
                 None,
                 true,
@@ -156,7 +156,7 @@ fn open_quick_terminal_window(cx: &mut App) {
     };
     let opened = open_workspace_window(
         cx,
-        WorkspaceStartup::NewTerminal { cwd: None },
+        WorkspaceStartup::NewTerminal { cwd: None, shell_id: None },
         None,
         None,
         false,

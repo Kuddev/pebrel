@@ -742,15 +742,22 @@ pub fn wsl_distro_names() -> Vec<String> {
 }
 
 #[cfg(windows)]
+/// 本机 `wsl.exe` 的绝对路径（`System32` 下那个）；没装 WSL 就没有。
+///
+/// [`find_wsl_distros`] 与「id 指名了 `wsl:<发行版>`、但当前枚举不到」的兜底共用
+/// 这一个来源——两处各拼一次路径，迟早会分叉。
+pub fn wsl_executable() -> Option<String> {
+    env_path("SystemRoot").and_then(|root| existing(root.join(r"System32\wsl.exe")))
+}
+
 fn find_wsl_distros() -> Vec<DetectedShell> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
-    let wsl_exe =
-        match env_path("SystemRoot").and_then(|root| existing(root.join(r"System32\wsl.exe"))) {
-            Some(path) => path,
-            None => return Vec::new(),
-        };
+    let wsl_exe = match wsl_executable() {
+        Some(path) => path,
+        None => return Vec::new(),
+    };
 
     let lxss = match RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
