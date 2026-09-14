@@ -465,6 +465,19 @@
     "imported": "已新增 {added} 台主机，跳过 {skipped} 台已有主机",
     "imported_partial": "已新增 {added} 台主机，但显示状态未能更新。请重试导入：{error}"
   },
+  "startup": {
+    "portable": {
+      "title": "是否启用便携运行？",
+      "description": "Pebrel 当前不在应用程序文件夹中。便携运行会将 Pebrel 的设置、会话、历史、导入字体和临时文件保存在：\n{path}\n\n退出 Pebrel 后，将 Pebrel.app 与 Pebrel Data 一起移动即可携带这些数据。首次使用独立配置，可通过“备份”导入已有设置。Shell、外部工具、SSH 密钥和系统凭据仍由本机管理。",
+      "enable": "便携运行",
+      "normal": "普通运行",
+      "quit": "退出",
+      "error_title": "Pebrel 无法启动",
+      "translocated": "macOS 正在临时安全位置运行 Pebrel。请退出应用，使用访达将 Pebrel.app 移到准备使用的可写文件夹，再重新打开。",
+      "linked_directory": "便携数据与临时文件夹不能是符号链接。",
+      "write_failed": "无法使用便携数据文件夹：\n{path}\n\n{error}\n\n请将 Pebrel.app 与 Pebrel Data 移到可写文件夹后重试。Pebrel 未切换到本机配置。"
+    }
+  },
   "vcs": {
     "changes": "变更",
     "staged": "已暂存",

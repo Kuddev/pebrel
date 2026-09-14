@@ -76,7 +76,7 @@ jobs:
         run: cargo test --locked --workspace
       - name: Test all GPUI product and interaction cases
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p nebula --bin pebrel --features gpui-test-support
+        run: cargo test --locked -p nebula --features gpui-test-support
       - name: Check source architecture
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: python scripts/check_architecture.py
