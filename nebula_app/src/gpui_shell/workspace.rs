@@ -867,10 +867,11 @@ pub struct NebulaWorkspace {
     tabs_section_collapsed: bool,
     /// 侧栏「快速访问」区是否折叠。与标签页分区同样只存内存，重启回到展开。
     quick_access_collapsed: bool,
-    /// 「快速访问」的行快照。侧栏是逐帧重绘的热路径，不能每帧读
-    /// `terminal_profiles.json`；由 [`Self::refresh_quick_access`] 在初始化、
-    /// 增删与 `TerminalProfilesChanged` 时刷新。
-    quick_access: Vec<crate::config::ui_config::Profile>,
+    /// 「快速访问」的行快照（含预先算好的显示文本）。侧栏是逐帧重绘的热路径，
+    /// 不能每帧读 `terminal_profiles.json`，也不该每帧重算「开在哪儿」；由
+    /// [`Self::refresh_quick_access`] 在初始化、增删与 `TerminalProfilesChanged`
+    /// 时刷新。
+    quick_access: Vec<quick_access::QuickAccessRow>,
     /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进 48px 标题栏。
     tabs_position: nebula_settings::TabsPositionName,
     /// 运行时持久化的侧栏逻辑宽；布局、初始窗口和折叠动画必须同源。
@@ -1174,7 +1175,7 @@ impl NebulaWorkspace {
             sidebar_collapsed: false,
             tabs_section_collapsed: false,
             quick_access_collapsed: false,
-            quick_access: quick_access::load_quick_access_profiles(),
+            quick_access: quick_access::load_quick_access_rows(),
             tabs_position: runtime.tabs_position,
             sidebar_width,
             sidebar_fold_armed: false,
