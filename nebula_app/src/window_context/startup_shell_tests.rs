@@ -52,14 +52,28 @@ fn insertion_never_runs_past_the_end_of_the_tab_list() {
 /// 变红——那说明它应该改走 `insert_tab`。
 #[test]
 fn tab_insertion_has_exactly_two_homes() {
-    let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/window_context.rs"),
-    )
-    .expect("window_context.rs 必须可读，否则本约束静默放水");
+    // P4 拆分后 insert_tab/move_tab 住在 window_context/ 子模块里；约束
+    // 覆盖整个 window_context 模块：根文件加全部子模块文件。
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = vec![std::fs::read_to_string(manifest.join("src/window_context.rs"))
+        .expect("window_context.rs 必须可读，否则本约束静默放水")];
+    let mut children: Vec<_> = std::fs::read_dir(manifest.join("src/window_context"))
+        .expect("window_context/ 必须可读，否则本约束静默放水")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    children.sort();
+    for path in children {
+        sources.push(std::fs::read_to_string(&path).expect("window_context 子模块必须可读"));
+    }
     // 只扫产品代码。规则本身是用字符串字面量表达的，扫描自己会把规则
     // 连同它的失败信息一起算成违规。
-    let production = source.split("#[cfg(test)]").next().unwrap_or_default();
-    let insertions = production.matches("self.tabs.insert(").count();
+    let insertions = sources
+        .iter()
+        .map(|source| source.split("#[cfg(test)]").next().unwrap_or_default())
+        .map(|production| production.matches("self.tabs.insert(").count())
+        .sum::<usize>();
     assert_eq!(
         insertions, 2,
         "找到 {insertions} 处 self.tabs.insert(，应为 2 处（insert_tab 与 move_tab）。\n\

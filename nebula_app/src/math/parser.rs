@@ -26,10 +26,12 @@ pub(crate) fn parse_formula(
     validate(source.as_ref(), limits)?;
 
     let style = if display { MathStyle::Display } else { MathStyle::Text };
-    let arrows = normalize_ascii_math_arrows(source.as_ref());
-    let substituted = substitute_unsupported_presentation(arrows.as_ref());
+    // 化学替换要先于箭头规范化：mhchem 翻译器按原文识别 `->`，先转成
+    // `\to` 会让 `\ce{}` 整体放弃翻译。非化学输入两步互不影响。
+    let substituted = substitute_unsupported_presentation(source.as_ref());
     let chem_source = crate::math::mhchem::substitute_chemistry_commands(substituted.as_ref());
-    parse_normalized_formula(chem_source.as_ref(), display, style, limits)
+    let arrows = normalize_ascii_math_arrows(chem_source.as_ref());
+    parse_normalized_formula(arrows.as_ref(), display, style, limits)
 }
 
 pub(crate) fn parse_formula_source(

@@ -1921,10 +1921,29 @@ mod tests {
 
     #[test]
     fn math_rendering_fixture_uses_native_layout_for_every_formula() {
-        let document =
-            crate::markdown::parse_markdown(include_str!("../../../docs/math-rendering-test.md"));
+        let raw = include_str!("../../../docs/math-rendering-test.md");
+        let document = crate::markdown::parse_markdown(raw);
+        // 语料中的 `<!-- pebrel-test: source-fallback -->` / `preserve-source`
+        // 负例（\pu、故意坏输入等）按合同不进排版引擎；取公式源码前最近的
+        // pebrel-test 标记判定期望，与 scientific_corpus 语料测试同源。
+        let expects_native = |source: &MathSource| -> bool {
+            let marker_end = match &source.source {
+                crate::markdown::TextRef::Source { range, .. } => range.as_usize().start,
+                crate::markdown::TextRef::Generated(_) => return true,
+            };
+            match raw[..marker_end].rfind("<!-- pebrel-test:") {
+                Some(index) => {
+                    let marker = &raw[index..marker_end];
+                    !marker.contains("source-fallback") && !marker.contains("preserve-source")
+                },
+                None => true,
+            }
+        };
         let mut formula_count = 0usize;
         let mut check = |source: &MathSource, display: bool| {
+            if !expects_native(source) {
+                return;
+            }
             let layout = compile_formula(source.as_str(), display, 18.0, 1.0, DEFAULT_LIMITS)
                 .unwrap_or_else(|error| {
                     panic!("fixture compile failed for {:?}: {error:?}", source)
