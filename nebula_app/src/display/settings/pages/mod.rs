@@ -5,3 +5,5 @@ pub(super) mod providers;
 pub(super) mod ssh;
 pub(super) mod proxy;
 pub(super) mod keymap;
+pub(super) mod advanced;
+pub(super) mod backup;

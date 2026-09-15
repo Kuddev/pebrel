@@ -14,6 +14,5 @@ nebula_app/src/display/chrome.rs 2442
 nebula_app/src/display/command_palette.rs 3935
 nebula_app/src/display/markdown_view.rs 2067
 nebula_app/src/display/mod.rs 11150
-nebula_app/src/display/settings.rs 8434
 nebula_app/src/gpui_shell/workspace.rs 4798
 nebula_terminal/src/term/mod.rs 2713
