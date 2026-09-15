@@ -8,11 +8,16 @@
 # 用法:
 #   .\scripts\visual_parity.ps1 -Exe <pebrel.exe> -Tag winit-old -ExeArgs '--working-directory D:\temp_build\nebula'
 #   .\scripts\visual_parity.ps1 -Exe <nebula-gpui.exe> -Tag gpui-lab
+#   .\scripts\visual_parity.ps1 -Exe <pebrel.exe> -Tag gpui-z16 -WindowW 1518 -WindowH 844 -ExeArgs '...'
+#     -WindowW/-WindowH: 找到主窗后按给定外框尺寸重设（两壳同外框 + 同字号
+#     = 同网格，放大级笔画粗细对账与等网格对账都需要）。缺省保持原尺寸。
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
     [Parameter(Mandatory = $true)][string]$Tag,
     [string]$ExeArgs = '',
-    [int]$SettleSec = 4
+    [int]$SettleSec = 4,
+    [int]$WindowW = 0,
+    [int]$WindowH = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -111,8 +116,13 @@ $proc = if ($ExeArgs) {
 Start-Sleep -Seconds 7
 if ($proc.HasExited) { throw "terminal exited immediately (mux hand-over? pass -ExeArgs)" }
 $hwnd = Get-MainWindow -ProcessId $proc.Id
-# 可见但不抢焦点（HWND_TOPMOST, SWP_NOSIZE|NOMOVE|NOACTIVATE）。
-[void][ParityWin]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x13)
+# 可见但不抢焦点。给了 -WindowW/H 就同时重设外框（保留 TOPMOST|NOACTIVATE），
+# 否则保持原尺寸（SWP_NOSIZE|NOMOVE|NOACTIVATE）。
+if ($WindowW -gt 0 -and $WindowH -gt 0) {
+    [void][ParityWin]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, $WindowW, $WindowH, 0x10)
+} else {
+    [void][ParityWin]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x13)
+}
 
 $command = "powershell -NoProfile -ExecutionPolicy Bypass -File $contentFile"
 $ok = $false
