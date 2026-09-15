@@ -822,12 +822,16 @@ F/C=C/F
 C1CC
 ```
 
-### mhchem 当前尚未实现
+### mhchem 化学式已实现
 
-<!-- pebrel-test: source-fallback -->
+<!-- pebrel-test: rendered -->
 $$
 \ce{2H2 + O2 -> 2H2O}
 $$
+
+支持的反应式语法：元素符号、下标、化学计量系数、`+`、`->`（`\to` 箭头）、`<=>`（平衡箭头 `\rightleftharpoons`）、`<->`（共振箭头 `\leftrightarrow`）、上标电荷（`^2-`、`^2+`、`^+`）、状态标注 `(s)/(l)/(g)/(aq)`、沉淀箭头 `v`（`\downarrow`）、气体箭头 `^`（`\uparrow`）、水合点 `.`（`\cdot`）以及普通基团括号。
+
+仍回退源码的情况：箭头上方文字 `->[T]`（`\xrightarrow` 扩展）、手性/立体化学标记、SMILES 格式、以及任何无法解析的 token 序列。
 
 ### 分子名不应被当成 SMILES
 
@@ -913,27 +917,33 @@ M  END
 $$$$
 ```
 
-## 尚未实现的化学 TeX 命令
+## 化学 TeX 命令渲染支持状态
 
-以下命令属于化学单位/化学式扩展，不是普通数学。每个块都必须留在源码中。
+以下命令属于化学单位/化学式扩展，不是普通数学。能渲染的块已标记为 `rendered`；仍回退源码的块标记为 `source-fallback`。
 
 ### mhchem 化学式
 
-<!-- pebrel-test: source-fallback -->
+<!-- pebrel-test: rendered -->
 $$
 \ce{2H2 + O2 -> 2H2O}
 $$
 
-### siunitx 单位
+支持子集：元素符号、下标、计量系数、`+`/`->`/`<=>`/`<->`、上标电荷、状态标注、沉淀/气体箭头、水合点、基团括号。
 
-<!-- pebrel-test: source-fallback -->
+### siunitx 单位与量值
+
+<!-- pebrel-test: rendered -->
 $$
 \SI{25}{\degreeCelsius}
 $$
 
-### siunitx 纯单位
+支持 `\unit{...}`、`\si{...}`（纯单位）、`\SI{<数>}{<单位>}` 和 `\qty{<数>}{<单位>}`（量值+单位）。单位宏表覆盖常用 SI 前缀（kilo/milli/micro 等）、基本单位（metre/gram/second 等）和衍生单位（degreeCelsius/percent 等）。`\per` 渲染为斜杠，`\squared`/`\cubic` 渲染为上标。未知单位宏回退源码。
+
+### siunitx 纯单位（`\pu` 仍未实现）
 
 <!-- pebrel-test: source-fallback -->
 $$
 \pu{1.00e3\,kJ\,mol^{-1}}
 $$
+
+`\pu{...}`（v3 的物理单位命令）尚未实现。标量+单位请使用 `\qty{...}{...}` 或 `\SI{...}{...}`。

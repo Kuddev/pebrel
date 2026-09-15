@@ -27,8 +27,9 @@ pub(crate) fn parse_formula(
 
     let style = if display { MathStyle::Display } else { MathStyle::Text };
     let arrows = normalize_ascii_math_arrows(source.as_ref());
-    let normalized_source = substitute_unsupported_presentation(arrows.as_ref());
-    parse_normalized_formula(normalized_source.as_ref(), display, style, limits)
+    let substituted = substitute_unsupported_presentation(arrows.as_ref());
+    let chem_source = crate::math::mhchem::substitute_chemistry_commands(substituted.as_ref());
+    parse_normalized_formula(chem_source.as_ref(), display, style, limits)
 }
 
 pub(crate) fn parse_formula_source(
@@ -43,7 +44,8 @@ pub(crate) fn parse_formula_source(
         .unwrap_or(Cow::Borrowed(source));
     let style = if display { MathStyle::Display } else { MathStyle::Text };
     let presentation = substitute_unsupported_presentation(source.as_ref());
-    parse_normalized_formula(presentation.as_ref(), display, style, limits)
+    let chem_source = crate::math::mhchem::substitute_chemistry_commands(presentation.as_ref());
+    parse_normalized_formula(chem_source.as_ref(), display, style, limits)
 }
 
 /// A lone line-ending backslash in a matrix can be accepted as TeX space,

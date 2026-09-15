@@ -1122,11 +1122,13 @@ $$
 \boxed{\frac{a+b}{c+d}}\tag*{附录}
 $$
 
-## 27. 不支持宏与坏输入的源码回退
+## 27. 宏的渲染边界与坏输入的源码回退
 
-以下块故意使用当前引擎不支持的化学式、物理量和单位宏。回退时保留原始数学源码，不应把这些宏猜译成另一种公式。
+`\ce` 化学式与 `\SI` 量值自 2026-09-15 起由化学扩展真实渲染（支持范围见
+chemistry-rendering-test.md）；`\pu` 等仍未实现的宏继续回退，回退时保留原始数学源码，
+不应把未支持的宏猜译成另一种公式。
 
-<!-- pebrel-test: source-fallback -->
+<!-- pebrel-test: rendered -->
 $$
 \ce{H2O + CO2 -> H2CO3}
 $$
@@ -1136,7 +1138,7 @@ $$
 \pu{9.81\ m/s^2}
 $$
 
-<!-- pebrel-test: source-fallback -->
+<!-- pebrel-test: rendered -->
 $$
 \SI{9.81}{\meter\per\second\squared}
 $$

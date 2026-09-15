@@ -8,8 +8,10 @@ mod compile;
 pub(crate) mod font;
 pub(crate) mod ir;
 pub(crate) mod layout;
+pub(crate) mod mhchem;
 pub(crate) mod parser;
 pub(crate) mod rasterizer;
+pub(crate) mod siunitx;
 pub(crate) mod spacing;
 pub(crate) mod validate;
 
