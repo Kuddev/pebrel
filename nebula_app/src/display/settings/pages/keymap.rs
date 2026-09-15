@@ -1,5 +1,6 @@
 // Settings UI: Keymap page (search, editable rows, read-only extras, clash hints).
 
+use crate::display::ui::tokens;
 use crate::display::color::Rgb;
 use crate::display::ui::surface;
 use crate::display::ui::text_field;
@@ -143,8 +144,8 @@ pub(crate) fn push_keymap_quads(
                 // Keycap 底座：捕获中的行换 accent 描边 + 软填充提示「正在
                 // 等待按键」；未绑定行不画底座；冲突行 danger 底（.kbd.clash）。
                 let capturing = view.keymap_capture == Some(flat);
-                let (label, _, bound) = keymap_row_value(view, flat);
-                let cap = keymap_keycap_rect(rect, &label, cell_w, scale);
+                let (label, _, bound) = super::super::keymap_row_value(view, flat);
+                let cap = super::super::keymap_keycap_rect(rect, &label, cell_w, scale);
                 let (cx, cy, cw, ch) = cap;
                 if capturing {
                     clip(
@@ -161,7 +162,7 @@ pub(crate) fn push_keymap_quads(
                     clip(quads, UiQuad::solid(cx, cy, cw, ch, s(6.0), sk.panel));
                     clip(quads, UiQuad::solid(cx, cy, cw, ch, s(6.0), sk.accent_soft));
                 } else if bound {
-                    let combo = super::ui::keycap::layout_combo(
+                    let combo = crate::display::ui::keycap::layout_combo(
                         &label,
                         rect.0 + rect.2 - s(16.0),
                         rect.1 + rect.3 / 2.0,
@@ -172,7 +173,7 @@ pub(crate) fn push_keymap_quads(
                     let (_, chip_y, _, chip_h) = combo.bounds;
                     let mut chip_quads = Vec::new();
                     for &(chip_x, chip_w, _) in &combo.chips {
-                        super::ui::keycap::push_chip_toned(
+                        crate::display::ui::keycap::push_chip_toned(
                             &mut chip_quads,
                             &sk,
                             chip_x,
@@ -196,6 +197,9 @@ pub(crate) fn push_keymap_quads(
                 let rect = (rx, ry + index as f32 * rh, rw, rh);
                 row_hover(quads, rect, view.hover == SettingsHit::KeymapReadonlyRow(index));
             }
+    quads.extend(staged.drain(..));
+}
+
 pub(crate) fn draw_keymap_text(
     view: &SettingsView,
     r: &mut Renderer,
@@ -270,7 +274,7 @@ pub(crate) fn draw_keymap_text(
                 if !title_y.is_finite() || !visible(*title_y, title_h) {
                     continue;
                 }
-                let (zh, en) = match keymap::GROUPS.get(group) {
+                let (zh, en) = match super::super::keymap::GROUPS.get(group) {
                     Some((zh, en, _)) => (*zh, *en),
                     None => ("固定快捷键", "Fixed shortcuts"),
                 };
@@ -314,21 +318,21 @@ pub(crate) fn draw_keymap_text(
                 }
                 let i = flat;
                 let ty = rect.1 + (kh - cell_h) / 2.0;
-                let (zh_label, en_label) = if i == keymap::QUICK_TERMINAL_ROW {
+                let (zh_label, en_label) = if i == super::super::keymap::QUICK_TERMINAL_ROW {
                     if view.quick_hotkey_error.is_some() {
                         ("快速终端（注册失败）", "Quick terminal (failed)")
                     } else {
                         ("快速终端", "Quick terminal")
                     }
                 } else {
-                    let (_, zh, en) = keymap::EDITABLE_ACTIONS[i - 1];
+                    let (_, zh, en) = super::super::keymap::EDITABLE_ACTIONS[i - 1];
                     (zh, en)
                 };
                 r.draw_chrome_text(
                     size,
                     rect.0 + s(16.0),
                     ty,
-                    if i == keymap::QUICK_TERMINAL_ROW && view.quick_hotkey_error.is_some() {
+                    if i == super::super::keymap::QUICK_TERMINAL_ROW && view.quick_hotkey_error.is_some() {
                         if sk.is_light { Rgb::new(207, 34, 46) } else { Rgb::new(248, 81, 73) }
                     } else {
                         sk.ink
@@ -362,7 +366,7 @@ pub(crate) fn draw_keymap_text(
                     r.draw_chrome_text(size, cap_x + s(12.0), ty, ink, &value, gc);
                 } else {
                     // 键帽规范：一颗 chip 承载整串键位（Windows 心智）。
-                    let combo = super::super::ui::keycap::layout_combo(
+                    let combo = crate::display::ui::keycap::layout_combo(
                         &value,
                         rect.0 + rect.2 - s(16.0),
                         rect.1 + rect.3 / 2.0,
@@ -399,7 +403,7 @@ pub(crate) fn draw_keymap_text(
             }
             let (rx, ry, rw, rh) = geometry.keymap_readonly_row0;
             for (row, flat) in view.keymap_readonly_visible.iter().copied().enumerate() {
-                let Some((zh_label, en_label, combo)) = keymap::READONLY_ROWS.get(flat) else {
+                let Some((zh_label, en_label, combo)) = super::super::keymap::READONLY_ROWS.get(flat) else {
                     continue;
                 };
                 let rect = (rx, ry + row as f32 * rh, rw, rh);

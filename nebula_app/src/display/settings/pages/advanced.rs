@@ -69,7 +69,7 @@ pub(crate) fn push_advanced_quads(
             clip(quads, UiQuad::solid(ix - s(1.0), iy - s(1.0), iw + s(2.0), ih + s(2.0),
                 s(8.0), Rgba::new(border.r, border.g, border.b, border_alpha)));
             clip(quads, UiQuad::solid(ix, iy, iw, ih, s(7.0), sk.surface));
-            if focused && super::super::caret_blink_on() {
+            if focused && crate::display::caret_blink_on() {
                 let max_cols = (((iw - s(24.0)) / cell_w) as usize).max(1);
                 let (_, placeholder, cols) = super::super::sync_input_display(view, index, max_cols);
                 let cols = if placeholder { 0 } else { cols };
@@ -209,7 +209,7 @@ pub(crate) fn draw_advanced_text(
                 }
             }
 
-            if SHOW_WEBDAV_SYNC_SETTINGS {
+            if super::super::SHOW_WEBDAV_SYNC_SETTINGS {
                 // ---- 同步（WebDAV）----
                 let (sx, sy, ..) = geometry.sync_rows[0];
                 if visible(group_y(sy), title_h) {

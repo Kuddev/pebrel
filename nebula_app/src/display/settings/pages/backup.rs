@@ -38,9 +38,11 @@ pub(crate) fn push_backup_quads(
                     row, hot: bool, open: bool| {
         widgets::push_combobox(staged, widgets::combobox_rect(row, scale), scale, &sk, hot, open);
         for quad in staged.drain(..) { clip(quads, quad); }
-    };            let overlay_radius = super::ui::tokens::radius::OVERLAY * scale;
-            let control_radius = super::ui::tokens::radius::CONTROL * scale;
-            let chip_radius = super::ui::tokens::radius::CHIP * scale;
+    };
+
+    let overlay_radius = crate::display::ui::tokens::radius::OVERLAY * scale;
+            let control_radius = crate::display::ui::tokens::radius::CONTROL * scale;
+            let chip_radius = crate::display::ui::tokens::radius::CHIP * scale;
             // Automatic-backup summary card. Its switch is deliberately shown
             // disabled while the page is gated: the current backend supports
             // explicit encrypted exports, but has no scheduled-retention
@@ -195,7 +197,7 @@ pub(crate) fn push_backup_quads(
                         clip(quads, quad);
                     }
                     clip(quads, UiQuad::solid(ix, iy, iw, ih, control_radius, sk.surface));
-                    if focused && super::caret_blink_on() {
+                    if focused && crate::display::caret_blink_on() {
                         let max_cols = (((iw - s(24.0)) / cell_w) as usize).max(1);
                         let (_, placeholder, cols) =
                             super::super::backup_remote_input_display(view, index, max_cols);
@@ -242,6 +244,7 @@ pub(crate) fn push_backup_quads(
                         );
                     }
                 }
+}
             }
 
 pub(crate) fn draw_backup_text(
@@ -277,7 +280,10 @@ pub(crate) fn draw_backup_text(
         let value = super::super::truncate_tab_label(value, max_chars);
         r.draw_chrome_text(size, tx, rect.1 + (rect.3 - cell_h) / 2.0, ink, &value, gc);
     };
-}
+    let row_text_y = |ry: f32, rh: f32| {
+        if geometry.stacked_rows { ry + s(9.0) } else { ry + (rh - cell_h) / 2.0 }
+    };
+    let (_, content_y, _, _) = geometry.content;
             r.draw_chrome_text(
                 size,
                 content_x + s(24.0),
