@@ -167,6 +167,21 @@ impl WindowContext {
         Ok(self.tabs[self.active_tab].active_pane)
     }
 
+    pub(crate) fn runtime_new_ssh_tab(
+        &mut self,
+        destination: String,
+    ) -> Result<u64, ApiError> {
+        let before = self.tabs.len();
+        self.handle_tab_request(TabRequest::NewSsh(destination));
+        if self.tabs.len() == before {
+            return Err(ApiError::new(
+                "action_failed",
+                "the SSH pane could not be created for the requested destination",
+            ));
+        }
+        Ok(self.tabs[self.active_tab].active_pane)
+    }
+
     pub(crate) fn runtime_split(
         &mut self,
         pane_id: Option<u64>,

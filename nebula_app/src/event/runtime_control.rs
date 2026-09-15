@@ -160,6 +160,18 @@ impl Processor {
                     "pane_id": pane_id
                 }))
             },
+            RuntimeCommand::SshOpen { window_id, destination } => {
+                let id = self.runtime_target_window(*window_id, None)?;
+                let pane_id = self
+                    .windows
+                    .get_mut(&id)
+                    .expect("resolved runtime window exists")
+                    .runtime_new_ssh_tab(destination.clone())?;
+                self.runtime_result(serde_json::json!({
+                    "window_id": u64::from(id),
+                    "pane_id": pane_id
+                }))
+            },
             RuntimeCommand::CloseTab { window_id, tab_index } => {
                 let id = self.runtime_target_window(*window_id, None)?;
                 let close_window = self

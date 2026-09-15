@@ -24,7 +24,8 @@ use crate::renderer::shader::{ShaderProgram, ShaderVersion};
 const IMAGE_SHADER_F: &str = include_str!("../../res/image.f.glsl");
 const IMAGE_SHADER_V: &str = include_str!("../../res/image.v.glsl");
 
-use super::image_layout::wallpaper_rect;
+// 双壳组合下 gpui_shell/wallpaper.rs 也从这里取 wallpaper_rect，需要 crate 可见。
+pub(crate) use super::image_layout::wallpaper_rect;
 pub use super::image_layout::{BackgroundImageAlignment, BackgroundImageFit};
 
 #[repr(C)]
