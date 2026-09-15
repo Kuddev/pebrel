@@ -1060,6 +1060,7 @@ pub(super) fn push_quads(
                 view, quads, size, scale, &geometry, &sk, clip_top, clip_bot,
             );
         },
+    }
     // section actually overflows (same style as the pane scrollbar: thin
     // rounded thumb, no track).
     let content_h = match section {
@@ -1306,8 +1307,6 @@ pub(super) fn draw_text(
                 view, r, gc, size, scale, &geometry, &sk, language, cell_w, cell_h,
                 &mut icon_draws, content_x, px, clip_top, clip_bot, title_h,
             );
-        },
-            }
         },
     }
     icon_draws
