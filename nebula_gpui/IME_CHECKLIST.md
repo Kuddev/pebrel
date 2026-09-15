@@ -1,8 +1,11 @@
 # G2 闸门：IME 中文输入人工验收清单
 
-环境：启用 `gpui-shell` feature 构建的 `nebula.exe --gpui` 产品主窗形态，
-微软拼音输入法。实验场 `nebula-gpui.exe` 和 `NEBULA_GPUI_SHELL=1` 双运行时
-spike 的结果不能替代本清单。任一项失败即 G2 否决：记录复现步骤、输入法、
+更新：2026-09-15。GPUI 自 v1.5.0 起是默认产品壳；本清单已从 `nebula.exe --gpui`
+独立入口改写到当前默认入口。
+
+环境：`pebrel.exe`（GPUI 默认产品壳；`--gpui` 仅为显式同义开关，`--legacy-shell`
+才回旧壳），微软拼音输入法。实验场 `nebula_gpui` 组件 gallery 的结果不能替代本
+清单。任一项失败即 G2 否决：记录复现步骤、输入法、
 Windows 版本、显示器缩放和截图，修复后整单重验。
 
 开始前记录当前 commit、构建 profile、Windows 版本、输入法版本，以及每台
