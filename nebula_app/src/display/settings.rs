@@ -964,8 +964,8 @@ pub(super) fn push_quads(
 
     // Settings groups are unframed. Natural row spacing carries hierarchy;
     // controls provide their own local hover feedback and click targets.
-    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row, _rows: usize| {};
-    let row_hover = |_quads: &mut Vec<UiQuad>, _rect, _hovered: bool| {};
+    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row: (f32, f32, f32, f32), _rows: usize| {};
+    let row_hover = |_quads: &mut Vec<UiQuad>, _rect: (f32, f32, f32, f32), _hovered: bool| {};
     let action_button = |quads: &mut Vec<UiQuad>, row, logical_w: f32, hovered: bool| {
         let rect = row_action_rect(row, scale, logical_w);
         clip(

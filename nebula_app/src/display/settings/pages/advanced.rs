@@ -30,7 +30,7 @@ pub(crate) fn push_advanced_quads(
         }
     };
     let mut staged: Vec<UiQuad> = Vec::new();
-    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row, _rows: usize| {};
+    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row: (f32, f32, f32, f32), _rows: usize| {};
     let row_hover = |_quads: &mut Vec<UiQuad>, _rect, _hovered: bool| {};
     let toggle = |quads: &mut Vec<UiQuad>,
                   staged: &mut Vec<UiQuad>,
@@ -116,7 +116,11 @@ pub(crate) fn draw_advanced_text(
     clip_top: f32,
     clip_bot: f32,
     title_h: f32,
-) {            let (ax, ay, _, ah) = geometry.keep_session;
+) {
+    let s = |v: f32| v * scale;
+    let visible = |ry: f32, rh: f32| ry >= clip_top && ry + rh <= clip_bot;
+    let group_y = |row_y: f32| row_y - s(42.0);
+    let (ax, ay, _, ah) = geometry.keep_session;
             if visible(group_y(ay), title_h) {
                 super::super::render::section_title(
                     r,

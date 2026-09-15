@@ -31,7 +31,7 @@ pub(crate) fn push_keymap_quads(
         }
     };
     let mut staged: Vec<UiQuad> = Vec::new();
-    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row, _rows: usize| {};
+    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row: (f32, f32, f32, f32), _rows: usize| {};
     let row_hover = |_quads: &mut Vec<UiQuad>, _rect, _hovered: bool| {};
             let cell_w = size.cell_width();
             // 搜索框（原型 .search：input 底、聚焦 accent 边——push_input

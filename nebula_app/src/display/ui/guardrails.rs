@@ -222,7 +222,10 @@ mod tests {
             "手写描边普遍内外用同一个半径，圆角处描边会变粗——「边缘发毛」的\n\
              来源之一。push_stroke 让外半径 = 内半径 + 描边宽，内外弧同心。",
             "surface::push_stroke(quads, rect, corner, scale, sk.hairline)",
-            32,
+            // P4 拆分把 settings 九个页臂搬进独立文件时，两处双坐标描边
+            // 各并成了一行（描边本身逐字保留），行数计数因此 32→30；按
+            // 本规则棘轮协议收紧预算。
+            30,
             hits,
         );
     }

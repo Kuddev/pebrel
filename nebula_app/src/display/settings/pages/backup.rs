@@ -31,7 +31,7 @@ pub(crate) fn push_backup_quads(
         }
     };
     let mut staged: Vec<UiQuad> = Vec::new();
-    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row, _rows: usize| {};
+    let group_frame = |_quads: &mut Vec<UiQuad>, _first_row: (f32, f32, f32, f32), _rows: usize| {};
     let row_hover = |_quads: &mut Vec<UiQuad>, _rect, _hovered: bool| {};
     let combobox = |quads: &mut Vec<UiQuad>,
                     staged: &mut Vec<UiQuad>,

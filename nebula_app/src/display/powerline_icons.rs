@@ -1,5 +1,6 @@
 //! Powerline icon types, pixel decoding and powerline drawing helpers.
 
+use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::Point;
 
 use super::Display;
@@ -102,7 +103,7 @@ impl Display {
     /// Decoded (and theme-tinted) pixels for an AI brand logo, plus a stable
     /// texture id for the renderer's inline cache. Decode + tint run once per
     /// (logo, ink); the GPU upload happens lazily inside the renderer.
-    fn ai_logo_pixels(
+    pub(super) fn ai_logo_pixels(
         &mut self,
         logo: AiLogo,
         ink: Rgb,
@@ -142,7 +143,7 @@ impl Display {
     /// extra/shell-icons), plus a stable texture id for the renderer's inline
     /// cache. Decode runs once per shell id; the GPU upload happens lazily
     /// inside the renderer. Returns `None` when the id has no brand asset.
-    fn shell_icon_pixels(
+    pub(super) fn shell_icon_pixels(
         &mut self,
         shell_id: &str,
     ) -> Option<(u64, std::sync::Arc<Vec<u8>>, (u32, u32))> {
@@ -164,7 +165,7 @@ impl Display {
         Some(entry)
     }
 
-    fn draw_powerline_icons(&mut self, icons: &[NebulaPowerlineIcon], view: SizeInfo) {
+    pub(super) fn draw_powerline_icons(&mut self, icons: &[NebulaPowerlineIcon], view: SizeInfo) {
         if icons.is_empty() {
             return;
         }

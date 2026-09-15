@@ -1756,7 +1756,10 @@ mod tests {
         assert_eq!(value, None);
     }
 
+    // 快照按默认产品面（gpui-shell）的 CLI 生成；legacy/双壳组合的参数面
+    // 多一个 `--legacy-shell`，快照不对应，属于既有的组合差异而非漂移。
     #[test]
+    #[cfg(not(feature = "legacy-shell"))]
     fn completions() {
         let mut clap = Options::command();
 

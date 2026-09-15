@@ -148,7 +148,7 @@ mod powerline_icons;
 use self::ux_anims::{NebulaUiAnims, ResizeHud, SettingsToggleAnim, UiAnim};
 pub use self::ux_anims::SplitReveal;
 
-pub(super) use self::powerline_icons::{
+use self::powerline_icons::{
     NebulaPowerlineIcon, NebulaPowerlineIconKind, remove_ssh_host_from_lists,
     restore_ssh_host_to_lists,
 };
