@@ -1357,7 +1357,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     }
 
     /// Jump to the first regex match from the search origin.
-    fn goto_match(&mut self, mut limit: Option<usize>) {
+    pub(super) fn goto_match(&mut self, mut limit: Option<usize>) {
         let dfas = match &mut self.search_state.dfas {
             Some(dfas) => dfas,
             None => return,
@@ -1426,7 +1426,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     /// Update the cursor blinking state.
     /// 当前聚焦终端此刻是否应该闪烁光标——blink 定时与每个 tick 的自检共
     /// 用这一个判定,两处口径不可能分叉。
-    fn cursor_should_blink(&mut self) -> bool {
+    pub(super) fn cursor_should_blink(&mut self) -> bool {
         // Push the settings default (shape + blink) into the terminal first:
         // `Term::cursor_style()` falls back to it whenever no DECSCUSR escape
         // has overridden the style, so vim's mode cursor keeps working while
@@ -1450,7 +1450,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         blinking && self.display.window.has_focus()
     }
 
-    fn update_cursor_blinking(&mut self) {
+    pub(super) fn update_cursor_blinking(&mut self) {
         let blinking = self.cursor_should_blink();
 
         // Update cursor blinking state.
