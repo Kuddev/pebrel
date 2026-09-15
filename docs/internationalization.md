@@ -24,13 +24,21 @@ Terminal subprocess output and environment variables are not translated or overr
 
 The initial catalogs cover navigation, common actions, appearance labels, and
 network controls in all eleven languages. French also covers all existing
-catalog-based diagnostics. Many older inline bilingual descriptions are not yet
-migrated; they intentionally fall back to English. This is not a claim of complete
-translation of every screen, configuration template, or installer language.
+catalog-based diagnostics. A subsequent migration pass moved settings help
+descriptions (~55 bilingual pairs), provider/backup/SSH status messages (~46
+pairs), about page labels, reset descriptions, and configuration error messages
+into the catalog. The remaining ~500 inline bilingual `pick()` calls in UI labels
+and toasts are lower priority — they follow the `pick()` convention (Chinese
+directly, English directly, third languages via catalog lookup or English
+fallback). This is not a claim of complete translation of every screen,
+configuration template, or installer language.
 
 初版词典覆盖全部十一种语言的导航、常用操作、外观标签与网络控件；法语同时覆盖原有
-词典中的诊断文案。大量旧的内联双语长说明尚未迁移，明确回退英文，不宣称所有页面、
-配置模板和安装向导已经完成全量翻译。后续翻译应经过母语审校。
+词典中的诊断文案。后续迁移已将设置帮助说明（约 55 对双语）、供应商/备份/SSH 状态
+消息（约 46 对）、关于页面标签、重置描述与配置错误提示纳入词典。剩余约 500 处内联
+`pick()` 调用属于 UI 短标签/弹窗——已遵循 `pick()` 惯例（中文直出、英文直出、第三种
+语言通过词典或英文回退），暂留原处。不宣称所有页面、配置模板和安装向导已经完成
+全量翻译。后续翻译应经过母语审校。
 
 ## Runtime contract / 运行时合同
 
@@ -47,6 +55,8 @@ translation of every screen, configuration template, or installer language.
   English retain their immediate branches; other languages use an unambiguous
   catalog match or English. Ambiguous English phrases do not borrow a translation
   from the wrong context. New context-sensitive messages must use typed ids.
+  The `settings.help.*` and `settings.status.*` namespaces now cover settings
+  help descriptions, provider/backup/SSH status messages, and about page labels.
 - Formatting is a separate path that builds a `String` only when arguments
   are needed. Values are inserted literally, not recursively interpreted as
   placeholders. Missing arguments stay visible; `{{` and `}}` escape braces.

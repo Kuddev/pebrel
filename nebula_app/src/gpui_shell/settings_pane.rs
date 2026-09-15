@@ -539,7 +539,7 @@ impl SettingsPane {
         #[cfg(windows)]
         let picked = pick_folder_with_wsl_places(
             window,
-            language.pick("选择终端安装目录", "Select a terminal installation directory"),
+            language.tr("settings.status.import_directory"),
         );
         #[cfg(not(windows))]
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -583,8 +583,8 @@ impl SettingsPane {
                 let language = crate::gpui_shell::config::ui_language(cx);
                 let message = format!(
                     "{} {count} {}",
-                    language.pick("已导入", "Imported"),
-                    language.pick("个终端，立即可用", "terminals; they are ready to use")
+                    language.tr("settings.status.imported_count"),
+                    language.tr("settings.status.terminals_ready")
                 );
                 crate::gpui_shell::toast::toast(
                     window,
@@ -869,7 +869,7 @@ impl SettingsPane {
         #[cfg(windows)]
         let picked = pick_folder_with_wsl_places(
             window,
-            language.pick("选择终端启动目录", "Select the terminal startup directory"),
+            language.tr("settings.status.startup_directory_prompt"),
         );
         #[cfg(not(windows))]
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -877,7 +877,7 @@ impl SettingsPane {
             directories: true,
             multiple: false,
             prompt: Some(
-                language.pick("选择终端启动目录", "Select the terminal startup directory").into(),
+                language.tr("settings.status.startup_directory_prompt").into(),
             ),
         });
         cx.spawn(async move |this, cx| {
@@ -967,7 +967,7 @@ impl SettingsPane {
             directories: false,
             multiple: false,
             prompt: Some(
-                language.pick("选择终端背景图片", "Select a terminal background image").into(),
+                language.tr("settings.status.background_image_prompt").into(),
             ),
         });
         cx.spawn(async move |this, cx| {
@@ -1366,7 +1366,7 @@ impl SettingsPane {
             .child(
                 Button::new("settings-restore-defaults")
                     .icon(IconName::Undo2)
-                    .label(language.pick("恢复默认设置", "Restore defaults"))
+                    .label(language.tr("common.restore_defaults"))
                     .ghost()
                     .small()
                     .w_full()
@@ -1374,7 +1374,7 @@ impl SettingsPane {
                     .justify_start()
                     .px_3()
                     .text_color(muted)
-                    .tooltip(language.pick("恢复设置与快捷键；保留 SSH 主机、凭据和历史，并备份原设置。", "Restores settings and shortcuts. Keeps SSH hosts, credentials and history, and backs up current settings."))
+                    .tooltip(language.tr("settings.status.reset_tooltip"))
                     .on_click(cx.listener(|this, _, window, cx| this.confirm_reset_all_settings(window, cx))),
             )
             .into_any_element()

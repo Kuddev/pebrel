@@ -189,10 +189,7 @@ impl Settings {
                 load_notice.get_or_insert_with(|| {
                     format!(
                         "{}: {err}",
-                        ui_language.pick(
-                            "pebrel.toml 字段解析失败",
-                            "Failed to parse pebrel.toml fields",
-                        )
+                        ui_language.tr("settings.status.failed_to_parse_toml"),
                     )
                 });
                 RawConfig::default()
@@ -527,12 +524,12 @@ fn read_toml(path: &Path, notice: &mut Option<String>, language: UiLanguage) -> 
                 .to_string()
                 .lines()
                 .next()
-                .unwrap_or(language.pick("解析失败", "Parse failed"))
+                .unwrap_or(language.tr("settings.status.parse_failed"))
                 .to_owned();
             notice.get_or_insert_with(|| {
                 format!(
                     "{} {}: {first_line}",
-                    language.pick("配置解析失败", "Failed to parse configuration"),
+                    language.tr("settings.status.failed_to_parse_config"),
                     path.display()
                 )
             });

@@ -483,15 +483,12 @@ impl SettingsPane {
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child(language.pick(
-                        "端到端加密（密码不落盘）；SSH 私钥永不进包，主机列表脱敏导出。",
-                        "End-to-end encrypted; the password is never persisted. SSH private keys are never included and host lists are exported with sensitive data removed.",
-                    )),
+                    .child(language.tr("settings.status.backup_encryption_description"),),
             )
             .children(category_rows)
             .child(self.row(
                 language.pick("备份密码", "Backup password"),
-                language.pick("导出时用它加密整个包，恢复时要一模一样的一串。密码不落盘、也无从找回——忘了这份备份就打不开了。", "This password encrypts the entire export and the exact same value is required to restore it. It is neither persisted nor recoverable; losing it makes the backup unreadable."),
+                language.tr("settings.status.backup_password_description"),
                 div().w(px(300.0)).child(Input::new(&self.backup_pass_input)),
                 cx,
             ))
@@ -503,7 +500,7 @@ impl SettingsPane {
                             .label(if busy {
                                 language.pick("处理中…", "Processing...")
                             } else {
-                                language.pick("导出到文件…", "Export to file...")
+                                language.tr("settings.status.export_to_file")
                             })
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -512,7 +509,7 @@ impl SettingsPane {
                     )
                     .child(
                         NebulaButton::new("bk-restore")
-                            .label(language.pick("从文件恢复…", "Restore from file..."))
+                            .label(language.tr("settings.status.restore_from_file"))
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.restore_backup(cx);

@@ -55,30 +55,30 @@ impl SettingsPane {
         let base_px = self.font_size_px(cx);
         let checking = matches!(self.about_update, AboutUpdateState::Checking);
         let (status, status_color): (SharedString, Hsla) = match &self.about_update {
-            AboutUpdateState::Idle => (language.pick("尚未检查", "Not checked yet").into(), muted),
+            AboutUpdateState::Idle => (language.tr("common.not_checked").into(), muted),
             AboutUpdateState::Checking => {
-                (language.pick("正在检查更新…", "Checking for updates...").into(), muted)
+                (language.tr("common.checking").into(), muted)
             },
             AboutUpdateState::UpToDate(latest) => (
-                format!("{} (GitHub v{latest})", language.pick("已是最新版本", "Up to date"))
+                format!("{} (GitHub v{latest})", language.tr("common.up_to_date"))
                     .into(),
                 success,
             ),
             AboutUpdateState::Available(latest) => (
-                format!("{} v{latest}", language.pick("发现新版本", "New version available"))
+                format!("{} v{latest}", language.tr("common.update_available"))
                     .into(),
                 warning,
             ),
             AboutUpdateState::Failed(error) => (
-                format!("{}: {error}", language.pick("检查失败", "Update check failed")).into(),
+                format!("{}: {error}", language.tr("settings.status.about_update_failed")).into(),
                 danger,
             ),
         };
         let update_button = NebulaButton::new("about-check-updates")
             .label(if checking {
-                language.pick("正在检查…", "Checking...")
+                language.tr("common.checking")
             } else {
-                language.pick("检查更新", "Check for updates")
+                language.tr("common.check_updates")
             })
             .primary()
             .disabled(checking)
@@ -121,10 +121,7 @@ impl SettingsPane {
                                 .child(crate::brand::NAME),
                         )
                         .child(div().text_color(muted).child(
-                            language.pick(
-                                "GPU 加速终端 · Windows",
-                                "GPU-accelerated terminal · Windows",
-                            ),
+                            language.tr("settings.status.about_gpu_tagline"),
                         ))
                         .child(
                             h_flex()
@@ -153,16 +150,16 @@ impl SettingsPane {
             .gap_2()
             .child(div().text_size(px(base_px * 0.78)).text_color(muted).child(
                 if self.runtime.auto_check_updates {
-                    language.pick("开启", "On")
+                    language.tr("common.on")
                 } else {
-                    language.pick("关闭", "Off")
+                    language.tr("common.off")
                 },
             ))
             .child(auto_update_switch);
         let last_checked: SharedString = self
             .about_last_checked
             .clone()
-            .unwrap_or_else(|| language.pick("尚未检查", "Not checked yet").to_owned())
+            .unwrap_or_else(|| language.tr("common.not_checked").to_owned())
             .into();
         let section_title = |title: &'static str| {
             div()
@@ -175,44 +172,44 @@ impl SettingsPane {
         let update_column = v_flex()
             .flex_1()
             .min_w(px(280.0))
-            .child(section_title(language.pick("版本与更新", "Version and updates")))
+            .child(section_title(language.tr("settings.status.about_version_updates")))
             .child(Self::about_value_row(
-                language.pick("自动检查更新", "Automatically check for updates"),
+                language.tr("settings.status.about_auto_check"),
                 auto_update,
                 cx,
             ))
             .child(Self::about_value_row(
-                language.pick("更新通道", "Update channel"),
+                language.tr("settings.status.about_update_channel"),
                 div().text_color(muted).child("Stable"),
                 cx,
             ))
             .child(Self::about_value_row(
-                language.pick("上次检查", "Last checked"),
+                language.tr("settings.status.about_last_checked"),
                 div().text_color(muted).child(last_checked),
                 cx,
             ));
         let actions = v_flex()
             .flex_1()
             .min_w(px(280.0))
-            .child(section_title(language.pick("项目与支持", "Project and support")))
+            .child(section_title(language.tr("settings.status.about_project_support")))
             .child(Self::about_action_row(
                 "about-report-issue",
                 IconName::TriangleAlert,
-                language.pick("反馈问题", "Report an issue"),
+                language.tr("settings.status.about_report_issue"),
                 issue_url(),
                 cx,
             ))
             .child(Self::about_action_row(
                 "about-github",
                 IconName::Github,
-                language.pick("GitHub 仓库", "GitHub repository"),
+                language.tr("settings.status.about_github_repo"),
                 REPOSITORY_URL.to_owned(),
                 cx,
             ))
             .child(Self::about_action_row(
                 "about-releases",
                 IconName::BookOpen,
-                language.pick("更新内容", "Release notes"),
+                language.tr("settings.status.about_release_notes"),
                 crate::update_check::RELEASES_PAGE.to_owned(),
                 cx,
             ));

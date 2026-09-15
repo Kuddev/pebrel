@@ -41,7 +41,7 @@ impl SettingsPane {
                     crate::gpui_shell::toast::ToastKind::Warning,
                     format!(
                         "{}: {error}",
-                        language.pick("恢复默认设置失败", "Failed to restore defaults")
+                        language.tr("settings.status.failed_to_restore_defaults")
                     ),
                 );
                 return;
@@ -80,12 +80,9 @@ impl SettingsPane {
             cx,
             crate::gpui_shell::toast::ToastKind::Success,
             if backup.is_some() {
-                language.pick("已恢复默认设置；主机与凭据保持不变，原设置已备份。", "Defaults restored. Hosts and credentials are unchanged; previous settings were backed up.")
+                language.tr("settings.status.defaults_restored_message")
             } else {
-                language.pick(
-                    "已恢复默认设置；主机与凭据保持不变。",
-                    "Defaults restored. Hosts and credentials are unchanged.",
-                )
+                language.tr("settings.status.defaults_restored_short")
             },
         );
     }
