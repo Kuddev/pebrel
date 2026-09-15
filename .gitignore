@@ -6,6 +6,10 @@ trellis/
 # `package-release.ps1 -TargetDirectory` builds into its own cargo target dir
 # so packaging never invalidates the incremental cache of the main one.
 target-pack/
+# 本地性能测量与门禁截图用的独立 release target 目录（perf_baseline/visual_parity），
+# 与开发缓存互不逐出。
+target-release/
+target-release-legacy/
 
 # Local/generated visual assets and scratch files.
 docs/ui_mockups/
