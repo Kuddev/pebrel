@@ -114,3 +114,22 @@ Linux GLIBC 依赖上限为 2.35；macOS 编译 deployment target 为 14.0，但
   能力可能降低；不以破坏用户 hook 换取表面一致。
 - 五件套和 SHA256 完整只代表产物结构通过。真正原生 Actions 成功之前，不称为“Mac/Linux 已验证可用”，
   更不能升级为与 Windows 完全等价的 Stable 承诺。
+
+### 5.1 差异收窄的移植注记（2026-09-15 勘察，未实现部分照旧为边界）
+
+为后续把上表缺口逐项搬上 Linux/macOS 记录已核实的事实，避免重复勘察：
+
+- **AI hook**：`ai_hook.rs` 核心（`AiHookEvent`、`capabilities_for`、`parse_remote_envelope`、
+  `accept_for_pane`）与平台无关，unix 已可复用；缺口在 `ai_hook/win.rs` 的三件套——named pipe
+  服务（unix 对应 UDS/socket）、`spawn_config_guard` 驻留守护、`setup_ai_cli` 的目标写入。
+  其中受管文件的所有权/原子写入机制（`ai_hook/win/managed_files.rs`）本身是纯 std 实现，
+  不依赖 Windows API，可直接上移共享；OpenCode/Pi 桥接脚本引用 `PEBREL_HOOK_EXE` 环境变量，
+  也是平台中立的。Codex `notify` argv 迁移逻辑（`desired_codex_notify`）是纯函数，unix helper
+  路径可参数化后加单测。**真正需要原生验证的**只有 socket 服务与守护进程生命周期。
+- **自动更新**：资产命名即接口（`windows_x64_installer_names` 的三段式兼容与 README
+  `Pebrel-v<版本>-<系统>-<架构>` 规则同源）；更新检查/下载/SHA256/代理已是共享代码。
+  unix 缺的是安装执行器（AppImage 自替换 / deb 包管理器 / DMG 拖装引导），必须先有原生
+  Actions 产物才能端到端验证，不存在可先行合并的“半套安装”。
+- **托盘/热键/提示音**：依赖平台 API（Windows 侧为 Win32；Linux 需 StatusNotifierItem，
+  macOS 需 Carbon/AppKit），GPUI 不内置，需要新增平台适配层并按本项目规则过依赖评审。
+- 上列任何一项在原生 runner 实测通过之前，维持本节开头的边界表述，不得提前宣称可用。
