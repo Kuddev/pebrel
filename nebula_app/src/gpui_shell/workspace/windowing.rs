@@ -120,7 +120,8 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::AgentFork { .. }
         | RuntimeCommand::AgentPrompt { .. }
         | RuntimeCommand::AgentPaste { .. }
-        | RuntimeCommand::AgentRead { .. } => RuntimeWindowPolicy::Preserve,
+        | RuntimeCommand::AgentRead { .. }
+        | RuntimeCommand::SshOpen { .. } => RuntimeWindowPolicy::Preserve,
     }
 }
 
@@ -749,6 +750,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
         | RuntimeCommand::Split { window_id, pane_id, .. }
         | RuntimeCommand::AgentStart { window_id, pane_id, .. } => (*window_id, *pane_id),
         RuntimeCommand::NewTab { window_id, .. }
+        | RuntimeCommand::SshOpen { window_id, .. }
         | RuntimeCommand::CloseWindow { window_id }
         | RuntimeCommand::CloseTab { window_id, .. }
         | RuntimeCommand::RenameTab { window_id, .. }
@@ -996,26 +998,80 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
     let entry = match route_entry(&dispatch.command, cx) {
         Ok(entry) => entry,
         Err(error)
-            if matches!(dispatch.command, RuntimeCommand::NewTab { window_id: None, .. }) =>
+            if matches!(
+                dispatch.command,
+                RuntimeCommand::NewTab { window_id: None, .. }
+                    | RuntimeCommand::SshOpen { window_id: None, .. }
+            ) =>
         {
-            let RuntimeCommand::NewTab { cwd, .. } = &dispatch.command else { unreachable!() };
-            let response = open_runtime_window(cx, cwd.clone())
-                .map_err(|create| {
-                    ApiError::new(
-                        "window_create_failed",
-                        format!(
-                            "{}: {}; creating a fallback window also failed: {create}",
-                            error.code, error.message
-                        ),
-                    )
-                })
-                .map(|(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
+            let response = match &dispatch.command {
+                RuntimeCommand::NewTab { cwd, .. } => open_runtime_window(cx, cwd.clone())
+                    .map(|(window_id, pane_id)| {
+                        let snapshot = publish_runtime_snapshot(cx);
+                        json!({
+                            "action": { "window_id": window_id, "pane_id": pane_id },
+                            "snapshot": snapshot
+                        })
                     })
-                });
+                    .map_err(|create| {
+                        ApiError::new(
+                            "window_create_failed",
+                            format!(
+                                "{}: {}; creating a fallback window also failed: {create}",
+                                error.code, error.message
+                            ),
+                        )
+                    }),
+                RuntimeCommand::SshOpen { destination, .. } => {
+                    let new_window_result = open_runtime_window(cx, None);
+                    match new_window_result {
+                        Ok((window_id, _)) => {
+                            // Collect entry data before the closure to avoid borrow conflicts
+                            let entry_data = cx
+                                .global::<WindowRegistry>()
+                                .entries
+                                .iter()
+                                .find(|e| e.runtime_window_id == window_id)
+                                .and_then(|entry| {
+                                    let workspace = entry.workspace.upgrade()?;
+                                    Some((workspace, entry.handle))
+                                });
+                            let maybe_result = entry_data.and_then(|(workspace, handle)| {
+                                let dest = destination.clone();
+                                handle
+                                    .update(cx, move |_, window, cx| {
+                                        workspace.update(cx, |ws, cx| {
+                                            ws.add_ssh_terminal(dest, window, cx);
+                                            ws.active_terminal_pane_id().unwrap_or_default()
+                                        })
+                                    })
+                                    .ok()
+                            });
+                            match maybe_result {
+                                Some(pane_id) => {
+                                    let snapshot = publish_runtime_snapshot(cx);
+                                    Ok(json!({
+                                        "action": { "window_id": window_id, "pane_id": pane_id },
+                                        "snapshot": snapshot
+                                    }))
+                                },
+                                None => Err(ApiError::new(
+                                    "action_failed",
+                                    "created a new window but failed to open SSH pane in it",
+                                )),
+                            }
+                        },
+                        Err(err) => Err(ApiError::new(
+                            "window_create_failed",
+                            format!(
+                                "{}: {}; creating a fallback window with SSH also failed: {err}",
+                                error.code, error.message
+                            ),
+                        )),
+                    }
+                },
+                _ => unreachable!(),
+            };
             dispatch.respond(response);
             return;
         },

@@ -159,13 +159,14 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `agent.paste` | 向同一 Agent generation 发送受控 bracketed-paste 文本 | `agent`, `generation?`, `text`, `submit?` |
 | `agent.read` | 读取命名 Agent 所在 Pane 的真实 Grid 尾部 | `agent`, `generation?`, `lines?` |
 | `agent.wait` | 等待同一 Agent generation 的状态跃迁；被替换/退出即明确失败 | `agent`, `generation`, `state`, `timeout_ms`, `after_seq?` |
-| `window.create` | 创建新窗口 | 无 |
+| `window.create` | 创建新窗口 | `cwd?` |
 | `window.close` | 关闭空闲窗口；忙碌 Pane 返回显式确认错误 | `window_id?` |
 | `window.focus` | 聚焦窗口或 Pane | `window_id?`, `pane_id?` |
 | `tab.new` | 创建默认 Shell 标签 | `window_id?` |
 | `tab.close` | 按窗口内零基索引关闭空闲 Tab | `window_id?`, `tab_index` |
 | `tab.rename` | 设置或清除 Tab 自定义名称 | `window_id?`, `tab_index`, `name` |
 | `tab.move` | 在同一窗口内移动 Tab | `window_id?`, `tab_index`, `to_index` |
+| `ssh.open` | 按主机地址打开 SSH pane 连接 | `window_id?`, `destination` |
 | `pane.split` | 从当前或指定 Pane 向右/向下分屏 | `window_id?`, `pane_id?`, `direction` |
 | `pane.close` | 关闭空闲 Pane；忙碌 Pane 返回显式确认错误 | `window_id?`, `pane_id` |
 | `pane.zoom` | 幂等设置 Pane 所在 Tab 的显式缩放状态 | `window_id?`, `pane_id`, `zoomed` |
@@ -310,10 +311,12 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 SSH pane 只有进入 `Ready` 后允许读取或写入。解析、连接、认证、打开 Shell 或 Failed 阶段会
 返回 `ssh_not_ready`，避免把密码提示和连接错误屏误当成远端 Agent 的正常输出。
 
-默认 GPUI 产品当前只有一个 workspace window，稳定 `window_id` 为 1。该窗口上的
-snapshot/focus/tab.new/pane.split/pane.prompt/pane.read 都操作真实 workspace；GPUI 尚未建立
-第二个拥有独立 hook/runtime 接收器的 workspace，因此 `window.create` 明确返回
-`runtime_unavailable`，不会伪造一个新窗口 id。旧 winit 壳仍支持真实多窗口创建。
+GPUI 产品壳支持多个 workspace 窗口创建。每个窗口拥有独立 workspace、独立 pane id 命名空
+间和稳定的 runtime_window_id 分配（从 1 单调递增）。`window.create` 真实创建新窗口并返回
+分配到的 `window_id` 及其首个 pane 的 `pane_id`。第二及后续窗口的 hook/runtime 接收器由
+进程级事件分发器统一路由：`dispatch_shell_events` 和 `dispatch_ai_events` 通过 pane 所
+在窗口定位目标 workspace，因此每个窗口不需要独立的事件泵。该机制已在 Windows GPUI 产品
+壳验证；其他平台的多窗口路由行为一致，未单独实测。旧 winit 壳的多窗口创建仍可正常使用。
 
 ## 等待语义与 `state_change_seq`
 

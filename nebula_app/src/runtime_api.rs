@@ -885,6 +885,10 @@ pub enum RuntimeCommand {
         generation: Option<u64>,
         lines: usize,
     },
+    SshOpen {
+        window_id: Option<u64>,
+        destination: String,
+    },
 }
 
 #[derive(Debug)]

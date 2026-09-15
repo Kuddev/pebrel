@@ -15,8 +15,11 @@ The cases run in this order:
 5. `scrollback`: a 600-line burst with at least 500 retained history rows.
 6. `session`: live autosave, forced process termination, cold restore, a
    custom tab label, and live PTYs in every restored tab.
-7. `ssh_loop`: currently skipped because Runtime API v1 has no `ssh.open`
-   method. The skip is explicit in the report.
+7. `ssh_loop`: opens an `ssh.open` Runtime API request during the conformance
+   gate. The case verifies that `ssh.open` is declared in capabilities and raises
+   a clear error asking for the full conformance case when it is. The full
+   SSH-automation case requires an external SSH server and is planned as a
+   follow-up after the API is functional.
 8. `paste`: multiline bracketed-paste transport when the target advertises it,
    or an explicit safety refusal when it does not; neither path may submit.
 9. `cjk_roundtrip`: UTF-8/CJK input through Runtime API, PTY, and terminal grid.

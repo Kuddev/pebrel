@@ -163,6 +163,14 @@ struct ExecParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SshOpenParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    destination: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SubscribeParams {
     #[serde(default)]
     pub(super) since_revision: Option<u64>,
@@ -231,6 +239,20 @@ impl RuntimeCommand {
             "window.focus" => {
                 let params: TargetParams = parse_params(&request.params)?;
                 Ok(Self::Focus { window_id: params.window_id, pane_id: params.pane_id })
+            },
+            "ssh.open" => {
+                let params: SshOpenParams = parse_params(&request.params)?;
+                let destination = params.destination.trim();
+                if destination.is_empty() {
+                    return Err(ApiError::invalid_params("ssh.open destination must not be empty"));
+                }
+                if destination.len() > 512 {
+                    return Err(ApiError::invalid_params("ssh.open destination exceeds 512 bytes"));
+                }
+                Ok(Self::SshOpen {
+                    window_id: params.window_id,
+                    destination: destination.to_owned(),
+                })
             },
             "tab.new" => {
                 let params: WindowParams = parse_params(&request.params)?;

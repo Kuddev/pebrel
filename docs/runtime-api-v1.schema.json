@@ -86,7 +86,8 @@
             "pane.send_key",
             "pane.run",
             "pane.exec",
-            "pane.wait"
+            "pane.wait",
+            "ssh.open"
           ]
         },
         "params": {
@@ -210,6 +211,10 @@
         {
           "if": { "properties": { "method": { "const": "pane.wait" } } },
           "then": { "properties": { "params": { "$ref": "#/$defs/wait_params" } } }
+        },
+        {
+          "if": { "properties": { "method": { "const": "ssh.open" } } },
+          "then": { "properties": { "params": { "$ref": "#/$defs/ssh_open_params" } } }
         }
       ]
     },
@@ -666,6 +671,15 @@
         "state": { "$ref": "#/$defs/wait_state" },
         "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 86400000 },
         "after_seq": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "ssh_open_params": {
+      "type": "object",
+      "required": ["destination"],
+      "properties": {
+        "window_id": { "$ref": "#/$defs/nullable_window_id" },
+        "destination": { "type": "string", "minLength": 1, "maxLength": 512 }
       },
       "additionalProperties": false
     },

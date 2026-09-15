@@ -175,7 +175,8 @@ pub(super) fn runtime_description() -> Value {
             "pane.send_key",
             "pane.run",
             "pane.exec",
-            "pane.wait"
+            "pane.wait",
+            "ssh.open"
         ],
         // Additive params cannot be detected from `capabilities`: an older
         // build ignores an unknown `after_seq` and still races. Clients that
@@ -438,6 +439,12 @@ pub(super) fn dispatch_connection(
                 "runtime pane.exec request_id={} window_id={window_id:?} pane_id={pane_id} argv_len={} timeout_ms={timeout_ms} max_output_bytes={max_output_bytes}",
                 request.id,
                 argv.len()
+            );
+        },
+        RuntimeCommand::SshOpen { window_id, destination } => {
+            info!(
+                "runtime ssh.open request_id={} window_id={window_id:?} destination={}",
+                request.id, destination,
             );
         },
         _ => {},

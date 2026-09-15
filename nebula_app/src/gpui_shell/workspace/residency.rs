@@ -117,6 +117,7 @@ impl NebulaWorkspace {
             },
             RuntimeCommand::Focus { .. }
             | RuntimeCommand::NewTab { .. }
+            | RuntimeCommand::SshOpen { .. }
             | RuntimeCommand::Split { .. }
             | RuntimeCommand::Prompt { .. }
             | RuntimeCommand::Paste { .. }
@@ -166,7 +167,7 @@ impl NebulaWorkspace {
             },
             RuntimeCommand::NewWindow { .. } => Err(ApiError::new(
                 "runtime_unavailable",
-                "window.create is not queued in the GPUI runtime",
+                "window.create is handled before workspace dispatch; this code path should not be reached",
             )),
             RuntimeCommand::CloseWindow { window_id } => {
                 self.runtime_window_requested(*window_id)?;
@@ -228,6 +229,16 @@ impl NebulaWorkspace {
             RuntimeCommand::NewTab { window_id, cwd } => {
                 self.runtime_window_requested(*window_id)?;
                 let pane_id = self.add_terminal_at(cwd.clone(), None, window, cx);
+                self.runtime_result(
+                    json!({ "window_id": self.runtime_window_id, "pane_id": pane_id }),
+                    window,
+                    cx,
+                )
+            },
+            RuntimeCommand::SshOpen { window_id, destination } => {
+                self.runtime_window_requested(*window_id)?;
+                self.add_ssh_terminal(destination.clone(), window, cx);
+                let pane_id = self.active_terminal_pane_id().unwrap_or_default();
                 self.runtime_result(
                     json!({ "window_id": self.runtime_window_id, "pane_id": pane_id }),
                     window,

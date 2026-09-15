@@ -1622,3 +1622,95 @@ fn wait_step_takes_its_baseline_from_the_step_it_references() {
     // 等不到同样要给现场。
     assert_eq!(receipt["steps"][1]["error"]["details"]["tail"]["text"], "› ");
 }
+
+#[test]
+fn ssh_open_parses_valid_request() {
+    let request = ApiRequest::new(
+        "token".into(),
+        "ssh.open",
+        json!({ "destination": "user@example.com:22" }),
+    );
+    assert!(matches!(
+        RuntimeCommand::from_request(&request),
+        Ok(RuntimeCommand::SshOpen { destination, window_id: None })
+            if destination == "user@example.com:22"
+    ));
+}
+
+#[test]
+fn ssh_open_accepts_window_id() {
+    let request = ApiRequest::new(
+        "token".into(),
+        "ssh.open",
+        json!({ "window_id": 7, "destination": "build@10.0.0.7" }),
+    );
+    assert!(matches!(
+        RuntimeCommand::from_request(&request),
+        Ok(RuntimeCommand::SshOpen { window_id: Some(7), .. })
+    ));
+}
+
+#[test]
+fn ssh_open_rejects_empty_destination() {
+    let request = ApiRequest::new("token".into(), "ssh.open", json!({ "destination": "" }));
+    assert_eq!(RuntimeCommand::from_request(&request).unwrap_err().code, "invalid_params");
+}
+
+#[test]
+fn ssh_open_appears_in_capabilities() {
+    let described = super::transport::runtime_description();
+    let capabilities: Vec<&str> = described["capabilities"]
+        .as_array()
+        .expect("capabilities")
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert!(capabilities.contains(&"ssh.open"), "ssh.open must appear in runtime capabilities");
+}
+
+#[test]
+fn ssh_open_appears_in_schema() {
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json"))
+            .expect("runtime schema must be valid JSON");
+    let schema_methods: std::collections::BTreeSet<_> =
+        schema["$defs"]["request"]["properties"]["method"]["enum"]
+            .as_array()
+            .expect("schema method enum")
+            .iter()
+            .map(|method| method.as_str().expect("method string"))
+            .collect();
+    assert!(
+        schema_methods.contains("ssh.open"),
+        "ssh.open must be declared in the schema method enum"
+    );
+}
+
+#[test]
+fn ssh_open_has_a_params_definition() {
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json"))
+            .expect("runtime schema must be valid JSON");
+    assert!(
+        schema["$defs"].get("ssh_open_params").is_some(),
+        "ssh.open must have a params definition in the schema"
+    );
+}
+
+#[test]
+fn window_create_parses_without_params() {
+    let request = ApiRequest::new("token".into(), "window.create", json!({}));
+    assert!(matches!(
+        RuntimeCommand::from_request(&request),
+        Ok(RuntimeCommand::NewWindow { cwd: None })
+    ));
+}
+
+#[test]
+fn window_create_accepts_optional_cwd() {
+    let request = ApiRequest::new("token".into(), "window.create", json!({ "cwd": "D:/work" }));
+    assert!(matches!(
+        RuntimeCommand::from_request(&request),
+        Ok(RuntimeCommand::NewWindow { ref cwd }) if cwd.as_deref() == Some(std::path::Path::new("D:/work"))
+    ));
+}
