@@ -91,7 +91,7 @@ pub(crate) struct NebulaRuntimeSettings {
     /// 交互：允许拖拽调节左侧栏宽 / SSH HOSTS 分界高 / 右抽屉宽。默认关，
     /// 开启走一次确认框——宽度拖动会实时重排终端，性能敏感。
     pub(crate) panel_resize: bool,
-    /// 左侧栏逻辑宽；[`super::SIDEBAR_W_LOGICAL`] 是默认值。
+    /// 左侧栏逻辑宽；`crate::display::SIDEBAR_W_LOGICAL` 是默认值。
     pub(crate) sidebar_w: f32,
     /// 右抽屉逻辑宽；布局时仍钳在窗口 42%。
     pub(crate) drawer_w: f32,

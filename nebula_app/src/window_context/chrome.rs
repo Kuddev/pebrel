@@ -3,6 +3,7 @@
 use super::*;
 
 impl WindowContext {
+    /// Draw the window.
     pub fn draw(&mut self, scheduler: &mut Scheduler) {
         self.display.window.requested_redraw = false;
         self.sync_chrome_tabs();

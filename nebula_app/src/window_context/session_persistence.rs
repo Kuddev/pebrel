@@ -3,6 +3,12 @@
 use super::*;
 
 impl WindowContext {
+    /// Continue one live AI conversation in a fresh tab with a new session id.
+    ///
+    /// This deliberately recreates the shell instead of cloning a PTY/process.
+    /// Profile/SSH tabs are excluded: injecting into a profile that starts the
+    /// agent directly, or into an SSH authentication prompt, would turn the
+    /// command into user input at the wrong protocol layer.
     pub(super) fn fork_ai_session(&mut self, index: usize) {
         let Some(tab) = self.tabs.get(index) else { return };
         let launch = match &tab.launch {

@@ -283,7 +283,7 @@ impl WindowContext {
     /// 1 Hz 声明式屏幕检测。Hook 仍是精确边界；屏幕承担两类补位：
     ///
     /// 1. Gemini/Cursor/Copilot 等尚无 hook 桥接的客户端；
-    /// 2. 可见的权限/问题框（比"turn complete"事件更能证明正在等人）。
+    /// 2. 可见的权限/问题框（比“turn complete”事件更能证明正在等人）。
     ///
     /// 只读底部 24 行，规则已预编译；普通 shell 或未知程序立即跳过。
     pub fn refresh_agent_screen_states(&mut self) {

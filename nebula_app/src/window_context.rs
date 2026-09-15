@@ -631,13 +631,7 @@ impl WindowContext {
         }
     }
 
-/// Continue one live AI conversation in a fresh tab with a new session id.
-    ///
-    /// This deliberately recreates the shell instead of cloning a PTY/process.
-    /// Profile/SSH tabs are excluded: injecting into a profile that starts the
-    /// agent directly, or into an SSH authentication prompt, would turn the
-    /// command into user input at the wrong protocol layer.
-/// Show a fastfetch-style welcome screen in a freshly-created pane.
+    /// Show a fastfetch-style welcome screen in a freshly-created pane.
     fn run_fastfetch_intro(&mut self, pane_id: PaneId) {
         if !self.display.nebula_fetch_enabled {
             return;
