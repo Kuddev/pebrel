@@ -165,8 +165,10 @@ pub(super) fn import_terminal_directory_blocking(
 /// 原生模态对话框不能在 GPUI update 借用中运行：它自己的消息泵会重入
 /// wndproc，造成 AppCell 二次可变借用。与 SSH 私钥选择器一样，先在 UI
 /// 线程捕获 HWND，再让专用线程运行旧壳的 IFileOpenDialog。
+/// 侧栏「快速访问」的 `+` 也走这里——同一个对话框，WSL 发行版的钉入行为
+/// 两处必须一致，否则用户在一个入口能看到发行版、在另一个看不到。
 #[cfg(windows)]
-pub(super) fn pick_folder_with_wsl_places(
+pub(crate) fn pick_folder_with_wsl_places(
     window: &Window,
     title: &'static str,
 ) -> futures::channel::oneshot::Receiver<Option<std::path::PathBuf>> {
