@@ -122,6 +122,7 @@ pub use toast::ToastKind;
 
 pub(crate) mod file_dialog;
 pub(crate) mod keymap;
+mod powerline_icons;
 mod settings;
 pub(crate) mod ssh_connect;
 mod ssh_editor_input;
@@ -129,7 +130,6 @@ mod ssh_editor_render;
 mod ssh_ui;
 mod text_input;
 mod ux_anims;
-mod powerline_icons;
 
 use self::ux_anims::{NebulaUiAnims, ResizeHud, SettingsToggleAnim, UiAnim};
 pub use self::ux_anims::SplitReveal;
@@ -139,23 +139,23 @@ use self::powerline_icons::{
     restore_ssh_host_to_lists,
 };
 pub(crate) use self::powerline_icons::replays_untrusted_terminal_output;
-mod chrome_tabs;
-mod panel_layout;
-mod settings_pane;
-mod settings_persist;
 mod backup_pane;
+mod chrome_tabs;
+mod completion_glue;
+mod frame_pipeline;
+mod keymap_pane;
+mod overlays;
+mod palette_glue;
+mod pane_render;
+mod panel_layout;
+mod pickers;
 mod providers_pane;
 mod proxy_pane;
-mod keymap_pane;
-mod pickers;
-mod palette_glue;
+mod settings_pane;
+mod settings_persist;
 mod side_panel_glue;
-mod window_surface;
-mod frame_pipeline;
-mod pane_render;
-mod overlays;
-mod completion_glue;
 mod terminal_overlays;
+mod window_surface;
 
 pub use self::panel_layout::{
     CHROME_BAR_LOGICAL, CONTENT_PAD_X_LOGICAL, DRAWER_COLLAPSE_AT, DRAWER_W_MAX, DRAWER_W_MIN,
