@@ -1,4 +1,11 @@
 {
+  "workspace": {
+    "project": {
+      "open": "Open project folder…",
+      "picking": "Choosing project folder…",
+      "open_failed": "Could not open the project folder. Check that it exists and is accessible, then try again."
+    }
+  },
   "language": {
     "self_name": "English",
     "system": "Follow system",

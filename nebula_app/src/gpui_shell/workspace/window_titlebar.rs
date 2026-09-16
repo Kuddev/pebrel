@@ -1,5 +1,14 @@
 use super::*;
 
+/// Controls must block both native titlebar hit testing and drag mouse-downs.
+pub(super) fn title_bar_panel_controls() -> gpui::Div {
+    h_flex()
+        .h_full()
+        .items_center()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+}
+
 /// Prepaint records the actual pane column before any titlebar paint runs. Keep
 /// this cell for the workspace lifetime, so resizing and panel animations do not
 /// allocate a new shared slot or duplicate the body's layout calculations.

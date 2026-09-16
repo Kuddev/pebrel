@@ -62,6 +62,7 @@ mod palette;
 mod palette_support;
 mod pane_header;
 mod quick_access;
+mod project;
 mod quick_jump;
 mod quick_terminal;
 mod recipes;
@@ -86,6 +87,7 @@ mod top_tabs;
 mod update_dialog;
 mod vcs_panel;
 mod window_titlebar;
+use window_titlebar::title_bar_panel_controls;
 pub(crate) mod windowing;
 
 // 调用点分散在设置页与窗口层，原样再导出以免拆分波及它们。
@@ -157,15 +159,7 @@ fn sidebar_resize_visual_offset(cx: &App) -> f32 {
     sidebar_resize_offset_for(card.divider, card.margin.left)
 }
 
-/// 标题栏里的文件树 / Git 工具必须同时挡住原生拖窗命中和父级拖拽起手。
-/// `occlude` 只屏蔽后方 hitbox，不会阻止 MouseDown 向 `TitleBar` 冒泡。
-fn title_bar_panel_controls() -> gpui::Div {
-    h_flex()
-        .h_full()
-        .items_center()
-        .occlude()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-}
+
 
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
@@ -686,6 +680,8 @@ fn apply_commit_rename(meta: &mut TabMeta, buffer: &str) {
 fn apply_cancel_rename(_meta: &mut TabMeta) {}
 
 pub struct NebulaWorkspace {
+    project_picker: Option<gpui::Task<()>>,
+    project_focus: gpui::FocusHandle,
     tabs: Vec<WorkspaceTab>,
     /// 与 `tabs` 同下标的用户元数据，见 [`TabMeta`]。
     tab_meta: Vec<TabMeta>,
@@ -1095,6 +1091,8 @@ impl NebulaWorkspace {
             window_role,
             runtime_hub,
             runtime_pending: Vec::new(),
+            project_picker: None,
+            project_focus: cx.focus_handle().tab_stop(true),
         };
         // 配置装载错误的驻留横幅（消息栏层：用户要去修文件，必须看见）。
         // 只在开窗时呈现一次；设置页 persist 的重载不重复弹。

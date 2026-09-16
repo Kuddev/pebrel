@@ -915,6 +915,7 @@ impl NebulaWorkspace {
                             })),
                     ),
             )
+            .child(self.render_open_project_button(cx))
             .child(self.render_collapsed_tab_title(cx))
             .child(
                 title_bar_panel_controls()

@@ -33,9 +33,9 @@ const TOP_TAB_MIN_W: f32 = 160.0;
 const TOP_TAB_MAX_W: f32 = 220.0;
 const TOP_TAB_GAP: f32 = 4.0;
 const TOP_TAB_STATUS_W: f32 = 28.0;
-/// 标题栏中不属于 tab 视口的固定预算：左内边距、五枚 32px 操作按钮、
+/// 标题栏中不属于 tab 视口的固定预算：左内边距、六枚 32px 操作按钮、
 /// 三枚 34px 窗口按钮，以及至少 72px 的可拖拽空白。
-const TOP_TAB_RESERVED_W: f32 = TOP_TAB_LEFT_INSET + 32.0 * 5.0 + 34.0 * 3.0 + 72.0;
+const TOP_TAB_RESERVED_W: f32 = TOP_TAB_LEFT_INSET + 32.0 * 6.0 + 34.0 * 3.0 + 72.0;
 /// 溢出翻页按钮（WT 的 TabView 在 tab 溢出时于两端给 `‹ ›`）单枚占的宽。
 const TOP_TAB_NUDGE_W: f32 = 22.0;
 /// 拖拽越界自动滚的触发带宽：指针进到视口左/右这么近就开始滚。
@@ -538,6 +538,7 @@ impl NebulaWorkspace {
             .size_full()
             .min_w_0()
             .items_center()
+            .child(self.render_open_project_button(cx))
             .child(
                 // TabView 贴住标题栏底边；只让 tab 与其相邻操作按钮下沉，
                 // 标题栏两侧的独立工具仍保持垂直居中。
