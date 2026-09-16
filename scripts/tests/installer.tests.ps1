@@ -36,6 +36,9 @@ $requiredPatterns = [ordered]@{
     'Pebrel default asset name' = '#define PackageBrand "Pebrel"'
     'explicit package brand' = 'OutputBaseFilename=\{#PackageBrand\}-v\{#AppVersion\}-windows-x64-setup'
     'localized Chinese context menu label' = 'chinesesimplified\.OpenInPebrel=\S.+'
+    'localized WSL context menu label' = 'english\.OpenInPebrelWsl=Open in Pebrel'
+    'localized Chinese WSL context menu label' = 'chinesesimplified\.OpenInPebrelWsl=\S.+'
+    'WSL context menu uninstall cleanup' = 'RemoveOwnedWslContextMenus;'
     'directory background context menu' = 'Software\\Classes\\Directory\\Background\\shell\\Pebrel'
     'selected directory context menu' = 'Software\\Classes\\Directory\\shell\\Pebrel'
     'context menu executable icon' = 'ValueName: "Icon"; ValueData: "\{app\}\\pebrel\.exe,0"'
@@ -112,6 +115,36 @@ foreach ($entry in $migrationPatterns.GetEnumerator()) {
 }
 if ($migration -match 'DelTree\(|TerminateProcess\(|taskkill') {
     throw 'Migration must not recursively delete user data or forcefully terminate applications.'
+}
+
+# 按 WSL 发行版注册的右键项（installer-migration.iss 里的 [Code]）：
+$wslPatterns = [ordered]@{
+    'WSL distribution registry' = 'Software\\Microsoft\\Windows\\CurrentVersion\\Lxss'
+    'plumbing distros are skipped' = "Pos\('docker-desktop'"
+    'distinct verb namespace' = "'PebrelWsl' \+ IntToStr\(Index\)"
+    'registration runs at post-install' = 'RegisterWslContextMenus;'
+    'owned keys are reclaimed by prefix and command' = "Pos\('PebrelWsl', Names\[NameIndex\]\) = 1"
+    'uninstall sweeps both roots' = "Directory\\Background\\shell'"
+}
+foreach ($entry in $wslPatterns.GetEnumerator()) {
+    if ($migration -notmatch $entry.Value) {
+        throw "Installer migration is missing $($entry.Key): $($entry.Value)"
+    }
+}
+
+# 命令串里 `--shell` 必须排在 `--working-directory` 之前：盘根（`D:\`）时后者的
+# 收尾反斜杠会吃掉收尾引号并把后面整段并进同一个参数（issue #36 的另一面），顺序
+# 写反会静默开出一个既没有 cwd、也没用上指定发行版的标签。
+$commandTemplates = @(
+    $migration -split "`n" | Where-Object { $_ -match '^\s*Command :=' -and $_ -match '--shell' }
+)
+if ($commandTemplates.Count -ne 1) {
+    throw "Expected exactly one WSL context-menu command template, found $($commandTemplates.Count)."
+}
+$shellAt = $commandTemplates[0].IndexOf('--shell')
+$directoryAt = $commandTemplates[0].IndexOf('--working-directory')
+if ($shellAt -lt 0 -or $directoryAt -lt 0 -or $shellAt -gt $directoryAt) {
+    throw "The WSL context-menu command must pass --shell before --working-directory: $($commandTemplates[0].Trim())"
 }
 
 $validationArguments = @{ SkipBuild = $true; AllowStale = $true; ValidateOnly = $true }
