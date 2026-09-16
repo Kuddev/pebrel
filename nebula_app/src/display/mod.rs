@@ -1,12 +1,9 @@
 //! The display subsystem including window management, font rasterization, and
 //! GPU drawing.
 
-use std::cmp;
 use std::fmt::{self, Formatter};
-use std::mem::{self, ManuallyDrop};
-use std::num::NonZeroU32;
-use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::mem::ManuallyDrop;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use glutin::config::GetGlConfig;
@@ -17,24 +14,18 @@ use glutin::prelude::*;
 use glutin::surface::{Surface, SwapInterval, WindowSurface};
 
 use log::{debug, info, warn};
-use parking_lot::MutexGuard;
-use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::keyboard::ModifiersState;
+use winit::dpi::PhysicalSize;
 use winit::raw_window_handle::RawWindowHandle;
-use winit::window::{CursorIcon, Theme as WinitTheme};
+use winit::window::Theme as WinitTheme;
 
 use crossfont::{Rasterize, Size as FontSize};
 use unicode_width::UnicodeWidthChar;
 
-use nebula_terminal::event::{EventListener, OnResize};
 use nebula_terminal::grid::Dimensions as TermDimensions;
-use nebula_terminal::index::{Column, Direction, Line, Point};
-use nebula_terminal::selection::Selection;
+use nebula_terminal::index::Point;
 use nebula_terminal::term::cell::Flags;
-use nebula_terminal::term::{
-    self, LineDamageBounds, MIN_COLUMNS, MIN_SCREEN_LINES, Term, TermDamage, TermMode,
-};
-use nebula_terminal::vte::ansi::{CursorShape, NamedColor};
+use nebula_terminal::term::{MIN_COLUMNS, MIN_SCREEN_LINES};
+use nebula_terminal::vte::ansi::CursorShape;
 
 use crate::config::UiConfig;
 use crate::config::debug::RendererPreference;
@@ -43,21 +34,16 @@ use crate::config::window::Dimensions;
 use crate::config::window::StartupMode;
 use crate::display::bell::VisualBell;
 use crate::display::color::{List, Rgb};
-use crate::display::content::{RenderableContent, RenderableCursor};
-use crate::display::cursor::IntoRects;
-use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
+use crate::display::damage::DamageTracker;
 use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
 use crate::display::window::Window;
-use crate::event::{Event, EventType, Mouse, SearchState};
-use crate::message_bar::{self, MessageBuffer, MessageType};
+use crate::event::{Event, EventType};
 use crate::renderer::Rasterizer;
 use crate::renderer::image::{BackgroundImageAlignment, BackgroundImageFit};
-use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::ui::{Gradient, Rgba, UiQuad};
 use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
-use crate::string::{ShortenDirection, StrShortener};
 
 mod background_color_model;
 pub mod color;
