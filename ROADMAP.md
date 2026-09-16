@@ -27,14 +27,29 @@ feature"），旧壳只保留在显式 `legacy-shell` feature 与 `--legacy-shel
 
 ### 仍然开放的事项
 
-1. **P4 大文件拆分未开始，且点名文件继续变大**（2026-09-15 实测）：
-   `display/mod.rs` 11,143 行、`display/settings.rs` 8,407 行、`event.rs`
-   3,485 行、`window_context.rs` 3,647 行（后两者已移至 `src/` 根）。
+1. **P4 大文件拆分已完成**（2026-09-16）：四个点名文件全部按职责/面拆分，
+   行为零变化，每步独立 commit 且经 token 级保真自证（方法体逐字节等价，仅
+   use 路径与 pub(super) 标注差异）。实测行数：`display/mod.rs` 11,143 →
+   1,767（steps 20-33 拆出 settings_pane/settings_persist/backup_pane/
+   providers_pane/proxy_pane/keymap_pane/pickers/palette_glue/side_panel_glue/
+   window_surface/frame_pipeline/pane_render/overlays/completion_glue/
+   terminal_overlays/ux_tests 共 16 个子模块，另有 steps 16-19 的 ux_anims/
+   powerline_icons/chrome_tabs/panel_layout）；`display/settings.rs` 8,407 →
+   1,313（settings/ 九页模块化）；`event.rs` 3,485 → 1,164；
+   `window_context.rs` 3,647 → 910。`architecture/file-budgets.txt` 中这四个
+   文件的超预算津贴已全部删除。门禁全绿：双组合构建 0 error、legacy 1329
+   测试全过（单线程确定性）、gpui 套件通过（仅余宿主并行竞争的 runtime_exec
+   进程派发与 side_panel::search 文件监听 flake，单独跑均过，与拆分无因果——
+   gpui 产品壳经 product_ui 提供 display，根本不编译 display/mod.rs）、
+   file_line_budget、ui::guardrails（stroke 30 / radius 56 / glow 9 预算随
+   字节级搬运不变）、i18n 合同 25、check_architecture exit 0。
 2. **G1 复测收严未做**：等网格条件下对产品形态复测一次的待办仍无结果记录。
 3. **G2 人工验收无记录**：`nebula_gpui/IME_CHECKLIST.md` 的复选框与记录表
    仍为空；正文引用的 `NEBULA_GPUI_SHELL` spike 已不存在，应先改写到当前
    入口再执行验收。默认切换先于该清单发生是既成事实，不构成清单通过记录。
-4. **G3 遗留**：fastfetch 尚未入对账集；放大级笔画粗细对账未做。
+4. **G3 遗留**：fastfetch 已入对账集、GPUI 侧三档（z12/z16/z24）截图已捕获
+   （`scripts/visual_parity.ps1` 增 `-WindowW/-WindowH` 外框参数）；legacy
+   侧三档截图与放大级笔画粗细对账仍未做（需 legacy release 实机跑）。
 
 ### 低风险剩余项（在高难度文件空闲时穿插）
 
@@ -166,11 +181,15 @@ feature"），旧壳只保留在显式 `legacy-shell` feature 与 `--legacy-shel
 - 2026-09-15 注记：脚手架（`NEBULA_GPUI_SHELL`）已移除；旧壳经
   `legacy-shell` feature 与 `--legacy-shell` 入口保留。大文件拆分仍待做，
   四个点名文件的当前实测大小见迁移快照，均比本节记录时更大。
-- **大文件拆分分层**（必做，接入完成后统一做一次）：
-  - `display/mod.rs`（10342 行）→ 按面拆：终端视图、布局、消息条、弹层等。
-  - `display/settings.rs`（7264 行）→ 设置分组模块化。
-  - `event.rs`（3178 行）/ `window_context.rs`（3100 行）→ 输入/窗口分层。
-  - 拆分原则：先划模块边界再搬代码，行为零变化，每步独立 commit 可回退。
+- **大文件拆分分层**（已完成 2026-09-16）：
+  - `display/mod.rs` 11,143 → 1,767 行：按面拆出 16 个子模块（设置面状态/
+    持久化、备份、供应商、代理、键位、各类 picker、命令面板与侧栏 glue、
+    窗口表面、帧管线、pane 渲染、浮层、补全 glue、终端浮层、ux 测试），
+    另有 steps 16-19 的 ux_anims/powerline_icons/chrome_tabs/panel_layout。
+  - `display/settings.rs` 8,407 → 1,313 行：settings/ 九页模块化。
+  - `event.rs` 3,485 → 1,164 / `window_context.rs` 3,647 → 910：输入/窗口分层。
+  - 拆分原则已遵循：先划模块边界再搬代码，行为零变化，每步独立 commit
+    可回退，token 级保真自证；`file-budgets.txt` 四条超预算津贴全部删除。
 
 ## 纪律（引用 `nebula_gpui/ARCHITECTURE.md`）
 
