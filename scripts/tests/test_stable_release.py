@@ -74,7 +74,7 @@ class StableReleaseTests(unittest.TestCase):
         native = workflow.split("  native-tests:\n", 1)[1].split("\n  linux:\n", 1)[0]
         self.assertIn("uses: ./.github/workflows/linux-lua.yml", native)
         shared = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
-        for platform in ("ubuntu-24.04", "windows-2022", "macos-26", "macos-26-intel"):
+        for platform in ("ubuntu-24.04", "windows-2022", "windows-11-arm", "macos-26", "macos-26-intel"):
             self.assertIn(platform, shared)
         self.assertIn("workflow_call:", shared)
         self.assertIn("run: python scripts/ci_native_tests.py", shared)

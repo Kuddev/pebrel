@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import re
 from pathlib import Path
 import tomllib
 import unittest
@@ -10,6 +11,38 @@ from scripts.ci_native_tests import main, native_commands
 
 
 class NativeSuiteTests(unittest.TestCase):
+    def test_every_pr_and_merge_group_runs_without_path_exclusions(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/linux-lua.yml").read_text()
+        events = workflow.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
+        for event in ("pull_request", "merge_group"):
+            declaration = re.search(rf"^  {event}:(.*?)(?=^  [a-z_]+:|\Z)", events, re.M | re.S)
+            self.assertIsNotNone(declaration)
+            self.assertNotIn("paths", declaration.group(1))
+            self.assertNotIn("branches", declaration.group(1))
+            self.assertNotIn("types", declaration.group(1))
+        self.assertIn("branches: [main]", events)
+        self.assertNotIn("branches-ignore", events)
+        self.assertNotIn("pull_request_target", workflow)
+        self.assertNotIn("contents: write", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request'", workflow)
+
+    def test_arm_job_requires_native_execution_and_matching_console_runtime(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/linux-lua.yml").read_text()
+        self.assertIn("windows-11-arm", workflow)
+        self.assertIn("host: aarch64-pc-windows-msvc", workflow)
+        self.assertIn("OSArchitecture -ne 'Arm64'", workflow)
+        self.assertIn("-Architecture $architecture", workflow)
+        self.assertLess(workflow.index("Prepare pinned Windows console runtime"),
+                        workflow.index("Test complete workspace"))
+        preview = (root / ".github/workflows/preview-packages.yml").read_text()
+        windows = preview.split("\n  windows:\n", 1)[1].split("\n  aggregate:", 1)[0]
+        self.assertNotIn("prepare-windows-runtime.ps1", preview.split("\njobs:", 1)[1].split("\n  windows:", 1)[0])
+        self.assertLess(windows.index("prepare-windows-runtime.ps1"),
+                        windows.index("cargo test --locked --workspace"))
+        self.assertIn("python scripts/conformance/windows_standard_user.py scripts/conformance/run.py", windows)
+
     def test_full_workspace_and_interactions_share_one_unfiltered_invocation(self):
         rust = [command for command in native_commands() if command[:2] == ["cargo", "test"]]
         self.assertEqual(len(rust), 1)

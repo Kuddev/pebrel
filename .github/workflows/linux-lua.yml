@@ -9,27 +9,14 @@ on:
         default: ""
   workflow_call:
   push:
-    # Releases call this entire workflow instead of duplicating branch-push jobs.
-    branches-ignore: ["release/**"]
-    paths:
-      - "**/*.rs"
-      - "scripts/**/*.py"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/linux-lua.yml"
-      - ".github/ci-profile.toml"
-      - ".github/actions/rust-cache/action.yml"
+    branches: [main]
+  # Include docs, catalogs, assets and workflow edits: every PR gets test results.
   pull_request:
-    paths:
-      - "**/*.rs"
-      - "scripts/**/*.py"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/linux-lua.yml"
-      - ".github/ci-profile.toml"
-      - ".github/actions/rust-cache/action.yml"
+  merge_group:
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 permissions:
   contents: read
@@ -48,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, macos-26, macos-26-intel]
+        os: [ubuntu-24.04, windows-2022, windows-11-arm, macos-26, macos-26-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -82,6 +69,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
+      - name: Require a native Windows ARM64 compiler
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
+            throw 'The Windows ARM job requires an ARM64 host.'
+          }
+          $compiler = rustc -vV
+          if ($LASTEXITCODE -ne 0 -or $compiler -notcontains 'host: aarch64-pc-windows-msvc') {
+            throw 'The Windows ARM job must compile and run ARM64 tests.'
+          }
       - uses: ./.github/actions/rust-cache
         id: rust-cache
         with:
@@ -94,7 +92,10 @@ jobs:
       - name: Prepare pinned Windows console runtime
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+        run: |
+          $architecture = if ('${{ runner.arch }}' -eq 'ARM64') { 'arm64' } else { 'x64' }
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture $architecture
+          ./scripts/tests/windows-runtime.tests.ps1 -Architecture $architecture
       - name: Test complete workspace and native harness
         run: python scripts/ci_native_tests.py
       - name: Check source architecture

@@ -81,6 +81,12 @@ impl DownloadJob {
 
 pub(crate) fn begin(asset: &UpdateAsset) -> Result<Option<DownloadJob>, String> {
     validate_asset(asset)?;
+    Ok(begin_download_session(asset))
+}
+
+/// Session ownership is independent of installer availability. The public
+/// entry point validates the platform and asset before reaching this state.
+fn begin_download_session(asset: &UpdateAsset) -> Option<DownloadJob> {
     let mut current = session();
     if let Some(existing) = current.as_ref().filter(|existing| existing.asset == *asset)
         && matches!(
@@ -88,7 +94,7 @@ pub(crate) fn begin(asset: &UpdateAsset) -> Result<Option<DownloadJob>, String> 
             DownloadStatus::Downloading { .. } | DownloadStatus::Ready { .. }
         )
     {
-        return Ok(None);
+        return None;
     }
     let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
     *current = Some(DownloadSession {
@@ -96,7 +102,7 @@ pub(crate) fn begin(asset: &UpdateAsset) -> Result<Option<DownloadJob>, String> 
         asset: asset.clone(),
         status: DownloadStatus::Downloading { downloaded: 0, total: asset.size },
     });
-    Ok(Some(DownloadJob { asset: asset.clone(), generation }))
+    Some(DownloadJob { asset: asset.clone(), generation })
 }
 
 pub(crate) fn cancel(asset: &UpdateAsset) {
@@ -450,15 +456,18 @@ mod tests {
         validate_windows_asset_contract, verify_download,
     };
 
-    #[cfg(windows)]
     #[test]
     fn cancel_then_retry_rejects_old_progress_and_old_completion() {
         let asset = branded_asset("Pebrel");
+        validate_windows_asset_contract(&asset).unwrap();
         super::cancel(&asset);
-        let old = super::begin(&asset).unwrap().unwrap();
-        assert!(super::begin(&asset).unwrap().is_none(), "duplicate click owns no second task");
+        let old = super::begin_download_session(&asset).unwrap();
+        assert!(
+            super::begin_download_session(&asset).is_none(),
+            "duplicate click owns no second task"
+        );
         super::cancel(&asset);
-        let current = super::begin(&asset).unwrap().unwrap();
+        let current = super::begin_download_session(&asset).unwrap();
         super::set_progress(Some(&old), 100, Some(200));
         super::run(old.clone(), crate::i18n::UiLanguage::EnUs);
         assert!(!old.is_current());
@@ -473,6 +482,20 @@ mod tests {
             super::DownloadStatus::Downloading { downloaded: 25, .. }
         ));
         super::cancel(&asset);
+    }
+
+    #[test]
+    fn begin_preserves_platform_and_asset_validation() {
+        let mut asset = branded_asset("Pebrel");
+        assert_eq!(
+            super::validate_asset(&asset).is_ok(),
+            cfg!(all(windows, target_arch = "x86_64"))
+        );
+        if super::validate_asset(&asset).is_err() {
+            assert!(super::begin(&asset).is_err());
+        }
+        asset.download_url = "https://example.invalid/untrusted.exe".into();
+        assert!(super::begin(&asset).is_err(), "the session must not bypass asset validation");
     }
 
     #[test]
