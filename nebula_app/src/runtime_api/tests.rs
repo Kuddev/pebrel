@@ -477,10 +477,12 @@ fn agent_fork_rolls_back_when_ui_launch_fails() {
     assert_eq!(response.error.unwrap().code, "action_failed");
     assert!(!target.exists());
     let mut branch_query = std::process::Command::new("git");
-    branch_query
-        .arg("-C")
-        .arg(repository.path())
-        .args(["show-ref", "--verify", "--quiet", "refs/heads/nebula/failed-agent"]);
+    branch_query.arg("-C").arg(repository.path()).args([
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/heads/nebula/failed-agent",
+    ]);
     assert!(
         !crate::platform::process::hidden_command(&mut branch_query)
             .status()

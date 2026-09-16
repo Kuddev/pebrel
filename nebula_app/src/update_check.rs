@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+
+use crate::i18n::UiLanguage;
 #[cfg(feature = "legacy-shell")]
 use winit::event_loop::EventLoopProxy;
 
@@ -139,7 +141,9 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
             log::debug!("update-check: v{current} is current (latest v{latest})");
             return;
         }
-        let text = format!("Pebrel v{latest} 已发布（当前 v{current}），下载：{RELEASES_PAGE}");
+        let text = UiLanguage::current()
+            .tr_args("command_palette.update_notice", &[("latest", &latest), ("current", current)]);
+        let text = format!("{text} ({RELEASES_PAGE})");
         let _ = proxy.send_event(Event::new(
             EventType::Message(Message::new(text, MessageType::Warning)),
             None,
@@ -252,17 +256,23 @@ fn load_prompt_state() -> UpdatePromptState {
 fn update_prompt_state(change: impl FnOnce(&mut UpdatePromptState)) -> Result<(), String> {
     let _guard = UPDATE_STATE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let path = update_state_path();
-    let Some(_file_lock) = crate::atomic_file::try_lock(&path)
-        .map_err(|error| format!("无法锁定更新提醒状态：{error}"))?
+    let Some(_file_lock) = crate::atomic_file::try_lock(&path).map_err(|error| {
+        UiLanguage::current()
+            .tr_args("update.prompt_state_lock_failed", &[("error", &error.to_string())])
+    })?
     else {
-        return Err("更新提醒状态正由另一个 Pebrel 进程写入".to_owned());
+        return Err(UiLanguage::current().tr("update.prompt_state_busy").to_owned());
     };
     let mut state = load_prompt_state();
     change(&mut state);
-    let bytes = serde_json::to_vec_pretty(&state)
-        .map_err(|error| format!("无法序列化更新提醒状态：{error}"))?;
-    crate::atomic_file::write(&path, &bytes)
-        .map_err(|error| format!("无法保存更新提醒状态：{error}"))
+    let bytes = serde_json::to_vec_pretty(&state).map_err(|error| {
+        UiLanguage::current()
+            .tr_args("update.prompt_state_serialize_failed", &[("error", &error.to_string())])
+    })?;
+    crate::atomic_file::write(&path, &bytes).map_err(|error| {
+        UiLanguage::current()
+            .tr_args("update.prompt_state_save_failed", &[("error", &error.to_string())])
+    })
 }
 
 pub fn should_prompt(version: &str) -> bool {
@@ -303,16 +313,21 @@ fn fetch_release_with_agent(agent: &ureq::Agent, url: &str) -> Result<LatestRele
         .and_then(|mut response| {
             response.body_mut().with_config().limit(2 * 1024 * 1024).read_to_vec()
         })
-        .map_err(|error| format!("GitHub 请求失败：{error}"))?;
+        .map_err(|error| {
+            UiLanguage::current()
+                .tr_args("update.github_request_failed", &[("detail", &error.to_string())])
+        })?;
     parse_latest_release(&bytes)
 }
 
 fn parse_latest_release(bytes: &[u8]) -> Result<LatestRelease, String> {
-    let release: GitHubRelease =
-        serde_json::from_slice(bytes).map_err(|error| format!("GitHub 返回了无效数据：{error}"))?;
+    let release: GitHubRelease = serde_json::from_slice(bytes).map_err(|error| {
+        UiLanguage::current()
+            .tr_args("update.github_invalid_data", &[("error", &error.to_string())])
+    })?;
     let version = release.tag_name.trim().trim_start_matches(['v', 'V']);
     if version.is_empty() {
-        return Err("GitHub release 的版本号为空".to_owned());
+        return Err(UiLanguage::current().tr("update.github_empty_version").to_owned());
     }
     let version = version.to_owned();
     let asset = if cfg!(all(windows, target_arch = "x86_64")) {

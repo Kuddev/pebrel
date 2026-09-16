@@ -16,6 +16,7 @@ use image::Frame;
 
 use crate::display::image_viewer::ImageView;
 use crate::gpui_shell::prelude::*;
+use crate::i18n::{Message, UiLanguage};
 
 /// 双击路由：应用内能读的开 tab（图片/文档/源码），其余交系统处理器。
 /// 源码查看是 GPUI 壳新增能力，旧壳合同（`input/chrome.rs`）之上的超集。
@@ -126,10 +127,21 @@ impl ImageTabView {
 
 /// 与壁纸解码同款：RGBA8 → BGRA（gpui 帧通道序）。跑在后台线程。
 fn decode_bgra(path: &Path) -> Result<Arc<RenderImage>, String> {
-    let bytes =
-        std::fs::read(path).map_err(|error| format!("无法读取 {}: {error}", path.display()))?;
+    let language = UiLanguage::current();
+    let path_display = path.display().to_string();
+    let bytes = std::fs::read(path).map_err(|error| {
+        language.format(
+            Message::DocsReadFailed,
+            &[("path", &path_display), ("error", &error.to_string())],
+        )
+    })?;
     let mut rgba = image::load_from_memory(&bytes)
-        .map_err(|error| format!("无法解码 {}: {error}", path.display()))?
+        .map_err(|error| {
+            language.format(
+                Message::DocsDecodeFailed,
+                &[("path", &path_display), ("error", &error.to_string())],
+            )
+        })?
         .into_rgba8();
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
@@ -180,7 +192,11 @@ impl Render for ImageTabView {
         let status: Option<String> = if let Some(error) = &self.error {
             Some(error.clone())
         } else if self.image.is_none() {
-            Some(String::from("正在加载图片…"))
+            Some(
+                crate::gpui_shell::config::ui_language(cx)
+                    .text(Message::DocsLoadingImage)
+                    .to_owned(),
+            )
         } else {
             None
         };

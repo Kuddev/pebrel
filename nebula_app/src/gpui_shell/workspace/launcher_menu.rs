@@ -55,9 +55,9 @@ impl LauncherTarget {
                     args: shell.args().to_vec(),
                 })
             },
-            Self::Profile(profile) => {
-                Some(NebulaWorkspace::profile_launch_session(profile.clone()))
-            },
+            Self::Profile(profile) => Some(
+                crate::gpui_shell::workspace::shell_launch::profile_launch_session(profile.clone()),
+            ),
             Self::Ssh(_) => None,
         }
     }

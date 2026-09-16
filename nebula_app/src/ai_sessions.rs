@@ -110,7 +110,11 @@ impl AiSession {
     fn ensure_title(&mut self) {
         if self.title.is_empty() {
             let short = self.id.chars().take(8).collect::<String>();
-            self.title = format!("{} 会话 {short}", self.source.display_name());
+            self.title = if crate::i18n::UiLanguage::current() == crate::i18n::UiLanguage::ZhCn {
+                format!("{} 会话 {short}", self.source.display_name())
+            } else {
+                format!("{} session {short}", self.source.display_name())
+            };
         }
     }
 }
@@ -285,11 +289,30 @@ pub fn scan(limit: usize) -> Vec<AiSession> {
 pub fn relative_label(modified: SystemTime) -> String {
     let elapsed = SystemTime::now().duration_since(modified).unwrap_or(Duration::ZERO);
     let minutes = elapsed.as_secs() / 60;
+    let language = crate::i18n::UiLanguage::current();
+    let count = |value: u64| value.to_string();
     match minutes {
-        0 => "刚刚".to_owned(),
-        1..=59 => format!("{minutes} 分钟前"),
-        60..=1439 => format!("{} 小时前", minutes / 60),
-        _ => format!("{} 天前", minutes / 1440),
+        0 => language.text(crate::i18n::Message::TimeJustNow).to_owned(),
+        1 => language.text(crate::i18n::Message::TimeMinuteAgo).to_owned(),
+        2..=59 => {
+            language.format(crate::i18n::Message::TimeMinutesAgo, &[("count", &count(minutes))])
+        },
+        60..=1439 => {
+            let hours = minutes / 60;
+            if hours == 1 {
+                language.text(crate::i18n::Message::TimeHourAgo).to_owned()
+            } else {
+                language.format(crate::i18n::Message::TimeHoursAgo, &[("count", &count(hours))])
+            }
+        },
+        _ => {
+            let days = minutes / 1440;
+            if days == 1 {
+                language.text(crate::i18n::Message::TimeDayAgo).to_owned()
+            } else {
+                language.format(crate::i18n::Message::TimeDaysAgo, &[("count", &count(days))])
+            }
+        },
     }
 }
 

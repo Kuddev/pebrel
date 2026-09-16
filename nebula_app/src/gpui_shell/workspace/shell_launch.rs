@@ -14,8 +14,6 @@
 
 use gpui::App;
 
-
-
 /// 冻结“新建这一刻”的默认 Shell 为共享 v4 launch 身份。
 ///
 /// 旧壳通过 `TabLaunch::Shell` 保存同样的 name/program/args；GPUI 以前只
@@ -45,9 +43,7 @@ pub(super) fn configured_local_launch(cx: &App) -> crate::session::LaunchSession
 /// [`configured_local_launch`]）自己决定要不要吞掉这个错，而显式请求
 /// （`--shell`、IPC 的 `shell`）必须让调用方看见——静默把"用 Ubuntu 打开"
 /// 变成 PowerShell 标签是最难查的一类失败。
-pub(crate) fn resolve_shell_id(
-    shell_id: &str,
-) -> Result<crate::session::LaunchSession, String> {
+pub(crate) fn resolve_shell_id(shell_id: &str) -> Result<crate::session::LaunchSession, String> {
     let requested = shell_id.trim();
     if requested.is_empty() {
         return Err("--shell needs a shell id".to_owned());
@@ -63,14 +59,11 @@ pub(crate) fn resolve_shell_id(
             args: shell.args().to_vec(),
         });
     }
-    if let Some(profile) = crate::terminal_profiles::TerminalProfiles::load().ok().and_then(
-        |store| {
-            store.as_config_profiles().into_iter().find(|profile| {
-                profile.settings_id().is_some_and(|id| id.eq_ignore_ascii_case(requested))
-            })
-        },
-    ) {
-        return Ok(profile_launch_session(profile));
+    if let Some(launch) = crate::terminal_profiles::TerminalProfiles::load()
+        .ok()
+        .and_then(|store| profile_launch_for_id(store.as_config_profiles(), requested))
+    {
+        return Ok(launch);
     }
     if let Some(launch) = wsl_launch_for_id(requested) {
         return Ok(launch);
@@ -78,16 +71,24 @@ pub(crate) fn resolve_shell_id(
     Err(format!("unknown shell id \"{requested}\"; available: {}", shell_id_menu().join(", ")))
 }
 
+// Imported profile ids are opaque and may include case-sensitive directory names.
+// Only detected shell aliases above allow case-insensitive matching.
+fn profile_launch_for_id(
+    profiles: Vec<crate::config::ui_config::Profile>,
+    requested: &str,
+) -> Option<crate::session::LaunchSession> {
+    profiles
+        .into_iter()
+        .find(|profile| profile.settings_id().as_deref() == Some(requested))
+        .map(profile_launch_session)
+}
+
 /// 报错时列给用户的可选 id（检测到的 shell + 磁盘上的导入入口）。
 fn shell_id_menu() -> Vec<String> {
-    let mut ids: Vec<String> = crate::shell_detect::detect_shells()
-        .into_iter()
-        .map(|shell| shell.id)
-        .collect();
+    let mut ids: Vec<String> =
+        crate::shell_detect::detect_shells().into_iter().map(|shell| shell.id).collect();
     if let Ok(store) = crate::terminal_profiles::TerminalProfiles::load() {
-        ids.extend(
-            store.as_config_profiles().iter().filter_map(|profile| profile.settings_id()),
-        );
+        ids.extend(store.as_config_profiles().iter().filter_map(|profile| profile.settings_id()));
     }
     ids
 }
@@ -140,9 +141,7 @@ fn wsl_launch_args(shell_id: &str) -> Option<(String, Vec<String>)> {
         .map(|_| trimmed[4..].trim())
         .filter(|distro| !distro.is_empty());
     match distro {
-        Some(distro) => {
-            Some((format!("WSL · {distro}"), vec!["-d".to_owned(), distro.to_owned()]))
-        },
+        Some(distro) => Some((format!("WSL · {distro}"), vec!["-d".to_owned(), distro.to_owned()])),
         None if trimmed.eq_ignore_ascii_case("wsl") => Some(("WSL".to_owned(), Vec::new())),
         None => None,
     }
@@ -151,38 +150,62 @@ fn wsl_launch_args(shell_id: &str) -> Option<(String, Vec<String>)> {
 #[cfg(test)]
 mod tests {
 
+    #[test]
+    fn profile_ids_preserve_case_sensitive_directory_identity() {
+        let profiles: Vec<_> = ["Project", "project"]
+            .into_iter()
+            .map(|name| crate::config::ui_config::Profile {
+                name: name.to_owned(),
+                command: "shell".into(),
+                args: Vec::new(),
+                cwd: None,
+                shell_id: Some("sh".into()),
+                terminal_profile_id: Some(format!("qa-{name}")),
+            })
+            .collect();
+        for name in ["Project", "project"] {
+            let launch =
+                super::profile_launch_for_id(profiles.clone(), &format!("profile:sh|qa-{name}"))
+                    .unwrap();
+            assert!(
+                matches!(launch, crate::session::LaunchSession::Profile { name: actual, .. } if actual == name)
+            );
+        }
+        assert!(super::profile_launch_for_id(profiles, "profile:sh|qa-PROJECT").is_none());
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn unix_rejects_wsl_instead_of_selecting_another_shell() {
         assert!(super::resolve_shell_id("wsl:Ubuntu").is_err());
         assert!(super::wsl_launch_for_id("wsl").is_none());
     }
-/// `--shell` 的 WSL id 语义：`wsl:<发行版>` 必须落成一条真会跑的
-/// `wsl.exe -d <发行版>`，而不是"解析不到就回落默认 shell"——右键点「Ubuntu」
-/// 却开出 PowerShell 是这个功能最容易出的错，而且没有任何提示。
-///
-/// 这里只测 id 解析（纯函数）。可执行文件的查找（`wsl_executable()`）与真正的
-/// 启动留给端到端验证，免得测试依赖"本机装了 WSL"。
-#[test]
-fn wsl_shell_ids_resolve_to_a_distro_launch() {
-    assert_eq!(
-        super::wsl_launch_args("wsl:Ubuntu"),
-        Some(("WSL · Ubuntu".to_owned(), vec!["-d".to_owned(), "Ubuntu".to_owned()]))
-    );
-    // id 大小写不敏感（`detect_shells()` 给的是 `wsl:<原名>`，注册表/手写可能不同）。
-    assert_eq!(super::wsl_launch_args("WSL:Ubuntu"), super::wsl_launch_args("wsl:Ubuntu"));
-    // 发行版名里的空格保留，只去掉外围空白。
-    assert_eq!(
-        super::wsl_launch_args("  wsl:Team Linux  "),
-        Some(("WSL · Team Linux".to_owned(), vec!["-d".to_owned(), "Team Linux".to_owned()]))
-    );
-    // 裸 `wsl` = 系统默认发行版（交给 wsl.exe 自己挑），不是"没有 shell"。
-    assert_eq!(super::wsl_launch_args("wsl"), Some(("WSL".to_owned(), Vec::new())));
-    assert_eq!(super::wsl_launch_args("WSL"), Some(("WSL".to_owned(), Vec::new())));
-    // 只有前缀没有发行版名、以及别的 id 都不算命中，交给调用方去报错。
-    assert_eq!(super::wsl_launch_args("wsl:"), None);
-    assert_eq!(super::wsl_launch_args("wsl:   "), None);
-    assert_eq!(super::wsl_launch_args("pwsh"), None);
-    assert_eq!(super::wsl_launch_args(""), None);
-}
+    /// `--shell` 的 WSL id 语义：`wsl:<发行版>` 必须落成一条真会跑的
+    /// `wsl.exe -d <发行版>`，而不是"解析不到就回落默认 shell"——右键点「Ubuntu」
+    /// 却开出 PowerShell 是这个功能最容易出的错，而且没有任何提示。
+    ///
+    /// 这里只测 id 解析（纯函数）。可执行文件的查找（`wsl_executable()`）与真正的
+    /// 启动留给端到端验证，免得测试依赖"本机装了 WSL"。
+    #[test]
+    fn wsl_shell_ids_resolve_to_a_distro_launch() {
+        assert_eq!(
+            super::wsl_launch_args("wsl:Ubuntu"),
+            Some(("WSL · Ubuntu".to_owned(), vec!["-d".to_owned(), "Ubuntu".to_owned()]))
+        );
+        // id 大小写不敏感（`detect_shells()` 给的是 `wsl:<原名>`，注册表/手写可能不同）。
+        assert_eq!(super::wsl_launch_args("WSL:Ubuntu"), super::wsl_launch_args("wsl:Ubuntu"));
+        // 发行版名里的空格保留，只去掉外围空白。
+        assert_eq!(
+            super::wsl_launch_args("  wsl:Team Linux  "),
+            Some(("WSL · Team Linux".to_owned(), vec!["-d".to_owned(), "Team Linux".to_owned()]))
+        );
+        // 裸 `wsl` = 系统默认发行版（交给 wsl.exe 自己挑），不是"没有 shell"。
+        assert_eq!(super::wsl_launch_args("wsl"), Some(("WSL".to_owned(), Vec::new())));
+        assert_eq!(super::wsl_launch_args("WSL"), Some(("WSL".to_owned(), Vec::new())));
+        // 只有前缀没有发行版名、以及别的 id 都不算命中，交给调用方去报错。
+        assert_eq!(super::wsl_launch_args("wsl:"), None);
+        assert_eq!(super::wsl_launch_args("wsl:   "), None);
+        assert_eq!(super::wsl_launch_args("pwsh"), None);
+        assert_eq!(super::wsl_launch_args(""), None);
+    }
 }

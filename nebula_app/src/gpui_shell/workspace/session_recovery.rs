@@ -42,7 +42,7 @@ impl NebulaWorkspace {
                         window,
                         cx,
                         ToastKind::Warning,
-                        format!("连续多次启动未完成恢复，已跳过；现场保存在 {}", path.display()),
+                        super::i18n::restore_repeated_failure(workspace_ui_language(), &path),
                     );
                 }
             }
@@ -62,11 +62,7 @@ impl NebulaWorkspace {
         }
         self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
         self.focus_active(window, cx);
-        let text = if crashed {
-            format!("上次未正常退出，已恢复 {restored} 个标签")
-        } else {
-            format!("已恢复 {restored} 个标签")
-        };
+        let text = super::i18n::restore_notice(workspace_ui_language(), crashed, restored);
         crate::gpui_shell::toast::toast(window, cx, ToastKind::Success, text);
         cx.notify();
         true
@@ -96,10 +92,15 @@ impl NebulaWorkspace {
         for (index, leaf) in layout.leaves().into_iter().enumerate() {
             let LayoutSession::Pane { cwd, agent, launch } = leaf else { continue };
             let mut launch_session = launch.clone().unwrap_or_else(|| {
-                if index == 0 { saved_launch.clone() } else { Self::configured_local_launch(cx) }
+                if index == 0 {
+                    saved_launch.clone()
+                } else {
+                    crate::gpui_shell::workspace::shell_launch::configured_local_launch(cx)
+                }
             });
             if matches!(launch_session, LaunchSession::Default) {
-                launch_session = Self::configured_local_launch(cx);
+                launch_session =
+                    crate::gpui_shell::workspace::shell_launch::configured_local_launch(cx);
             }
             let guest_directory =
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);

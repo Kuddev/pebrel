@@ -30,14 +30,14 @@ pub(crate) fn show_update_notification(
         start_update_download(result.clone(), window, cx);
     }
     let language = workspace_ui_language();
-    let title: SharedString = language.pick("发现新版本", "Update available").into();
+    let title: SharedString = language.text(crate::i18n::Message::CommonUpdateAvailable).into();
     let message: SharedString = language
         .format(
             crate::i18n::Message::CommonUpdateNotice,
             &[("latest", &result.latest), ("current", &result.current)],
         )
         .into();
-    let action_label: SharedString = language.pick("查看更新", "View update").into();
+    let action_label: SharedString = language.text(crate::i18n::Message::CommonViewUpdate).into();
     let action_result = result.clone();
     let notification = Notification::warning(message)
         .id::<UpdateNotification>()
@@ -129,29 +129,20 @@ fn show_download_outcome_notification(
     let (title, message, action, success): (SharedString, SharedString, SharedString, bool) =
         match status {
             DownloadStatus::Ready { bytes, .. } => (
-                language.pick("更新已下载", "Update downloaded").into(),
-                match language {
-                    crate::display::UiLanguage::ZhCn => {
-                        format!(
-                            "v{} 安装包已通过 SHA-256 校验（{}）",
-                            downloaded_version,
-                            format_bytes(bytes)
-                        )
-                    },
-                    _ => format!(
-                        "The v{} installer passed SHA-256 verification ({})",
-                        downloaded_version,
-                        format_bytes(bytes)
-                    ),
-                }
-                .into(),
+                language.tr("update.dialog.downloaded").into(),
+                language
+                    .format(
+                        crate::i18n::Message::UpdateShaVerified,
+                        &[("version", &downloaded_version), ("size", &format_bytes(bytes))],
+                    )
+                    .into(),
                 language.text(Message::UpdateRestartInstall).into(),
                 true,
             ),
             DownloadStatus::Failed(error) => (
-                language.pick("更新下载失败", "Update download failed").into(),
+                language.tr("update.dialog.download_failed").into(),
                 error.into(),
-                language.pick("查看详情", "View details").into(),
+                language.tr("update.dialog.view_details").into(),
                 false,
             ),
             DownloadStatus::InstallFailed(error) => (
@@ -196,9 +187,9 @@ pub(crate) fn open_update_dialog(
     let dialog_result = result.clone();
     window.open_dialog(cx, move |dialog, window, cx| {
         let language = workspace_ui_language();
-        let title: SharedString = language.pick("Pebrel 更新", "Pebrel Update").into();
-        let current_label: SharedString = language.pick("当前版本", "Current").into();
-        let latest_label: SharedString = language.pick("最新版本", "Latest").into();
+        let title: SharedString = language.tr("update.dialog.title").into();
+        let current_label: SharedString = language.tr("update.dialog.current").into();
+        let latest_label: SharedString = language.tr("update.dialog.latest").into();
         let current_version: SharedString = format!("v{}", dialog_result.current).into();
         let latest_version: SharedString = format!("v{}", dialog_result.latest).into();
         let later_text: SharedString =
@@ -248,23 +239,15 @@ pub(crate) fn open_update_dialog(
                 .into(),
             // 非 Windows 目前没有自动安装路径（能力表 `self_update_install`）：
             // 不说「缺 Windows 安装包」，那对 Mac/Linux 用户是句错话。
-            _ if !crate::platform::CAPABILITIES.self_update_install => language
-                .pick(
-                    "此平台暂不支持应用内自动更新；请到发布页下载对应的安装包。",
-                    "In-app automatic updates are not available on this platform yet. Download the matching package from the Releases page.",
-                )
-                .into(),
-            _ => language
-                .pick(
-                    "此 release 没有可验证的 Windows x64 安装包，已禁用自动执行；可打开发布页手动处理。",
-                    "This release has no verifiable Windows x64 installer, so automatic execution is disabled. Use the Releases page instead.",
-                )
-                .into(),
+            _ if !crate::platform::CAPABILITIES.self_update_install => {
+                language.tr("update.dialog.hint_platform_unsupported").into()
+            },
+            _ => language.tr("update.dialog.hint_no_windows_installer").into(),
         };
 
         let primary_text: SharedString = match status {
             DownloadStatus::Idle if verified_asset => {
-                language.pick("下载更新", "Download update").into()
+                language.tr("update.dialog.download_update").into()
             },
             DownloadStatus::Downloading { .. } => {
                 language.text(Message::UpdateStopDownload).into()
@@ -276,9 +259,9 @@ pub(crate) fn open_update_dialog(
                 language.text(Message::UpdateRecheckPackage).into()
             },
             DownloadStatus::Failed(_) if verified_asset => {
-                language.pick("重新下载", "Retry download").into()
+                language.tr("update.dialog.retry_download").into()
             },
-            _ => language.pick("打开发布页", "Open Releases").into(),
+            _ => language.tr("update.dialog.open_releases").into(),
         };
 
         let mut body = v_flex()
@@ -366,10 +349,7 @@ pub(crate) fn open_update_dialog(
         let skip_version = dialog_result.latest.clone();
         let cancel_version = dialog_result.latest.clone();
         let action_result = dialog_result.clone();
-        let save_failed_prefix = language.pick("无法保存更新提醒设置", "Could not save update preference");
-        let error_separator = language.pick("：", ": ");
-        let cancel_save_failed_prefix = save_failed_prefix.to_owned();
-        let cancel_error_separator = error_separator.to_owned();
+        let language_for_save = language;
         let mut footer = DialogFooter::new()
             .child(
                 Button::new("skip-nebula-update")
@@ -382,7 +362,10 @@ pub(crate) fn open_update_dialog(
                                 window,
                                 cx,
                                 crate::display::ToastKind::Warning,
-                                format!("{save_failed_prefix}{error_separator}{error}"),
+                                language_for_save.tr_args(
+                                    "update.dialog.save_preference_failed",
+                                    &[("error", &error.to_string())],
+                                ),
                             );
                         }
                         window.close_dialog(cx);
@@ -443,7 +426,10 @@ pub(crate) fn open_update_dialog(
                         window,
                         cx,
                         crate::display::ToastKind::Warning,
-                        format!("{cancel_save_failed_prefix}{cancel_error_separator}{error}"),
+                        language_for_save.tr_args(
+                            "update.dialog.save_preference_failed",
+                            &[("error", &error.to_string())],
+                        ),
                     );
                 }
                 true

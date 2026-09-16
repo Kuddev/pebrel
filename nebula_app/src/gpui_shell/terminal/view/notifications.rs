@@ -30,7 +30,11 @@ impl super::TerminalView {
 /// 5 拍（看门狗 1 Hz）就会发生。Claude 思考时、或跑一条不输出的长命令（编译等）
 /// 时终端本就没有输出，于是任务还在跑却反复弹「回合完成」。没有 hook 的客户端
 /// 屏幕仍是唯一证据，保持原样。
-pub(super) fn screen_notification(previous: AgentStatus, next: AgentStatus, hooks: bool) -> Option<bool> {
+pub(super) fn screen_notification(
+    previous: AgentStatus,
+    next: AgentStatus,
+    hooks: bool,
+) -> Option<bool> {
     match next {
         AgentStatus::Blocked if previous != AgentStatus::Blocked => Some(true),
         AgentStatus::Done if matches!(previous, AgentStatus::Working | AgentStatus::Blocked) => {
@@ -65,10 +69,22 @@ mod tests {
     #[test]
     fn screen_completion_and_attention_are_edges_not_idle_polling() {
         // 无 hook 时屏幕是唯一证据，「完成」照旧提示。
-        assert_eq!(screen_notification(AgentStatus::Working, AgentStatus::Done, false), Some(false));
-        assert_eq!(screen_notification(AgentStatus::Blocked, AgentStatus::Done, false), Some(false));
-        assert_eq!(screen_notification(AgentStatus::Working, AgentStatus::Blocked, false), Some(true));
-        assert_eq!(screen_notification(AgentStatus::Unknown, AgentStatus::Blocked, false), Some(true));
+        assert_eq!(
+            screen_notification(AgentStatus::Working, AgentStatus::Done, false),
+            Some(false)
+        );
+        assert_eq!(
+            screen_notification(AgentStatus::Blocked, AgentStatus::Done, false),
+            Some(false)
+        );
+        assert_eq!(
+            screen_notification(AgentStatus::Working, AgentStatus::Blocked, false),
+            Some(true)
+        );
+        assert_eq!(
+            screen_notification(AgentStatus::Unknown, AgentStatus::Blocked, false),
+            Some(true)
+        );
         assert_eq!(screen_notification(AgentStatus::Done, AgentStatus::Done, false), None);
         assert_eq!(screen_notification(AgentStatus::Blocked, AgentStatus::Blocked, false), None);
         assert_eq!(screen_notification(AgentStatus::Unknown, AgentStatus::Idle, false), None);
@@ -82,7 +98,10 @@ mod tests {
         assert_eq!(screen_notification(AgentStatus::Working, AgentStatus::Done, true), None);
         assert_eq!(screen_notification(AgentStatus::Blocked, AgentStatus::Done, true), None);
         // 等输入是真事件，与完成无关，不受 hook 影响。
-        assert_eq!(screen_notification(AgentStatus::Working, AgentStatus::Blocked, true), Some(true));
+        assert_eq!(
+            screen_notification(AgentStatus::Working, AgentStatus::Blocked, true),
+            Some(true)
+        );
     }
 
     #[test]

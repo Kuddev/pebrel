@@ -977,9 +977,7 @@ fn task_is_in_flight(task: &serde_json::Map<String, Value>) -> bool {
         return false;
     }
     match task.get("status").and_then(Value::as_str) {
-        Some(status) => {
-            !TERMINAL_TASK_STATUSES.contains(&status.to_ascii_lowercase().as_str())
-        },
+        Some(status) => !TERMINAL_TASK_STATUSES.contains(&status.to_ascii_lowercase().as_str()),
         None => true,
     }
 }
@@ -1323,8 +1321,7 @@ mod remote_tests {
     /// `agent.delegate` 的完成回调也不会触发，比早弹一条更难发现。
     #[test]
     fn finished_background_tasks_do_not_hold_the_turn_open() {
-        for status in ["completed", "success", "exited", "failed", "killed", "cancelled", "idle"]
-        {
+        for status in ["completed", "success", "exited", "failed", "killed", "cancelled", "idle"] {
             let payload = serde_json::json!({
                 "session_id": "s",
                 "hook_event_name": "Stop",

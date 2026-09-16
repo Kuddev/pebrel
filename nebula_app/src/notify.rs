@@ -48,6 +48,7 @@ pub fn init_proxy(proxy: EventLoopProxy<Event>) {
     let _ = PROXY.set(proxy);
 }
 
+use crate::i18n::{Message, UiLanguage};
 pub use crate::platform::notifications::notify_test;
 use crate::platform::notifications::{ToastActivation, toast_clickable};
 
@@ -150,15 +151,26 @@ impl Notification {
     /// Toast title + body. Title names the source ("Pebrel" or the program);
     /// body carries the human detail, bounded to a glanceable length.
     pub(crate) fn toast_text(&self) -> (String, String) {
-        let (title, body) = self.raw_toast_text();
-        (title, clamp_toast_body(&body))
+        self.toast_text_for(UiLanguage::current())
     }
 
     pub(crate) fn raw_toast_text(&self) -> (String, String) {
+        self.raw_toast_text_for(UiLanguage::current())
+    }
+
+    pub(crate) fn toast_text_for(&self, language: UiLanguage) -> (String, String) {
+        let (title, body) = self.raw_toast_text_for(language);
+        (title, clamp_toast_body(&body))
+    }
+
+    pub(crate) fn raw_toast_text_for(&self, language: UiLanguage) -> (String, String) {
         match self {
             Self::Bell { program } => match program {
-                Some(p) => (p.clone(), "任务完成，等待输入".to_owned()),
-                None => (crate::brand::NAME.to_owned(), "终端响铃".to_owned()),
+                Some(p) => (p.clone(), language.text(Message::NotifyTaskDone).to_owned()),
+                None => (
+                    crate::brand::NAME.to_owned(),
+                    language.text(Message::NotifyTerminalBell).to_owned(),
+                ),
             },
             Self::CommandDone { duration, program } => {
                 let secs = duration.as_secs();
@@ -167,9 +179,10 @@ impl Notification {
                 } else {
                     format!("{secs}s")
                 };
+                let body = language.format(Message::NotifyCommandDone, &[("duration", &human)]);
                 match program {
-                    Some(p) => (p.clone(), format!("命令完成，用时 {human}")),
-                    None => (crate::brand::NAME.to_owned(), format!("命令完成，用时 {human}")),
+                    Some(p) => (p.clone(), body),
+                    None => (crate::brand::NAME.to_owned(), body),
                 }
             },
             Self::Text { body, program } => match program {
@@ -178,11 +191,13 @@ impl Notification {
             },
             Self::AiTurn { program, message, attention } => {
                 let body = message.clone().unwrap_or_else(|| {
-                    if *attention {
-                        "需要你的确认或输入".to_owned()
-                    } else {
-                        "回合完成，等待下一条指令".to_owned()
-                    }
+                    language
+                        .text(if *attention {
+                            Message::NotifyNeedsConfirmation
+                        } else {
+                            Message::NotifyTurnComplete
+                        })
+                        .to_owned()
                 });
                 (program.clone(), body)
             },
@@ -461,5 +476,29 @@ mod delivery_tests {
         assert!(matches!(receiver.try_recv(), Ok(GpuiShellEvent::NotificationFocus(None))));
         drop(receiver);
         pane_activation();
+    }
+
+    #[test]
+    fn default_ai_turn_toast_follows_selected_language() {
+        let done =
+            Notification::AiTurn { program: "codex".to_owned(), message: None, attention: false };
+        let waiting =
+            Notification::AiTurn { program: "claude".to_owned(), message: None, attention: true };
+        assert_eq!(
+            done.toast_text_for(UiLanguage::EnUs),
+            ("codex".to_owned(), "Turn complete, waiting for the next instruction".to_owned())
+        );
+        assert_eq!(
+            done.raw_toast_text_for(UiLanguage::ZhCn),
+            ("codex".to_owned(), "回合完成，等待下一条指令".to_owned())
+        );
+        assert_eq!(
+            waiting.toast_text_for(UiLanguage::EnUs),
+            ("claude".to_owned(), "Needs your confirmation or input".to_owned())
+        );
+        assert_eq!(
+            waiting.raw_toast_text_for(UiLanguage::ZhCn),
+            ("claude".to_owned(), "需要你的确认或输入".to_owned())
+        );
     }
 }

@@ -1,6 +1,7 @@
 //! Process window events.
 
 use crate::ConfigMonitor;
+use crate::i18n::t;
 use glutin::config::GetGlConfig;
 use std::borrow::Cow;
 use std::cmp::min;
@@ -272,11 +273,10 @@ impl Processor {
                 // 「一恢复就崩」的唯一现场。
                 Some(session) if !session.tabs.is_empty() => {
                     blocked_notice = Some(match crate::session::quarantine() {
-                        Some(path) => format!(
-                            "连续三次启动失败，已跳过会话恢复；上次的会话保存在 {}。",
-                            path.display()
-                        ),
-                        None => "连续三次启动失败，已跳过会话恢复。".to_owned(),
+                        Some(path) => {
+                            t!("workspace.restore.skipped_repeated_failures", path = path.display())
+                        },
+                        None => t!("workspace.restore.skipped").to_string(),
                     });
                     None
                 },
@@ -656,7 +656,7 @@ impl ApplicationHandler<Event> for Processor {
                     } else {
                         crate::backup_remote::pull_latest().and_then(|(name, packet)| {
                             crate::encrypted_backup::restore(&packet, &passphrase)
-                                .map(|()| format!("已从远端恢复 {name}，重启后应用全部设置"))
+                                .map(|()| t!("backup_remote.restore_success", name = name))
                         })
                     };
                     crate::backup_remote::warn_result(&result);
@@ -1307,11 +1307,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     /// exactly one notification path while paste remains silent.
     fn notify_copy(&mut self, text: &str) {
         let lines = text.lines().count().max(1);
-        let language = self.display.ui_language();
-        let message = match language {
-            UiLanguage::ZhCn => format!("已复制 {lines} 行到剪贴板"),
-            _ => format!("Copied {lines} lines to clipboard"),
-        };
+        let message = t!("common.copied_lines", lines = lines);
         self.display.push_toast(message, ToastKind::Info);
     }
 
@@ -1678,7 +1674,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 request_id,
                 &destination,
                 false,
-                &format!("无法启动测试任务：{err}"),
+                &format!("{}: {err}", t!("ux.test_task_failed")),
                 0,
             );
         }
@@ -3164,7 +3160,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         // 随后到来的 `Exit` 走既有的 tab 关闭路径。
                         crate::display::nebula_debug_log(format!("pty failure: {reason}"));
                         self.ctx.message_buffer.push(Message::new(
-                            format!("终端会话异常终止(宿主或管道故障):{reason}"),
+                            format!("{}: {reason}", t!("ux.terminal_abnormal_exit")),
                             MessageType::Error,
                         ));
                         self.ctx.display.pending_update.dirty = true;

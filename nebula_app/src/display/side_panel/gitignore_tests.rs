@@ -6,12 +6,7 @@ fn repository() -> tempfile::TempDir {
     // 弹一个终端窗口（见 `platform::process`）。
     let mut command = std::process::Command::new("git");
     command.args(["init", "-q"]).arg(directory.path());
-    assert!(
-        crate::platform::process::hidden_command(&mut command)
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(crate::platform::process::hidden_command(&mut command).status().unwrap().success());
     directory
 }
 

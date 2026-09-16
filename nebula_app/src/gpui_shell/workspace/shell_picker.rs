@@ -35,7 +35,8 @@ pub(super) fn profile_location(profile: &crate::config::ui_config::Profile) -> S
         return cwd.to_string_lossy().into_owned();
     }
     if let Some(distro) = crate::shell_detect::wsl_launch_distro(&profile.command, &profile.args) {
-        if let Some(guest) = crate::shell_detect::wsl_launch_guest(&profile.command, &profile.args) {
+        if let Some(guest) = crate::shell_detect::wsl_launch_guest(&profile.command, &profile.args)
+        {
             return format!("{distro}:{guest}");
         }
     }

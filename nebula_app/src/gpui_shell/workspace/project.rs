@@ -147,7 +147,7 @@ fn project_launch_at(mut launch: LaunchSession, path: &Path) -> LaunchSession {
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(all(test, feature = "gpui-test-support", target_os = "windows"))]
 mod native_tests;

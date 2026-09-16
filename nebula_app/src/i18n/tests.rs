@@ -81,3 +81,36 @@ fn measure_static_catalog_costs() {
     }
     eprintln!("key lookup: {} ns/op", started.elapsed().as_nanos() / count);
 }
+
+#[test]
+fn language_cache_defaults_to_english_and_round_trips() {
+    use std::sync::atomic::Ordering;
+
+    // Exercise process-wide mutation in a child harness, isolated from concurrent UI tests.
+    if std::env::var_os("PEBREL_TEST_LANGUAGE_CACHE").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                concat!(module_path!(), "::language_cache_defaults_to_english_and_round_trips")
+                    .split_once("::")
+                    .unwrap()
+                    .1,
+            ])
+            .env("PEBREL_TEST_LANGUAGE_CACHE", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+    let previous = super::CURRENT_LANGUAGE.load(Ordering::Relaxed);
+    super::CURRENT_LANGUAGE.store(super::UNSET, Ordering::Relaxed);
+    assert_eq!(UiLanguage::current(), UiLanguage::EnUs);
+    super::CURRENT_LANGUAGE.store(usize::MAX - 1, Ordering::Relaxed);
+    assert_eq!(UiLanguage::current(), UiLanguage::EnUs);
+    UiLanguage::FrFr.activate();
+    assert_eq!(UiLanguage::current(), UiLanguage::FrFr);
+    UiLanguage::ZhCn.activate();
+    assert_eq!(UiLanguage::current(), UiLanguage::ZhCn);
+    super::CURRENT_LANGUAGE.store(previous, Ordering::Relaxed);
+}

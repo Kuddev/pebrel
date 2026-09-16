@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use markdown::{ParseOptions, mdast::Node, to_mdast};
 
+use crate::i18n::{Message, UiLanguage};
+
 pub const MAX_IMAGES: usize = 8;
 pub const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
 pub const IMAGE_LANGUAGE: &str = "nebula-answer-image";
@@ -25,6 +27,14 @@ pub struct ReaderDocument {
 struct NormalizedSource {
     text: String,
     inline_math: Vec<Range<usize>>,
+}
+
+fn current_text(message: Message) -> &'static str {
+    UiLanguage::current().text(message)
+}
+
+fn current_format(message: Message, args: &[(&str, &str)]) -> String {
+    UiLanguage::current().format(message, args)
 }
 
 pub fn prepare(source: &str) -> ReaderDocument {
@@ -67,13 +77,16 @@ pub fn prepare(source: &str) -> ReaderDocument {
                     images_omitted += 1;
                     replacements.push((
                         range,
-                        "\n\n图片数量超过本次阅读上限；原文仍可复制。\n\n".into(),
+                        format!("\n\n{}\n\n", current_text(Message::AnswerImageLimitNote)),
                         None,
                     ));
                     continue;
                 }
                 let alt = if alt.is_empty() {
-                    format!("图片 {}", image_count + 1)
+                    current_format(
+                        Message::AnswerImageDefaultAlt,
+                        &[("index", &(image_count + 1).to_string())],
+                    )
                 } else {
                     alt.to_owned()
                 };
@@ -245,7 +258,7 @@ pub fn literal_markdown(source: &str) -> String {
 
 pub fn local_image_path(target: &str, base: &Path) -> Result<PathBuf, String> {
     if target.len() > 4096 || target.chars().any(char::is_control) {
-        return Err("图片路径无效，未读取文件。".into());
+        return Err(current_text(Message::AnswerInvalidPath).into());
     }
     let lower = target.to_ascii_lowercase();
     if lower.contains("://")
@@ -254,14 +267,16 @@ pub fn local_image_path(target: &str, base: &Path) -> Result<PathBuf, String> {
         || network_path(target)
         || network_path(&base.to_string_lossy())
     {
-        return Err("网络图片不会自动下载；可选择本地图片查看。".into());
+        return Err(current_text(Message::AnswerNetworkImage).into());
     }
     let path = Path::new(target);
     let path = if path.is_absolute() { path.to_path_buf() } else { base.join(path) };
-    let root = base.canonicalize().map_err(|_| "无法确认当前本地目录，未读取图片。".to_owned())?;
-    let path = path.canonicalize().map_err(|_| "图片文件不存在或无法访问。".to_owned())?;
+    let root =
+        base.canonicalize().map_err(|_| current_text(Message::AnswerUnknownDir).to_owned())?;
+    let path =
+        path.canonicalize().map_err(|_| current_text(Message::AnswerMissingFile).to_owned())?;
     if !path.starts_with(root) {
-        return Err("图片不在当前目录内；请主动选择文件后查看。".into());
+        return Err(current_text(Message::AnswerOutsideDir).into());
     }
     Ok(path)
 }
@@ -276,25 +291,27 @@ pub fn read_image(path: &Path) -> Result<Vec<u8>, String> {
         .metadata()
         .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= MAX_IMAGE_BYTES)
     {
-        return Err("图片不是普通文件，或超过 12 MiB 上限。".into());
+        return Err(current_text(Message::AnswerNotRegular).into());
     }
-    let file = std::fs::File::open(path).map_err(|_| "无法打开图片文件。".to_owned())?;
-    let metadata = file.metadata().map_err(|_| "无法读取图片文件信息。".to_owned())?;
+    let file = std::fs::File::open(path)
+        .map_err(|_| current_text(Message::AnswerOpenFailed).to_owned())?;
+    let metadata =
+        file.metadata().map_err(|_| current_text(Message::AnswerMetadataFailed).to_owned())?;
     if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES {
-        return Err("图片不是普通文件，或超过 12 MiB 上限。".into());
+        return Err(current_text(Message::AnswerNotRegular).into());
     }
     let mut bytes = Vec::new();
     file.take(MAX_IMAGE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "无法完整读取图片。".to_owned())?;
+        .map_err(|_| current_text(Message::AnswerReadFailed).to_owned())?;
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        return Err("图片超过 12 MiB 上限，未解码。".into());
+        return Err(current_text(Message::AnswerTooLargeFile).into());
     }
     if !matches!(
         image::guess_format(&bytes),
         Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg)
     ) {
-        return Err("本版阅读视图仅支持 PNG / JPEG 图片。".into());
+        return Err(current_text(Message::AnswerUnsupportedFormat).into());
     }
     Ok(bytes)
 }

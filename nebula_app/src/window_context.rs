@@ -1,5 +1,6 @@
 //! Terminal window context.
 
+use crate::i18n::t;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
@@ -48,6 +49,7 @@ use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::{input, renderer, session};
 
 mod agents;
+mod background_results;
 mod model;
 mod nebula_fetch_art;
 mod runtime;
@@ -1081,9 +1083,9 @@ impl WindowContext {
                 Err(err) => {
                     error!("创建直连 SSH Pane 失败: {err}");
                     let user_error = crate::ux::UserFacingError::new(
-                        format!("SSH {host} 连接创建失败"),
-                        "无法创建 SSH 会话，地址、认证方式或本机 SSH 配置可能无效。",
-                        "检查主机地址和认证配置，右键编辑该主机后重试。",
+                        t!("ssh.connect.create_failed", host = &host),
+                        t!("ssh.connect.create_cause"),
+                        t!("ssh.connect.create_suggestion"),
                     )
                     .retry(crate::ux::RetryAction::Retry)
                     .details(err.to_string());
@@ -1176,7 +1178,9 @@ impl WindowContext {
                     self.display.ssh_connect_stage(
                         old_id,
                         destination,
-                        crate::ssh_session::SshStage::Failed(format!("无法重试 SSH 连接: {error}")),
+                        crate::ssh_session::SshStage::Failed(
+                            t!("ssh.connect.retry_failed", error = &error.to_string()).to_string(),
+                        ),
                     );
                     self.dirty = true;
                     self.display.window.request_redraw();
@@ -1300,7 +1304,7 @@ impl WindowContext {
                 layout: Layout::Leaf(DOC_PANE_ID),
                 active_pane: DOC_PANE_ID,
                 has_bell: false,
-                custom_name: Some("\u{eb51} 设置".to_owned()),
+                custom_name: Some(format!("\u{eb51} {}", t!("common.settings"))),
                 custom_color: None,
                 launch: TabLaunch::Settings,
                 doc: None,
@@ -1353,7 +1357,9 @@ impl WindowContext {
                 layout: Layout::Leaf(pane_id),
                 active_pane: pane_id,
                 has_bell: false,
-                custom_name: Some(format!("{} 分叉", agent.display_name())),
+                custom_name: Some(
+                    t!("workspace.agent.fork_tab_name", agent = agent.display_name()).to_string(),
+                ),
                 custom_color: color,
                 launch,
                 doc: None,
@@ -1422,9 +1428,9 @@ impl WindowContext {
         let session = session::Session::new(0, tabs);
         if let Err(err) = session::save_to(&path, &session) {
             let user_error = crate::ux::UserFacingError::new(
-                "工作区导出失败",
-                "无法写入所选的工作区文件。",
-                "确认该位置可写(或换一个目录)后重试。",
+                t!("workspace.export.title"),
+                t!("workspace.export.cause"),
+                t!("workspace.export.suggestion"),
             )
             .details(err.to_string());
             self.message_buffer.push(crate::message_bar::Message::user_error(&user_error));
@@ -1438,9 +1444,9 @@ impl WindowContext {
         let Some(path) = self.display.pick_workspace_dialog() else { return };
         let Some(session) = session::load_from(&path) else {
             let user_error = crate::ux::UserFacingError::new(
-                "工作区导入失败",
-                "所选文件不是可识别的 Pebrel 工作区。",
-                "确认选择的是导出生成的 .pebrel-workspace.json 或旧版 .nebula-workspace.json 文件。",
+                t!("workspace.import.title"),
+                t!("workspace.import.unrecognized_cause"),
+                t!("workspace.import.unrecognized_suggestion"),
             );
             self.message_buffer.push(crate::message_bar::Message::user_error(&user_error));
             self.dirty = true;
@@ -1460,9 +1466,9 @@ impl WindowContext {
             self.mark_session_dirty();
         } else {
             let user_error = crate::ux::UserFacingError::new(
-                "工作区导入失败",
-                "工作区文件里没有可恢复的标签页。",
-                "该文件可能为空,或其中的会话都无法启动。",
+                t!("workspace.import.title"),
+                t!("workspace.import.empty_cause"),
+                t!("workspace.import.empty_suggestion"),
             );
             self.message_buffer.push(crate::message_bar::Message::user_error(&user_error));
             self.dirty = true;
@@ -2417,40 +2423,6 @@ impl WindowContext {
         true
     }
 
-    /// 远程备份线程收尾：设置页状态行是第一现场，message bar 兜底通知
-    /// 没开设置页的窗口。
-    pub fn handle_backup_remote_done(&mut self, message: &str, error: bool) {
-        self.display.backup_remote_done(message, error);
-        let ty = if error {
-            crate::message_bar::MessageType::Error
-        } else {
-            crate::message_bar::MessageType::Warning
-        };
-        self.message_buffer.push(crate::message_bar::Message::new(format!("备份：{message}"), ty));
-        self.dirty = true;
-        self.display.window.request_redraw();
-    }
-
-    /// 同步线程收尾（spec 003）：消息进 message bar；拉到新历史时热加载
-    /// （ghost 补全立即吃到另一台机器的命令）。settings 变化不用管——
-    /// mtime 监视在下一帧自动 reload。
-    pub fn handle_sync_done(&mut self, message: &str, error: bool, history_changed: bool) {
-        // 设置页的状态行（按钮下方）是第一现场；message_bar 兜底通知
-        // 没开设置页的窗口。
-        self.display.sync_action_done(message, error);
-        let ty = if error {
-            crate::message_bar::MessageType::Error
-        } else {
-            crate::message_bar::MessageType::Warning
-        };
-        self.message_buffer.push(crate::message_bar::Message::new(format!("同步：{message}"), ty));
-        if history_changed {
-            self.display.reload_nebula_history();
-        }
-        self.dirty = true;
-        self.display.window.request_redraw();
-    }
-
     /// Toast click landed: bring this window to the foreground and, when the
     /// toast named a pane, surface its tab and focus that split.
     pub fn focus_from_toast(&mut self, pane: Option<u64>) {
@@ -2930,13 +2902,12 @@ impl WindowContext {
         let mut ai_fork = Vec::with_capacity(self.tabs.len());
         // 静默行右侧的 shell 短标；Default 启动的 tab 用当前默认 shell 的。
         let default_tag = self.display.default_shell_tag();
-        let ui_language = self.display.ui_language();
         for tab in &self.tabs {
             let pane = self.pane(tab.active_pane);
             let state = pane.map(|p| &p.nebula_state);
             // Use custom name if set, otherwise derive from cwd/title
             let mut label = if tab.settings {
-                format!("\u{eb51} {}", ui_language.pick("设置", "Settings"))
+                format!("\u{eb51} {}", t!("common.settings"))
             } else if let Some(custom) = &tab.custom_name {
                 custom.clone()
             } else {

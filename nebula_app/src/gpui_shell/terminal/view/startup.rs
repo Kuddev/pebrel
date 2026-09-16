@@ -170,10 +170,7 @@ impl TerminalView {
                 super::super::session_pump::attach(rx, stage_rx, is_ssh, cx);
                 (Some(session), None)
             },
-            Err(err) => {
-                let what = if is_ssh { "SSH 会话启动失败" } else { "PTY 启动失败" };
-                (None, Some(format!("{what}: {err}")))
-            },
+            Err(err) => (None, Some(super::i18n::start_failed(is_ssh, &err.to_string()))),
         };
 
         let (ghost_enabled, accept, completion_style) = match cx.try_global::<Settings>() {

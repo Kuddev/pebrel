@@ -181,6 +181,7 @@ impl Settings {
         let resolved_theme =
             Arc::new(crate::gpui_shell::theme::ResolvedTheme::from_runtime(&runtime, theme));
         let ui_language = resolve_ui_language(runtime.language);
+        ui_language.activate();
         let path = find_config_file();
         let mut load_notice = resolved_theme.notice.clone();
         let raw = path

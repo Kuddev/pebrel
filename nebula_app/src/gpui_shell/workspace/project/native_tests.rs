@@ -96,7 +96,7 @@ fn native_project_folder_opens_a_real_pty_without_changing_the_existing_tab() {
                             workspace.update(cx, |view, cx| {
                                 let original = view.tabs[0].focused_view().unwrap().clone();
                                 view.open_project_selection(
-                                    NebulaWorkspace::configured_local_launch(cx),
+                                    crate::gpui_shell::workspace::shell_launch::configured_local_launch(cx),
                                     std::future::ready(Ok(Some(project_directory.clone()))),
                                     window,
                                     cx,

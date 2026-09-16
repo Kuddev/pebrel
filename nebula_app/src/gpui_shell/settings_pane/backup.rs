@@ -72,8 +72,12 @@ impl SettingsPane {
                     async move {
                         let archive = crate::encrypted_backup::collect(selection)?;
                         let packet = crate::encrypted_backup::seal(&archive, &pass)?;
-                        std::fs::write(&path, packet)
-                            .map_err(|err| format!("写入备份文件失败：{err}"))?;
+                        std::fs::write(&path, packet).map_err(|err| {
+                            crate::i18n::UiLanguage::current().format(
+                                crate::i18n::Message::BackupWriteFailed,
+                                &[("error", &err.to_string())],
+                            )
+                        })?;
                         Ok(BackupCompletion::Exported(path))
                     },
                     cx,
@@ -105,8 +109,12 @@ impl SettingsPane {
             let _ = this.update(cx, |pane, cx| {
                 pane.backup_run_async(
                     async move {
-                        let packet = std::fs::read(&path)
-                            .map_err(|err| format!("读取备份文件失败：{err}"))?;
+                        let packet = std::fs::read(&path).map_err(|err| {
+                            crate::i18n::UiLanguage::current().format(
+                                crate::i18n::Message::BackupReadFailed,
+                                &[("error", &err.to_string())],
+                            )
+                        })?;
                         crate::encrypted_backup::restore(&packet, &pass)?;
                         Ok(BackupCompletion::Restored)
                     },

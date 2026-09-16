@@ -23,6 +23,7 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileType, OpenFlags};
 use tokio::io::AsyncWriteExt;
 
+use crate::i18n::t;
 use transaction::FileStamp;
 use transfer::TransferObserver;
 
@@ -275,9 +276,9 @@ impl SftpController {
             local_paths[0]
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "上传".to_owned())
+                .unwrap_or_else(|| t!("ssh.sftp.upload").to_string())
         } else {
-            format!("上传 {} 项", local_paths.len())
+            t!("ssh.sftp.upload_items", count = local_paths.len()).to_string()
         };
         self.start_job(
             SftpPhase::Working,
@@ -322,8 +323,10 @@ impl SftpController {
         let snapshot = self.snapshot();
         let destination = snapshot.destination;
         let path = snapshot.path;
-        let progress =
-            TransferProgress::new(format!("复制 {}", entry.name), entry.size.saturating_mul(2));
+        let progress = TransferProgress::new(
+            t!("ssh.sftp.copying", name = &entry.name).to_string(),
+            entry.size.saturating_mul(2),
+        );
         self.start_job(SftpPhase::Working, Some(progress), move |context| async move {
             let source = crate::ssh_session::open_sftp(&source_destination).await?;
             let target = crate::ssh_session::open_sftp(&destination).await?;
@@ -382,9 +385,9 @@ impl SftpController {
         let mut state = lock(&self.state);
         if state.phase == SftpPhase::Working {
             state.error = Some(if publishing {
-                "正在完成已进入发布阶段的文件，随后取消…".to_owned()
+                t!("ssh.sftp.canceling_after_publish").to_string()
             } else {
-                "正在取消传输…".to_owned()
+                t!("ssh.sftp.canceling_transfer").to_string()
             });
         }
         drop(state);
@@ -459,17 +462,19 @@ impl SftpBrowseSession {
         let path = normalize_remote_path("/", path);
         let mut slot = self.session.lock().await;
         if slot.is_none() {
-            *slot = Some(
-                crate::ssh_session::open_sftp(&self.destination)
-                    .await
-                    .map_err(|err| format!("无法连接 {}：{err}", self.destination))?,
-            );
+            *slot =
+                Some(crate::ssh_session::open_sftp(&self.destination).await.map_err(|err| {
+                    t!("ssh.sftp.connection_failed", destination = &self.destination, error = err)
+                        .to_string()
+                })?);
         }
 
         let result =
             read_remote_dir(slot.as_ref().expect("SFTP browser session initialized"), &path)
                 .await
-                .map_err(|err| format!("无法读取目录 {path}：{err}"));
+                .map_err(|err| {
+                    t!("ssh.sftp.read_directory_failed", path = path, error = err).to_string()
+                });
         if result.is_err() {
             // A dead subsystem must not poison every later click. Permission
             // and missing-path errors also clear the channel; the next user

@@ -28,7 +28,9 @@ impl NebulaWorkspace {
             return custom.into();
         }
         match &self.tabs[ix] {
-            WorkspaceTab::Settings { .. } => "设置".into(),
+            WorkspaceTab::Settings { .. } => crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::CommonSettings)
+                .into(),
             WorkspaceTab::Image { view } => view.read(cx).title.clone().into(),
             WorkspaceTab::Document { view, .. } => view.read(cx).tab_title().into(),
             WorkspaceTab::Code { view, .. } => view.read(cx).tab_title(cx).into(),

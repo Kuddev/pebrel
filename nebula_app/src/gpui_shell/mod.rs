@@ -149,13 +149,10 @@ pub fn run_shell(
                     )
                 },
                 _ => match handover_cwd.as_deref() {
-                    Some(dir) => crate::runtime_api::try_open_directory_existing(
-                        dir,
-                        shell_id.as_deref(),
-                    ),
-                    None => {
-                        crate::runtime_api::try_open_default_tab_existing(shell_id.as_deref())
+                    Some(dir) => {
+                        crate::runtime_api::try_open_directory_existing(dir, shell_id.as_deref())
                     },
+                    None => crate::runtime_api::try_open_default_tab_existing(shell_id.as_deref()),
                 },
             };
             if handed_over {

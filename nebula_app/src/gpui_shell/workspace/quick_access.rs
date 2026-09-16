@@ -51,7 +51,8 @@ pub(super) fn load_quick_access_rows() -> Vec<QuickAccessRow> {
 /// 其余情况用调用方给的默认 shell，`cwd` 就是选中的宿主目录。
 fn quick_access_profile_for(
     directory: &std::path::Path,
-    default_shell: Option<(String, std::path::PathBuf)>,
+    default_shell: Option<(String, crate::session::LaunchSession)>,
+    wsl_command: Option<std::path::PathBuf>,
 ) -> Option<crate::terminal_profiles::TerminalProfile> {
     // 目录名做显示名；盘根或来宾根拿不到名字时退回整条路径，总比空着强。
     let name = directory
@@ -64,9 +65,9 @@ fn quick_access_profile_for(
         return Some(crate::terminal_profiles::TerminalProfile {
             // id 只要求非空且在本 store 内唯一；UNC 原文就是天然的稳定键，
             // 同一个目录再加一次会走 `add` 的同 id 替换而不是多出一行。
-            id: format!("qa-wsl-{}", directory.to_string_lossy().to_ascii_lowercase()),
+            id: format!("qa-wsl-{}", directory.to_string_lossy()),
             name,
-            command: std::path::PathBuf::from("wsl.exe"),
+            command: wsl_command.filter(|command| command.is_absolute())?,
             args: vec!["-d".to_owned(), distro.clone(), "--cd".to_owned(), guest],
             // 宿主侧没有对应目录，`cwd` 留空——目录由 `--cd` 带给来宾。
             cwd: None,
@@ -74,12 +75,19 @@ fn quick_access_profile_for(
         });
     }
 
-    let (shell_id, program) = default_shell?;
+    let (default_id, launch) = default_shell?;
+    let (program, args, shell_id) = match launch {
+        crate::session::LaunchSession::Shell { program, args, .. } => (program, args, default_id),
+        crate::session::LaunchSession::Profile { command, args, shell_id, .. } => {
+            (command, args, shell_id.unwrap_or(default_id))
+        },
+        _ => return None,
+    };
     Some(crate::terminal_profiles::TerminalProfile {
-        id: format!("qa-{}", directory.to_string_lossy().to_ascii_lowercase()),
+        id: format!("qa-{}", directory.to_string_lossy()),
         name,
-        command: program,
-        args: Vec::new(),
+        command: program.into(),
+        args,
         cwd: Some(directory.to_path_buf()),
         shell_id,
     })
@@ -156,11 +164,12 @@ impl NebulaWorkspace {
     /// [`finish_quick_access_add`] 会把它转成正经的 WSL 入口。
     pub(super) fn add_quick_access_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let language = crate::gpui_shell::config::ui_language(cx);
-        let title = language.pick("选择项目目录", "Select a project directory");
+        let title = language.text(crate::i18n::Message::QuickAccessPickDirectory);
 
         #[cfg(windows)]
-        let picked =
-            crate::gpui_shell::settings_pane::shell_picker::pick_folder_with_wsl_places(window, title);
+        let picked = crate::gpui_shell::settings_pane::shell_picker::pick_folder_with_wsl_places(
+            window, title,
+        );
         #[cfg(not(windows))]
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
@@ -204,16 +213,24 @@ impl NebulaWorkspace {
             cx.try_global::<crate::gpui_shell::config::Settings>()
                 .and_then(|settings| settings.shell_id.as_deref()),
         );
-        let default_shell = crate::shell_detect::detect_shells()
-            .into_iter()
-            .find(|shell| shell.id == default_shell_id)
-            .map(|shell| (shell.id, std::path::PathBuf::from(shell.program)));
-
-        let Some(profile) = quick_access_profile_for(&directory, default_shell) else {
-            log::warn!("quick access: 无法为 {directory:?} 生成 profile");
+        let default_shell = shell_launch::resolve_shell_id(&default_shell_id)
+            .ok()
+            .map(|launch| (default_shell_id, launch));
+        #[cfg(windows)]
+        let wsl_command = crate::shell_detect::wsl_executable().map(std::path::PathBuf::from);
+        #[cfg(not(windows))]
+        let wsl_command = None;
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let Some(profile) = quick_access_profile_for(&directory, default_shell, wsl_command) else {
+            log::warn!("quick access: cannot resolve the shell for {directory:?}");
+            crate::gpui_shell::toast::banner(
+                window,
+                cx,
+                crate::display::ToastKind::Warning,
+                language.text(crate::i18n::Message::QuickAccessCreateFailed),
+            );
             return;
         };
-        let language = crate::gpui_shell::config::ui_language(cx);
         let mut store = match crate::terminal_profiles::TerminalProfiles::load() {
             Ok(store) => store,
             Err(error) => {
@@ -254,10 +271,6 @@ impl NebulaWorkspace {
 
     /// 「快速访问」区。行高与标签页行一致——两列内容上下相邻，行高不同一眼就看出来。
     pub(super) fn render_quick_access(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.quick_access.is_empty() {
-            // 没有 profile 就整区不渲染：留一个空标题只占地方。
-            return div().into_any_element();
-        }
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let hover_bg = theme.list_hover;
@@ -294,7 +307,7 @@ impl NebulaWorkspace {
                 div()
                     .text_size(px(14.0 * SIDEBAR_TITLE_SCALE))
                     .text_color(muted)
-                    .child(workspace_ui_language().pick("快速访问", "Quick access")),
+                    .child(workspace_ui_language().text(crate::i18n::Message::QuickAccessTitle)),
             )
             .child(
                 div()
@@ -310,6 +323,7 @@ impl NebulaWorkspace {
                 // 标题行里唯一的行动点，与计数同侧、靠最右。
                 div()
                     .id("sidebar-quick-access-add")
+                    .debug_selector(|| "sidebar-quick-access-add".to_owned())
                     .w(px(SIDEBAR_MENU_W))
                     .h(px(SIDEBAR_PLUS_SIZE))
                     .flex_shrink_0()
@@ -323,7 +337,7 @@ impl NebulaWorkspace {
                     .tooltip(|window, cx| {
                         gpui_component::tooltip::Tooltip::new(
                             workspace_ui_language()
-                                .pick("添加项目目录", "Add a project directory"),
+                                .text(crate::i18n::Message::QuickAccessAddDirectory),
                         )
                         .build(window, cx)
                     })
@@ -353,11 +367,8 @@ impl NebulaWorkspace {
             // （`wsl:Ubuntu`），所以 Ubuntu 项目拿到的就是 Ubuntu 圆标。
             let id = profile.settings_id().unwrap_or_default();
             let icon_id = profile.shell_id.clone().unwrap_or_else(|| id.clone());
-            let icon = crate::gpui_shell::widgets::shell_brand_image(
-                &icon_id,
-                SIDEBAR_HEADER_ICON,
-                1.0,
-            );
+            let icon =
+                crate::gpui_shell::widgets::shell_brand_image(&icon_id, SIDEBAR_HEADER_ICON, 1.0);
             let glyph = super::shell_picker::fallback_shell_glyph(&icon_id, icon.is_some());
             // 右侧显示目录而不是可执行文件——这一列回答的是「开在哪儿」，与
             // 选择器共用 `profile_location`，但**在刷新时就算好**（见
@@ -465,40 +476,4 @@ impl NebulaWorkspace {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::quick_access_store_id;
-
-    /// 「快速访问」的 × 必须按 store 的裸 id 删。渲染键
-    /// （[`crate::config::ui_config::Profile::settings_id`]）带 `profile:<shell>|`
-    /// 前缀，是设置页引用默认 shell 的键——递进 `remove` 只会静默返回 false，
-    /// 也就是「× 点得动但删不掉」的成因。这条测试把两个键的分工钉住。
-    #[test]
-    fn quick_access_delete_is_keyed_by_the_store_id() {
-        let mut store = crate::terminal_profiles::TerminalProfiles::default();
-        store
-            .add(crate::terminal_profiles::TerminalProfile {
-                id: r"qa-d:\tools\demo".to_owned(),
-                name: "demo".to_owned(),
-                // `validate` 只要求绝对路径，不要求这个文件真的存在。
-                command: std::env::temp_dir().join("wsl.exe"),
-                args: vec!["-d".to_owned(), "Ubuntu".to_owned()],
-                cwd: None,
-                shell_id: "wsl:Ubuntu".to_owned(),
-            })
-            .unwrap();
-
-        let rows = store.as_config_profiles();
-        let row = &rows[0];
-        let render_key = row.settings_id().expect("导入的 profile 一定有设置键");
-        let delete_id = quick_access_store_id(row).expect("store id").to_owned();
-
-        // 反例：渲染键删不掉任何东西——修之前 × 走的就是这条路。
-        assert_ne!(render_key, delete_id, "渲染键与删除键不是同一个东西");
-        assert!(!store.remove(&render_key), "渲染键不是删除键");
-
-        // 正例：store 自己的裸 id 才认。
-        assert_eq!(delete_id, r"qa-d:\tools\demo");
-        assert!(store.remove(&delete_id));
-        assert!(store.profiles().is_empty());
-    }
-}
+mod tests;

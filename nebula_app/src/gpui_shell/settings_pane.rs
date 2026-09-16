@@ -674,7 +674,13 @@ impl SettingsPane {
         // chevron 在组件内自带 muted，不会被染色。
         let control = self.segmented_setting(key, cx).unwrap_or_else(|| {
             div()
-                .debug_selector(move || if key == "notification_duration" { "notification-duration-select".to_owned() } else { format!("settings-select-{key}") })
+                .debug_selector(move || {
+                    if key == "notification_duration" {
+                        "notification-duration-select".to_owned()
+                    } else {
+                        format!("settings-select-{key}")
+                    }
+                })
                 .w(px(SETTINGS_SELECT_WIDTH))
                 .text_color(cx.theme().link)
                 .children(select.map(|state| Select::new(&state)))

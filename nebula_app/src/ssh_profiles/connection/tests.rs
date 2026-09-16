@@ -110,7 +110,12 @@ fn self_jump_is_rejected_before_resolution() {
         jump_host: "ssh://root@HOST:22".to_owned(),
         ..Default::default()
     };
-    assert!(options.validate("root@host").unwrap_err().contains("自身"));
+    for (language, expected) in
+        [(crate::i18n::UiLanguage::ZhCn, "自身"), (crate::i18n::UiLanguage::EnUs, "its own jump host")]
+    {
+        let error = options.validate_in("root@host", language).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
 }
 
 #[test]

@@ -73,6 +73,7 @@ mod win {
     use super::TrayAgent;
     #[cfg(feature = "legacy-shell")]
     use crate::event::{Event, EventType};
+    use crate::i18n::{Message, UiLanguage};
 
     /// 托盘回调（lParam 携带鼠标消息；未 SETVERSION 的经典 v0 语义，
     /// Win7 至今行为一致，不依赖 v4 的坐标打包）。
@@ -361,25 +362,31 @@ mod win {
             if menu.is_null() {
                 return;
             }
+            let language = UiLanguage::current();
             if agents.is_empty() {
-                let text = wide("没有正在运行的 agent");
+                let text = wide(language.text(Message::TrayNoAgents));
                 AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, text.as_ptr());
             }
             for (index, agent) in agents.iter().enumerate() {
                 // 状态点进文案：菜单不画自定义图形，实心/空心圈已经把
                 // 「等你」和「在跑」分开。
                 let mark = if agent.needs_attention { "● " } else { "○ " };
-                let suffix = if agent.needs_attention { " — 等待输入" } else { "" };
+                let suffix = if agent.needs_attention {
+                    language.text(Message::TrayWaitingInput)
+                } else {
+                    ""
+                };
                 let text = wide(&format!("{mark}{}{suffix}", agent.label));
                 AppendMenuW(menu, MF_STRING, MENU_AGENT_BASE + index, text.as_ptr());
             }
             AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-            let show = wide(&format!("显示 {}", crate::brand::NAME));
+            let show = wide(&language.format(Message::TrayShow, &[("name", crate::brand::NAME)]));
             AppendMenuW(menu, MF_STRING, MENU_SHOW, show.as_ptr());
             // 旧壳没有托盘「退出」：真退出是 window+detached 都空。GPUI hide
             // 之后可能只剩托盘，所以只在 GPUI 回调路径上加这一项。
             if GPUI_COMMAND.get().is_some() {
-                let quit = wide(&format!("退出 {}", crate::brand::NAME));
+                let quit =
+                    wide(&language.format(Message::TrayQuit, &[("name", crate::brand::NAME)]));
                 AppendMenuW(menu, MF_STRING, MENU_QUIT, quit.as_ptr());
             }
 
@@ -439,12 +446,19 @@ mod win {
             let mut data = notify_data(hwnd);
             data.uFlags = NIF_ICON | NIF_TIP;
             data.hIcon = (if attention_count > 0 { icons.attention } else { icons.normal }) as _;
+            let language = UiLanguage::current();
             let tip = if agent_count == 0 {
                 crate::brand::NAME.to_owned()
             } else if attention_count > 0 {
-                format!("{} — {attention_count} 个 agent 等待输入", crate::brand::NAME)
+                language.format(
+                    Message::TrayAgentsWaiting,
+                    &[("name", crate::brand::NAME), ("count", &attention_count.to_string())],
+                )
             } else {
-                format!("{} — {agent_count} 个 agent 运行中", crate::brand::NAME)
+                language.format(
+                    Message::TrayAgentsRunning,
+                    &[("name", crate::brand::NAME), ("count", &agent_count.to_string())],
+                )
             };
             copy_tip(&mut data.szTip, &tip);
             // SAFETY: data 完整初始化且 hwnd 属于本线程。

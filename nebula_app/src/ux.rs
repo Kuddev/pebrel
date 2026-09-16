@@ -2,6 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::i18n::UiLanguage;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryAction {
     None,
@@ -45,21 +47,29 @@ impl UserFacingError {
     }
 
     pub fn message(&self) -> String {
-        let mut message =
-            format!("{}\n原因：{}\n建议：{}", self.title, self.cause, self.suggestion);
+        self.message_in(UiLanguage::current())
+    }
+
+    fn message_in(&self, language: UiLanguage) -> String {
+        let body = language.tr_args(
+            "ux.error.body",
+            &[("title", &self.title), ("cause", &self.cause), ("suggestion", &self.suggestion)],
+        );
+        let mut message = body.to_string();
+
         let action = match self.retry {
             RetryAction::None => None,
-            RetryAction::Retry => Some("操作：请重试"),
-            RetryAction::OpenSettings => Some("操作：打开设置检查配置"),
-            RetryAction::OpenLogs => Some("操作：打开日志查看诊断信息"),
+            RetryAction::Retry => Some(language.tr("ux.error.retry")),
+            RetryAction::OpenSettings => Some(language.tr("ux.error.open_settings")),
+            RetryAction::OpenLogs => Some(language.tr("ux.error.open_logs")),
         };
         if let Some(action) = action {
             message.push('\n');
             message.push_str(action);
         }
         if let Some(details) = &self.details {
-            message.push_str("\n详情：");
-            message.push_str(details);
+            message.push('\n');
+            message.push_str(&language.tr_args("ux.error.details", &[("details", details)]));
         }
         message
     }
@@ -203,10 +213,15 @@ mod tests {
         let error = UserFacingError::new("连接失败", "主机不可达", "检查地址后重试")
             .retry(RetryAction::Retry)
             .details("timeout");
-        let message = error.message();
+        let message = error.message_in(UiLanguage::ZhCn);
         assert!(message.contains("原因：主机不可达"));
         assert!(message.contains("建议：检查地址后重试"));
         assert!(message.contains("操作：请重试"));
+        let english = error.message_in(UiLanguage::EnUs);
+        assert!(english.contains("Cause: 主机不可达"), "{english}");
+        assert!(english.contains("Suggestion: 检查地址后重试"), "{english}");
+        assert!(english.contains("Action: please retry"), "{english}");
+        assert!(english.contains("timeout"));
     }
 
     #[test]

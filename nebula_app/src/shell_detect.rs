@@ -527,7 +527,7 @@ pub fn wsl_launch_guest<'a>(program: &str, args: &'a [String]) -> Option<&'a str
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--cd" => {
-                return arguments.next().map(String::as_str).filter(|guest| !guest.is_empty())
+                return arguments.next().map(String::as_str).filter(|guest| !guest.is_empty());
             },
             // 取值的启动选项：连值一起跳过，别把它的值当成命令名。
             "-d" | "--distribution" | "-u" | "--user" | "--shell-type" => {
@@ -644,9 +644,7 @@ pub fn wsl_unc_path(distro: &str, guest_path: &str) -> std::path::PathBuf {
 /// 还是那个）。不是这两种形式的一律返回 `None`。
 pub fn wsl_guest_path_from_unc(path: &std::path::Path) -> Option<(String, String)> {
     let text = path.to_string_lossy().replace('/', "\\");
-    let rest = text
-        .strip_prefix(r"\\wsl.localhost\")
-        .or_else(|| text.strip_prefix(r"\\wsl$\"))?;
+    let rest = text.strip_prefix(r"\\wsl.localhost\").or_else(|| text.strip_prefix(r"\\wsl$\"))?;
     let (distro, guest) = rest.split_once('\\')?;
     if distro.is_empty() || guest.is_empty() {
         return None;
@@ -1016,7 +1014,8 @@ mod tests {
     /// WSL 早期形式，新版 Windows 只保证 `wsl.localhost` 这个名字。
     #[test]
     fn wsl_guest_path_round_trips_the_unc_form() {
-        for (distro, guest) in [("Debian", "/home/hello/src"), ("Ubuntu", "/home/anx4758/stylekit")] {
+        for (distro, guest) in [("Debian", "/home/hello/src"), ("Ubuntu", "/home/anx4758/stylekit")]
+        {
             let unc = super::wsl_unc_path(distro, guest);
             assert_eq!(
                 super::wsl_guest_path_from_unc(&unc),
@@ -1031,8 +1030,14 @@ mod tests {
         );
         // 普通 Windows 路径与残缺的 UNC 都不是 WSL 目录。
         assert_eq!(super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"D:\src")), None);
-        assert_eq!(super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu")), None);
-        assert_eq!(super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"\\server\share")), None);
+        assert_eq!(
+            super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu")),
+            None
+        );
+        assert_eq!(
+            super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"\\server\share")),
+            None
+        );
     }
 
     #[test]

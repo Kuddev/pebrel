@@ -223,11 +223,7 @@ impl TerminalOptions {
     /// Kept as an id (not a program path) so every launch re-resolves the
     /// executable, exactly like the `shell` setting does.
     pub fn shell_id(&self) -> Option<String> {
-        self.shell
-            .as_deref()
-            .map(str::trim)
-            .filter(|shell| !shell.is_empty())
-            .map(str::to_owned)
+        self.shell.as_deref().map(str::trim).filter(|shell| !shell.is_empty()).map(str::to_owned)
     }
 
     /// Override the [`PtyOptions`]'s fields with the [`TerminalOptions`].
@@ -1779,11 +1775,12 @@ mod tests {
         .expect("context-menu argv parses");
         let terminal = &options.window_options.terminal_options;
         assert_eq!(terminal.shell_id().as_deref(), Some("wsl:Ubuntu"));
-        assert_eq!(terminal.resolved_working_directory(), Some(PathBuf::from("D:\\")));
+        let expected = if cfg!(windows) { "D:\\" } else { "D:\"" };
+        assert_eq!(terminal.resolved_working_directory(), Some(PathBuf::from(expected)));
     }
 
-    /// `--shell` 与 `-e/--command` 是互相矛盾的意图：`-e` 在 GPUI 路径根本没被
-    /// 消费（`main.rs` 只取 working_directory），两个一起给只会让人以为生效了。
+    /// `--shell` selects a saved shell identity; `-e` supplies a command directly.
+    /// Reject their combination instead of silently ignoring either explicit request.
     #[test]
     fn shell_and_command_conflict() {
         assert!(

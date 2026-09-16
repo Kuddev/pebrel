@@ -2,7 +2,7 @@ use super::*;
 use gpui::{Modifiers, TestAppContext, VisualTestContext, point};
 use nebula_settings::TabsPositionName;
 
-fn open_workspace(
+pub(in crate::gpui_shell::workspace) fn open_workspace(
     mode: TabsPositionName,
     cx: &mut TestAppContext,
 ) -> (Entity<NebulaWorkspace>, VisualTestContext) {

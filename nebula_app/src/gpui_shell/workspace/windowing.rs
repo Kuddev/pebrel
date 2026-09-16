@@ -304,7 +304,11 @@ pub(crate) fn open_initial_window(
             },
         }
     } else {
-        initial_startup(initial_cwd, initial_command, crate::platform::elevation::requires_isolation())
+        initial_startup(
+            initial_cwd,
+            initial_command,
+            crate::platform::elevation::requires_isolation(),
+        )
     };
     open_workspace_window(
         cx,
@@ -345,9 +349,12 @@ fn initial_startup(
 mod startup_tests {
     use super::*;
 
+    #[cfg(feature = "gpui-test-support")]
     #[gpui::test]
     fn invalid_explicit_shell_cannot_create_a_runtime_window(cx: &mut gpui::TestAppContext) {
-        let error = cx.update(|cx| open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into()))).unwrap_err();
+        let error = cx
+            .update(|cx| open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into())))
+            .unwrap_err();
         assert_eq!(error.code, "invalid_shell");
         assert!(cx.update(|cx| cx.windows().is_empty()));
     }
@@ -355,9 +362,10 @@ mod startup_tests {
     #[test]
     fn default_runtime_startup_keeps_the_requested_directory() {
         let cwd = Some(PathBuf::from("project"));
-        assert!(matches!(runtime_window_startup(cwd.clone(), None).unwrap(), WorkspaceStartup::NewTerminal { cwd: actual } if actual == cwd));
+        assert!(
+            matches!(runtime_window_startup(cwd.clone(), None).unwrap(), WorkspaceStartup::NewTerminal { cwd: actual } if actual == cwd)
+        );
     }
-
 
     #[test]
     fn explicit_program_is_kept_with_its_arguments_and_directory() {
@@ -576,7 +584,10 @@ pub(crate) fn open_new_window(cx: &mut App, cwd: Option<PathBuf>) -> gpui::Resul
 }
 
 /// Resolve explicit shell identity before any window or terminal is created.
-fn runtime_window_startup(cwd: Option<PathBuf>, shell_id: Option<&str>) -> Result<WorkspaceStartup, ApiError> {
+fn runtime_window_startup(
+    cwd: Option<PathBuf>,
+    shell_id: Option<&str>,
+) -> Result<WorkspaceStartup, ApiError> {
     match shell_id {
         Some(id) => super::shell_launch::resolve_shell_id(id)
             .map(|launch| WorkspaceStartup::LaunchTerminal { cwd, launch })
@@ -591,14 +602,9 @@ fn open_runtime_window(
     shell_id: Option<String>,
 ) -> Result<(u64, u64), ApiError> {
     let startup = runtime_window_startup(cwd, shell_id.as_deref())?;
-    let (window_id, workspace) = open_workspace_window(
-        cx,
-        startup,
-        None,
-        None,
-        false,
-        WindowRole::Regular,
-    ).map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
+    let (window_id, workspace) =
+        open_workspace_window(cx, startup, None, None, false, WindowRole::Regular)
+            .map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
     let pane_id = workspace.read(cx).active_terminal_pane_id().unwrap_or_default();
     Ok((window_id, pane_id))
 }
@@ -1008,14 +1014,15 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             return;
         },
         RuntimeCommand::NewWindow { cwd, shell_id } => {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone())
-                .map(|(window_id, pane_id)| {
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
+                |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
                         "action": { "window_id": window_id, "pane_id": pane_id },
                         "snapshot": snapshot
                     })
-                });
+                },
+            );
             dispatch.respond(response);
             return;
         },
@@ -1023,14 +1030,15 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             if nebula_settings::RuntimeSettings::load().windowing_behavior
                 == nebula_settings::WindowingBehaviorName::UseNew =>
         {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone())
-                .map(|(window_id, pane_id)| {
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
+                |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
                         "action": { "window_id": window_id, "pane_id": pane_id },
                         "snapshot": snapshot
                     })
-                });
+                },
+            );
             dispatch.respond(response);
             return;
         },
@@ -1073,18 +1081,18 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
         Err(_error)
             if matches!(dispatch.command, RuntimeCommand::NewTab { window_id: None, .. }) =>
         {
-            let RuntimeCommand::NewTab { cwd, shell_id, .. } = &dispatch.command
-            else {
+            let RuntimeCommand::NewTab { cwd, shell_id, .. } = &dispatch.command else {
                 unreachable!()
             };
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone())
-                .map(|(window_id, pane_id)| {
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
+                |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
                         "action": { "window_id": window_id, "pane_id": pane_id },
                         "snapshot": snapshot
                     })
-                });
+                },
+            );
             dispatch.respond(response);
             return;
         },

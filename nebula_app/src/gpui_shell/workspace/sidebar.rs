@@ -716,7 +716,9 @@ impl NebulaWorkspace {
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
                                         gpui_component::tooltip::Tooltip::new(
-                                            "新建终端 (Ctrl+Shift+T)",
+                                            crate::gpui_shell::config::ui_language(cx).text(
+                                                crate::i18n::Message::ChromeNewTerminalCtrlShiftT,
+                                            ),
                                         )
                                         .build(window, cx)
                                     })
@@ -737,8 +739,11 @@ impl NebulaWorkspace {
                                     .text_color(muted)
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
-                                        gpui_component::tooltip::Tooltip::new("新建终端 (Ctrl+K)")
-                                            .build(window, cx)
+                                        gpui_component::tooltip::Tooltip::new(
+                                            crate::gpui_shell::config::ui_language(cx)
+                                                .text(crate::i18n::Message::ChromeNewTerminalCtrlK),
+                                        )
+                                        .build(window, cx)
                                     })
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         cx.stop_propagation();
@@ -868,6 +873,7 @@ impl NebulaWorkspace {
         let settings_active_bg = cx.theme().sidebar_accent;
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
+        let language = crate::gpui_shell::config::ui_language(cx);
         h_flex()
             .size_full()
             .items_center()
@@ -890,7 +896,7 @@ impl NebulaWorkspace {
                             // Ghost 的全局 selected 使用 hover_strong，静态底比
                             // 旧壳亮一档；仅此按钮覆写回旧壳 surface。
                             .when(sidebar_visible, |button| button.bg(secondary))
-                            .tooltip("折叠/展开侧边栏 (Ctrl+Shift+B)")
+                            .tooltip(language.text(crate::i18n::Message::ChromeToggleSidebar))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.reader_focus_active(cx) {
                                     this.clear_reader_focus(cx);
@@ -909,7 +915,7 @@ impl NebulaWorkspace {
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
                             })
-                            .tooltip("设置 (Ctrl+,)")
+                            .tooltip(language.text(crate::i18n::Message::ChromeSettingsShortcut))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_settings(window, cx);
                             })),
@@ -928,7 +934,7 @@ impl NebulaWorkspace {
                             )
                             .ghost()
                             .selected(self.command_manager_open)
-                            .tooltip("命令列表")
+                            .tooltip(language.text(crate::i18n::Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),
@@ -942,7 +948,7 @@ impl NebulaWorkspace {
                             })
                             .ghost()
                             .selected(files_active)
-                            .tooltip("目录树 (Ctrl+Shift+F)")
+                            .tooltip(language.text(crate::i18n::Message::ChromeFileTree))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_file_tree(cx);
                             })),
@@ -972,6 +978,7 @@ impl NebulaWorkspace {
     /// 吃鼠标事件，标题栏本身的拖窗和双击最大化照旧。
     fn render_collapsed_tab_title(&self, cx: &mut Context<Self>) -> gpui::Div {
         let slot = div().relative().flex_1().min_w_0().h_full();
+        let language = crate::gpui_shell::config::ui_language(cx);
         if self.settings_open {
             return slot.child(
                 div()
@@ -981,7 +988,7 @@ impl NebulaWorkspace {
                     .items_center()
                     .justify_center()
                     .text_color(cx.theme().foreground)
-                    .child(crate::gpui_shell::config::ui_language(cx).pick("设置", "Settings")),
+                    .child(language.text(crate::i18n::Message::CommonSettings)),
             );
         }
         if !self.sidebar_collapsed || self.tabs.is_empty() {
