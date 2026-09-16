@@ -276,12 +276,6 @@ pub(crate) const NEBULA_SPLIT_HIT_SLOP: f32 = 8.0;
 /// `unfocused-split-opacity = 0.7` (i.e. a 0.3 dim veil).
 pub(crate) const NEBULA_UNFOCUSED_SPLIT_DIM: f32 = 0.30;
 
-/// Max remembered commands for the history hint.
-
-/// Top chrome reserve, in logical pixels at scale factor 1.0. Sized as: top
-/// bar (8 margin + 40 bar) + card seam (8) + 8px of breathing room inside the
-/// terminal card, so the first grid row doesn't touch the card's top edge.
-
 /// The UI font role: the size chrome
 /// typography rasterizes at and the cell chrome layout steps by. Anchored to
 /// the config font at the window's DPI — never to the terminal zoom. Stage 3
@@ -1634,11 +1628,6 @@ impl Display {
     pub fn settings_scroll(&self) -> f32 {
         self.nebula_settings_scroll
     }
-
-
-    /// Fold the tab sidebar in or out. Toggling changes the grid's usable width,
-    /// so it re-runs the resize/reflow path by re-feeding the current window
-    /// size — `handle_update` then recomputes the asymmetric padding split.
 
     /// Snapshot of the state the settings render reads, owning the wallpaper
     /// path so `draw_chrome` can still borrow `&mut renderer` afterwards.
@@ -5471,12 +5460,6 @@ impl Display {
         self.persist_nebula_settings();
         self.pending_update.dirty = true;
     }
-
-
-    /// DPI 变化时按同一比例重标 UI 角色字号（等价于配置字号 × 新缩放）。
-    /// Apply a monitor scale change after any native move transaction has
-    /// settled. Keeping this in Display makes the immediate and deferred paths
-    /// use exactly the same font/UI invalidation sequence.
 
     /// Auto-save an SSH destination the user typed and successfully connected
     /// to — armed at OSC 133;C, confirmed by a remote `NEBULA|` title or a

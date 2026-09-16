@@ -17,6 +17,10 @@ use super::{nebula_data_dir};
 use crate::config::UiConfig;
 
 use super::Display;
+
+/// Top chrome reserve, in logical pixels at scale factor 1.0. Sized as: top
+/// bar (8 margin + 40 bar) + card seam (8) + 8px of breathing room inside the
+/// terminal card, so the first grid row doesn't touch the card's top edge.
 pub const CHROME_BAR_LOGICAL: f32 = 64.0;
 
 /// 「刚完成」对勾在徽章位上停留多久，随后落回未读圆点。
@@ -180,6 +184,9 @@ pub const SIDEBAR_COLLAPSE_AT: f32 = 120.0;
 pub const DRAWER_COLLAPSE_AT: f32 = 150.0;
 
 impl Display {
+    /// Fold the tab sidebar in or out. Toggling changes the grid's usable width,
+    /// so it re-runs the resize/reflow path by re-feeding the current window
+    /// size — `handle_update` then recomputes the asymmetric padding split.
     pub fn toggle_sidebar(&mut self) {
         self.nebula_sidebar_collapsed = !self.nebula_sidebar_collapsed;
         let size = PhysicalSize::new(self.size_info.width() as u32, self.size_info.height() as u32);
@@ -375,6 +382,10 @@ impl Display {
         true
     }
 
+    /// DPI 变化时按同一比例重标 UI 角色字号（等价于配置字号 × 新缩放）。
+    /// Apply a monitor scale change after any native move transaction has
+    /// settled. Keeping this in Display makes the immediate and deferred paths
+    /// use exactly the same font/UI invalidation sequence.
     pub(crate) fn apply_scale_factor_change(&mut self, scale_factor: f64, config: &UiConfig) {
         let old_scale_factor = mem::replace(&mut self.window.scale_factor, scale_factor);
         if (old_scale_factor - scale_factor).abs() <= f64::EPSILON {

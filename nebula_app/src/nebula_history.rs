@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::PathBuf;
 
+/// Max remembered commands for the history hint.
 const HISTORY_MAX: usize = 5_000;
 pub(crate) const LOCAL_HISTORY_FILE: &str = "pebrel_history.jsonl";
 pub(crate) const WSL_HISTORY_FILE: &str = "pebrel_history_wsl.jsonl";

@@ -107,10 +107,6 @@ fn nav_icon(section: NebulaSettingsSection) -> icons::SettingsNavIcon {
     }
 }
 
-/// Shortcut sheet shown in 设置→按键映射. Editable rows live in
-/// [`keymap::EDITABLE_ACTIONS`]; the read-only extras in
-/// [`keymap::READONLY_ROWS`] (spec 002).
-
 /// Which independently draggable opacity control is being adjusted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsOpacityTarget {
