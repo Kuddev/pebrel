@@ -32,7 +32,10 @@ impl SettingsPane {
                     if let SelectEvent::Confirm(Some(_)) = event {
                         let row = entity.read(cx).selected_index(cx).map(|path| path.row);
                         if let Some(value) = row.and_then(|row| values.get(row)) {
-                            if key == "scrollback_lines" {
+                            if key == "notification_duration" {
+                                this.set_notification_duration(value, window, cx);
+                                return;
+                            } else if key == "scrollback_lines" {
                                 this.commit_scrollback_lines(value, window, cx);
                             } else {
                                 this.persist(&[(key, (*value).to_string())], cx);
@@ -67,6 +70,13 @@ impl SettingsPane {
             cx,
         );
         add_select("theme", &THEME_VALUES, runtime.theme.prompt_name(), window, cx);
+        add_select(
+            "notification_duration",
+            nebula_settings::NotificationDuration::VALUES,
+            runtime.notification_duration.settings_value(),
+            window,
+            cx,
+        );
         // 选项顺序与文案照抄旧壳 `CURSOR_SHAPE_OPTIONS` / `cursor_shape_label`。
         add_select(
             "cursor_shape",

@@ -24,6 +24,8 @@ pub use custom_theme::{
     meets_wcag_aa, wcag_contrast_ratio,
 };
 mod language;
+mod notifications;
+pub use notifications::NotificationDuration;
 mod quick_terminal;
 mod scrolling;
 pub use scrolling::{
@@ -1003,6 +1005,8 @@ pub struct RuntimeSettings {
     /// AI message toasts inside the application. System notifications and
     /// terminal/tab state are independent. Default on for existing users.
     pub ai_toasts: bool,
+    /// Display lifetime for in-app cards; default mode retains each kind's lifetime.
+    pub notification_duration: NotificationDuration,
     /// 新会话欢迎屏 fastfetch（默认关：启动速度优先于观感，旧壳裁定）。
     pub fetch: bool,
     /// Check GitHub Releases after startup. Manual checks remain available
@@ -1177,6 +1181,10 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             bell: raw.value("bell").and_then(BellModeName::from_settings).unwrap_or_default(),
             ai_toasts: raw.bool_on("ai_toasts").unwrap_or(true),
+            notification_duration: raw
+                .value("notification_duration")
+                .and_then(NotificationDuration::from_settings)
+                .unwrap_or_default(),
             fetch: raw.bool_on("fetch").unwrap_or(false),
             auto_check_updates: raw.bool_on("auto_check_updates").unwrap_or(true),
             auto_download_updates: raw.bool_on("auto_download_updates").unwrap_or(false),
