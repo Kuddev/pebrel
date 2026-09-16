@@ -2,10 +2,12 @@ use super::*;
 
 fn repository() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
+    // 测试二进制没有控制台：不压掉这个 flag，每次 `git init` 都会在用户屏幕上
+    // 弹一个终端窗口（见 `platform::process`）。
+    let mut command = std::process::Command::new("git");
+    command.args(["init", "-q"]).arg(directory.path());
     assert!(
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .arg(directory.path())
+        crate::platform::process::hidden_command(&mut command)
             .status()
             .unwrap()
             .success()

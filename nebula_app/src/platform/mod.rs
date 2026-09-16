@@ -27,6 +27,7 @@ pub(crate) mod keyboard;
 pub mod notifications;
 pub(crate) mod pi_session;
 pub(crate) mod process_snapshot;
+pub(crate) mod process;
 pub mod shell;
 pub mod shell_integration;
 pub mod startup;
