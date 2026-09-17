@@ -1,6 +1,8 @@
 """Reject legacy engines and require both native Ghostty/russh Android ABIs."""
 from pathlib import Path
 import hashlib
+import io
+import tarfile
 import json
 import re
 import struct
@@ -12,6 +14,20 @@ def verify(path: Path) -> dict:
     libraries = []
     with zipfile.ZipFile(path) as apk:
         names = apk.namelist()
+        deployment = apk.read("assets/relay-kit.bin")
+        if len(deployment) > 2 * 1024 * 1024 or deployment[:2] != b"\x1f\x8b":
+            raise ValueError("Deployment resource must retain its gzip bytes")
+        with tarfile.open(fileobj=io.BytesIO(deployment), mode="r:gz") as kit:
+            members = kit.getmembers()
+            required = {"relay/server.mjs", "relay/init.mjs", "relay/invite.mjs", "relay/tls.mjs",
+                        "relay/compose.yaml", "relay/Dockerfile", "relay/package-lock.json",
+                        "protocol/bridge-policy.json"}
+            if not required.issubset({entry.name for entry in members}):
+                raise ValueError("Deployment source kit is incomplete")
+            if sum(entry.size for entry in members) > 2 * 1024 * 1024 or any(
+                    not entry.isfile() or entry.name.startswith("/") or ".." in Path(entry.name).parts
+                    for entry in members):
+                raise ValueError("Deployment source kit contains invalid entries")
         dex = [apk.read(name) for name in names if name.endswith(".dex")]
         if not dex:
             raise ValueError("Missing dex in application")

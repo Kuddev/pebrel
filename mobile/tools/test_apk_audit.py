@@ -1,12 +1,26 @@
 """Positive and negative fixtures for native APK composition gates (not real APKs)."""
 from pathlib import Path
 import json
+import io
+import tarfile
 import struct
 import tempfile
 import unittest
 import zipfile
 
 from verify_ghostty_apk import verify
+
+
+def deployment_kit() -> bytes:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+        for name in ("relay/server.mjs", "relay/init.mjs", "relay/invite.mjs", "relay/tls.mjs",
+                     "relay/compose.yaml", "relay/Dockerfile", "relay/package-lock.json",
+                     "protocol/bridge-policy.json"):
+            entry = tarfile.TarInfo(name)
+            entry.size = len(b"fixture")
+            archive.addfile(entry, io.BytesIO(b"fixture"))
+    return output.getvalue()
 
 
 def elf(machine: int, alignment: int = 16384) -> bytes:
@@ -22,7 +36,7 @@ def elf(machine: int, alignment: int = 16384) -> bytes:
 
 class ApkAuditTest(unittest.TestCase):
     def contents(self):
-        result = {"classes.dex": b"Lio/github/kuddev/pebrel/terminal/NativeBridge;Lio/github/kuddev/pebrel/ssh/NativeSsh;",
+        result = {"assets/relay-kit.bin": deployment_kit(), "classes.dex": b"Lio/github/kuddev/pebrel/terminal/NativeBridge;Lio/github/kuddev/pebrel/ssh/NativeSsh;",
                   "assets/licenses/Ghostty/Ghostty-MIT.txt": b"fixture",
                   "assets/licenses/Ghostty-UPSTREAM.json": b'{"revision":"fixture"}',
                   "assets/licenses/Russh/BUILD.json": b'{"russh":"0.62.2"}',
@@ -43,6 +57,12 @@ class ApkAuditTest(unittest.TestCase):
 
     def test_accepts_both_engines_and_abis(self):
         self.assertEqual(len(self.audit(self.contents())["libraries"]), 4)
+
+    def test_rejects_transformed_deployment_resource(self):
+        contents = self.contents()
+        contents["assets/relay-kit.bin"] = b"expanded tar bytes"
+        with self.assertRaisesRegex(ValueError, "gzip bytes"):
+            self.audit(contents)
 
     def test_rejects_legacy_sshj(self):
         contents = self.contents()

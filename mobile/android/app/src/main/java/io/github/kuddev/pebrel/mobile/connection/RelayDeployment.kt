@@ -193,7 +193,7 @@ private class DeploymentSsh(
 
 /** Android adapter for deploying the existing user-hosted relay over password SSH. */
 object RelayDeployment {
-    const val ASSET_NAME = "relay-kit.tar.gz"
+    const val ASSET_NAME = "relay-kit.bin"
 
     private const val MAX_ARCHIVE_BYTES = 16 * 1024 * 1024
     private const val MAX_COMMAND_OUTPUT_BYTES = 48 * 1024

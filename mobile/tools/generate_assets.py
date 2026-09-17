@@ -51,7 +51,11 @@ def generate(output: Path, resources: Path | None = None) -> None:
     notices.mkdir(exist_ok=True)
     for license_file in (root / "mobile/android/third_party/licenses").glob("*.txt"):
         shutil.copyfile(license_file, notices / license_file.name)
-    package_relay(root, output / "relay-kit.tar.gz")
+    # AAPT transparently expands .gz assets and removes the suffix. Keep gzip bytes
+    # under a neutral extension so Android and the remote tar reader agree.
+    (output / "relay-kit.tar.gz").unlink(missing_ok=True)
+    (output / "relay-kit.tar").unlink(missing_ok=True)
+    package_relay(root, output / "relay-kit.bin")
     # Bundle the licenses corresponding to the pinned native dependency.
     native_notices = root / "mobile/android/ghostty/build/upstream/arm64-v8a/licenses"
     if not (native_notices / "Ghostty-MIT.txt").is_file():
