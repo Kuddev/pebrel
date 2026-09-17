@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "PebrelAndroid"
-include(":app", ":ghostty", ":ssh")
+include(":app", ":ghostty", ":ssh", ":voice")

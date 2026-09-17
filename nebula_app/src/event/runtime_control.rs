@@ -280,13 +280,13 @@ impl Processor {
                     "input": "paste"
                 }))
             },
-            RuntimeCommand::ReadPane { window_id, pane_id, lines } => {
+            RuntimeCommand::ReadPane { window_id, pane_id, lines, screen } => {
                 let id = self.runtime_target_window(*window_id, Some(*pane_id))?;
                 let read = self
                     .windows
                     .get(&id)
                     .expect("resolved runtime window exists")
-                    .runtime_read(*pane_id, *lines)?;
+                    .runtime_read(*pane_id, *lines, *screen)?;
                 serde_json::to_value(read)
                     .map_err(|error| ApiError::new("serialization_failed", error.to_string()))
             },
@@ -368,7 +368,7 @@ impl Processor {
                         format!("agent {:?} no longer has a live window", managed.name),
                     ));
                 };
-                let read = window.runtime_read(managed.pane_id, *lines)?;
+                let read = window.runtime_read(managed.pane_id, *lines, false)?;
                 Ok(serde_json::json!({ "agent": managed, "read": read }))
             },
         }

@@ -81,6 +81,8 @@ mod tests {
     fn search_filters_navigation_without_an_extra_click() {
         let en = crate::display::UiLanguage::EnUs;
         let zh = crate::display::UiLanguage::ZhCn;
+        assert_eq!(matching_sections("二维码", zh), vec![10]);
+        assert_eq!(matching_sections("relay", en), vec![10]);
         assert_eq!(matching_sections(" FONT ", en), vec![1]);
         assert_eq!(matching_sections("字体", zh), vec![1]);
         assert_eq!(matching_sections("quick terminal", en), vec![7]);

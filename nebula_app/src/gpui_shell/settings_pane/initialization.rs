@@ -553,6 +553,7 @@ impl SettingsPane {
             runtime,
             launch_at_login: crate::platform::startup::launch_at_login(),
             active_section: 1,
+            mobile: mobile::MobileState::new(window,cx),
             appearance_picker: None,
             appearance_picker_seq: 0,
             theme_editor: None,

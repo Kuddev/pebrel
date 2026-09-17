@@ -39,7 +39,10 @@ impl Request {
             return Err(ApiError::invalid_params("params must be an object"));
         }
         let listed = |group: &str| {
-            bridge_policy()[group].as_array().expect("method array").iter()
+            bridge_policy()[group]
+                .as_array()
+                .expect("method array")
+                .iter()
                 .any(|method| method.as_str() == Some(self.method.as_str()))
         };
         if !listed("read") {
@@ -53,7 +56,9 @@ impl Request {
         if self.method.starts_with("pane.") {
             for key in ["window_id", "pane_id"] {
                 if self.params.get(key).and_then(Value::as_u64).is_none_or(|id| id == 0) {
-                    return Err(ApiError::invalid_params(format!("{key} must be explicit and nonzero")));
+                    return Err(ApiError::invalid_params(format!(
+                        "{key} must be explicit and nonzero"
+                    )));
                 }
             }
         }
@@ -96,15 +101,15 @@ fn connect(endpoint: &Endpoint, request: &ApiRequest) -> io::Result<TcpStream> {
     Ok(stream)
 }
 
-fn write_frame(output: &Mutex<io::Stdout>, value: &impl Serialize) -> io::Result<()> {
-    let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
+type Output = Arc<dyn Fn(Vec<u8>) -> io::Result<()> + Send + Sync>;
+
+fn write_frame(output: &Output, value: &impl Serialize) -> io::Result<()> {
+    let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
     if bytes.len() >= MAX_BRIDGE_FRAME {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "response exceeds limit"));
     }
-    let mut output = output.lock().map_err(|_| io::Error::other("output lock poisoned"))?;
-    output.write_all(&bytes)?;
-    output.write_all(b"\n")?;
-    output.flush()
+    bytes.push(b'\n');
+    output(bytes)
 }
 
 struct Subscription {
@@ -125,7 +130,7 @@ impl Subscription {
 fn start_subscription(
     endpoint: &Endpoint,
     request: Request,
-    output: Arc<Mutex<io::Stdout>>,
+    output: Output,
     stopped: Arc<AtomicBool>,
 ) -> io::Result<Subscription> {
     let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
@@ -133,98 +138,154 @@ fn start_subscription(
     let stream = connect(endpoint, &local)?;
     let shutdown = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
-    let first = read_frame(&mut reader, MAX_BRIDGE_FRAME)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing subscription response"))?;
+    let first = read_frame(&mut reader, MAX_BRIDGE_FRAME)?.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::UnexpectedEof, "missing subscription response")
+    })?;
     let response: ApiResponse = serde_json::from_slice(&first).map_err(io::Error::other)?;
     write_frame(&output, &response)?;
     if !response.ok {
         return Err(io::Error::other("runtime rejected subscription"));
     }
     reader.get_mut().set_read_timeout(None)?;
-    let thread = std::thread::Builder::new().name("pebrel-mobile-events".into()).spawn(move || {
-        while !stopped.load(Ordering::Acquire) {
-            let Ok(Some(frame)) = read_frame(&mut reader, MAX_BRIDGE_FRAME) else { break };
-            let Ok(event) = serde_json::from_slice::<Value>(&frame) else { break };
-            if write_frame(&output, &event).is_err() {
-                break;
+    let thread =
+        std::thread::Builder::new().name("pebrel-mobile-events".into()).spawn(move || {
+            while !stopped.load(Ordering::Acquire) {
+                let Ok(Some(frame)) = read_frame(&mut reader, MAX_BRIDGE_FRAME) else { break };
+                let Ok(event) = serde_json::from_slice::<Value>(&frame) else { break };
+                if write_frame(&output, &event).is_err() {
+                    break;
+                }
             }
-        }
-        if !stopped.swap(true, Ordering::AcqRel) {
-            let _ = write_frame(&output, &json!({"type":"mobile.disconnected"}));
-        }
-    })?;
+            if !stopped.swap(true, Ordering::AcqRel) {
+                let _ = write_frame(&output, &json!({"type":"mobile.disconnected"}));
+            }
+        })?;
     Ok(Subscription { shutdown, thread })
 }
 
 pub(crate) fn run(allow_input: bool) -> Result<(), Box<dyn Error>> {
-    let endpoint = read_endpoint().ok_or_else(|| io::Error::other("no resident Pebrel runtime"))?;
-    let output = Arc::new(Mutex::new(io::stdout()));
-    let stopped = Arc::new(AtomicBool::new(false));
-    write_frame(
-        &output,
-        &json!({
-            "type": "mobile.ready", "protocol": "pebrel.mobile.ssh", "version": 1,
-            "capabilities": {
-                "snapshot": true, "read_tail": true, "state_subscription": true,
-                "input": allow_input, "exclusive_input": false, "replay_notifications": false,
-                "terminal_grid_stream": false
-            },
-            "max_request_bytes": MAX_BRIDGE_REQUEST,
-            "max_frame_bytes": MAX_BRIDGE_FRAME
-        }),
-    )?;
+    let stdout = Mutex::new(io::stdout());
+    let output: Output = Arc::new(move |bytes| {
+        let mut stdout = stdout.lock().map_err(|_| io::Error::other("output lock poisoned"))?;
+        stdout.write_all(&bytes)?;
+        stdout.flush()
+    });
+    let mut session = BridgeSession::open(allow_input, output)?;
     let stdin = io::stdin();
     let mut input = stdin.lock();
-    let mut subscription: Option<Subscription> = None;
-    let result = (|| -> Result<(), Box<dyn Error>> {
-        while !stopped.load(Ordering::Acquire) {
-            let Some(frame) = read_frame(&mut input, MAX_BRIDGE_REQUEST)? else { break };
-            let request: Request = match serde_json::from_slice(&frame) {
-                Ok(request) => request,
-                Err(_) => {
-                    write_frame(&output, &ApiResponse::failure(
-                        "invalid", ApiError::new("invalid_request", "invalid mobile request"),
-                    ))?;
-                    continue;
+    while !session.stopped.load(Ordering::Acquire) {
+        let Some(frame) = read_frame(&mut input, MAX_BRIDGE_REQUEST)? else { break };
+        session.request(&frame)?;
+    }
+    Ok(())
+}
+
+/// The native settings transport and SSH CLI share this exact authorization,
+/// endpoint pinning and subscription owner; networking never forks RPC policy.
+pub(crate) struct BridgeSession {
+    endpoint: Endpoint,
+    output: Output,
+    stopped: Arc<AtomicBool>,
+    subscription: Option<Subscription>,
+    allow_input: bool,
+}
+
+impl BridgeSession {
+    pub(crate) fn open(allow_input: bool, output: Output) -> io::Result<Self> {
+        let endpoint =
+            read_endpoint().ok_or_else(|| io::Error::other("no resident Pebrel runtime"))?;
+        let stopped = Arc::new(AtomicBool::new(false));
+        write_frame(
+            &output,
+            &json!({
+                "type": "mobile.ready", "protocol": "pebrel.mobile.ssh", "version": 1,
+                "capabilities": {
+                    "snapshot": true, "read_tail": true, "state_subscription": true,
+                    "input": allow_input, "exclusive_input": false, "replay_notifications": false,
+                    "terminal_grid_stream": false
                 },
-            };
-            if let Err(error) = request.validate(allow_input) {
-                write_frame(&output, &ApiResponse::failure(request.id, error))?;
-                continue;
+                "max_request_bytes": MAX_BRIDGE_REQUEST,
+                "max_frame_bytes": MAX_BRIDGE_FRAME
+            }),
+        )?;
+        Ok(Self { endpoint, output, stopped, subscription: None, allow_input })
+    }
+
+    pub(crate) fn request(&mut self, frame: &[u8]) -> io::Result<()> {
+        if self.stopped.load(Ordering::Acquire) || frame.len() > MAX_BRIDGE_REQUEST {
+            return Err(io::Error::other("mobile_connection_closed"));
+        }
+        let Self { endpoint, output, stopped, subscription, allow_input } = self;
+        let request: Request = match serde_json::from_slice(&frame) {
+            Ok(request) => request,
+            Err(_) => {
+                write_frame(
+                    &output,
+                    &ApiResponse::failure(
+                        "invalid",
+                        ApiError::new("invalid_request", "invalid mobile request"),
+                    ),
+                )?;
+                return Ok(());
+            },
+        };
+        if let Err(error) = request.validate(*allow_input) {
+            write_frame(&output, &ApiResponse::failure(request.id, error))?;
+            return Ok(());
+        }
+        if request.method == "events.subscribe" {
+            if subscription.is_some() {
+                write_frame(
+                    &output,
+                    &ApiResponse::failure(
+                        request.id,
+                        ApiError::new("already_subscribed", "one state subscription per channel"),
+                    ),
+                )?;
+            } else {
+                *subscription =
+                    Some(start_subscription(endpoint, request, output.clone(), stopped.clone())?);
             }
-            if request.method == "events.subscribe" {
-                if subscription.is_some() {
-                    write_frame(&output, &ApiResponse::failure(request.id,
-                        ApiError::new("already_subscribed", "one state subscription per channel")))?;
-                } else {
-                    subscription = Some(start_subscription(&endpoint, request, output.clone(), stopped.clone())?);
-                }
-                continue;
-            }
-            let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
-            local.id = request.id.clone();
-            // Never rediscover the endpoint mid-channel: a runtime replacement
-            // must cause disconnect, not retarget a queued prompt to a new pane.
-            let response = (|| -> io::Result<ApiResponse> {
-                let mut reader = BufReader::new(connect(&endpoint, &local)?);
-                let frame = read_frame(&mut reader, MAX_BRIDGE_FRAME)?
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing response"))?;
-                serde_json::from_slice(&frame).map_err(io::Error::other)
-            })();
-            match response {
-                Ok(response) => write_frame(&output, &response)?,
-                Err(_) => {
-                    write_frame(&output, &ApiResponse::failure(request.id,
-                        ApiError::new("runtime_connection_lost", "delivery may be unknown; do not replay input")))?;
-                    break;
-                },
-            }
+            return Ok(());
+        }
+        let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
+        local.id = request.id.clone();
+        // Never rediscover the endpoint mid-channel: a runtime replacement
+        // must cause disconnect, not retarget a queued prompt to a new pane.
+        let response = (|| -> io::Result<ApiResponse> {
+            let mut reader = BufReader::new(connect(&endpoint, &local)?);
+            let frame = read_frame(&mut reader, MAX_BRIDGE_FRAME)?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing response"))?;
+            serde_json::from_slice(&frame).map_err(io::Error::other)
+        })();
+        match response {
+            Ok(response) => write_frame(&output, &response)?,
+            Err(_) => {
+                write_frame(
+                    &output,
+                    &ApiResponse::failure(
+                        request.id,
+                        ApiError::new(
+                            "runtime_connection_lost",
+                            "delivery may be unknown; do not replay input",
+                        ),
+                    ),
+                )?;
+                stopped.store(true, Ordering::Release);
+                return Err(io::Error::other("runtime_connection_lost"));
+            },
         }
         Ok(())
-    })();
-    stopped.store(true, Ordering::Release);
-    if let Some(subscription) = subscription { subscription.stop(); }
-    result
+    }
+}
+
+impl Drop for BridgeSession {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        if let Some(subscription) = self.subscription.take() {
+            subscription.stop();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -239,15 +300,22 @@ mod tests {
 
     #[test]
     fn readonly_default_denies_writes_and_unlisted_methods() {
-        for method in ["pane.prompt", "pane.send_key", "pane.exec", "window.close", "runtime.orchestrate"] {
-            let request = Request { id: "1".into(), method: method.into(), params: json!({"window_id":1,"pane_id":2}) };
+        for method in
+            ["pane.prompt", "pane.send_key", "pane.exec", "window.close", "runtime.orchestrate"]
+        {
+            let request = Request {
+                id: "1".into(),
+                method: method.into(),
+                params: json!({"window_id":1,"pane_id":2}),
+            };
             assert!(request.validate(false).is_err(), "{method}");
         }
     }
 
     #[test]
     fn explicit_input_still_requires_complete_target_and_allowlist() {
-        let mut request = Request { id: "2".into(), method: "pane.prompt".into(), params: json!({"pane_id":2}) };
+        let mut request =
+            Request { id: "2".into(), method: "pane.prompt".into(), params: json!({"pane_id":2}) };
         assert!(request.validate(true).is_err());
         request.params["window_id"] = json!(1);
         assert!(request.validate(true).is_ok());
@@ -268,8 +336,11 @@ mod tests {
 
     #[test]
     fn caller_cannot_supply_the_local_runtime_token() {
-        assert!(serde_json::from_value::<Request>(json!({
-            "id":"1", "method":"runtime.snapshot", "token":"attacker"
-        })).is_err());
+        assert!(
+            serde_json::from_value::<Request>(json!({
+                "id":"1", "method":"runtime.snapshot", "token":"attacker"
+            }))
+            .is_err()
+        );
     }
 }

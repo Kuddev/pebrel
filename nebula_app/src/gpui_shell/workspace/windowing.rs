@@ -1858,7 +1858,7 @@ mod tests {
                 text: "paste".to_owned(),
                 submit: false,
             },
-            RuntimeCommand::ReadPane { window_id: Some(1), pane_id: 2, lines: 20 },
+            RuntimeCommand::ReadPane { window_id: Some(1), pane_id: 2, lines: 20, screen: false },
             RuntimeCommand::Procs { window_id: Some(1), pane_id: 2 },
             RuntimeCommand::SendKey {
                 window_id: Some(1),

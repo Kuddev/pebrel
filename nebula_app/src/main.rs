@@ -105,6 +105,7 @@ mod renderer;
 #[path = "product_renderer.rs"]
 mod renderer;
 mod runtime_api;
+mod mobile_connection;
 mod runtime_exec;
 mod saved_commands;
 #[cfg(feature = "legacy-shell")]

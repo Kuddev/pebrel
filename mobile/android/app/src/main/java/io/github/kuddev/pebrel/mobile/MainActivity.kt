@@ -156,8 +156,8 @@ class MainActivity : ComponentActivity() {
                     "computers" -> {
                         PageHeader(stringResource(R.string.computers), ::back)
                         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp)) {
-                            ComputerRows(desktops, relays, ::openDesktop, { openDesktop(repository.connectRelay(it)) })
-                            if (desktops.isEmpty() && relays.isEmpty()) HelperText(stringResource(R.string.no_computers))
+                            ComputerRows(desktops, relays, ::openDesktop, { openDesktop(repository.connectRelay(it)) }, repository::forgetRelay)
+                            if (desktops.none { it.hasConnected } && relays.isEmpty()) HelperText(stringResource(R.string.no_computers))
                             NavigationRow(R.drawable.ic_monitor, stringResource(R.string.relay_connect), onClick = { addRelay = true })
                             HelperText(stringResource(R.string.connection_boundary), Modifier.padding(top = 20.dp))
                         }
@@ -184,7 +184,7 @@ class MainActivity : ComponentActivity() {
                     }
                     "desktop" -> {
                         PageHeader(stringResource(R.string.computers), ::back)
-                        val profile = relays.find { it.id == desktop?.host?.id }
+                        val profile = desktop?.relayProfile ?: relays.find { it.id == desktop?.host?.id }
                         DesktopScreen(desktop, { openPane(desktopId, it) },
                             onRetry = profile?.let { saved -> { openDesktop(repository.connectRelay(saved)) } },
                         ) { repository.closeDesktop(desktopId); back() }

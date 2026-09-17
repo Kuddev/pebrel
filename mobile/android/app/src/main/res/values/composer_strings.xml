@@ -1,4 +1,5 @@
 <resources>
+    <string name="composer_tools">Input actions</string>
     <string name="composer_attach">Attach file</string>
     <string name="composer_voice">Voice input</string>
     <string name="composer_voice_prompt">Speak a command</string>

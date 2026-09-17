@@ -195,12 +195,26 @@ fun HostRow(host: HostProfile, onLogin: () -> Unit, onEdit: () -> Unit, onDelete
 }
 
 @Composable
-fun ComputerRows(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>, onDesktop: (String) -> Unit, onRelay: (RelayProfile) -> Unit) {
+fun ComputerRows(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>, onDesktop: (String) -> Unit,
+                 onRelay: (RelayProfile) -> Unit, onForget: ((RelayProfile) -> Unit)? = null) {
+    var removing by remember { mutableStateOf<RelayProfile?>(null) }
     computerSummaries(desktops, relays).forEach { computer ->
         val relay = computer.relay
-        ComputerRow(computer.title, computer.status, computer.transport) {
+        val profileId = desktops.find { it.id == computer.id }?.host?.id ?: computer.id
+        val saved = relays.find { it.id == profileId }
+        ComputerRow(computer.title, computer.status, computer.transport,
+            onForget = if (saved != null && onForget != null) ({ removing = saved }) else null) {
             if (relay == null) onDesktop(computer.id) else onRelay(relay)
         }
+    }
+    removing?.let { profile ->
+        AlertDialog(onDismissRequest = { removing = null },
+            title = { Text(stringResource(R.string.computer_remove_title)) },
+            text = { Text(stringResource(R.string.computer_remove_hint, profile.name)) },
+            confirmButton = { TextButton({ removing = null; onForget?.invoke(profile) }) {
+                Text(stringResource(R.string.computer_remove_title))
+            } },
+            dismissButton = { TextButton({ removing = null }) { Text(stringResource(R.string.cancel)) } })
     }
 }
 
@@ -213,7 +227,9 @@ private data class ComputerSummary(
 )
 
 private fun computerSummaries(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>): List<ComputerSummary> = buildList {
-    desktops.forEach { desktop ->
+    // A failed first attempt lives only on its connection page, not in the
+    // user's computer library. Existing, previously connected PCs remain.
+    desktops.filter { it.hasConnected || relays.any { profile -> profile.id == it.host.id } }.forEach { desktop ->
         val retryProfile = if (desktop.status in setOf("ready", "connecting")) null
             else relays.find { it.id == desktop.host.id }
         add(ComputerSummary(desktop.id, desktop.host.name, desktop.status, desktop.transport, retryProfile))
@@ -224,7 +240,7 @@ private fun computerSummaries(desktops: List<DesktopWorkspace>, relays: List<Rel
 }
 
 @Composable
-private fun ComputerRow(title: String, status: String, transport: String, onClick: () -> Unit) {
+private fun ComputerRow(title: String, status: String, transport: String, onForget: (() -> Unit)? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).workspaceFrame().clickable(onClick = onClick)
         .heightIn(min = 82.dp).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -233,7 +249,16 @@ private fun ComputerRow(title: String, status: String, transport: String, onClic
             Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Box(Modifier.padding(top = 7.dp)) { StatusCaption(status, "$transport · ") }
         }
-        Glyph(R.drawable.ic_chevron, Modifier.size(14.dp))
+        if (onForget != null) {
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                GlyphButton(R.drawable.ic_more, stringResource(R.string.more_actions), { menu = true })
+                DropdownMenu(menu, { menu = false }) {
+                    DropdownMenuItem(text = { Text(stringResource(R.string.computer_remove_title)) },
+                        onClick = { menu = false; onForget() })
+                }
+            }
+        } else Glyph(R.drawable.ic_chevron, Modifier.size(14.dp))
     }
 }
 

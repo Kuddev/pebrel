@@ -58,6 +58,7 @@ mod keymap;
 mod launcher_actions;
 mod localization;
 mod navigation;
+mod mobile;
 mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
@@ -101,6 +102,7 @@ pub struct SettingsPane {
     launch_at_login: bool,
     /// 当前分区（`SECTIONS` 下标）；默认落在应用主页。
     active_section: usize,
+    mobile: mobile::MobileState,
     appearance_picker: Option<appearance_picker::AppearancePicker>,
     appearance_picker_seq: u64,
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
@@ -1292,6 +1294,7 @@ impl SettingsPane {
             6 => self.section_interaction(cx),
             7 => self.section_keymap(cx),
             8 => self.section_advanced(cx),
+            10 => self.section_mobile(window, cx),
             _ => self.section_backup(cx),
         }
         .into_any_element()

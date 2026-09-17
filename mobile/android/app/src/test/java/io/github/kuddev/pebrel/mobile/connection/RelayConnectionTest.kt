@@ -17,6 +17,23 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class RelayConnectionTest {
+    @Test fun aSnapshotCannotPublishASavedComputerBeforeTheProtocolIsValidated() = runBlocking {
+        var published = 0
+        val transport = object : DesktopTransport {
+            override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit) {
+                receive(JSONObject().put("event", "runtime.snapshot").put("data", JSONObject().put("process_id", 1)))
+                receive(JSONObject().put("type", "mobile.ready").put("protocol", "wrong").put("version", 1))
+            }
+            override fun send(frame: JSONObject) = error("invalid protocol must not send")
+            override fun close() = Unit
+        }
+        val client = DesktopRuntimeClient(transport, { published++ }, {})
+        try {
+            assertTrue(runCatching { client.connect(true) }.isFailure)
+            assertEquals(0, published)
+        } finally { client.close() }
+    }
+
     @Test fun invitationsRequireTlsAndSeparateBoundedCredentials() {
         val value = JSONObject().put("version", 1).put("url", "wss://relay.example.com")
             .put("device", "computer").put("token", "a".repeat(43)).put("name", "PC")
@@ -128,7 +145,10 @@ class RelayConnectionTest {
             override fun send(frame: JSONObject) {
                 sends.incrementAndGet()
                 when (frame.getString("method")) {
-                    "events.subscribe" -> receive(JSONObject().put("id", frame.getString("id")).put("ok", true))
+                    "events.subscribe" -> {
+                        receive(JSONObject().put("id", frame.getString("id")).put("ok", true))
+                        receive(JSONObject().put("event", "runtime.snapshot").put("data", JSONObject().put("process_id", 1)))
+                    }
                     "pane.read" -> pendingSent.complete(Unit)
                     else -> throw java.io.IOException("send_rejected")
                 }

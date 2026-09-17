@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -99,12 +100,7 @@ internal fun ComposerIconButton(
 
 @Composable
 internal fun ComposerToolbar(
-    direct: Boolean,
-    onDirect: ((Boolean) -> Unit)?,
-    keys: Boolean,
-    onToggleKeys: (() -> Unit)?,
-    focused: Boolean,
-    onToggleFocus: (() -> Unit)?,
+    onEdit: (() -> Unit)?,
     keyboardVisible: Boolean,
     keyboardEnabled: Boolean,
     onImeToggle: () -> Unit,
@@ -114,55 +110,32 @@ internal fun ComposerToolbar(
 ) {
     val colors = MaterialTheme.colorScheme
     Row(
-        Modifier.fillMaxWidth()
+        Modifier.fillMaxWidth().testTag("composer-direct")
             .heightIn(min = 52.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(colors.surfaceVariant.copy(alpha = .30f))
             .padding(horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (direct) {
-            if (onKey != null && shortcuts.isNotEmpty()) {
-                ComposerShortcutRow(
-                    shortcuts = shortcuts,
-                    enabled = enabled,
-                    onKey = onKey,
-                    modifier = Modifier.weight(1f),
-                    surface = false,
-                )
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
+        if (onKey != null && shortcuts.isNotEmpty()) {
+            ComposerShortcutRow(
+                shortcuts = shortcuts,
+                enabled = enabled,
+                onKey = onKey,
+                modifier = Modifier.weight(1f),
+                surface = false,
+            )
         } else {
-            if (onToggleKeys != null) {
-                ComposerIconButton(
-                    icon = R.drawable.ic_command,
-                    label = stringResourceCompat(if (keys) R.string.composer_hide_aux_keys else R.string.composer_aux_keys),
-                    enabled = enabled,
-                    selected = keys,
-                    onClick = onToggleKeys,
-                )
-            }
-            onToggleFocus?.let { toggle ->
-                ComposerIconButton(
-                    icon = R.drawable.ic_focus,
-                    label = stringResourceCompat(if (focused) R.string.composer_exit_focus else R.string.composer_focus),
-                    enabled = true,
-                    selected = focused,
-                    onClick = toggle,
-                )
-            }
             Spacer(Modifier.weight(1f))
         }
         Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(24.dp)
             .background(colors.outlineVariant.copy(alpha = .45f)))
-        onDirect?.let { toggle ->
+        onEdit?.let { edit ->
             ComposerIconButton(
-                icon = if (direct) R.drawable.ic_compose_bubble else R.drawable.ic_terminal,
-                label = stringResourceCompat(if (direct) R.string.composer_mode_edit else R.string.composer_mode_direct),
-                enabled = enabled,
+                icon = R.drawable.ic_compose_bubble,
+                label = stringResourceCompat(R.string.composer_mode_edit),
                 tint = colors.onSurfaceVariant,
-                onClick = { toggle(!direct) },
+                onClick = edit,
             )
         }
         ComposerIconButton(

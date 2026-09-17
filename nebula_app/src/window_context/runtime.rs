@@ -508,6 +508,7 @@ impl WindowContext {
         &self,
         pane_id: u64,
         lines: usize,
+        screen: bool,
     ) -> Result<RuntimePaneRead, ApiError> {
         let Some(pane) = self.pane(pane_id) else {
             return Err(ApiError::new(
@@ -516,7 +517,7 @@ impl WindowContext {
             ));
         };
         let term = pane.terminal.lock();
-        Ok(crate::runtime_api::capture_terminal_tail(
+        let mut read = crate::runtime_api::capture_terminal_tail(
             &term,
             self.id().into(),
             pane_id,
@@ -524,7 +525,12 @@ impl WindowContext {
             task_state(pane),
             false,
             None,
-        ))
+        );
+        if screen {
+            read.screen = Some(nebula_terminal::snapshot::capture(&term, lines).ok_or_else(||
+                ApiError::new("screen_too_large", "terminal screen exceeds the mirror budget"))?);
+        }
+        Ok(read)
     }
 
     pub(crate) fn runtime_procs(&self, pane_id: u64) -> Result<RuntimePaneProcesses, ApiError> {

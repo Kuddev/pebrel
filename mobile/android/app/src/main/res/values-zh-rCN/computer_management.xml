@@ -1,0 +1,4 @@
+<resources>
+    <string name="computer_remove_title">移除电脑</string>
+    <string name="computer_remove_hint">从这部手机移除 %1$s 及其连接凭据？电脑上的任务会继续运行，此操作不会卸载中转服务。</string>
+</resources>

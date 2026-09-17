@@ -1,5 +1,90 @@
 # Architecture decisions / 架构决策记录
 
+## ADR-0022 — Physical cell mirroring and a shared mobile cell painter
+
+- **Status:** Requested on 2026-09-17; working tree, not device acceptance.
+- **Context:** Desktop `pane.read` returns unstyled text with logical wrapped-line
+  joining. Rendering that as paragraphs loses ANSI colors and wraps TUI borders.
+- **Decision:** Opt-in `pane.read` parameter `screen` captures immutable physical
+  cells in the terminal core. Versioned tuples carry graphemes, widths, foreground,
+  background and style; unknown/oversized snapshots fail explicitly. No commands,
+  OSC actions or escape streams are replayed into a phone or desktop terminal.
+  Old requests keep the old text-only cost and result shape. Old servers get one
+  explicitly recognized unknown-parameter fallback, labelled text-only in the UI.
+- **Cost/lifetime:** At most 40,000 cells, 128 KiB of glyph text and 256 bytes per
+  glyph; snapshot work holds the terminal lock only for the bounded copy. Android
+  decoding runs on IO and publishes only to the current pane generation. A shared
+  Canvas cell painter handles local/SSH/mirrored grids, including procedural block
+  glyphs. Detached mirrors have no native parser or permanent worker.
+- **Geometry:** A PC mirror fits existing columns; pinch/pan changes only the
+  viewport. It does not race the computer for PTY sizing. Independent SSH clients
+  continue using their own PTY window-change events. A future resize lease for
+  shared sessions is a distinct mutating capability, not hidden in a read request.
+- **Validation:** Focused ANSI/truecolor/background/wide/combining/bounds tests and
+  Android bitmap/decoder/one-input-slot tests. Physical-device and desktop product
+  integration remain separate acceptance; snapshots are not a live grid stream.
+- **Revisit:** Replace polling only with bounded change subscriptions and recovery
+  snapshots; preserve these cell-width and explicit capability contracts.
+
+## ADR-0021 — Native mobile link and independently deployed relay
+
+- **Status:** Implementation requested by the maintainer on 2026-09-17. Working
+  tree implementation; not a release or an end-to-end product acceptance claim.
+- **Context:** The preview requires external Node for pairing and Docker/domain
+  configuration for relay deployment. Relay TLS currently terminates application
+  plaintext. A native pairing UI must not introduce a second runtime authority.
+- **Decision:** `mobile/link` is a renderer-independent workspace crate with one
+  shared Noise NKpsk0/25519/ChaChaPoly/SHA256 implementation (snow 0.10). Android's
+  native adapter and the desktop consume this implementation; a feature-selected
+  executable owns only relay networking. Host keys, one-use invitations and
+  approved device credentials stay at the endpoints, never at the relay. Relay
+  bearer credentials are separate from end-to-end authentication secrets.
+- **Dependencies/cost:** Opt-in axum/hyper/tokio/rustls/rcgen implement the server
+  and cold-path TLS initialization. No renderer, database, Node or Docker runtime
+  dependency. Two relay runtime workers, bounded socket admission, 64 KiB wire
+  packets, bounded per-peer queues and 2 MiB reassembly; these are component bounds,
+  not a process-wide RAM or CPU performance guarantee. Runtime RPC remains owned
+  by the existing desktop Runtime API and its shared mobile method policy.
+- **Lifecycle:** A peer loss terminates both sockets. New connections require a
+  fresh Noise handshake; old frames and uncertain input are not automatically
+  replayed. Installation ownership and stop/update/uninstall are explicit, with
+  user configuration retained unless complete removal is requested. No public
+  privileged deployment endpoint is added; administration uses verified SSH.
+- **Compatibility:** Protocol v2 is explicit and fail-closed; it cannot silently
+  downgrade to the existing plaintext-over-TLS preview protocol. Legacy profiles
+  remain readable until their migration is complete. Failed first connections
+  remain transient; only a validated runtime handshake and initial snapshot allow
+  a computer to enter the saved-device list.
+- **Native settings increment (2026-09-17):** The maintainer prioritized native
+  LAN/relay QR settings before the v2 rollout. An explicitly named `preview`
+  adapter preserves the shipped v1 phone protocol; the UI discloses that relays
+  can read v1 payloads. It is never a fallback from v2. Native address enumeration,
+  TLS sockets and QR encoding replace the desktop Node/browser lifecycle. RPC
+  authorization stays in the existing mobile bridge, shared by its CLI and a
+  bounded native session actor. The application owns a two-worker network runtime,
+  cancels replaced listeners and rejects stale start results. OS credential storage
+  owns preview access secrets; view closure cancels unfinished starts but preserves
+  established connections. Remove this compatibility adapter after a tested v2
+  phone migration; do not advertise v2 security for these QR codes.
+- **Native v2 endpoint increment (2026-09-17):** Service bootstrap uses explicit
+  SPKI pins; x509-parser extracts the leaf SPKI and validity while rustls verifies
+  possession through handshake signatures. The imported pin, not an untrusted
+  remote hostname, is this private-server trust authority. Version, host, grant,
+  enrollment kind and relay epoch are bound in the Noise prologue. Host grants
+  persist via OS credentials before their secrets are delivered; Runtime opens
+  only after encrypted acknowledgement. Android and desktop framing use the same
+  native crypto core. Native TLS integration and Kotlin lifecycle tests are not
+  substitutes for physical-device, UI or VPS deployment acceptance.
+- **Alternatives:** Bundling a Node/browser QR helper would retain a separate UI
+  lifecycle. Copying a cloud cluster stack would burden personal VPS deployments.
+  Two native/JVM crypto implementations would duplicate framing and replay policy.
+- **Validation:** Focused crypto, authorization, resource-bound, disconnect and
+  deployment-ownership regressions accompany the implementation. Actual command
+  results and remaining native/Android/UI integration are reported separately.
+- **Revisit condition:** Revisit the protocol only with versioned interoperability
+  fixtures and security review. Add clustering or persistent relay buffering only
+  for a demonstrated requirement, never as an implicit input-retry mechanism.
+
 ## Process
 
 Record decisions that change dependency direction, core ownership, persistent

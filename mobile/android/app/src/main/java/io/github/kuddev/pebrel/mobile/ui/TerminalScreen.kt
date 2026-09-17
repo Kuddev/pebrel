@@ -3,7 +3,6 @@ package io.github.kuddev.pebrel.mobile.ui
 import android.view.KeyEvent
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,7 +50,10 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
                     trust = trust?.takeIf { it.ownerId == session.id }, onTrust = repository::answerTrust)
             }
         }
-        CommandComposer(session.id, repository, session.status == "ready", direct, { direct = it }, { label ->
+        CommandComposer(session.id, repository, session.status == "ready", direct, {
+            direct = it
+            if (it) keyboardRequest++
+        }, { label ->
             val key = when (label) {
                 "Ctrl+C" -> KeyEvent.KEYCODE_C
                 "Esc" -> KeyEvent.KEYCODE_ESCAPE
@@ -90,10 +92,9 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     TerminalHeader(pane.title, desktop.host.name, desktop.status, onBack, onSessions)
     Column(Modifier.fillMaxSize()) {
         if (desktop.status != "ready") HelperText(stringResource(R.string.device_unavailable), Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
-        SelectionContainer(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-            Text(if (output.target == identity) output.text else "", fontFamily = LocalTerminalFont.current,
-                fontSize = prefs.fontSize.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp))
-        }
+        DesktopOutputSurface(identity, if (output.target == identity) output.text else "", prefs.fontSize,
+            prefs.pinchZoom, { size -> repository.display.update { it.copy(fontSize = size) } },
+            Modifier.weight(1f).fillMaxWidth(), frame = if (output.target == identity) output.frame else null)
         if (output.loading && output.text.isBlank()) LinearProgressIndicator(Modifier.fillMaxWidth())
         CommandComposer(identity, repository, desktop.allowInput && desktop.status == "ready", false, null, null) { command ->
             repository.sendDesktop(desktop.id, pane, command)

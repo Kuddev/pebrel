@@ -1,4 +1,5 @@
 <resources>
+    <string name="composer_tools">输入操作</string>
     <string name="composer_attach">添加附件</string>
     <string name="composer_voice">语音输入</string>
     <string name="composer_voice_prompt">说出命令</string>

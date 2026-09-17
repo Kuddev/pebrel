@@ -11,6 +11,7 @@ pub mod index;
 pub mod osc_cwd;
 pub mod render;
 pub mod selection;
+pub mod snapshot;
 pub mod sync;
 pub mod term;
 pub mod thread;

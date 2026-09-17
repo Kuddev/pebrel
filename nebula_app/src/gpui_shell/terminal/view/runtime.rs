@@ -366,6 +366,7 @@ impl TerminalView {
         &self,
         window_id: u64,
         lines: usize,
+        screen: bool,
     ) -> Result<crate::runtime_api::RuntimePaneRead, crate::runtime_api::ApiError> {
         self.ensure_runtime_readable()?;
         let Some(session) = &self.session else {
@@ -375,7 +376,7 @@ impl TerminalView {
             ));
         };
         let term = session.term.lock();
-        Ok(crate::runtime_api::capture_terminal_tail(
+        let mut read = crate::runtime_api::capture_terminal_tail(
             &term,
             window_id,
             self.pane_id,
@@ -383,7 +384,12 @@ impl TerminalView {
             self.runtime_task_state(),
             self.exited.is_some(),
             self.exited.clone(),
-        ))
+        );
+        if screen {
+            read.screen = Some(nebula_terminal::snapshot::capture(&term, lines).ok_or_else(||
+                crate::runtime_api::ApiError::new("screen_too_large", "terminal screen exceeds the mirror budget"))?);
+        }
+        Ok(read)
     }
 
     pub fn runtime_procs(

@@ -1,15 +1,11 @@
-"""Bundle a freshly packaged desktop with the same source-only mobile pairing kit."""
+"""Bundle a freshly built GPUI desktop with native mobile pairing instructions."""
 import argparse
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
-import tarfile
-import tempfile
 import zipfile
-
-from package_relay import package_relay
 
 
 def safe_name(name: str) -> str:
@@ -53,15 +49,8 @@ def package(desktop: Path, output: Path, commit: str) -> Path:
         for required in ("pebrel.exe", "runtime/pebrel-hook.exe", "runtime/conpty.dll", "runtime/OpenConsole.exe"):
             if required not in record["files"]:
                 raise ValueError(f"Missing desktop runtime: {required}")
-        with tempfile.TemporaryDirectory() as temporary:
-            kit_path = Path(temporary) / "relay-kit.tar.gz"
-            package_relay(root, kit_path)
-            with tarfile.open(kit_path, "r:gz") as kit:
-                for entry in kit.getmembers():
-                    if not entry.isfile():
-                        raise ValueError("Pairing kit must contain only regular files")
-                    add("mobile/" + safe_name(entry.name), kit.extractfile(entry).read())
-        for name in ("Start-Pebrel-Preview.cmd", "Connect-Phone.cmd", "Connect-Phone.ps1", "START-LAN.zh-CN.md"):
+        # Native Settings replaces the external Node/browser pairing launcher.
+        for name in ("Start-Pebrel-Preview.cmd", "START-NATIVE-LAN.md"):
             data = (root / "mobile/desktop" / name).read_bytes()
             if name.endswith(".cmd"):
                 data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")

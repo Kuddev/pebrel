@@ -502,6 +502,8 @@ pub struct RuntimePaneRead {
     pub window_id: u64,
     pub pane_id: u64,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<nebula_terminal::snapshot::ScreenSnapshot>,
     pub requested_lines: usize,
     pub returned_lines: usize,
     pub history_available: usize,
@@ -820,6 +822,7 @@ pub enum RuntimeCommand {
         window_id: Option<u64>,
         pane_id: u64,
         lines: usize,
+        screen: bool,
     },
     Procs {
         window_id: Option<u64>,
@@ -1923,7 +1926,7 @@ pub(crate) fn read_pane_tail_text(
 ) -> Option<(String, usize)> {
     let requested = lines.saturating_add(TAIL_SCAN_EXTRA_LINES).min(MAX_READ_LINES);
     let result = dispatch_runtime_command(
-        RuntimeCommand::ReadPane { window_id, pane_id, lines: requested },
+        RuntimeCommand::ReadPane { window_id, pane_id, lines: requested, screen: false },
         sink,
         hub,
     )

@@ -9,6 +9,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+internal class DesktopRpcFailure(val code: String) : java.io.IOException(code)
+
 /** One authority for bounded pending RPCs over SSH or a user-owned WSS relay. */
 class DesktopRuntimeClient(
     private val transport: DesktopTransport,
@@ -22,7 +24,25 @@ class DesktopRuntimeClient(
     private val sequence = AtomicLong()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val ready = CompletableDeferred<JSONObject>()
+    private val firstSnapshot = CompletableDeferred<Unit>()
+    private val snapshotLock = Any()
+    private var latestSnapshot: JSONObject? = null
+    private var snapshotsActive = false
     private val closed = AtomicBoolean()
+    @Volatile private var screenUnsupported = false
+
+    suspend fun readPane(params: JSONObject): JSONObject {
+        if (screenUnsupported) return request("pane.read", params)
+        try {
+            return request("pane.read", JSONObject(params.toString()).put("screen", true))
+        } catch (failure: DesktopRpcFailure) {
+            // Old desktop runtimes reject unknown parameters. Do not silently
+            // downgrade malformed snapshots, transport errors or authorization.
+            if (failure.code != "invalid_params") throw failure
+            screenUnsupported = true
+            return request("pane.read", params)
+        }
+    }
 
     suspend fun connect(allowInput: Boolean): JSONObject {
         try {
@@ -32,7 +52,12 @@ class DesktopRuntimeClient(
                         message.optString("type") == "mobile.ready" -> ready.complete(message)
                         message.optString("type") == "mobile.disconnected" -> disconnect(
                             DesktopConnectionFailure(DesktopFailureKind.RUNTIME_UNAVAILABLE))
-                        message.optString("event") == "runtime.snapshot" -> onSnapshot(message.getJSONObject("data"))
+                        message.optString("event") == "runtime.snapshot" -> synchronized(snapshotLock) {
+                            val snapshot = message.getJSONObject("data")
+                            latestSnapshot = snapshot
+                            firstSnapshot.complete(Unit)
+                            if (snapshotsActive && !closed.get()) onSnapshot(snapshot)
+                        }
                         message.has("id") -> pending.remove(message.getString("id"))?.complete(message)
                     }
                 }
@@ -49,6 +74,12 @@ class DesktopRuntimeClient(
             catch (error: Exception) {
                 throw if (error is DesktopConnectionFailure) error
                     else DesktopConnectionFailure(DesktopFailureKind.RUNTIME_UNAVAILABLE, error)
+            }
+            withTimeout(30_000) { firstSnapshot.await() }
+            synchronized(snapshotLock) {
+                check(!closed.get())
+                snapshotsActive = true
+                onSnapshot(checkNotNull(latestSnapshot))
             }
             return hello
         } catch (error: TimeoutCancellationException) {
@@ -86,7 +117,8 @@ class DesktopRuntimeClient(
                 }
             }
             val response = withTimeout(35_000) { completion.await() }
-            if (!response.optBoolean("ok")) error(response.optJSONObject("error")?.optString("code") ?: "runtime_error")
+            if (!response.optBoolean("ok")) throw DesktopRpcFailure(
+                response.optJSONObject("error")?.optString("code")?.take(80) ?: "runtime_error")
             return response.optJSONObject("result") ?: JSONObject()
         } finally { pending.remove(id) }
     }
@@ -99,6 +131,7 @@ class DesktopRuntimeClient(
     }
     private fun settle(failure: DesktopConnectionFailure = DesktopConnectionFailure(DesktopFailureKind.DISCONNECTED)) {
         ready.completeExceptionally(failure)
+        firstSnapshot.completeExceptionally(failure)
         pending.values.forEach { it.completeExceptionally(failure) }
         pending.clear()
     }

@@ -94,6 +94,8 @@ struct ReadParams {
     pane_id: u64,
     #[serde(default = "default_read_lines")]
     lines: usize,
+    #[serde(default)]
+    screen: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,6 +325,7 @@ impl RuntimeCommand {
                     window_id: params.window_id,
                     pane_id: params.pane_id,
                     lines: params.lines,
+                    screen: params.screen,
                 })
             },
             "pane.procs" => {
@@ -418,6 +421,7 @@ pub(crate) fn capture_terminal_tail<T: EventListener>(
             window_id,
             pane_id,
             text: String::new(),
+            screen: None,
             requested_lines,
             returned_lines: 0,
             history_available,
@@ -459,6 +463,7 @@ pub(crate) fn capture_terminal_tail<T: EventListener>(
         window_id,
         pane_id,
         text,
+        screen: None,
         requested_lines,
         returned_lines,
         history_available,

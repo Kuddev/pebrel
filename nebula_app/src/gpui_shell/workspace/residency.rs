@@ -526,7 +526,7 @@ impl NebulaWorkspace {
                     cx,
                 )
             },
-            RuntimeCommand::ReadPane { window_id, pane_id, lines } => {
+            RuntimeCommand::ReadPane { window_id, pane_id, lines, screen } => {
                 self.runtime_window_requested(*window_id)?;
                 let Some(tab_ix) = self.tab_of_pane(*pane_id) else {
                     return Err(ApiError::new(
@@ -541,7 +541,7 @@ impl NebulaWorkspace {
                         .expect("tab_of_pane resolved a terminal pane")
                         .view
                         .read(cx)
-                        .runtime_read(self.runtime_window_id, *lines),
+                        .runtime_read(self.runtime_window_id, *lines, *screen),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 }?;
                 serde_json::to_value(read)
@@ -777,7 +777,7 @@ impl NebulaWorkspace {
                         .expect("tab_of_pane resolved a terminal pane")
                         .view
                         .read(cx)
-                        .runtime_read(self.runtime_window_id, *lines),
+                        .runtime_read(self.runtime_window_id, *lines, false),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 }?;
                 Ok(json!({ "agent": managed, "read": read }))

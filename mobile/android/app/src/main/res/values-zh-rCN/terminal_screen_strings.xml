@@ -1,0 +1,4 @@
+<resources>
+    <string name="desktop_legacy_text">这台电脑仅提供纯文本，请更新电脑端 Pebrel 以显示彩色网格。长行可左右拖动查看。</string>
+    <string name="desktop_snapshot_text">选择并复制屏幕文字</string>
+</resources>

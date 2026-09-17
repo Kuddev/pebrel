@@ -1,0 +1,4 @@
+<resources>
+    <string name="desktop_legacy_text">This desktop sends plain text only. Update Pebrel on the computer for a color grid. Drag sideways to read long rows.</string>
+    <string name="desktop_snapshot_text">Select and copy screen text</string>
+</resources>

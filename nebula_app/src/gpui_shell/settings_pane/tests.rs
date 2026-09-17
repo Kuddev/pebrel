@@ -84,7 +84,7 @@ fn ai_toast_setting_is_searchable_and_has_a_visible_switch(cx: &mut gpui::TestAp
 #[test]
 fn settings_nav_visibility_keeps_stable_routes_but_hides_two_entries() {
     let visibility: Vec<_> = (0..SECTION_IDS.len()).map(is_nav_section_visible).collect();
-    assert_eq!(visibility, vec![true, true, true, false, true, true, true, true, true, false]);
+    assert_eq!(visibility, vec![true, true, true, false, true, true, true, true, true, false, true]);
     assert_eq!(
         SECTION_IDS,
         [
@@ -98,6 +98,7 @@ fn settings_nav_visibility_keeps_stable_routes_but_hides_two_entries() {
             "keymap",
             "advanced",
             "backup",
+            "mobile",
         ]
     );
 }
@@ -105,12 +106,12 @@ fn settings_nav_visibility_keeps_stable_routes_but_hides_two_entries() {
 #[test]
 fn settings_nav_starts_with_application_then_frequent_options() {
     let visible: Vec<_> = visible_nav_sections().collect();
-    assert_eq!(visible, vec![0, 1, 2, 6, 7, 4, 5, 8]);
+    assert_eq!(visible, vec![0, 1, 2, 6, 7, 4, 5, 10, 8]);
     let zh_labels: Vec<_> = visible
         .iter()
         .map(|index| section_label(*index, crate::display::UiLanguage::ZhCn))
         .collect();
-    assert_eq!(zh_labels, vec!["应用", "外观", "终端", "交互", "按键映射", "SSH", "网络", "高级"]);
+    assert_eq!(zh_labels, vec!["应用", "外观", "终端", "交互", "按键映射", "SSH", "网络", "手机连接", "高级"]);
     let en_labels: Vec<_> = visible
         .iter()
         .map(|index| section_label(*index, crate::display::UiLanguage::EnUs))
@@ -125,6 +126,7 @@ fn settings_nav_starts_with_application_then_frequent_options() {
             "Key Bindings",
             "SSH",
             "Network",
+            "Mobile connection",
             "Advanced",
         ]
     );

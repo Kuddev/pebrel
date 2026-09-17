@@ -24,9 +24,11 @@ data class LocalSession(
     val status: String = "connecting", val host: HostProfile? = null,
     val stage: SshStage = SshStage.NETWORK, val failure: SshFailureKind? = null, val hasConnected: Boolean = false,
 )
-data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH", val failure: DesktopFailureKind? = null)
+data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH", val failure: DesktopFailureKind? = null,
+                            val hasConnected: Boolean = false, val relayProfile: RelayProfile? = null)
 data class TrustRequest(val ownerId: String, val host: HostProfile, val fingerprint: String, val answer: CompletableFuture<Boolean>)
-data class DesktopOutput(val target: String = "", val text: String = "", val loading: Boolean = false)
+data class DesktopOutput(val target: String = "", val text: String = "", val loading: Boolean = false,
+                         val frame: io.github.kuddev.pebrel.terminal.TerminalFrame? = null)
 
 /** Application owns sessions; activities only attach views. Metadata never updates per cell. */
 class SessionRepository(private val context: Context) {
@@ -248,7 +250,7 @@ class SessionRepository(private val context: Context) {
     fun detachRenderer(id: String, token: Any) {
         if (renderOwner == id && renderToken === token) { renderOwner = null; renderToken = null; redraw = null }
     }
-    private var terminalColors: IntArray? = null
+    @Volatile private var terminalColors: IntArray? = null
     fun setTerminalColors(value: IntArray) {
         terminalColors = value.copyOf()
         live.value.forEach { it.terminal.colors(value) }
@@ -297,8 +299,6 @@ class SessionRepository(private val context: Context) {
         return try {
             val profile = RelayProfile.parse(text)
             check(savedRelays.value.size < 64 || savedRelays.value.any { it.id == profile.id })
-            savedRelays.value = savedRelays.value.filterNot { it.id == profile.id } + profile
-            persistRelays()
             connectRelay(profile)
         } catch (_: Exception) { error.value = "invalid_relay_invite"; null }
     }
@@ -318,7 +318,7 @@ class SessionRepository(private val context: Context) {
         computers.value.find { it.host.id == profile.id && it.status in setOf("ready", "connecting") }?.let { return it.id }
         computers.value.filter { it.host.id == profile.id }.forEach { closeDesktop(it.id) }
         val host = HostProfile(profile.id, profile.name, profile.url, 443, "")
-        return addDesktop(host, true, RelayTransport(profile), if (profile.mode == "lan") "LAN" else "Relay")
+        return addDesktop(host, true, RelayTransport(profile), if (profile.mode == "lan") "LAN" else "Relay", relayProfile = profile)
     }
     fun connectDesktop(host: HostProfile, password: CharArray, allowInput: Boolean): String {
         val id = UUID.randomUUID().toString()
@@ -327,15 +327,24 @@ class SessionRepository(private val context: Context) {
     }
 
     private fun addDesktop(host: HostProfile, allowInput: Boolean, transport: DesktopTransport, source: String,
-                           id: String = UUID.randomUUID().toString()): String {
-        computers.value = computers.value + DesktopWorkspace(id, host, allowInput = false, transport = source)
+                           id: String = UUID.randomUUID().toString(), relayProfile: RelayProfile? = null): String {
+        computers.value = computers.value + DesktopWorkspace(id, host, allowInput = false, transport = source, relayProfile = relayProfile)
         SessionService.ensureStarted(context)
         val transitions = DesktopTransitions()
-        val client = DesktopRuntimeClient(transport, { snapshot ->
+        lateinit var client: DesktopRuntimeClient
+        client = DesktopRuntimeClient(transport, { snapshot ->
             val panes = parseDesktopPanes(snapshot)
             val events = transitions.observe(snapshot)
             main.post {
-                computers.value = computers.value.map { if (it.id == id) it.copy(panes = panes, status = "ready") else it }
+                if (desktopClients[id] !== client) return@post
+                val current = computers.value.find { it.id == id } ?: return@post
+                if (!current.hasConnected && relayProfile != null) {
+                    if (savedRelays.value.size < 64 || savedRelays.value.any { it.id == relayProfile.id }) {
+                        savedRelays.value = savedRelays.value.filterNot { it.id == relayProfile.id } + relayProfile
+                        persistRelays()
+                    } else error.value = "relay_storage_failed"
+                }
+                computers.value = computers.value.map { if (it.id == id) it.copy(panes = panes, status = "ready", hasConnected = true, failure = null) else it }
                 if (computers.value.any { it.id == id }) events.forEach { SessionNotices.task(context, id, host.name, it) }
             }
         }, { failure -> main.post {
@@ -373,13 +382,20 @@ class SessionRepository(private val context: Context) {
         readJob?.cancel()
         val generation = ++readGeneration
         val previousText = if (output.value.target == identity) output.value.text else ""
-        output.value = DesktopOutput(identity, previousText, loading = true)
+        val previousFrame = if (output.value.target == identity) output.value.frame else null
+        output.value = DesktopOutput(identity, previousText, loading = true, frame = previousFrame)
         readJob = scope.launch {
-            val result = runCatching { checkNotNull(desktopClients[id]).request("pane.read", target(pane).put("lines", 120)) }
+            val result = runCatching {
+                val response = checkNotNull(desktopClients[id]).readPane(target(pane).put("lines", 100))
+                val frame = response.optJSONObject("screen")?.let {
+                    decodeDesktopScreen(it, checkNotNull(terminalColors))
+                }
+                DesktopOutput(identity, response.optString("text"), frame = frame)
+            }
             if (!isActive) return@launch
             main.post {
                 if (generation == readGeneration && output.value.target == identity) {
-                    output.value = DesktopOutput(identity, result.getOrNull()?.optString("text") ?: "")
+                    output.value = result.getOrNull() ?: DesktopOutput(identity, previousText, frame = previousFrame)
                     if (result.isFailure) error.value = "desktop_read_failed"
                 }
             }

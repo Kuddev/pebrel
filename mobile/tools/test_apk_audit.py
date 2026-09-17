@@ -36,15 +36,17 @@ def elf(machine: int, alignment: int = 16384) -> bytes:
 
 class ApkAuditTest(unittest.TestCase):
     def contents(self):
-        result = {"assets/relay-kit.bin": deployment_kit(), "classes.dex": b"Lio/github/kuddev/pebrel/terminal/NativeBridge;Lio/github/kuddev/pebrel/ssh/NativeSsh;",
+        result = {"assets/relay-kit.bin": deployment_kit(), "classes.dex": b"Lio/github/kuddev/pebrel/terminal/NativeBridge;Lio/github/kuddev/pebrel/ssh/NativeSsh;Lio/github/kuddev/pebrel/ssh/NativeLink;Lio/github/kuddev/pebrel/voice/NativeWhisper;",
                   "assets/licenses/Ghostty/Ghostty-MIT.txt": b"fixture",
+                  "assets/licenses/whisper.cpp.txt": b"fixture",
                   "assets/licenses/Ghostty-UPSTREAM.json": b'{"revision":"fixture"}',
                   "assets/licenses/Russh/BUILD.json": b'{"russh":"0.62.2"}',
                   "assets/licenses/Russh/DEPENDENCIES.json": json.dumps([
                       {"name": "russh", "version": "0.62.2", "texts": ["LICENSE"]}]).encode()}
         for abi, machine in (("arm64-v8a", 183), ("x86_64", 62)):
-            for library in ("libpebrel_ghostty.so", "libpebrel_ssh.so"):
-                result[f"lib/{abi}/{library}"] = elf(machine)
+            for library in ("libpebrel_ghostty.so", "libpebrel_ssh.so", "libpebrel_voice.so"):
+                result[f"lib/{abi}/{library}"] = elf(machine) + (
+                    b"Java_io_github_kuddev_pebrel_ssh_NativeLink_create" if library == "libpebrel_ssh.so" else b"")
         return result
 
     def audit(self, contents):
@@ -56,7 +58,20 @@ class ApkAuditTest(unittest.TestCase):
             return verify(apk)
 
     def test_accepts_both_engines_and_abis(self):
-        self.assertEqual(len(self.audit(self.contents())["libraries"]), 4)
+        self.assertEqual(len(self.audit(self.contents())["libraries"]), 6)
+
+    def test_rejects_stale_native_transport_without_secure_entry_point(self):
+        contents = self.contents()
+        contents["lib/arm64-v8a/libpebrel_ssh.so"] = elf(183)
+        with self.assertRaisesRegex(ValueError, "entry point missing"):
+            self.audit(contents)
+
+    def test_rejects_missing_voice_abi_or_license(self):
+        for name in ("lib/x86_64/libpebrel_voice.so", "assets/licenses/whisper.cpp.txt"):
+            contents = self.contents()
+            del contents[name]
+            with self.assertRaises((ValueError, KeyError)):
+                self.audit(contents)
 
     def test_rejects_transformed_deployment_resource(self):
         contents = self.contents()

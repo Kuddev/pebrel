@@ -290,46 +290,7 @@ class GhosttyView(context: Context) : View(context) {
     }
 
     private fun drawRow(canvas: Canvas, frame: TerminalFrame, row: TerminalRow, y: Int) {
-        val cells = row.cells
-        var x = 0
-        while (x < frame.columns) {
-            val index = x * CELL_FIELDS
-            val width = cells[index + 2]
-            if (width == 0) { x++; continue }
-            val start = cells[index]
-            var end = start + cells[index + 1]
-            var next = x + width
-            val flags = cells[index + 5]
-            // Ordinary monospace cells with the same style share one text draw.
-            if (width == 1 && cells[index + 1] == 1 && row.text[start].code in 32..126) {
-                while (next < frame.columns) {
-                    val n = next * CELL_FIELDS
-                    if (cells[n + 2] != 1 || cells[n + 1] != 1 || cells[n] != end || row.text[end].code !in 32..126 ||
-                        cells[n + 3] != cells[index + 3] || cells[n + 4] != cells[index + 4] || cells[n + 5] != flags) break
-                    end++
-                    next++
-                }
-            }
-            val top = y * cellHeight
-            paint.color = cells[index + 4]
-            paint.alpha = 255
-            canvas.drawRect(x * cellWidth, top, next * cellWidth, top + cellHeight, paint)
-            if (flags and 32 == 0 && end > start) {
-                paint.color = cells[index + 3]
-                paint.alpha = if (flags and 16 != 0) 150 else 255
-                paint.isFakeBoldText = flags and 1 != 0
-                paint.textSkewX = if (flags and 2 != 0) -.2f else 0f
-                paint.isUnderlineText = flags and 4 != 0
-                paint.isStrikeThruText = flags and 8 != 0
-                canvas.drawTextRun(row.text, start, end, 0, row.text.length, x * cellWidth, top + baseline, false, paint)
-            }
-            x = next
-        }
-        paint.isFakeBoldText = false
-        paint.textSkewX = 0f
-        paint.isUnderlineText = false
-        paint.isStrikeThruText = false
-        paint.alpha = 255
+        TerminalCellPainter.row(canvas, paint, frame, row, y, cellWidth, cellHeight, baseline)
         selectionRangeForRow(frame, y)?.let { range ->
             paint.color = frame.cursorColor
             paint.alpha = 70

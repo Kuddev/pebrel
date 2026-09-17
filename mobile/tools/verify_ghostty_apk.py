@@ -40,13 +40,16 @@ def verify(path: Path) -> dict:
             raise ValueError("russh JNI class missing from application")
         if not any(b"Lio/github/kuddev/pebrel/terminal/NativeBridge;" in payload for payload in dex):
             raise ValueError("Ghostty JNI class missing from application")
-        allowed_libraries = {"libpebrel_ghostty.so", "libpebrel_ssh.so", "libandroidx.graphics.path.so"}
+        for descriptor in (b"Lio/github/kuddev/pebrel/ssh/NativeLink;", b"Lio/github/kuddev/pebrel/voice/NativeWhisper;"):
+            if not any(descriptor in payload for payload in dex):
+                raise ValueError("Mobile link or voice JNI class missing from application")
+        allowed_libraries = {"libpebrel_ghostty.so", "libpebrel_ssh.so", "libpebrel_voice.so", "libandroidx.graphics.path.so"}
         for name in names:
             if name.endswith(".so") and (name.split("/")[-1] not in allowed_libraries or
                     name.split("/")[:2] not in [["lib", "arm64-v8a"], ["lib", "x86_64"]]):
                 raise ValueError(f"Unexpected native library in application: {name}")
         for abi, machine in (("arm64-v8a", 183), ("x86_64", 62)):
-            for library in ("libpebrel_ghostty.so", "libpebrel_ssh.so"):
+            for library in ("libpebrel_ghostty.so", "libpebrel_ssh.so", "libpebrel_voice.so"):
                 name = f"lib/{abi}/{library}"
                 payload = apk.read(name)
                 if payload[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", payload, 18)[0] != machine:
@@ -63,9 +66,13 @@ def verify(path: Path) -> dict:
                         alignments.append(align)
                 if not alignments:
                     raise ValueError(f"No loadable native segments: {name}")
+                if library == "libpebrel_ssh.so" and b"Java_io_github_kuddev_pebrel_ssh_NativeLink_create" not in payload:
+                    raise ValueError(f"Native mobile link entry point missing: {name}")
                 libraries.append({"abi": abi, "library": library, "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(), "load_alignment": alignments})
         if "assets/licenses/Ghostty/Ghostty-MIT.txt" not in names:
             raise ValueError("Ghostty license missing")
+        if "assets/licenses/whisper.cpp.txt" not in names:
+            raise ValueError("whisper.cpp license missing")
         russh = json.loads(apk.read("assets/licenses/Russh/BUILD.json"))
         dependencies = json.loads(apk.read("assets/licenses/Russh/DEPENDENCIES.json"))
         if not any(p["name"] == "russh" and p["texts"] for p in dependencies):
