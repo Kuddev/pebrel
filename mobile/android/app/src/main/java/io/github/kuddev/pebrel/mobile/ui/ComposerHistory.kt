@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -82,7 +83,7 @@ internal fun ComposerHistory(
         Column(
             modifier.fillMaxWidth().heightIn(max = maxHeight)
                 .clip(shape)
-                .background(colors.surfaceVariant.copy(alpha = .50f))
+                .background(colors.surfaceVariant.copy(alpha = .94f).compositeOver(colors.surface))
                 .border(.5.dp, colors.outlineVariant.copy(alpha = .75f), shape)
                 .semantics { contentDescription = historyLabel },
         ) {

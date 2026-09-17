@@ -133,27 +133,7 @@ internal fun ComposerToolbar(
             } else {
                 Spacer(Modifier.weight(1f))
             }
-            Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(24.dp)
-                .background(colors.outlineVariant.copy(alpha = .45f)))
-            onDirect?.let { toggle ->
-                ComposerIconButton(
-                    icon = R.drawable.ic_compose_bubble,
-                    label = stringResourceCompat(R.string.composer_mode_edit),
-                    enabled = enabled,
-                    tint = colors.onSurfaceVariant,
-                    onClick = { toggle(false) },
-                )
-            }
         } else {
-            onDirect?.let { toggle ->
-                ComposerIconButton(
-                    icon = R.drawable.ic_terminal,
-                    label = stringResourceCompat(R.string.composer_mode_direct),
-                    enabled = enabled,
-                    tint = colors.primary,
-                    onClick = { toggle(true) },
-                )
-            }
             if (onToggleKeys != null) {
                 ComposerIconButton(
                     icon = R.drawable.ic_command,
@@ -173,6 +153,17 @@ internal fun ComposerToolbar(
                 )
             }
             Spacer(Modifier.weight(1f))
+        }
+        Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(24.dp)
+            .background(colors.outlineVariant.copy(alpha = .45f)))
+        onDirect?.let { toggle ->
+            ComposerIconButton(
+                icon = if (direct) R.drawable.ic_compose_bubble else R.drawable.ic_terminal,
+                label = stringResourceCompat(if (direct) R.string.composer_mode_edit else R.string.composer_mode_direct),
+                enabled = enabled,
+                tint = colors.onSurfaceVariant,
+                onClick = { toggle(!direct) },
+            )
         }
         ComposerIconButton(
             icon = R.drawable.ic_keyboard,
