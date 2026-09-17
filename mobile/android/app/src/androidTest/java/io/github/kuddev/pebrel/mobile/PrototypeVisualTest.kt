@@ -42,13 +42,13 @@ class PrototypeVisualTest {
             waitLabel(R.string.sessions)
             waitLabel(R.string.add_ssh).click()
             val fields = edits(4)
-            check(kotlin.math.abs(fields[2].visibleBounds.top - fields[3].visibleBounds.top) < 8) {
-                "Username and port must share the prototype row"
+            check(kotlin.math.abs(fields[1].visibleBounds.top - fields[2].visibleBounds.top) < 8) {
+                "Host address and port must share the connection row"
             }
             fields[0].text = "Visual Test Host"
             fields[1].text = "192.0.2.10"
-            fields[2].text = "tester"
-            fields[3].text = "22"
+            fields[2].text = "22"
+            fields[3].text = "tester"
             // The prototype places Save after the form, so scroll it into view.
             scrollTo(target.getString(R.string.save)).click()
             waitLabel("Visual Test Host")
@@ -67,6 +67,7 @@ class PrototypeVisualTest {
             capture("06-home-nord")
 
             scrollTo(target.getString(R.string.local_terminal)).click()
+            waitLabel(R.string.local_compose).click()
             val input = edits(1).last()
             input.click()
             input.text = "git"
@@ -88,6 +89,7 @@ class PrototypeVisualTest {
             capture("08-session-thumbnail")
 
             scrollTo(target.getString(R.string.local_terminal)).click()
+            waitLabel(R.string.local_compose).click()
             check(edits(1).last().text.isEmpty()) { "A new session inherited another session draft" }
             edits(1).last().text = "second session draft"
             waitLabel(R.string.long_editor).click()
@@ -109,8 +111,8 @@ class PrototypeVisualTest {
             val sshFields = edits(4)
             sshFields[0].text = "OpenSSH UI Test"
             sshFields[1].text = "10.0.2.2"
-            sshFields[2].text = "pebreltest"
-            sshFields[3].text = "2222"
+            sshFields[2].text = "2222"
+            sshFields[3].text = "pebreltest"
             // The inline password is directly editable, not an authentication tile.
             repeat(8) {
                 if (device.findObject(By.desc(target.getString(R.string.auth_password))) == null) {
@@ -125,7 +127,7 @@ class PrototypeVisualTest {
             waitLabel(R.string.trust_connect)
             capture("13-ssh-fingerprint")
             waitLabel(R.string.trust_connect).click()
-            waitLabel(R.string.raw_terminal)
+            waitLabel(R.string.toggle_keyboard)
             capture("14-russh-terminal-frame")
         } finally {
             capture("last-state")

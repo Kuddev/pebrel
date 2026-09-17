@@ -2,10 +2,13 @@ package io.github.kuddev.pebrel.mobile.ui
 
 import android.graphics.Paint
 import android.graphics.Rect
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -13,6 +16,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.kuddev.pebrel.mobile.HostIconSpec
@@ -48,12 +54,20 @@ fun HostIconChoice(id: String, onSelect: (String) -> Unit) {
     val app = LocalContext.current.applicationContext as PebrelApplication
     val icon = app.hostIcons.find { it.id == id } ?: app.hostIcons.last { it.id == "term" }
     var expanded by remember { mutableStateOf(false) }
+    val label = stringResource(R.string.host_icon)
+    val selectedLabel = iconLabel(icon)
     Box {
-        OutlinedButton({ expanded = true }, shape = MaterialTheme.shapes.small, contentPadding = PaddingValues(horizontal = 12.dp),
-            modifier = Modifier.heightIn(min = 48.dp)) {
-            HostSymbol(icon.id)
-            Text(iconLabel(icon), fontSize = 12.sp, modifier = Modifier.padding(horizontal = 9.dp))
-            Glyph(R.drawable.ic_down, Modifier.size(13.dp))
+        OutlinedIconButton({ expanded = true }, shape = RoundedCornerShape(14.dp),
+            colors = IconButtonDefaults.outlinedIconButtonColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(.5.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.size(48.dp).semantics {
+                contentDescription = label
+                stateDescription = selectedLabel
+            }) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                HostSymbol(icon.id, Modifier.size(24.dp))
+                Glyph(R.drawable.ic_down, Modifier.align(Alignment.BottomEnd).padding(4.dp).size(9.dp))
+            }
         }
         DropdownMenu(expanded, { expanded = false }, Modifier.heightIn(max = 330.dp)) {
             app.hostIcons.forEach { entry ->

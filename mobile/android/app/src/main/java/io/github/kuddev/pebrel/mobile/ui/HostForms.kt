@@ -42,61 +42,48 @@ fun HostForm(
         icon = icon, group = group)
     ConnectionForm(stringResource(if (initial == null) R.string.add_ssh else R.string.edit_host), { if (!busy) onCancel() }) {
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-        HelperText(stringResource(R.string.host_credentials_hint))
-        Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-            Text(stringResource(R.string.host_icon), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            HostIconChoice(icon) { icon = it }
-        }
-        Column(Modifier.padding(top = 22.dp), verticalArrangement = Arrangement.spacedBy(17.dp)) {
-            ConnectionField(name, { name = it }, R.string.host_name, placeholder = "My server", limit = 40)
-            ConnectionField(address, { address = it }, R.string.host_address, keyboard = KeyboardType.Uri, placeholder = "server.example.com")
-            Row(horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-                ConnectionField(user, { user = it }, R.string.username, Modifier.weight(1f), limit = 40)
-                ConnectionField(port, { port = it }, R.string.port, Modifier.weight(1f), KeyboardType.Number, limit = 5)
+        Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                HostIconChoice(icon) { icon = it }
+                ConnectionField(name, { name = it }, R.string.host_name, Modifier.weight(1f),
+                    placeholder = stringResource(R.string.host_name), limit = 40, showLabel = false)
             }
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SegmentRow(R.string.authentication) {
-                    ConnectionSegments(listOf("password" to stringResource(R.string.auth_password), "key" to stringResource(R.string.auth_key)),
-                        "password", {}, Modifier.weight(1f), disabled = setOf("key"))
-                }
-                HelperText(stringResource(R.string.password_auth_hint))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ConnectionField(address, { address = it }, R.string.host_address, Modifier.weight(1f),
+                    keyboard = KeyboardType.Uri, placeholder = "server.example.com")
+                ConnectionField(port, { port = it }, R.string.port, Modifier.width(82.dp), KeyboardType.Number, limit = 5)
+            }
+            ConnectionField(user, { user = it }, R.string.username, limit = 40)
+            SegmentRow(R.string.authentication) {
+                ConnectionSegments(listOf("password" to stringResource(R.string.auth_password), "key" to stringResource(R.string.auth_key)),
+                    "password", {}, Modifier.weight(1f), disabled = setOf("key"))
             }
             ConnectionField(password, { password = it }, R.string.credential_password,
                 keyboard = KeyboardType.Password, placeholder = if (passwordIsSaved) stringResource(R.string.password_saved_placeholder) else "",
                 transformation = PasswordVisualTransformation(), limit = 1024)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Checkbox(rememberPassword, { rememberPassword = it }, enabled = !busy)
-                Column(Modifier.padding(top = 11.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(stringResource(R.string.save_password), fontSize = 13.sp)
-                    HelperText(stringResource(
-                        when {
-                            passwordIsSaved && rememberPassword -> R.string.password_saved_hint
-                            rememberPassword -> R.string.password_will_save_hint
-                            else -> R.string.password_not_saved_hint
-                        },
-                    ))
-                }
-            }
-            if (passwordIsSaved) {
+            Column {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    HelperText(stringResource(R.string.password_saved_status), Modifier.weight(1f))
-                    TextButton({
-                        password = ""
-                        onClearPassword()
-                    }, enabled = !busy) { Text(stringResource(R.string.clear_saved_password), fontSize = 12.sp) }
+                    Checkbox(rememberPassword, { rememberPassword = it }, enabled = !busy)
+                    Text(stringResource(R.string.save_password), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    if (passwordIsSaved) {
+                        TextButton({
+                            password = ""
+                            onClearPassword()
+                        }, enabled = !busy) { Text(stringResource(R.string.clear_saved_password), fontSize = 12.sp) }
+                    }
                 }
+                HelperText(stringResource(
+                    when {
+                        passwordIsSaved && rememberPassword -> R.string.password_saved_hint
+                        rememberPassword -> R.string.password_will_save_hint
+                        else -> R.string.password_not_saved_hint
+                    },
+                ), Modifier.padding(start = 12.dp))
             }
             SegmentRow(R.string.host_group) {
                 ConnectionSegments(listOf("production" to stringResource(R.string.group_production), "development" to stringResource(R.string.group_development)),
                     group, { group = it }, Modifier.weight(1f))
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(stringResource(R.string.jump_host), fontSize = 11.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedButton({}, enabled = false, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = MaterialTheme.shapes.small) {
-                    Text(stringResource(R.string.no_jump), fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    Glyph(R.drawable.ic_down, Modifier.size(13.dp))
-                }
             }
         }
         Spacer(Modifier.height(24.dp))

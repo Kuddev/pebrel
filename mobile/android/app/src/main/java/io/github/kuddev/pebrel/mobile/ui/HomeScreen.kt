@@ -17,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,7 +55,7 @@ fun HomeScreen(
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 8.dp, bottom = 105.dp)) {
             item {
                 GroupHeading(stringResource(R.string.sessions), sessions.size, stringResource(R.string.all_sessions), onSessions)
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(8.dp))
                 AnimatedContent(
                     targetState = sessions.take(6),
                     contentKey = { visibleSessions -> visibleSessions.map { it.id } },
@@ -61,8 +63,9 @@ fun HomeScreen(
                     label = "home_sessions",
                 ) { visibleSessions ->
                     if (visibleSessions.isEmpty()) {
-                        Column(Modifier.fillMaxWidth().heightIn(min = 154.dp).animateContentSize(motion.contentSizeSpec())
-                            .workspaceFrame().padding(18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                        Row(Modifier.fillMaxWidth().heightIn(min = 96.dp).animateContentSize(motion.contentSizeSpec())
+                            .workspaceFrame().padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                             WorkspaceSymbol { Glyph(R.drawable.ic_terminal, Modifier.size(22.dp)) }
                             HelperText(stringResource(R.string.no_sessions))
                         }
@@ -74,7 +77,7 @@ fun HomeScreen(
                 }
             }
             item {
-                Spacer(Modifier.height(30.dp))
+                Spacer(Modifier.height(22.dp))
                 GroupHeading(stringResource(R.string.ssh_hosts), action = stringResource(R.string.all_count, hosts.size), onAction = onHosts)
                 Spacer(Modifier.height(8.dp))
             }
@@ -135,21 +138,34 @@ private fun SessionThumbnail(session: LocalSession, modifier: Modifier, onClick:
     val preview = remember(session.id, session.status) {
         session.terminal.previewText()
     }
-    Column(modifier.workspaceFrame().clickable(onClick = onClick)) {
-        Box(Modifier.fillMaxWidth().height(157.dp).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .35f)).padding(10.dp)) {
-            if (preview.isBlank()) Glyph(R.drawable.ic_terminal, Modifier.align(Alignment.Center).size(24.dp))
-            else Text(preview, fontSize = 9.sp, lineHeight = 15.sp, fontFamily = LocalTerminalFont.current,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, softWrap = false, maxLines = 9)
-            Text(session.source.uppercase(), fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.background).padding(3.dp))
+    val colors = MaterialTheme.colorScheme
+    val source = if (session.source == "Local") stringResource(R.string.local_device) else session.source
+    val status = statusLabel(session.status)
+    Column(modifier.aspectRatio(1f).workspaceFrame().clickable(onClick = onClick)) {
+        Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).semantics { stateDescription = status }, contentAlignment = Alignment.Center) {
+                    if (session.status == "connecting") CircularProgressIndicator(Modifier.size(8.dp), strokeWidth = 1.2.dp)
+                    else Box(Modifier.size(6.dp).background(when (session.status) {
+                        "ready", "finished" -> colors.tertiary
+                        "failed" -> colors.error
+                        else -> colors.onSurfaceVariant.copy(alpha = .6f)
+                    }, CircleShape))
+                }
+                Spacer(Modifier.weight(1f))
+                Text(source, fontSize = 8.sp, lineHeight = 12.sp, color = colors.onSurfaceVariant,
+                    modifier = Modifier.background(colors.background.copy(alpha = .65f), RoundedCornerShape(50))
+                        .padding(horizontal = 7.dp, vertical = 3.dp))
+            }
+            Spacer(Modifier.height(5.dp))
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (preview.isBlank()) Glyph(R.drawable.ic_terminal, Modifier.align(Alignment.Center).size(22.dp))
+                else Text(preview, fontSize = 9.sp, lineHeight = 13.sp, fontFamily = LocalTerminalFont.current,
+                    color = colors.onSurfaceVariant, softWrap = false, maxLines = 6, overflow = TextOverflow.Clip)
+            }
         }
-        HorizontalDivider(thickness = .5.dp)
-        Row(Modifier.padding(start = 11.dp, end = 11.dp, top = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-            Glyph(R.drawable.ic_terminal, Modifier.size(16.dp))
-            Text(session.title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 7.dp))
-        }
-        Box(Modifier.padding(start = 11.dp, end = 11.dp, top = 7.dp, bottom = 12.dp)) { StatusCaption(session.status) }
+        Text(session.title, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp))
     }
 }
 
@@ -226,8 +242,7 @@ fun HostsScreen(hosts: List<HostProfile>, onLogin: (HostProfile) -> Unit, onEdit
     val found = hosts.filter { (group == "all" || it.group == group) && "${it.name} ${it.address} ${it.user}".contains(query, ignoreCase = true) }
     LazyColumn(contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)) {
         item {
-            OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), singleLine = true,
-                placeholder = { Text(stringResource(R.string.search_hosts), fontSize = 13.sp) }, leadingIcon = { Glyph(R.drawable.ic_search) })
+            ConnectionSearchField(query, { query = it }, Modifier.fillMaxWidth().padding(bottom = 10.dp))
         }
         item {
             ConnectionSegments(listOf("all" to stringResource(R.string.all), "production" to stringResource(R.string.group_production),

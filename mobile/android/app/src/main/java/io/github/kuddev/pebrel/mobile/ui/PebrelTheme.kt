@@ -45,6 +45,7 @@ fun PebrelTheme(content: @Composable () -> Unit) {
     val dark = background.luminance() < 0.5f
     val scheme = (if (dark) darkColorScheme() else lightColorScheme()).copy(
         primary = palette.color("accent"), onPrimary = background,
+        tertiary = palette.color("green"), onTertiary = background,
         background = background, surface = palette.color("shell"),
         onBackground = palette.color("foreground"), onSurface = palette.color("foreground"),
         onSurfaceVariant = palette.color("muted"), outline = palette.color("frame"),
@@ -78,9 +79,9 @@ fun PebrelTheme(content: @Composable () -> Unit) {
         bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 19.sp),
         labelLarge = TextStyle(fontSize = 13.sp, lineHeight = 20.sp),
     ), shapes = Shapes(
-        extraSmall = RoundedCornerShape(3.dp), small = RoundedCornerShape(4.dp),
-        medium = RoundedCornerShape(5.dp), large = RoundedCornerShape(6.dp),
-        extraLarge = RoundedCornerShape(8.dp),
+        extraSmall = RoundedCornerShape(8.dp), small = RoundedCornerShape(14.dp),
+        medium = RoundedCornerShape(18.dp), large = RoundedCornerShape(20.dp),
+        extraLarge = RoundedCornerShape(24.dp),
     )) {
         CompositionLocalProvider(LocalTerminalFont provides terminalFont, content = content)
     }

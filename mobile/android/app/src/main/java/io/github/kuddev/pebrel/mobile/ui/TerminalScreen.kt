@@ -10,6 +10,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -31,18 +33,20 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     var direct by rememberSaveable(session.id) { mutableStateOf(prefs.directInput) }
     var closing by remember { mutableStateOf(false) }
+    var focused by rememberSaveable(session.id) { mutableStateOf(false) }
+    var keyboardRequest by remember(session.id) { mutableIntStateOf(0) }
     if (session.host != null && (session.status == "connecting" || (session.status == "failed" && session.terminal.frame == null))) {
         SshConnectionStatus(session, onClose, onRetry, onEdit)
         return
     }
-    TerminalHeader(session.title, session.source, session.status, onBack, onSessions, { closing = true })
-    TerminalContext(if (session.source == "Local") stringResource(R.string.local_device) else session.source, stringResource(R.string.raw_terminal))
+    if (!focused) TerminalHeader(session.title,
+        if (session.source == "Local") stringResource(R.string.local_device) else session.source,
+        session.status, onBack, onSessions, { closing = true })
     Column(Modifier.fillMaxSize()) {
         if (session.status in setOf("ended", "failed")) TerminalDisconnected(session, if (session.host != null) onRetry else null)
         if (session.status == "connecting") LinearProgressIndicator(Modifier.fillMaxWidth())
         key(session.id) {
-            TerminalSurface(session, repository, Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp)
-                .workspaceFrame().padding(5.dp), direct, prefs.fontSize)
+            TerminalSurface(session, repository, Modifier.weight(1f).fillMaxWidth(), direct, prefs.fontSize, keyboardRequest)
         }
         CommandComposer(session.id, repository, session.status == "ready", direct, { direct = it }, { label ->
             val key = when (label) {
@@ -56,7 +60,7 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
             }
             if (!session.terminal.key(key, if (label == "Ctrl+C") 2 else 0,
                     text = if (label == "Ctrl+C") "c" else "", unshifted = if (label == "Ctrl+C") 99 else 0)) repository.error.value = "input_rejected"
-        }) { command ->
+        }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused }) { command ->
             val bytes = (command + "\r").toByteArray()
             session.terminal.tryWrite(bytes, 0, bytes.size)
         }
@@ -80,12 +84,11 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     }
     DisposableEffect(identity) { onDispose { repository.leaveDesktopPane() } }
     TerminalHeader(pane.title, desktop.host.name, desktop.status, onBack, onSessions)
-    TerminalContext(pane.cwd.ifBlank { pane.task }, stringResource(R.string.recent_output))
     Column(Modifier.fillMaxSize()) {
         if (desktop.status != "ready") HelperText(stringResource(R.string.device_unavailable), Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
         SelectionContainer(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
             Text(if (output.target == identity) output.text else "", fontFamily = LocalTerminalFont.current,
-                fontSize = prefs.fontSize.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp))
+                fontSize = prefs.fontSize.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp))
         }
         if (output.loading && output.text.isBlank()) LinearProgressIndicator(Modifier.fillMaxWidth())
         CommandComposer(identity, repository, desktop.allowInput && desktop.status == "ready", false, null, null) { command ->
@@ -97,14 +100,19 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
 @Composable
 private fun TerminalHeader(title: String, endpoint: String, status: String, onBack: () -> Unit, onSessions: () -> Unit, onClose: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().height(72.dp).background(MaterialTheme.colorScheme.surface).padding(horizontal = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+    val connection = "$endpoint · ${statusLabel(status)}"
+    Row(Modifier.fillMaxWidth().height(48.dp).background(MaterialTheme.colorScheme.background), verticalAlignment = Alignment.CenterVertically) {
         GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
-        Column(Modifier.weight(1f).clickable(onClickLabel = stringResource(R.string.switch_session), onClick = onSessions).padding(horizontal = 8.dp, vertical = 9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                Glyph(R.drawable.ic_down, Modifier.size(13.dp))
-            }
-            Box(Modifier.padding(top = 5.dp)) { StatusCaption(status, "$endpoint · ") }
+        Row(Modifier.weight(1f).heightIn(min = 48.dp)
+            .clickable(onClickLabel = stringResource(R.string.switch_session), onClick = onSessions)
+            .semantics { contentDescription = connection },
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            if (status == "connecting") CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
+            else Glyph(if (status == "ready") R.drawable.ic_terminal else R.drawable.ic_info, Modifier.size(15.dp),
+                if (status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            Text(title, fontSize = 13.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Glyph(R.drawable.ic_down, Modifier.size(12.dp))
         }
         if (onClose != null) Box {
             GlyphButton(R.drawable.ic_more, stringResource(R.string.more_actions), { menu = true })
@@ -112,15 +120,6 @@ private fun TerminalHeader(title: String, endpoint: String, status: String, onBa
                 DropdownMenuItem(text = { Text(stringResource(R.string.close_session)) }, onClick = { menu = false; onClose() })
             }
         }
-    }
-}
-
-@Composable
-private fun TerminalContext(context: String, view: String) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 42.dp).padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(context, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = LocalTerminalFont.current,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text(view, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 12.dp))
     }
 }
 

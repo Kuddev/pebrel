@@ -17,7 +17,7 @@
     <string name="host_address">Host address</string>
     <string name="username">Username</string>
     <string name="port">Port</string>
-    <string name="password">Password (this connection only)</string>
+    <string name="password">Password</string>
     <string name="connect_pebrel">Connect to Pebrel desktop</string>
     <string name="allow_input">Allow command input on this channel</string>
     <string name="local_edit">Edit locally…</string>
@@ -57,7 +57,7 @@
     <string name="delete_host">Delete host</string>
     <string name="host_actions">Host actions</string>
     <string name="delete_host_confirm">Remove %1$s from saved hosts? Open sessions will keep running.</string>
-    <string name="host_hint">Saved hosts do not store passwords. Verify the host fingerprint on first connection.</string>
+    <string name="host_hint">Verify the host fingerprint on first connection. Passwords can be saved on this device.</string>
     <string name="state_ready">Connected</string>
     <string name="state_connecting">Connecting…</string>
     <string name="state_ended">Ended</string>
@@ -128,7 +128,7 @@
     <string name="group_development">Development</string>
     <string name="jump_host">Jump host</string>
     <string name="no_jump">No jump host</string>
-    <string name="login_hint">The password is used for this connection only and is never saved.</string>
+    <string name="login_hint">Choose Save password to keep it encrypted on this device.</string>
     <string name="connection_failed">Connection failed</string>
     <string name="establishing_connection">Establishing connection…</string>
     <string name="retry">Retry</string>
@@ -150,4 +150,7 @@
     <string name="ssh_error_unknown">Could not open this terminal. Retry or check the host configuration.</string>
     <string name="ssh_error_crypto">The SSH cryptographic component failed to initialize on this device. Update the app and retry.</string>
     <string name="save_connect">Save and connect</string>
+    <string name="enter_terminal_focus">Hide terminal header</string>
+    <string name="exit_terminal_focus">Show terminal header</string>
+    <string name="toggle_keyboard">Show or hide keyboard</string>
 </resources>

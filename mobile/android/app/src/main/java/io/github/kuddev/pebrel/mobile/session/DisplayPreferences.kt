@@ -23,7 +23,7 @@ data class TerminalPreferences(
     val cursorBlink: Boolean = true,
     val pinchZoom: Boolean = true,
     val suggestions: Boolean = true,
-    val directInput: Boolean = false,
+    val directInput: Boolean = true,
 ) {
     /** Preserve the persisted contract when callers pass a stale or unknown value. */
     fun normalized(): TerminalPreferences = copy(
@@ -60,7 +60,7 @@ class DisplayPreferences(context: Context) {
             cursorBlink = stored.getBoolean("cursor_blink", true),
             pinchZoom = stored.getBoolean("pinch_zoom", true),
             suggestions = stored.getBoolean("suggestions", true),
-            directInput = stored.getBoolean("direct_input", false),
+            directInput = stored.getBoolean("direct_input", true),
         ).normalized(),
     )
     val state = current.asStateFlow()

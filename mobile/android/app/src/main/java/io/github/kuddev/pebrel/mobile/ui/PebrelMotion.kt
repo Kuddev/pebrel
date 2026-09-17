@@ -85,6 +85,9 @@ data class PebrelMotion(
         )
     }
 
+    fun <T> tweenOrSnap(durationMillis: Int): FiniteAnimationSpec<T> =
+        if (animationsEnabled) tween(durationMillis) else snap()
+
     fun contentSizeSpec(): FiniteAnimationSpec<IntSize> {
         if (!animationsEnabled) return snap()
         return spring(

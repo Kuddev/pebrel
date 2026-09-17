@@ -1,5 +1,7 @@
 package io.github.kuddev.pebrel.mobile.ui
 
+import android.view.inputmethod.InputMethodManager
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -13,13 +15,14 @@ import io.github.kuddev.pebrel.mobile.session.TerminalPreferences
 import io.github.kuddev.pebrel.terminal.GhosttyView
 
 @Composable
-fun TerminalSurface(session: LocalSession, repository: SessionRepository, modifier: Modifier, direct: Boolean, fontSize: Int) {
+fun TerminalSurface(session: LocalSession, repository: SessionRepository, modifier: Modifier, direct: Boolean, fontSize: Int, keyboardRequest: Int = 0) {
     val stored = repository.display.state.value
     TerminalSurface(
         session = session,
         repository = repository,
         modifier = modifier,
         preferences = stored.copy(fontSize = fontSize, directInput = direct),
+        keyboardRequest = keyboardRequest,
         onPreferencesChanged = { value ->
             repository.display.update { current -> current.copy(fontSize = value.fontSize) }
         },
@@ -33,8 +36,10 @@ fun TerminalSurface(
     modifier: Modifier,
     preferences: TerminalPreferences,
     onPreferencesChanged: (TerminalPreferences) -> Unit = {},
+    keyboardRequest: Int = 0,
 ) {
     val renderToken = remember(session.id) { Any() }
+    val lastKeyboardRequest = remember(session.id) { mutableIntStateOf(keyboardRequest) }
     DisposableEffect(session.id, renderToken) { onDispose { repository.detachRenderer(session.id, renderToken) } }
     AndroidView(modifier = modifier.clipToBounds(), factory = { context -> GhosttyView(context) }, update = { view ->
         val app = view.context.applicationContext as PebrelApplication
@@ -51,5 +56,16 @@ fun TerminalSurface(
         view.directInput = preferences.directInput
         view.session = session.terminal
         repository.attachRenderer(session.id, renderToken) { view.onScreenUpdated() }
+        if (keyboardRequest != lastKeyboardRequest.intValue) {
+            lastKeyboardRequest.intValue = keyboardRequest
+            if (preferences.directInput) {
+                view.requestFocus()
+                view.post {
+                    if (view.isAttachedToWindow && view.directInput) {
+                        view.context.getSystemService(InputMethodManager::class.java).showSoftInput(view, 0)
+                    }
+                }
+            }
+        }
     })
 }

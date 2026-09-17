@@ -17,7 +17,7 @@
     <string name="host_address">主机地址</string>
     <string name="username">用户名</string>
     <string name="port">端口</string>
-    <string name="password">密码（仅本次连接）</string>
+    <string name="password">密码</string>
     <string name="connect_pebrel">连接 Pebrel 桌面端</string>
     <string name="allow_input">允许通过此通道输入命令</string>
     <string name="local_edit">在本地编辑…</string>
@@ -57,7 +57,7 @@
     <string name="delete_host">删除主机</string>
     <string name="host_actions">主机操作</string>
     <string name="delete_host_confirm">从已保存的主机中移除 %1$s？已打开的会话会继续运行。</string>
-    <string name="host_hint">主机信息不保存密码。首次连接时请核对主机指纹。</string>
+    <string name="host_hint">首次连接时请核对主机指纹。密码可选择保存在本机。</string>
     <string name="state_ready">已连接</string>
     <string name="state_connecting">连接中…</string>
     <string name="state_ended">已结束</string>
@@ -128,7 +128,7 @@
     <string name="group_development">开发环境</string>
     <string name="jump_host">跳板机</string>
     <string name="no_jump">不使用跳板机</string>
-    <string name="login_hint">密码仅用于本次连接，不会保存。</string>
+    <string name="login_hint">勾选“保存密码”后，密码会加密保存在本机。</string>
     <string name="connection_failed">连接失败</string>
     <string name="establishing_connection">正在建立连接…</string>
     <string name="retry">重新连接</string>
@@ -150,4 +150,7 @@
     <string name="ssh_error_unknown">无法打开终端，请重新连接或检查主机配置。</string>
     <string name="ssh_error_crypto">此设备上的 SSH 加密组件初始化失败，请更新应用后重试。</string>
     <string name="save_connect">保存并连接</string>
+    <string name="enter_terminal_focus">隐藏终端标题栏</string>
+    <string name="exit_terminal_focus">显示终端标题栏</string>
+    <string name="toggle_keyboard">显示或隐藏键盘</string>
 </resources>
