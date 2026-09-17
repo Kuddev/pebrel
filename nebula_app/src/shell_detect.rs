@@ -486,6 +486,15 @@ pub fn shell_short_tag(name_or_id: &str) -> String {
     lower.split_whitespace().next().unwrap_or("").chars().take(10).collect()
 }
 
+/// 这个程序是不是 WSL（`wsl.exe` / 全路径都认，按 `file_stem` 判断）。
+fn is_wsl_program(program: &str) -> bool {
+    let filename = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("wsl"))
+}
+
 /// 一次 WSL 启动用的发行版名：只认 `-d` / `--distribution` 显式给出的那个。
 ///
 /// 裸 `wsl` 启动跑的是系统默认发行版，名字我们无从得知——宁可返回 `None`
@@ -494,30 +503,58 @@ pub fn shell_short_tag(name_or_id: &str) -> String {
 ///
 /// 旧壳 `window_context::focused_wsl_cwd` 的判定原样固化在这里，两壳共用。
 pub fn wsl_launch_distro<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
-    let filename = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let stem = std::path::Path::new(filename)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if stem != "wsl" {
+    if !is_wsl_program(program) {
         return None;
     }
     let index = args.iter().position(|arg| arg == "-d" || arg == "--distribution")?;
     args.get(index + 1).map(String::as_str).filter(|distro| !distro.is_empty())
 }
 
+/// 一次 WSL 启动带的来宾目录：只认显式 `--cd <路径>` / `--cd=<路径>`。
+///
+/// [`wsl_args_at`] 的反向读取。存在的理由是「开在哪儿」那一列：WSL 入口的
+/// `Profile::cwd` 是空的（目录随 `--cd` 直接带给来宾，宿主侧没有对应目录，
+/// 见 `quick_access_profile_for`），只有 argv 里有答案——读不到就返回 `None`，
+/// 调用方保持原有回落，绝不猜。
+///
+/// 不像 [`wsl_args_at`] 那样只认绝对来宾路径：这里只做展示，`~` 这类相对写法
+/// 照原样显示也比显示 `wsl.exe` 有用。
+pub fn wsl_launch_guest<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
+    if !is_wsl_program(program) {
+        return None;
+    }
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--cd" => {
+                return arguments.next().map(String::as_str).filter(|guest| !guest.is_empty())
+            },
+            // 取值的启动选项：连值一起跳过，别把它的值当成命令名。
+            "-d" | "--distribution" | "-u" | "--user" | "--shell-type" => {
+                arguments.next();
+            },
+            option if option.starts_with("--cd=") => {
+                let guest = &option["--cd=".len()..];
+                return (!guest.is_empty()).then_some(guest);
+            },
+            "--system" => {},
+            option
+                if ["--distribution=", "--user=", "--shell-type="]
+                    .iter()
+                    .any(|prefix| option.starts_with(prefix)) => {},
+            // 走到不认识 token 就是来宾命令开始了（显式 `--`/`--exec` 或隐式命令名），
+            // 后面的 `--cd` 属于来宾程序而不是启动目录——边界与 [`wsl_args_at`] 同一口径。
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// 一次 WSL 启动用的来宾用户：只认显式 `-u` / `--user`。探测来宾进程时必须
 /// 使用同一个用户，否则 `wsl.exe` 可能启动另一份默认用户环境，看不到目标
 /// Codex 的 `/proc`。
 pub fn wsl_launch_user<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
-    let filename = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let stem = std::path::Path::new(filename)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if stem != "wsl" {
+    if !is_wsl_program(program) {
         return None;
     }
     for (index, arg) in args.iter().enumerate() {
@@ -594,6 +631,27 @@ pub fn wsl_unc_path(distro: &str, guest_path: &str) -> std::path::PathBuf {
         "\\\\wsl.localhost\\{distro}{}",
         guest_path.replace('/', "\\")
     ))
+}
+
+/// `\\wsl.localhost\<发行版>\…` 宿主 UNC 路径 →（发行版, 来宾绝对路径）。
+///
+/// [`wsl_unc_path`] 的反向。目录选择器会把 WSL 发行版钉进侧栏（issue #12），
+/// 用户在那里选到目录、拿回来的就是 UNC 形式；而 `wsl.exe --cd` 要的是来宾
+/// 路径。两者必须转换——否则一个「Ubuntu + 项目目录」的入口会带着宿主路径去
+/// 启动，来宾侧根本不存在那个路径。
+///
+/// 纯字符串变换，不碰文件系统。也认旧的 `\\wsl$\` 形式（用户手打的路径可能
+/// 还是那个）。不是这两种形式的一律返回 `None`。
+pub fn wsl_guest_path_from_unc(path: &std::path::Path) -> Option<(String, String)> {
+    let text = path.to_string_lossy().replace('/', "\\");
+    let rest = text
+        .strip_prefix(r"\\wsl.localhost\")
+        .or_else(|| text.strip_prefix(r"\\wsl$\"))?;
+    let (distro, guest) = rest.split_once('\\')?;
+    if distro.is_empty() || guest.is_empty() {
+        return None;
+    }
+    Some((distro.to_owned(), format!("/{}", guest.replace('\\', "/"))))
 }
 
 /// 一个 WSL 终端的位置：发行版名 + 来宾绝对路径。
@@ -831,6 +889,40 @@ mod tests {
         assert_eq!(super::wsl_launch_user("pwsh.exe", &owned(&["--user", "hello"])), None);
     }
 
+    /// 「开在哪儿」那一列读的就是这个：WSL 入口的 profile 没有 `cwd`，目录只在
+    /// argv 的 `--cd` 里。读不准，那一列就会显示成 `wsl.exe`。
+    #[test]
+    fn wsl_launch_guest_reads_only_the_launch_directory() {
+        let owned =
+            |args: &[&str]| -> Vec<String> { args.iter().map(|arg| (*arg).to_owned()).collect() };
+
+        assert_eq!(
+            super::wsl_launch_guest("wsl.exe", &owned(&["-d", "Ubuntu", "--cd", "/home/me/proj"])),
+            Some("/home/me/proj")
+        );
+        assert_eq!(
+            super::wsl_launch_guest(r"C:\Windows\System32\wsl.exe", &owned(&["--cd=/home/me"])),
+            Some("/home/me")
+        );
+        // 只做展示：`~` 这类写法照原样显示，也比显示 `wsl.exe` 有用。
+        assert_eq!(super::wsl_launch_guest("wsl", &owned(&["--cd", "~"])), Some("~"));
+
+        // 缺值 / 空值 / 非 WSL 程序都不识别，调用方保持自己的回落。
+        assert_eq!(super::wsl_launch_guest("wsl.exe", &owned(&["--cd"])), None);
+        assert_eq!(super::wsl_launch_guest("wsl.exe", &owned(&["--cd="])), None);
+        assert_eq!(super::wsl_launch_guest("wsl.exe", &[]), None);
+        assert_eq!(super::wsl_launch_guest("pwsh.exe", &owned(&["--cd", "/home/me"])), None);
+
+        // 来宾命令之后的 `--cd` 是它自己的参数，不是启动目录——与 `wsl_args_at` 同一边界。
+        for marker in ["--", "--exec", "--execute", "-e", "zsh"] {
+            let args = owned(&["-d", "Ubuntu", marker, "--cd", "/guest-argument"]);
+            assert_eq!(super::wsl_launch_guest("wsl.exe", &args), None, "marker={marker}");
+        }
+        // 取值的启动选项不能被当成命令名，否则它后面的 `--cd` 就丢了。
+        let args = owned(&["-u", "guest", "--shell-type", "login", "--cd", "/home/me"]);
+        assert_eq!(super::wsl_launch_guest("wsl.exe", &args), Some("/home/me"));
+    }
+
     /// 只有来宾绝对路径需要映射；宿主路径与空 cwd 走普通分支。
     #[test]
     fn wsl_guest_cwd_accepts_only_absolute_guest_paths() {
@@ -914,6 +1006,27 @@ mod tests {
 
     /// UNC 形式必须是 `\\wsl.localhost\<发行版>\…`：旧壳原来拼的 `\\wsl$\` 是
     /// WSL 早期形式，新版 Windows 只保证 `wsl.localhost` 这个名字。
+    #[test]
+    fn wsl_guest_path_round_trips_the_unc_form() {
+        for (distro, guest) in [("Debian", "/home/hello/src"), ("Ubuntu", "/home/anx4758/stylekit")] {
+            let unc = super::wsl_unc_path(distro, guest);
+            assert_eq!(
+                super::wsl_guest_path_from_unc(&unc),
+                Some((distro.to_owned(), guest.to_owned())),
+                "{unc:?} 应还原回 ({distro}, {guest})"
+            );
+        }
+        // 旧的 `\\wsl$` 形式也认——用户手打的历史路径可能还是那个。
+        assert_eq!(
+            super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"\\wsl$\Ubuntu\home\x")),
+            Some(("Ubuntu".to_owned(), "/home/x".to_owned()))
+        );
+        // 普通 Windows 路径与残缺的 UNC 都不是 WSL 目录。
+        assert_eq!(super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"D:\src")), None);
+        assert_eq!(super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu")), None);
+        assert_eq!(super::wsl_guest_path_from_unc(&std::path::PathBuf::from(r"\\server\share")), None);
+    }
+
     #[test]
     fn wsl_unc_path_uses_the_localhost_form_with_backslashes() {
         assert_eq!(

@@ -1,7 +1,7 @@
 use super::*;
 
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
-const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
+pub(super) const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
 
 /// `SidebarActivity::WaitingInput` / `Attention` 共用的字位：Nerd Font
 /// `nf-fa-hand_paper_o`（开掌）。已核对打包字体
@@ -751,6 +751,7 @@ impl NebulaWorkspace {
                             ),
                     ),
             )
+            .child(self.render_quick_access(cx))
             .child(self.render_tabs_section(items, cx));
         self.spinner_visible.set(items_running.get());
         if items_running.get() {
