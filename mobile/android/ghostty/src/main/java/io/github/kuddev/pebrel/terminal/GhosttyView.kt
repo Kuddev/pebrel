@@ -13,6 +13,7 @@ import android.view.*
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import android.widget.OverScroller
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -35,6 +36,9 @@ class GhosttyView(context: Context) : View(context) {
         textSize = 14 * resources.displayMetrics.scaledDensity
         fontFeatureSettings = "'liga' 0, 'calt' 0"
     }
+    private val fling = OverScroller(context)
+    private var flingY = 0
+    private var flingInputGeneration = 0
     private val blinkHandler = Handler(Looper.getMainLooper())
     private var blinkScheduled = false
     private var cursorOn = true
@@ -70,6 +74,7 @@ class GhosttyView(context: Context) : View(context) {
     var session: TerminalSession? = null
         set(value) {
             if (field === value) return
+            stopScrolling()
             field?.setVisible(false)
             actionMode?.finish()
             field = value
@@ -175,13 +180,14 @@ class GhosttyView(context: Context) : View(context) {
         if (width > 0 && height > 0) session?.updateSize(
             floor(width / cellWidth).toInt(), floor(height / cellHeight).toInt(), ceil(cellWidth).toInt(), ceil(cellHeight).toInt())
     }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { updateGeometry() }
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { stopScrolling(); updateGeometry() }
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         session?.setVisible(isShown)
         resetCursorBlink()
     }
     override fun onDetachedFromWindow() {
+        stopScrolling()
         session?.setVisible(false)
         actionMode?.finish()
         stopCursorBlink()
@@ -190,21 +196,21 @@ class GhosttyView(context: Context) : View(context) {
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
         session?.setVisible(visibility == VISIBLE && isAttachedToWindow)
-        if (visibility == VISIBLE) resetCursorBlink() else stopCursorBlink()
+        if (visibility == VISIBLE) resetCursorBlink() else { stopScrolling(); stopCursorBlink() }
     }
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
         super.onVisibilityChanged(changedView, visibility)
         if (changedView !== this) return
         session?.setVisible(visibility == VISIBLE && isAttachedToWindow && windowVisibility == VISIBLE)
-        if (visibility == VISIBLE) resetCursorBlink() else stopCursorBlink()
+        if (visibility == VISIBLE) resetCursorBlink() else { stopScrolling(); stopCursorBlink() }
     }
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (hasWindowFocus) resetCursorBlink() else stopCursorBlink()
+        if (hasWindowFocus) resetCursorBlink() else { stopScrolling(); stopCursorBlink() }
     }
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
-        if (gainFocus) resetCursorBlink() else stopCursorBlink()
+        if (gainFocus) resetCursorBlink() else { stopScrolling(); stopCursorBlink() }
     }
     fun onScreenUpdated() {
         post {
@@ -315,12 +321,22 @@ class GhosttyView(context: Context) : View(context) {
             return true
         }
         override fun onScroll(first: MotionEvent?, current: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
-            scrollRemainder += distanceY
-            val lines = (scrollRemainder / cellHeight).toInt()
-            if (lines != 0) { session?.scroll(lines); scrollRemainder -= lines * cellHeight }
+            scrollPixels(distanceY)
+            return true
+        }
+        override fun onFling(first: MotionEvent?, current: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+            if (selectedFrame != null || pinchInProgress) return false
+            val terminal = session ?: return false
+            flingInputGeneration = terminal.inputGeneration
+            flingY = 0
+            // Finger movement and viewport movement have opposite signs.
+            val limit = ViewConfiguration.get(context).scaledMaximumFlingVelocity
+            fling.fling(0, 0, 0, (-velocityY).toInt().coerceIn(-limit, limit), 0, 0, -1_000_000, 1_000_000)
+            postInvalidateOnAnimation()
             return true
         }
         override fun onLongPress(event: MotionEvent) {
+            stopScrolling()
             val current = session?.frame ?: return
             selectedFrame = current
             val row = floor(event.y / cellHeight).toInt().coerceIn(0, current.rows.lastIndex)
@@ -358,6 +374,41 @@ class GhosttyView(context: Context) : View(context) {
     })
     private var scrollRemainder = 0f
 
+    private fun scrollPixels(distance: Float) {
+        scrollRemainder += distance
+        val lines = (scrollRemainder / cellHeight).toInt()
+        if (lines != 0) {
+            session?.scroll(lines)
+            scrollRemainder -= lines * cellHeight
+        }
+    }
+
+    private fun stopScrolling() {
+        fling.forceFinished(true)
+        scrollRemainder = 0f
+    }
+
+    override fun computeScroll() {
+        super.computeScroll()
+        if (fling.isFinished) return
+        if (session?.inputGeneration != flingInputGeneration) { stopScrolling(); return }
+        if (!fling.computeScrollOffset()) return
+        val position = fling.currY
+        scrollPixels((position - flingY).toFloat())
+        flingY = position
+        postInvalidateOnAnimation()
+    }
+
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (selectedFrame == null && !pinchInProgress && event.actionMasked == MotionEvent.ACTION_SCROLL &&
+            event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) {
+            stopScrolling()
+            scrollPixels(-event.getAxisValue(MotionEvent.AXIS_VSCROLL) * cellHeight * 3)
+            return true
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
     private fun cancelPointerGesture(event: MotionEvent) {
         val cancel = MotionEvent.obtain(event)
         cancel.action = MotionEvent.ACTION_CANCEL
@@ -366,6 +417,17 @@ class GhosttyView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                stopScrolling()
+                parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                stopScrolling()
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            MotionEvent.ACTION_UP -> parent?.requestDisallowInterceptTouchEvent(false)
+        }
         if (selectedFrame != null && !(event.actionMasked == MotionEvent.ACTION_POINTER_DOWN && pinchZoomEnabled)) {
             if (event.actionMasked == MotionEvent.ACTION_MOVE) {
                 val frame = checkNotNull(selectedFrame)
@@ -385,6 +447,7 @@ class GhosttyView(context: Context) : View(context) {
         val wasPinching = pinchInProgress
         val startedByPointer = pinchZoomEnabled && event.pointerCount >= 2 && !pinchInProgress
         if (startedByPointer) {
+            stopScrolling()
             pinchInProgress = true
             pinchFontSize = fontSize.toFloat()
             pinchChanged = false
@@ -399,7 +462,10 @@ class GhosttyView(context: Context) : View(context) {
             }
             return true
         }
-        return gestures.onTouchEvent(event)
+        gestures.onTouchEvent(event)
+        // Once DOWN is accepted, retain the whole stream through touch-slop and UP.
+        // GestureDetector can return false for intermediate events before scrolling starts.
+        return true
     }
     override fun performClick(): Boolean { super.performClick(); return true }
 
@@ -449,7 +515,7 @@ class GhosttyView(context: Context) : View(context) {
         if (clip.itemCount > 0) accept(session?.paste(clip.getItemAt(0).coerceToText(context).toString()) == true)
     }
     internal fun accept(result: Boolean) {
-        if (result) resetCursorBlink() else session?.reportRejected()
+        if (result) { stopScrolling(); resetCursorBlink() } else session?.reportRejected()
     }
     override fun onCheckIsTextEditor() = directInput
     override fun onCreateInputConnection(info: EditorInfo): InputConnection? {

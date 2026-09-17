@@ -29,6 +29,8 @@ class TerminalSession(private val transport: SessionTransport, private val callb
     private val ended = AtomicBoolean()
     private val failed = AtomicBoolean()
     private val queuedBytes = AtomicInteger()
+    private val acceptedInput = AtomicInteger()
+    val inputGeneration: Int get() = acceptedInput.get()
     private val outgoing = Channel<Input>(64)
     private val sizes = Channel<Geometry>(Channel.CONFLATED)
     private val frames = Channel<Unit>(Channel.CONFLATED)
@@ -164,14 +166,18 @@ class TerminalSession(private val transport: SessionTransport, private val callb
         require(offset >= 0 && count >= 0 && offset <= bytes.size - count)
         if (count > 128 * 1024) return false
         val copy = bytes.copyOfRange(offset, offset + count)
-        return offer(copy.size) { copy }.also { if (it) scroll(Int.MAX_VALUE) }
+        return offer(copy.size) { copy }.also { if (it) returnToInput() }
     }
     fun sendText(text: String): Boolean = text.toByteArray().let { tryWrite(it, 0, it.size) }
     fun key(code: Int, mods: Int = 0, action: Int = 1, text: String = "", unshifted: Int = 0): Boolean =
-        offer(1024) { it.key(code, mods, action, text, unshifted) }.also { if (it && action != 0) scroll(Int.MAX_VALUE) }
+        offer(1024) { it.key(code, mods, action, text, unshifted) }.also { if (it && action != 0) returnToInput() }
     fun paste(text: String): Boolean {
         if (text.length > 32768) return false
-        return offer(text.length * 4 + 12) { it.paste(text) }.also { if (it) scroll(Int.MAX_VALUE) }
+        return offer(text.length * 4 + 12) { it.paste(text) }.also { if (it) returnToInput() }
+    }
+    private fun returnToInput() {
+        acceptedInput.incrementAndGet()
+        scroll(Int.MAX_VALUE)
     }
     fun reportRejected() { notify { callbacks.onInputRejected(this@TerminalSession) } }
     private fun requestFrame() { if (visible) frames.trySend(Unit) }
