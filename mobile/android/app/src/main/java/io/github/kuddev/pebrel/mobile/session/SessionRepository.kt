@@ -67,8 +67,17 @@ class SessionRepository(private val context: Context) {
     private var renderToken: Any? = null
     private var redraw: (() -> Unit)? = null
     val drafts = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val recentCommands = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    val commandHistory = recentCommands.asStateFlow()
     fun setDraft(id: String, text: String) { drafts.value = drafts.value + (id to text) }
     fun acknowledgeDraft(id: String, sent: String) {
+        if (sent.isNotBlank()) {
+            // Local composition history follows the live session, without writing shell input to disk.
+            var remaining = 32_768
+            val entries = (listOf(sent) + recentCommands.value[id].orEmpty())
+                .distinct().take(40).takeWhile { remaining -= it.length; remaining >= 0 }
+            recentCommands.value = recentCommands.value + (id to entries)
+        }
         if (drafts.value[id] == sent) drafts.value = drafts.value - id
     }
 
@@ -281,6 +290,7 @@ class SessionRepository(private val context: Context) {
         live.value.find { it.id == id }?.terminal?.finishIfRunning()
         live.value = live.value.filterNot { it.id == id }
         drafts.value = drafts.value - id
+        recentCommands.value = recentCommands.value - id
         stopIdleService()
     }
     fun importRelay(text: String): String? {
@@ -397,6 +407,7 @@ class SessionRepository(private val context: Context) {
         live.value.forEach { it.terminal.finishIfRunning() }; live.value = emptyList()
         val clients = desktopClients.values.toList(); desktopClients.clear(); computers.value = emptyList()
         drafts.value = emptyMap()
+        recentCommands.value = emptyMap()
         scope.launch { clients.forEach { it.close() } }
         stopIdleService()
     }
@@ -406,6 +417,7 @@ class SessionRepository(private val context: Context) {
         val client = desktopClients.remove(id)
         computers.value = computers.value.filterNot { it.id == id }
         drafts.value = drafts.value.filterKeys { !it.startsWith("$id:") }
+        recentCommands.value = recentCommands.value.filterKeys { !it.startsWith("$id:") }
         scope.launch { client?.close() }
         stopIdleService()
     }

@@ -1,0 +1,16 @@
+<resources>
+    <string name="attachment_added">附件已加入草稿</string>
+    <string name="attachment_auth_title">上传到当前 SSH 主机</string>
+    <string name="attachment_auth_hint">请输入登录密码以单独传输文件。此密码仅用于本次上传。</string>
+    <string name="attachment_upload">上传</string>
+    <string name="attachment_copy_path">复制路径</string>
+    <string name="attachment_importing">正在导入附件…</string>
+    <string name="attachment_uploading">正在上传附件…</string>
+    <string name="attachment_failed">无法添加附件</string>
+    <string name="attachment_draft_full">文件已保存，请复制路径后缩短草稿。</string>
+    <string name="attachment_too_large">请选择不超过 16 MiB 的文件。</string>
+    <string name="attachment_unreadable">无法读取所选文件，请重新选择。</string>
+    <string name="attachment_storage">请允许访问共享存储，并检查可用空间。</string>
+    <string name="attachment_remote_tools">SSH 主机需提供 POSIX Shell、head 和 base64 才能上传附件。</string>
+    <string name="attachment_transfer_failed">文件传输未完成，请检查连接和可用空间后重试。</string>
+</resources>

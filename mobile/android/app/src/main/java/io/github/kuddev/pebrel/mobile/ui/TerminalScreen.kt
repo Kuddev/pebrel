@@ -31,7 +31,8 @@ import kotlinx.coroutines.delay
 fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit,
                         onRetry: () -> Unit, onEdit: () -> Unit, onClose: () -> Unit) {
     val prefs by repository.display.state.collectAsStateWithLifecycle()
-    var direct by rememberSaveable(session.id) { mutableStateOf(prefs.directInput) }
+    var direct by rememberSaveable(session.id, prefs.directInput) { mutableStateOf(prefs.directInput) }
+    val attachments = rememberTerminalAttachmentAction(session, repository) { direct = false }
     var closing by remember { mutableStateOf(false) }
     var focused by rememberSaveable(session.id) { mutableStateOf(false) }
     var keyboardRequest by remember(session.id) { mutableIntStateOf(0) }
@@ -62,7 +63,8 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
             }
             if (!session.terminal.key(key, if (label == "Ctrl+C") 2 else 0,
                     text = if (label == "Ctrl+C") "c" else "", unshifted = if (label == "Ctrl+C") 99 else 0)) repository.error.value = "input_rejected"
-        }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused }) { command ->
+        }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused },
+            onAttach = attachments.pick, attachmentBusy = attachments.busy) { command ->
             val bytes = (command + "\r").toByteArray()
             session.terminal.tryWrite(bytes, 0, bytes.size)
         }

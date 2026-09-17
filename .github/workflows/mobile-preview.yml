@@ -28,7 +28,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: mobile-preview-${{ github.ref }}
+  group: mobile-preview-${{ github.ref }}-${{ inputs.include_windows || false }}
   cancel-in-progress: true
 
 jobs:

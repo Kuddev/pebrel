@@ -1,0 +1,21 @@
+<resources>
+    <string name="composer_attach">添加附件</string>
+    <string name="composer_voice">语音输入</string>
+    <string name="composer_voice_prompt">说出命令</string>
+    <string name="composer_voice_unavailable">没有可用的语音输入服务。</string>
+    <string name="composer_voice_failed">语音输入失败，请重试。</string>
+    <string name="composer_voice_empty">没有识别到语音内容。</string>
+    <string name="composer_history">最近命令</string>
+    <string name="composer_history_filled">命令已填入编辑框</string>
+    <string name="composer_mode_direct">直接终端输入</string>
+    <string name="composer_mode_edit">本地命令编辑</string>
+    <string name="composer_aux_keys">显示辅助按键</string>
+    <string name="composer_hide_aux_keys">隐藏辅助按键</string>
+    <string name="composer_expand_editor">展开命令编辑框</string>
+    <string name="composer_collapse_editor">收起命令编辑框</string>
+    <string name="composer_focus">进入终端专注模式</string>
+    <string name="composer_exit_focus">退出终端专注模式</string>
+    <string name="composer_show_keyboard">显示键盘</string>
+    <string name="composer_hide_keyboard">隐藏键盘</string>
+    <string name="composer_voice_too_long">语音内容会超过命令长度限制。</string>
+</resources>

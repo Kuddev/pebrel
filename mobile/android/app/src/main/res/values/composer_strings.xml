@@ -1,0 +1,21 @@
+<resources>
+    <string name="composer_attach">Attach file</string>
+    <string name="composer_voice">Voice input</string>
+    <string name="composer_voice_prompt">Speak a command</string>
+    <string name="composer_voice_unavailable">No speech input service is available.</string>
+    <string name="composer_voice_failed">Speech input failed. Try again.</string>
+    <string name="composer_voice_empty">No speech was recognized.</string>
+    <string name="composer_history">Recent commands</string>
+    <string name="composer_history_filled">Command filled into editor</string>
+    <string name="composer_mode_direct">Direct terminal input</string>
+    <string name="composer_mode_edit">Local command editor</string>
+    <string name="composer_aux_keys">Show auxiliary keys</string>
+    <string name="composer_hide_aux_keys">Hide auxiliary keys</string>
+    <string name="composer_expand_editor">Expand command editor</string>
+    <string name="composer_collapse_editor">Collapse command editor</string>
+    <string name="composer_focus">Enter terminal focus</string>
+    <string name="composer_exit_focus">Exit terminal focus</string>
+    <string name="composer_show_keyboard">Show keyboard</string>
+    <string name="composer_hide_keyboard">Hide keyboard</string>
+    <string name="composer_voice_too_long">Voice input would exceed the command limit.</string>
+</resources>

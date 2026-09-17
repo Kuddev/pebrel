@@ -37,7 +37,7 @@
     <string name="enable_notifications">Enable system notifications</string>
     <string name="desktop_setup">Desktop connection preview</string>
     <string name="desktop_setup_hint">The computer needs a reachable SSH server and a running Pebrel build with mobile-bridge on PATH. Windows, Linux and macOS use the same channel protocol.</string>
-    <string name="native_preview_boundary">Native connection preview: local shell, password SSH, desktop task discovery and bounded output reads. QR pairing, durable notification replay, attachments, WebDAV and the complete visual design are not implemented in this build yet.</string>
+    <string name="native_preview_boundary">Connection preview: local and SSH terminals, LAN and relay QR pairing, and bounded desktop output. Durable notification replay, desktop file transfer and WebDAV are not available yet.</string>
     <string name="appearance">Appearance</string>
     <string name="follow_system">Follow system</string>
     <string name="relay_connect">Connect computer</string>
@@ -110,7 +110,7 @@
     <string name="font_boundary">Font changes apply to terminal output. Layout follows system text scaling.</string>
     <string name="background_style_hint">The terminal uses the selected theme background. Image backgrounds are not available yet.</string>
     <string name="input_settings_hint">Compose edits locally before sending. Direct input is for interactive terminal programs.</string>
-    <string name="features_pending">QR pairing, WebDAV, attachments and structured reading are not available yet.</string>
+    <string name="features_pending">Desktop file transfer, WebDAV and structured reading are not available yet.</string>
     <string name="notice_boundary">Online desktop task updates use system notifications. Offline replay is not available yet.</string>
     <string name="connection_boundary">SSH terminals stream bytes. Computer output currently refreshes about every 2 seconds. Relay TLS terminates on your server; end-to-end encryption is not implemented yet.</string>
     <string name="notifications">Notifications</string>
