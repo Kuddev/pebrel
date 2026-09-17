@@ -11,6 +11,10 @@ on:
         description: "Optional successful public core CI run to reuse for APK-only builds"
         type: string
         default: ""
+      include_windows:
+        description: "Also package the Windows desktop and LAN pairing tools from this commit"
+        type: boolean
+        default: false
   push:
     branches: ["mobile/**"]
   pull_request:
@@ -28,6 +32,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_only && inputs.include_windows }}
+    name: Windows desktop for mobile LAN testing
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      PYTHONUTF8: "1"
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: release
+          target: target/release
+          legacy-key: windows
+      - name: Prepare pinned Windows console runtime
+        shell: pwsh
+        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+      - name: Build and package the GPUI desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = python scripts/preview_release.py --print-package-version nebula_app/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read product version' }
+          ./scripts/package-release.ps1 -Version $version -OutputDirectory desktop-package -TargetDirectory target
+          python mobile/tools/package_windows_preview.py --desktop "desktop-package/Pebrel-v$version-windows-x64.zip" --output desktop-delivery --commit $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot package mobile desktop preview' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pebrel-windows-mobile-preview
+          path: desktop-delivery/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save compiled workload
+        if: ${{ success() && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
   relay:
     if: ${{ !inputs.package_only }}
     runs-on: ubuntu-24.04
