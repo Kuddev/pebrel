@@ -101,7 +101,7 @@ class SessionRepository(private val context: Context) {
 
     fun saveHost(host: HostProfile) {
         val previous = savedHosts.value.find { it.id == host.id }
-        val fingerprint = if (previous?.address == host.address && previous.port == host.port) previous.fingerprint else ""
+        val fingerprint = if (previous != null && sameSshServer(previous, host)) previous.fingerprint else ""
         savedHosts.value = savedHosts.value.filterNot { it.id == host.id } + host.copy(fingerprint = fingerprint)
         persistHosts()
     }
@@ -113,7 +113,21 @@ class SessionRepository(private val context: Context) {
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
 
-    fun hasSavedPassword(host: HostProfile): Boolean = savedCredentialIds.value.contains(credentialKey(host))
+    private fun sameSshServer(first: HostProfile, second: HostProfile): Boolean =
+        first.port == second.port && runCatching {
+            parseSshEndpoint(first.address, first.user).address == parseSshEndpoint(second.address, second.user).address
+        }.getOrDefault(false)
+
+    private fun sameSshLogin(first: HostProfile, second: HostProfile): Boolean =
+        first.id == second.id && first.port == second.port && runCatching {
+            parseSshEndpoint(first.address, first.user) == parseSshEndpoint(second.address, second.user)
+        }.getOrDefault(false)
+
+    private fun previousCredential(host: HostProfile): HostProfile? =
+        savedHosts.value.firstOrNull { sameSshLogin(it, host) }
+
+    fun hasSavedPassword(host: HostProfile): Boolean = savedCredentialIds.value.contains(credentialKey(host)) ||
+        previousCredential(host)?.let { savedCredentialIds.value.contains(credentialKey(it)) } == true
 
     /** Completes only after encrypted credentials and host metadata reach storage. */
     suspend fun saveHostWithCredentials(host: HostProfile, password: CharArray?, rememberPassword: Boolean): Boolean =
@@ -125,8 +139,14 @@ class SessionRepository(private val context: Context) {
                         val key = credentialKey(host)
                         if (rememberPassword && password?.isNotEmpty() == true) credentialStore.save(key, password)
                         else if (!rememberPassword) credentialStore.clear(key)
+                        else if (previous != null && credentialKey(previous) != key && sameSshLogin(previous, host)) {
+                            // Canonicalizing user@host must retain the explicitly saved credential.
+                            credentialStore.load(credentialKey(previous))?.let { saved ->
+                                try { credentialStore.save(key, saved) } finally { saved.fill('\u0000') }
+                            }
+                        }
                         if (previous != null && credentialKey(previous) != key) credentialStore.clear(credentialKey(previous))
-                        val fingerprint = if (previous?.address == host.address && previous.port == host.port) previous.fingerprint else ""
+                        val fingerprint = if (previous != null && sameSshServer(previous, host)) previous.fingerprint else ""
                         val next = savedHosts.value.filterNot { it.id == host.id } + host.copy(fingerprint = fingerprint)
                         check(writeHostMetadata(next))
                         val ids = credentialStore.ids()
@@ -143,7 +163,11 @@ class SessionRepository(private val context: Context) {
 
     suspend fun loadSavedPassword(host: HostProfile): CharArray? = withContext(Dispatchers.IO) {
         credentialWrites.withLock {
-            try { credentialStore.load(credentialKey(host)) }
+            try {
+                credentialStore.load(credentialKey(host)) ?: previousCredential(host)?.let {
+                    credentialStore.load(credentialKey(it))
+                }
+            }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { error.value = "credential_load_failed"; null }
         }

@@ -160,7 +160,9 @@ The Save password choice uses independent AES-GCM records backed by Android
 Keystore. Records are bound to the profile ID, address, port and username; changing
 the login endpoint never reuses its previous secret. Keeping the password field
 blank retains an existing credential, while Remove saved password deletes it
-explicitly. Storage runs on the IO dispatcher and the form closes only after the
+explicitly. Canonicalizing an existing `user@host` record retains its saved password
+and host fingerprint when the actual endpoint and account are unchanged.
+Storage runs on the IO dispatcher and the form closes only after the
 requested write succeeds. Passwords stay out of saved UI state and host metadata.
 Authentication and grouping
 use compact pill selectors. Hosts, computers and terminal previews use thin
