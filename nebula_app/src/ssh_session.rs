@@ -395,11 +395,7 @@ fn ssh_config_command(target: &str, config: Option<&Path>) -> Command {
         command.arg("-F").arg(path);
     }
     command.arg("-G").arg("--").arg(target);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    }
+    crate::platform::process::hidden_command(&mut command);
     command
 }
 

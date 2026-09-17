@@ -133,11 +133,7 @@ fn matching_rule(root: &Path, path: &Path) -> Result<Option<IgnoreRule>, String>
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
+    crate::platform::process::hidden_command(&mut command);
     let mut child = command.spawn().map_err(|error| error.to_string())?;
     let mut stdin = child.stdin.take().ok_or("git stdin unavailable")?;
     let relative = relative.to_string_lossy();

@@ -1344,11 +1344,7 @@ impl SidePanel {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000);
-        }
+        crate::platform::process::hidden_command(&mut command);
         let Ok(mut child) = command.spawn() else { return };
         let Some(mut stdin) = child.stdin.take() else { return };
         for path in candidates {

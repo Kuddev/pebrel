@@ -437,11 +437,15 @@ fn agent_fork_rolls_back_when_ui_launch_fails() {
     assert!(!response.ok);
     assert_eq!(response.error.unwrap().code, "action_failed");
     assert!(!target.exists());
+    let mut branch_query = std::process::Command::new("git");
+    branch_query.arg("-C").arg(repository.path()).args([
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/heads/nebula/failed-agent",
+    ]);
     assert!(
-        !std::process::Command::new("git")
-            .arg("-C")
-            .arg(repository.path())
-            .args(["show-ref", "--verify", "--quiet", "refs/heads/nebula/failed-agent"])
+        !crate::platform::process::hidden_command(&mut branch_query)
             .status()
             .expect("query branch")
             .success()
@@ -489,12 +493,11 @@ fn managed_agent_keeps_worktree_provenance() {
 fn test_git_repository() -> tempfile::TempDir {
     let directory = tempfile::tempdir().expect("create repository directory");
     let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(directory.path())
-            .args(args)
-            .output()
-            .expect("run git")
+        // 测试二进制没有控制台，不压掉就会在用户屏幕上弹窗口（见
+        // `platform::process`）。
+        let mut command = std::process::Command::new("git");
+        command.arg("-C").arg(directory.path()).args(args);
+        crate::platform::process::hidden_command(&mut command).output().expect("run git")
     };
     assert!(git(&["init", "--initial-branch=main"]).status.success());
     std::fs::write(directory.path().join("tracked.txt"), "tracked").expect("write tracked file");

@@ -284,8 +284,24 @@ impl WorktreeTransaction {
     }
 }
 
+/// 本模块所有 `git` 子进程的统一构造口。
+///
+/// Pebrel 是 `windows_subsystem = "windows"` 的 GUI 进程（见 `main.rs`），本身没有
+/// 控制台可给子进程继承；不加 `CREATE_NO_WINDOW` 时 Windows 会给每条 git 命令分配
+/// 一个新控制台——在默认终端应用是 Windows Terminal 的机器上，那就是**每跑一条
+/// git 弹一扇窗口**。worktree 操作会连着跑好几条，用户看到的就是一串窗口。
+///
+/// 名字里的 `hidden` 不是装饰：`gpui_shell::code_tab` 里已有一个签名完全不同的
+/// `git_command(location, args)`，两个同名函数隔着模块互不相识，改错地方就是
+/// 又一次漏 flag。
+fn hidden_git_command() -> Command {
+    let mut command = Command::new("git");
+    crate::platform::process::hidden_command(&mut command);
+    command
+}
+
 fn ensure_git_available() -> Result<(), ApiError> {
-    let output = Command::new("git").arg("--version").output().map_err(|error| {
+    let output = hidden_git_command().arg("--version").output().map_err(|error| {
         ApiError::new("git_unavailable", "Git executable is unavailable")
             .details(json!({ "reason": error.to_string() }))
     })?;
@@ -305,7 +321,7 @@ fn validate_branch(branch: &str) -> Result<(), ApiError> {
     if branch.trim() != branch || branch.is_empty() || branch.chars().any(char::is_control) {
         return Err(ApiError::invalid_params("branch is not a valid Git branch name"));
     }
-    let output = Command::new("git")
+    let output = hidden_git_command()
         .args(["check-ref-format", "--branch", branch])
         .output()
         .map_err(|error| {
@@ -377,7 +393,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    Command::new("git").arg("-C").arg(cwd).args(args).output().map_err(|error| {
+    hidden_git_command().arg("-C").arg(cwd).args(args).output().map_err(|error| {
         ApiError::new("git_unavailable", "failed to execute Git")
             .details(json!({ "cwd": cwd, "reason": error.to_string() }))
     })
@@ -528,6 +544,6 @@ mod tests {
     }
 
     fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> Output {
-        Command::new("git").arg("-C").arg(cwd).args(args).output().expect("run git")
+        hidden_git_command().arg("-C").arg(cwd).args(args).output().expect("run git")
     }
 }

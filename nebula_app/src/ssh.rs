@@ -338,7 +338,13 @@ fn cli_verdict(args: &[String]) -> CliVerdict {
 /// (inject) if ssh can't run or errors, so a config quirk never blocks a login.
 #[cfg(windows)]
 fn config_forces_passthrough(ssh: &str, args: &[String]) -> bool {
-    let out = std::process::Command::new(ssh).arg("-G").args(args).output();
+    let mut command = std::process::Command::new(ssh);
+    // 这是个非交互探针（`-G` 只解析配置、不连接），和 `ssh_session.rs` 里那条
+    // 同源：不压掉就会从无控制台的 GUI 进程里闪出一个新控制台（见
+    // `platform::process`）。`pebrel ssh <host>` 的**交互会话**是另一回事，它
+    // 靠 `AttachConsole` 继承父控制台，绝不能压。
+    crate::platform::process::hidden_command(&mut command);
+    let out = command.arg("-G").args(args).output();
     match out {
         Ok(o) if o.status.success() => {
             parse_g_says_passthrough(&String::from_utf8_lossy(&o.stdout))

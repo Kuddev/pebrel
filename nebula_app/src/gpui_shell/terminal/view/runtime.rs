@@ -1150,9 +1150,11 @@ impl TerminalView {
         };
         self.confirmation.observe_waiting(next == AgentStatus::Blocked);
         if next != self.agent_status {
-            if let Some(attention) =
-                super::notifications::screen_notification(self.agent_status, next)
-            {
+            if let Some(attention) = super::notifications::screen_notification(
+                self.agent_status,
+                next,
+                self.agent_hook_seen,
+            ) {
                 cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::AiTurn {
                     program: program.clone(),
                     message: None,
