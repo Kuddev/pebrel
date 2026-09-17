@@ -1,0 +1,200 @@
+name: Mobile connection preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_only:
+        description: "Build and sign the preview APK for manual testing"
+        type: boolean
+        default: false
+  push:
+    branches: ["mobile/**"]
+  pull_request:
+    paths:
+      - "mobile/**"
+      - "nebula_app/src/runtime_api/mobile_bridge.rs"
+      - ".github/workflows/mobile-preview.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relay:
+    if: ${{ !inputs.package_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/relay/package-lock.json
+      - name: Install the locked relay dependency
+        run: npm ci --ignore-scripts --prefix mobile/relay
+      - name: Test relay authentication, real forwarding and stale-link rejection
+        run: npm test --prefix mobile/relay
+      - name: Validate deployable server image
+        run: docker build -f mobile/relay/Dockerfile -t pebrel-relay-test mobile
+      - name: Validate TLS deployment configuration
+        env:
+          PEBREL_RELAY_DOMAIN: relay.example.com
+        run: docker compose -f mobile/relay/compose.yaml config --quiet
+      - name: Package the server and desktop connector
+        run: |
+          mkdir -p relay-kit
+          tar --exclude=node_modules --exclude=private --exclude=.env -czf relay-kit/pebrel-relay-test-kit.tar.gz mobile/relay mobile/protocol
+          sha256sum relay-kit/pebrel-relay-test-kit.tar.gz > relay-kit/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pebrel-self-hosted-relay-test-kit
+          path: relay-kit/
+          if-no-files-found: error
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018 cmake;3.22.1"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+      - name: Install pinned Rust and Android targets
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt --target aarch64-linux-android,x86_64-linux-android
+      - uses: actions/cache@v4
+        with:
+          path: mobile/ssh/target
+          key: mobile-russh-ndk27-rust1971-${{ runner.os }}-${{ hashFiles('mobile/ssh/Cargo.lock', 'mobile/ssh/Cargo.toml') }}
+      - name: Test russh lifecycle
+        if: ${{ !inputs.package_only }}
+        env:
+          RUSTUP_TOOLCHAIN: 1.97.1
+        run: |
+          cargo fmt --manifest-path mobile/ssh/Cargo.toml -- --check
+          cargo test --locked --manifest-path mobile/ssh/Cargo.toml
+      - name: Build russh for both Android ABIs
+        env:
+          RUSTUP_TOOLCHAIN: 1.97.1
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" python3 mobile/tools/build_russh.py
+      - name: Build pinned Ghostty for both Android ABIs
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" python3 mobile/tools/build_ghostty.py
+      - name: Compile and test Ghostty application and transports
+        if: ${{ !inputs.package_only }}
+        working-directory: mobile/android
+        run: gradle --no-daemon :app:testPreviewUnitTest :app:assemblePreview :app:assemblePreviewAndroidTest :app:lintPreview
+      - name: Assemble APK for user testing
+        if: ${{ inputs.package_only }}
+        working-directory: mobile/android
+        run: gradle --no-daemon :app:assemblePreview
+      - name: Verify installable APK and record source and checksum
+        run: |
+          if [ "${{ inputs.package_only }}" != "true" ]; then python3 mobile/tools/test_apk_audit.py; fi
+          for apk in mobile/android/app/build/outputs/apk/preview/*.apk; do
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" > mobile/android/app/build/outputs/apk/preview/apk-signature.txt
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" > mobile/android/app/build/outputs/apk/preview/apk-metadata.txt
+          done
+          printf '%s\n' "$GITHUB_SHA" > mobile/android/app/build/outputs/apk/preview/SOURCE_COMMIT
+          sha256sum mobile/android/app/build/outputs/apk/preview/*.apk > mobile/android/app/build/outputs/apk/preview/SHA256SUMS
+          python3 mobile/tools/verify_ghostty_apk.py mobile/android/app/build/outputs/apk/preview/app-preview.apk > mobile/android/app/build/outputs/apk/preview/ghostty-audit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pebrel-android-connection-preview
+          path: |
+            mobile/android/app/build/outputs/apk/preview/*.apk
+            mobile/android/app/build/outputs/apk/androidTest/preview/*.apk
+            mobile/android/app/build/outputs/apk/preview/SHA256SUMS
+            mobile/android/app/build/outputs/apk/preview/*.txt
+            mobile/android/app/build/outputs/apk/preview/SOURCE_COMMIT
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-check-reports
+          path: mobile/android/**/build/reports/
+          if-no-files-found: warn
+  visual:
+    if: ${{ !inputs.package_only }}
+    needs: android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pebrel-android-connection-preview
+          path: visual-apks
+      - name: Start loopback OpenSSH fixture for the optimized APK
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openssh-server
+          sudo useradd --create-home --shell /bin/bash pebreltest
+          echo 'pebreltest:pebrel-test-only' | sudo chpasswd
+          mkdir -p ssh-fixture
+          ssh-keygen -t ed25519 -N '' -f ssh-fixture/host_key
+          ssh-keygen -lf ssh-fixture/host_key.pub | awk '{print $2}' > ssh-fixture/fingerprint
+          cat > ssh-fixture/sshd_config <<EOF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey $PWD/ssh-fixture/host_key
+          PidFile $PWD/ssh-fixture/sshd.pid
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication no
+          UsePAM no
+          AllowUsers pebreltest
+          PermitRootLogin no
+          PrintMotd no
+          EOF
+          sudo mkdir -p /run/sshd
+          sudo /usr/sbin/sshd -f "$PWD/ssh-fixture/sshd_config" -E "$PWD/ssh-fixture/sshd.log"
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            mkdir -p visual-screenshots
+            adb install -r "$(find visual-apks -type f -name '*.apk' ! -name '*androidTest*' -print -quit)"
+            adb install -r "$(find visual-apks -type f -name '*androidTest*.apk' -print -quit)"
+            adb shell pm clear io.github.kuddev.pebrel.mobile.preview
+            adb shell cmd locale set-app-locales io.github.kuddev.pebrel.mobile.preview --locales zh-CN
+            adb shell wm size 1080x2160
+            adb shell wm density 440
+            adb shell am start -W -n io.github.kuddev.pebrel.mobile.preview/io.github.kuddev.pebrel.mobile.MainActivity
+            adb shell sleep 2
+            adb exec-out screencap -p > visual-screenshots/00-launch.png
+            adb shell am instrument -w -r -e sshFingerprint "$(cat ssh-fixture/fingerprint)" -e class io.github.kuddev.pebrel.mobile.GhosttyEngineTest,io.github.kuddev.pebrel.mobile.SshIntegrationTest,io.github.kuddev.pebrel.mobile.PrototypeVisualTest io.github.kuddev.pebrel.mobile.preview.test/androidx.test.runner.AndroidJUnitRunner > instrumentation.log 2>&1
+            adb logcat -d > visual-logcat.txt
+            adb pull /sdcard/Android/data/io.github.kuddev.pebrel.mobile.preview/files/Pictures/visual visual-screenshots || true
+            cat instrumentation.log
+            grep -Eq '^OK \([1-9][0-9]* test' instrumentation.log
+            ! grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed' instrumentation.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pebrel-android-visual-screenshots
+          path: |
+            visual-screenshots/
+            instrumentation.log
+            visual-logcat.txt
+          if-no-files-found: error

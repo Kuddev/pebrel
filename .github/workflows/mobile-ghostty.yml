@@ -1,0 +1,53 @@
+name: Android Ghostty core
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["mobile/**"]
+    paths:
+      - "mobile/android/ghostty/**"
+      - "mobile/tools/build_ghostty.py"
+      - ".github/workflows/mobile-ghostty.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ghostty-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "ndk;27.2.12479018"
+      - name: Build public VT core for both Android ABIs
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" python3 mobile/tools/build_ghostty.py
+      - name: Check public terminal and rendering API symbols
+        run: |
+          for abi in arm64-v8a x86_64; do
+            library="mobile/android/ghostty/build/upstream/$abi/lib/libghostty-vt.a"
+            "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --defined-only "$library" > "symbols-$abi.txt"
+            grep -q 'ghostty_terminal_new' "symbols-$abi.txt"
+            grep -q 'ghostty_render_state_update' "symbols-$abi.txt"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghostty-android-vt-core
+          path: |
+            mobile/android/ghostty/build/upstream/arm64-v8a/lib/libghostty-vt.a
+            mobile/android/ghostty/build/upstream/arm64-v8a/include/
+            mobile/android/ghostty/build/upstream/arm64-v8a/SOURCE.json
+            mobile/android/ghostty/build/upstream/arm64-v8a/licenses/
+            mobile/android/ghostty/build/upstream/x86_64/lib/libghostty-vt.a
+            mobile/android/ghostty/build/upstream/x86_64/include/
+            mobile/android/ghostty/build/upstream/x86_64/SOURCE.json
+            mobile/android/ghostty/build/upstream/x86_64/licenses/
+            symbols-*.txt
+          if-no-files-found: error

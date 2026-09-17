@@ -282,6 +282,13 @@ pub enum Subcommands {
     Pane(PaneOptions),
     /// Inspect and drive the AI agents running in panes: list, send, read, wait.
     Agent(AgentOptions),
+    /// Serve the bounded mobile control protocol over an authenticated SSH exec channel.
+    /// Does not open a network listener or print the local runtime token.
+    MobileBridge {
+        /// Explicitly allow prompt and named-key requests for this SSH channel.
+        #[clap(long)]
+        allow_input: bool,
+    },
     /// 旧壳的 Unix socket IPC；GPUI 壳的控制面是 `ctl` 与资源动词命令。
     #[cfg(all(unix, feature = "legacy-shell"))]
     Msg(MessageOptions),

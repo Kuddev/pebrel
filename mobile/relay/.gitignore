@@ -1,0 +1,6 @@
+private/
+node_modules/
+.env
+computer-*.json
+phone-*.txt
+relay.config.json

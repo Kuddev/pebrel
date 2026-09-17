@@ -8,6 +8,7 @@
 mod agent_api;
 mod cli;
 mod command;
+pub(crate) mod mobile_bridge;
 mod orchestrate;
 mod server;
 mod transport;

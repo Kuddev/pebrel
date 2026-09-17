@@ -105,6 +105,13 @@ mod tests {
     }
 
     fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+        // The dialog slides into place. Finish its virtual animation before
+        // measuring hit bounds, so a redraw between press/release cannot move it.
+        cx.executor().advance_clock(*gpui_component::dialog::ANIMATION_DURATION);
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
         let bounds = cx.debug_bounds(selector).expect("SSH dialog button is visible");
         cx.simulate_click(
             point(

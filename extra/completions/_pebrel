@@ -1044,6 +1044,13 @@ esac
     ;;
 esac
 ;;
+(mobile-bridge)
+_arguments "${_arguments_options[@]}" : \
+'--allow-input[Explicitly allow prompt and named-key requests for this SSH channel]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (migrate)
 _arguments "${_arguments_options[@]}" : \
 '-c+[Path to the configuration file]:CONFIG_FILE:_files' \
@@ -1417,6 +1424,10 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(mobile-bridge)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (migrate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1467,6 +1478,7 @@ _pebrel_commands() {
 'tab:Control tabs within one terminal window' \
 'pane:Inspect and drive terminal panes\: list, read, send, paste, wait, and change layout' \
 'agent:Inspect and drive the AI agents running in panes\: list, send, read, wait' \
+'mobile-bridge:Serve the bounded mobile control protocol over an authenticated SSH exec channel. Does not open a network listener or print the local runtime token' \
 'migrate:Migrate the configuration file' \
 'config:Validate or create the Pebrel configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -2012,6 +2024,7 @@ _pebrel__help_commands() {
 'tab:Control tabs within one terminal window' \
 'pane:Inspect and drive terminal panes\: list, read, send, paste, wait, and change layout' \
 'agent:Inspect and drive the AI agents running in panes\: list, send, read, wait' \
+'mobile-bridge:Serve the bounded mobile control protocol over an authenticated SSH exec channel. Does not open a network listener or print the local runtime token' \
 'migrate:Migrate the configuration file' \
 'config:Validate or create the Pebrel configuration' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -2285,6 +2298,11 @@ _pebrel__help__migrate_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help migrate commands' commands "$@"
 }
+(( $+functions[_pebrel__help__mobile-bridge_commands] )) ||
+_pebrel__help__mobile-bridge_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help mobile-bridge commands' commands "$@"
+}
 (( $+functions[_pebrel__help__pane_commands] )) ||
 _pebrel__help__pane_commands() {
     local commands; commands=(
@@ -2385,6 +2403,11 @@ _pebrel__help__window__close_commands() {
 _pebrel__migrate_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel migrate commands' commands "$@"
+}
+(( $+functions[_pebrel__mobile-bridge_commands] )) ||
+_pebrel__mobile-bridge_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel mobile-bridge commands' commands "$@"
 }
 (( $+functions[_pebrel__pane_commands] )) ||
 _pebrel__pane_commands() {

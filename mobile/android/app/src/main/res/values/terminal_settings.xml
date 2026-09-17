@@ -1,0 +1,16 @@
+<resources>
+    <string name="terminal_font_and_size">Font and size</string>
+    <string name="terminal_font_size_value">Font size · %1$d sp</string>
+    <string name="terminal_system_font">System monospace</string>
+    <string name="terminal_cursor">Cursor</string>
+    <string name="terminal_cursor_shape">Cursor shape</string>
+    <string name="terminal_cursor_block">Block</string>
+    <string name="terminal_cursor_bar">Bar</string>
+    <string name="terminal_cursor_underline">Underline</string>
+    <string name="terminal_cursor_blink">Blink cursor</string>
+    <string name="terminal_cursor_hint">Applies to local and SSH terminals. Applications can hide the cursor; blinking pauses while the terminal is inactive.</string>
+    <string name="terminal_gestures">Gestures</string>
+    <string name="terminal_pinch_zoom">Pinch to resize text</string>
+    <string name="terminal_pinch_hint">Use two fingers to change the terminal font size. The size is saved for future sessions. Use one finger to scroll, or hold to select text.</string>
+    <string name="terminal_solid_background">Solid theme background</string>
+</resources>

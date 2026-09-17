@@ -256,6 +256,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Subcommands::Tab(options)) => runtime_api::shortcuts::tab(options)?,
         Some(Subcommands::Pane(options)) => runtime_api::shortcuts::pane(options)?,
         Some(Subcommands::Agent(options)) => runtime_api::shortcuts::agent(options)?,
+        Some(Subcommands::MobileBridge { allow_input }) => {
+            runtime_api::mobile_bridge::run(allow_input)?
+        },
         #[cfg(all(unix, feature = "legacy-shell"))]
         Some(Subcommands::Msg(options)) => msg(options)?,
         Some(Subcommands::Migrate(options)) => migrate::migrate(options),

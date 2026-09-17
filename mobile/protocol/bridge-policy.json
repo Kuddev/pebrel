@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "read": ["runtime.describe", "runtime.snapshot", "events.subscribe", "pane.read"],
+  "input": ["pane.prompt", "pane.send_key"],
+  "maxRequestBytes": 40960,
+  "maxFrameBytes": 2097152,
+  "maxPending": 16
+}
