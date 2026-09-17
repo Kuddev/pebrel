@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { createInvitation } from './invite.mjs';
 
 const urlIndex = process.argv.indexOf('--url');
 const nameIndex = process.argv.indexOf('--name');
@@ -19,7 +20,7 @@ if (!Array.isArray(server.devices) || server.devices.length >= 64) throw new Err
 server.devices.push(device);
 writeFileSync(serverFile, JSON.stringify(server, null, 2) + '\n', { mode: 0o600 });
 writeFileSync(path.join(directory, `computer-${id}.json`), JSON.stringify({ url: url.origin.replace('https:', 'wss:'), device: id, token: device.desktopToken, name }, null, 2), { flag: 'wx', mode: 0o600 });
-const invitation = { version: 1, url: url.toString().replace(/\/$/, ''), device: id, token: device.mobileToken, name };
+const invitation = createInvitation({ url: url.toString(), device: id, token: device.mobileToken, name });
 writeFileSync(path.join(directory, `phone-${id}.txt`), JSON.stringify(invitation), { flag: 'wx', mode: 0o600 });
 const envFile = path.resolve('.env');
 if (!existsSync(envFile)) {

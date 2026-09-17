@@ -4,38 +4,13 @@ import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okio.ByteString
 import org.json.JSONObject
-import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-
-class RelayProfile(val url: String, val device: String, val token: String, val name: String) {
-    val id: String = MessageDigest.getInstance("SHA-256").digest("$url/$device".toByteArray())
-        .joinToString("") { "%02x".format(it) }
-    fun toJson(): JSONObject = JSONObject().put("version", 1).put("url", url).put("device", device).put("token", token).put("name", name)
-    override fun toString() = "RelayProfile($name)"
-    companion object {
-        fun parse(text: String): RelayProfile {
-            require(text.length <= 8192)
-            val data = JSONObject(text)
-            require(data.getInt("version") == 1)
-            val raw = data.getString("url")
-            require(raw.startsWith("wss://"))
-            val url = raw.replaceFirst("wss://", "https://").toHttpUrl()
-            require(url.username.isEmpty() && url.password.isEmpty() && url.query == null && url.fragment == null && url.encodedPath == "/")
-            val device = data.getString("device")
-            val token = data.getString("token")
-            require(Regex("[a-zA-Z0-9_-]{1,64}").matches(device))
-            require(Regex("[a-zA-Z0-9_-]{43}").matches(token))
-            val name = data.optString("name", device).take(80)
-            return RelayProfile(url.toString().replaceFirst("https://", "wss://").trimEnd('/'), device, token, name)
-        }
-    }
-}
 
 /** TLS validates the user's server. Relay credentials never appear in a URL or log. */
 class RelayTransport(
     private val profile: RelayProfile,
-    private val client: OkHttpClient = sharedClient,
+    private val client: OkHttpClient = profile.tlsPin?.let { PinnedDesktopTls.client(sharedClient, it) } ?: sharedClient,
 ) : DesktopTransport {
     private val closed = AtomicBoolean()
     @Volatile private var link: String? = null
@@ -91,6 +66,7 @@ class RelayTransport(
     companion object {
         private const val MAX_FRAME = 2 * 1024 * 1024 + 1024
         private val sharedClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.SECONDS).pingInterval(30, TimeUnit.SECONDS).retryOnConnectionFailure(false).build()
+            .readTimeout(0, TimeUnit.SECONDS).pingInterval(30, TimeUnit.SECONDS)
+            .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
     }
 }

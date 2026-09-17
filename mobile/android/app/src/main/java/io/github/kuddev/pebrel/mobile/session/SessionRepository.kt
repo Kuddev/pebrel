@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
 data class LocalSession(
     val id: String, val title: String, val source: String, val terminal: TerminalSession,
     val status: String = "connecting", val host: HostProfile? = null,
-    val stage: SshStage = SshStage.NETWORK, val failure: SshFailureKind? = null,
+    val stage: SshStage = SshStage.NETWORK, val failure: SshFailureKind? = null, val hasConnected: Boolean = false,
 )
 data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH")
 data class TrustRequest(val ownerId: String, val host: HostProfile, val fingerprint: String, val answer: CompletableFuture<Boolean>)
@@ -58,6 +58,7 @@ class SessionRepository(private val context: Context) {
     val output = MutableStateFlow(DesktopOutput())
     private val hostWrites = Mutex()
     private val credentialWrites = Mutex()
+    private val sshOperations = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val pendingTrust = java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Boolean>>()
     private var readJob: Job? = null
     private var readGeneration = 0L
@@ -179,12 +180,16 @@ class SessionRepository(private val context: Context) {
             }
         }
     }
+    fun beginSshOperation(): String = UUID.randomUUID().toString().also { sshOperations.add(it) }
+    fun endSshOperation(ownerId: String) { sshOperations.remove(ownerId); cancelTrust(ownerId) }
+    fun verifySshOperation(ownerId: String, host: HostProfile, fingerprint: String): Boolean = verify(ownerId, host, fingerprint)
+
     private fun verify(ownerId: String, host: HostProfile, fingerprint: String): Boolean {
         val answer = CompletableFuture<Boolean>()
         pendingTrust[ownerId] = answer
         main.post {
             val active = live.value.any { it.id == ownerId && it.status == "connecting" } ||
-                computers.value.any { it.id == ownerId && it.status == "connecting" }
+                computers.value.any { it.id == ownerId && it.status == "connecting" } || sshOperations.contains(ownerId)
             if (!active || answer.isDone || trust.value != null) answer.complete(false)
             else trust.value = TrustRequest(ownerId, host, fingerprint, answer)
         }
@@ -215,7 +220,7 @@ class SessionRepository(private val context: Context) {
         terminalColors = value.copyOf()
         live.value.forEach { it.terminal.colors(value) }
     }
-    fun local(): String = addTerminal("Term", "Local", LocalPtyTransport(context.filesDir.absolutePath))
+    fun local(): String = addTerminal("Term", "Local", LocalPtyTransport(LocalTerminalStorage.homePath(context)))
     fun ssh(host: HostProfile, password: CharArray): String {
         val id = UUID.randomUUID().toString()
         val connection = SshConnection(host, password, { h, fingerprint -> verify(id, h, fingerprint) }) { stage ->
@@ -229,7 +234,7 @@ class SessionRepository(private val context: Context) {
         val callbacks = object : TerminalCallbacks() {
             override fun onTextChanged(session: TerminalSession) { if (renderOwner == id) redraw?.invoke() }
             override fun onTitleChanged(session: TerminalSession) { update(id) { it.copy(title = session.title?.take(80) ?: it.title) } }
-            override fun onTransportReady(session: TerminalSession) { update(id) { it.copy(status = "ready") } }
+            override fun onTransportReady(session: TerminalSession) { update(id) { it.copy(status = "ready", hasConnected = true) } }
             override fun onSessionFinished(session: TerminalSession) {
                 cancelTrust(id)
                 update(id) { it.copy(status = if (session.failure == null) "ended" else "failed",
@@ -241,6 +246,7 @@ class SessionRepository(private val context: Context) {
         }
         val terminal = TerminalSession(transport, callbacks)
         live.value = live.value + LocalSession(id, title, source, terminal, host = host)
+        SessionService.ensureStarted(context)
         terminal.start()
         terminalColors?.let { terminal.colors(it) }
         return id
@@ -278,7 +284,7 @@ class SessionRepository(private val context: Context) {
         computers.value.find { it.host.id == profile.id && it.status in setOf("ready", "connecting") }?.let { return it.id }
         computers.value.filter { it.host.id == profile.id }.forEach { closeDesktop(it.id) }
         val host = HostProfile(profile.id, profile.name, profile.url, 443, "")
-        return addDesktop(host, true, RelayTransport(profile), "Relay")
+        return addDesktop(host, true, RelayTransport(profile), if (profile.mode == "lan") "LAN" else "Relay")
     }
     fun connectDesktop(host: HostProfile, password: CharArray, allowInput: Boolean): String {
         val id = UUID.randomUUID().toString()
@@ -289,6 +295,7 @@ class SessionRepository(private val context: Context) {
     private fun addDesktop(host: HostProfile, allowInput: Boolean, transport: DesktopTransport, source: String,
                            id: String = UUID.randomUUID().toString()): String {
         computers.value = computers.value + DesktopWorkspace(id, host, allowInput = false, transport = source)
+        SessionService.ensureStarted(context)
         val transitions = DesktopTransitions()
         val client = DesktopRuntimeClient(transport, { snapshot ->
             val panes = parseDesktopPanes(snapshot)

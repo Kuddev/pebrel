@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.connection.HostProfile
+import io.github.kuddev.pebrel.mobile.connection.endpointLabel
 import io.github.kuddev.pebrel.mobile.connection.RelayProfile
 import io.github.kuddev.pebrel.mobile.session.DesktopWorkspace
 import io.github.kuddev.pebrel.mobile.session.LocalSession
@@ -179,8 +180,7 @@ fun HostRow(host: HostProfile, onLogin: () -> Unit, onEdit: () -> Unit, onDelete
             WorkspaceSymbol { HostSymbol(host.icon, Modifier.size(23.dp)) }
             Column(Modifier.weight(1f)) {
                 Text(host.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val address = if (':' in host.address && !host.address.startsWith('[')) "[${host.address}]" else host.address
-                Text("${host.user}@$address:${host.port}", fontFamily = LocalTerminalFont.current, fontSize = 11.sp,
+                Text(host.endpointLabel, fontFamily = LocalTerminalFont.current, fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
             }
         }

@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.kuddev.pebrel.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.3.1-preview"
+        versionCode = 7
+        versionName = "0.4.0-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -68,6 +68,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
@@ -86,6 +87,9 @@ val generateAssets by tasks.registering(Exec::class) {
         root.resolve("nebula_app/src/display/ui/os_icons.rs"), root.resolve("assets/fonts/MapleMono-NF-CN-Regular.ttf"),
         root.resolve("assets/fonts/JetBrainsMono-Regular.ttf"), root.resolve("extra/logo/nebula-titanium.png"))
     inputs.dir(root.resolve("mobile/tools"))
+    inputs.files(fileTree(root.resolve("mobile/relay")) { include("*.mjs", "*.json", "*.md", "*.yaml", "Caddyfile", "Dockerfile") })
+    inputs.file(root.resolve("mobile/protocol/bridge-policy.json"))
+    inputs.file(root.resolve("LICENSE"))
     inputs.dir(root.resolve("mobile/android/third_party/licenses"))
     inputs.files(root.resolve("mobile/android/third_party/THIRD-PARTY-NOTICES.md"),
         root.resolve("mobile/android/ghostty/UPSTREAM.json"))

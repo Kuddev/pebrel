@@ -39,7 +39,9 @@ Source is available at https://github.com/Kuddev/pebrel at the artifact's record
 ## Connections in this implementation
 
 - Local: Android `/system/bin/sh` and available system tools. This does not ship
-  an additional package environment or Git/Python/Node.
+  an additional package environment or Git/Python/Node. After explicit shared
+  storage access, both the working directory and HOME are `/storage/emulated/0/Pebrel`.
+  Denied permission never silently redirects the shell to app-private storage.
 - SSH: password authentication, explicit first host-key approval, pinned host
   identity, encrypted PTY, native direct input and a locally edited command box.
   Saved host metadata contains no password. Candidate taps only edit the draft.
@@ -50,7 +52,8 @@ Source is available at https://github.com/Kuddev/pebrel at the artifact's record
   input, not exclusive takeover; coloured desktop grid streaming is not present.
 - Notifications: Android local notifications for observed live desktop task
   transitions. No proprietary server, push service or durable replay is claimed.
-- The foreground connection service is opt-in. Android can still terminate it;
+- Live sessions start an ongoing notification with an accurate count, Exit, and
+  an explicit CPU wakelock toggle. Android can still terminate the service;
   remote process survival requires the server's own session host, such as tmux.
 
 The native interface now follows the approved local HTML page structure: session
@@ -59,8 +62,8 @@ grouped settings. Thumbnail text is a bounded capture of a real terminal when th
 gallery opens; thumbnails do not run hidden render loops. Command candidates only
 fill the per-session draft. Font family/size, cursor shape/blinking, pinch zoom, suggestion visibility and
 default input mode are persisted as display preferences, separate from credentials.
-QR pairing, durable notification recovery, file/media transfer, WebDAV and
-structured reading remain subsequent work. Local and SSH terminals use Ghostty;
+QR pairing supports LAN and a user-owned relay. Durable notification recovery,
+file/media transfer, WebDAV and structured reading remain subsequent work. Local and SSH terminals use Ghostty;
 the desktop bridge still supplies bounded text at approximately two-second intervals.
 
 The launcher and home icon use the desktop Titanium asset. Other UI icons are Android vectors;
@@ -90,8 +93,8 @@ The terminal uses the selected theme color without a decorative image background
   runs for hidden views. Cursor blinking uses a visible-view timer. These budgets
   do not establish a measured performance guarantee.
 - The Android adapter provides local IME preedit, committed UTF-8, hardware keys,
-  bracketed paste and viewport selection/copy. Long-press selects a line; drag
-  extends selection. Image graphics and mouse reporting are not implemented.
+  bracketed paste and viewport selection/copy. Long-press selects a word; draggable handles extend
+  the selection and a native floating menu provides copy and paste. Image graphics and mouse reporting are not implemented.
 - Local command editing is immediate on the device. Direct terminal interaction
   still includes SSH round-trip time; shell passwords and full-screen programs
   do not receive speculative local echo.
@@ -157,3 +160,29 @@ requested write succeeds. Passwords stay out of saved UI state and host metadata
 Authentication and grouping
 use compact pill selectors. Hosts, computers and terminal previews use thin
 outlined containers, with live connection status and no fabricated session data.
+
+
+## Pairing and deployment ownership
+
+The PC helper in `relay/` connects to the already installed desktop Runtime API.
+LAN pairing uses TLS with an invitation-pinned certificate and normal hostname
+verification. The QR is shown only by a loopback browser page; it carries a mobile
+role credential, never the local Runtime API token. Android scans locally using
+ZXing Android Embedded 4.3.0 / ZXing Core 3.4.1, then asks for an explicit Connect.
+No account or remote barcode decoding service is involved.
+
+Android can deploy the relay through an existing password-authenticated SSH host
+or a manually entered SSH endpoint. Deployment has a separate cancelable owner,
+uses the existing host-key confirmation, and runs blocking transport work on IO
+workers. A bundled source archive is uploaded to a dedicated server directory;
+Docker and Compose must already be available to that SSH account. Domain, HTTPS
+port, HTTP challenge port and installation path are explicit. The result includes
+separate phone and PC role configurations after startup and health verification.
+The PC still runs its outbound connector; deploying the server alone does not
+attach a desktop runtime. See `deployment/README.md` and `relay/README.md`.
+
+These additions preserve the terminal/native transport boundary. Connection
+progress and the initial SSH trust decision stay above the mounted terminal.
+Shared storage access and notification/wakelock ownership stay in Android session
+services, separate from terminal rendering and translation. English and Chinese
+Android resources own new visible labels.

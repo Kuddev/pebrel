@@ -5,6 +5,14 @@
   "type": "module",
   "license": "GPL-3.0-only",
   "engines": { "node": ">=22" },
-  "scripts": { "test": "node --test test/*.test.mjs", "start": "node server.mjs" },
-  "dependencies": { "ws": "8.18.3" }
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "start": "node server.mjs",
+    "pair": "node pairing.mjs"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "selfsigned": "2.4.1",
+    "ws": "8.18.3"
+  }
 }

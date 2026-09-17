@@ -1,0 +1,17 @@
+<resources>
+    <string name="computer_connect">连接电脑</string>
+    <string name="pair_scan">扫描二维码</string>
+    <string name="pair_scan_prompt">扫描 Pebrel 电脑上显示的配对码</string>
+    <string name="pair_import">粘贴配对码</string>
+    <string name="pair_read">读取配置</string>
+    <string name="pair_lan">局域网</string>
+    <string name="pair_relay">服务器中转</string>
+    <string name="pair_helper_hint">在电脑上打开配对助手显示二维码，也可在下方手动填写连接信息。</string>
+    <string name="pair_computer_name">电脑名称</string>
+    <string name="pair_server_url">服务地址</string>
+    <string name="pair_device_id">设备编号</string>
+    <string name="pair_access_key">连接密钥</string>
+    <string name="pair_certificate_pin">证书指纹（可选）</string>
+    <string name="pair_invalid">配对码或连接参数无效，请检查地址和密钥。</string>
+    <string name="pair_deploy_server">通过 SSH 部署中转</string>
+</resources>

@@ -14,6 +14,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.connection.HostProfile
+import io.github.kuddev.pebrel.mobile.connection.parseSshEndpoint
+import io.github.kuddev.pebrel.mobile.connection.endpointLabel
 import io.github.kuddev.pebrel.mobile.session.TrustRequest
 import java.util.UUID
 
@@ -33,12 +35,13 @@ fun HostForm(
     var icon by rememberSaveable { mutableStateOf(initial?.icon ?: "term") }
     var group by rememberSaveable { mutableStateOf(initial?.group ?: "development") }
     var password by remember { mutableStateOf("") }
-    val passwordIsSaved = passwordSaved && initial != null && initial.address == address.trim() &&
-        initial.port == port.toIntOrNull() && initial.user == user.trim()
+    val endpoint = runCatching { parseSshEndpoint(address, user) }.getOrNull()
+    val originalEndpoint = initial?.let { runCatching { parseSshEndpoint(it.address, it.user) }.getOrNull() }
+    val passwordIsSaved = passwordSaved && initial != null && originalEndpoint == endpoint &&
+        initial.port == port.toIntOrNull()
     var rememberPassword by rememberSaveable(initial?.id) { mutableStateOf(passwordSaved || initial == null) }
-    val valid = name.isNotBlank() && address.isNotBlank() && !address.any { it.isWhitespace() } &&
-        !address.contains("://") && user.isNotBlank() && (port.toIntOrNull() ?: 0) in 1..65535
-    fun profile() = HostProfile(initial?.id ?: UUID.randomUUID().toString(), name.trim(), address.trim(), port.toInt(), user.trim(),
+    val valid = name.isNotBlank() && endpoint != null && (port.toIntOrNull() ?: 0) in 1..65535
+    fun profile() = HostProfile(initial?.id ?: UUID.randomUUID().toString(), name.trim(), checkNotNull(endpoint).address, port.toInt(), endpoint.user,
         icon = icon, group = group)
     ConnectionForm(stringResource(if (initial == null) R.string.add_ssh else R.string.edit_host), { if (!busy) onCancel() }) {
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -50,7 +53,12 @@ fun HostForm(
                     placeholder = stringResource(R.string.host_name), limit = 40, showLabel = false)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ConnectionField(address, { address = it }, R.string.host_address, Modifier.weight(1f),
+                ConnectionField(address, { value ->
+                    address = value
+                    if ('@' in value) runCatching { parseSshEndpoint(value, user) }.onSuccess {
+                        address = it.address; user = it.user
+                    }
+                }, R.string.host_address, Modifier.weight(1f),
                     keyboard = KeyboardType.Uri, placeholder = "server.example.com")
                 ConnectionField(port, { port = it }, R.string.port, Modifier.width(82.dp), KeyboardType.Number, limit = 5)
             }
@@ -125,7 +133,7 @@ fun LoginForm(host: HostProfile, onCancel: () -> Unit, passwordSaved: Boolean, b
             HostSymbol(host.icon, Modifier.size(30.dp))
             Column {
                 Text(host.name, fontSize = 16.sp)
-                HelperText("${host.user}@${host.address}:${host.port}", Modifier.padding(top = 6.dp))
+                HelperText(host.endpointLabel, Modifier.padding(top = 6.dp))
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -164,18 +172,16 @@ fun LoginForm(host: HostProfile, onCancel: () -> Unit, passwordSaved: Boolean, b
 
 @Composable
 fun HostTrustForm(request: TrustRequest, onAnswer: (Boolean) -> Unit) {
-    ConnectionForm(stringResource(R.string.verify_host), { onAnswer(false) }) {
-        Text(request.host.name, fontSize = 16.sp)
-        HelperText("${request.host.address}:${request.host.port}", Modifier.padding(top = 8.dp))
-        HelperText(stringResource(R.string.verify_hint), Modifier.padding(top = 24.dp))
-        Surface(Modifier.fillMaxWidth().padding(vertical = 20.dp), shape = MaterialTheme.shapes.small,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f)) {
-            SelectionContainer {
-                Text(request.fingerprint, Modifier.padding(15.dp), fontFamily = LocalTerminalFont.current, fontSize = 12.sp, lineHeight = 22.sp)
+    AlertDialog(onDismissRequest = { onAnswer(false) }, title = { Text(stringResource(R.string.verify_host)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(request.host.name)
+                HelperText("${request.host.address}:${request.host.port}")
+                HelperText(stringResource(R.string.verify_hint))
+                SelectionContainer {
+                    Text(request.fingerprint, fontFamily = LocalTerminalFont.current, fontSize = 12.sp, lineHeight = 20.sp)
+                }
             }
-        }
-        ConnectionButton(stringResource(R.string.trust_connect)) { onAnswer(true) }
-        Spacer(Modifier.height(12.dp))
-        ConnectionButton(stringResource(R.string.cancel), primary = false) { onAnswer(false) }
-    }
+        }, confirmButton = { TextButton({ onAnswer(true) }) { Text(stringResource(R.string.trust_connect)) } },
+        dismissButton = { TextButton({ onAnswer(false) }) { Text(stringResource(R.string.cancel)) } })
 }

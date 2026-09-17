@@ -2,6 +2,7 @@
 from pathlib import Path
 import hashlib
 import json
+import re
 import struct
 import sys
 import zipfile
@@ -12,16 +13,22 @@ def verify(path: Path) -> dict:
     with zipfile.ZipFile(path) as apk:
         names = apk.namelist()
         dex = [apk.read(name) for name in names if name.endswith(".dex")]
-        if not dex or any(b"Lcom/termux/" in payload for payload in dex):
-            raise ValueError("Missing dex or residual Termux classes in application")
+        if not dex:
+            raise ValueError("Missing dex in application")
+        external_terminal = re.compile(rb"Lcom/[^/]+/(?:terminal/|view/Terminal(?:View|Renderer))")
+        if any(external_terminal.search(payload) for payload in dex):
+            raise ValueError("External legacy terminal classes remain in application")
         if any(b"Lnet/schmizz/sshj/" in payload for payload in dex):
             raise ValueError("SSHJ classes remain in application")
         if not any(b"Lio/github/kuddev/pebrel/ssh/NativeSsh;" in payload for payload in dex):
             raise ValueError("russh JNI class missing from application")
         if not any(b"Lio/github/kuddev/pebrel/terminal/NativeBridge;" in payload for payload in dex):
             raise ValueError("Ghostty JNI class missing from application")
-        if any("libtermux" in name.lower() for name in names):
-            raise ValueError("Termux native library remains in application")
+        allowed_libraries = {"libpebrel_ghostty.so", "libpebrel_ssh.so", "libandroidx.graphics.path.so"}
+        for name in names:
+            if name.endswith(".so") and (name.split("/")[-1] not in allowed_libraries or
+                    name.split("/")[:2] not in [["lib", "arm64-v8a"], ["lib", "x86_64"]]):
+                raise ValueError(f"Unexpected native library in application: {name}")
         for abi, machine in (("arm64-v8a", 183), ("x86_64", 62)):
             for library in ("libpebrel_ghostty.so", "libpebrel_ssh.so"):
                 name = f"lib/{abi}/{library}"
@@ -49,7 +56,7 @@ def verify(path: Path) -> dict:
             raise ValueError("russh license missing")
         upstream = json.loads(apk.read("assets/licenses/Ghostty-UPSTREAM.json"))
     return {"apk": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "termux_absent": True, "sshj_absent": True, "russh_version": russh["russh"], "ghostty_revision": upstream["revision"], "libraries": libraries}
+            "external_terminal_absent": True, "sshj_absent": True, "russh_version": russh["russh"], "ghostty_revision": upstream["revision"], "libraries": libraries}
 
 
 if __name__ == "__main__":

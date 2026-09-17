@@ -3,13 +3,16 @@ import { pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 import { MAX_ENVELOPE, MAX_BUFFERED, devicePattern, tokenPattern, ready } from './protocol.mjs';
 import { RuntimeLink, discoverEndpoint } from './runtime-link.mjs';
+import { pinnedTlsOptions, validateTlsPin } from './tls.mjs';
 
 /** Outbound-only desktop connector; Windows/Linux/macOS need no inbound port. */
 export function connectDesktop(config, options = {}) {
   const url = new URL(config.url);
-  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  const loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname);
   if (url.protocol !== 'wss:' && !(options.allowLoopback && loopback && url.protocol === 'ws:')) throw new Error('wss_required');
   if (url.username || url.password || url.search || url.hash || !devicePattern.test(config.device) || !tokenPattern.test(config.token)) throw new Error('invalid_connection');
+  const tlsPin = options.tlsPin ?? config.tlsPin;
+  if (tlsPin) validateTlsPin(tlsPin);
   url.pathname = '/v1/link'; url.searchParams.set('device', config.device); url.searchParams.set('role', 'desktop');
   let stopped = false;
   let socket;
@@ -31,7 +34,8 @@ export function connectDesktop(config, options = {}) {
     if (stopped) return;
     status('connecting');
     socket = new WebSocket(url, { headers: { Authorization: `Bearer ${config.token}` },
-      maxPayload: MAX_ENVELOPE, perMessageDeflate: false, handshakeTimeout: 15_000 });
+      maxPayload: MAX_ENVELOPE, perMessageDeflate: false, handshakeTimeout: 15_000,
+      ...pinnedTlsOptions({ pin: tlsPin, certificate: options.tlsCert ?? config.tlsCert }) });
     let heartbeat;
     let lastReceived = Date.now();
     socket.on('open', () => {

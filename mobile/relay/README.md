@@ -60,7 +60,56 @@ Windows PowerShell、Linux 和 macOS 使用相同的 Node 命令。电脑名称�
 `runtime.port`。特殊便携目录可以设置 `PEBREL_CONFIG_DIR`，或在电脑 JSON 中加入
 `"runtimeFile": "实际的 runtime.port 完整路径"`。不匹配时连接失败，不会另找一台实例。
 
-## 3. 在手机连接
+## 3. 显示配对二维码
+
+电脑端可以用 Node 启动一个 Pebrel 风格的本地浏览器配对页。它读取已有的电脑配置
+和手机邀请，二维码由本地固定版本的 `qrcode` 库生成；页面只绑定 `127.0.0.1`，
+不会把邀请或其中的密钥暴露到局域网或公共网页：
+
+```sh
+npm ci --omit=dev --ignore-scripts
+node pairing.mjs \
+  --config ./computer-设备编号.json \
+  --invitation ./phone-设备编号.txt \
+  --allow-input
+```
+
+命令会打开 `http://127.0.0.1:随机端口/...`，在页面中显示实际二维码，并在终端和
+页面中显示 `connecting`、`waiting_for_phone`、`paired` 等状态。`--allow-input` 仍然
+是明确的电脑端权限开关；省略它时手机只能读取。没有桌面环境时可加 `--no-browser`，
+再把终端打印的回环地址复制到本机浏览器。二维码页的复制按钮只复制当前邀请，且
+页面关闭后回环服务随之停止。
+
+## 4. 局域网直连模式
+
+没有自建服务器时，可以让电脑启动同一套有界中转协议的本地 TLS 端点。电脑绑定
+选定的局域网地址和端口，手机通过 `wss://局域网地址:端口` 连接；连接工具仍从
+电脑主动接入本机端点，因此 Pebrel Runtime 令牌不会进入邀请或手机。首次运行：
+
+```sh
+npm ci --omit=dev --ignore-scripts
+node pairing.mjs --lan --name Office-PC --address 192.168.1.42 --port 8765
+```
+
+不传 `--address` 时选择第一个非回环 IPv4 地址；可用 `--advertise` 指定手机实际
+访问的 IP 或局域网主机名，`--port 0`（默认）让系统分配可用端口。需要输入权限时再加
+`--allow-input`。命令会在 `private/lan-设备编号.json` 保存电脑端配置，在
+`private/phone-设备编号.txt` 保存手机邀请，并打开包含二维码的本地页面：
+
+- `lan-设备编号.json` 包含自签名证书和私钥，权限为 600，只留在这台电脑。
+- 手机邀请沿用 v1 JSON：`version`、`url`、`device`、43 字符 `token`、`name`，并
+  添加 `mode: "lan"` 与 `tlsPin: "sha256/<Base64 SPKI>"`。
+- 手机和电脑都校验证书有效期、所选地址的 SAN 以及完全匹配的 SPKI 指纹。任何
+  指纹变化都中止握手；代码不会关闭全局 TLS 校验，也不会使用全局信任所有证书。
+- `--address` 是监听地址；绑定 `0.0.0.0` 或 `::` 时必须用 `--advertise`（或让
+  工具选择一个地址）生成二维码，电脑连接工具通过临时的本机回环入口接入该
+  HTTPS 监听器。
+
+局域网端点没有公共 HTTPS 证书，也不应转发到互联网。手机扫描二维码后，在同一
+个受信任网络中完成一次配对；要更换证书或设备凭据，删除对应的 `lan-*.json` 后
+重新运行。Node 22 或更新版本、Windows/Linux/macOS 均使用同一条命令。
+
+## 5. 在手机连接
 
 1. 打开 APK，在“电脑”区选择“连接电脑 · 自建中转”。
 2. 粘贴对应 `phone-设备编号.txt` 的全部 JSON 内容，点击连接。
@@ -101,8 +150,8 @@ docker compose restart relay
 - WebSocket 单消息和发送缓存有硬上限；禁用压缩，空闲只保活，不轮询全部 Tab。
 - TLS 校验你自己的服务器证书。**本次服务器是受信任的中转终点，管理员能够读取会话内容；尚无端到端加密。**
 - 通知来自在线状态订阅；尚无离线通知持久补收，也没有接入官方推送服务器。
-- Node 连接工具目前单独启动，尚未集成成桌面“移动设备”设置页。后台服务开关
-  只能改善 Android 存活，不保证强行停止、系统终止或关机后仍能收通知。
+- Node 连接工具和浏览器配对页目前单独启动，尚未集成成桌面“移动设备”设置页。
+  后台服务开关只能改善 Android 存活，不保证强行停止、系统终止或关机后仍能收通知。
 
 ## Verification / 验证
 
@@ -111,7 +160,9 @@ docker compose restart relay
 Compose 配置。Android 对 WSS 邀请、TLS/RPC 生命周期另有测试。实际运营网络的
 HTTPS/DNS 连通性以及手机耗电、流畅度仍需你在设备上验收。
 
-Sources use GPLv3-compatible terms. This relay uses `ws` (MIT); its pinned version
-and integrity are recorded in package-lock.json, and its license is retained by
-npm. The relay contains no copied proprietary server source and does not provide
-a deployable cloud service.
+Sources use GPLv3-compatible terms. This relay uses `ws` (MIT). The browser pairing
+helper pins `qrcode` 1.5.4 and `selfsigned` 2.4.1; their licenses, the transitive
+`node-forge` license, and integrity values are recorded in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) and `package-lock.json`. The
+browser page has no external CDN dependency, and the relay contains no copied
+proprietary server source or deployable cloud service.

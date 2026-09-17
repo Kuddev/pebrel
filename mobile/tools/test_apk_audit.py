@@ -50,6 +50,19 @@ class ApkAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SSHJ"):
             self.audit(contents)
 
+    def test_rejects_external_terminal_classes(self):
+        for descriptor in (b"Lcom/legacy/terminal/TerminalEmulator;", b"Lcom/legacy/view/TerminalView;"):
+            contents = self.contents()
+            contents["classes.dex"] += descriptor
+            with self.assertRaisesRegex(ValueError, "External legacy terminal"):
+                self.audit(contents)
+
+    def test_rejects_unexpected_native_library(self):
+        contents = self.contents()
+        contents["lib/arm64-v8a/libexternal-terminal.so"] = elf(183)
+        with self.assertRaisesRegex(ValueError, "Unexpected native library"):
+            self.audit(contents)
+
     def test_rejects_missing_transport_abi(self):
         contents = self.contents()
         del contents["lib/arm64-v8a/libpebrel_ssh.so"]

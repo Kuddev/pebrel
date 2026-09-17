@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import shutil
+from package_relay import package_relay
 
 
 def generate(output: Path, resources: Path | None = None) -> None:
@@ -50,6 +51,7 @@ def generate(output: Path, resources: Path | None = None) -> None:
     notices.mkdir(exist_ok=True)
     for license_file in (root / "mobile/android/third_party/licenses").glob("*.txt"):
         shutil.copyfile(license_file, notices / license_file.name)
+    package_relay(root, output / "relay-kit.tar.gz")
     # Bundle the licenses corresponding to the pinned native dependency.
     native_notices = root / "mobile/android/ghostty/build/upstream/arm64-v8a/licenses"
     if not (native_notices / "Ghostty-MIT.txt").is_file():

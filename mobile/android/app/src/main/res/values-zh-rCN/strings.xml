@@ -40,7 +40,7 @@
     <string name="native_preview_boundary">原生联通预览：本地 Shell、密码 SSH、桌面任务发现与有界输出读取。二维码配对、通知断线补收、附件、WebDAV 和完整视觉设计尚未在此构建中实现。</string>
     <string name="appearance">外观</string>
     <string name="follow_system">跟随系统</string>
-    <string name="relay_connect">连接电脑 · 自建中转</string>
+    <string name="relay_connect">连接电脑</string>
     <string name="relay_invite">手机连接配置</string>
     <string name="relay_invite_hint">先启动你的中转服务器和电脑连接工具，再粘贴 phone-设备编号.txt 的内容。中转域名需要有效的 HTTPS 证书。</string>
     <string name="relay_trust_hint">此测试版信任你自己的中转服务器，服务器管理者可接触会话数据。连接凭据使用 Android Keystore 保存；电脑端加 --allow-input 才能输入。</string>

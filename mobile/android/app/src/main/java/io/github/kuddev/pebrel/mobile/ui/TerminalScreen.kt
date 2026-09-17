@@ -35,18 +35,20 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
     var closing by remember { mutableStateOf(false) }
     var focused by rememberSaveable(session.id) { mutableStateOf(false) }
     var keyboardRequest by remember(session.id) { mutableIntStateOf(0) }
-    if (session.host != null && (session.status == "connecting" || (session.status == "failed" && session.terminal.frame == null))) {
-        SshConnectionStatus(session, onClose, onRetry, onEdit)
-        return
-    }
+    val trust by repository.trust.collectAsStateWithLifecycle()
     if (!focused) TerminalHeader(session.title,
         if (session.source == "Local") stringResource(R.string.local_device) else session.source,
         session.status, onBack, onSessions, { closing = true })
     Column(Modifier.fillMaxSize()) {
-        if (session.status in setOf("ended", "failed")) TerminalDisconnected(session, if (session.host != null) onRetry else null)
-        if (session.status == "connecting") LinearProgressIndicator(Modifier.fillMaxWidth())
-        key(session.id) {
-            TerminalSurface(session, repository, Modifier.weight(1f).fillMaxWidth(), direct, prefs.fontSize, keyboardRequest)
+        if (session.status == "ended" || (session.status == "failed" && session.hasConnected)) TerminalDisconnected(session, if (session.host != null) onRetry else null)
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            key(session.id) {
+                TerminalSurface(session, repository, Modifier.fillMaxSize(), direct, prefs.fontSize, keyboardRequest)
+            }
+            if (session.host != null && (session.status == "connecting" || (session.status == "failed" && !session.hasConnected))) {
+                SshConnectionStatus(session, onClose, onRetry, onEdit,
+                    trust = trust?.takeIf { it.ownerId == session.id }, onTrust = repository::answerTrust)
+            }
         }
         CommandComposer(session.id, repository, session.status == "ready", direct, { direct = it }, { label ->
             val key = when (label) {

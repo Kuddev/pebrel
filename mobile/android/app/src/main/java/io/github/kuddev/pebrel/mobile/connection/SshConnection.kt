@@ -30,7 +30,8 @@ class SshConnection(
             val transport = synchronized(guard) {
                 if (closed) throw NativeSshException("CLOSED")
                 check(opened == null)
-                RusshSession.create(host.address, host.port, host.user, password, host.fingerprint).also { opened = it }
+                val endpoint = parseSshEndpoint(host.address, host.user)
+                RusshSession.create(endpoint.address, host.port, endpoint.user, password, host.fingerprint).also { opened = it }
             }
             transport.connect({ progress(SshStage.valueOf(it)) }, { fingerprint -> verify(host, fingerprint) })
         } catch (error: Exception) {

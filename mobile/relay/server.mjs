@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -8,8 +9,9 @@ import { MAX_ENVELOPE, MAX_BUFFERED, devicePattern, tokenPattern } from './proto
 const digest = value => createHash('sha256').update(value).digest();
 
 /** User-owned rendezvous. No accounts, database, terminal replay or payload logging. */
-export function createRelay(config) {
+export function createRelay(config, options = {}) {
   if (!Array.isArray(config.devices) || !config.devices.length || config.devices.length > 64) throw new Error('configure_1_to_64_devices');
+  if (options.tls && (!options.tls.key || !options.tls.cert)) throw new Error('invalid_tls_config');
   const rooms = new Map();
   for (const device of config.devices) {
     if (!devicePattern.test(device.id) || rooms.has(device.id) ||
@@ -17,10 +19,13 @@ export function createRelay(config) {
         device.desktopToken === device.mobileToken) throw new Error('invalid_device_credentials');
     rooms.set(device.id, { keys: { desktop: digest(device.desktopToken), mobile: digest(device.mobileToken) }, peers: {}, link: null });
   }
-  const server = http.createServer((request, response) => {
+  const requestHandler = (request, response) => {
     response.writeHead(request.url === '/healthz' ? 200 : 404, { 'content-type': 'text/plain' });
     response.end(request.url === '/healthz' ? 'ok\n' : 'not found\n');
-  });
+  };
+  const server = options.tls
+    ? https.createServer({ key: options.tls.key, cert: options.tls.cert }, requestHandler)
+    : http.createServer(requestHandler);
   server.maxConnections = 256;
   server.requestTimeout = 10_000;
   server.headersTimeout = 10_000;

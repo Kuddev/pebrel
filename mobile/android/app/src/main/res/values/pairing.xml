@@ -1,0 +1,17 @@
+<resources>
+    <string name="computer_connect">Connect computer</string>
+    <string name="pair_scan">Scan QR code</string>
+    <string name="pair_scan_prompt">Scan the code shown by your Pebrel computer</string>
+    <string name="pair_import">Paste invitation</string>
+    <string name="pair_read">Read invitation</string>
+    <string name="pair_lan">Local network</string>
+    <string name="pair_relay">Relay server</string>
+    <string name="pair_helper_hint">Open the pairing helper on your computer to show its QR code. You can also enter the connection details below.</string>
+    <string name="pair_computer_name">Computer name</string>
+    <string name="pair_server_url">Server address</string>
+    <string name="pair_device_id">Device ID</string>
+    <string name="pair_access_key">Access key</string>
+    <string name="pair_certificate_pin">Certificate fingerprint (optional)</string>
+    <string name="pair_invalid">Invalid invitation or connection settings. Check the address and keys.</string>
+    <string name="pair_deploy_server">Deploy using SSH</string>
+</resources>

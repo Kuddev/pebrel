@@ -6,6 +6,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,35 +25,47 @@ import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.connection.SshFailureKind
 import io.github.kuddev.pebrel.mobile.connection.SshStage
 import io.github.kuddev.pebrel.mobile.session.LocalSession
+import io.github.kuddev.pebrel.mobile.session.TrustRequest
 
 @Composable
-fun SshConnectionStatus(session: LocalSession, onCancel: () -> Unit, onRetry: () -> Unit, onEdit: () -> Unit) {
+fun SshConnectionStatus(session: LocalSession, onCancel: () -> Unit, onRetry: () -> Unit, onEdit: () -> Unit,
+                        trust: TrustRequest? = null, onTrust: (Boolean) -> Unit = {}) {
     BackHandler(onBack = onCancel)
     val connecting = session.status == "connecting"
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp)) {
-        ConnectionHeading(stringResource(if (connecting) R.string.connect else R.string.connection_failed), onCancel)
-        Column(Modifier.fillMaxWidth().padding(top = 40.dp, bottom = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.size(64.dp).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .4f), MaterialTheme.shapes.large),
-                contentAlignment = Alignment.Center) {
-                if (connecting) CircularProgressIndicator(Modifier.size(25.dp), strokeWidth = 2.dp)
-                else Glyph(R.drawable.ic_server, Modifier.size(28.dp), MaterialTheme.colorScheme.error)
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = .22f))
+        .clickable(remember { MutableInteractionSource() }, indication = null) {}, contentAlignment = Alignment.Center) {
+        ElevatedCard(Modifier.padding(24.dp).widthIn(max = 420.dp).fillMaxWidth(),
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.elevatedCardElevation(8.dp)) {
+            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (connecting && trust == null) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    else Glyph(if (trust != null) R.drawable.ic_server else R.drawable.ic_info, Modifier.size(23.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(session.title, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        Text(stringResource(if (trust != null) R.string.verify_host else if (connecting) R.string.establishing_connection else R.string.connection_failed),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (trust != null) {
+                    HelperText("${trust.host.address}:${trust.host.port}")
+                    HelperText(stringResource(R.string.verify_hint))
+                    SelectionContainer {
+                        Text(trust.fingerprint, fontSize = 12.sp, lineHeight = 20.sp, fontFamily = LocalTerminalFont.current)
+                    }
+                    ConnectionButton(stringResource(R.string.trust_connect)) { onTrust(true) }
+                    TextButton({ onTrust(false) }) { Text(stringResource(R.string.cancel)) }
+                } else {
+                    Text(stringResource(if (connecting) stageText(session.stage) else failureText(session.failure)),
+                        fontSize = 12.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    if (connecting) TextButton(onCancel) { Text(stringResource(R.string.cancel)) }
+                    else {
+                        ConnectionButton(stringResource(R.string.retry), onClick = onRetry)
+                        TextButton(onEdit) { Text(stringResource(R.string.back_edit)) }
+                    }
+                }
             }
-            Text(stringResource(if (connecting) R.string.establishing_connection else R.string.connection_failed),
-                fontSize = 18.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 22.dp, bottom = 12.dp))
-            Text(session.title, fontSize = 14.sp)
-            session.host?.let { host ->
-                HelperText("${host.user}@${host.address}:${host.port}", Modifier.padding(top = 8.dp))
-            }
-            Text(stringResource(if (connecting) stageText(session.stage) else failureText(session.failure)),
-                fontSize = 12.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp).semantics { liveRegion = LiveRegionMode.Polite })
-        }
-        if (connecting) ConnectionButton(stringResource(R.string.cancel), primary = false, onClick = onCancel)
-        else {
-            ConnectionButton(stringResource(R.string.retry), onClick = onRetry)
-            Spacer(Modifier.height(12.dp))
-            ConnectionButton(stringResource(R.string.back_edit), primary = false, onClick = onEdit)
         }
     }
 }

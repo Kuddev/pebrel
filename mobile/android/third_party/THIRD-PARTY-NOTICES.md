@@ -31,3 +31,12 @@ JetBrains Mono 2.304: Copyright 2020 The JetBrains Mono Project Authors
 (https://github.com/JetBrains/JetBrainsMono), SIL Open Font License 1.1.
 The unmodified regular font is bundled; see licenses/JetBrainsMono-OFL.txt.
 Exact font source files and hashes are recorded in FONTS.json.
+
+## QR scanning
+
+ZXing Android Embedded 4.3.0 (Apache-2.0), pinned Maven dependency `com.journeyapps:zxing-android-embedded:4.3.0`.
+Uses on-device camera decoding without a remote recognition service. License from upstream commit `24d02945fec5f2c5a65b24ea7848cb5ca18f9f81`, included as `licenses/ZXing-Android-Embedded-Apache-2.0.txt`.
+
+ZXing Core 3.4.1 is the scanner decoder dependency (Apache-2.0).
+Source: `https://raw.githubusercontent.com/zxing/zxing/272d9561b547c82670918790c34b490da1aec3b0/LICENSE`.
+License text: `licenses/ZXing-Core-Apache-2.0.txt`; SHA256 `3f62881f0566227a24b12e5a754cc79f39aaa94883038e95c94812e1f50af42f`.

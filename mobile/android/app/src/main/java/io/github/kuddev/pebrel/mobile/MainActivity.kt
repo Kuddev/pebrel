@@ -1,9 +1,14 @@
 package io.github.kuddev.pebrel.mobile
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
@@ -58,7 +63,9 @@ class MainActivity : ComponentActivity() {
         var editHost by remember { mutableStateOf<HostProfile?>(null) }
         var deleteHost by remember { mutableStateOf<HostProfile?>(null) }
         var addRelay by remember { mutableStateOf(false) }
+        var deployRelay by remember { mutableStateOf(false) }
         var login by remember { mutableStateOf<HostProfile?>(null) }
+        var retrySession by remember { mutableStateOf<String?>(null) }
         var switcher by remember { mutableStateOf(false) }
         val desktop = desktops.find { it.id == desktopId }
         val pane = desktop?.panes?.find { it.id == paneId && it.window == windowId }
@@ -71,6 +78,45 @@ class MainActivity : ComponentActivity() {
         fun openDesktop(id: String) { desktopId = id; paneId = -1L; showPage("desktop"); switcher = false }
         fun openPane(id: String, entry: DesktopPane) {
             desktopId = id; windowId = entry.window; paneId = entry.id; showPage("pane"); switcher = false
+        }
+        fun connectHost(host: HostProfile, previous: String? = null) {
+            if (credentialBusy) return
+            if (!repository.hasSavedPassword(host)) {
+                retrySession = previous
+                login = host
+                return
+            }
+            credentialBusy = true
+            credentialScope.launch {
+                var secret: CharArray? = null
+                try {
+                    secret = repository.loadSavedPassword(host)
+                    if (secret == null) {
+                        retrySession = previous
+                        login = host
+                    } else {
+                        previous?.let(repository::closeTerminal)
+                        openSession(repository.ssh(host, checkNotNull(secret)))
+                        secret = null
+                    }
+                } finally {
+                    secret?.fill('\u0000')
+                    credentialBusy = false
+                }
+            }
+        }
+        val openLocal = rememberLocalTerminalLauncher { openSession(repository.local()) }
+        var notificationRequested by rememberSaveable { mutableStateOf(false) }
+        val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+        val hasLiveSessions = sessions.any { it.status == "ready" || it.status == "connecting" } ||
+            desktops.any { it.status == "ready" || it.status == "connecting" }
+        LaunchedEffect(hasLiveSessions) {
+            if (hasLiveSessions && !notificationRequested && Build.VERSION.SDK_INT >= 33) {
+                notificationRequested = true
+                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
         }
         fun back() {
             val destination = if (page == "pane" && desktop != null) "desktop" else "home"
@@ -98,15 +144,14 @@ class MainActivity : ComponentActivity() {
                 when (route) {
                     "settings" -> key(settingsInitial) {
                         SettingsScreen(repository, ::back, { showPage("computers") }, { enabled ->
-                            val service = Intent(this@MainActivity, SessionService::class.java)
-                            if (enabled) startForegroundService(service) else stopService(service)
+                            if (enabled) SessionService.start(this@MainActivity) else SessionService.stop(this@MainActivity)
                         }, settingsInitial)
                     }
                     "hosts" -> {
                         PageHeader(stringResource(R.string.ssh_hosts), ::back) {
                             GlyphButton(R.drawable.ic_plus, stringResource(R.string.add_ssh), { editHost = null; hostForm = true })
                         }
-                        HostsScreen(hosts, { login = it }, { editHost = it; hostForm = true }, { deleteHost = it })
+                        HostsScreen(hosts, { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it })
                     }
                     "computers" -> {
                         PageHeader(stringResource(R.string.computers), ::back)
@@ -121,8 +166,7 @@ class MainActivity : ComponentActivity() {
                         val session = sessions.find { it.id == selected }
                         if (session != null) LocalTerminalScreen(session, repository, ::back, { switcher = true },
                             onRetry = { session.host?.let { host ->
-                                login = hosts.find { it.id == host.id } ?: host
-                                repository.closeTerminal(session.id); back()
+                                connectHost(hosts.find { it.id == host.id } ?: host, session.id)
                             } },
                             onEdit = { session.host?.let { host ->
                                 editHost = hosts.find { it.id == host.id } ?: host; hostForm = true
@@ -145,9 +189,9 @@ class MainActivity : ComponentActivity() {
                     else -> {
                         HomeHeader({ settingsInitial = ""; showPage("settings") }, { settingsInitial = "notices"; showPage("settings") })
                         HomeScreen(sessions, hosts, desktops, relays, ::openSession, { switcher = true }, { showPage("hosts") },
-                            { login = it }, { editHost = it; hostForm = true }, { deleteHost = it }, { editHost = null; hostForm = true },
+                            { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it }, { editHost = null; hostForm = true },
                             ::openDesktop, { openDesktop(repository.connectRelay(it)) }, { showPage("computers") }, { addRelay = true },
-                            { openSession(repository.local()) })
+                            openLocal)
                     }
                 }
                 }
@@ -203,12 +247,15 @@ class MainActivity : ComponentActivity() {
             text = { Text(stringResource(R.string.delete_host_confirm, host.name)) },
             confirmButton = { TextButton({ repository.deleteHost(host); deleteHost = null }) { Text(stringResource(R.string.delete_host)) } },
             dismissButton = { TextButton({ deleteHost = null }) { Text(stringResource(R.string.cancel)) } }) }
-        if (addRelay) RelayForm({ addRelay = false }) { invitation ->
+        if (addRelay) RelayForm(onCancel = { addRelay = false }, onConnect = { invitation ->
             repository.importRelay(invitation)?.let { openDesktop(it); addRelay = false }
-        }
+        }, onDeploy = { addRelay = false; deployRelay = true })
+        if (deployRelay) RelayDeploymentFlow(repository, onCancel = { deployRelay = false }, onConnect = { invitation ->
+            repository.importRelay(invitation)?.let { openDesktop(it); deployRelay = false }
+        })
         login?.let { host -> LoginForm(
             host = host,
-            onCancel = { login = null },
+            onCancel = { login = null; retrySession = null },
             passwordSaved = savedCredentials.isNotEmpty() && repository.hasSavedPassword(host),
             busy = credentialBusy,
             onClearPassword = {
@@ -226,6 +273,8 @@ class MainActivity : ComponentActivity() {
                         if (connectionPassword == null) repository.error.value = "credential_missing"
                         else if (repository.saveHostWithCredentials(host, password, rememberPassword)) {
                             val secret = checkNotNull(connectionPassword)
+                            retrySession?.let(repository::closeTerminal)
+                            retrySession = null
                             if (computer) openDesktop(repository.connectDesktop(host, secret, input))
                             else openSession(repository.ssh(host, secret))
                             connectionPassword = null
@@ -239,7 +288,9 @@ class MainActivity : ComponentActivity() {
                 }
             },
         ) }
-        trust?.let { request -> HostTrustForm(request, repository::answerTrust) }
+        trust?.takeUnless { page == "terminal" && it.ownerId == selected }?.let { request ->
+            HostTrustForm(request, repository::answerTrust)
+        }
         error?.let { AlertDialog(onDismissRequest = { repository.error.value = null }, title = { Text(stringResource(R.string.operation_failed)) },
             text = { Text(credentialErrorText(it)) }, confirmButton = { TextButton({ repository.error.value = null }) { Text(stringResource(R.string.close)) } }) }
     }

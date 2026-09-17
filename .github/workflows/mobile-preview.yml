@@ -177,6 +177,8 @@ jobs:
             adb install -r "$(find visual-apks -type f -name '*.apk' ! -name '*androidTest*' -print -quit)"
             adb install -r "$(find visual-apks -type f -name '*androidTest*.apk' -print -quit)"
             adb shell pm clear io.github.kuddev.pebrel.mobile.preview
+            adb shell appops set io.github.kuddev.pebrel.mobile.preview MANAGE_EXTERNAL_STORAGE allow
+            adb shell pm grant io.github.kuddev.pebrel.mobile.preview android.permission.POST_NOTIFICATIONS
             adb shell cmd locale set-app-locales io.github.kuddev.pebrel.mobile.preview --locales zh-CN
             adb shell wm size 1080x2160
             adb shell wm density 440

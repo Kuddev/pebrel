@@ -40,7 +40,7 @@
     <string name="native_preview_boundary">Native connection preview: local shell, password SSH, desktop task discovery and bounded output reads. QR pairing, durable notification replay, attachments, WebDAV and the complete visual design are not implemented in this build yet.</string>
     <string name="appearance">Appearance</string>
     <string name="follow_system">Follow system</string>
-    <string name="relay_connect">Connect computer via your relay</string>
+    <string name="relay_connect">Connect computer</string>
     <string name="relay_invite">Private phone invitation</string>
     <string name="relay_invite_hint">Start your relay and the desktop connector, then paste the contents of phone-DEVICE.txt here. Your relay must have a valid HTTPS certificate.</string>
     <string name="relay_trust_hint">This preview uses your relay as a trusted endpoint: its operator can access session data. Credentials are stored using Android Keystore. Input requires --allow-input on the computer.</string>
