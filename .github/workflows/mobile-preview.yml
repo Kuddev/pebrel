@@ -7,6 +7,10 @@ on:
         description: "Build and sign the preview APK for manual testing"
         type: boolean
         default: false
+      vt_core_run:
+        description: "Optional successful public core CI run to reuse for APK-only builds"
+        type: string
+        default: ""
   push:
     branches: ["mobile/**"]
   pull_request:
@@ -17,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: mobile-preview-${{ github.ref }}
@@ -90,7 +95,22 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: 1.97.1
         run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" python3 mobile/tools/build_russh.py
+      - name: Download optional public VT dependency
+        if: ${{ inputs.package_only && inputs.vt_core_run != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ghostty-android-vt-core
+          run-id: ${{ inputs.vt_core_run }}
+          github-token: ${{ github.token }}
+          path: verified-core-input
+      - name: Verify public core provenance and pinned inputs
+        if: ${{ inputs.package_only && inputs.vt_core_run != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VT_CORE_RUN: ${{ inputs.vt_core_run }}
+        run: python3 mobile/tools/restore_vt_core.py --directory verified-core-input --run "$VT_CORE_RUN"
       - name: Build pinned Ghostty for both Android ABIs
+        if: ${{ !inputs.package_only || inputs.vt_core_run == '' }}
         run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018" python3 mobile/tools/build_ghostty.py
       - name: Compile and test Ghostty application and transports
         if: ${{ !inputs.package_only }}

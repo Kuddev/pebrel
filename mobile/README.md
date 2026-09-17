@@ -28,6 +28,11 @@ The `Mobile connection preview` workflow runs the build, native instrumentation
 and UI interactions, and uploads APKs, screenshots, checksums and reports.
 For a user-requested APK-only delivery, dispatch it with `package_only=true`;
 this assembles and signs the APK without running the test or emulator jobs.
+An optional `vt_core_run` may reuse the public VT dependency from a successful
+`Android Ghostty core` run. The restore checks producer repository/workflow,
+identical pins and builder sources, both ABI hashes, headers and licenses before
+use. The app, SSH transport and JNI adapter still build from the current checkout;
+normal non-preview verification builds the core from source.
 
 The Pebrel preview uses `io.github.kuddev.pebrel.mobile.preview`. It can coexist
 with earlier preview packages; Android keeps their saved profiles separate.

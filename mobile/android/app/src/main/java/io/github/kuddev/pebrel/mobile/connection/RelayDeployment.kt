@@ -256,7 +256,7 @@ object RelayDeployment {
         val stage = ".pebrel-relay-stage-$deploymentId"
         val archivePath = ".pebrel-relay-kit-$deploymentId.tar.gz"
         var outputTail = ""
-        try {
+        return try {
             emit(onProgress, RelayDeploymentStage.CONNECTING, 2)
 
             emit(onProgress, RelayDeploymentStage.CHECKING_PREREQUISITES, 3)
