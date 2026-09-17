@@ -6,7 +6,7 @@
     <string name="pair_read">Read invitation</string>
     <string name="pair_lan">Local network</string>
     <string name="pair_relay">Relay server</string>
-    <string name="pair_helper_hint">Open the pairing helper on your computer to show its QR code. You can also enter the connection details below.</string>
+    <string name="pair_helper_hint">Open Connect phone on the computer, then scan its QR code to connect. Use manual setup only when you need to enter connection details.</string>
     <string name="pair_computer_name">Computer name</string>
     <string name="pair_server_url">Server address</string>
     <string name="pair_device_id">Device ID</string>

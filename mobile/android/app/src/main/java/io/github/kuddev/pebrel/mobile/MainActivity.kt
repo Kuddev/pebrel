@@ -184,7 +184,10 @@ class MainActivity : ComponentActivity() {
                     }
                     "desktop" -> {
                         PageHeader(stringResource(R.string.computers), ::back)
-                        DesktopScreen(desktop, { openPane(desktopId, it) }) { repository.closeDesktop(desktopId); back() }
+                        val profile = relays.find { it.id == desktop?.host?.id }
+                        DesktopScreen(desktop, { openPane(desktopId, it) },
+                            onRetry = profile?.let { saved -> { openDesktop(repository.connectRelay(saved)) } },
+                        ) { repository.closeDesktop(desktopId); back() }
                     }
                     else -> {
                         HomeHeader({ settingsInitial = ""; showPage("settings") }, { settingsInitial = "notices"; showPage("settings") })
@@ -292,6 +295,6 @@ class MainActivity : ComponentActivity() {
             HostTrustForm(request, repository::answerTrust)
         }
         error?.let { AlertDialog(onDismissRequest = { repository.error.value = null }, title = { Text(stringResource(R.string.operation_failed)) },
-            text = { Text(credentialErrorText(it)) }, confirmButton = { TextButton({ repository.error.value = null }) { Text(stringResource(R.string.close)) } }) }
+            text = { Text(operationErrorText(it)) }, confirmButton = { TextButton({ repository.error.value = null }) { Text(stringResource(R.string.close)) } }) }
     }
 }

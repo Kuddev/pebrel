@@ -1,0 +1,26 @@
+<resources>
+    <string name="desktop_dns">The computer or relay address could not be resolved. Check the address and network.</string>
+    <string name="desktop_timeout">Connection timed out. Check the address and port. For LAN pairing, use the same network and keep the computer pairing tool running.</string>
+    <string name="desktop_refused">Could not connect to this port. Keep the pairing tool running and check the address, port and firewall.</string>
+    <string name="desktop_network">The network connection was interrupted. Check the network and reconnect. Commands will not be resent automatically.</string>
+    <string name="desktop_certificate_changed">The computer certificate no longer matches the scanned invitation. Verify the computer, then scan its current QR code again.</string>
+    <string name="desktop_certificate_date">The certificate is expired or not yet valid. Check the clocks on both devices and generate a new pairing certificate if needed.</string>
+    <string name="desktop_tls">The encrypted connection could not be verified. Check that the invitation address matches the computer certificate, or that the relay has a valid HTTPS certificate.</string>
+    <string name="desktop_authentication">The invitation was rejected or has expired. Scan the current QR code from the pairing tool again.</string>
+    <string name="desktop_already_connected">This phone connection is already in use. Close the previous phone connection, wait a moment, then retry.</string>
+    <string name="desktop_server">The server rejected the WebSocket connection. Check the relay address and reverse proxy configuration.</string>
+    <string name="desktop_peer_offline">The computer did not become ready or went offline. Keep Pebrel and the pairing tool running, then check the status on the computer pairing page.</string>
+    <string name="desktop_runtime_unavailable">The pairing tool could not access the Pebrel sessions. Open Pebrel and start the pairing tool inside its local terminal, then reconnect.</string>
+    <string name="desktop_protocol">The connection returned incompatible data. Update Pebrel on both devices and the computer pairing tool, then reconnect.</string>
+    <string name="desktop_disconnected">The computer connection closed. Keep Pebrel and the pairing tool running, then reconnect. Commands will not be resent automatically.</string>
+    <string name="desktop_connection_failed">Could not connect to the computer. Check the computer pairing page and reconnect.</string>
+    <string name="relay_storage_failed">The computer invitation could not be saved on this device. Retry saving it.</string>
+    <string name="invalid_relay_invite">This is not a supported Pebrel invitation. Scan the current QR code from the computer pairing tool.</string>
+    <string name="desktop_read_failed">Could not read the pane output. Check the computer connection and retry.</string>
+    <string name="delivery_unknown">Command delivery could not be confirmed. Check the computer output before sending it again.</string>
+    <string name="input_rejected">Input was not accepted. Check the session connection and input permission.</string>
+    <string name="operation_failed_hint">The operation could not be completed. Check the connection or settings and retry.</string>
+    <string name="pair_import_connect">Import and connect</string>
+    <string name="pair_manual_setup">Configure manually</string>
+    <string name="pair_hide_manual">Hide manual settings</string>
+</resources>

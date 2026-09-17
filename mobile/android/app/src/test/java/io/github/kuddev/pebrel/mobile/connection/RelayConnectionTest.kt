@@ -29,7 +29,6 @@ class RelayConnectionTest {
     @Test fun tlsWebSocketUsesHeaderCredentialsAndDisconnectSettlesInputWithoutReplay() = runBlocking {
         val certificate = HeldCertificate.Builder().commonName("localhost").addSubjectAlternativeName("localhost").build()
         val serverTls = HandshakeCertificates.Builder().heldCertificate(certificate).build()
-        val clientTls = HandshakeCertificates.Builder().addTrustedCertificate(certificate.certificate).build()
         val server = MockWebServer()
         server.useHttps(serverTls.sslSocketFactory(), false)
         val sent = AtomicInteger()
@@ -58,8 +57,9 @@ class RelayConnectionTest {
         }))
         server.start()
         val profile = RelayProfile.parse(JSONObject().put("version", 1).put("url", "wss://localhost:${server.port}")
-            .put("device", "computer").put("token", "a".repeat(43)).toString())
-        val http = OkHttpClient.Builder().sslSocketFactory(clientTls.sslSocketFactory(), clientTls.trustManager).build()
+            .put("device", "computer").put("token", "a".repeat(43)).put("mode", "lan")
+            .put("tlsPin", CertificatePinner.pin(certificate.certificate)).toString())
+        val http = PinnedDesktopTls.client(OkHttpClient(), requireNotNull(profile.tlsPin))
         val client = DesktopRuntimeClient(RelayTransport(profile, http), { snapshot.complete(it) }, { disconnected.complete(Unit) })
         try {
             withTimeout(10_000) {
@@ -74,6 +74,28 @@ class RelayConnectionTest {
             assertEquals("Bearer ${profile.token}", upgrade.getHeader("Authorization"))
             assertFalse(upgrade.path!!.contains(profile.token))
         } finally { client.close(); http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll(); server.shutdown() }
+    }
+
+    @Test fun handshakeFailurePreservesTheCauseWithoutExposingRemoteText() = runBlocking {
+        val expected = DesktopFailureKind.CERTIFICATE_CHANGED
+        var observed: DesktopFailureKind? = null
+        val transport = object : DesktopTransport {
+            override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit) {
+                disconnected(javax.net.ssl.SSLHandshakeException("private remote detail").apply {
+                    initCause(PairingCertificateChanged())
+                })
+            }
+            override fun send(frame: JSONObject) = error("No request may be sent before the handshake")
+            override fun close() = Unit
+        }
+        val client = DesktopRuntimeClient(transport, {}, { observed = it })
+        try {
+            val failure = withTimeout(1000) { runCatching { client.connect(true) }.exceptionOrNull() }
+            assertTrue(failure is DesktopConnectionFailure)
+            assertEquals(expected, (failure as DesktopConnectionFailure).kind)
+            assertEquals(expected, observed)
+            assertEquals(expected.code, failure.message)
+        } finally { client.close() }
     }
 
     @Test fun notificationReducerUsesDesktopFinishedStateAndRejectsDuplicateSequences() {
@@ -97,8 +119,8 @@ class RelayConnectionTest {
         val closes = AtomicInteger()
         val transport = object : DesktopTransport {
             lateinit var receive: (JSONObject) -> Unit
-            lateinit var lost: () -> Unit
-            override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: () -> Unit) {
+            lateinit var lost: (Throwable?) -> Unit
+            override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit) {
                 this.receive = receive
                 lost = disconnected
                 receive(JSONObject().put("type", "mobile.ready").put("protocol", "pebrel.mobile.relay").put("version", 1))
@@ -111,7 +133,7 @@ class RelayConnectionTest {
                     else -> throw java.io.IOException("send_rejected")
                 }
             }
-            override fun close() { closes.incrementAndGet(); lost(); transportClosed.complete(Unit) }
+            override fun close() { closes.incrementAndGet(); lost(null); transportClosed.complete(Unit) }
         }
         val client = DesktopRuntimeClient(transport, {}, { disconnected.incrementAndGet() })
         try {

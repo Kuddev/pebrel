@@ -15,12 +15,20 @@ class RelayTransport(
     private val closed = AtomicBoolean()
     @Volatile private var link: String? = null
     @Volatile private var socket: WebSocket? = null
-    override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: () -> Unit) {
+    @Volatile private var relayReached = false
+    override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit) {
         check(!closed.get())
         val url = profile.url.replaceFirst("wss://", "https://").toHttpUrl().newBuilder()
             .encodedPath("/v1/link").addQueryParameter("device", profile.device).addQueryParameter("role", "mobile").build()
         val request = Request.Builder().url(url).header("Authorization", "Bearer ${profile.token}").build()
+        fun fail(kind: DesktopFailureKind, cause: Throwable? = null) {
+            if (!closed.compareAndSet(false, true)) return
+            link = null
+            disconnected(DesktopConnectionFailure(kind, cause))
+            socket?.cancel()
+        }
         socket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) { relayReached = true }
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (closed.get()) return
                 try {
@@ -34,22 +42,30 @@ class RelayTransport(
                             require(newLink.length in 1..80)
                             link = newLink
                         }
-                        "relay.peer_left" -> { disconnected(); close() }
+                        "relay.peer_left" -> fail(DesktopFailureKind.PEER_OFFLINE)
                         "relay.data" -> {
                             check(link != null && frame.getString("link") == link)
                             receive(frame.getJSONObject("body"))
                         }
                         else -> error("invalid_frame")
                     }
-                } catch (_: Exception) { disconnected(); close() }
+                } catch (error: Exception) { fail(DesktopFailureKind.PROTOCOL, error) }
             }
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) { disconnected(); close() }
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null); if (!closed.get()) disconnected() }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { if (!closed.get()) disconnected() }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { if (!closed.get()) disconnected() }
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) { fail(DesktopFailureKind.PROTOCOL) }
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(code, null)
+                fail(if (code == 1008 || code == 1009) DesktopFailureKind.PROTOCOL else DesktopFailureKind.DISCONNECTED)
+            }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { fail(DesktopFailureKind.DISCONNECTED) }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                fail(desktopHttpFailure(response?.code) ?: classifyDesktopFailure(t), t)
+            }
         })
         if (closed.get()) socket?.cancel()
     }
+    override fun readyTimeoutFailure(): DesktopFailureKind =
+        if (relayReached) DesktopFailureKind.PEER_OFFLINE else DesktopFailureKind.TIMEOUT
+
     override fun send(frame: JSONObject) {
         check(!closed.get())
         val socket = checkNotNull(socket)

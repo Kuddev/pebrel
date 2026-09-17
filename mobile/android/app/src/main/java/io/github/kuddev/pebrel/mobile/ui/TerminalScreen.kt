@@ -128,7 +128,7 @@ private fun TerminalHeader(title: String, endpoint: String, status: String, onBa
 }
 
 @Composable
-fun DesktopScreen(desktop: DesktopWorkspace?, onPane: (DesktopPane) -> Unit, onDisconnect: () -> Unit) {
+fun DesktopScreen(desktop: DesktopWorkspace?, onPane: (DesktopPane) -> Unit, onRetry: (() -> Unit)? = null, onDisconnect: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 12.dp)) {
         Row(Modifier.padding(vertical = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(15.dp)) {
             Glyph(R.drawable.ic_monitor, Modifier.size(30.dp), MaterialTheme.colorScheme.primary)
@@ -153,7 +153,11 @@ fun DesktopScreen(desktop: DesktopWorkspace?, onPane: (DesktopPane) -> Unit, onD
             }
         }
         if (desktop?.panes.isNullOrEmpty()) HelperText(stringResource(R.string.no_panes), Modifier.padding(vertical = 20.dp))
+        desktop?.failure?.let { HelperText(desktopFailureText(it), Modifier.padding(vertical = 12.dp)) }
         if (desktop?.status !in listOf("ready", "connecting")) HelperText(stringResource(R.string.device_unavailable), Modifier.padding(vertical = 12.dp))
+        if (onRetry != null && desktop?.status !in listOf("ready", "connecting")) {
+            Button(onRetry, modifier = Modifier.padding(top = 12.dp)) { Text(stringResource(R.string.retry)) }
+        }
         OutlinedButton(onDisconnect, modifier = Modifier.padding(top = 20.dp)) { Text(stringResource(R.string.disconnect)) }
     }
 }

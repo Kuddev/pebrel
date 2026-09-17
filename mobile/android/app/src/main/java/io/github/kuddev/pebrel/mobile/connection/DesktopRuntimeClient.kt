@@ -13,9 +13,9 @@ import java.util.concurrent.atomic.AtomicLong
 class DesktopRuntimeClient(
     private val transport: DesktopTransport,
     private val onSnapshot: (JSONObject) -> Unit,
-    private val onDisconnected: () -> Unit,
+    private val onDisconnected: (DesktopFailureKind) -> Unit,
 ) : Closeable {
-    constructor(connection: SshConnection, onSnapshot: (JSONObject) -> Unit, onDisconnected: () -> Unit) :
+    constructor(connection: SshConnection, onSnapshot: (JSONObject) -> Unit, onDisconnected: (DesktopFailureKind) -> Unit) :
         this(SshDesktopTransport(connection), onSnapshot, onDisconnected)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val writer = Mutex()
@@ -25,20 +25,44 @@ class DesktopRuntimeClient(
     private val closed = AtomicBoolean()
 
     suspend fun connect(allowInput: Boolean): JSONObject {
-        transport.open(allowInput, { message ->
-            if (!closed.get()) {
-                when {
-                    message.optString("type") == "mobile.ready" -> ready.complete(message)
-                    message.optString("type") == "mobile.disconnected" -> disconnect()
-                    message.optString("event") == "runtime.snapshot" -> onSnapshot(message.getJSONObject("data"))
-                    message.has("id") -> pending.remove(message.getString("id"))?.complete(message)
+        try {
+            transport.open(allowInput, { message ->
+                if (!closed.get()) {
+                    when {
+                        message.optString("type") == "mobile.ready" -> ready.complete(message)
+                        message.optString("type") == "mobile.disconnected" -> disconnect(
+                            DesktopConnectionFailure(DesktopFailureKind.RUNTIME_UNAVAILABLE))
+                        message.optString("event") == "runtime.snapshot" -> onSnapshot(message.getJSONObject("data"))
+                        message.has("id") -> pending.remove(message.getString("id"))?.complete(message)
+                    }
                 }
+            }, ::disconnect)
+            val hello = try { withTimeout(30_000) { ready.await() } }
+            catch (error: TimeoutCancellationException) {
+                throw DesktopConnectionFailure(transport.readyTimeoutFailure(), error)
             }
-        }, ::disconnect)
-        val hello = withTimeout(30_000) { ready.await() }
-        check(hello.optString("protocol") in setOf("pebrel.mobile.ssh", "pebrel.mobile.relay") && hello.optInt("version") == 1)
-        request("events.subscribe")
-        return hello
+            if (hello.optString("protocol") !in setOf("pebrel.mobile.ssh", "pebrel.mobile.relay") || hello.optInt("version") != 1) {
+                throw DesktopConnectionFailure(DesktopFailureKind.PROTOCOL)
+            }
+            try { request("events.subscribe") }
+            catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                throw if (error is DesktopConnectionFailure) error
+                    else DesktopConnectionFailure(DesktopFailureKind.RUNTIME_UNAVAILABLE, error)
+            }
+            return hello
+        } catch (error: TimeoutCancellationException) {
+            val failure = DesktopConnectionFailure(DesktopFailureKind.RUNTIME_UNAVAILABLE, error)
+            disconnect(failure)
+            throw failure
+        } catch (cancelled: CancellationException) {
+            close()
+            throw cancelled
+        } catch (error: Exception) {
+            val failure = if (error is DesktopConnectionFailure) error else DesktopConnectionFailure(classifyDesktopFailure(error), error)
+            disconnect(failure)
+            throw failure
+        }
     }
 
     suspend fun request(method: String, params: JSONObject = JSONObject()): JSONObject {
@@ -56,7 +80,7 @@ class DesktopRuntimeClient(
                     } catch (error: Exception) {
                         // A rejected send invalidates this connection as well as
                         // this request; settle all peers and leave the ready UI.
-                        disconnect()
+                        disconnect(error)
                         throw error
                     }
                 }
@@ -66,15 +90,16 @@ class DesktopRuntimeClient(
             return response.optJSONObject("result") ?: JSONObject()
         } finally { pending.remove(id) }
     }
-    private fun disconnect() {
+    private fun disconnect(error: Throwable?) {
         if (!closed.compareAndSet(false, true)) return
-        settle()
-        onDisconnected()
+        val failure = DesktopConnectionFailure(if (error == null) DesktopFailureKind.DISCONNECTED else classifyDesktopFailure(error), error)
+        settle(failure)
+        onDisconnected(failure.kind)
         scope.launch { try { transport.close() } finally { scope.cancel() } }
     }
-    private fun settle() {
-        ready.completeExceptionally(IllegalStateException("desktop_disconnected"))
-        pending.values.forEach { it.completeExceptionally(IllegalStateException("delivery_unknown")) }
+    private fun settle(failure: DesktopConnectionFailure = DesktopConnectionFailure(DesktopFailureKind.DISCONNECTED)) {
+        ready.completeExceptionally(failure)
+        pending.values.forEach { it.completeExceptionally(failure) }
         pending.clear()
     }
     override fun close() {

@@ -93,6 +93,18 @@ export async function startRelayPairing({ config, invitation, allowInput = false
   }
 }
 
+function lanPageOptions(local, invitationChanged = () => {}) {
+  return {
+    addresses: local.addresses,
+    currentAddress: local.address,
+    onAddressChange: async address => {
+      const result = await local.switchAddress(address);
+      invitationChanged(result.invitation);
+      return result;
+    },
+  };
+}
+
 /** Start the local TLS relay, attach the runtime connector and serve its QR. */
 export async function startLanBrowserPairing({ state, statePath, name, address, advertiseAddress, port,
   allowInput = false, open = true } = {}) {
@@ -102,7 +114,7 @@ export async function startLanBrowserPairing({ state, statePath, name, address, 
   try {
     local = await startLanPairing({ state, statePath, name, address, advertiseAddress, port, allowInput,
       onStatus: status => { lastStatus = status; page?.setStatus(status); } });
-    page = await startQrPage(local.invitation);
+    page = await startQrPage(local.invitation, lanPageOptions(local));
     page.setStatus(lastStatus);
     const originalClose = local.close;
     if (open) openBrowser(page.url);
@@ -165,7 +177,7 @@ function buildLanState(args, configPath, outputDirectory) {
     address: argument(args, '--address'), advertiseAddress: argument(args, '--advertise'),
     port: portArgument(args, 0),
   });
-  const statePath = path.join(outputDirectory, `lan-${state.device}.json`);
+  const statePath = configPath ? path.resolve(configPath) : path.join(outputDirectory, `lan-${state.device}.json`);
   return { state, statePath };
 }
 
@@ -186,20 +198,23 @@ export async function runCli(args = process.argv.slice(2)) {
       port: portArgument(args, state.port ?? 0), allowInput,
       onStatus: status => { lastStatus = status; page?.setStatus(status); },
     });
-    page = await startQrPage(local.invitation);
-    page.setStatus(lastStatus);
-    const invitationPath = path.join(outputDirectory, `phone-${local.state.device}.txt`);
-    writeInvitation(invitationPath, local.invitation);
-    if (open) openBrowser(page.url);
-    console.log(`Pebrel LAN pairing ready for ${local.state.name}`);
-    console.log(`Scan the QR in your browser at ${page.url}`);
-    console.log(`Invitation saved to ${invitationPath}`);
-    await new Promise(resolve => {
-      const stop = () => resolve();
-      for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, stop);
-    });
-    await page.close();
-    await local.close();
+    try {
+      const invitationPath = path.join(outputDirectory, `phone-${local.state.device}.txt`);
+      writeInvitation(invitationPath, local.invitation);
+      page = await startQrPage(local.invitation, lanPageOptions(local, value => writeInvitation(invitationPath, value)));
+      page.setStatus(lastStatus);
+      if (open) openBrowser(page.url);
+      console.log(`Pebrel LAN pairing ready for ${local.state.name}`);
+      console.log(`Scan the QR in your browser at ${page.url}`);
+      console.log(`Invitation saved to ${invitationPath}`);
+      await new Promise(resolve => {
+        const stop = () => resolve();
+        for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, stop);
+      });
+    } finally {
+      await page?.close();
+      await local.close();
+    }
     return;
   }
   const configPath = argument(args, '--config') ?? argument(args, '--desktop-config') ?? argument(args, '--relay-config');
@@ -220,7 +235,17 @@ export async function runCli(args = process.argv.slice(2)) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runCli().catch(error => { console.error(`Pairing failed: ${error.message}`); process.exitCode = 1; });
+  runCli().catch(error => {
+    const messages = {
+      ambiguous_lan_address: '无法自动确定局域网接口，请使用 --address 指定电脑与手机共同网络的地址。 / Select a LAN address with --address.',
+      no_lan_address: '未找到局域网，请连接 Wi-Fi 或有线网络后重试。 / Connect to Wi-Fi or Ethernet, then retry.',
+      EADDRINUSE: '此连接端口已在使用，请返回已打开的配对窗口。 / This port is in use. Return to the existing pairing window.',
+      EADDRNOTAVAIL: '保存的网络地址已不可用，请重新选择当前网络。 / The saved network address is unavailable.',
+    };
+    console.error(messages[error.code] || messages[error.message] ||
+      '无法启动连接工具，请检查 Node.js、完整解压和目录权限后重试。 / Pairing could not start. Check Node.js, extraction and folder permissions.');
+    process.exitCode = 1;
+  });
 }
 
 export { createInvitation, parseInvitation, readInvitation, writeInvitation, writePrivateJson,

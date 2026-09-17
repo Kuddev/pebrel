@@ -61,7 +61,7 @@ def package(desktop: Path, output: Path, commit: str) -> Path:
                     if not entry.isfile():
                         raise ValueError("Pairing kit must contain only regular files")
                     add("mobile/" + safe_name(entry.name), kit.extractfile(entry).read())
-        for name in ("Start-Pebrel-Preview.cmd", "START-LAN.zh-CN.md"):
+        for name in ("Start-Pebrel-Preview.cmd", "Connect-Phone.cmd", "Connect-Phone.ps1", "START-LAN.zh-CN.md"):
             data = (root / "mobile/desktop" / name).read_bytes()
             if name.endswith(".cmd"):
                 data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")

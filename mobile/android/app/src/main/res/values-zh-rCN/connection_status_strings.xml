@@ -1,0 +1,26 @@
+<resources>
+    <string name="desktop_dns">无法解析电脑或中转服务器地址。请检查地址和网络连接。</string>
+    <string name="desktop_timeout">连接超时。请检查地址和端口；局域网连接时，两台设备应处于同一网络，并保持电脑配对工具运行。</string>
+    <string name="desktop_refused">无法连接此端口。请保持配对工具运行，并检查地址、端口和防火墙设置。</string>
+    <string name="desktop_network">网络连接中断。请检查网络后重新连接；命令不会自动重发。</string>
+    <string name="desktop_certificate_changed">电脑证书与扫码保存的指纹不一致，连接已阻止。请确认电脑身份后，重新扫描当前二维码。</string>
+    <string name="desktop_certificate_date">连接证书已过期或尚未生效。请检查两台设备的日期和时间，必要时重新生成配对证书。</string>
+    <string name="desktop_tls">无法验证加密连接。请检查邀请地址是否与电脑证书匹配，或中转服务器是否使用有效的 HTTPS 证书。</string>
+    <string name="desktop_authentication">连接邀请被拒绝或已失效。请重新扫描配对工具当前显示的二维码。</string>
+    <string name="desktop_already_connected">此手机连接已被占用。请关闭先前的手机连接，稍等片刻后重试。</string>
+    <string name="desktop_server">服务器未接受 WebSocket 连接。请检查中转地址和反向代理配置。</string>
+    <string name="desktop_peer_offline">电脑尚未就绪或已离线。请保持 Pebrel 和配对工具运行，并查看电脑配对页面的状态。</string>
+    <string name="desktop_runtime_unavailable">配对工具无法读取 Pebrel 会话。请打开 Pebrel，在它的本地终端内启动配对工具，再重新连接。</string>
+    <string name="desktop_protocol">连接返回的数据格式不兼容。请更新两端 Pebrel 和电脑配对工具后重新连接。</string>
+    <string name="desktop_disconnected">电脑连接已关闭。请保持 Pebrel 和配对工具运行后重新连接；命令不会自动重发。</string>
+    <string name="desktop_connection_failed">无法连接电脑。请查看电脑配对页面的状态后重新连接。</string>
+    <string name="relay_storage_failed">无法在此设备保存电脑连接邀请，请重试。</string>
+    <string name="invalid_relay_invite">这不是有效的 Pebrel 连接邀请。请扫描电脑配对工具当前显示的二维码。</string>
+    <string name="desktop_read_failed">无法读取终端输出。请检查电脑连接后重试。</string>
+    <string name="delivery_unknown">无法确认命令是否已送达。请先检查电脑端输出，再决定是否重新发送。</string>
+    <string name="input_rejected">输入未被接受。请检查会话连接和输入权限。</string>
+    <string name="operation_failed_hint">操作未完成。请检查连接或设置后重试。</string>
+    <string name="pair_import_connect">导入并连接</string>
+    <string name="pair_manual_setup">手动配置连接</string>
+    <string name="pair_hide_manual">收起手动配置</string>
+</resources>

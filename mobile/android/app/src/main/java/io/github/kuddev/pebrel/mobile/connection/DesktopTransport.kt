@@ -8,21 +8,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Transport lifetime is separate from RPC identity and the desktop's task state. */
 interface DesktopTransport : Closeable {
-    suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: () -> Unit)
+    suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit)
     fun send(frame: JSONObject)
+    fun readyTimeoutFailure(): DesktopFailureKind = DesktopFailureKind.PEER_OFFLINE
 }
 
 class SshDesktopTransport(private val connection: SshConnection) : DesktopTransport {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val closed = AtomicBoolean()
 
-    override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: () -> Unit) {
+    override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit) {
         withContext(Dispatchers.IO) {
             connection.connect()
             check(!closed.get())
             connection.openExec(if (allowInput) "pebrel mobile-bridge --allow-input" else "pebrel mobile-bridge")
             check(!closed.get())
             scope.launch {
+                var failure: Throwable? = null
                 try {
                     BufferedInputStream(connection.input(), 8192).use { input ->
                         while (!closed.get()) {
@@ -30,8 +32,8 @@ class SshDesktopTransport(private val connection: SshConnection) : DesktopTransp
                             receive(JSONObject(bytes.toString(Charsets.UTF_8)))
                         }
                     }
-                } catch (_: Exception) { /* Disconnection below settles pending requests. */ }
-                finally { if (!closed.get()) disconnected(); close() }
+                } catch (error: Exception) { failure = error }
+                finally { if (!closed.get()) disconnected(failure); close() }
             }
             scope.launch {
                 runCatching {

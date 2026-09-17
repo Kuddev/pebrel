@@ -166,3 +166,25 @@ helper pins `qrcode` 1.5.4 and `selfsigned` 2.4.1; their licenses, the transitiv
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) and `package-lock.json`. The
 browser page has no external CDN dependency, and the relay contains no copied
 proprietary server source or deployable cloud service.
+
+## Network selection and reconnection / 网络选择与重连
+
+Automatic LAN pairing prefers an interface with a default route, with physical
+Windows adapters ordered before virtual adapters. IPv4 link-local addresses are
+excluded. The helper queries OS routing information only at startup or during a
+network change; it does not send a reachability probe to an external service.
+The local QR page shows the advertised address and offers the discovered interfaces.
+Changing it closes the old phone link and generates a matching certificate and QR.
+The phone must scan the new QR; pending input is never replayed onto the new link.
+
+自动选择优先使用具有默认路由的网络接口，不再按网卡名称直接取第一项。
+Windows 优先实体网卡，自动发现排除 169.254.* 地址。配对页显示手机使用的地址，
+可直接切换已发现的网络接口；切换后重新扫码，不自动重发命令。
+明确传入的 `--address` 优先；保存地址失效时重新选择当前接口。
+`--config` 指定的配置可在首次启动时创建，之后保留设备编号和配对凭据。
+没有路由信息且存在多个地址时，需要明确指定地址，不假定所有接口都可达手机。
+
+Windows portable previews include `Connect-Phone.cmd`, which opens the adjacent
+preview and QR page without typed commands. Its saved pairing is
+`mobile/relay/private/lan-desktop.json`. Existing desktop tasks are not stopped when
+the helper closes. The source-only helper still requires Node.js 22 or newer.

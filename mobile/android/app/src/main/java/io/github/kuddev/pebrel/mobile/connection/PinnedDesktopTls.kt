@@ -22,7 +22,7 @@ internal object PinnedDesktopTls {
                 val leaf = chain.firstOrNull() ?: throw CertificateException("Missing server certificate")
                 leaf.checkValidity()
                 val actual = MessageDigest.getInstance("SHA-256").digest(leaf.publicKey.encoded)
-                if (!MessageDigest.isEqual(expected, actual)) throw CertificateException("Pairing certificate changed")
+                if (!MessageDigest.isEqual(expected, actual)) throw PairingCertificateChanged()
             }
         }
         val context = SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }

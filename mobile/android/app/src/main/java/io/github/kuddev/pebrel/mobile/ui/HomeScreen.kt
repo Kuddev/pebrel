@@ -214,10 +214,12 @@ private data class ComputerSummary(
 
 private fun computerSummaries(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>): List<ComputerSummary> = buildList {
     desktops.forEach { desktop ->
-        add(ComputerSummary(desktop.id, desktop.host.name, desktop.status, desktop.transport))
+        val retryProfile = if (desktop.status in setOf("ready", "connecting")) null
+            else relays.find { it.id == desktop.host.id }
+        add(ComputerSummary(desktop.id, desktop.host.name, desktop.status, desktop.transport, retryProfile))
     }
     relays.filter { profile -> desktops.none { it.host.id == profile.id } }.forEach { profile ->
-        add(ComputerSummary(profile.id, profile.name, "disconnected", "Relay", profile))
+        add(ComputerSummary(profile.id, profile.name, "disconnected", if (profile.mode == "lan") "LAN" else "Relay", profile))
     }
 }
 

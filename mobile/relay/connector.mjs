@@ -20,18 +20,29 @@ export function connectDesktop(config, options = {}) {
   let link;
   let reconnect;
   let attempts = 0;
+  let runtimeUnavailable = false;
   const status = options.onStatus ?? (() => {});
   const release = () => { runtime?.close(); runtime = null; link = null; };
   const send = body => {
-    if (!link || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > MAX_BUFFERED) {
-      socket.terminate(); return;
+    if (!link || !socket || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > MAX_BUFFERED) {
+      socket?.terminate(); return;
     }
     const bytes = JSON.stringify({ type: 'relay.data', link, body });
     if (Buffer.byteLength(bytes) > MAX_ENVELOPE) { socket.terminate(); return; }
     socket.send(bytes);
   };
+  const reportRuntimeUnavailable = () => {
+    if (runtimeUnavailable) return;
+    runtimeUnavailable = true;
+    status('runtime_unavailable');
+    // Keep this diagnostic deliberately bounded. It is consumed by Android and
+    // must never carry a filesystem error, token, or other local detail.
+    send({ type: 'mobile.disconnected', code: 'runtime_unavailable' });
+    socket.close(1008, 'runtime_unavailable');
+  };
   const start = () => {
     if (stopped) return;
+    runtimeUnavailable = false;
     status('connecting');
     socket = new WebSocket(url, { headers: { Authorization: `Bearer ${config.token}` },
       maxPayload: MAX_ENVELOPE, perMessageDeflate: false, handshakeTimeout: 15_000,
@@ -52,15 +63,25 @@ export function connectDesktop(config, options = {}) {
         const frame = JSON.parse(bytes.toString());
         if (frame.type === 'relay.paired') {
           release(); link = frame.link; attempts = 0;
-          const endpoint = options.endpoint ?? discoverEndpoint(config.runtimeFile);
+          let endpoint;
+          try {
+            endpoint = options.endpoint ?? discoverEndpoint(config.runtimeFile);
+          } catch {
+            reportRuntimeUnavailable();
+            return;
+          }
           runtime = new RuntimeLink(endpoint, options.allowInput === true, send, () => {
-            send({ type: 'mobile.disconnected' }); release();
+            reportRuntimeUnavailable();
+            release();
           });
           send(ready(options.allowInput === true)); status('paired');
         } else if (frame.type === 'relay.peer_left') { release(); status('waiting_for_phone'); }
         else if (frame.type === 'relay.data' && frame.link === link) runtime?.request(frame.body);
         else if (frame.type !== 'relay.waiting') throw new Error('invalid_frame');
-      } catch { socket.close(1008, 'runtime_unavailable'); }
+      } catch {
+        if (!runtimeUnavailable) status('connection_failed');
+        socket.close(1008, 'protocol_error');
+      }
     });
     socket.on('unexpected-response', (_request, response) => {
       // Rejected/revoked credentials require user action, never an endless retry storm.
@@ -70,11 +91,13 @@ export function connectDesktop(config, options = {}) {
       } else status('server_unavailable');
       response.resume(); socket.terminate();
     });
-    socket.on('error', () => { status('connection_failed'); });
+    socket.on('error', () => { if (!runtimeUnavailable) status('connection_failed'); });
     socket.on('close', () => {
       clearInterval(heartbeat); release();
       if (!stopped) {
-        status('reconnecting');
+        // Leave the actionable Runtime diagnosis visible until the next retry
+        // starts. Generic network failures retain the existing reconnect state.
+        if (!runtimeUnavailable) status('reconnecting');
         const ceiling = Math.min(30_000, 1000 * 2 ** Math.min(attempts++, 5));
         reconnect = setTimeout(start, ceiling / 2 + Math.random() * ceiling / 2);
       }

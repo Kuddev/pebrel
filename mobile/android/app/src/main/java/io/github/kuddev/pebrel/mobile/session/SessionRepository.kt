@@ -24,7 +24,7 @@ data class LocalSession(
     val status: String = "connecting", val host: HostProfile? = null,
     val stage: SshStage = SshStage.NETWORK, val failure: SshFailureKind? = null, val hasConnected: Boolean = false,
 )
-data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH")
+data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH", val failure: DesktopFailureKind? = null)
 data class TrustRequest(val ownerId: String, val host: HostProfile, val fingerprint: String, val answer: CompletableFuture<Boolean>)
 data class DesktopOutput(val target: String = "", val text: String = "", val loading: Boolean = false)
 
@@ -338,9 +338,9 @@ class SessionRepository(private val context: Context) {
                 computers.value = computers.value.map { if (it.id == id) it.copy(panes = panes, status = "ready") else it }
                 if (computers.value.any { it.id == id }) events.forEach { SessionNotices.task(context, id, host.name, it) }
             }
-        }, { main.post {
+        }, { failure -> main.post {
             desktopClients.remove(id)
-            computers.value = computers.value.map { if (it.id == id) it.copy(status = "disconnected") else it }
+            computers.value = computers.value.map { if (it.id == id) it.copy(status = "disconnected", failure = failure) else it }
             stopIdleService()
         } })
         desktopClients[id] = client
@@ -349,13 +349,17 @@ class SessionRepository(private val context: Context) {
                 val hello = client.connect(allowInput)
                 val input = allowInput && hello.optJSONObject("capabilities")?.optBoolean("input") == true
                 main.post { computers.value = computers.value.map { if (it.id == id) it.copy(allowInput = input) else it } }
-            } catch (_: Exception) {
+            } catch (cancelled: CancellationException) {
+                client.close()
+                throw cancelled
+            } catch (failure: Exception) {
                 desktopClients.remove(id, client)
                 client.close()
                 main.post {
                     if (computers.value.any { it.id == id }) {
-                        computers.value = computers.value.map { if (it.id == id) it.copy(status = "failed") else it }
-                        error.value = if (source == "Relay") "relay_connection_failed" else "desktop_connection_failed"
+                        val kind = classifyDesktopFailure(failure)
+                        computers.value = computers.value.map { if (it.id == id) it.copy(status = "failed", failure = kind) else it }
+                        error.value = kind.code
                     }
                     stopIdleService()
                 }
