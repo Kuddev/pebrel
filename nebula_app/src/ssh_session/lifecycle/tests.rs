@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use nebula_terminal::event::EventListener;
+use nebula_terminal::grid::Dimensions;
 use russh::keys::ssh_key::{Algorithm, PrivateKey};
 use russh::server::{self, Auth, ChannelOpenHandle, Session};
 use russh::{ChannelId, Pty};
@@ -69,6 +70,7 @@ struct Loopback {
     mode: Mode,
     hang: bool,
     data: mpsc::UnboundedSender<Vec<u8>>,
+    window_changes: mpsc::UnboundedSender<WindowSize>,
     channels: Vec<Channel<server::Msg>>,
 }
 
@@ -135,6 +137,27 @@ impl server::Handler for Loopback {
         } else {
             session.channel_success(channel)
         }
+    }
+
+    async fn window_change_request(
+        &mut self,
+        channel: ChannelId,
+        col_width: u32,
+        row_height: u32,
+        pix_width: u32,
+        pix_height: u32,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.window_changes
+            .send(WindowSize {
+                num_cols: u16::try_from(col_width).unwrap(),
+                num_lines: u16::try_from(row_height).unwrap(),
+                cell_width: u16::try_from(pix_width / col_width).unwrap(),
+                cell_height: u16::try_from(pix_height / row_height).unwrap(),
+            })
+            .unwrap();
+        session.channel_success(channel)?;
+        Ok(())
     }
 
     async fn shell_request(
@@ -335,6 +358,7 @@ fn duplicate_ssh_directory_preserves_literal_paths_and_rejects_control_character
 struct Fixture {
     route: ResolvedRoute,
     data: mpsc::UnboundedReceiver<Vec<u8>>,
+    window_changes: mpsc::UnboundedReceiver<WindowSize>,
     task: tokio::task::JoinHandle<()>,
     _directory: tempfile::TempDir,
 }
@@ -366,6 +390,7 @@ impl Fixture {
             ..Default::default()
         });
         let (data_tx, data) = mpsc::unbounded_channel();
+        let (window_changes_tx, window_changes) = mpsc::unbounded_channel();
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
             let mut first = true;
@@ -376,6 +401,7 @@ impl Fixture {
                     mode,
                     hang: first && mode == Mode::HangFirstConnection,
                     data: data_tx.clone(),
+                    window_changes: window_changes_tx.clone(),
                     channels: Vec::new(),
                 };
                 first = false;
@@ -394,11 +420,11 @@ impl Fixture {
             transport: RouteTransport::Direct,
             known_hosts_path: Some(known_hosts),
         };
-        Self { route, data, task, _directory: directory }
+        Self { route, data, window_changes, task, _directory: directory }
     }
 
     async fn connect(&self) -> AcquiredSession {
-        authenticated_route(&self.route, None::<&NoopSshEventHost>, false).await.unwrap()
+        authenticated_route(&self.route, None::<&NoopSshEventHost>, false, true).await.unwrap()
     }
 
     async fn forget(&self, session: &SharedSession) {
@@ -487,6 +513,60 @@ fn shell_confirmation_preserves_early_output_and_remote_directory() {
         let command = fixture.data.recv().await.unwrap();
         assert_eq!(command, b"cd '/srv/Team'\\''s App '\r");
         drop(channel);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_resize_updates_grid_and_remote_pty() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::Open).await;
+        let acquired = fixture.connect().await;
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (input_tx, mut input) = mpsc::unbounded_channel();
+        let pump_terminal = Arc::clone(&terminal);
+        let pump_events = events.clone();
+        let mut running = tokio::spawn(async move {
+            pump(&mut channel, token, size(), &pump_terminal, &pump_events, &mut input).await
+        });
+
+        let grid_size = WindowSize { num_cols: 100, num_lines: 30, ..size() };
+        input_tx.send(Msg::ResizeGrid(grid_size)).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let dimensions = {
+                    let terminal = terminal.lock();
+                    (terminal.columns(), terminal.screen_lines())
+                };
+                if dimensions == (100, 30) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("SSH grid-only resize was not applied");
+
+        let remote_size = WindowSize { num_cols: 132, num_lines: 40, ..size() };
+        input_tx.send(Msg::Resize(remote_size)).unwrap();
+        let observed = tokio::select! {
+            observed = fixture.window_changes.recv() => observed.expect("SSH server stopped before window change"),
+            result = &mut running => panic!("SSH pump stopped before window change: {result:?}"),
+        };
+        assert_eq!(observed.num_cols, remote_size.num_cols);
+        assert_eq!(observed.num_lines, remote_size.num_lines);
+        assert_eq!(observed.cell_width, remote_size.cell_width);
+        assert_eq!(observed.cell_height, remote_size.cell_height);
+        let dimensions = {
+            let terminal = terminal.lock();
+            (terminal.columns(), terminal.screen_lines())
+        };
+        assert_eq!(dimensions, (132, 40));
+
+        input_tx.send(Msg::Shutdown).unwrap();
+        assert!(running.await.unwrap().is_ok());
         fixture.forget(&acquired.session).await;
     });
 }

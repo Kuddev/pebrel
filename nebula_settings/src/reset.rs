@@ -5,15 +5,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RESET_KEYS: &[&str] = &[
+    "scrollback_lines",
+    "scroll_speed",
     "language",
     "theme",
     "app_icon",
     "follow_system_theme",
     "font_family",
+    "font_family_cjk",
+    "ui_font_family",
+    "ui_font_size",
     "font_size",
     "cursor_shape",
     "cursor_blink",
     "copy_on_select",
+    "focus_follows_mouse",
+    "dim_inactive_panes",
     "multiline_paste_confirm",
     "tab_close_visible",
     "terminal_proxy",
@@ -36,13 +43,17 @@ const RESET_KEYS: &[&str] = &[
     "ai_toasts",
     "fetch",
     "auto_check_updates",
+    "auto_download_updates",
     "keep_session",
     "restore_session",
     "resume_ai",
     "tray",
+    "silent_start",
     "blur",
     "opacity",
     "background",
+    "theme_foreground",
+    "custom_theme",
     "background_image",
     "background_image_opacity",
     "background_image_fit",
@@ -117,6 +128,26 @@ mod tests {
     use crate::{RawSettings, RuntimeSettings};
 
     #[test]
+    fn reset_restores_scrolling_defaults_and_preserves_unknown_keys() {
+        let restored =
+            default_settings_text("scrollback_lines=100000\nscroll_speed=4.00\ncustom=keep\n");
+        assert_eq!(restored, "custom=keep\n");
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+        assert_eq!(runtime.scrollback_lines, 10_000);
+        assert_eq!(runtime.scroll_speed, 1.0);
+    }
+
+    #[test]
+    fn reset_restores_split_dimming_and_removes_mouse_override() {
+        let restored =
+            default_settings_text("focus_follows_mouse=1\ndim_inactive_panes=0\ncustom=keep\n");
+        assert_eq!(restored, "custom=keep\n");
+        let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+        assert_eq!(settings.focus_follows_mouse, None);
+        assert!(settings.dim_inactive_panes);
+    }
+
+    #[test]
     fn resetting_preferences_reenables_ai_toasts_without_erasing_other_data() {
         let original = "ai_toasts=0\ncustom_data=keep\n";
         assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(original)).ai_toasts);
@@ -127,7 +158,7 @@ mod tests {
 
     #[test]
     fn reset_removes_all_overrides_and_keeps_user_data() {
-        let text = "# preferences\r\n THEME = Nord\r\ncopy_on_select=1\nkeybind=ctrl+x:Copy\nFONT_SIZE=30\nexecutor=custom\nblur=acrylic\nopacity=0.65\nssh_hosts=saved-host\nai_provider=custom\nfuture_setting=keep\n";
+        let text = "# preferences\r\n THEME = Nord\r\ncopy_on_select=1\nkeybind=ctrl+x:Copy\nFONT_SIZE=30\nexecutor=custom\nblur=acrylic\nopacity=0.65\nbackground=#101216\ntheme_foreground=#d6dae6\ncustom_theme=my-night\nssh_hosts=saved-host\nai_provider=custom\nfuture_setting=keep\n";
         let result = default_settings_text(text);
         assert_eq!(
             result,
@@ -148,6 +179,13 @@ mod tests {
     fn duplicate_keys_and_legacy_aliases_cannot_override_the_reset() {
         let text = "theme=Nord\nTHEME=Paper\nshell=pwsh\nexecutor=cmd\nkeybind=ctrl+a:Copy\nkeybind=ctrl+b:Paste\n";
         assert_eq!(default_settings_text(text), "");
+    }
+
+    #[test]
+    fn reset_removes_theme_overrides_but_keeps_unknown_theme_data() {
+        let text =
+            "theme_foreground=#d6dae6\ncustom_theme=my-night\ncustom_theme_file=theme.json\n";
+        assert_eq!(default_settings_text(text), "custom_theme_file=theme.json\n");
     }
 
     #[test]

@@ -793,6 +793,7 @@ pub(crate) struct CardInk {
     pub(crate) fg: Rgb,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct NebulaPalette {
     pub(crate) panel: Rgba,
     /// Standalone fill for inactive tab rows / the "+" pill. Currently unpainted

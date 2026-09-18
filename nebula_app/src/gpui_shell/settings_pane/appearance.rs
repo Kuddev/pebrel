@@ -24,12 +24,16 @@ impl SettingsPane {
     ) -> gpui::AnyElement {
         let language = crate::gpui_shell::config::ui_language(cx);
         let colors = AppearanceColors::current(cx);
-        let name = crate::gpui_shell::theme::effective_theme_name(cx);
+        let resolved = crate::gpui_shell::theme::resolved_theme(cx);
+        let name = resolved.base_name();
         let icon = crate::app_icon::selected();
-        let label = if theme {
-            chrome_theme(name).short_label()
+        let label: SharedString = if theme {
+            resolved
+                .definition()
+                .map(|definition| definition.name.clone().into())
+                .unwrap_or_else(|| chrome_theme(name).short_label().into())
         } else {
-            language.pick(icon.palette().name_zh, icon.palette().name_en)
+            language.pick(icon.palette().name_zh, icon.palette().name_en).into()
         };
         let action = if theme {
             language.pick("更换主题", "Change theme")
@@ -38,15 +42,30 @@ impl SettingsPane {
         };
         let focus = if theme { &self.theme_picker_trigger } else { &self.icon_picker_trigger };
         let sample = if theme {
-            div()
-                .size(px(45.0))
-                .flex_shrink_0()
-                .child(super::theme_picker::theme_sample(name, true, false))
+            let thumbnail = if let Some(definition) = resolved.definition() {
+                super::theme_picker::theme_definition_sample(
+                    definition,
+                    Some(resolved.terminal_foreground()),
+                    true,
+                    false,
+                )
+            } else {
+                super::theme_picker::theme_sample_with_foreground(
+                    name,
+                    resolved.foreground_override(),
+                    true,
+                    false,
+                )
+            };
+            div().size(px(45.0)).flex_shrink_0().child(thumbnail)
         } else {
             super::app_icon::icon_image(icon, 45.0, window)
         };
         h_flex()
             .id(if theme { "open-theme-picker" } else { "open-icon-picker" })
+            .debug_selector(move || {
+                if theme { "open-theme-picker" } else { "open-icon-picker" }.to_owned()
+            })
             .track_focus(&focus.clone().tab_stop(true))
             .role(gpui::accesskit::Role::Button)
             .aria_label(format!("{action}: {label}"))
@@ -88,45 +107,51 @@ impl SettingsPane {
             .into_any_element()
     }
 
-    pub(super) fn terminal_font_size_row(&self, cx: &Context<Self>) -> gpui::AnyElement {
+    pub(super) fn font_size_row(&self, ui: bool, cx: &Context<Self>) -> gpui::AnyElement {
         let language = crate::gpui_shell::config::ui_language(cx);
-        let size = self.terminal_font_size_px(cx);
+        let size = if ui { self.font_size_px(cx) } else { self.terminal_font_size_px(cx) };
+        let (key, min, max) =
+            if ui { ("ui_font_size", 10.0, 24.0) } else { ("font_size", 4.0, 96.0) };
         let stepper = h_flex()
             .w(px(142.0))
             .h(px(36.0))
             .items_center()
             .child(
-                Button::new("appearance-font-smaller")
+                Button::new(SharedString::from(format!("{key}-smaller")))
                     .icon(IconName::Minus)
                     .ghost()
                     .size(px(34.0))
-                    .disabled(size <= 4.0)
+                    .disabled(size <= min)
                     .tooltip(language.pick("减小字号", "Decrease font size"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.set_font_size(
-                            (this.terminal_font_size_px(cx).ceil() - 1.0).round(),
-                            cx,
-                        );
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let next = (size.ceil() - 1.0).clamp(min, max);
+                        this.persist(&[(key, format!("{next:.2}"))], cx);
                     })),
             )
             .child(div().flex_1().text_center().child(format!("{size:.0} px")))
             .child(
-                Button::new("appearance-font-larger")
+                Button::new(SharedString::from(format!("{key}-larger")))
                     .icon(IconName::Plus)
                     .ghost()
                     .size(px(34.0))
-                    .disabled(size >= 96.0)
+                    .disabled(size >= max)
                     .tooltip(language.pick("增大字号", "Increase font size"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.set_font_size(
-                            (this.terminal_font_size_px(cx).floor() + 1.0).round(),
-                            cx,
-                        );
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let next = (size.floor() + 1.0).clamp(min, max);
+                        this.persist(&[(key, format!("{next:.2}"))], cx);
                     })),
             );
         self.row(
-            language.pick("终端字号（Ctrl+滚轮缩放）", "Terminal font size (Ctrl+wheel)"),
-            language.pick("只调整终端文字大小。", "Changes only the terminal text size."),
+            if ui {
+                language.text(crate::i18n::Message::SettingsFontUiSize)
+            } else {
+                language.pick("终端字号（Ctrl+滚轮缩放）", "Terminal font size (Ctrl+wheel)")
+            },
+            if ui {
+                language.text(crate::i18n::Message::SettingsFontUiSizeDescription)
+            } else {
+                language.pick("只调整终端文字大小。", "Changes only the terminal text size.")
+            },
             stepper,
             cx,
         )

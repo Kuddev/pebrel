@@ -543,14 +543,27 @@ pub fn wsl_guest_cwd(cwd: &str) -> Option<&str> {
 
 /// Set the WSL guest cwd without changing its distribution, user or command.
 pub fn wsl_args_at(program: &str, args: &[String], cwd: &str) -> Option<Vec<String>> {
+    if !cwd.starts_with('/') || cwd.chars().any(char::is_control) {
+        return None;
+    }
+    wsl_args_with_directory(program, args, Some(cwd))
+}
+
+/// Let WSL inherit an explicit host cwd, removing only its own --cd options.
+pub fn wsl_args_in_host_directory(program: &str, args: &[String]) -> Option<Vec<String>> {
+    wsl_args_with_directory(program, args, None)
+}
+
+fn wsl_args_with_directory(
+    program: &str,
+    args: &[String],
+    cwd: Option<&str>,
+) -> Option<Vec<String>> {
     let name = program.rsplit(['/', '\\']).next()?;
     if !name.eq_ignore_ascii_case("wsl.exe") && !name.eq_ignore_ascii_case("wsl") {
         return None;
     }
-    if !cwd.starts_with('/') || cwd.chars().any(char::is_control) {
-        return None;
-    }
-    let mut result = vec!["--cd".to_owned(), cwd.to_owned()];
+    let mut result = cwd.map_or_else(Vec::new, |cwd| vec!["--cd".to_owned(), cwd.to_owned()]);
     let mut arguments = args.iter();
     while let Some(arg) = arguments.next() {
         match arg.as_str() {
@@ -656,16 +669,18 @@ pub fn wsl_unc_cwd(located: &WslCwd) -> Option<std::path::PathBuf> {
 /// shell 正常启动。
 pub fn wsl_cwd_report_env(
     program: &str,
-    args: &[String],
+    _args: &[String],
     current_wslenv: Option<&str>,
 ) -> Vec<(String, String)> {
-    if wsl_launch_distro(program, args).is_none() {
+    if crate::display::extract_program(program).as_deref() != Some("wsl") {
         return Vec::new();
     }
     // 用 `$PWD` 而不是 `$(pwd)`，整个 PROMPT_COMMAND 只有变量赋值与一个
-    // builtin printf：每个提示符都执行也不 fork。初始提示符多发的 D 无害，
+    // builtin printf；身份只在首个提示符编码一次。初始提示符多发的 D 无害，
     // Runtime submit barrier 会拒绝把它错配给尚未真正提交的新命令。
-    const REPORT: &str = r#"__nebula_status=$?; printf '\033]133;D;%s\007\033]7;file://%s%s\007\033]133;A\007' "$__nebula_status" "${HOSTNAME:-wsl}" "$PWD""#;
+    const REPORT: &str = r#"__nebula_status=$?; if [ -z "${__pebrel_shell_token:-}" ]; then __pebrel_shell_token=$(printf '%s' "wsl|${WSL_DISTRO_NAME:-}|bash:${HOSTNAME:-wsl}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n');
+__PEBREL_CONNECTION_HOOK__
+fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007\033]133;D;%s\007\033]7;file://%s%s\007\033]133;A\007' "$__pebrel_shell_token" "$__nebula_status" "${HOSTNAME:-wsl}" "$PWD""#;
     // 宿主侧可能已经有 WSLENV（别的工具设的），必须追加而不是覆盖。
     let mut wslenv = current_wslenv
         .map(str::to_owned)
@@ -677,7 +692,9 @@ pub fn wsl_cwd_report_env(
     if !wslenv.split(':').any(|entry| entry == "PROMPT_COMMAND") {
         wslenv.push_str("PROMPT_COMMAND");
     }
-    vec![("PROMPT_COMMAND".to_owned(), REPORT.to_owned()), ("WSLENV".to_owned(), wslenv)]
+    let report =
+        REPORT.replace("__PEBREL_CONNECTION_HOOK__", nebula_terminal::tty::connection_shell());
+    vec![("PROMPT_COMMAND".to_owned(), report), ("WSLENV".to_owned(), wslenv)]
 }
 
 /// WSL automount 路径（仅 `/mnt/<盘>`）→ 宿主可见且已确认存在的目录。
@@ -746,11 +763,10 @@ fn find_wsl_distros() -> Vec<DetectedShell> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
-    let wsl_exe =
-        match env_path("SystemRoot").and_then(|root| existing(root.join(r"System32\wsl.exe"))) {
-            Some(path) => path,
-            None => return Vec::new(),
-        };
+    let wsl_exe = match crate::platform::shell::wsl_executable() {
+        Some(path) => path,
+        None => return Vec::new(),
+    };
 
     let lxss = match RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
@@ -993,7 +1009,6 @@ mod tests {
         assert_eq!(launched.args(), &["-d".to_owned(), "Ubuntu".to_owned()]);
     }
 
-    #[cfg(windows)]
     #[test]
     fn wsl_cwd_report_preserves_the_refreshed_wslenv() {
         let additions = wsl_cwd_report_env(
@@ -1011,6 +1026,79 @@ mod tests {
         assert!(prompt_command.contains("]133;D;%s"));
         assert!(prompt_command.contains("]7;file://%s%s"));
         assert!(prompt_command.contains("]133;A"));
+        assert!(!prompt_command.contains('\r'));
+    }
+
+    #[test]
+    fn wsl_prompt_command_executes_repeatedly_without_checkout_carriage_returns() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let environment = wsl_cwd_report_env("wsl.exe", &[], Some("PROMPT_COMMAND:KEEP/u"));
+        assert_eq!(environment[1].1, "PROMPT_COMMAND:KEEP/u");
+        let prompt = &environment[0].1;
+        let bash = std::env::var_os("NEBULA_BASH").unwrap_or_else(|| {
+            [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
+                .into_iter()
+                .find(|path| std::path::Path::new(path).is_file())
+                .unwrap_or("bash")
+                .into()
+        });
+        let run = |prompt: &str, user_function: &str| {
+            let user_check =
+                if user_function.is_empty() { "" } else { "ssh; test $? = 42 || exit 97" };
+            let mut child = Command::new(&bash)
+                .args(["--noprofile", "--norc", "-s"])
+                .env("BASH_ENV", "/dev/null")
+                .env("PROMPT_COMMAND", prompt)
+                .env_remove("__pebrel_shell_token")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("Bash is required for the shell injection regression");
+            let script = format!(
+                r#"{user_function}
+(exit 7); eval "$PROMPT_COMMAND" || exit 91
+typeset -f __pebrel_connection >/dev/null || exit 92
+typeset -f ssh >/dev/null || exit 93
+token=$__pebrel_shell_token
+test -n "$token" || exit 94
+(exit 23); eval "$PROMPT_COMMAND" || exit 95
+test "$token" = "$__pebrel_shell_token" || exit 96
+{user_check}
+"#
+            );
+            child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+            child.wait_with_output().unwrap()
+        };
+        // Git Bash accepts CRLF in eval; Unix Bash (including WSL) rejects it.
+        // Run the failing control on Unix and the fixed payload on every host.
+        #[cfg(unix)]
+        {
+            let broken = prompt.replace(
+                nebula_terminal::tty::connection_shell(),
+                &nebula_terminal::tty::connection_shell().replace('\n', "\r\n"),
+            );
+            let output = run(&broken, "");
+            assert!(!output.status.success(), "CRLF must reproduce the original parse failure");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("syntax error"));
+        }
+
+        for user_function in ["", "ssh() { return 42; }"] {
+            let output = run(prompt, user_function);
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            for marker in
+                ["\x1b]133;D;7\x07", "\x1b]133;D;23\x07", "\x1b]7;file://", "\x1b]133;A\x07"]
+            {
+                assert_eq!(
+                    stdout.matches(marker).count(),
+                    if marker.contains("D;") { 1 } else { 2 }
+                );
+            }
+        }
     }
 
     #[test]

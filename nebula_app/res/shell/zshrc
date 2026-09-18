@@ -8,6 +8,8 @@ if [[ -r ${ZDOTDIR-$HOME}/.zshrc ]]; then
 fi
 unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
 
+__pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}zsh:${HOST:-localhost}:$$:$RANDOM" | base64 | tr -d '\r\n')
+
 _nebula_cwd() {
     emulate -L zsh
     local LC_ALL=C cwd_value=$PWD encoded='' character ordinal index
@@ -28,6 +30,7 @@ _nebula_preexec() {
 
 _nebula_precmd() {
     local status_code=$?
+    printf '\e]1337;SetUserVar=pebrel_shell=%s\a' "$__pebrel_shell_token"
     if [[ ${_nebula_command_running:-0} == 1 ]]; then
         printf '\e]133;D;%s\a' "$status_code"
     fi

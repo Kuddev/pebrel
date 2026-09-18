@@ -383,6 +383,19 @@ pub fn ensure_bundled_font_on_disk() -> PathBuf {
 mod tests {
     use super::*;
 
+    #[test]
+    fn default_face_matches_the_1_7_regular_font_asset() {
+        assert_eq!(REQUIRED_FONT_FAMILY, "Maple Mono Normal NF CN");
+        assert_eq!(REQUIRED_FONT_FILE, "MapleMonoNormal-NF-CN-Regular.ttf");
+        assert_eq!(
+            Sha256::digest(REQUIRED_FONT_BYTES)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            "9ae0c348a44a681fa8fa20a34e782e95316cec880102295a128b65760944c0f5"
+        );
+    }
+
     fn sys(name: &str, monospaced: bool) -> SystemFontFamily {
         SystemFontFamily { name: name.to_owned(), monospaced }
     }

@@ -75,7 +75,8 @@ mod tests {
             (UiLanguage::ZhCn, "提交信息…"),
         ] {
             cx.update(|window, cx| {
-                let mut settings = crate::gpui_shell::config::Settings::load(false);
+                let mut settings =
+                    crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord);
                 settings.ui_language = language;
                 cx.set_global(settings);
                 probe.update(cx, |_, cx| cx.notify());

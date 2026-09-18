@@ -49,10 +49,14 @@ mod agents;
 mod closing;
 mod command_manager;
 mod keyboard_bindings;
-use keyboard_bindings::custom_workspace_binding;
+#[cfg(test)]
+use keyboard_bindings::{
+    STATIC_DEFAULT_COMBOS, custom_workspace_binding, default_workspace_bindings, gpui_binding_combo,
+};
 mod documents;
 mod file_tree;
 mod key_actions;
+mod launcher_menu;
 mod notifications;
 mod palette;
 mod pane_header;
@@ -63,6 +67,8 @@ mod remote_files;
 mod residency;
 mod send_to_chat;
 mod session_persistence;
+mod session_recovery;
+pub(crate) mod shell_launch;
 mod shell_picker;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
@@ -71,6 +77,8 @@ mod ssh_dialog;
 mod tab_drag;
 mod tab_duplication;
 mod tab_menu;
+mod tab_presentation;
+use tab_presentation::TabPresentation;
 mod tab_scroll;
 mod top_tabs;
 mod update_dialog;
@@ -157,162 +165,9 @@ fn title_bar_panel_controls() -> gpui::Div {
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-/// 工作区静态默认绑定的 combo 集（[`init`] 的镜像）。撤销已失效的自定义
-/// 注入时要排除：gpui 的 NoAction 打在静态默认键上会误杀基础功能。
-const STATIC_DEFAULT_COMBOS: &[&str] = &[
-    "ctrl-shift-t",
-    "ctrl-shift-e",
-    "ctrl-shift-w",
-    "ctrl-shift-b",
-    "ctrl-,",
-    "ctrl-shift-p",
-    "ctrl-k",
-    "ctrl-shift-f",
-    "escape",
-    "ctrl-shift-d",
-    "ctrl-alt-shift-s",
-    "f2",
-    "ctrl-shift-enter",
-    "ctrl-alt-left",
-    "ctrl-alt-right",
-    "ctrl-alt-up",
-    "ctrl-alt-down",
-    "ctrl-tab",
-    "ctrl-shift-tab",
-    "ctrl-shift-pageup",
-    "ctrl-shift-pagedown",
-    "ctrl-shift-g",
-    "ctrl-=",
-    "ctrl-+",
-    "ctrl--",
-    "ctrl-0",
-    "ctrl-shift-c",
-    #[cfg(not(target_os = "macos"))]
-    "ctrl-c",
-    "ctrl-v",
-    "ctrl-shift-v",
-    "alt-enter",
-    "ctrl-shift-o",
-];
-
-/// `keybind=` 自定义表（两壳共读）中 config::Action → GPUI 工作区动作的
-/// 映射。仍跳过未接线的动作（prompt 跳转、搜索）：编辑器可读写，这里不
-/// 注入。`CreateNewWindow` 复用同一个 GPUI App 和进程级 hook/runtime。
-
-/// 存储格式 combo（`ctrl+shift+t`）→ gpui 绑定串（`ctrl-shift-t`）。键名
-/// 两套体系同构（小写命名键 + 单字符）；digitN 折回数字，plus/minus 折回
-/// `+`/`-`（`+` 是存储分隔符，必须先占位再替换）。
-fn gpui_binding_combo(combo: &str) -> String {
-    combo
-        .replace("plus", "\u{1}")
-        .replace("minus", "\u{2}")
-        .replace('+', "-")
-        .replace("digit", "")
-        .replace('\u{1}', "+")
-        .replace('\u{2}', "-")
-}
-
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
-    cx.bind_keys(default_workspace_bindings());
-    #[cfg(target_os = "macos")]
-    bind_macos_command_keys(cx);
-}
-
-/// 工作区静态默认键位表；与 [`STATIC_DEFAULT_COMBOS`] 互为镜像。
-fn default_workspace_bindings() -> Vec<KeyBinding> {
-    [
-        KeyBinding::new("ctrl-shift-t", NewTerminal, None),
-        KeyBinding::new("ctrl-alt-shift-s", recipes::OpenLayoutRecipes, None),
-        KeyBinding::new("ctrl-shift-e", NewWindow, None),
-        KeyBinding::new("ctrl-shift-w", CloseActiveTerminal, None),
-        KeyBinding::new("ctrl-shift-b", ToggleSidebar, None),
-        KeyBinding::new("ctrl-,", OpenSettings, None),
-        KeyBinding::new("ctrl-shift-p", ToggleCommandPalette, None),
-        KeyBinding::new("ctrl-k", ToggleShellPicker, None),
-        KeyBinding::new("ctrl-shift-f", ToggleFileTree, None),
-        // Esc 只在命令/Shell 面板打开时关面板。绑成 `None` 会在终端聚焦时
-        // 抢走按键，CC/Codex 收不到 0x1b（旧壳无 overlay 时 Esc 一定进 PTY）。
-        KeyBinding::new("escape", CloseCommandPalette, Some(PALETTE_KEY_CONTEXT)),
-        // 分屏（旧壳 nebula_key_bindings 同键位）：ctrl+shift+d 左右、
-        // ctrl+shift+s 上下、ctrl+shift+enter 缩放、ctrl+alt+方向切聚焦。
-        KeyBinding::new("ctrl-shift-d", SplitRight, None),
-        KeyBinding::new("ctrl-shift-s", SplitDown, None),
-        // F2 重命名活动标签（旧壳同键位）；右键菜单的键帽读的就是这条。
-        KeyBinding::new("f2", RenameActiveTab, None),
-        KeyBinding::new("ctrl-shift-enter", ToggleZoom, None),
-        KeyBinding::new("ctrl-alt-left", FocusPaneLeft, None),
-        KeyBinding::new("ctrl-alt-right", FocusPaneRight, None),
-        KeyBinding::new("ctrl-alt-up", FocusPaneUp, None),
-        KeyBinding::new("ctrl-alt-down", FocusPaneDown, None),
-        KeyBinding::new("ctrl-tab", SelectNextTab, None),
-        KeyBinding::new("ctrl-shift-tab", SelectPreviousTab, None),
-        // 标签位置左右移动（WT 的 moveTab forward/backward；键位取 VS Code
-        // 的「移动编辑器」同构）。我们自己的回滚翻页只吃**不带 ctrl** 的
-        // shift+pageup（view.rs 的滚动分支），两者不冲突。
-        KeyBinding::new("ctrl-shift-pageup", MoveTabLeft, None),
-        KeyBinding::new("ctrl-shift-pagedown", MoveTabRight, None),
-        KeyBinding::new("ctrl-shift-g", ToggleGitPanel, None),
-        KeyBinding::new("ctrl-=", IncreaseFontSize, None),
-        KeyBinding::new("ctrl-+", IncreaseFontSize, None),
-        KeyBinding::new("ctrl--", DecreaseFontSize, None),
-        KeyBinding::new("ctrl-0", ResetFontSize, None),
-        KeyBinding::new("ctrl-shift-c", CopySelection, None),
-        // 复制优先（WT 语义）：终端聚焦时有选区复制并清选区，无选区经 handler
-        // 的 `cx.propagate()` 落成 ^C。带终端上下文，重命名/输入框聚焦时
-        // ctrl+c 归输入框自己（Input -> Copy）。
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-c", CopySelection, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
-        // 终端粘贴只在终端焦点路径命中。Input 自己带 `Input -> Paste`；这里若
-        // 无上下文，会因注册更晚而抢走弹窗/设置页输入框的 Ctrl+V。
-        KeyBinding::new("ctrl-v", PasteClipboard, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
-        KeyBinding::new(
-            "ctrl-shift-v",
-            PasteClipboard,
-            Some(crate::gpui_shell::terminal::KEY_CONTEXT),
-        ),
-        KeyBinding::new("ctrl-shift-v", gpui_component::input::Paste, Some("Input")),
-        KeyBinding::new("alt-enter", ToggleFullscreen, None),
-        KeyBinding::new("ctrl-shift-o", OpenQuickJump, None),
-    ]
-    .into()
-}
-
-/// macOS 的原生修饰键是 ⌘：在 Ctrl 绑定之外**追加**一套 ⌘ 绑定，不替换。
-/// 追加而非替换有两个原因：Ctrl+Shift 组合在 Mac 终端里没有别的含义，留着
-/// 不碍事；而 ⌘C/⌘V 必须存在，否则 Mac 用户第一反应就是「复制粘贴坏了」。
-/// 终端里的 Ctrl+C 仍然是 SIGINT——这里只绑 ⌘，不碰 Ctrl 的语义。
-#[cfg(target_os = "macos")]
-fn bind_macos_command_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("cmd-t", NewTerminal, None),
-        KeyBinding::new("cmd-n", NewWindow, None),
-        KeyBinding::new("cmd-w", CloseActiveTerminal, None),
-        KeyBinding::new("cmd-b", ToggleSidebar, None),
-        KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-shift-p", ToggleCommandPalette, None),
-        KeyBinding::new("cmd-k", ToggleShellPicker, None),
-        KeyBinding::new("cmd-shift-f", ToggleFileTree, None),
-        KeyBinding::new("cmd-d", SplitRight, None),
-        KeyBinding::new("cmd-shift-d", SplitDown, None),
-        KeyBinding::new("cmd-shift-enter", ToggleZoom, None),
-        KeyBinding::new("cmd-alt-left", FocusPaneLeft, None),
-        KeyBinding::new("cmd-alt-right", FocusPaneRight, None),
-        KeyBinding::new("cmd-alt-up", FocusPaneUp, None),
-        KeyBinding::new("cmd-alt-down", FocusPaneDown, None),
-        KeyBinding::new("cmd-shift-]", SelectNextTab, None),
-        KeyBinding::new("cmd-shift-[", SelectPreviousTab, None),
-        KeyBinding::new("cmd-shift-g", ToggleGitPanel, None),
-        KeyBinding::new("cmd-=", IncreaseFontSize, None),
-        KeyBinding::new("cmd-+", IncreaseFontSize, None),
-        KeyBinding::new("cmd--", DecreaseFontSize, None),
-        KeyBinding::new("cmd-0", ResetFontSize, None),
-        KeyBinding::new("cmd-c", CopySelection, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
-        KeyBinding::new("cmd-v", PasteClipboard, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
-        KeyBinding::new("cmd-v", gpui_component::input::Paste, Some("Input")),
-        KeyBinding::new("cmd-ctrl-f", ToggleFullscreen, None),
-        KeyBinding::new("cmd-shift-o", OpenQuickJump, None),
-    ]);
+    keyboard_bindings::init(cx);
 }
 
 /// 一个终端 pane：视图实体 + 宿主订阅。id 即 `TerminalView::pane_id`
@@ -744,8 +599,8 @@ fn log_file_manager_spawn(kind: &str, path: &Path, result: std::io::Result<()>) 
     }
 }
 
-/// “在文件管理器中显示”与单纯打开路径不是一个动作。Windows 的
-/// `/select,` 必须和路径组成同一个 argv，避免空格与 Unicode 被二次解析。
+/// “在文件管理器中显示”与单纯打开路径不是一个动作。Windows 的 `/select,`
+/// 命令构造（引号只包路径，见 `platform::file_manager`）不在这里重复实现。
 pub(super) fn reveal_in_file_manager(path: &Path) {
     log_file_manager_spawn("reveal", path, crate::platform::file_manager::reveal(path));
 }
@@ -814,22 +669,6 @@ struct TabRename {
     _subscription: Subscription,
 }
 
-/// 两种 tab 布局共用的只读展示数据。状态与动作仍由 `NebulaWorkspace`
-/// 持有；这里只集中 cwd 标题、程序图标、AI 活动和用户元数据的解释。
-struct TabPresentation {
-    title: SharedString,
-    is_settings: bool,
-    activity: SidebarActivity,
-    logo_image: Option<Arc<RenderImage>>,
-    program_glyph: Option<&'static str>,
-    shell_tag: Option<SharedString>,
-    color: Option<Rgb>,
-    renaming: Option<Entity<InputState>>,
-    /// 本 tab 的分屏数（Terminal tab 才 > 0）。`> 1` 时行首图标换成 2×2 分屏
-    /// 标记、行尾挂一枚数量胶囊；见 [`pane_header::split_badge`]。
-    pane_count: usize,
-}
-
 /// 旧壳 `TabRequest::CommitRename`（`window_context.rs` ~871-880）：
 /// trim；空串 → `custom_name = None`（恢复自动名）；非空 → `Some(trimmed)`。
 fn apply_commit_rename(meta: &mut TabMeta, buffer: &str) {
@@ -852,6 +691,8 @@ pub struct NebulaWorkspace {
     /// Window-level Settings surface. It intentionally lives outside `tabs`:
     /// opening preferences must not alter tab order, session state, or PTYs.
     settings_surface: Option<(Entity<SettingsPane>, Subscription)>,
+    /// Presence of the singleton Settings tab, independent of the active page.
+    settings_tab_open: bool,
     settings_open: bool,
     /// Sidebar state sampled on entry. `None` means top-tab mode, where there
     /// is no left rail to fold and the setting must remain untouched.
@@ -913,6 +754,7 @@ pub struct NebulaWorkspace {
     /// 用户命令管理器贴在右侧覆盖显示，不占终端布局宽度，也不复用应用动作
     /// 命令面板的状态，避免两种“命令”语义互相污染。
     command_manager_open: bool,
+    command_group_menu: Option<command_manager::GroupMenu>,
     command_manager_input: Entity<InputState>,
     command_manager_selected: usize,
     command_manager_scroll: gpui::ScrollHandle,
@@ -930,6 +772,8 @@ pub struct NebulaWorkspace {
     /// 三点 / Ctrl+K 打开的是旧壳 `PaletteMode::Profiles`，要画
     /// 全部/SSH/Shell 芯片；Ctrl+Shift+P 的命令目录不走这条。
     shell_picker_open: bool,
+    launcher_menu: Option<launcher_menu::LauncherContextMenu>,
+    launcher_admin_task: Option<gpui::Task<()>>,
     launcher_filter: crate::display::command_palette::LauncherFilter,
     /// `Some` 表示当前是统一 Quick Jump；值就是 provider scope。
     /// 命令面板与 Shell picker 必须保持 `None`，避免跨入口泄漏筛选状态。
@@ -989,6 +833,7 @@ pub struct NebulaWorkspace {
     /// 系统关闭按钮可能连续送来多次 should-close；确认框在场时只保留一份。
     window_close_confirm_open: bool,
     window_close_pending: bool,
+    recovery_boot_attempts: u32,
     /// `keep_session` 关窗后 HWND 已隐藏、PTY 仍在；托盘 / mux ATTACH 用来捞回。
     window_hidden: bool,
     /// 开窗时记下，mux `tab.new` 需要从 pump 拿到 `&mut Window`。
@@ -1157,6 +1002,7 @@ impl NebulaWorkspace {
                 .saturating_add(1),
             active: 0,
             settings_surface: None,
+            settings_tab_open: false,
             settings_open: false,
             settings_restore_sidebar_collapsed: None,
             settings_restore_side_panel_open: false,
@@ -1189,6 +1035,7 @@ impl NebulaWorkspace {
             command_palette_input,
             command_palette_selected: 0,
             command_manager_open: false,
+            command_group_menu: None,
             command_manager_input,
             command_manager_selected: 0,
             command_manager_scroll: gpui::ScrollHandle::new(),
@@ -1198,6 +1045,8 @@ impl NebulaWorkspace {
             vcs_discard_confirm: None,
             palette_override: None,
             shell_picker_open: false,
+            launcher_menu: None,
+            launcher_admin_task: None,
             launcher_filter: crate::display::command_palette::LauncherFilter::All,
             quick_jump_filter: None,
             command_palette_scroll: gpui::ScrollHandle::new(),
@@ -1225,6 +1074,7 @@ impl NebulaWorkspace {
             spinner_visible: std::cell::Cell::new(false),
             window_close_confirm_open: false,
             window_close_pending: false,
+            recovery_boot_attempts: 0,
             window_hidden: false,
             window_handle: window.window_handle(),
             runtime_window_id,
@@ -1246,16 +1096,24 @@ impl NebulaWorkspace {
             );
         }
         match startup {
+            windowing::WorkspaceStartup::RestoreUpdate(session) => {
+                if !this.restore_update_session(&session, runtime.resume_ai, window, cx) {
+                    this.add_terminal_at(std::env::current_dir().ok(), None, window, cx);
+                }
+            },
             windowing::WorkspaceStartup::RestoreOrDefault => {
                 // 只有首窗恢复全局 session，避免每个新窗口重复回放同一批 PTY。
                 if !runtime.restore_session
                     || !this.try_restore_session(runtime.resume_ai, window, cx)
                 {
-                    this.add_terminal(window, cx);
+                    this.add_terminal_at(std::env::current_dir().ok(), None, window, cx);
                 }
             },
             windowing::WorkspaceStartup::NewTerminal { cwd } => {
                 this.add_terminal_at(cwd, None, window, cx);
+            },
+            windowing::WorkspaceStartup::LaunchTerminal { cwd, launch } => {
+                this.add_terminal_with(launch, cwd, None, window, cx);
             },
             windowing::WorkspaceStartup::Empty => {},
         }
@@ -1335,54 +1193,8 @@ impl NebulaWorkspace {
         crate::shell_detect::shell_short_tag(&crate::platform::shell::default_shell_id()).into()
     }
 
-    /// 冻结“新建这一刻”的默认 Shell 为共享 v4 launch 身份。
-    ///
-    /// 旧壳通过 `TabLaunch::Shell` 保存同样的 name/program/args；GPUI 以前只
-    /// 保存 UI 短标，冷恢复时因此失去了真正的启动命令。检测失败才保留
-    /// `Default`，让跨机器工作区按 schema 的既有降级规则使用当地默认值。
-    fn configured_local_launch(cx: &App) -> crate::session::LaunchSession {
-        let shell_id = cx
-            .try_global::<crate::gpui_shell::config::Settings>()
-            .and_then(|settings| settings.shell_id.clone());
-        let Some(shell_id) = shell_id.filter(|id| !id.trim().is_empty()) else {
-            return crate::session::LaunchSession::Default;
-        };
-        if let Some(detected) = crate::shell_detect::detect_shells()
-            .into_iter()
-            .find(|shell| shell.id.eq_ignore_ascii_case(&shell_id))
-        {
-            let shell = detected.shell();
-            return crate::session::LaunchSession::Shell {
-                name: detected.name,
-                program: shell.program().to_owned(),
-                args: shell.args().to_vec(),
-            };
-        }
-        crate::terminal_profiles::TerminalProfiles::load()
-            .ok()
-            .and_then(|store| {
-                store.as_config_profiles().into_iter().find(|profile| {
-                    profile.settings_id().is_some_and(|id| id.eq_ignore_ascii_case(&shell_id))
-                })
-            })
-            .map(Self::profile_launch_session)
-            .unwrap_or(crate::session::LaunchSession::Default)
-    }
-
-    fn profile_launch_session(
-        profile: crate::config::ui_config::Profile,
-    ) -> crate::session::LaunchSession {
-        crate::session::LaunchSession::Profile {
-            name: profile.name,
-            command: profile.command,
-            args: profile.args,
-            cwd: profile.cwd.map(|path| path.to_string_lossy().into_owned()),
-            shell_id: profile.shell_id,
-        }
-    }
-
-    /// 把共享会话 launch 还原为一次 GPUI PTY 启动。只有首 Pane 使用 Tab 的
-    /// launch；其它分屏继续沿用旧壳合同，按当前默认 Shell 重建。
+    /// 把一份冻结的会话 launch 还原为一次 GPUI PTY 启动。逐 pane 选择
+    /// 与旧快照回退由 session_recovery 统一负责。
     fn terminal_launch_from_session(
         launch: &crate::session::LaunchSession,
         cwd: Option<std::path::PathBuf>,
@@ -1434,9 +1246,7 @@ impl NebulaWorkspace {
     /// 设置或系统外观变化后的统一热应用：重载全局 `Settings`（主题经
     /// follow_system 折算）、逐终端刷新、重建 chrome 令牌。
     fn apply_runtime_settings(&mut self, cx: &mut Context<Self>) {
-        let settings = crate::gpui_shell::config::Settings::load(
-            crate::gpui_shell::theme::system_is_light(cx),
-        );
+        let (runtime, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
         cx.set_global(settings);
         for tab in &self.tabs {
             if let WorkspaceTab::Terminal { panes, .. } = tab {
@@ -1446,7 +1256,6 @@ impl NebulaWorkspace {
             }
         }
         crate::gpui_shell::theme::apply_chrome_theme(cx);
-        let runtime = nebula_settings::RuntimeSettings::load();
         crate::gpui_shell::apply_app_icon(runtime.app_icon, cx);
         self.sidebar_width = runtime.sidebar_width;
         self.tabs_position = runtime.tabs_position;
@@ -1524,7 +1333,7 @@ impl NebulaWorkspace {
         // 默认 shell 只在“创建新 Tab”的这一刻取样，并把实际 program/args
         // 一起冻结进 Tab launch。设置页随后改默认值只影响下一次创建；冷
         // 恢复也按本 Tab 的 launch 重建，不会把混合工作区抹成同一种 shell。
-        let launch_session = Self::configured_local_launch(cx);
+        let launch_session = shell_launch::configured_local_launch(cx);
         self.add_terminal_with(launch_session, cwd, command, window, cx)
     }
 
@@ -1841,13 +1650,13 @@ impl NebulaWorkspace {
         (0..self.tabs.len()).find_map(|tab_ix| self.busy_process_in_tab(tab_ix, None, cx))
     }
 
-    fn save_clean_window_session(&mut self, cx: &mut App) {
+    fn save_clean_window_session(&mut self, cx: &mut App) -> std::io::Result<()> {
         windowing::save_current_window_session(
             self.runtime_window_id,
             self.snapshot_session(cx),
             session_persistence::SaveReason::WindowClose,
             cx,
-        );
+        )
     }
 
     fn request_close_pane(
@@ -1980,245 +1789,6 @@ impl NebulaWorkspace {
         }
     }
 
-    /// 启动恢复：断路器跳闸就隔离现场并走干净路径；恢复成功弹一条
-    /// 自动消失的提示（崩溃现场多一句来源说明）。返回是否恢复出了 tab。
-    fn try_restore_session(
-        &mut self,
-        resume_ai: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        use crate::display::ToastKind;
-
-        let Some(mut session) = crate::session::load() else { return false };
-        if !crate::session::should_restore(&session) {
-            if !session.tabs.is_empty() {
-                // 连续几次启动都没活到第一次自动保存：把「一恢复就崩」的
-                // 现场挪去隔离文件（唯一的诊断材料），本次干净启动。
-                if let Some(path) = crate::session::quarantine() {
-                    crate::gpui_shell::toast::banner(
-                        window,
-                        cx,
-                        ToastKind::Warning,
-                        format!("连续多次启动未完成恢复，已跳过；现场保存在 {}", path.display()),
-                    );
-                }
-            }
-            return false;
-        }
-        let crashed = crate::session::was_crash(&session);
-        crate::session::mark_boot_attempt(&mut session);
-        let mut restored = 0usize;
-        for tab in &session.tabs {
-            if self.restore_tab(tab, resume_ai, window, cx) {
-                restored += 1;
-            }
-        }
-        if restored == 0 {
-            return false;
-        }
-        self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
-        self.focus_active(window, cx);
-        let text = if crashed {
-            format!("上次未正常退出，已恢复 {restored} 个标签")
-        } else {
-            format!("已恢复 {restored} 个标签")
-        };
-        crate::gpui_shell::toast::toast(window, cx, ToastKind::Success, text);
-        cx.notify();
-        true
-    }
-
-    /// 恢复一个 Terminal tab：DFS 逐叶 spawn（消失目录回退默认 cwd、AI 会话
-    /// 以安全 resume 命令接续、SSH launch 只作用于首 pane——launch 描述的
-    /// 是「首 pane 怎么启动」，旧壳同义），再按持久化树的形状重建分屏树。
-    fn restore_tab(
-        &mut self,
-        tab: &crate::session::TabSession,
-        resume_ai: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        use crate::session::{LaunchSession, LayoutSession};
-
-        let layout =
-            tab.layout.clone().unwrap_or(LayoutSession::Pane { cwd: tab.cwd.clone(), agent: None });
-        // v1-v3 / 早期 GPUI 快照没有 launch，按共享 schema 回退 Default；
-        // v4 的 Shell/Profile/Ssh 必须原样用于首 Pane，不能再次读取当前默认。
-        let saved_launch = tab.launch.clone().unwrap_or(LaunchSession::Default);
-        let grid = self.initial_grid;
-        let mut panes: Vec<TerminalPane> = Vec::new();
-        for (index, leaf) in layout.leaves().into_iter().enumerate() {
-            let LayoutSession::Pane { cwd, agent } = leaf else { continue };
-            let launch = if index == 0 {
-                Self::terminal_launch_from_session(&saved_launch, crate::session::valid_dir(cwd))
-            } else {
-                // 共享 v4 与旧壳只把 Tab 的 launch 赋给首 Pane；其它叶子没有
-                // 独立启动身份，保持既有 Default 恢复语义。
-                crate::gpui_shell::terminal::view::TerminalLaunch::Local {
-                    cwd: crate::session::valid_dir(cwd),
-                    shell: None,
-                    shell_name: None,
-                }
-            };
-            let command = restored_agent_command(resume_ai, agent.as_ref());
-            let pane = self.new_pane(grid, launch, command, window, cx);
-            // 冷恢复已经知道这段对话的 hook 身份：种回 view，右键「分叉
-            // AI 会话」不必再等下一条带 session_id 的 hook。
-            if let Some((source, session_id)) = agent
-                .as_ref()
-                .and_then(|agent| Some((agent.source.clone(), agent.session_id.clone()?)))
-            {
-                pane.view.update(cx, |view, cx| view.seed_ai_session(source, session_id, cx));
-            }
-            panes.push(pane);
-        }
-        if panes.is_empty() {
-            return false;
-        }
-        let mut ids = panes.iter().map(|pane| pane.id).collect::<Vec<_>>().into_iter();
-        let (tree, _) = crate::gpui_shell::session_restore::tree_from_layout(&layout, &mut || {
-            ids.next().unwrap_or(0)
-        });
-        let focused =
-            panes.get(tab.active_pane).or_else(|| panes.first()).map(|pane| pane.id).unwrap_or(0);
-        // 恢复期保持文件里的既有次序，不套「新标签插入位置」策略。
-        // 重命名与色标随会话一起回来（旧壳同合同）。
-        let at = self.tabs.len();
-        self.insert_tab_at(
-            at,
-            WorkspaceTab::Terminal { panes, tree, focused, zoomed: false, broadcast: false },
-            TabMeta {
-                custom_name: tab.custom_name.clone(),
-                color: tab.color,
-                shell_tag: Self::launch_shell_tag(&saved_launch),
-                launch: Some(saved_launch),
-                has_bell: false,
-            },
-        );
-        true
-    }
-
-    /// 当前工作区 → 共享 v4 快照。设置/文档/图片 tab 不进会话（旧壳同
-    /// 合同）；AI 会话身份优先取 hook 直报的精确 id，退而取可解析的前台
-    /// 程序名（claude 无 id 恢复成 `--continue`，安全判定在 schema 层）。
-    pub(crate) fn snapshot_session(&self, cx: &App) -> crate::session::Session {
-        use crate::session::{AgentSession, LaunchSession, Session, TabSession};
-
-        let mut tabs = Vec::new();
-        let mut active_out = 0usize;
-        for (ix, tab) in self.tabs.iter().enumerate() {
-            let WorkspaceTab::Terminal { panes, tree, focused, .. } = tab else { continue };
-            if ix == self.active {
-                active_out = tabs.len();
-            }
-            let leaf_data = |id: u64| -> (String, Option<AgentSession>) {
-                let Some(pane) = panes.iter().find(|pane| pane.id == id) else {
-                    return (String::new(), None);
-                };
-                let view = pane.view.read(cx);
-                let agent = view
-                    .ai_session
-                    .as_ref()
-                    .map(|identity| AgentSession {
-                        source: identity.source.clone(),
-                        session_id: Some(identity.session_id.clone()),
-                    })
-                    .or_else(|| {
-                        view.running_program
-                            .as_deref()
-                            .filter(|program| crate::ai_agents::AgentKind::parse(program).is_some())
-                            .map(|program| AgentSession {
-                                source: program.to_owned(),
-                                session_id: None,
-                            })
-                    });
-                (view.cwd.clone(), agent)
-            };
-            let layout = crate::gpui_shell::session_restore::layout_from_tree(tree, &leaf_data);
-            let cwd = panes
-                .iter()
-                .find(|pane| pane.id == *focused)
-                .map(|pane| pane.view.read(cx).cwd.clone())
-                .unwrap_or_default();
-            let meta = self.meta(ix);
-            let first_leaf = tree.first_leaf();
-            let launch = meta.launch.clone().unwrap_or_else(|| {
-                // 兼容本次修复前已经在内存中的 Tab：SSH 仍可从首 Pane 取回；
-                // 旧本地 Tab 已经没有身份信息，只能诚实落为 Default。
-                panes
-                    .iter()
-                    .find(|pane| pane.id == first_leaf)
-                    .and_then(|pane| pane.view.read(cx).ssh_destination.clone())
-                    .map(|host| LaunchSession::Ssh { host })
-                    .unwrap_or(LaunchSession::Default)
-            });
-            let active_pane = tree.leaves().iter().position(|id| id == focused).unwrap_or(0);
-            tabs.push(TabSession {
-                cwd,
-                custom_name: meta.custom_name,
-                color: meta.color,
-                launch: Some(launch),
-                layout: Some(layout),
-                active_pane,
-            });
-        }
-        Session::new(active_out, tabs)
-    }
-
-    /// Open Settings as a window-level page while preserving the active tab.
-    /// Side-tab mode folds its real left rail; top-tab mode has no such rail,
-    /// so touching `sidebar_collapsed` there would only create hidden state.
-    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open {
-            if let Some((view, _)) = self.settings_surface.as_ref() {
-                let focus = view.read(cx).focus_handle(cx);
-                window.defer(cx, move |window, cx| window.focus(&focus, cx));
-            }
-            return;
-        }
-
-        if self.settings_surface.is_none() {
-            let view = cx.new(|cx| SettingsPane::new(window, cx));
-            let subscription = cx.subscribe_in(&view, window, Self::on_settings_event);
-            self.settings_surface = Some((view, subscription));
-        }
-
-        self.settings_open = true;
-        self.sync_settings_layout();
-
-        self.settings_restore_side_panel_open = self.side_panel.open;
-        if self.side_panel.open {
-            self.side_panel.open = false;
-            self.side_panel_anim_armed = true;
-            self.file_tree_menu = None;
-        }
-
-        if let Some((view, _)) = self.settings_surface.as_ref() {
-            let focus = view.read(cx).focus_handle(cx);
-            window.defer(cx, move |window, cx| window.focus(&focus, cx));
-        }
-        cx.notify();
-    }
-
-    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.settings_open {
-            return;
-        }
-        self.leave_settings(window, cx);
-        if self.tabs.is_empty() {
-            windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
-        }
-    }
-
-    fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open {
-            self.close_settings(window, cx);
-        } else {
-            self.open_settings(window, cx);
-        }
-    }
-
     /// 按视图实体反查 (tab 下标, pane id)。
     fn locate_pane(&self, entity_id: gpui::EntityId) -> Option<(usize, u64)> {
         self.tabs.iter().enumerate().find_map(|(ix, tab)| match tab {
@@ -2238,6 +1808,16 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         match event {
+            TerminalViewEvent::SessionIdentityChanged => {
+                if let Err(error) = windowing::save_current_window_session(
+                    self.runtime_window_id,
+                    self.snapshot_session(cx),
+                    session_persistence::SaveReason::Checkpoint,
+                    cx,
+                ) {
+                    log::warn!("Could not checkpoint native recovery identity: {error}");
+                }
+            },
             // OSC 7 cwd 与标题共用这条事件。只有当前聚焦 pane 能驱动共享文件树；
             // 后台 pane 的提示符更新不能把前台目录覆盖掉。
             TerminalViewEvent::TitleChanged => {
@@ -2388,20 +1968,26 @@ impl NebulaWorkspace {
             }
         }
 
-        if self.tabs.is_empty() && !self.settings_open {
-            windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
-            return;
+        if self.tabs.is_empty() {
+            if self.settings_tab_open {
+                self.open_settings(window, cx);
+            } else {
+                windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
+                return;
+            }
         }
         if ix < self.active {
             self.active -= 1;
         }
         self.active = self.active.min(self.tabs.len().saturating_sub(1));
-        windowing::save_current_window_session(
+        if let Err(error) = windowing::save_current_window_session(
             self.runtime_window_id,
             self.snapshot_session(cx),
             session_persistence::SaveReason::TabsClosed,
             cx,
-        );
+        ) {
+            log::warn!("Could not save closed tabs: {error}");
+        }
         self.reveal_active_tab();
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);
@@ -2409,9 +1995,10 @@ impl NebulaWorkspace {
     }
 
     fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open {
-            self.close_settings(window, cx);
+        if ix >= self.tabs.len() {
+            return;
         }
+        self.leave_settings(window, cx);
         if ix < self.tabs.len() && ix != self.active {
             self.clear_reader_focus(cx);
             self.active = ix;
@@ -2788,6 +2375,7 @@ impl NebulaWorkspace {
     }
 
     fn dismiss_palette_state(&mut self) {
+        self.launcher_menu = None;
         self.command_palette_open = false;
         self.palette_override = None;
         self.shell_picker_open = false;
@@ -3019,7 +2607,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.dismiss_palette_state();
-        let launch = Self::profile_launch_session(profile);
+        let launch = shell_launch::profile_launch_session(profile);
         let cwd = Self::startup_directory().or_else(|| {
             self.tabs
                 .get(self.active)
@@ -3140,33 +2728,6 @@ impl NebulaWorkspace {
             _ => self.focus_active(window, cx),
         }
         cx.notify();
-    }
-
-    /// 完整标签文本。**不在这里截断**：可见宽度是布局问题，字符数上限会在
-    /// 窄侧栏下漏出、在宽侧栏下白扔字符。截断由 `render_sidebar` 按实测
-    /// cell 宽换算成列数后交给旧壳的 `truncate_tab_label`（带省略号）。
-    fn tab_title(&self, ix: usize, cx: &App) -> SharedString {
-        if let Some(custom) = self.meta(ix).custom_name {
-            return custom.into();
-        }
-        match &self.tabs[ix] {
-            WorkspaceTab::Settings { .. } => "设置".into(),
-            WorkspaceTab::Image { view } => view.read(cx).title.clone().into(),
-            WorkspaceTab::Document { view, .. } => view.read(cx).tab_title().into(),
-            WorkspaceTab::Code { view, .. } => view.read(cx).tab_title(cx).into(),
-            tab @ WorkspaceTab::Terminal { .. } => {
-                // 标签 = 聚焦 pane 的 cwd 末级目录名（旧壳 chrome_tab_label
-                // 规则）。分屏计数**不拼在这里**：这份字符串还要喂给 runtime
-                // API 的 tab label、跨窗拖拽标题和重命名预填，掺进 "⊞2" 会
-                // 一路泄漏，而且长标题下会被 truncate_tab_label 截掉、被
-                // custom_name 整条顶掉。计数改由 TabPresentation::pane_count
-                // 单独画成胶囊，见 sidebar/top_tabs 的渲染。
-                match tab.focused_view() {
-                    Some(view) => view.read(cx).tab_label().into(),
-                    None => SharedString::from("shell"),
-                }
-            },
-        }
     }
 
     fn select_side_panel_view(
@@ -3541,7 +3102,13 @@ impl NebulaWorkspace {
                             // 与旧壳一致：不用焦点描边，仅给非活动 pane 覆 30%
                             // 黑色 veil。veil 只盖终端区——压暗标题条会把四个
                             // pane 的标题一起糊成灰。
-                            .when(!is_focused, |pane| pane.child(veil)),
+                            .when(
+                                !is_focused
+                                    && cx
+                                        .try_global::<crate::gpui_shell::config::Settings>()
+                                        .is_none_or(|settings| settings.dim_inactive_panes),
+                                |pane| pane.child(veil),
+                            ),
                     )
                     .into_any_element()
             },
@@ -4041,6 +3608,7 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &FocusPaneDown, window, cx| {
                 this.navigate_pane(SplitNav::Down, window, cx);
             }))
+            .on_action(cx.listener(Self::select_tab))
             .on_action(cx.listener(|this, _: &SelectNextTab, window, cx| {
                 this.select_adjacent_tab(true, window, cx);
             }))
@@ -4084,17 +3652,8 @@ impl Render for NebulaWorkspace {
             .child(
                 // 用户显式配置的背景图画在 chrome 之下；系统 Mica/Aero/Acrylic
                 // 位于整个 GPUI 内容层下方，由 DWM 合成，不能在这里读取壁纸仿画。
-                // 卡外区域由这层负责，卡内切片由终端元素在卡底色之上重画。
-                gpui::canvas(
-                    |_, _, _| (),
-                    |bounds, _, window, cx| {
-                        crate::gpui_shell::wallpaper::paint_wallpaper_under_chrome(
-                            bounds, window, cx,
-                        );
-                    },
-                )
-                .absolute()
-                .inset_0(),
+                // 拓展模式只在此绘图，壳/卡衬底在其上保留原有文字对比度。
+                crate::gpui_shell::wallpaper::window_layer(cx),
             )
             .child(
                 self.render_window_title_bar(
@@ -4198,18 +3757,9 @@ impl Render for NebulaWorkspace {
                                 .overflow_hidden()
                                 .child(
                                     // 壁纸层（卡底色之上、内容之下，覆盖整卡含
-                                    // 内边距带）：卡模式按卡定位，铺满整窗模式画
-                                    // 窗口锚定的卡内切片。
-                                    gpui::canvas(
-                                        |_, _, _| (),
-                                        |bounds, _, window, cx| {
-                                            crate::gpui_shell::wallpaper::paint_wallpaper_card(
-                                                bounds, window, cx,
-                                            );
-                                        },
-                                    )
-                                    .absolute()
-                                    .inset_0(),
+                                    // 内边距带）：卡模式按卡定位；拓展模式由
+                                    // 窗口底层统一绘图，此处不覆盖原有衬底。
+                                    crate::gpui_shell::wallpaper::card_layer(cx),
                                 )
                                 .children(content),
                         )
@@ -4344,18 +3894,22 @@ impl Render for NebulaWorkspace {
                 root.child(menu)
             })
             .when_some(self.render_tab_context_menu(), |root, menu| root.child(menu))
+            .when_some(self.render_launcher_context_menu(), |root, menu| root.child(menu))
             .when_some(self.render_selection_context_menu(), |root, menu| {
                 root.child(menu)
             })
             // 组件库的模态/通知层不会自己上屏：`Root::render` 只画宿主视图，
-            // dialog/notification 两层由宿主显式挂。挂在最外层链尾＝盖住命令
-            // 面板和所有拖拽罩层；dialog 在下、notification 在上，确认框弹着
-            // 时仍看得见 toast。
+            // dialog/notification 两层由宿主显式挂。确认框需要晚于设置页中
+            // priority 4–6 的主题浮层绘制；通知再覆盖确认框。
             //
             // 少了这两行，`window.open_dialog` 只会把模态推进 `Root` 并抢走
             // 焦点而不画任何东西——终端看着就像卡死了。
-            .children(Root::render_dialog_layer(window, cx))
-            .children(crate::gpui_shell::toast::render_layer(window, cx))
+            .children(Root::render_dialog_layer(window, cx).map(|layer| {
+                gpui::deferred(layer).with_priority(10)
+            }))
+            .children(crate::gpui_shell::toast::render_layer(window, cx).map(|layer| {
+                gpui::deferred(layer).with_priority(11)
+            }))
     }
 }
 

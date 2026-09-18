@@ -9,134 +9,214 @@
 //!   fit/alignment/透明度语义；图自身透明度独立于窗口 opacity）。
 //!
 //! 设置来源是共享层 `nebula_settings`（新增壁纸五键），解码结果按
-//! (路径, mtime, 透明度) 缓存；[`refresh`] 在启动与设置热应用时调用。
+//! (路径, 文件状态) 缓存；加载在后台串行执行，绘制只复用一张纹理。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(windows)]
 use std::sync::OnceLock;
 
 use gpui::{
-    App, Bounds, ContentMask, Corners, Hsla, Pixels, RenderImage, Window,
-    WindowBackgroundAppearance, fill, point, px, size,
+    App, Bounds, ContentMask, Corners, Hsla, IntoElement, ParentElement, Pixels, RenderImage,
+    Styled, Window, WindowBackgroundAppearance, div, fill, point, px, size,
 };
-use image::{Frame, RgbaImage, imageops};
+use image::{Frame, RgbaImage};
+
+mod image_loader;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests;
 use nebula_settings::BlurModeName;
 
-use crate::renderer::image::{BackgroundImageAlignment, BackgroundImageFit};
+use crate::renderer::image::{BackgroundImageAlignment, BackgroundImageFit, wallpaper_rect};
 
-/// 全局视效状态（App global）。
+/// App-owned wallpaper loading uses the existing GPUI executor: one job and one
+/// latest request, with generation checks before expensive work and publication.
 pub struct VisualEffects {
     pub opacity: f32,
     pub blur: BlurModeName,
     wallpaper: Option<Wallpaper>,
+    generation: Arc<AtomicU64>,
+    loading: bool,
 }
 
 impl gpui::Global for VisualEffects {}
 
+impl Drop for VisualEffects {
+    fn drop(&mut self) {
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+}
+
 struct Wallpaper {
-    image: Arc<RenderImage>,
-    /// 已烘焙壁纸透明度、并转换成 GPUI 所需 BGRA 顺序的原始像素。
-    /// 卡片模式要先把目标图裁成卡片大小，才能让 GPUI 对最终边界做圆角。
-    source: Arc<RgbaImage>,
-    /// 原图像素尺寸（fit 数学用）。
+    path: PathBuf,
+    image: Option<Arc<RenderImage>>,
+    stamp: Option<image_loader::FileStamp>,
     width: u32,
     height: u32,
     fit: BackgroundImageFit,
     alignment: BackgroundImageAlignment,
-    /// 铺满整窗（chrome 之下也画）而非仅终端卡。
     cover_chrome: bool,
-    /// 解码缓存键。
-    path: PathBuf,
-    mtime: Option<SystemTime>,
-    baked_opacity: f32,
-    /// 当前窗口只显示一张正文卡；保留最近一次尺寸即可覆盖拖拽 resize，
-    /// 又不会让连续缩放积累大量 GPU 纹理。
-    card_cache: Mutex<Option<CardWallpaper>>,
-    /// 铺满整窗时的窗口级合成图。绝不能每帧把原图像素丢给 GPU。
-    window_cache: Mutex<Option<CardWallpaper>>,
+    opacity: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CardWallpaperKey {
-    card_width: u32,
-    card_height: u32,
-    anchor_width: u32,
-    anchor_height: u32,
-    crop_x: i32,
-    crop_y: i32,
-}
-
-struct CardWallpaper {
-    key: CardWallpaperKey,
-    image: Arc<RenderImage>,
-}
-
-/// 读取设置并重建视效状态；壁纸命中缓存键则复用已解码纹理。
-/// 随后把窗口层效果（背景外观 + DWM backdrop）应用到所有已开窗口。
+/// Refresh prepared visual state without reading or decoding image files on the UI thread.
 pub fn refresh(cx: &mut App) {
     let rt = nebula_settings::RuntimeSettings::load();
+    let (opacity, blur) = cx
+        .try_global::<crate::gpui_shell::config::Settings>()
+        .map(|settings| (settings.visual_opacity, settings.visual_blur))
+        .unwrap_or_else(|| effective_material(&rt));
+    update_wallpaper(&rt, opacity, blur, cx);
+    apply_window_effects(cx);
+    refresh_surface_opacity(cx);
+}
 
-    let wallpaper = rt.background_image.as_ref().and_then(|raw_path| {
-        let path = PathBuf::from(raw_path);
-        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        let opacity = rt.background_image_opacity;
-        let fit = rt
+fn update_wallpaper(
+    rt: &nebula_settings::RuntimeSettings,
+    opacity: f32,
+    blur: BlurModeName,
+    cx: &mut App,
+) {
+    if !cx.has_global::<VisualEffects>() {
+        cx.set_global(VisualEffects {
+            opacity,
+            blur,
+            wallpaper: None,
+            generation: Arc::new(AtomicU64::new(0)),
+            loading: false,
+        });
+    }
+    let desired = rt.background_image.as_ref().map(PathBuf::from);
+    let effects = cx.global_mut::<VisualEffects>();
+    effects.opacity = opacity;
+    effects.blur = blur;
+    let retired = if effects.wallpaper.as_ref().map(|wp| &wp.path) != desired.as_ref() {
+        let retired = effects.wallpaper.take().and_then(|wp| wp.image);
+        effects.wallpaper = desired.map(|path| Wallpaper {
+            path,
+            image: None,
+            stamp: None,
+            width: 1,
+            height: 1,
+            fit: BackgroundImageFit::default(),
+            alignment: BackgroundImageAlignment::default(),
+            cover_chrome: false,
+            opacity: 1.0,
+        });
+        retired
+    } else {
+        None
+    };
+    if let Some(wp) = effects.wallpaper.as_mut() {
+        wp.fit = rt
             .background_image_fit
             .as_deref()
             .and_then(BackgroundImageFit::parse)
             .unwrap_or_default();
-        let alignment = rt
+        wp.alignment = rt
             .background_image_alignment
             .as_deref()
             .and_then(BackgroundImageAlignment::parse)
             .unwrap_or_default();
+        wp.cover_chrome = rt.background_image_cover_chrome;
+        wp.opacity = rt.background_image_opacity.clamp(0.0, 1.0);
+    }
+    effects.generation.fetch_add(1, Ordering::Release);
+    retire_image(retired, cx);
+    start_load(cx);
+}
 
-        let cover_chrome = rt.background_image_cover_chrome;
-
-        // 缓存：路径/mtime/烘焙透明度都没变就不重解码。
-        let cached = cx.try_global::<VisualEffects>().and_then(|v| v.wallpaper.as_ref());
-        if let Some(prev) = cached {
-            if prev.path == path && prev.mtime == mtime && prev.baked_opacity == opacity {
-                return Some(Wallpaper {
-                    image: prev.image.clone(),
-                    source: prev.source.clone(),
-                    width: prev.width,
-                    height: prev.height,
-                    fit,
-                    alignment,
-                    cover_chrome,
-                    path,
-                    mtime,
-                    baked_opacity: opacity,
-                    card_cache: Mutex::new(None),
-                    window_cache: Mutex::new(None),
-                });
+fn start_load(cx: &mut App) {
+    let effects = cx.global_mut::<VisualEffects>();
+    if effects.loading {
+        return;
+    }
+    let Some(wp) = effects.wallpaper.as_ref() else { return };
+    let request = image_loader::Request {
+        path: wp.path.clone(),
+        cached: wp.stamp.clone(),
+        generation: effects.generation.clone(),
+        version: effects.generation.load(Ordering::Acquire),
+    };
+    let version = request.version;
+    effects.loading = true;
+    let task = cx.background_executor().spawn(async move { image_loader::load(request) });
+    cx.spawn(async move |cx| {
+        let result = task.await;
+        cx.update(|cx| {
+            let Some(effects) = cx.try_global::<VisualEffects>() else { return };
+            let stale = effects.generation.load(Ordering::Acquire) != version;
+            cx.global_mut::<VisualEffects>().loading = false;
+            if stale {
+                start_load(cx);
+                return;
             }
+            match result {
+                Ok(Some(loaded)) => {
+                    let Some(wp) = cx.global_mut::<VisualEffects>().wallpaper.as_mut() else {
+                        return;
+                    };
+                    wp.width = loaded.layout_width;
+                    wp.height = loaded.layout_height;
+                    wp.stamp = Some(loaded.stamp);
+                    let image = Arc::new(RenderImage::new([Frame::new(loaded.pixels)]));
+                    let retired = wp.image.replace(image);
+                    retire_image(retired, cx);
+                    refresh_surface_opacity(cx);
+                    cx.refresh_windows();
+                },
+                Ok(None) => {},
+                Err(error) => {
+                    log::warn!("background image load failed: {error:?}");
+                    show_load_error(error, cx);
+                },
+            }
+        });
+    })
+    .detach();
+}
+
+fn refresh_surface_opacity(cx: &mut App) {
+    if cx.has_global::<gpui_component::Theme>()
+        && cx.has_global::<crate::gpui_shell::config::Settings>()
+    {
+        crate::gpui_shell::theme::reapply_prepared_surface_opacity(cx);
+    }
+}
+
+fn retire_image(image: Option<Arc<RenderImage>>, cx: &mut App) {
+    if let Some(image) = image {
+        // Settings callbacks may have taken the current window out of App.windows.
+        // Defer until all windows are back, and invalidate cached scene replay.
+        cx.defer(move |cx| {
+            cx.drop_image(image, None);
+            cx.refresh_windows();
+        });
+    }
+}
+
+fn show_load_error(error: image_loader::LoadError, cx: &mut App) {
+    use crate::i18n::Message;
+    cx.defer(move |cx| {
+        let message = match error {
+            image_loader::LoadError::TooLarge => Message::WallpaperTooLarge,
+            _ => Message::WallpaperLoadFailed,
+        };
+        let text = crate::gpui_shell::config::ui_language(cx).text(message);
+        if let Some(handle) = cx.windows().first() {
+            let _ = handle.update(cx, |_, window, cx| {
+                crate::gpui_shell::toast::toast(
+                    window,
+                    cx,
+                    crate::gpui_shell::toast::ToastKind::Warning,
+                    text,
+                );
+            });
         }
-
-        let (image, source, width, height) = decode(&path, opacity)?;
-        Some(Wallpaper {
-            image,
-            source,
-            width,
-            height,
-            fit,
-            alignment,
-            cover_chrome,
-            path,
-            mtime,
-            baked_opacity: opacity,
-            card_cache: Mutex::new(None),
-            window_cache: Mutex::new(None),
-        })
     });
-
-    cx.set_global(VisualEffects { opacity: rt.opacity, blur: rt.blur, wallpaper });
-    apply_window_effects(cx);
 }
 
 /// 当前窗口透明度（无全局时视为不透明）。
@@ -156,28 +236,30 @@ pub fn set_opacity_live(opacity: f32, cx: &mut App) {
     }
 }
 
-/// 壳/卡透明度严格跟随用户滑块。模糊是独立的窗口背景外观属性，不能反向
-/// 篡改透明度；否则打开模糊会把用户设置的 100% 偷改成 88%，与旧壳语义
-/// 不一致。铺满 chrome 的壁纸仍沿用自己的可见性上限。
-///
-/// 推论：不透明度 100% 时开模糊在画面上看不出变化——模糊的是窗口**后方**
-/// 的内容，被完全不透明的像素挡住了。这是两个开关正交的必然结果，不是 bug。
+/// Preserve the original extended-wallpaper scrim: shell and card surfaces
+/// retain the user's opacity, capped at 0.78, while text remains opaque.
+/// Before an image is ready (or after clearing it), use the normal surface.
 pub fn chrome_surface_opacity(cx: &App) -> f32 {
     let Some(effects) = cx.try_global::<VisualEffects>() else {
         return 1.0;
     };
-    let mut alpha = effects.opacity.clamp(0.0, 1.0);
-    if effects.wallpaper.as_ref().is_some_and(|wp| wp.cover_chrome) {
-        alpha = alpha.min(0.78);
+    if effects.wallpaper.as_ref().is_some_and(|wp| wp.cover_chrome && wp.image.is_some()) {
+        return effects.opacity.clamp(0.0, 1.0).min(0.78);
     }
-    alpha
+    effects.opacity.clamp(0.0, 1.0)
 }
 
 /// 开窗参数用。GPUI 通用层在窗口创建时就会把这个值下发到平台层
 /// （`gpui::Window::new` → `platform_window.set_background_appearance`）。
 /// Mica / Mica Alt 因此从首帧就走平台原生 backdrop，不再先挂一层普通透明背景。
 pub fn initial_background_appearance() -> WindowBackgroundAppearance {
-    background_appearance(nebula_settings::RuntimeSettings::load().blur)
+    let runtime = nebula_settings::RuntimeSettings::load();
+    background_appearance(effective_material(&runtime).1)
+}
+
+fn effective_material(runtime: &nebula_settings::RuntimeSettings) -> (f32, BlurModeName) {
+    let resolved = crate::gpui_shell::theme::ResolvedTheme::from_runtime(runtime, runtime.theme);
+    (resolved.effective_opacity(runtime), resolved.effective_blur(runtime))
 }
 
 /// 模糊开关 → 窗口背景外观。**唯一落笔点**，启动与热应用共用。
@@ -539,34 +621,6 @@ fn apply_windows_accent_policy(
     }
 }
 
-/// 解码壁纸：RGBA8 → 把图片透明度烘进 alpha → BGRA（gpui 图像帧的
-/// 通道序，zed 的图片资产装载器同款处理）。
-fn decode(
-    path: &std::path::Path,
-    opacity: f32,
-) -> Option<(Arc<RenderImage>, Arc<RgbaImage>, u32, u32)> {
-    let bytes = std::fs::read(path).ok()?;
-    let mut rgba = image::load_from_memory(&bytes).ok()?.into_rgba8();
-    // 4K+ 原图若每帧按窗口重采样会卡死设置页开关。先压到长边 2560。
-    const MAX_EDGE: u32 = 2560;
-    let (src_w, src_h) = rgba.dimensions();
-    if src_w.max(src_h) > MAX_EDGE {
-        let scale = MAX_EDGE as f32 / src_w.max(src_h) as f32;
-        let w = (src_w as f32 * scale).round().max(1.0) as u32;
-        let h = (src_h as f32 * scale).round().max(1.0) as u32;
-        rgba = imageops::resize(&rgba, w, h, imageops::FilterType::Triangle);
-    }
-    let (width, height) = rgba.dimensions();
-    let factor = opacity.clamp(0.0, 1.0);
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel[3] = (f32::from(pixel[3]) * factor).round() as u8;
-        pixel.swap(0, 2);
-    }
-    let source = Arc::new(rgba);
-    let image = Arc::new(RenderImage::new([Frame::new((*source).clone())]));
-    Some((image, source, width, height))
-}
-
 // ---- 以下一组只服务已停用的 [`paint_glass_overlay`]（见其文档）。按用户要求
 // ---- 保留实现，因此统一标 `dead_code`，不要因为"没人用"就删掉。
 
@@ -610,7 +664,7 @@ fn noise_tile() -> Arc<RenderImage> {
             // 取高位：LCG 的低位周期极短，直接用会出现肉眼可见的条带。
             let luma = (state >> 24) as u8;
             // GPUI 的图像帧是预乘 alpha，颜色必须先乘进去，否则半透明噪点
-            // 整体偏亮。三通道同值，所以不必像 `decode` 那样 swap 成 BGRA。
+            // 整体偏亮。三通道同值，所以不必加载壁纸时那样 swap 成 BGRA。
             let premultiplied = ((u16::from(luma) * u16::from(NOISE_ALPHA)) / 255) as u8;
             pixel[0] = premultiplied;
             pixel[1] = premultiplied;
@@ -643,7 +697,7 @@ pub fn paint_glass_overlay(bounds: Bounds<Pixels>, window: &mut Window, cx: &App
         return;
     }
 
-    let is_light = crate::gpui_shell::theme::chrome_theme_resolved(cx).skin().is_light;
+    let is_light = crate::gpui_shell::theme::resolved_skin(cx).is_light;
     let tint = if is_light { TINT_ALPHA_LIGHT } else { TINT_ALPHA_DARK };
     window.paint_quad(fill(bounds, Hsla { h: 0.0, s: 0.0, l: 1.0, a: tint }));
 
@@ -679,186 +733,83 @@ pub fn paint_glass_overlay(bounds: Bounds<Pixels>, window: &mut Window, cx: &App
     });
 }
 
-/// 终端卡的壁纸层（卡底色之上、内容之下；由卡容器的 canvas 调用，
-/// 覆盖整卡含内边距带）。
-///
-/// 卡模式：以卡为定位空间。铺满整窗模式：以整窗为定位空间、这里只
-/// 画卡内那片切片——图在窗口坐标系里连续，与 chrome 底层无缝。
-pub fn paint_wallpaper_card(bounds: Bounds<Pixels>, window: &mut Window, cx: &App) {
-    let Some(effects) = cx.try_global::<VisualEffects>() else { return };
-    let Some(wp) = &effects.wallpaper else { return };
-    let Some(image) = card_wallpaper(bounds, window, wp) else { return };
-
-    // GPUI 的 ContentMask 只有矩形，paint_image 的半径又作用于图片自身
-    // bounds，而不是独立的裁剪矩形。cover/contain/native 的图片 bounds
-    // 往往不等于卡片，直接画会把四角重新铺方。这里传入已裁成卡片尺寸的
-    // 纹理，使图片 bounds 与旧壳 shader 的圆角 clip rect 完全重合。
-    let _ = window.paint_image(
-        bounds,
-        bounds,
-        Corners::all(crate::gpui_shell::theme::card_radius(cx)),
-        image,
-        0,
-        false,
-    );
+/// Card-only wallpaper sits above the card background. Extended wallpaper sits
+/// below the shell/card surfaces, preserving the original visible scrim.
+/// Both modes reuse one image; opacity and layout never rebake its pixels.
+pub fn card_layer(cx: &App) -> impl IntoElement {
+    layer(false, cx)
 }
 
-/// 生成卡片尺寸的壁纸纹理。卡片模式以卡片为布局锚点；铺满整窗模式先按
-/// 整窗布局，再截取卡片所在切片，保证卡内外图案连续。
-fn card_wallpaper(
-    bounds: Bounds<Pixels>,
-    window: &Window,
-    wp: &Wallpaper,
-) -> Option<Arc<RenderImage>> {
-    let scale = window.scale_factor().max(0.5);
-    let card_width = (f32::from(bounds.size.width) * scale).ceil().max(1.0) as u32;
-    let card_height = (f32::from(bounds.size.height) * scale).ceil().max(1.0) as u32;
+pub fn window_layer(cx: &App) -> impl IntoElement {
+    layer(true, cx)
+}
 
-    let (anchor_width, anchor_height, crop_x, crop_y) = if wp.cover_chrome {
-        let viewport = window.viewport_size();
-        (
-            (f32::from(viewport.width) * scale).ceil().max(1.0) as u32,
-            (f32::from(viewport.height) * scale).ceil().max(1.0) as u32,
-            (f32::from(bounds.origin.x) * scale).floor() as i32,
-            (f32::from(bounds.origin.y) * scale).floor() as i32,
+fn layer(under_chrome: bool, cx: &App) -> impl IntoElement {
+    let opacity = cx
+        .try_global::<VisualEffects>()
+        .and_then(|effects| effects.wallpaper.as_ref())
+        .map_or(1.0, |wp| wp.opacity);
+    // Canvas's style.paint does not apply element opacity in pinned GPUI;
+    // Div owns that scope for its child, without baking alpha into the image.
+    div().absolute().inset_0().opacity(opacity).child(
+        gpui::canvas(
+            |_, _, _| (),
+            move |bounds, _, window, cx| paint_wallpaper(bounds, under_chrome, window, cx),
         )
-    } else {
-        (card_width, card_height, 0, 0)
-    };
-
-    let key =
-        CardWallpaperKey { card_width, card_height, anchor_width, anchor_height, crop_x, crop_y };
-    if let Some(image) = wp.card_cache.lock().ok().and_then(|cache| {
-        cache.as_ref().filter(|cached| cached.key == key).map(|c| c.image.clone())
-    }) {
-        return Some(image);
-    }
-
-    let anchor = compose_anchor(wp, anchor_width, anchor_height);
-    let card = if wp.cover_chrome { crop_card(&anchor, key) } else { anchor };
-    let image = Arc::new(RenderImage::new([Frame::new(card)]));
-    if let Ok(mut cache) = wp.card_cache.lock() {
-        *cache = Some(CardWallpaper { key, image: image.clone() });
-    }
-    Some(image)
+        .size_full(),
+    )
 }
 
-/// 按旧层 `wallpaper_rect` 的 fit/alignment 语义合成完整锚点图。对 cover
-/// 先裁源图再缩放，避免极端长宽比图片产生远大于窗口的临时位图。
-fn compose_anchor(wp: &Wallpaper, width: u32, height: u32) -> RgbaImage {
-    use image::imageops::FilterType;
-
-    let source = wp.source.as_ref();
-    let source_width = source.width().max(1);
-    let source_height = source.height().max(1);
-    let (fx, fy) = wp.alignment.factors();
-
-    match wp.fit {
-        BackgroundImageFit::Fill => imageops::resize(source, width, height, FilterType::Triangle),
-        BackgroundImageFit::UniformToFill => {
-            let source_aspect = source_width as f32 / source_height as f32;
-            let target_aspect = width as f32 / height as f32;
-            let (crop_width, crop_height) = if source_aspect > target_aspect {
-                (
-                    ((source_height as f32 * target_aspect).round() as u32).clamp(1, source_width),
-                    source_height,
-                )
-            } else {
-                (
-                    source_width,
-                    ((source_width as f32 / target_aspect).round() as u32).clamp(1, source_height),
-                )
-            };
-            let crop_x = ((source_width - crop_width) as f32 * fx).round() as u32;
-            let crop_y = ((source_height - crop_height) as f32 * fy).round() as u32;
-            let cropped = imageops::crop_imm(source, crop_x, crop_y, crop_width, crop_height);
-            imageops::resize(&cropped.to_image(), width, height, FilterType::Triangle)
-        },
-        BackgroundImageFit::Uniform => {
-            let scale =
-                (width as f32 / source_width as f32).min(height as f32 / source_height as f32);
-            let draw_width = (source_width as f32 * scale).round().max(1.0) as u32;
-            let draw_height = (source_height as f32 * scale).round().max(1.0) as u32;
-            let resized = imageops::resize(source, draw_width, draw_height, FilterType::Triangle);
-            let mut output = RgbaImage::new(width, height);
-            let x = ((width - draw_width) as f32 * fx).round() as i64;
-            let y = ((height - draw_height) as f32 * fy).round() as i64;
-            imageops::overlay(&mut output, &resized, x, y);
-            output
-        },
-        BackgroundImageFit::None => {
-            let mut output = RgbaImage::new(width, height);
-            let x = ((width as i64 - source_width as i64) as f32 * fx).round() as i64;
-            let y = ((height as i64 - source_height as i64) as f32 * fy).round() as i64;
-            imageops::overlay(&mut output, source, x, y);
-            output
-        },
-    }
+fn image_bounds(wp: &Wallpaper, anchor: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
+    let (x, y, width, height) = wallpaper_rect(
+        f32::from(anchor.size.width) * scale,
+        f32::from(anchor.size.height) * scale,
+        wp.width as f32,
+        wp.height as f32,
+        wp.fit,
+        wp.alignment,
+    );
+    Bounds::new(
+        anchor.origin + point(px(x / scale), px(y / scale)),
+        size(px(width / scale), px(height / scale)),
+    )
 }
 
-/// 从整窗锚点图中取出卡片切片。常规布局完全位于视口内；边界保护用于
-/// DPI/开窗过渡帧，避免 1px 的负坐标或越界导致 panic。
-fn crop_card(anchor: &RgbaImage, key: CardWallpaperKey) -> RgbaImage {
-    let mut card = RgbaImage::new(key.card_width, key.card_height);
-    let source_x = key.crop_x.max(0) as u32;
-    let source_y = key.crop_y.max(0) as u32;
-    let target_x = key.crop_x.saturating_neg() as u32;
-    let target_y = key.crop_y.saturating_neg() as u32;
-    let copy_width =
-        key.card_width.saturating_sub(target_x).min(anchor.width().saturating_sub(source_x));
-    let copy_height =
-        key.card_height.saturating_sub(target_y).min(anchor.height().saturating_sub(source_y));
-    if copy_width == 0 || copy_height == 0 {
-        return card;
-    }
-
-    let slice = imageops::crop_imm(anchor, source_x, source_y, copy_width, copy_height).to_image();
-    imageops::replace(&mut card, &slice, i64::from(target_x), i64::from(target_y));
-    card
-}
-
-/// 整窗壁纸底层（chrome 之下），仅铺满整窗模式绘制；workspace 根部的
-/// canvas 调用。侧栏/标题栏以壳色 alpha 盖在其上（透明度低时透出），
-/// 终端卡内的那片由卡容器在卡底色之上重画（旧壳同一层模型）。
-pub fn paint_wallpaper_under_chrome(bounds: Bounds<Pixels>, window: &mut Window, cx: &App) {
+fn paint_wallpaper(bounds: Bounds<Pixels>, under_chrome: bool, window: &mut Window, cx: &App) {
     let Some(effects) = cx.try_global::<VisualEffects>() else { return };
-    let Some(wp) = &effects.wallpaper else { return };
-    if !wp.cover_chrome {
+    let Some(wp) = effects.wallpaper.as_ref() else { return };
+    // In the previous CPU crop path an offset card produced an empty overlay
+    // (negative crop offsets cast to u32). Repainting the source here would
+    // remove the visible scrim. Preserve that appearance directly, without
+    // retaining the broken crop arithmetic or an empty card-sized bitmap.
+    if wp.opacity <= 0.0 || under_chrome != wp.cover_chrome {
         return;
     }
-    let Some(image) = window_wallpaper(bounds, window, wp) else { return };
-    window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        let _ = window.paint_image(bounds, bounds, Corners::all(px(0.0)), image, 0, false);
-    });
+    let Some(image) = wp.image.as_ref() else { return };
+    let anchor = if wp.cover_chrome {
+        Bounds::new(point(px(0.0), px(0.0)), window.viewport_size())
+    } else {
+        bounds
+    };
+    let image_bounds = image_bounds(wp, anchor, window.scale_factor().max(0.5));
+    let radius = if under_chrome { px(0.0) } else { crate::gpui_shell::theme::card_radius(cx) };
+    let corners = image_corners(bounds, image_bounds, radius);
+    if let Err(error) = window.paint_image(bounds, image_bounds, corners, image.clone(), 0, false) {
+        log::warn!("background image paint failed: {error}");
+    }
 }
 
-/// 整窗壁纸：按视口物理像素合成一次并缓存。打开 cover 时绝不能把
-/// 原图丢给 GPU 每帧缩放——那是设置开关「一点就卡死」的根因。
-fn window_wallpaper(
-    bounds: Bounds<Pixels>,
-    window: &Window,
-    wp: &Wallpaper,
-) -> Option<Arc<RenderImage>> {
-    let scale = window.scale_factor().max(0.5);
-    let width = (f32::from(bounds.size.width) * scale).ceil().max(1.0) as u32;
-    let height = (f32::from(bounds.size.height) * scale).ceil().max(1.0) as u32;
-    let key = CardWallpaperKey {
-        card_width: width,
-        card_height: height,
-        anchor_width: width,
-        anchor_height: height,
-        crop_x: 0,
-        crop_y: 0,
-    };
-    if let Some(image) = wp.window_cache.lock().ok().and_then(|cache| {
-        cache.as_ref().filter(|cached| cached.key == key).map(|c| c.image.clone())
-    }) {
-        return Some(image);
+fn image_corners(bounds: Bounds<Pixels>, image: Bounds<Pixels>, radius: Pixels) -> Corners<Pixels> {
+    // GPUI rounds the visible intersection. Interior letterbox edges are square;
+    // only corners shared with the card inherit its radius.
+    let left = image.left() <= bounds.left();
+    let right = image.right() >= bounds.right();
+    let top = image.top() <= bounds.top();
+    let bottom = image.bottom() >= bounds.bottom();
+    Corners {
+        top_left: if left && top { radius } else { px(0.0) },
+        top_right: if right && top { radius } else { px(0.0) },
+        bottom_left: if left && bottom { radius } else { px(0.0) },
+        bottom_right: if right && bottom { radius } else { px(0.0) },
     }
-    let composed = compose_anchor(wp, width, height);
-    let image = Arc::new(RenderImage::new([Frame::new(composed)]));
-    if let Ok(mut cache) = wp.window_cache.lock() {
-        *cache = Some(CardWallpaper { key, image: image.clone() });
-    }
-    Some(image)
 }

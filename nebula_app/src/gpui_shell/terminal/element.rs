@@ -497,8 +497,14 @@ impl Element for TerminalElement {
             .try_global::<crate::gpui_shell::config::Settings>()
             .map(|settings| settings.cjk_bold_regular)
             .unwrap_or(true);
+        let cjk_fonts = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .and_then(|settings| settings.font_cjk.clone());
         let pick_font = |bold: bool, italic: bool, wide: bool| {
             let bold = bold && !(wide && cjk_bold_regular);
+            if let Some(fonts) = cjk_fonts.as_ref().filter(|_| wide) {
+                return fonts[usize::from(bold) + 2 * usize::from(italic)].clone();
+            }
             match (bold, italic) {
                 (false, false) => font.clone(),
                 (true, false) => bold_font.clone(),
@@ -534,7 +540,7 @@ impl Element for TerminalElement {
             {
                 app_cursor_color.unwrap_or_else(|| theme.resolve(glyph.fg, &overrides, glyph.bold))
             } else if cursor_inverts(glyph.row, glyph.col) {
-                theme.background
+                theme.cursor_text.unwrap_or(theme.background)
             } else if let Some(foreground) = selected_foreground(glyph.row, glyph.col) {
                 foreground
             } else {
@@ -595,7 +601,7 @@ impl Element for TerminalElement {
                     continue;
                 };
                 let fg: Hsla = if cursor_inverts(seg.row, cell.col) {
-                    theme.background.into()
+                    theme.cursor_text.unwrap_or(theme.background).into()
                 } else if let Some(foreground) = selected_foreground(seg.row, cell.col) {
                     foreground.into()
                 } else {
@@ -1641,7 +1647,7 @@ pub(super) fn rgba_rgb(color: crate::display::color::Rgb, alpha: f32) -> Rgba {
 }
 
 fn themed_anchor(palette: &super::colors::Palette, cx: &App) -> (crate::display::color::Rgb, bool) {
-    let sk = crate::gpui_shell::theme::chrome_theme_resolved(cx).skin();
+    let sk = crate::gpui_shell::theme::resolved_skin(cx);
     // ANSI magenta = index 5；旧壳 `display.colors[NamedColor::Magenta]`。
     let magenta = rgb_from_rgba(palette.ansi[5]);
     let mix = if sk.is_light {

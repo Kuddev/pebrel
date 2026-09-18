@@ -312,7 +312,7 @@ declare_class!(
 
         /// Invoked when fail to enter fullscreen
         ///
-        /// When this window launch from a fullscreen app (e.g. launch from VS Code
+        /// When this window launches from a fullscreen app (e.g. an embedded
         /// terminal), it creates a new virtual desktop and a transition animation.
         /// This animation takes one second and cannot be disable without
         /// elevated privileges. In this animation time, all toggleFullscreen events

@@ -106,6 +106,7 @@ jobs:
           python3 scripts/check_platform_cfg.py
           python3 -m unittest \
             scripts.tests.test_stable_release \
+            scripts.tests.test_ci_native_tests \
             scripts.tests.test_preview_release \
             scripts.tests.test_macos_dmg \
             scripts.tests.test_ai_session_probe \
@@ -117,6 +118,15 @@ jobs:
             scripts.tests.test_xplat
           bash -n scripts/package-linux.sh scripts/package-macos.sh
           python3 -m py_compile scripts/stable_release.py scripts/preview_release.py
+
+  native-tests:
+    name: Native tests
+    permissions:
+      contents: read
+      actions: read
+    if: ${{ !inputs.windows_only }}
+    needs: prepare
+    uses: ./.github/workflows/linux-lua.yml
 
   linux:
     name: Linux x86_64 stable package
@@ -148,18 +158,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
         with:
-          cache-on-failure: true
-      - name: Test workspace and startup contracts
-        run: |
-          cargo test --locked --workspace
-          cargo test --locked -p nebula --bin pebrel --features gpui-shell
-          python3 -m unittest scripts.tests.test_shell_integration
-          cargo test --locked -p nebula --features gpui-test-support dialog
-          cargo test --locked -p nebula --bin pebrel --features gpui-test-support gpui_shell::
+          key: release
+          target: target/release
+          legacy-key: linux
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
+        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell --timings
+      - name: Save compiled workload
+        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
       - name: Download pinned linuxdeploy
         env:
           LINUXDEPLOY: ${{ runner.temp }}/linuxdeploy-x86_64.AppImage
@@ -228,6 +240,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: stable-package-linux-x64
           path: |
             dist/*.AppImage
@@ -239,6 +252,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: stable-evidence-linux-x64
           path: dist/conformance
           if-no-files-found: warn
@@ -281,18 +295,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
         with:
-          cache-on-failure: true
-      - name: Test workspace and native startup contracts
-        run: |
-          cargo test --locked --workspace
-          cargo test --locked -p nebula --bin pebrel --features gpui-shell
-          python3 -m unittest scripts.tests.test_shell_integration scripts.conformance.tests.test_posix_lifecycle
-          cargo test --locked -p nebula --features gpui-test-support dialog
-          cargo test --locked -p nebula --bin pebrel --features gpui-test-support gpui_shell::
+          key: release
+          target: target/release
+          legacy-key: macos
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
+        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell --timings
+      - name: Save compiled workload
+        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
       - name: Import Developer ID signing credentials
         if: ${{ env.MACOS_SIGNING == 'developer-id' }}
         env:
@@ -375,6 +391,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: stable-package-macos-${{ matrix.asset_architecture }}
           path: dist/*.dmg
           if-no-files-found: error
@@ -383,6 +400,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: stable-evidence-macos-${{ matrix.architecture }}
           path: dist/conformance
           if-no-files-found: warn
@@ -404,6 +422,7 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item scripts/prepare-windows-runtime.ps1 "$env:RUNNER_TEMP/prepare-windows-runtime.ps1"
+          Copy-Item scripts/conformance/windows_standard_user.py "$env:RUNNER_TEMP/windows-standard-user.py"
           New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/runtime-tests" -Force | Out-Null
           Copy-Item scripts/tests/windows-runtime.tests.ps1 "$env:RUNNER_TEMP/runtime-tests/windows-runtime.tests.ps1"
       - name: Verify the previous Windows test result
@@ -422,9 +441,9 @@ jobs:
           $run = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:VALIDATED_RUN" -Headers $headers -ErrorAction Stop
           if ($run.head_sha -ne $env:SELECTED_COMMIT) { throw 'Validated run source differs.' }
           $jobs = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:VALIDATED_RUN/jobs?per_page=100" -Headers $headers -ErrorAction Stop
-          $windows = @($jobs.jobs | Where-Object name -eq 'Windows x64 stable package')
-          $tests = @($windows.steps | Where-Object { $_.name -eq 'Test workspace and native harness' -and $_.conclusion -eq 'success' })
-          if ($windows.Count -ne 1 -or $tests.Count -ne 1) { throw 'Prior Windows native tests did not pass.' }
+          $windows = @($jobs.jobs | Where-Object { $_.name -in @('Windows x64 stable package', 'Native tests (windows-x64)') -or $_.name -match 'Tests \(windows-2022\)$' })
+          $tests = @($windows.steps | Where-Object { $_.name -in @('Test workspace and native harness', 'Test complete workspace and native harness') -and $_.conclusion -eq 'success' })
+          if ($tests.Count -ne 1) { throw 'Prior Windows native tests did not pass.' }
       - uses: actions/checkout@v4
         if: ${{ inputs.source_commit != '' }}
         with:
@@ -435,7 +454,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: release
+          target: target/release
+          legacy-key: windows
+        if: ${{ inputs.source_commit == '' }}
       - uses: Swatinem/rust-cache@v2
+        if: ${{ inputs.source_commit != '' }}
         with:
           cache-on-failure: true
       - name: Prepare pinned Windows console runtime
@@ -444,29 +471,27 @@ jobs:
           & "$env:RUNNER_TEMP/prepare-windows-runtime.ps1" -Destination assets/windows/conhost
           & "$env:RUNNER_TEMP/runtime-tests/windows-runtime.tests.ps1" -ArchivePath (Join-Path ([IO.Path]::GetTempPath()) 'pebrel-conpty-source-v1.5.0.zip')
       - name: Test workspace and native harness
-        if: ${{ inputs.source_commit == '' }}
-        shell: pwsh
-        run: |
-          python -m unittest scripts.conformance.tests.test_lifecycle scripts.conformance.tests.test_scrollback
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --workspace
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p nebula --bin pebrel --features gpui-shell
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p nebula --features gpui-test-support dialog
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p nebula --bin pebrel --features gpui-test-support gpui_shell::
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if: ${{ inputs.windows_only && inputs.source_commit == '' }}
+        run: python scripts/ci_native_tests.py
       - name: Build GPUI release binary
         shell: pwsh
         run: |
-          cargo build --locked --release -p nebula_hook --bin pebrel-hook
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
-          exit $LASTEXITCODE
+          if (Test-Path scripts/build-windows-product.ps1) {
+            ./scripts/build-windows-product.ps1 -Configuration release -TargetDirectory target
+          } else {
+            cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
+            if ($LASTEXITCODE -ne 0) { throw 'Windows product build failed' }
+          }
+      - name: Save compiled workload
+        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
       - name: Retain built Windows runtime before packaging
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: stable-runtime-windows-x64
           path: |
             target/release/pebrel.exe
@@ -495,12 +520,13 @@ jobs:
           $actual = git rev-parse HEAD
           if ($actual -ne $env:SELECTED_COMMIT) { throw 'Checked-out source differs from the requested build.' }
           $env:GITHUB_SHA = $actual
-          python scripts/conformance/run.py --app target/release/pebrel.exe --platform windows-x86_64 --output dist/conformance/windows-report.json
+          python "$env:RUNNER_TEMP/windows-standard-user.py" scripts/conformance/run.py --app target/release/pebrel.exe --platform windows-x86_64 --output dist/conformance/windows-report.json
           exit $LASTEXITCODE
       - name: Upload Windows stable assets
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: stable-package-windows-x64
           path: |
             dist/Pebrel-v${{ needs.prepare.outputs.version }}-windows-x64.zip
@@ -511,6 +537,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: stable-evidence-windows-x64
           path: dist/conformance
           if-no-files-found: warn
@@ -519,7 +546,7 @@ jobs:
   aggregate:
     name: Verify stable assets and upload complete set
     if: ${{ !inputs.windows_only }}
-    needs: [prepare, linux, macos, windows]
+    needs: [prepare, native-tests, linux, macos, windows]
     runs-on: ubuntu-22.04
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -558,6 +585,7 @@ jobs:
       - name: Upload complete stable release set
         uses: actions/upload-artifact@v4
         with:
+          compression-level: 0
           name: Pebrel-v${{ needs.prepare.outputs.version }}
           path: release-dist
           if-no-files-found: error

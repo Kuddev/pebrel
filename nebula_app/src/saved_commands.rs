@@ -1,8 +1,10 @@
 //! User-managed shell commands shown by the GPUI command manager.
 
 pub(crate) mod builtins;
+mod groups;
+pub(crate) use groups::BUILTIN_GROUP_ID;
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,11 +37,29 @@ struct CommandStore {
     version: u32,
     #[serde(default)]
     commands: Vec<SavedCommand>,
+    #[serde(default)]
+    organization: groups::Organization,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    deleted_builtins: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SavedCommands {
+    path: PathBuf,
     commands: Vec<SavedCommand>,
+    organization: groups::Organization,
+    deleted_builtins: BTreeSet<String>,
+}
+
+impl Default for SavedCommands {
+    fn default() -> Self {
+        Self {
+            path: store_path(),
+            commands: Vec::new(),
+            organization: groups::Organization::default(),
+            deleted_builtins: BTreeSet::new(),
+        }
+    }
 }
 
 impl SavedCommands {
@@ -47,10 +67,12 @@ impl SavedCommands {
         Self::load_from(&store_path())
     }
 
-    fn load_from(path: &Path) -> io::Result<Self> {
+    pub(crate) fn load_from(path: &Path) -> io::Result<Self> {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Self { path: path.to_owned(), ..Self::default() });
+            },
             Err(error) => return Err(error),
         };
         let store: CommandStore = serde_json::from_slice(&bytes)
@@ -62,15 +84,36 @@ impl SavedCommands {
             ));
         }
         validate_store(&store.commands)?;
-        Ok(Self { commands: store.commands })
+        let saved = Self {
+            path: path.to_owned(),
+            commands: store.commands,
+            organization: store.organization,
+            deleted_builtins: store.deleted_builtins,
+        };
+        if saved.deleted_builtins.iter().any(|id| !is_builtin_id(id)) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid builtin command id"));
+        }
+        saved.validate_groups()?;
+        Ok(saved)
     }
 
     pub(crate) fn commands(&self) -> &[SavedCommand] {
         &self.commands
     }
 
+    pub(crate) fn builtin_commands(
+        &self,
+        language: crate::i18n::UiLanguage,
+        platform: builtins::CommandPlatform,
+    ) -> Vec<SavedCommand> {
+        builtins::commands(language, platform)
+            .into_iter()
+            .filter(|command| !self.deleted_builtins.contains(&command.id))
+            .collect()
+    }
+
     pub(crate) fn reload(&mut self) -> io::Result<()> {
-        *self = Self::load()?;
+        *self = Self::load_from(&self.path)?;
         Ok(())
     }
 
@@ -80,8 +123,9 @@ impl SavedCommands {
         command: &str,
         append_enter: bool,
     ) -> io::Result<SavedCommand> {
-        let path = store_path();
-        let (next, inserted) = mutate_store(&path, |commands| {
+        let path = self.path.clone();
+        let (next, inserted) = mutate_store(&path, |store| {
+            let commands = &mut store.commands;
             if commands.len() >= MAX_COMMANDS {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -108,8 +152,9 @@ impl SavedCommands {
         command: &str,
         append_enter: bool,
     ) -> io::Result<()> {
-        let path = store_path();
-        let (next, ()) = mutate_store(&path, |commands| {
+        let path = self.path.clone();
+        let (next, ()) = mutate_store(&path, |store| {
+            let commands = &mut store.commands;
             let (name, command) = normalize_fields(name, command)?;
             let Some(saved) = commands.iter_mut().find(|saved| saved.id == id) else {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "saved command not found"));
@@ -124,12 +169,19 @@ impl SavedCommands {
     }
 
     pub(crate) fn remove(&mut self, id: &str) -> io::Result<()> {
-        let path = store_path();
-        let (next, ()) = mutate_store(&path, |commands| {
+        let path = self.path.clone();
+        let (next, ()) = mutate_store(&path, |store| {
+            if is_builtin_id(id) {
+                store.deleted_builtins.insert(id.to_owned());
+                store.organization.membership.remove(id);
+                return Ok(());
+            }
+            let commands = &mut store.commands;
             let Some(index) = commands.iter().position(|saved| saved.id == id) else {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "saved command not found"));
             };
             commands.remove(index);
+            store.organization.membership.remove(id);
             Ok(())
         })?;
         *self = next;
@@ -139,7 +191,7 @@ impl SavedCommands {
 
 fn mutate_store<T>(
     path: &Path,
-    mutate: impl FnOnce(&mut Vec<SavedCommand>) -> io::Result<T>,
+    mutate: impl FnOnce(&mut SavedCommands) -> io::Result<T>,
 ) -> io::Result<(SavedCommands, T)> {
     let Some(_lock) = crate::atomic_file::try_lock(path)? else {
         return Err(io::Error::new(
@@ -150,12 +202,22 @@ fn mutate_store<T>(
     // 锁内重新读盘：多个 Nebula 窗口同时管理命令时，不能拿各自启动时的旧快照
     // 覆盖对方刚写入的列表。
     let mut saved = SavedCommands::load_from(path)?;
-    let result = mutate(&mut saved.commands)?;
+    let result = mutate(&mut saved)?;
     validate_store(&saved.commands)?;
-    let store = CommandStore { version: STORE_VERSION, commands: saved.commands.clone() };
+    saved.validate_groups()?;
+    let store = CommandStore {
+        version: STORE_VERSION,
+        commands: saved.commands.clone(),
+        organization: saved.organization.clone(),
+        deleted_builtins: saved.deleted_builtins.clone(),
+    };
     let bytes = serde_json::to_vec_pretty(&store).map_err(io::Error::other)?;
     crate::atomic_file::write(path, &bytes)?;
     Ok((saved, result))
+}
+
+fn is_builtin_id(id: &str) -> bool {
+    id.starts_with("builtin:") && id.len() > 8 && id.len() <= MAX_ID_CHARS
 }
 
 fn normalize_fields(name: &str, command: &str) -> io::Result<(String, String)> {
@@ -237,10 +299,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn builtin_deletion_survives_reload_and_other_window_edits() {
+        use crate::i18n::UiLanguage;
+        use builtins::CommandPlatform;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(STORE_FILE);
+        std::fs::write(&path, r#"{"version":1,"commands":[]}"#).unwrap();
+        let mut first = SavedCommands::load_from(&path).unwrap();
+        let mut other_window = first.clone();
+        first.create_group("Containers").unwrap();
+        let group = first.groups()[0].id.clone();
+        first.move_to_group("builtin:docker_exec", Some(&group)).unwrap();
+        first.remove("builtin:docker_exec").unwrap();
+        first.remove("builtin:python_install_windows").unwrap();
+        let custom = other_window.insert("My Git command", "git status", false).unwrap();
+        let reloaded = SavedCommands::load_from(&path).unwrap();
+        assert_eq!(reloaded.commands(), &[custom]);
+        assert_eq!(reloaded.groups()[0].id, group);
+        assert!(!reloaded.organization.membership.contains_key("builtin:docker_exec"));
+        for language in [UiLanguage::EnUs, UiLanguage::ZhCn] {
+            for platform in [CommandPlatform::Windows, CommandPlatform::Mac, CommandPlatform::Posix]
+            {
+                let commands = reloaded.builtin_commands(language, platform);
+                assert!(commands.iter().all(|row| row.id != "builtin:docker_exec"
+                    && row.id != "builtin:python_install_windows"));
+                assert!(commands.iter().any(|row| row.id == "builtin:conda_create"));
+            }
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(other_window.move_to_group("builtin:docker_exec", Some(&group)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
     fn versioned_store_round_trips_and_rejects_invalid_rows() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(STORE_FILE);
-        let (saved, inserted) = mutate_store(&path, |commands| {
+        let (saved, inserted) = mutate_store(&path, |store| {
+            let commands = &mut store.commands;
             let (name, command) = normalize_fields(" Start backend ", " cargo run ")?;
             let saved =
                 SavedCommand { id: "cmd-test".to_owned(), name, command, append_enter: false };

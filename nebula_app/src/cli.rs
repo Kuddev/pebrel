@@ -166,6 +166,15 @@ pub struct TerminalOptions {
     #[clap(long, value_hint = ValueHint::FilePath)]
     pub working_directory: Option<PathBuf>,
 
+    /// Start this shell instead of the configured default one, by the same id the
+    /// `shell` setting uses (`pwsh`, `cmd`, `wsl:Ubuntu`, or a profile's settings id).
+    ///
+    /// The Explorer menu uses it to open a folder in a specific WSL distribution.
+    /// An id that no longer resolves still starts `wsl.exe` for `wsl:<distro>`
+    /// rather than silently falling back to the default shell.
+    #[clap(long, value_name = "ID", conflicts_with = "command")]
+    pub shell: Option<String>,
+
     /// Remain open after child process exit.
     #[clap(long)]
     pub hold: bool,
@@ -207,6 +216,14 @@ impl TerminalOptions {
     /// repair applies whether the options came from the CLI or over IPC.
     pub fn resolved_working_directory(&self) -> Option<PathBuf> {
         self.working_directory.clone().map(repair_context_menu_dir)
+    }
+
+    /// Shell id requested on the command line, normalized: blank counts as absent.
+    ///
+    /// Kept as an id (not a program path) so every launch re-resolves the
+    /// executable, exactly like the `shell` setting does.
+    pub fn shell_id(&self) -> Option<String> {
+        self.shell.as_deref().map(str::trim).filter(|shell| !shell.is_empty()).map(str::to_owned)
     }
 
     /// Override the [`PtyOptions`]'s fields with the [`TerminalOptions`].
@@ -1736,6 +1753,50 @@ mod tests {
             repair_context_menu_dir(PathBuf::from("D:\\temp_build")),
             PathBuf::from("D:\\temp_build")
         );
+    }
+
+    /// 右键菜单那条命令行的形状：`--shell` 必须排在 `--working-directory` **之前**。
+    ///
+    /// 这不是风格问题。`--working-directory "D:\"` 的收尾反斜杠会吃掉它的收尾
+    /// 引号（issue #36），若它排在前头，`CommandLineToArgvW` 会把 `--shell` 整段
+    /// 并进那个参数——目录变成垃圾、shell 被吞掉，而 clap 依然认为解析成功，
+    /// 最后开出一个没有 cwd 的默认 shell 标签。安装器里的书写顺序由
+    /// `scripts/tests/installer.tests.ps1` 的断言钉住，这里钉住解析侧。
+    #[test]
+    fn shell_flag_parses_ahead_of_the_working_directory() {
+        let options = Options::try_parse_from([
+            "pebrel",
+            "--gpui",
+            "--shell",
+            "wsl:Ubuntu",
+            "--working-directory",
+            "D:\"",
+        ])
+        .expect("context-menu argv parses");
+        let terminal = &options.window_options.terminal_options;
+        assert_eq!(terminal.shell_id().as_deref(), Some("wsl:Ubuntu"));
+        let expected = if cfg!(windows) { "D:\\" } else { "D:\"" };
+        assert_eq!(terminal.resolved_working_directory(), Some(PathBuf::from(expected)));
+    }
+
+    /// `--shell` selects a saved shell identity; `-e` supplies a command directly.
+    /// Reject their combination instead of silently ignoring either explicit request.
+    #[test]
+    fn shell_and_command_conflict() {
+        assert!(
+            Options::try_parse_from(["pebrel", "--gpui", "--shell", "pwsh", "-e", "cmd"]).is_err()
+        );
+    }
+
+    /// 空白/空的 `--shell` 当作没给：脚本传了空串时不该去解析一个空 id，
+    /// 更不该因此报错挡住启动。
+    #[test]
+    fn blank_shell_id_counts_as_absent() {
+        for value in ["", "   "] {
+            let options = Options::try_parse_from(["pebrel", "--gpui", "--shell", value])
+                .expect("blank shell parses");
+            assert_eq!(options.window_options.terminal_options.shell_id(), None);
+        }
     }
 
     #[test]

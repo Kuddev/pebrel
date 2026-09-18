@@ -83,6 +83,9 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
                         continue;
                     },
 
+                    // Windows reports normal anonymous-pipe EOF this way.
+                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => return,
+
                     Poll::Ready(Err(e)) => {
                         log::error!("error writing to pipe: {}", e);
                         return;
@@ -232,6 +235,8 @@ impl<W: Write + Send + 'static> UnblockedWriter<W> {
                         // We were interrupted; continue.
                         continue;
                     },
+
+                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => return,
 
                     Poll::Ready(Err(e)) => {
                         log::error!("error writing to pipe: {}", e);

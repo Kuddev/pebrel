@@ -5,6 +5,7 @@
 
 use super::*;
 
+use crate::i18n::Message;
 use crate::update_download::DownloadStatus;
 
 const UPDATE_DIALOG_IDLE_HEIGHT: f32 = 250.0;
@@ -18,6 +19,16 @@ pub(crate) fn show_update_notification(
     window: &mut Window,
     cx: &mut App,
 ) {
+    let cached_status = result.asset.as_ref().map(crate::update_download::status);
+    if matches!(cached_status, Some(DownloadStatus::InstallFailed(_))) {
+        show_download_outcome_notification(result, cached_status.unwrap(), window, cx);
+        return;
+    }
+    if nebula_settings::RuntimeSettings::load().auto_download_updates
+        && result.asset.as_ref().is_some_and(|asset| asset.sha256.is_some())
+    {
+        start_update_download(result.clone(), window, cx);
+    }
     let language = workspace_ui_language();
     let title: SharedString = language.pick("发现新版本", "Update available").into();
     let message: SharedString = language
@@ -61,9 +72,9 @@ fn start_update_download(
         cx.open_url(crate::update_check::RELEASES_PAGE);
         return;
     };
-    match crate::update_download::begin(&asset) {
-        Ok(true) => {},
-        Ok(false) => {
+    let job = match crate::update_download::begin(&asset) {
+        Ok(Some(job)) => job,
+        Ok(None) => {
             cx.refresh_windows();
             return;
         },
@@ -71,17 +82,21 @@ fn start_update_download(
             crate::gpui_shell::toast::toast(window, cx, crate::display::ToastKind::Warning, error);
             return;
         },
-    }
+    };
 
-    let background_asset = asset.clone();
+    let language = workspace_ui_language();
+    let observation = job.clone();
     cx.background_executor()
-        .spawn(async move { crate::update_download::run(background_asset) })
+        .spawn(async move { crate::update_download::run(job, language) })
         .detach();
 
     let window_handle = window.window_handle();
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(Duration::from_millis(120)).await;
+            if !observation.is_current() {
+                break;
+            }
             let status = crate::update_download::status(&asset);
             let finished = status.is_terminal();
             let notification_result = result.clone();
@@ -131,13 +146,19 @@ fn show_download_outcome_notification(
                     ),
                 }
                 .into(),
-                language.pick("安装更新", "Install update").into(),
+                language.text(Message::UpdateRestartInstall).into(),
                 true,
             ),
             DownloadStatus::Failed(error) => (
                 language.pick("更新下载失败", "Update download failed").into(),
                 error.into(),
                 language.pick("查看详情", "View details").into(),
+                false,
+            ),
+            DownloadStatus::InstallFailed(error) => (
+                language.text(Message::UpdateInstallationFailed).into(),
+                error.into(),
+                language.text(Message::UpdateViewDetails).into(),
                 false,
             ),
             _ => return,
@@ -183,7 +204,7 @@ pub(crate) fn open_update_dialog(
         let current_version: SharedString = format!("v{}", dialog_result.current).into();
         let latest_version: SharedString = format!("v{}", dialog_result.latest).into();
         let later_text: SharedString =
-            language.pick("3 天后提醒", "Remind me in 3 days").into();
+            language.text(Message::UpdateLater).into();
         let skip_text: SharedString = language.pick("跳过此版本", "Skip this version").into();
         let muted = cx.theme().muted_foreground;
         let latest_color = cx.theme().warning;
@@ -202,7 +223,8 @@ pub(crate) fn open_update_dialog(
             DownloadStatus::Idle => UPDATE_DIALOG_IDLE_HEIGHT,
             DownloadStatus::Downloading { .. }
             | DownloadStatus::Ready { .. }
-            | DownloadStatus::Failed(_) => UPDATE_DIALOG_STATUS_HEIGHT,
+            | DownloadStatus::Failed(_)
+            | DownloadStatus::InstallFailed(_) => UPDATE_DIALOG_STATUS_HEIGHT,
         };
 
         let hint: SharedString = match (&status, asset.as_ref()) {
@@ -212,12 +234,8 @@ pub(crate) fn open_update_dialog(
                     "Downloading and verifying the Windows x64 installer in the background.",
                 )
                 .into(),
-            (DownloadStatus::Ready { .. }, _) => language
-                .pick(
-                    "安装包已通过 SHA-256 校验。点击“安装更新”后将启动安装向导并退出当前 Pebrel。",
-                    "The installer passed SHA-256 verification. Install Update starts the setup wizard and exits this Pebrel instance.",
-                )
-                .into(),
+            (DownloadStatus::Ready { .. }, _) => language.text(Message::UpdateReadyHint).into(),
+            (DownloadStatus::InstallFailed(_), _) => language.text(Message::UpdateInstallationFailedHint).into(),
             (DownloadStatus::Failed(_), _) => language
                 .pick(
                     "下载未完成。可以重试自动下载，或打开发布页手动处理。",
@@ -251,10 +269,13 @@ pub(crate) fn open_update_dialog(
                 language.pick("下载更新", "Download update").into()
             },
             DownloadStatus::Downloading { .. } => {
-                language.pick("正在下载", "Downloading").into()
+                language.text(Message::UpdateStopDownload).into()
             },
             DownloadStatus::Ready { .. } => {
-                language.pick("安装更新", "Install update").into()
+                language.text(Message::UpdateRestartInstall).into()
+            },
+            DownloadStatus::InstallFailed(_) if verified_asset => {
+                language.text(Message::UpdateRecheckPackage).into()
             },
             DownloadStatus::Failed(_) if verified_asset => {
                 language.pick("重新下载", "Retry download").into()
@@ -332,7 +353,7 @@ pub(crate) fn open_update_dialog(
                         .child(format!("{} · {}", file_name, format_bytes(*bytes))),
                 );
             },
-            DownloadStatus::Failed(error) => {
+            DownloadStatus::Failed(error) | DownloadStatus::InstallFailed(error) => {
                 body = body.child(
                     div()
                         .text_sm()
@@ -371,15 +392,22 @@ pub(crate) fn open_update_dialog(
             )
             .child(div().flex_1())
             .child(DialogClose::new().child(Button::new("cancel").label(later_text)));
-        let primary = Button::new("ok").label(primary_text).primary().disabled(downloading);
-        footer = if downloading {
-            footer.child(primary)
-        } else {
-            footer.child(DialogAction::new().child(primary))
-        };
+        if matches!(status, DownloadStatus::Ready { .. }) && let Some(asset) = asset.clone() {
+            footer = footer.child(Button::new("install-next-launch")
+                .label(language.text(Message::UpdateInstallNextLaunch))
+                .on_click(move |_, window, cx| {
+                    match crate::update_download::handoff::schedule(&asset) {
+                        Ok(()) => window.close_dialog(cx),
+                        Err(error) => crate::gpui_shell::toast::toast(window, cx,
+                            crate::display::ToastKind::Warning, error),
+                    }
+                }));
+        }
+        let primary = Button::new("ok").label(primary_text).primary();
+        footer = footer.child(DialogAction::new().child(primary));
 
         center_modal_dialog(dialog, window, estimated_height)
-            .close_button(false)
+            .close_button(true)
             // 保留新 Dialog 的遮罩点击取消；它与 Esc、取消按钮共用 on_cancel。
             .overlay_closable(true)
             .title(div().text_lg().font_semibold().line_height(relative(1.0)).child(title))
@@ -391,24 +419,18 @@ pub(crate) fn open_update_dialog(
                     return true;
                 };
                 match crate::update_download::status(asset) {
-                    DownloadStatus::Idle | DownloadStatus::Failed(_) if asset.sha256.is_some() => {
+                    DownloadStatus::Idle | DownloadStatus::Failed(_) | DownloadStatus::InstallFailed(_) if asset.sha256.is_some() => {
                         start_update_download(action_result.clone(), window, cx);
                         false
                     },
-                    DownloadStatus::Downloading { .. } => false,
+                    DownloadStatus::Downloading { .. } => {
+                        crate::update_download::cancel(asset);
+                        cx.refresh_windows();
+                        false
+                    },
                     DownloadStatus::Ready { .. } => {
-                        match crate::update_download::launch_ready(asset) {
-                            Ok(()) => {
-                                window.close_dialog(cx);
-                                windowing::quit_all(cx);
-                            },
-                            Err(error) => crate::gpui_shell::toast::toast(
-                                window,
-                                cx,
-                                crate::display::ToastKind::Warning,
-                                error,
-                            ),
-                        }
+                        window.close_dialog(cx);
+                        windowing::quit_for_update(asset.clone(), cx);
                         false
                     },
                     _ => {

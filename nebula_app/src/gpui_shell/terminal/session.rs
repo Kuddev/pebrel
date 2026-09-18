@@ -68,6 +68,27 @@ pub struct TerminalSession {
     pub shell_pid: u32,
 }
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) fn test_session()
+-> (TerminalSession, std::sync::mpsc::Receiver<nebula_terminal::event_loop::Msg>) {
+    let (events, _) = super::event_mailbox::channel();
+    let (stages, _) = unbounded();
+    let term = Term::new(
+        Config::default(),
+        &GridSize { columns: 80, screen_lines: 24 },
+        EventProxy { events, stages },
+    );
+    let (sender, receiver) = nebula_terminal::event_loop::EventLoopSender::standalone().unwrap();
+    (
+        TerminalSession {
+            term: Arc::new(FairMutex::new(term)),
+            notifier: Notifier(sender),
+            shell_pid: 0,
+        },
+        receiver,
+    )
+}
+
 /// 一次会话 spawn 的完整出口：会话句柄 + 终端事件流 + SSH 阶段流
 /// （本地会话的阶段流永远安静，接收端可以直接丢弃）。
 pub type SpawnedSession = (

@@ -4,6 +4,272 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 1.8.2 - 2026-09-17
+
+### English
+
+#### Added
+
+- Added Windows Explorer entries for opening a folder in a registered WSL distribution. Both a folder's context menu and the folder-background menu offer the distribution choices installed with Pebrel.
+- Added `--shell <id>` to select a Shell or saved terminal profile for a new terminal. The choice reaches both a fresh launch and an already-running instance; an explicitly supplied directory overrides the profile's saved directory without changing the saved profile.
+- Added persistent command groups, with drag-and-drop assignment and context-menu actions to move commands between groups or return them to Ungrouped. Deleting a group keeps its commands. This covers the grouping portion of the request; default-collapsed groups and automatic grouping by tool remain pending. Addresses [#149](https://github.com/Kuddev/nebula/issues/149).
+- Added persistent deletion of built-in command recipes. Removed recipes stay hidden after reopening the command manager, including after changes from another window; saved user commands are retained.
+
+#### Fixed
+
+- Fixed WSL repeatedly printing `PROMPT_COMMAND` syntax errors at `__pebrel_connection() {` when Windows line endings entered embedded Shell scripts. Shared scripts are normalized before injection, preserving command exit codes and existing user SSH functions. Addresses [#188](https://github.com/Kuddev/nebula/issues/188).
+- Fixed Git Bash leaving leading characters behind when editing or clearing wrapped input in byte-oriented locales. The managed prompt uses an ASCII marker when required and retains the Unicode marker in UTF-8 locales.
+- Fixed premature completion notifications when the integration reports active background commands or monitors, which were previously missed by the background-work counter.
+- Fixed hook-enabled AI sessions showing a completion toast when the screen was inferred to be idle while work was still running. Completion notifications now follow the integration’s turn events. Addresses [#162](https://github.com/Kuddev/nebula/issues/162).
+- Fixed background operations briefly opening console windows on Windows, including process probes, Git operations and SSH helper commands.
+- Fixed SSH terminals retaining their initial grid size after resizing a window or pane; the visible grid and remote terminal now receive the updated dimensions.
+- Fixed "Reveal in file manager" opening the wrong folder when a Windows path contains spaces. The containing folder opens with the requested file selected. Addresses [#167](https://github.com/Kuddev/nebula/issues/167).
+- Fixed moving the final tab to another window triggering a conflicting workspace update when the original window closes. Addresses [#150](https://github.com/Kuddev/nebula/issues/150).
+- Fixed saved SSH connection names being replaced by remote directory or program titles. Both the sidebar and top-tab layouts retain the configured connection name. Addresses [#164](https://github.com/Kuddev/nebula/issues/164).
+- Fixed Windows SSH configuration and identity-file paths containing spaces or quotes. Host discovery and connection resolution use the same user configuration file.
+- Fixed SSH connection tests mishandling host-key confirmation and cancellation. Closing or editing the connection cancels the owned test, and an old result cannot overwrite the edited connection's status.
+- Fixed the multiline command editor collapsing instead of retaining a usable editing height.
+- Fixed Windows taskbar and relaunch icon properties and refreshed matching pinned shortcuts while preserving their launch arguments.
+
+#### Improved
+
+- Integrated keyboard-binding search into the global settings search, including action names and key combinations. Searching for the keyboard-settings section still shows the complete page.
+- Made short, fixed settings choices directly visible as segmented buttons, including tab placement, new-tab position, display density and completion style.
+- Expanded terminal-tab hover details to show the connection, working directory and current program or AI task without replacing the tab's stable name.
+- Improved fallback handling for simple SSH configurations when the system SSH client cannot expand them. Advanced directives that require OpenSSH report a clear error instead of silently resolving an incomplete connection.
+- Simplified the built-in recipes to selected Docker/Conda operations and Python/Git installation commands, while preserving saved user commands and persistent deletion choices.
+
+Windows packages include a Pebrel installer and portable ZIP. Linux x64 packages and macOS Apple Silicon/Intel DMGs retain their Preview designation. macOS requires version 14 or later. Molecular structure rendering remains disabled.
+
+### 中文
+
+#### 新增
+
+- 新增：Windows 资源管理器可选择已注册的 WSL 发行版打开目录；文件夹及文件夹空白处的右键菜单均提供随 Pebrel 安装注册的发行版选项。
+- 新增：`--shell <id>` 可为新终端指定 Shell 或已保存的终端配置；首次启动和已运行实例都能接收该选择。本次明确指定的目录覆盖配置保存的目录，保存的配置本身保持不变。
+- 新增：可持久保存的命令分组，支持拖动分配、右键移入其他分组或移回“未分组”；删除分组会保留其中的命令。本次完成分组部分，默认折叠及按工具自动分类仍待实现。对应 [#149](https://github.com/Kuddev/nebula/issues/149)。
+- 新增：内置命令配方支持持久删除；重新打开命令管理器或从另一窗口修改后，被删除的配方仍保持隐藏，用户保存的命令予以保留。
+
+#### 修复
+
+- 修复：Windows 换行符混入内置 Shell 脚本后，WSL 在 `__pebrel_connection() {` 处反复输出 `PROMPT_COMMAND` 语法错误的问题。共享脚本在注入前统一换行，保留命令退出码及用户已有的 SSH 函数。对应 [#188](https://github.com/Kuddev/nebula/issues/188)。
+- 修复：Git Bash 在按字节处理字符的语言环境中，编辑或清空折行输入后残留行首字符的问题；受管理的提示符在需要时使用 ASCII 标记，在 UTF-8 环境中保留 Unicode 标记。
+- 修复：集成已上报正在运行的后台命令或监控任务，却因后台任务统计遗漏而提前弹出完成通知的问题。
+- 修复：已启用 Hook 的 AI 会话仍在工作时，因屏幕被推断为空闲而弹出完成提示的问题；完成通知改为依据集成上报的回合事件。对应 [#162](https://github.com/Kuddev/nebula/issues/162)。
+- 修复：Windows 后台操作短暂弹出控制台窗口的问题，覆盖进程探测、Git 操作及 SSH 辅助命令等路径。
+- 修复：调整窗口或窗格尺寸后，SSH 终端仍保持初始网格大小的问题；可见网格与远端终端同步接收新的尺寸。
+- 修复：Windows 路径含空格时，“在文件管理器中显示”打开错误目录的问题；现在会打开所在目录并选中目标文件。对应 [#167](https://github.com/Kuddev/nebula/issues/167)。
+- 修复：将最后一个标签移动到另一窗口、原窗口随之关闭时触发工作区更新冲突的问题。对应 [#150](https://github.com/Kuddev/nebula/issues/150)。
+- 修复：已保存的 SSH 连接名称被远端目录或程序标题替换的问题；侧栏和顶部标签布局均保留配置中的连接名称。对应 [#164](https://github.com/Kuddev/nebula/issues/164)。
+- 修复：Windows SSH 配置及密钥文件路径含空格或引号时的处理问题；主机发现与连接解析使用同一份用户配置文件。
+- 修复：SSH 连接测试中的主机密钥确认和取消处理；关闭或编辑连接会取消该测试，旧测试结果不能覆盖修改后连接的状态。
+- 修复：多行命令编辑器收缩、无法保持可用编辑高度的问题。
+- 修复：Windows 任务栏和重新启动入口的图标属性，并在保留启动参数的同时刷新匹配的已固定快捷方式。
+
+#### 改进
+
+- 改进：快捷键搜索统一接入设置页全局搜索，支持动作名称和按键组合；搜索快捷键设置分类时仍展示完整页面。
+- 改进：选项较少且固定的设置直接显示为分段按钮，覆盖标签布局、新标签位置、显示密度和补全样式等选项。
+- 改进：终端标签悬停提示展示连接、工作目录及当前程序或 AI 任务，同时保留稳定的标签名称。
+- 改进：系统 SSH 客户端无法展开配置时，对简单 SSH 配置提供回退处理；需要 OpenSSH 的高级指令会明确报错，避免静默使用不完整的连接配置。
+- 改进：将内置命令配方精简为选定的 Docker／Conda 操作及 Python／Git 安装命令，保留用户保存的命令和已持久保存的删除选择。
+
+Windows 提供 Pebrel 安装器和 ZIP 便携包；Linux x64 包以及 macOS Apple Silicon／Intel DMG 继续标记为 Preview。macOS 最低运行版本为 14。分子结构渲染仍处于禁用状态。
+
+### Contributors
+
+<a href="https://github.com/AnxForever"><img src="https://github.com/AnxForever.png?size=96" width="64" height="64" alt="@AnxForever avatar"></a><a href="https://github.com/AlanWanco"><img src="https://github.com/AlanWanco.png?size=96" width="64" height="64" alt="@AlanWanco avatar"></a><a href="https://github.com/Traveritas"><img src="https://github.com/Traveritas.png?size=96" width="64" height="64" alt="@Traveritas avatar"></a><a href="https://github.com/Kuddev"><img src="https://github.com/Kuddev.png?size=96" width="64" height="64" alt="@Kuddev avatar"></a>
+
+- **[@AnxForever](https://github.com/AnxForever)** — Fixed premature notifications and background console popups; added Shell selection and WSL Explorer entries. / 修复通知提前触发与后台控制台弹窗，新增 Shell 选择及 WSL 资源管理器入口。([#142](https://github.com/Kuddev/pebrel/pull/142), [#143](https://github.com/Kuddev/pebrel/pull/143), [#145](https://github.com/Kuddev/pebrel/pull/145))
+- **[@AlanWanco](https://github.com/AlanWanco)** — Kept the SSH terminal grid and remote PTY synchronized on resize. / 修复调整尺寸后 SSH 终端网格与远端 PTY 不同步的问题。([#166](https://github.com/Kuddev/pebrel/pull/166))
+- **[@Traveritas](https://github.com/Traveritas)** — Fixed revealing files whose Windows paths contain spaces. / 修复 Windows 路径含空格时无法正确定位文件的问题。([#168](https://github.com/Kuddev/pebrel/pull/168))
+- **[@Kuddev](https://github.com/Kuddev)** — Fixed tab, SSH, Git Bash and WSL issues; improved command management and settings, and completed review and release integration. / 修复标签、SSH、Git Bash 与 WSL 问题，改进命令管理和设置，并完成审核与发布整合。([#171](https://github.com/Kuddev/pebrel/pull/171), [#173](https://github.com/Kuddev/pebrel/pull/173), [#175](https://github.com/Kuddev/pebrel/pull/175), [#183](https://github.com/Kuddev/pebrel/pull/183), [#189](https://github.com/Kuddev/pebrel/pull/189))
+
+---
+
+**SHA256**
+
+- `Pebrel-v1.8.2-windows-x64.zip`: `9a1957a337b7747ba9a47ddf7be40d159e5fd33ab6b57efc6e1643bab5360ade`
+- `Pebrel-v1.8.2-windows-x64-setup.exe`: `8c72f4921e663a70b2e9c2aa142388301396263f77b3ff4841ce096b75ad74d4`
+- `Pebrel-v1.8.2-linux-x64-preview.AppImage`: `44da90755aa94734c434e00232f8ad17b5d7ebca1fe6ef898702629742272e61`
+- `Pebrel-v1.8.2-linux-x64-preview.deb`: `3506a149ed0893ebb25e9a56b327f33187e3321f617594beda9a9fea4839af65`
+- `Pebrel-v1.8.2-linux-x64-preview.tar.gz`: `304dcd53067493a7a82b34731ecdd2afc376e936a81b4671b9078ab465f334ae`
+- `Pebrel-v1.8.2-macos-arm64-preview.dmg`: `e54bea2d9b30ec2f46dfd3dbf798ab45de6c4bab3f15a880da16c91758a6f3b4`
+- `Pebrel-v1.8.2-macos-x64-preview.dmg`: `ca7e90b6c3dee0b9d3f844e2e2f1eb517dbaa6b5b5ef5ac9ea0b1fd598b8d14a`
+
+## 1.8.1 - 2026-09-15
+
+### English
+
+#### Added
+
+- Added seven scrollback limits: 1,000 / 2,000 / 5,000 / 10,000 / 20,000 / 50,000 / 100,000 lines. The default remains 10,000; changes apply to new terminals without truncating open sessions.
+- Added a wheel-speed control from 0.25× to 4.00×, defaulting to 1.00×. Dragging previews the speed and releasing saves it; trackpad pixel scrolling, font zoom and completion-list scrolling keep their existing behavior.
+- Added a custom theme library with saved snapshots, a preview editor, and theme import/export. Saved themes can retain terminal colors, typography and window appearance alongside the built-in themes.
+- Added optional background update downloads and an option to install a verified download on the next application launch on Windows.
+
+#### Fixed
+
+- Fixed command history and completion candidates leaking between the parent shell and typed SSH/WSL connections. Integrated shell reports switch the active context and restore it on return; native PowerShell predictions retain the user's configuration.
+- Restored the default terminal font to the exact Maple Mono Normal NF CN font bundled with 1.7.0 after the default changed in 1.8.0. Explicitly selected custom fonts remain available. Addresses [#148](https://github.com/Kuddev/nebula/issues/148).
+- Fixed update checks and installer downloads ignoring the application's proxy configuration, including proxy exclusions and SOCKS connections.
+- Fixed scheduled updates merging saved windows into one window. Update recovery retains each window's tabs and active tab; this does not change desktop position or window-size restoration.
+- Fixed the Windows installer failing to reuse its registered installation directory when updating an existing installation.
+- Restored the 1.7 tab-status alignment and prevented status glyphs from being clipped.
+
+#### Improved
+
+- Reduced unused scrollback allocations and reclaimed oversized row capacity when narrowing terminals, while preserving retained history and content. Large width reductions can take longer during synchronous reclamation; savings depend on the workload.
+- Improved Pi conversation recovery by retaining the native session ID and session file together with each pane's shell and working directory. Failed restoration keeps the original target available for retry instead of treating command submission as successful recovery. Addresses [#146](https://github.com/Kuddev/nebula/issues/146).
+- Improved Windows update handoff: save workspace state before exit, wait for the old process to stop before installing, verify the installer, and retain failure details when installation or restart does not complete.
+- Improved cleanup of terminals on Windows when panes close, including console resources and process-monitoring handles; retained font ownership while text rendering still needs it.
+
+Windows packages include a Pebrel installer and portable ZIP. Linux x64 packages and macOS Apple Silicon/Intel DMGs retain their Preview designation. macOS requires version 14 or later. Molecular structure rendering remains disabled.
+
+### 中文
+
+#### 新增
+
+- 新增：七档回滚行数：1,000 / 2,000 / 5,000 / 10,000 / 20,000 / 50,000 / 100,000。默认仍为 10,000，仅影响新建终端，不截断已打开会话的历史。
+- 新增：0.25×～4.00× 滚轮速度控制，默认 1.00×；拖动即时预览，松手保存。触控板像素滚动、字体缩放和补全列表滚动保持原有行为。
+- 新增：自定义主题库，支持保存主题快照、预览编辑和主题导入导出；可在内置主题之外保存终端配色、字体排版及窗口外观。
+- 新增：Windows 可选的后台更新下载，以及在下次启动应用时安装已校验下载包的选项。
+
+#### 修复
+
+- 修复：父 Shell 与手动进入的 SSH／WSL 连接之间混用命令历史和补全候选的问题；根据集成 Shell 的回执切换当前环境，返回后恢复父环境，并保留用户配置的 PowerShell 原生预测。
+- 修复：将 1.8.0 更换后的默认终端字体恢复为与 1.7.0 完全相同的内置 Maple Mono Normal NF CN；用户明确选择的自定义字体仍可使用。对应 [#148](https://github.com/Kuddev/nebula/issues/148)。
+- 修复：检查更新和下载安装器时忽略应用代理配置的问题，包括代理排除规则与 SOCKS 连接。
+- 修复：计划更新将已保存的多个窗口合并成一个窗口的问题；更新恢复时保留各窗口的标签及活动标签，不改变桌面位置或窗口尺寸的恢复行为。
+- 修复：Windows 安装器更新已有安装时未复用已注册安装目录的问题。
+- 修复：恢复 1.7 的标签状态对齐方式，避免状态符号被裁切。
+
+#### 改进
+
+- 改进：减少闲置回滚行的预分配，并在缩窄终端时回收过大的行容量，保留历史行数及内容；大幅缩列时同步回收可能增加耗时，节省量取决于实际负载。
+- 改进：Pi 会话恢复同时保留原生会话 ID、会话文件，以及各窗格的 Shell 和工作目录。恢复失败时保留原目标以便重试，不再仅凭恢复命令已提交就视为恢复成功。对应 [#146](https://github.com/Kuddev/nebula/issues/146)。
+- 改进：Windows 更新交接在退出前保存工作区，等待旧进程退出后再安装，校验安装包，并在安装或重启未完成时保留失败详情。
+- 改进：Windows 关闭窗格时释放控制台资源及进程监测句柄，并在文字渲染仍需使用字体时保持其有效。
+
+Windows 提供 Pebrel 安装器和 ZIP 便携包；Linux x64 包以及 macOS Apple Silicon／Intel DMG 继续标记为 Preview。macOS 最低运行版本为 14。分子结构渲染仍处于禁用状态。
+
+---
+
+**SHA256**
+
+- `Pebrel-v1.8.1-windows-x64.zip`: `4e6315d47c4b8d1db612a7ada0231c88b570dfd7dd1faec56bd498a8a2face18`
+- `Pebrel-v1.8.1-windows-x64-setup.exe`: `1b94feebd50d135fa6e7330830659dc38457b4f5b4f6216eeabd64a1e415eccf`
+- `Pebrel-v1.8.1-linux-x64-preview.AppImage`: `7b098a1806e20c22c6d34a848be26207108e9ceae9d15522b8ae0b2319c15aca`
+- `Pebrel-v1.8.1-linux-x64-preview.deb`: `0b218ceda32e96f92eadec33e166211222b71faf4661cf54a4b8824789f7a18d`
+- `Pebrel-v1.8.1-linux-x64-preview.tar.gz`: `26b5e01f543a014cf6250fc7dbfc8db9d19c38e5549f0c433b03637dc6550ea0`
+- `Pebrel-v1.8.1-macos-arm64-preview.dmg`: `e1f0858bb507185fd4903ce2ca8308cf88d7e07172357c3f33b1f246a3d35c7f`
+- `Pebrel-v1.8.1-macos-x64-preview.dmg`: `5b2dcd220a958646b04c8a6425f314ed58505ec4a015d141454cf23f75617de4`
+
+## 1.8.0 - 2026-09-14
+
+### English
+
+#### Added
+
+- Added confirmation before restoring default settings, with Cancel, Escape and backdrop dismissal available before any preferences change. Contributed by [@WilliamWang1721](https://github.com/WilliamWang1721) in [#115](https://github.com/Kuddev/pebrel/pull/115).
+- Added Windows login-startup and silent-start switches in Settings → Advanced → Session lifecycle. Silent startup enables the tray so the window can be reopened; an explicit directory launch still opens a visible window. Contributed by [@WilliamWang1721](https://github.com/WilliamWang1721) in [#117](https://github.com/Kuddev/pebrel/pull/117).
+- Added an independent interface text-size control, adjustable from 10 to 24 px without changing terminal text size. Contributed by [@WilliamWang1721](https://github.com/WilliamWang1721) in [#127](https://github.com/Kuddev/pebrel/pull/127).
+- Added a separate terminal font fallback list for Chinese and other full-width characters. Font choices apply on Enter or leaving the field; the English and Chinese fields both default to bundled Maple Mono NF CN. Contributed by [@WilliamWang1721](https://github.com/WilliamWang1721) in [#127](https://github.com/Kuddev/pebrel/pull/127).
+- Added “Focus follows mouse” in Settings → Interaction, off by default, and “Dim inactive panes” in Settings → Appearance, on by default. Both preferences take effect immediately.
+- Added right-click actions to the Shell launcher for choosing the default Shell and, on Windows, opening the selected Shell inside a new administrator Pebrel window.
+- Added Connect, Edit, and Delete to SSH launcher context menus. Delete uses the existing confirmation and undo flow.
+- Added Trae CLI recognition and its tab icon, plus a dedicated Oh My Pi icon.
+- Added CodeBuddy CLI recognition and its color tab icon, including the `codebuddy`, `cbc`, `codebuddy-code` and `codebuddy-lowmem` commands. Prewarm commands and old welcome text alone do not establish a foreground AI session.
+
+#### Fixed
+
+- Fixed font candidates being clipped near the window edge or covering their input after settings-page scrolling. The list opens above the field when needed, and both terminal-font fields align and display the current font.
+- Fixed a bare `pebrel` launch opening a new terminal in the wrong directory. The inherited launch directory is preserved, including when handing the request to an existing Windows instance.
+- Fixed restored WSL panes losing their saved guest directory during startup.
+- Fixed queued AI resume commands and session identities being lost during Shell initialization. Compact Codex resume screens are recognized without another AI message, and exiting the CLI clears the foreground identity.
+- Fixed long WSL directory titles overlapping distribution labels in the sidebar and top tabs.
+- Fixed quiet terminals retaining an intermediate startup size. The final viewport size reaches the terminal even when no more output arrives.
+- Fixed Windows terminal focus consuming `Alt+F4` and `Alt+Space`. `Alt+F4` now uses the normal window-close flow, and `Alt+Space`, followed by `N`, uses the system menu to minimize the window.
+- Fixed the top Settings tab disappearing when switching to another tab. It now remains available until explicitly closed, including when tabs overflow or the tab layout changes.
+- Fixed `Alt+1–9` and `Ctrl+1–9` tab shortcuts losing priority to terminal input. They now work while a terminal or CLI has focus and respect custom shortcut changes without restarting.
+- Fixed WSL filename search failing when the directory path contains spaces or shell punctuation. Cancelling a search stops its own directory scan.
+- Aligned macOS native window controls with the sidebar and Settings buttons, and preserved their reserved space in the top tab layout. Window controls follow the system appearance. Contributed by [@WilliamWang1721](https://github.com/WilliamWang1721) in [#114](https://github.com/Kuddev/pebrel/pull/114).
+- Fixed the Git drawer retaining Chinese labels when the application resolves to English. Controls, history timestamps and application notices follow the selected language; switching languages preserves the commit draft and text selection. Contributed by [@gao-jian-bin](https://github.com/gao-jian-bin) in [#118](https://github.com/Kuddev/pebrel/pull/118).
+- Fixed explicitly configured terminal selection text colors being ignored. Themes without their own selection foreground preserve that setting; themes with an explicit foreground retain their precedence. Contributed by [@Aschenbath](https://github.com/Aschenbath) in [#125](https://github.com/Kuddev/pebrel/pull/125).
+- Fixed selected text disappearing behind opaque highlights in the answer reader and other selectable text views. Text remains visible while list and sidebar selection backgrounds retain their existing appearance. Contributed by [@Aschenbath](https://github.com/Aschenbath) in [#126](https://github.com/Kuddev/pebrel/pull/126).
+
+#### Improved
+
+- Reduced file browsing and filename-search memory use by starting recursive searches only when a query is entered, reusing a bounded cache and streaming paths beyond that cache. Repeated panel use releases obsolete results and cancels superseded searches. Case, whole-word and regular-expression options remain available, with visible feedback for incomplete searches and errors.
+- Reduced background-image memory use with bounded image loading and reuse while resizing the window. Replacing an image releases the previous resources; extended backgrounds retain their fit, alignment and text readability.
+- Replaced the low-resolution Claude Code icon with artwork exported from SVG at 1024 pixels, and prepared Agent icons at their display size for smoother tab edges.
+- Restored monospace lettering for terminal directory labels, sidebar headers, tabs and split-pane titles while retaining the independent interface text-size setting.
+
+Windows packages include a Pebrel installer and portable ZIP. Linux x64 packages and macOS Apple Silicon/Intel DMGs retain their Preview designation. macOS requires version 14 or later. Molecular structure rendering remains disabled.
+
+### 中文
+
+#### 新增
+
+- 新增：恢复默认设置前的确认弹窗，可通过“取消”、Esc 或点击遮罩退出，确认前不会修改偏好。由 [@WilliamWang1721](https://github.com/WilliamWang1721) 在 [#115](https://github.com/Kuddev/pebrel/pull/115) 中贡献。
+- 新增：Windows“设置 → 高级 → 会话生命周期”中的登录自启动和静默启动开关。静默启动会启用托盘以便重新打开窗口；显式打开目录时仍显示窗口。由 [@WilliamWang1721](https://github.com/WilliamWang1721) 在 [#117](https://github.com/Kuddev/pebrel/pull/117) 中贡献。
+- 新增：独立界面字号设置，可在 10–24 px 间调整，不影响终端文字字号。由 [@WilliamWang1721](https://github.com/WilliamWang1721) 在 [#127](https://github.com/Kuddev/pebrel/pull/127) 中贡献。
+- 新增：中文及其他全宽字符的独立终端字体回退列表。按回车或离开输入框后生效，中英文两项默认均采用内置 Maple Mono NF CN。由 [@WilliamWang1721](https://github.com/WilliamWang1721) 在 [#127](https://github.com/Kuddev/pebrel/pull/127) 中贡献。
+- 新增：在“设置 → 交互”中加入“焦点跟随鼠标”，默认关闭；在“设置 → 外观”中加入“调暗非活动窗格”，默认开启。两项设置均即时生效。
+- 新增：Shell 启动菜单新增右键操作，可设为默认 Shell；Windows 下还可在新的管理员 Pebrel 窗口内打开所选 Shell。
+- 新增：SSH 启动菜单新增“连接、编辑、删除”右键操作；删除沿用已有的确认与撤销流程。
+- 新增：Trae CLI 识别与标签图标，并为 Oh My Pi 加入独立图标。
+- 新增：CodeBuddy CLI 识别与彩色标签图标，支持 `codebuddy`、`cbc`、`codebuddy-code`、`codebuddy-lowmem` 命令；预热命令和单独的历史欢迎文字不会被认定为前台 AI 会话。
+
+#### 修复
+
+- 修复：字体候选列表在窗口边缘被裁切、或设置页滚动后遮住输入框的问题。空间不足时向上展开，中英文终端字体输入框保持对齐并显示当前字体。
+- 修复：不带目录参数运行 `pebrel` 时，新终端未继承实际启动目录的问题；交接给已有 Windows 实例时也会保留目录。
+- 修复：WSL 窗格恢复时，在启动过程中丢失已保存的来宾目录的问题。
+- 修复：Shell 初始化期间丢失排队的 AI 恢复命令和会话身份的问题。可识别 Codex 精简恢复界面，无需再发送 AI 消息；CLI 退出后清除前台身份。
+- 修复：WSL 长目录标题与发行版名称在侧栏、顶部标签中互相覆盖的问题。
+- 修复：安静终端停留在启动中间尺寸的问题；即使没有新的输出，也会收到布局稳定后的最终视口尺寸。
+- 修复：Windows 终端获得焦点时吞掉 `Alt+F4` 和 `Alt+Space` 的问题。`Alt+F4` 现在进入正常窗口关闭流程，`Alt+Space` 后按 `N` 可通过系统菜单最小化窗口。
+- 修复：顶部设置标签在切换到其他标签后消失的问题。现在只有主动关闭才会移除，标签溢出或切换标签布局时也会保留。
+- 修复：`Alt+1–9` 和 `Ctrl+1–9` 标签快捷键优先级低于终端输入的问题。终端或 CLI 获得焦点时仍可切换标签，自定义快捷键的修改也无需重启即可生效。
+- 修复：目录路径含空格或 Shell 特殊符号时 WSL 文件名搜索失败的问题；取消搜索会停止该次目录扫描。
+- 修复：对齐 macOS 原生窗口按钮与侧栏、设置按钮，并在顶部标签布局中保留窗口按钮所需空间；窗口按钮外观跟随系统。由 [@WilliamWang1721](https://github.com/WilliamWang1721) 在 [#114](https://github.com/Kuddev/pebrel/pull/114) 中贡献。
+- 修复：应用解析为英文时 Git 面板仍保留中文标签的问题。控件、历史时间和应用提示跟随所选语言，切换语言时保留提交草稿和文字选区。由 [@gao-jian-bin](https://github.com/gao-jian-bin) 在 [#118](https://github.com/Kuddev/pebrel/pull/118) 中贡献。
+- 修复：终端忽略用户明确设置的选中文字颜色的问题。未指定选中文字颜色的主题会保留该设置；已明确指定的主题仍保持自身优先级。由 [@Aschenbath](https://github.com/Aschenbath) 在 [#125](https://github.com/Kuddev/pebrel/pull/125) 中贡献。
+- 修复：回答阅读器等文本视图中，选中文字被不透明高亮遮住的问题。文字保持可读，列表与侧栏的选中背景保留原有外观。由 [@Aschenbath](https://github.com/Aschenbath) 在 [#126](https://github.com/Kuddev/pebrel/pull/126) 中贡献。
+
+#### 改进
+
+- 改进：降低文件浏览与文件名搜索的内存占用：输入关键词后才开始递归搜索，复用有容量上限的缓存，并流式查找缓存之外的路径。重复使用文件面板时释放过期结果、取消已被替代的搜索；保留大小写、整词和正则选项，并明确提示搜索未覆盖全部文件或发生错误。
+- 改进：降低背景图内存占用，限制图片加载成本，并在调整窗口大小时复用图像资源；替换背景图会释放旧资源，扩展背景仍保持原有的适配、对齐和文字可读性。
+- 改进：将 Claude Code 的低分辨率图标替换为从 SVG 导出的 1024 像素图像，并按显示尺寸处理 Agent 图标，使标签图标边缘更平滑。
+- 改进：终端目录标签、侧栏标题、标签页及分屏标题恢复等宽字体，同时继续使用独立的界面字号设置。
+
+Windows 提供 Pebrel 安装器和 ZIP 便携包；Linux x64 包以及 macOS Apple Silicon／Intel DMG 继续标记为 Preview。macOS 最低运行版本为 14。分子结构渲染仍处于禁用状态。
+
+### Contributors
+
+<a href="https://github.com/WilliamWang1721"><img src="https://github.com/WilliamWang1721.png?size=96" width="64" height="64" alt="@WilliamWang1721 avatar"></a><a href="https://github.com/gao-jian-bin"><img src="https://github.com/gao-jian-bin.png?size=96" width="64" height="64" alt="@gao-jian-bin avatar"></a><a href="https://github.com/Aschenbath"><img src="https://github.com/Aschenbath.png?size=96" width="64" height="64" alt="@Aschenbath avatar"></a>
+
+**[@WilliamWang1721](https://github.com/WilliamWang1721)** - Improved macOS window controls, reset confirmation, Windows startup settings and independent interface/terminal font controls. / 改进 macOS 窗口按钮、恢复默认确认、Windows 启动设置，以及界面字号和终端字体设置。（[#114](https://github.com/Kuddev/pebrel/pull/114)、[#115](https://github.com/Kuddev/pebrel/pull/115)、[#117](https://github.com/Kuddev/pebrel/pull/117)、[#127](https://github.com/Kuddev/pebrel/pull/127)）
+
+**[@gao-jian-bin](https://github.com/gao-jian-bin)** - Made Git drawer language follow application preferences while preserving editing state. / 让 Git 面板语言跟随应用设置，同时保留编辑状态。（[#118](https://github.com/Kuddev/pebrel/pull/118)）
+
+**[@Aschenbath](https://github.com/Aschenbath)** - Preserved terminal selection foreground colors and readable text selections in the answer reader. / 修正终端选中文字颜色，并让回答阅读器的文字选区保持可读。（[#125](https://github.com/Kuddev/pebrel/pull/125)、[#126](https://github.com/Kuddev/pebrel/pull/126)）
+
+
+---
+
+**SHA256**
+
+- `Pebrel-v1.8.0-windows-x64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v1.8.0-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v1.8.0-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v1.8.0-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v1.8.0-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v1.8.0-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v1.8.0-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+
 ## 1.7.0 - 2026-09-12
 
 ### English

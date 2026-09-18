@@ -114,6 +114,7 @@ impl TerminalView {
         self.ssh_connect_last_step = std::time::Instant::now();
         if matches!(stage, crate::ssh_session::SshStage::Failed(_)) {
             self.pending_runtime_submit = None;
+            self.pending_shell_command = None;
             self.command_running = false;
             self.command_started = None;
             self.confirmation.invalidate();
@@ -129,10 +130,13 @@ impl TerminalView {
     /// lifecycle routes cannot drift apart.
     pub(super) fn clear_foreground_agent_state(&mut self) -> bool {
         self.confirmation.observe_waiting(false);
+        self.recovery.command_ended();
         self.answers.close();
-        let title_changed =
-            self.running_program.take().is_some() || self.ai_session.take().is_some();
-        self.invalidate_ai_session_probe();
+        let program_changed = self.running_program.take().is_some();
+        let title_changed = self.ai_session.take().is_some() || program_changed;
+        if !self.recovery.preparing() {
+            self.invalidate_ai_session_probe();
+        }
         self.primary_agent_pid = None;
         self.ai_session_from_probe = false;
         self.agent_status = crate::ai_agents::AgentStatus::Unknown;
@@ -691,26 +695,19 @@ impl TerminalView {
         crate::ai_agents::AgentKind::parse(&identity.source)?.fork_command(&identity.session_id)
     }
 
-    /// 冷恢复把快照里的 hook 身份种回 pane，右键分叉不必再等下一条事件。
-    pub fn seed_ai_session(&mut self, source: String, session_id: String, cx: &mut Context<Self>) {
-        if session_id.is_empty() {
-            return;
-        }
-        self.ai_session = Some(crate::display::AiSessionIdentity { source, session_id });
-        cx.emit(TerminalViewEvent::TitleChanged);
-        cx.notify();
-    }
-
     pub(crate) fn prepare_ai_session_save(&mut self, cx: &mut Context<Self>) {
-        if self.ai_session_from_probe {
-            self.ai_session = None;
-        }
+        // A refresh may fail or time out. Keep the last confirmed native ID.
         self.last_ai_session_probe = None;
         self.probe_missing_codex_session(cx);
     }
 
     pub(crate) fn ai_session_save_pending(&self) -> bool {
-        self.ai_session_probe_pending
+        // A failed refresh cannot erase an already durable identity. Pi/Codex
+        // without any native target must finish identifying before safe exit.
+        self.session_agent().is_some_and(|agent| {
+            matches!(agent.source.as_str(), "pi" | "codex")
+                && agent.session_id.as_deref().is_none_or(str::is_empty)
+        })
     }
 
     /// Read the active conversation metadata when its hook has not reported an ID.
@@ -758,12 +755,27 @@ impl TerminalView {
                 ) {
                     return;
                 }
-                if let Some(session_id) = session_id {
+                if let Some(session) = session_id {
                     log::debug!("agent session identity from active rollout: pane={pane_id}");
+                    let target = crate::session::AgentSession {
+                        source: "codex".to_owned(),
+                        session_id: Some(session.session_id.clone()),
+                        session_file: None,
+                    };
+                    let previous = view.recovery.target.clone();
+                    if !view.recovery.confirm(target) {
+                        return;
+                    }
+                    if previous != view.recovery.target {
+                        cx.emit(TerminalViewEvent::SessionIdentityChanged);
+                    }
                     view.ai_session = Some(crate::display::AiSessionIdentity {
                         source: "codex".to_owned(),
-                        session_id,
+                        session_id: session.session_id,
                     });
+                    if let Some(cwd) = session.cwd {
+                        view.process_event(nebula_terminal::event::Event::CwdReport(cwd), cx);
+                    }
                     view.ai_session_from_probe = true;
                     cx.emit(TerminalViewEvent::TitleChanged);
                     cx.notify();
@@ -771,17 +783,6 @@ impl TerminalView {
             });
         })
         .detach();
-    }
-
-    /// Queue a full shell command. Like cold resume, input may arrive before
-    /// the first prompt; ConPTY preserves ordering until the shell reads it.
-    pub fn run_command(&mut self, command: String, cx: &mut Context<Self>) {
-        if command.is_empty() || self.exited.is_some() {
-            return;
-        }
-        let mut bytes = command.into_bytes();
-        bytes.push(b'\r');
-        self.write_input(bytes, cx);
     }
 
     /// 事件声明的 pane 与写管道进程的祖先链是否互相矛盾。
@@ -883,6 +884,20 @@ impl TerminalView {
             && let Some(reader) = &self.answer_reader
         {
             reader.update(cx, |reader, cx| reader.needs_attention(cx));
+        }
+        if from_primary_agent && let Some(id) = event.session_id.as_deref() {
+            let target = crate::session::AgentSession {
+                source: event.source.clone(),
+                session_id: Some(id.to_owned()),
+                session_file: event.session_file.clone(),
+            };
+            let previous = self.recovery.target.clone();
+            if !self.recovery.confirm(target) {
+                return false;
+            }
+            if previous != self.recovery.target {
+                cx.emit(TerminalViewEvent::SessionIdentityChanged);
+            }
         }
         if from_primary_agent
             && let Some(id) = event.session_id.as_deref()
@@ -1008,6 +1023,7 @@ impl TerminalView {
         self.flush_pending_runtime_submit(cx);
         // 进程树对账必须排在下面那道早退之前：身份认不出来就早退，等于让
         // 这个 pane 永远退出屏幕检测。
+        self.flush_pending_shell_command(cx);
         self.reconcile_shell_activity(cx);
         self.probe_missing_codex_session(cx);
         let Some(session) = &self.session else { return };
@@ -1134,9 +1150,11 @@ impl TerminalView {
         };
         self.confirmation.observe_waiting(next == AgentStatus::Blocked);
         if next != self.agent_status {
-            if let Some(attention) =
-                super::notifications::screen_notification(self.agent_status, next)
-            {
+            if let Some(attention) = super::notifications::screen_notification(
+                self.agent_status,
+                next,
+                self.agent_hook_seen,
+            ) {
                 cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::AiTurn {
                     program: program.clone(),
                     message: None,

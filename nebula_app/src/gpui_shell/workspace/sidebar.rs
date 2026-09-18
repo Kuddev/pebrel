@@ -53,14 +53,46 @@ pub(super) fn resting_activity(
 }
 
 impl NebulaWorkspace {
-    /// 侧栏标签的保守字宽：塑形一个 "M" 取 advance，供旧壳列数截断逻辑
-    /// 估算。必须使用 UI 字体；终端字体变化不属于 chrome 的布局输入。
-    fn sidebar_cell_width(&self, window: &mut Window, family: &SharedString, size_px: f32) -> f32 {
-        let shaped = window.text_system().shape_line(
-            SharedString::new_static("M"),
+    pub(super) fn shell_status_label(
+        tag: SharedString,
+        family: SharedString,
+        size_px: f32,
+        color: gpui::Hsla,
+    ) -> gpui::Div {
+        // As in 1.7, short labels keep their intrinsic width and align right in
+        // the status row. Only a long label is clipped to the available space.
+        div()
+            .max_w_full()
+            .min_w_0()
+            .truncate()
+            .font_family(family)
+            .text_size(px(size_px))
+            .font_weight(FontWeight::NORMAL)
+            .text_color(color)
+            .child(tag)
+    }
+
+    pub(super) fn tab_status_slot(width: f32) -> gpui::Div {
+        // Nerd Font ink can extend beyond its advance. Keep the 1.7 slot
+        // unclipped; the enclosing tab still clips at its own outer boundary.
+        div().relative().w(px(width)).h_full().flex_shrink_0()
+    }
+
+    /// Reserve the shaped shell label's width, capped to leave room for the title.
+    pub(super) fn shell_status_width(
+        window: &Window,
+        tag: Option<&SharedString>,
+        family: &SharedString,
+        size_px: f32,
+        minimum: f32,
+        maximum: f32,
+    ) -> f32 {
+        let Some(tag) = tag else { return minimum };
+        let line = window.text_system().shape_line(
+            tag.clone(),
             px(size_px),
             &[gpui::TextRun {
-                len: 1,
+                len: tag.len(),
                 font: gpui::font(family.clone()),
                 color: gpui::Hsla::default(),
                 background_color: None,
@@ -69,8 +101,7 @@ impl NebulaWorkspace {
             }],
             None,
         );
-        let width = f32::from(shaped.width);
-        if width > 0.5 { width } else { size_px * 0.6 }
+        f32::from(line.width).ceil().clamp(minimum, maximum.max(minimum))
     }
 
     /// 旧壳 `icons::push_spinner` 的 canvas 复刻：暗轨道 + 绕行亮弧（占
@@ -154,75 +185,6 @@ impl NebulaWorkspace {
             .child(WAITING_INPUT_GLYPH)
     }
 
-    pub(super) fn tab_presentation(&self, ix: usize, cx: &App, dark: bool) -> TabPresentation {
-        let active = ix == self.active;
-        let title = self.tab_title(ix, cx);
-        let is_settings = self.tabs[ix].is_settings();
-        let is_terminal = self.tabs[ix].is_terminal();
-        let pane_count = match &self.tabs[ix] {
-            WorkspaceTab::Terminal { panes, .. } => panes.len(),
-            _ => 0,
-        };
-        let (program, activity) = self.tabs[ix]
-            .focused_view()
-            .map(|entity| {
-                let view = entity.read(cx);
-                let program = view
-                    .running_program
-                    .clone()
-                    .or_else(|| view.ai_session.as_ref().map(|identity| identity.source.clone()))
-                    .or_else(|| view.ssh_destination.as_ref().map(|_| "ssh".to_owned()));
-                (program, view.sidebar_activity())
-            })
-            .unwrap_or((None, SidebarActivity::Idle));
-        // 事件 vs 状态的唯一裁定处（侧栏与顶栏共用这份 presentation），规则与
-        // 理由见 [`resting_activity`]。
-        let activity = resting_activity(activity, active, self.meta(ix).has_bell);
-        let logo_image = program
-            .as_deref()
-            .and_then(crate::display::ai_logo_for_program)
-            .and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
-        let program_glyph = program
-            .as_deref()
-            .filter(|_| logo_image.is_none())
-            .map(crate::display::program_icon)
-            .or_else(|| match &self.tabs[ix] {
-                WorkspaceTab::Document { .. } => Some("\u{eb1d}"),
-                WorkspaceTab::Code { view, .. } => {
-                    Some(crate::display::side_panel::file_type_icon(&view.read(cx).title))
-                },
-                WorkspaceTab::Image { view } => {
-                    Some(crate::display::side_panel::file_type_icon(&view.read(cx).title))
-                },
-                _ => None,
-            });
-        let meta = self.meta(ix);
-        // 分屏 tab 不画 shell 短标：一个 tab 里的 N 个 pane 完全可能跑着不同
-        // 的 shell，只贴其中一个（聚焦那个）是误导；数量胶囊「这是一组」才是
-        // 此时该占这个槽位的信息。顺带把 28px 让回标题——顶栏挤到 120px 时，
-        // 图标+胶囊+短标三样一起上，标题只剩两三个字符。
-        let shell_tag = (is_terminal && activity == SidebarActivity::Idle && pane_count <= 1)
-            .then_some(meta.shell_tag.clone())
-            .flatten()
-            .filter(|tag| !tag.is_empty());
-        let renaming = self
-            .tab_rename
-            .as_ref()
-            .filter(|rename| rename.ix == ix)
-            .map(|rename| rename.input.clone());
-        TabPresentation {
-            title,
-            is_settings,
-            activity,
-            logo_image,
-            program_glyph,
-            shell_tag,
-            color: meta.color,
-            renaming,
-            pane_count,
-        }
-    }
-
     fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
@@ -233,8 +195,8 @@ impl NebulaWorkspace {
         let active_fg = theme.sidebar_accent_foreground;
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
-        // 标题/标签走稳定的 UI 字体；程序图标是 Nerd Font 字位，固定走随
-        // 安装包提供的 Maple。用户设置的终端字体不得改变 chrome 几何。
+        // 路径标签沿用稳定的等宽字体；程序图标是 Nerd Font 字位，固定走随
+        // 安装包提供的 Maple。字号由独立的界面字号设置控制。
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let tab_close_visible = settings.map(|settings| settings.tab_close_visible).unwrap_or(true);
         let tab_reveal = settings
@@ -242,12 +204,8 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
-        // 旧壳合同（display/mod.rs `ui_font_px`）：chrome 锚定**配置字号**
-        // （nebula.toml `font.size` 默认 11.25pt = 15px）。终端的持久化缩放
-        // （`font_size=` 键）只影响终端网格，侧栏不得跟着变粗/变大；
-        // 固定 14px 的旧毛病（比旧壳小一号）也不能回潮。
-        let label_px = settings.map(|settings| settings.base_font_size_px).unwrap_or(15.0);
-        let cell_w = self.sidebar_cell_width(window, &chrome_family, label_px);
+        // 界面字号独立于终端缩放。
+        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
 
         // 受约束拖拽的渲染参数：激活后被拖行骑指针位移，落点槽位由位移换算。
         let drag = self
@@ -269,6 +227,7 @@ impl NebulaWorkspace {
                 let active = ix == self.active;
                 let TabPresentation {
                     title,
+                    tooltip,
                     is_settings,
                     activity,
                     logo_image,
@@ -279,25 +238,15 @@ impl NebulaWorkspace {
                     pane_count,
                 } = self.tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("sidebar-tab-hover-{ix}").into();
-                // 可用列数 = （行宽 − 行内 px_2 − 行内 gap − 状态槽 − 行首图标槽）
-                // ÷ cell 宽。基准取上面的 `row_w`（已扣掉侧栏 p_2 与滚动条留白），
-                // 与行的实际宽度同源——否则算出的列数会比行能容纳的多出一格，
-                // 截断后的标题反过来把行撑开。省略号由旧壳同一份
-                // `truncate_tab_label` 追加，两壳的裁切位置因此一致。
-                // 行首图标槽只有一个：身份图标（设置 / AI logo / 程序字位）优先，
-                // 都没有时分屏标记才补位。三者互斥，所以扣一份宽即可。
                 let has_program_glyph = program_glyph.is_some();
-                let has_icon =
-                    is_settings || logo_image.is_some() || has_program_glyph || pane_count > 1;
-                let label_avail = row_w
-                    - 16.0
-                    - TAB_STATUS_SLOT_W
-                    - 8.0
-                    - if has_icon { TAB_LABEL_ICON_W + 8.0 } else { 0.0 }
-                    - if pane_count > 1 { pane_header::split_badge_slot_w(label_px) } else { 0.0 };
-                let label_cols = (label_avail / cell_w).floor().max(1.0) as usize;
-                let title: SharedString =
-                    crate::display::truncate_tab_label(&title, label_cols).into();
+                let status_width = Self::shell_status_width(
+                    window,
+                    shell_tag.as_ref(),
+                    &chrome_family,
+                    label_px * SIDEBAR_TAG_SCALE,
+                    TAB_STATUS_SLOT_W,
+                    row_w * 0.45,
+                );
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
                 // 用户明确设置过的标签色：行左侧一条竖光条（旧壳 strip，位置与
                 // 尺寸同源：左内缩 4、上下各留 7、宽 2.5）。默认标签不占这层
@@ -364,13 +313,13 @@ impl NebulaWorkspace {
                             .into_any_element(),
                     ),
                     SidebarActivity::Idle => shell_tag.map(|tag| {
-                        div()
-                            .font_family(chrome_family.clone())
-                            .text_size(px(label_px * SIDEBAR_TAG_SCALE))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(status_color)
-                            .child(tag)
-                            .into_any_element()
+                        Self::shell_status_label(
+                            tag,
+                            chrome_family.clone(),
+                            label_px * SIDEBAR_TAG_SCALE,
+                            status_color,
+                        )
+                        .into_any_element()
                     }),
                 };
                 // 三类行位移（旧壳 tab_drag_draw_y 的语义）：被拖行骑指针，
@@ -388,6 +337,10 @@ impl NebulaWorkspace {
                 };
                 let row = h_flex()
                 .id(("sidebar-tab", ix))
+                .debug_selector(move || format!("sidebar-tab-{ix}"))
+                .when_some(tooltip, |row, text| row.tooltip(move |window, cx| {
+                    tab_presentation::tooltip(text.clone(), window, cx)
+                }))
                 .group(hover_group.clone())
                 .relative()
                 // 旧壳 `layout.tabs[i]` 的命中矩形覆盖整条可见行。
@@ -517,10 +470,7 @@ impl NebulaWorkspace {
                         )
                     },
                 )
-                // 标签走终端字体 + 终端字号（旧壳 chrome 同源）。文本已按列
-                // 截断，这里只需要不换行；再叠一层 `truncate()` 会把省略号
-                // 自己裁掉（用户报的"直接截断"）。重命名中的那一行原地换成
-                // 输入框：点进去不该触发选中/拖拽，所以自己吃掉 mouse_down。
+                // GPUI truncates the actual shaped title within its flex column.
                 .child(match renaming {
                     Some(input) => div()
                         .flex_1()
@@ -550,8 +500,7 @@ impl NebulaWorkspace {
                         // 标签标题本身使用 Light；活动态只换前景/背景色，
                         // 不再靠更粗字重强调，避免选中行看起来突然加粗。
                         .font_weight(FontWeight::LIGHT)
-                        .whitespace_nowrap()
-                        .overflow_hidden()
+                        .truncate()
                         .child(title)
                         .into_any_element(),
                 })
@@ -574,11 +523,7 @@ impl NebulaWorkspace {
                     )
                 })
                 .child(
-                    div()
-                        .relative()
-                        .w(px(TAB_STATUS_SLOT_W))
-                        .h_full()
-                        .flex_shrink_0()
+                    Self::tab_status_slot(status_width)
                         .when_some(resting_status, |slot, status| {
                             slot.child(
                                 h_flex()
@@ -1046,7 +991,7 @@ impl NebulaWorkspace {
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
-        let label_px = settings.map(|settings| settings.base_font_size_px).unwrap_or(15.0);
+        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let TabPresentation { title, logo_image, program_glyph, pane_count, .. } =
             self.tab_presentation(self.active, cx, dark);
         slot.child(
@@ -1097,6 +1042,97 @@ impl NebulaWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpui-test-support")]
+    mod layout {
+        use super::*;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct StatusProbe {
+            label: SharedString,
+            font_size: f32,
+            mask: Rc<RefCell<Option<Bounds<Pixels>>>>,
+        }
+
+        impl Render for StatusProbe {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                let mask = self.mask.clone();
+                h_flex()
+                    .id("status-probe-row")
+                    .debug_selector(|| "status-probe-row".to_owned())
+                    .w(px(200.0))
+                    .h(px(TAB_ROW_H))
+                    .px_2()
+                    .overflow_hidden()
+                    .child(div().flex_1())
+                    .child(
+                        NebulaWorkspace::tab_status_slot(TAB_STATUS_SLOT_W)
+                            .id("status-probe-slot")
+                            .debug_selector(|| "status-probe-slot".to_owned())
+                            .child(
+                                h_flex().absolute().inset_0().justify_end().items_center().child(
+                                    NebulaWorkspace::shell_status_label(
+                                        self.label.clone(),
+                                        ".SystemUIFont".into(),
+                                        self.font_size,
+                                        gpui::black(),
+                                    )
+                                    .id("status-probe-label")
+                                    .debug_selector(|| "status-probe-label".to_owned()),
+                                ),
+                            )
+                            .child(
+                                canvas(
+                                    |_, _, _| {},
+                                    move |_, _, window, _| {
+                                        *mask.borrow_mut() = Some(window.content_mask().bounds);
+                                    },
+                                )
+                                .absolute()
+                                .size_full(),
+                            ),
+                    )
+            }
+        }
+
+        #[gpui::test]
+        fn short_shells_align_right_long_shells_fit_and_glyph_ink_keeps_row_padding(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            cx.update(gpui_component::init);
+            for font_size in [12.0, 15.0, 20.0] {
+                for label in ["sh", "debian", "a-very-long-shell-distribution-name"] {
+                    let mask = Rc::new(RefCell::new(None));
+                    let recorded = mask.clone();
+                    let (_, visual) = cx.add_window_view(|_, _| StatusProbe {
+                        label: label.into(),
+                        font_size,
+                        mask,
+                    });
+                    let row = visual.debug_bounds("status-probe-row").unwrap();
+                    let slot = visual.debug_bounds("status-probe-slot").unwrap();
+                    let text = visual.debug_bounds("status-probe-label").unwrap();
+                    assert!(text.size.width <= slot.size.width);
+                    assert_eq!(
+                        text.right(),
+                        slot.right(),
+                        "shell labels retain the 1.7 right edge"
+                    );
+                    if label == "sh" {
+                        assert!(text.size.width < slot.size.width, "short labels stay intrinsic");
+                    }
+                    let clip = recorded.borrow().expect("status paint mask");
+                    assert!(clip.right() > slot.right(), "glyph overhang must retain row padding");
+                    assert!(clip.right() <= row.right(), "the outer row still clips overflow");
+                }
+            }
+        }
+    }
 
     #[test]
     fn finished_dot_is_an_event_so_the_tab_you_are_watching_never_shows_it() {

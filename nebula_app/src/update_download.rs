@@ -8,18 +8,24 @@ use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
+
+mod cache;
+pub(crate) mod handoff;
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::i18n::{Message, UiLanguage};
 use crate::update_check::UpdateAsset;
 
 const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/Kuddev/pebrel/releases/download/";
 const LEGACY_RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/Kuddev/nebula/releases/download/";
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
+
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 static DOWNLOAD_SESSION: Mutex<Option<DownloadSession>> = Mutex::new(None);
 
@@ -29,16 +35,18 @@ pub(crate) enum DownloadStatus {
     Downloading { downloaded: u64, total: Option<u64> },
     Ready { path: PathBuf, bytes: u64 },
     Failed(String),
+    InstallFailed(String),
 }
 
 impl DownloadStatus {
     pub(crate) fn is_terminal(&self) -> bool {
-        matches!(self, Self::Ready { .. } | Self::Failed(_))
+        !matches!(self, Self::Downloading { .. })
     }
 }
 
 #[derive(Clone, Debug)]
 struct DownloadSession {
+    generation: u64,
     asset: UpdateAsset,
     status: DownloadStatus,
 }
@@ -55,9 +63,30 @@ pub(crate) fn status(asset: &UpdateAsset) -> DownloadStatus {
         .unwrap_or(DownloadStatus::Idle)
 }
 
-/// 将当前资产切换到下载态。`false` 表示同一资产已经在下载或已经校验完成。
-pub(crate) fn begin(asset: &UpdateAsset) -> Result<bool, String> {
+/// A task owns one generation. Cancellation or a new asset invalidates every
+/// progress/completion write from the old task, even for the same version.
+#[derive(Clone)]
+pub(crate) struct DownloadJob {
+    asset: UpdateAsset,
+    generation: u64,
+}
+
+impl DownloadJob {
+    pub(crate) fn is_current(&self) -> bool {
+        session().as_ref().is_some_and(|current| {
+            current.generation == self.generation && current.asset == self.asset
+        })
+    }
+}
+
+pub(crate) fn begin(asset: &UpdateAsset) -> Result<Option<DownloadJob>, String> {
     validate_asset(asset)?;
+    Ok(begin_download_session(asset))
+}
+
+/// Session ownership is independent of installer availability. The public
+/// entry point validates the platform and asset before reaching this state.
+fn begin_download_session(asset: &UpdateAsset) -> Option<DownloadJob> {
     let mut current = session();
     if let Some(existing) = current.as_ref().filter(|existing| existing.asset == *asset)
         && matches!(
@@ -65,29 +94,79 @@ pub(crate) fn begin(asset: &UpdateAsset) -> Result<bool, String> {
             DownloadStatus::Downloading { .. } | DownloadStatus::Ready { .. }
         )
     {
-        return Ok(false);
+        return None;
     }
+    let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
     *current = Some(DownloadSession {
+        generation,
         asset: asset.clone(),
         status: DownloadStatus::Downloading { downloaded: 0, total: asset.size },
     });
-    Ok(true)
+    Some(DownloadJob { asset: asset.clone(), generation })
 }
 
-/// 在后台执行器线程调用；进度直接写入进程内会话，UI 以低频轮询刷新。
-pub(crate) fn run(asset: UpdateAsset) {
-    let outcome = download_and_verify(&asset);
+pub(crate) fn cancel(asset: &UpdateAsset) {
     let mut current = session();
-    let Some(current) = current.as_mut().filter(|current| current.asset == asset) else {
+    if current.as_ref().is_some_and(|current| current.asset == *asset) {
+        *current = None;
+    }
+}
+
+/// Runs off the UI thread. Cached files are always reverified before Ready.
+pub(crate) fn run(job: DownloadJob, language: UiLanguage) {
+    if !job.is_current() {
         return;
-    };
-    current.status = match outcome {
+    }
+    let outcome = download_and_verify(&job.asset, language, Some(&job));
+    let status = match outcome {
         Ok((path, bytes)) => DownloadStatus::Ready { path, bytes },
         Err(error) => DownloadStatus::Failed(error),
     };
+    {
+        let mut current = session();
+        let Some(current) = current.as_mut().filter(|current| current.generation == job.generation)
+        else {
+            return;
+        };
+        current.status = status.clone();
+    }
+    // File sync can take seconds on a busy disk. UI status polling never waits
+    // for it; the cache writer rechecks ownership separately.
+    if let Err(error) = cache::save_job(&job, &status) {
+        log::warn!("Could not persist update download state: {error}");
+    }
 }
 
-pub(crate) fn launch_ready(asset: &UpdateAsset) -> Result<(), String> {
+/// Restore local update state without requiring a successful network check.
+/// Call once on a background executor; a user-started task always takes priority.
+pub(crate) fn hydrate() {
+    let cached = handoff::failed_update()
+        .map(|(asset, error)| (asset, DownloadStatus::InstallFailed(error)))
+        .or_else(cache::load);
+    let Some((asset, status)) = cached else {
+        return;
+    };
+    let mut current = session();
+    if current.is_none() {
+        *current = Some(DownloadSession {
+            generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
+            asset,
+            status,
+        });
+    }
+}
+
+pub(crate) fn cached_asset() -> Option<UpdateAsset> {
+    session().as_ref().map(|current| current.asset.clone())
+}
+
+/// A failure that happened after "later" is new information. Once its details
+/// were viewed/dismissed, normal reminder suppression applies again.
+pub(crate) fn installation_failure_unseen(prompt_state: &Path) -> bool {
+    handoff::failure_unseen(prompt_state) || cache::failure_unseen(prompt_state)
+}
+
+pub(crate) fn ready_path(asset: &UpdateAsset) -> Result<PathBuf, String> {
     let path = match status(asset) {
         DownloadStatus::Ready { path, .. } => path,
         _ => return Err("安装包尚未下载并通过校验".to_owned()),
@@ -100,30 +179,14 @@ pub(crate) fn launch_ready(asset: &UpdateAsset) -> Result<(), String> {
     // 弹窗等待用户确认期间被替换后仍直接执行。
     verify_file(&path, asset).map_err(|error| format!("安装前重新校验失败：{error}"))?;
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        Command::new(&path)
-            // 安装向导必须可见；这里只切断旧进程的标准流并让安装器独立存活。
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NEW_PROCESS_GROUP)
-            .spawn()
-            .map_err(|error| format!("无法启动更新安装包：{error}"))?;
-        Ok(())
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = path;
-        Err("当前平台暂不支持应用内安装更新".to_owned())
-    }
+    Ok(path)
 }
 
-fn download_and_verify(asset: &UpdateAsset) -> Result<(PathBuf, u64), String> {
+fn download_and_verify(
+    asset: &UpdateAsset,
+    language: UiLanguage,
+    job: Option<&DownloadJob>,
+) -> Result<(PathBuf, u64), String> {
     validate_asset(asset)?;
     let (partial_path, final_path) = download_paths(asset)?;
     let _download_lock = crate::atomic_file::try_lifetime_lock(&final_path)
@@ -136,7 +199,10 @@ fn download_and_verify(asset: &UpdateAsset) -> Result<(PathBuf, u64), String> {
         return Ok((final_path, bytes));
     }
 
-    let result = download_to_partial(asset, &partial_path).and_then(|bytes| {
+    let result = download_to_partial(asset, &partial_path, language, job).and_then(|bytes| {
+        if job.is_some_and(|job| !job.is_current()) {
+            return Err("Download cancelled".into());
+        }
         crate::atomic_file::replace(&partial_path, &final_path)
             .map_err(|error| format!("无法保存已校验的更新安装包：{error}"))?;
         Ok((final_path.clone(), bytes))
@@ -147,18 +213,43 @@ fn download_and_verify(asset: &UpdateAsset) -> Result<(PathBuf, u64), String> {
     result
 }
 
-fn download_to_partial(asset: &UpdateAsset, partial_path: &Path) -> Result<u64, String> {
-    let agent = ureq::config::Config::builder()
-        .timeout_global(Some(Duration::from_secs(15 * 60)))
-        .build()
-        .new_agent();
+fn download_to_partial(
+    asset: &UpdateAsset,
+    partial_path: &Path,
+    language: UiLanguage,
+    job: Option<&DownloadJob>,
+) -> Result<u64, String> {
+    #[cfg(feature = "update-test-source")]
+    if crate::update_check::test_source::origin()?.is_some() {
+        let agent = crate::update_check::test_source::agent(Duration::from_secs(15 * 60));
+        return download_with_job(asset, partial_path, language, &agent, job);
+    }
+    let agent = crate::update_proxy::agent(&asset.download_url, Duration::from_secs(15 * 60));
+    download_with_job(asset, partial_path, language, &agent, job)
+}
+
+fn download_with_job(
+    asset: &UpdateAsset,
+    partial_path: &Path,
+    language: UiLanguage,
+    agent: &ureq::Agent,
+    job: Option<&DownloadJob>,
+) -> Result<u64, String> {
+    if job.is_some_and(|job| !job.is_current()) {
+        return Err("Download cancelled".into());
+    }
+    let download_url = asset.download_url.clone();
+    #[cfg(feature = "update-test-source")]
+    let download_url = crate::update_check::test_source::origin()?
+        .map(|origin| format!("{origin}/{}", asset.name))
+        .unwrap_or(download_url);
     let mut response = agent
-        .get(&asset.download_url)
+        .get(&download_url)
         .header("User-Agent", "pebrel-updater")
         .header("Accept", "application/octet-stream")
         .header("Accept-Encoding", "identity")
         .call()
-        .map_err(|error| format!("下载安装包失败：{error}"))?;
+        .map_err(|error| network_error_text(error, language))?;
 
     let response_size = response.body().content_length();
     if let (Some(expected), Some(actual)) = (asset.size, response_size)
@@ -183,7 +274,11 @@ fn download_to_partial(asset: &UpdateAsset, partial_path: &Path) -> Result<u64, 
     let mut pe_header = Vec::with_capacity(2);
     let mut buffer = vec![0_u8; DOWNLOAD_CHUNK_BYTES];
     loop {
-        let read = reader.read(&mut buffer).map_err(|error| format!("读取安装包失败：{error}"))?;
+        if job.is_some_and(|job| !job.is_current()) {
+            return Err("Download cancelled".into());
+        }
+        let read =
+            reader.read(&mut buffer).map_err(|error| network_error_text(error.into(), language))?;
         if read == 0 {
             break;
         }
@@ -199,12 +294,53 @@ fn download_to_partial(asset: &UpdateAsset, partial_path: &Path) -> Result<u64, 
         output
             .write_all(&buffer[..read])
             .map_err(|error| format!("写入更新临时文件失败：{error}"))?;
-        set_progress(asset, downloaded, total);
+        set_progress(job, downloaded, total);
     }
     output.sync_all().map_err(|error| format!("同步更新临时文件失败：{error}"))?;
 
     verify_download(downloaded, &pe_header, hasher.finalize(), asset)?;
     Ok(downloaded)
+}
+
+#[cfg(test)]
+fn download_with_agent(
+    asset: &UpdateAsset,
+    partial_path: &Path,
+    language: UiLanguage,
+    agent: &ureq::Agent,
+) -> Result<u64, String> {
+    download_with_job(asset, partial_path, language, agent, None)
+}
+
+/// 网络错误用稳定类别解释；不把代理 URL、认证信息或 CDN 查询串拼进 UI。
+fn network_error_text(error: ureq::Error, language: UiLanguage) -> String {
+    use std::io::ErrorKind;
+    use ureq::Error;
+
+    let message = match error {
+        Error::HostNotFound => Message::UpdateDownloadDns,
+        Error::Tls(_) | Error::Rustls(_) | Error::TlsRequired => Message::UpdateDownloadTls,
+        Error::Timeout(_) => Message::UpdateDownloadTimeout,
+        Error::Io(ref io) if io.kind() == ErrorKind::ConnectionRefused => {
+            Message::UpdateDownloadRefused
+        },
+        Error::Io(ref io) if io.kind() == ErrorKind::TimedOut => Message::UpdateDownloadTimeout,
+        Error::Io(ref io)
+            if matches!(
+                io.kind(),
+                ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof | ErrorKind::BrokenPipe
+            ) =>
+        {
+            Message::UpdateDownloadInterrupted
+        },
+        Error::ConnectProxyFailed(_) | Error::InvalidProxyUrl => Message::UpdateDownloadProxy,
+        Error::StatusCode(status) => {
+            return language
+                .format(Message::UpdateDownloadHttp, &[("status", &status.to_string())]);
+        },
+        _ => Message::UpdateDownloadNetwork,
+    };
+    language.text(message).to_owned()
 }
 
 fn verify_file(path: &Path, asset: &UpdateAsset) -> Result<u64, String> {
@@ -255,9 +391,12 @@ fn verify_download(
     Ok(())
 }
 
-fn set_progress(asset: &UpdateAsset, downloaded: u64, total: Option<u64>) {
+fn set_progress(job: Option<&DownloadJob>, downloaded: u64, total: Option<u64>) {
+    let Some(job) = job else {
+        return;
+    };
     let mut current = session();
-    if let Some(current) = current.as_mut().filter(|current| current.asset == *asset) {
+    if let Some(current) = current.as_mut().filter(|current| current.generation == job.generation) {
         current.status = DownloadStatus::Downloading { downloaded, total };
     }
 }
@@ -316,6 +455,173 @@ mod tests {
         LEGACY_RELEASE_DOWNLOAD_PREFIX, MAX_INSTALLER_BYTES, RELEASE_DOWNLOAD_PREFIX, UpdateAsset,
         validate_windows_asset_contract, verify_download,
     };
+
+    #[test]
+    fn cancel_then_retry_rejects_old_progress_and_old_completion() {
+        let asset = branded_asset("Pebrel");
+        validate_windows_asset_contract(&asset).unwrap();
+        super::cancel(&asset);
+        let old = super::begin_download_session(&asset).unwrap();
+        assert!(
+            super::begin_download_session(&asset).is_none(),
+            "duplicate click owns no second task"
+        );
+        super::cancel(&asset);
+        let current = super::begin_download_session(&asset).unwrap();
+        super::set_progress(Some(&old), 100, Some(200));
+        super::run(old.clone(), crate::i18n::UiLanguage::EnUs);
+        assert!(!old.is_current());
+        assert!(current.is_current());
+        assert!(matches!(
+            super::status(&asset),
+            super::DownloadStatus::Downloading { downloaded: 0, .. }
+        ));
+        super::set_progress(Some(&current), 25, Some(200));
+        assert!(matches!(
+            super::status(&asset),
+            super::DownloadStatus::Downloading { downloaded: 25, .. }
+        ));
+        super::cancel(&asset);
+    }
+
+    #[test]
+    fn begin_preserves_platform_and_asset_validation() {
+        let mut asset = branded_asset("Pebrel");
+        assert_eq!(
+            super::validate_asset(&asset).is_ok(),
+            cfg!(all(windows, target_arch = "x86_64"))
+        );
+        if super::validate_asset(&asset).is_err() {
+            assert!(super::begin(&asset).is_err());
+        }
+        asset.download_url = "https://example.invalid/untrusted.exe".into();
+        assert!(super::begin(&asset).is_err(), "the session must not bypass asset validation");
+    }
+
+    #[test]
+    fn proxy_download_follows_redirect_and_verifies_the_streamed_installer() {
+        use crate::i18n::UiLanguage;
+        use crate::update_proxy::test_support::{Server, response};
+
+        let body = "MZinstaller over a proxy";
+        let server = Server::start(vec![
+            response("302 Found", "Location: http://cdn.update.invalid/installer\r\n", ""),
+            response("200 OK", "", body),
+        ]);
+        let mut asset = branded_asset("Pebrel");
+        asset.download_url = "http://release.update.invalid/asset".into();
+        asset.size = Some(body.len() as u64);
+        asset.sha256 = Some(
+            Sha256::digest(body.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect(),
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("installer.part");
+        let bytes = super::download_with_agent(&asset, &path, UiLanguage::EnUs, &server.agent(&[]))
+            .unwrap();
+        assert_eq!(bytes, body.len() as u64);
+        assert_eq!(std::fs::read(&path).unwrap(), body.as_bytes());
+        assert!(super::verify_file(&path, &asset).is_ok());
+        let requests = server.finish();
+        assert!(requests[0].0.starts_with("CONNECT release.update.invalid:80 "));
+        assert!(requests[1].0.starts_with("CONNECT cdn.update.invalid:80 "));
+        assert!(requests[1].1.to_ascii_lowercase().contains("accept-encoding: identity"));
+    }
+
+    #[test]
+    fn redirect_to_an_excluded_host_connects_directly() {
+        use crate::i18n::UiLanguage;
+        use crate::update_proxy::test_support::{Server, response};
+
+        let body = "MZdirect CDN fixture";
+        let origin = Server::start(vec![response("200 OK", "", body)]);
+        let proxy = Server::start(vec![response(
+            "302 Found",
+            &format!("Location: http://{}/installer\r\n", origin.address),
+            "",
+        )]);
+        let mut asset = branded_asset("Pebrel");
+        asset.download_url = "http://release.update.invalid/asset".into();
+        asset.size = Some(body.len() as u64);
+        asset.sha256 = Some(
+            Sha256::digest(body.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect(),
+        );
+        let directory = tempfile::tempdir().unwrap();
+        super::download_with_agent(
+            &asset,
+            &directory.path().join("installer.part"),
+            UiLanguage::EnUs,
+            &proxy.agent(&["127.0.0.1"]),
+        )
+        .unwrap();
+        assert!(proxy.finish()[0].0.starts_with("CONNECT release.update.invalid:80 "));
+        let requests = origin.finish();
+        assert!(requests[0].0.is_empty());
+        assert!(requests[0].1.starts_with("GET /installer "));
+    }
+
+    #[test]
+    fn proxy_download_rejects_http_errors_truncated_bodies_and_bad_digests() {
+        use crate::i18n::UiLanguage;
+        use crate::update_proxy::test_support::{Server, response};
+
+        for reply in [
+            response("503 Service Unavailable", "", "unavailable"),
+            "HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\nMZshort".into(),
+            response("200 OK", "", &format!("MZ{}", "x".repeat(40))),
+        ] {
+            let server = Server::start(vec![reply]);
+            let mut asset = branded_asset("Pebrel");
+            asset.download_url = "http://release.update.invalid/asset".into();
+            let directory = tempfile::tempdir().unwrap();
+            let result = super::download_with_agent(
+                &asset,
+                &directory.path().join("installer.part"),
+                UiLanguage::EnUs,
+                &server.agent(&[]),
+            );
+            assert!(result.is_err());
+            server.finish();
+        }
+    }
+
+    #[test]
+    fn network_failures_have_localized_actionable_messages_without_credentials() {
+        use crate::i18n::{Message, UiLanguage};
+        use std::io::{Error as IoError, ErrorKind};
+        use ureq::Error;
+
+        for (error, message) in [
+            (Error::HostNotFound, Message::UpdateDownloadDns),
+            (Error::Tls("invalid certificate"), Message::UpdateDownloadTls),
+            (
+                Error::Io(IoError::from(ErrorKind::ConnectionRefused)),
+                Message::UpdateDownloadRefused,
+            ),
+            (Error::Io(IoError::from(ErrorKind::TimedOut)), Message::UpdateDownloadTimeout),
+            (
+                Error::from(Error::Timeout(ureq::Timeout::Global).into_io()),
+                Message::UpdateDownloadTimeout,
+            ),
+            (
+                Error::Io(IoError::from(ErrorKind::UnexpectedEof)),
+                Message::UpdateDownloadInterrupted,
+            ),
+            (
+                Error::ConnectProxyFailed("http://user:secret@proxy.local".into()),
+                Message::UpdateDownloadProxy,
+            ),
+            (Error::ConnectionFailed, Message::UpdateDownloadNetwork),
+        ] {
+            let text = super::network_error_text(error, UiLanguage::ZhCn);
+            assert_eq!(text, UiLanguage::ZhCn.text(message));
+            assert!(!text.contains("secret"));
+            assert_ne!(UiLanguage::ZhCn.text(message), UiLanguage::EnUs.text(message));
+        }
+        assert!(
+            super::network_error_text(Error::StatusCode(503), UiLanguage::EnUs)
+                .contains("HTTP 503")
+        );
+    }
 
     fn asset(url: &str, sha256: Option<&str>) -> UpdateAsset {
         UpdateAsset {

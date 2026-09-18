@@ -11,7 +11,7 @@ config.scrolling = {
 
 -- 字体示例。取消下面各行开头的 `--` 即可启用。
 -- config.font = {
---     normal = { family = 'Maple Mono NF CN', style = 'Regular' },
+--     normal = { family = 'Maple Mono Normal NF CN', style = 'Regular' },
 --     size = 13.0,
 --     builtin_box_drawing = true,
 -- }

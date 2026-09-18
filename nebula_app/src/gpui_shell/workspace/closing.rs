@@ -87,10 +87,26 @@ impl NebulaWorkspace {
         let panes = self.prepare_session_save(cx);
         let handle = self.window_handle;
         cx.spawn(async move |this, cx| {
-            wait_for_session_ids(&panes, cx).await;
+            let ready = wait_for_session_ids(&panes, cx).await;
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |workspace, cx| {
-                    workspace.save_clean_window_session(cx);
+                    if !ready || workspace.save_clean_window_session(cx).is_err() {
+                        workspace.window_close_pending = false;
+                        let language = crate::gpui_shell::config::ui_language(cx);
+                        let message = if ready {
+                            crate::i18n::Message::SessionSaveFailed
+                        } else {
+                            crate::i18n::Message::SessionIdentityPending
+                        };
+                        crate::gpui_shell::toast::banner(
+                            window,
+                            cx,
+                            crate::display::ToastKind::Warning,
+                            language.text(message),
+                        );
+                        cx.notify();
+                        return;
+                    }
                     window.remove_window();
                 });
             });
@@ -119,13 +135,19 @@ impl NebulaWorkspace {
     }
 }
 
-pub(super) async fn wait_for_session_ids(panes: &[Entity<TerminalView>], cx: &mut gpui::AsyncApp) {
+pub(super) async fn wait_for_session_ids(
+    panes: &[Entity<TerminalView>],
+    cx: &mut gpui::AsyncApp,
+) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         let pending =
             cx.update(|cx| panes.iter().any(|pane| pane.read(cx).ai_session_save_pending()));
-        if !pending || std::time::Instant::now() >= deadline {
-            break;
+        if !pending {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
         }
         cx.background_executor().timer(Duration::from_millis(25)).await;
     }

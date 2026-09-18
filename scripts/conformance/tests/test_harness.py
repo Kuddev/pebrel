@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 from pathlib import Path
 
@@ -29,6 +29,47 @@ from conformance.harness import (  # noqa: E402
     SkipCase,
 )
 from conformance.macos_launch import capture_screenshot
+
+
+class BootReadinessTests(unittest.TestCase):
+    def context(self, outputs):
+        from conformance.harness import ConformanceContext, PROTOCOL_NAME, PROTOCOL_VERSION
+
+        pane = {"id": 1, "cwd": r"C:\fixture"}
+        tab = {"panes": [pane]}
+        snapshot = {"protocol_version": PROTOCOL_VERSION, "windows": [{"tabs": [tab]}]}
+        context = SimpleNamespace(
+            snapshot=lambda: snapshot, refresh_targets=lambda value: None,
+            window_id=1, pane_id=1, startup_ms=10, startup_timeout=4,
+            description={"protocol": PROTOCOL_NAME, "protocol_version": PROTOCOL_VERSION,
+                         "capabilities": ["runtime.snapshot", "window.close", "tab.new",
+                                          "tab.rename", "pane.split", "pane.resize", "pane.prompt",
+                                          "pane.paste", "pane.read", "pane.procs", "pane.send_key"]},
+            detect_shell=lambda: "powershell", api=lambda *args: {"processes": [{"pid": 42}]},
+            tab_for_pane=lambda *args: tab, read=Mock(side_effect=outputs),
+        )
+        context.poll = ConformanceContext.poll.__get__(context)
+        return context
+
+    def test_runtime_discovery_alone_does_not_finish_cold_shell_boot(self):
+        from conformance.cases.boot import run
+
+        context = self.context([{"text": ""}, {"text": " \n"}, {"text": "PS C:\\fixture> "}])
+        with patch("time.sleep"), patch("time.monotonic", side_effect=range(20)):
+            result = run(context)
+        self.assertEqual(context.read.call_count, 3)
+        self.assertTrue(result["default_tab_present"])
+        self.assertGreater(result["startup_ms"], context.startup_ms)
+
+    def test_silent_shell_fails_boot_instead_of_being_marked_ready(self):
+        from conformance.cases.boot import run
+
+        context = self.context(None)
+        context.read.side_effect = None
+        context.read.return_value = {"text": ""}
+        with patch("time.sleep"), patch("time.monotonic", side_effect=range(20)):
+            with self.assertRaisesRegex(ConformanceError, "did not render initial output"):
+                run(context)
 
 
 class NormalizationTests(unittest.TestCase):

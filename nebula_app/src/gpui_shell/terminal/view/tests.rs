@@ -1,8 +1,8 @@
 use gpui::{FontStyle, FontWeight};
 
 use super::{
-    TermMode, TerminalView, cursor_blink_allowed, mono_font, paste_line_count,
-    paste_needs_confirmation, restart_cursor_blink_phase, selection_scroll_lines,
+    TermMode, cursor_blink_allowed, paste_line_count, paste_needs_confirmation,
+    restart_cursor_blink_phase, selection_scroll_lines, typography,
 };
 
 #[test]
@@ -84,15 +84,18 @@ fn paste_confirmation_follows_execution_risk_not_volume() {
 
 #[test]
 fn terminal_font_explicitly_enables_maple_ligatures() {
-    let font =
-        mono_font(crate::font_install::REQUIRED_FONT_FAMILY, FontWeight::NORMAL, FontStyle::Normal);
+    let font = typography::mono_font(
+        crate::font_install::REQUIRED_FONT_FAMILY,
+        FontWeight::NORMAL,
+        FontStyle::Normal,
+    );
     assert_eq!(font.features.tag_value_list(), &[("calt".to_owned(), 1)]);
 }
 
 #[test]
 fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
     assert_eq!(
-        f32::from(TerminalView::effective_cell_width(
+        f32::from(typography::effective_cell_width(
             10.8,
             nebula_settings::CellWidthModeName::Compact,
             1.0,
@@ -101,7 +104,7 @@ fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
         10.0
     );
     assert_eq!(
-        f32::from(TerminalView::effective_cell_width(
+        f32::from(typography::effective_cell_width(
             10.8,
             nebula_settings::CellWidthModeName::Relaxed,
             1.0,
@@ -110,7 +113,7 @@ fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
         11.0
     );
 
-    let compact = f32::from(TerminalView::effective_cell_width(
+    let compact = f32::from(typography::effective_cell_width(
         9.2,
         nebula_settings::CellWidthModeName::Compact,
         1.5,
@@ -118,7 +121,7 @@ fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
     ));
     assert!((compact - 13.0 / 1.5).abs() < f32::EPSILON);
 
-    let relaxed = f32::from(TerminalView::effective_cell_width(
+    let relaxed = f32::from(typography::effective_cell_width(
         9.2,
         nebula_settings::CellWidthModeName::Relaxed,
         1.5,
@@ -131,6 +134,25 @@ fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
 fn line_height_uses_shaped_metrics_and_device_pixel_offset() {
     // Maple's hhea metrics are 1.32em. At 150% DPI, the legacy 4px
     // Windows offset yields floor(15 * 1.32 * 1.5 + 4) = 33 device px.
-    let height = TerminalView::effective_line_height(15.0 * 1.32, 4.0, 1.5);
+    let height = typography::effective_line_height(15.0 * 1.32, 4.0, 1.5);
     assert!((f32::from(height) - 22.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn theme_line_height_none_preserves_shaped_metrics() {
+    let natural = 15.0 * 1.32;
+    let legacy = typography::effective_line_height(natural, 4.0, 1.5);
+    let themed = typography::effective_line_height_with_theme(natural, 15.0, None, 4.0, 1.5);
+
+    assert_eq!(themed, legacy);
+}
+
+#[test]
+fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
+    // 15px * 1.5 = 22.5 logical px; at 150% DPI with a 4px device offset,
+    // floor(22.5 * 1.5 + 4) = 37 device px, or 37 / 1.5 logical px.
+    let height =
+        typography::effective_line_height_with_theme(15.0 * 1.32, 15.0, Some(1.5), 4.0, 1.5);
+
+    assert!((f32::from(height) - 37.0 / 1.5).abs() < f32::EPSILON);
 }

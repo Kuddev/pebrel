@@ -118,11 +118,7 @@ pub(crate) fn run_wsl_find_lenient(
 ) -> Option<(Vec<u8>, bool)> {
     let mut command = std::process::Command::new("wsl.exe");
     command.args(["-d", distro, "--", "find"]).args(args);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::platform::process::hidden_command(&mut command);
     let output = match command_output_with_timeout(command, Some(WSL_COMMAND_TIMEOUT)) {
         Ok(output) => output,
         Err(error) => {

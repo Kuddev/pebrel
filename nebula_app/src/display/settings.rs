@@ -1106,14 +1106,7 @@ pub(super) fn cursor_shape_settings_value(shape: CursorShape) -> &'static str {
 }
 
 pub(crate) fn parse_hex_rgb(value: &str) -> Option<Rgb> {
-    let hex = value.strip_prefix('#').unwrap_or(value);
-    if hex.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(Rgb::new(r, g, b))
+    nebula_settings::parse_hex_rgb(value).map(|[r, g, b]| Rgb::new(r, g, b))
 }
 
 fn format_hex_rgb(rgb: Rgb) -> String {

@@ -13,6 +13,7 @@ pub(crate) mod ai_session_identity;
 pub mod capabilities;
 pub mod credentials;
 pub mod dirs;
+pub(crate) mod elevation;
 pub(crate) mod environment;
 pub(crate) mod file_drag;
 pub mod file_manager;
@@ -24,9 +25,13 @@ pub mod fonts;
 #[cfg(all(windows, feature = "gpui-shell"))]
 pub(crate) mod keyboard;
 pub mod notifications;
+pub(crate) mod pi_session;
+pub(crate) mod process;
+pub(crate) mod process_snapshot;
 pub mod shell;
 pub mod shell_integration;
 pub mod startup;
+pub(crate) mod update_installation;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod window_chrome;
 

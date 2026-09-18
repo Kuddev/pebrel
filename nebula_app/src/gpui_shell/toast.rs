@@ -411,7 +411,7 @@ mod tests {
         fn initialize(cx: &mut TestAppContext, enabled: bool) {
             cx.update(|cx| {
                 gpui_component::init(cx);
-                let mut settings = Settings::load(false);
+                let mut settings = Settings::load(nebula_settings::ThemeName::Nord);
                 settings.ai_toasts = enabled;
                 cx.set_global(settings);
                 init(cx);
