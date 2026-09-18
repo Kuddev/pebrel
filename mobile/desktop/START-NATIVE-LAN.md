@@ -1,4 +1,4 @@
-# Pebrel 0.4.5 手机连接测试 / Mobile connection preview
+# Pebrel 0.4.6 手机连接测试 / Mobile connection preview
 
 ## 局域网测试
 
@@ -14,14 +14,14 @@
 
 关闭设置页不会断开已启动的连接；**停止连接**会断开手机，但不会结束电脑任务。
 二维码包含连接凭据，请勿发送截图、公开二维码或分享系统凭据。
-此次局域网继续兼容 Android 0.4.3；请覆盖安装配套 0.4.5 APK 测试输入区修复。
+此次局域网继续兼容 Android 0.4.3；请覆盖安装配套 0.4.6 APK 测试输入区修复。
 PC 与 SSH 默认使用紧凑快捷栏，点击终端即可输入；气泡按钮切到编辑卡片，关闭按钮切回。
 PC 必须已授权终端操作；只读连接会显示原因。电脑配色修复需要本轮电脑包与 APK 配套。
 
 ## 中转测试边界
 
 设置内同时有中转服务器入口，可以导入原生 v2 服务导出的连接配置，生成原生二维码。
-新 v2 链路使用端到端加密，建议配套 0.4.5 手机构建；旧 0.4.3 不支持。
+新 v2 链路使用端到端加密，建议配套 0.4.6 手机构建；旧 0.4.3 不支持。
 二维码 5 分钟有效且只使用一次；配对后使用单独的设备凭据重新连接。
 协议失败不自动降级。显式导入旧 v1 配置仍是旧的 TLS 分段加密，服务器可见内容。
 
@@ -61,7 +61,7 @@ No Node.js, Docker, browser or pairing command is required on the computer.
 The launcher uses an isolated `preview-profile`. Closing Settings preserves an
 established link; Stop connection disconnects the phone without ending PC tasks.
 Do not share the QR or credentials. LAN remains compatible with Android 0.4.3;
-the paired 0.4.5 build unifies compact/direct input and the optional editor for PC
+the paired 0.4.6 build unifies compact/direct input and the optional editor for PC
 and SSH. Tap the terminal to type when control is authorized. Pair both new builds
 to receive the computer's effective terminal palette.
 
