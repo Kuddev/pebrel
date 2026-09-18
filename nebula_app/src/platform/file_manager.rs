@@ -4,7 +4,14 @@ use std::process::{Command, Stdio};
 use super::Platform;
 
 pub fn open(path: &Path) -> std::io::Result<()> {
-    open_command(Platform::current(), path).spawn().map(|_| ())
+    let res = open_command(Platform::current(), path).spawn().map(|_| ());
+    #[cfg(target_os = "linux")]
+    if res.is_err() {
+        if command("gio").arg("open").arg(path).spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    res
 }
 
 pub fn reveal(path: &Path) -> std::io::Result<()> {

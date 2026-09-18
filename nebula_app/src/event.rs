@@ -2123,26 +2123,18 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         match &hint.action() {
             // Launch an external program.
             HintAction::Command(command) => {
-                // On Windows, a `file://` OSC 8 link (our clickable `ls`) is
-                // opened via `explorer.exe` with a translated native path. This
-                // sidesteps `cmd /c start` mangling spaces/unicode and lets
-                // WSL/MSYS posix paths (`/mnt/c/…`, `/d/…`) actually resolve.
-                #[cfg(windows)]
-                if let Some(path) = crate::file_uri::file_uri_to_local_path(&text) {
-                    crate::display::nebula_link_log(format!(
-                        "trigger_hint file-uri explorer path={path:?} (from {text:?})"
-                    ));
-                    self.spawn_daemon("explorer.exe", &[path.as_os_str()]);
-                    return;
+                let language = self.display.ui_language();
+                match crate::file_uri::handle_legacy_hint_command(&text, command.args(), language) {
+                    crate::file_uri::LegacyHintOutcome::Handled => {},
+                    crate::file_uri::LegacyHintOutcome::SpawnCommand(args) => {
+                        let arg_refs: Vec<&std::ffi::OsStr> =
+                            args.iter().map(|s| s.as_os_str()).collect();
+                        self.spawn_daemon(command.program(), &arg_refs);
+                    },
+                    crate::file_uri::LegacyHintOutcome::Failed(err) => {
+                        self.display.push_toast(err, ToastKind::Warning);
+                    },
                 }
-
-                let mut args = command.args().to_vec();
-                args.push(text.into());
-                crate::display::nebula_link_log(format!(
-                    "trigger_hint spawn program={:?} args={args:?}",
-                    command.program()
-                ));
-                self.spawn_daemon(command.program(), &args);
             },
             // Copy the text to the clipboard.
             HintAction::Action(HintInternalAction::Copy) => {
