@@ -93,10 +93,10 @@ fn read_frame(reader: &mut impl BufRead, limit: usize) -> io::Result<Option<Vec<
 
 fn connect(endpoint: &Endpoint, request: &ApiRequest) -> io::Result<TcpStream> {
     let mut stream = TcpStream::connect_timeout(&endpoint_addr(endpoint), CONNECT_TIMEOUT)?;
+    stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(COMMAND_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    serde_json::to_writer(&mut stream, request).map_err(io::Error::other)?;
-    stream.write_all(b"\n")?;
+    write_json_line(&mut stream, request)?;
     stream.shutdown(Shutdown::Write)?;
     Ok(stream)
 }
@@ -188,6 +188,7 @@ pub(crate) struct BridgeSession {
     stopped: Arc<AtomicBool>,
     subscription: Option<Subscription>,
     allow_input: bool,
+    screen: super::mobile_screen::ScreenBaseline,
 }
 
 impl BridgeSession {
@@ -202,20 +203,27 @@ impl BridgeSession {
                 "capabilities": {
                     "snapshot": true, "read_tail": true, "state_subscription": true,
                     "input": allow_input, "exclusive_input": false, "replay_notifications": false,
-                    "terminal_grid_stream": false
+                    "terminal_grid_stream": false, "screen_delta": true
                 },
                 "max_request_bytes": MAX_BRIDGE_REQUEST,
                 "max_frame_bytes": MAX_BRIDGE_FRAME
             }),
         )?;
-        Ok(Self { endpoint, output, stopped, subscription: None, allow_input })
+        Ok(Self {
+            endpoint,
+            output,
+            stopped,
+            subscription: None,
+            allow_input,
+            screen: Default::default(),
+        })
     }
 
     pub(crate) fn request(&mut self, frame: &[u8]) -> io::Result<()> {
         if self.stopped.load(Ordering::Acquire) || frame.len() > MAX_BRIDGE_REQUEST {
             return Err(io::Error::other("mobile_connection_closed"));
         }
-        let Self { endpoint, output, stopped, subscription, allow_input } = self;
+        let Self { endpoint, output, stopped, subscription, allow_input, screen } = self;
         let request: Request = match serde_json::from_slice(&frame) {
             Ok(request) => request,
             Err(_) => {
@@ -250,6 +258,16 @@ impl BridgeSession {
         }
         let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
         local.id = request.id.clone();
+        // This extension belongs to the link, not the resident Runtime API.
+        let baseline = if local.method == "pane.read" && local.params["screen"] == true {
+            local
+                .params
+                .as_object_mut()
+                .and_then(|params| params.remove("screen_since"))
+                .and_then(|value| value.as_u64())
+        } else {
+            None
+        };
         // Never rediscover the endpoint mid-channel: a runtime replacement
         // must cause disconnect, not retarget a queued prompt to a new pane.
         let response = (|| -> io::Result<ApiResponse> {
@@ -259,7 +277,14 @@ impl BridgeSession {
             serde_json::from_slice(&frame).map_err(io::Error::other)
         })();
         match response {
-            Ok(response) => write_frame(&output, &response)?,
+            Ok(mut response) => {
+                if response.ok
+                    && let (Some(result), Some(sequence)) = (&mut response.result, baseline)
+                {
+                    screen.encode(result, sequence);
+                }
+                write_frame(&output, &response)?;
+            },
             Err(_) => {
                 write_frame(
                     &output,

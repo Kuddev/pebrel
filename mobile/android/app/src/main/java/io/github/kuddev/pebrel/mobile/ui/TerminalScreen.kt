@@ -90,12 +90,11 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     var focused by rememberSaveable(identity) { mutableStateOf(false) }
     var showPermission by remember(identity) { mutableStateOf(false) }
     val enabled = desktop.allowInput && desktop.status == "ready"
-    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val input = remember(identity, enabled) { repository.desktopInput(desktop.id, pane) }
     DisposableEffect(input) { onDispose { input.close() } }
-    LaunchedEffect(identity, desktop.status, direct, keyboardVisible) {
+    LaunchedEffect(identity, desktop.status) {
         if (desktop.status == "ready") lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (true) { repository.readDesktop(desktop.id, pane); delay(if (enabled && direct && keyboardVisible) 250 else 2000) }
+            repository.watchDesktop(desktop.id, pane)
         }
     }
     DisposableEffect(identity) { onDispose { repository.leaveDesktopPane() } }

@@ -888,7 +888,7 @@ impl NebulaWorkspace {
     pub fn new(
         window: &mut Window,
         ai_events: Option<std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>>,
-        shell_events: Option<std::sync::mpsc::Receiver<crate::gpui_shell::GpuiShellEvent>>,
+        shell_events: Option<crate::gpui_shell::events::Receiver>,
         runtime_window_id: u64,
         runtime_hub: crate::runtime_api::RuntimeHub,
         startup: windowing::WorkspaceStartup,

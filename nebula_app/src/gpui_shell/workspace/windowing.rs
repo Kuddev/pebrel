@@ -261,7 +261,7 @@ fn save_after_window_closed(cx: &mut App) {
 pub(crate) fn open_initial_window(
     cx: &mut App,
     ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
-    shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
+    shell_events: crate::gpui_shell::events::Receiver,
     initial_cwd: Option<PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
 ) {
@@ -475,7 +475,7 @@ fn open_workspace_window(
     cx: &mut App,
     startup: WorkspaceStartup,
     ai_events: Option<std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>>,
-    shell_events: Option<std::sync::mpsc::Receiver<GpuiShellEvent>>,
+    shell_events: Option<crate::gpui_shell::events::Receiver>,
     focus: bool,
     role: WindowRole,
 ) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {

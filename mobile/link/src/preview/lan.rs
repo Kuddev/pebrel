@@ -140,6 +140,7 @@ pub async fn start_lan(
                 _ = connections.join_next(), if !connections.is_empty() => {},
                 accepted = listener.accept() => {
                     let Ok((stream, _)) = accepted else { set_status(&status, Status::Failed); break };
+                    if stream.set_nodelay(true).is_err() { continue; }
                     let Ok(permit) = admission.clone().try_acquire_owned() else { continue };
                     let (acceptor, phone, factory, shutdown, status, path, hash) =
                         (acceptor.clone(),phone.clone(),factory.clone(),shutdown.clone(),status.clone(),path.clone(),hash.clone());

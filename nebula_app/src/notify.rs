@@ -52,19 +52,19 @@ pub use crate::platform::notifications::notify_test;
 use crate::platform::notifications::{ToastActivation, toast_clickable};
 
 #[cfg(feature = "gpui-shell")]
-static GPUI_ACTIVATION: OnceLock<std::sync::mpsc::Sender<crate::gpui_shell::GpuiShellEvent>> =
+static GPUI_ACTIVATION: OnceLock<crate::gpui_shell::events::Sender> =
     OnceLock::new();
 
 #[cfg(feature = "gpui-shell")]
 pub(crate) fn init_gpui_activation(
-    sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiShellEvent>,
+    sender: crate::gpui_shell::events::Sender,
 ) {
     let _ = GPUI_ACTIVATION.set(sender);
 }
 
 #[cfg(feature = "gpui-shell")]
 fn gpui_activation(
-    sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiShellEvent>,
+    sender: crate::gpui_shell::events::Sender,
     pane_id: Option<u64>,
 ) -> ToastActivation {
     Arc::new(move || {
@@ -452,7 +452,7 @@ mod delivery_tests {
     fn activation_preserves_exact_pane_and_generic_application_targets() {
         use crate::gpui_shell::GpuiShellEvent;
 
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, mut receiver) = crate::gpui_shell::events::channel();
         let pane_activation = gpui_activation(sender.clone(), Some(42));
         let generic_activation = gpui_activation(sender, None);
         pane_activation();

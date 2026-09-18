@@ -3,6 +3,7 @@ package io.github.kuddev.pebrel.mobile.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -35,9 +36,11 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
     var servicePort by remember { mutableStateOf("443") }
     var advertisedAddress by remember { mutableStateOf("") }
     var advanced by remember { mutableStateOf(false) }
+    var manual by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<RelayServiceResult?>(null) }
     var stage by remember { mutableStateOf<String?>(null) }
+    var installProgress by remember { mutableStateOf<RelayInstallProgress?>(null) }
     var failure by remember { mutableStateOf<Int?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
     var running by remember { mutableStateOf(false) }
@@ -73,6 +76,7 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
         password = ""
         failure = null
         stage = "connecting"
+        installProgress = if (action == RelayServiceAction.INSTALL) RelayInstallProgress() else null
         running = true
         val token = Any()
         operation = token
@@ -84,8 +88,12 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
                 result = NativeRelayDeployment.execute(context, selected, checkNotNull(secret),
                     { h, fingerprint -> repository.verifySshOperation(owner, h, fingerprint) },
                     action, relayAddress, port, removeConfiguration) { update ->
-                    scope.launch { if (operation === token) stage = update }
+                    scope.launch { if (operation === token) {
+                        stage = update.stage
+                        installProgress = installProgress?.advance(update)
+                    } }
                 }
+                installProgress = installProgress?.copy(finished = true)
                 stage = when {
                     result?.state?.ready == true -> "ready"
                     result?.state?.running == true -> "not_ready"
@@ -93,13 +101,22 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
                     action == RelayServiceAction.UNINSTALL -> "uninstalled"
                     else -> "not_installed"
                 }
-            } catch (_: TimeoutCancellationException) { failure = R.string.ssh_error_timeout; stage = "failed" }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { failure = serviceErrorText(error); stage = "failed" }
+            } catch (_: TimeoutCancellationException) {
+                failure = R.string.ssh_error_timeout; stage = "failed"
+                installProgress = installProgress?.copy(failed = true)
+            }
+            catch (cancelled: CancellationException) {
+                installProgress = installProgress?.copy(cancelled = true)
+                throw cancelled
+            }
+            catch (error: Exception) {
+                failure = serviceErrorText(error); stage = "failed"
+                installProgress = installProgress?.copy(failed = true)
+            }
             finally { secret?.fill('\u0000'); operation = null; running = false; job = null }
         }
     }
-    fun resetStatus() { result = null; stage = null; failure = null; exportFeedback = null }
+    fun resetStatus() { result = null; stage = null; installProgress = null; failure = null; exportFeedback = null }
     ConnectionForm(stringResource(R.string.pair_deploy_server), onCancel) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             HelperText(stringResource(R.string.service_intro))
@@ -127,8 +144,8 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(stringResource(R.string.service_title))
                     Text(stringResource(serviceStageText(stage)), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    failure?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
+                    if (busy && installProgress == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (installProgress == null) failure?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
                     if (!busy) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button({ execute(RelayServiceAction.INSTALL) }, enabled = valid) { Text(stringResource(R.string.service_install)) }
@@ -153,6 +170,17 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
             }
             exportFeedback?.let { HelperText(stringResource(it)) }
             if (busy) TextButton({ job?.cancel(); stage = "cancelled" }) { Text(stringResource(R.string.cancel)) }
+            installProgress?.let { RelayInstallSteps(it, failure) }
+            if (!busy) TextButton({ manual = !manual }) { Text(stringResource(R.string.service_manual_commands)) }
+            if (manual) {
+                HelperText(stringResource(R.string.service_manual_hint))
+                val relayAddress = runCatching {
+                    NativeRelayDeployment.validatedAddress(advertisedAddress.ifBlank { host?.address ?: endpoint?.address.orEmpty() })
+                }.getOrDefault("SERVER_IP")
+                val relayPort = servicePort.toIntOrNull()?.takeIf { it in 1..65535 }?.toString() ?: "PORT"
+                SelectionContainer { Text("sh install.sh '$relayAddress' $relayPort\n/opt/pebrel-relay/pebrel-relay service-status",
+                    fontFamily = LocalTerminalFont.current, style = MaterialTheme.typography.bodySmall) }
+            }
         }
     }
     if (choosing) AlertDialog(onDismissRequest = { choosing = false }, title = { Text(stringResource(R.string.deploy_choose_host)) },
@@ -169,7 +197,9 @@ internal fun serviceStageText(stage: String?): Int = when (stage) {
     "failed" -> R.string.service_operation_failed
     "connecting" -> R.string.establishing_connection
     "checking" -> R.string.deploy_prerequisites
-    "uploading", "installing" -> R.string.service_uploading
+    "uploading" -> R.string.service_uploading
+    "uploaded" -> R.string.service_uploaded
+    "installing" -> R.string.service_installing
     "initializing" -> R.string.deploy_initializing
     "starting" -> R.string.service_starting
     "verifying" -> R.string.service_verifying

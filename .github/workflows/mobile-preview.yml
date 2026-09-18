@@ -73,6 +73,7 @@ jobs:
             -e PEBREL_DISPOSABLE_OPENRC_TEST=1 \
             -v "$PWD/target/${{ matrix.target }}/release/pebrel-relay:/fixture/pebrel-relay:ro" \
             -v "$PWD/mobile/tools/test_native_relay_openrc.sh:/fixture/test.sh:ro" \
+            -v "$PWD/mobile/relay-native/install.sh:/fixture/install.sh:ro" \
             alpine:3.22.2 sh /fixture/test.sh
       - name: Package verified relay executable
         run: python3 mobile/tools/package_native_relay.py --binary target/${{ matrix.target }}/release/pebrel-relay --output relay-native --arch ${{ matrix.arch }} --commit "$GITHUB_SHA"
@@ -108,6 +109,8 @@ jobs:
       - name: Prepare pinned Windows console runtime
         shell: pwsh
         run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+      - name: Verify targeted mobile latency contracts
+        run: cargo test --locked --release -p nebula --bin pebrel --features gpui-shell mobile_latency
       - name: Build and package the GPUI desktop
         shell: pwsh
         run: |

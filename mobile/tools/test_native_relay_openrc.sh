@@ -13,8 +13,14 @@ umask 077
 binary=/fixture/pebrel-relay
 sha=$(sha256sum "$binary")
 sha=${sha%% *}
+manual_dir=$(mktemp -d /tmp/pebrel-manual-test.XXXXXXXX)
+arch=$(uname -m)
+mkdir "$manual_dir/$arch"
+cp "$binary" "$manual_dir/$arch/pebrel-relay"
+printf '%s  pebrel-relay\n' "$sha" > "$manual_dir/$arch/SHA256SUMS"
+cp /fixture/install.sh "$manual_dir/install.sh"
 install_relay() {
-    "$binary" service-install --source "$binary" --sha256 "$sha" --address 127.0.0.1 --port 18443
+    sh "$manual_dir/install.sh" 127.0.0.1 18443
 }
 cleanup() {
     if [ -f /opt/pebrel-relay/installation.json ]; then

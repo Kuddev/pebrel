@@ -51,18 +51,11 @@ pub(super) fn residency_close_action(
 
 impl NebulaWorkspace {
     pub(super) fn start_shell_event_pump(
-        rx: std::sync::mpsc::Receiver<GpuiShellEvent>,
+        mut rx: crate::gpui_shell::events::Receiver,
         cx: &mut Context<Self>,
     ) {
-        let executor = cx.background_executor().clone();
         cx.spawn(async move |_this, cx| {
-            loop {
-                executor.timer(Duration::from_millis(120)).await;
-                let mut events = Vec::new();
-                while let Ok(event) = rx.try_recv() {
-                    events.push(event);
-                }
-
+            while let Some(events) = rx.next_batch().await {
                 cx.update(|cx| {
                     crate::gpui_shell::workspace::windowing::dispatch_shell_events(events, cx)
                 });

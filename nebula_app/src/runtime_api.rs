@@ -9,6 +9,7 @@ mod agent_api;
 mod cli;
 mod command;
 pub(crate) mod mobile_bridge;
+mod mobile_screen;
 mod orchestrate;
 mod server;
 mod transport;

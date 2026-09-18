@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.InputStream
+import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.Base64
 
@@ -31,26 +32,27 @@ object NativeRelayDeployment {
         context: Context, host: HostProfile, password: CharArray,
         verify: (HostProfile, String) -> Boolean, action: RelayServiceAction,
         address: String = host.address, port: Int = 443, purge: Boolean = false,
-        progress: (String) -> Unit,
+        progress: (RelayServiceProgress) -> Unit,
     ): RelayServiceResult = withTimeout(180_000) {
         require(port in 1..65535)
         val endpoint = validatedAddress(address)
+        val stage: (String) -> Unit = { progress(RelayServiceProgress(it)) }
         DeploymentSsh(host, password, verify).use { ssh ->
-            progress("connecting")
-            val preflight = command(ssh, preflightCommand(), progress = progress)
+            stage("connecting")
+            val preflight = command(ssh, preflightCommand(), progress = stage, connected = { stage("checking") })
             val arch = preflight.last().getString("arch")
             val state = command(ssh, """
                 set -eu
                 if [ -L $BINARY ]; then printf '{"error":"managed_file_changed"}\n'; exit 1; fi
                 if [ -x $BINARY ]; then $BINARY service-status
                 else printf '{"installed":false,"running":false,"ready":false,"configuration_retained":false}\n'; fi
-            """.trimIndent(), progress = progress).last()
+            """.trimIndent(), progress = stage).last()
             if (action == RelayServiceAction.STATUS) return@use RelayServiceResult(parseState(state))
             if (action == RelayServiceAction.INSTALL) {
-                progress("checking")
-                val binary = loadBinary(context, arch)
-                val sha = digest(binary)
-                val encoded = Base64.getEncoder().encode(binary)
+                val (sha, encoded) = withContext(Dispatchers.IO) {
+                    val binary = loadBinary(context, arch)
+                    digest(binary) to Base64.getEncoder().encode(binary)
+                }
                 // The random directory is created by this command, mode 0700.
                 // Cleanup names just its one file and then its empty directory.
                 val install = """
@@ -59,15 +61,18 @@ object NativeRelayDeployment {
                     stage=${'$'}(mktemp -d /tmp/pebrel-relay.XXXXXXXX)
                     trap 'rm -f "${'$'}stage/pebrel-relay"; rmdir "${'$'}stage"' EXIT
                     head -c ${encoded.size} | base64 -d > "${'$'}stage/pebrel-relay"
-                    printf '%s  %s\n' '$sha' "${'$'}stage/pebrel-relay" | sha256sum -c - >/dev/null
+                    printf '{"event":"progress","stage":"installing"}\n'
+                    printf '%s  %s\n' '$sha' "${'$'}stage/pebrel-relay" | sha256sum -c - >/dev/null || { printf '{"error":"binary_integrity_failed"}\n'; exit 1; }
                     chmod 700 "${'$'}stage/pebrel-relay"
                     "${'$'}stage/pebrel-relay" service-install --source "${'$'}stage/pebrel-relay" --sha256 '$sha' --address ${quote(endpoint)} --port $port
                     $BINARY export-access --directory /etc/pebrel-relay
                     printf '\n'
                     $BINARY service-status
                 """.trimIndent()
-                progress("uploading")
-                val result = command(ssh, install, encoded, progress)
+                progress(RelayServiceProgress("uploading", 0, encoded.size))
+                val result = command(ssh, install, encoded, stage) { sent, total ->
+                    progress(RelayServiceProgress(if (sent == total) "uploaded" else "uploading", sent, total))
+                }
                 val access = result.firstOrNull { it.optInt("version") == 2 && it.has("desktopToken") }
                     ?: throw RelayServiceFailure("invalid_access")
                 validateAccess(access)
@@ -82,7 +87,7 @@ object NativeRelayDeployment {
                 RelayServiceAction.UNINSTALL -> "service-uninstall${if (purge) " --purge" else ""}"
                 else -> error("unreachable")
             }
-            val result = command(ssh, "$BINARY $operation" + if (action != RelayServiceAction.UNINSTALL) "\n$BINARY service-status" else "", progress = progress)
+            val result = command(ssh, "$BINARY $operation" + if (action != RelayServiceAction.UNINSTALL) "\n$BINARY service-status" else "", progress = stage)
             if (action == RelayServiceAction.UNINSTALL) {
                 check(result.last().optBoolean("ok"))
                 RelayServiceResult(RelayServiceState(false, false, false, !purge))
@@ -149,14 +154,17 @@ object NativeRelayDeployment {
     }
 
     private suspend fun command(ssh: DeploymentSsh, text: String, input: ByteArray? = null,
-        progress: (String) -> Unit): List<JSONObject> = withTimeout(120_000) {
+        progress: (String) -> Unit, connected: () -> Unit = {}, upload: (Int, Int) -> Unit = { _, _ -> }): List<JSONObject> = withTimeout(120_000) {
         val connection = ssh.open(30_000)
         try {
+            connected()
             ssh.blocking(connection) { connection.openExec(text) }
             coroutineScope {
                 val output = async(Dispatchers.IO) { ssh.blocking(connection) { readMessages(connection.input(false), progress) } }
                 val errors = async(Dispatchers.IO) { ssh.blocking(connection) { readMessages(connection.input(true), {}) } }
-                val writer = async(Dispatchers.IO) { if (input != null) ssh.blocking(connection) { connection.output().write(input) } }
+                val writer = async(Dispatchers.IO) { if (input != null) ssh.blocking(connection) {
+                    writeUpload(connection.output(), input, upload)
+                } }
                 val code = async(Dispatchers.IO) { ssh.blocking(connection) { connection.awaitExit() } }
                 val exit = code.await()
                 writer.await()
@@ -166,13 +174,26 @@ object NativeRelayDeployment {
         } finally { ssh.release(connection) }
     }
 
+    internal fun writeUpload(output: OutputStream, bytes: ByteArray, progress: (Int, Int) -> Unit) {
+        var sent = 0
+        while (sent < bytes.size) {
+            val count = minOf(32 * 1024, bytes.size - sent)
+            output.write(bytes, sent, count)
+            sent += count
+            progress(sent, bytes.size)
+        }
+        output.flush()
+    }
+
     internal fun readMessages(input: InputStream, progress: (String) -> Unit): List<JSONObject> {
+        // Russh's unbuffered single-byte read allocates and crosses JNI for every byte.
+        val buffered = input.buffered(8192)
         val result = mutableListOf<JSONObject>()
         var total = 0
         // export-access is pretty JSON; keep it as one bounded object.
         val objectText = StringBuilder()
         while (true) {
-            val line = readBoundedFrame(input, 8192)?.toString(Charsets.UTF_8)?.trimEnd() ?: break
+            val line = readBoundedFrame(buffered, 8192)?.toString(Charsets.UTF_8)?.trimEnd() ?: break
             total += line.length
             if (total > 32 * 1024 || line.length > 8192) throw RelayServiceFailure("output_limit")
             if (objectText.isNotEmpty() || line.startsWith('{')) {

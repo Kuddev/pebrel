@@ -153,7 +153,7 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
 /// GPUI 主壳使用自己的事件循环；检查结果进入现有 shell event pump，先显示
 /// 轻通知，再由用户决定是否打开更新详情弹窗。
 #[cfg(feature = "gpui-shell")]
-pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiShellEvent>) {
+pub fn spawn_gpui_once(sender: crate::gpui_shell::events::Sender) {
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::SeqCst) {
         return;

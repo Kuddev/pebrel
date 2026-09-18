@@ -30,17 +30,31 @@ class DesktopRuntimeClient(
     private var snapshotsActive = false
     private val closed = AtomicBoolean()
     @Volatile private var screenUnsupported = false
+    @Volatile private var screenDelta = false
+    private val screenSync = DesktopScreenSync()
+    private val screenReader = Mutex()
+    suspend fun resetScreen() = screenReader.withLock { screenSync.reset() }
 
-    suspend fun readPane(params: JSONObject): JSONObject {
-        if (screenUnsupported) return request("pane.read", params)
+    suspend fun readPane(params: JSONObject): DesktopPaneRead = screenReader.withLock {
+        if (screenUnsupported) return@withLock DesktopPaneRead(request("pane.read", params))
+        val identity = "${params.getLong("window_id")}:${params.getLong("pane_id")}"
+        val query = JSONObject(params.toString()).put("screen", true)
+        if (screenDelta) query.put("screen_since", screenSync.since(identity))
         try {
-            return request("pane.read", JSONObject(params.toString()).put("screen", true))
+            val response = request("pane.read", query)
+            if (!screenDelta) return@withLock DesktopPaneRead(response)
+            try { screenSync.apply(identity, response) }
+            catch (_: Exception) {
+                // Only this idempotent read can be repeated; never resend input.
+                screenSync.reset()
+                screenSync.apply(identity, request("pane.read", query.put("screen_since", 0)))
+            }
         } catch (failure: DesktopRpcFailure) {
             // Old desktop runtimes reject unknown parameters. Do not silently
             // downgrade malformed snapshots, transport errors or authorization.
             if (failure.code != "invalid_params") throw failure
             screenUnsupported = true
-            return request("pane.read", params)
+            DesktopPaneRead(request("pane.read", params))
         }
     }
 
@@ -69,6 +83,7 @@ class DesktopRuntimeClient(
             if (hello.optString("protocol") !in setOf("pebrel.mobile.ssh", "pebrel.mobile.relay") || hello.optInt("version") != 1) {
                 throw DesktopConnectionFailure(DesktopFailureKind.PROTOCOL)
             }
+            screenDelta = hello.optJSONObject("capabilities")?.optBoolean("screen_delta") == true
             try { request("events.subscribe") }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {

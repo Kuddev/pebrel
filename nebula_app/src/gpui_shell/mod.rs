@@ -23,6 +23,7 @@ macro_rules! eprintln {
 }
 
 mod assets;
+pub(crate) mod events;
 pub mod code_tab;
 pub mod config;
 pub(crate) mod copy_feedback;
@@ -96,7 +97,7 @@ pub fn run_shell(
     {
         return;
     }
-    let (shell_tx, shell_rx) = std::sync::mpsc::channel();
+    let (shell_tx, shell_rx) = events::channel();
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::ssh_prompt::install({
         let sender = shell_tx.clone();
@@ -252,7 +253,7 @@ fn register_bundled_fonts(cx: &App) {
 fn open_main_window(
     cx: &mut App,
     ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
-    shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
+    shell_events: events::Receiver,
     runtime_hub: crate::runtime_api::RuntimeHub,
     initial_cwd: Option<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,

@@ -35,6 +35,7 @@ pub(super) fn handle_connection(
     sink: &EventSink,
     hub: &RuntimeHub,
 ) -> Result<(), IoError> {
+    stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let reader = BufReader::new(stream.try_clone()?);
@@ -532,10 +533,46 @@ pub(super) fn write_response(
 }
 
 pub(super) fn write_json_line<T: Serialize>(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     value: &T,
 ) -> Result<(), IoError> {
-    serde_json::to_writer(&mut *stream, value).map_err(IoError::other)?;
-    stream.write_all(b"\n")?;
+    // Serializing cells straight into TcpStream issues a write for every JSON
+    // punctuation/string fragment, delaying input behind a screen response.
+    let mut bytes = serde_json::to_vec(value).map_err(IoError::other)?;
+    bytes.push(b'\n');
+    stream.write_all(&bytes)?;
     stream.flush()
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    #[derive(Default)]
+    struct CountingWriter {
+        writes: usize,
+        bytes: Vec<u8>,
+    }
+    impl Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    #[test]
+    fn mobile_latency_screen_response_is_one_contiguous_write_with_identical_bytes() {
+        let row = vec![json!(["字", 1, -257, -258, 0]); 120];
+        let screen = json!({"screen": {"columns":120,"rows":vec![row; 50]}});
+        let mut before = CountingWriter::default();
+        serde_json::to_writer(&mut before, &screen).unwrap();
+        before.write_all(b"\n").unwrap();
+        let mut after = CountingWriter::default();
+        write_json_line(&mut after, &screen).unwrap();
+        assert_eq!(before.bytes, after.bytes);
+        assert!(before.writes > 50_000, "fixture must exercise fragmented serialization");
+        assert_eq!(after.writes, 1);
+    }
 }

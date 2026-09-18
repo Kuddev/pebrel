@@ -1,6 +1,8 @@
 <resources>
     <string name="service_intro">选择要使用的服务器，Pebrel 通过 SSH 安装轻量加密中转服务，无需 Docker、Node.js 或域名。</string>
     <string name="service_title">Pebrel 中转服务</string>
+    <string name="service_manual_commands">手动安装命令</string>
+    <string name="service_manual_hint">先上传并解压配套的离线中转安装包，以 root 进入其中的 pebrel-relay-manual 目录，再执行以下命令。若显示 SERVER_IP 或 PORT，请替换成实际值。脚本显示四个步骤，失败即停止；无需 Docker 或 Node.js。</string>
     <string name="service_advanced">高级连接设置</string>
     <string name="service_port">中转端口</string>
     <string name="service_address">连接地址覆盖（可选）</string>
@@ -15,7 +17,20 @@
     <string name="service_requirements">支持 Linux x64/ARM64、systemd 247+ 或 Alpine OpenRC。管理服务需要 root SSH 权限，中转运行时不使用 root 权限。电脑和手机需能访问中转端口（默认 443）；Pebrel 不会修改防火墙。</string>
     <string name="service_pc_next">在电脑“设置 → 手机连接 → 中转服务器”选择此 SSH 服务器，点击“使用此中转服务器”，再生成二维码供手机扫描。也可在下方保存私有配置文件备用。</string>
     <string name="service_export_private">此文件包含服务器访问凭据，请私下传给自己的电脑，不要公开。</string>
-    <string name="service_uploading">正在上传并安装原生服务…</string>
+    <string name="service_uploading">正在把内置服务文件上传到服务器…</string>
+    <string name="service_uploaded">文件已发出，正在等待服务器校验…</string>
+    <string name="service_installing">正在校验文件并安装服务…</string>
+    <string name="service_step_connect">连接 SSH</string>
+    <string name="service_step_check">检查系统与内置文件</string>
+    <string name="service_step_upload">上传到服务器</string>
+    <string name="service_step_start">安装、启动并验证</string>
+    <string name="service_step_waiting">待执行</string>
+    <string name="service_step_active">进行中</string>
+    <string name="service_step_done">✓ 已完成</string>
+    <string name="service_step_cancelled">已取消</string>
+    <string name="service_step_row">%1$d. %2$s · %3$s</string>
+    <string name="service_upload_bytes">已交给 SSH 传输：%1$d / %2$d KiB</string>
+    <string name="service_step_wait_seconds">已 %1$d 秒没有新进度，正在等待服务器；可取消操作。</string>
     <string name="service_starting">正在启动服务…</string>
     <string name="service_verifying">正在检查服务监听…</string>
     <string name="service_removing">正在停止并移除服务…</string>

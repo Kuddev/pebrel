@@ -5,6 +5,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.layout.Box
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
@@ -29,6 +32,24 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CommandComposerTest {
+    @Test fun installFailureShowsAllFourNumberedStepsAndActualUploadCount() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val progress = io.github.kuddev.pebrel.mobile.connection.RelayInstallProgress()
+            .advance(io.github.kuddev.pebrel.mobile.connection.RelayServiceProgress("uploading", 32768, 65536))
+            .copy(failed = true)
+        compose.setContent {
+            renderedView = LocalView.current
+            MaterialTheme { Box(Modifier.testTag("relay-install-steps")) { RelayInstallSteps(progress, R.string.ssh_error_timeout) } }
+        }
+        val titles = listOf(R.string.service_step_connect, R.string.service_step_check, R.string.service_step_upload, R.string.service_step_start)
+        val states = listOf(R.string.service_step_done, R.string.service_step_done, R.string.service_operation_failed, R.string.service_step_waiting)
+        titles.forEachIndexed { i, title ->
+            compose.onNodeWithText(context.getString(R.string.service_step_row, i + 1, context.getString(title), context.getString(states[i]))).assertIsDisplayed()
+        }
+        compose.onNodeWithText(context.getString(R.string.service_upload_bytes, 32, 64)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.ssh_error_timeout)).assertIsDisplayed()
+        saveSurface("relay-install-steps")
+    }
     @Test fun readOnlyPaneExplainsAuthorizationAndOffersPairingWithoutSending() {
         val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
         val repository = SessionRepository(context)
@@ -124,6 +145,8 @@ class CommandComposerTest {
         compose.onNodeWithText(context.getString(R.string.service_advanced)).performClick()
         compose.onNodeWithContentDescription(context.getString(R.string.service_port)).assertExists()
         compose.onNodeWithContentDescription(context.getString(R.string.service_address)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.service_manual_commands)).performScrollTo().performClick()
+        compose.onNodeWithText("sh install.sh 'SERVER_IP' 443\n/opt/pebrel-relay/pebrel-relay service-status").assertExists()
     }
 
     private fun saveSurface(tag: String) {

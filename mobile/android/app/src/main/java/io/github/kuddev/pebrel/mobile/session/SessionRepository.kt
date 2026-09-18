@@ -64,6 +64,7 @@ class SessionRepository(private val context: Context) {
     private val pendingTrust = java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Boolean>>()
     private var readJob: Job? = null
     private var readGeneration = 0L
+    private var desktopReader: DesktopReadScheduler? = null
     private val desktopClients = java.util.concurrent.ConcurrentHashMap<String, DesktopRuntimeClient>()
     private var renderOwner: String? = null
     private var renderToken: Any? = null
@@ -377,33 +378,51 @@ class SessionRepository(private val context: Context) {
         return id
     }
     fun readDesktop(id: String, pane: DesktopPane) {
+        if (output.value.target == "$id:${pane.window}:${pane.id}") desktopReader?.refresh()
+    }
+    suspend fun watchDesktop(id: String, pane: DesktopPane) {
+        val client = desktopClients[id] ?: return
         val identity = "$id:${pane.window}:${pane.id}"
-        if (readJob?.isActive == true && output.value.target == identity) return
         readJob?.cancel()
         val generation = ++readGeneration
-        val previousText = if (output.value.target == identity) output.value.text else ""
-        val previousFrame = if (output.value.target == identity) output.value.frame else null
-        output.value = DesktopOutput(identity, previousText, loading = true, frame = previousFrame)
-        readJob = scope.launch {
-            val result = runCatching {
-                val response = checkNotNull(desktopClients[id]).readPane(target(pane).put("lines", 100))
-                val frame = response.optJSONObject("screen")?.let {
-                    decodeDesktopScreen(it, checkNotNull(terminalColors))
+        val reader = DesktopReadScheduler()
+        desktopReader = reader
+        readJob = currentCoroutineContext().job
+        output.value = if (output.value.target == identity) output.value else DesktopOutput(identity, loading = true)
+        try {
+            reader.run {
+                val previous = output.value
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        val read = client.readPane(target(pane).put("lines", 100))
+                        val response = read.response
+                        val frame = if (!read.screenChanged && previous.frame != null) previous.frame else response.optJSONObject("screen")?.let {
+                            decodeDesktopScreen(it, checkNotNull(terminalColors))
+                        }
+                        DesktopOutput(identity, response.optString("text"), frame = frame)
+                    }
                 }
-                DesktopOutput(identity, response.optString("text"), frame = frame)
+                currentCoroutineContext().ensureActive()
+                if (generation != readGeneration || desktopClients[id] !== client) throw CancellationException()
+                val next = result.getOrNull() ?: previous.copy(loading = false)
+                output.value = next
+                if (result.isFailure) {
+                    client.resetScreen()
+                    error.value = "desktop_read_failed"
+                }
+                next.frame !== previous.frame || next.text != previous.text
             }
-            if (!isActive) return@launch
-            main.post {
-                if (generation == readGeneration && output.value.target == identity) {
-                    output.value = result.getOrNull() ?: DesktopOutput(identity, previousText, frame = previousFrame)
-                    if (result.isFailure) error.value = "desktop_read_failed"
-                }
+        } finally {
+            if (generation == readGeneration) {
+                desktopReader = null
+                readJob = null
             }
         }
     }
     fun leaveDesktopPane() {
         readGeneration++
         readJob?.cancel()
+        desktopReader = null
         output.value = DesktopOutput()
     }
     fun desktopInput(id: String, pane: DesktopPane): DesktopTerminalInput {

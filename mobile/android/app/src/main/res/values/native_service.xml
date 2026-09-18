@@ -1,6 +1,8 @@
 <resources>
     <string name="service_intro">Choose the server you want to use. Pebrel installs a small encrypted relay over SSH; no Docker, Node.js or domain name is required.</string>
     <string name="service_title">Pebrel relay service</string>
+    <string name="service_manual_commands">Manual installation commands</string>
+    <string name="service_manual_hint">Upload and extract the companion offline relay kit, then enter its pebrel-relay-manual directory as root. Run the commands below; replace SERVER_IP or PORT if shown. The script prints four steps and stops on failure. No Docker or Node.js is required.</string>
     <string name="service_advanced">Advanced connection settings</string>
     <string name="service_port">Relay port</string>
     <string name="service_address">Connection address override (optional)</string>
@@ -15,7 +17,20 @@
     <string name="service_requirements">Supports Linux x64/ARM64 with systemd 247+ or Alpine OpenRC. Root SSH access is required for management; the relay runs without root privileges. Both devices must reach the relay port (443 by default); Pebrel does not change your firewall.</string>
     <string name="service_pc_next">On your computer, open Settings → Phone connection → Relay, select this SSH server and choose Use this relay server. Then generate a QR code for your phone. You can also save a private configuration file below.</string>
     <string name="service_export_private">This file contains server access credentials. Transfer it privately to your computer; do not publish it.</string>
-    <string name="service_uploading">Uploading and installing the native service…</string>
+    <string name="service_uploading">Uploading the bundled service to the server…</string>
+    <string name="service_uploaded">Upload sent. Waiting for server verification…</string>
+    <string name="service_installing">Verifying the file and installing the service…</string>
+    <string name="service_step_connect">Connect to SSH</string>
+    <string name="service_step_check">Check system and bundled file</string>
+    <string name="service_step_upload">Upload to server</string>
+    <string name="service_step_start">Install, start and verify</string>
+    <string name="service_step_waiting">Waiting</string>
+    <string name="service_step_active">In progress</string>
+    <string name="service_step_done">✓ Done</string>
+    <string name="service_step_cancelled">Cancelled</string>
+    <string name="service_step_row">%1$d. %2$s · %3$s</string>
+    <string name="service_upload_bytes">Sent to SSH: %1$d / %2$d KiB</string>
+    <string name="service_step_wait_seconds">No new progress for %1$d s; waiting for the server. You can cancel.</string>
     <string name="service_starting">Starting the service…</string>
     <string name="service_verifying">Checking the service listener…</string>
     <string name="service_removing">Stopping and removing the service…</string>
