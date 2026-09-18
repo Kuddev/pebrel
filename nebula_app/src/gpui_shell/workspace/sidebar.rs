@@ -751,7 +751,20 @@ impl NebulaWorkspace {
                             ),
                     ),
             )
-            .child(self.render_tabs_section(items, cx));
+            .child(self.render_tabs_section(items, cx))
+            .when(cx.global::<crate::gpui_shell::config::Settings>().mobile_shortcut, |sidebar| {
+                sidebar.child(div().px_2().py_2().child(
+                    Button::new("sidebar-mobile-pairing").ghost().w_full()
+                        .icon(Icon::default().path(crate::gpui_shell::assets::nav::PHONE))
+                        .label(crate::gpui_shell::config::ui_language(cx).text(crate::i18n::Message::MobilePairTitle))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_settings(window, cx);
+                            if let Some((view, _)) = &this.settings_surface {
+                                view.update(cx, |pane, cx| pane.open_mobile(window, cx));
+                            }
+                        })),
+                ))
+            });
         self.spinner_visible.set(items_running.get());
         if items_running.get() {
             self.arm_activity_spinner_frame(window, cx);

@@ -37,8 +37,6 @@ const SSH_DELETE_UNDO_SECS: u64 = 8;
 
 const SSH_EDITOR_CTL_H: f32 = 39.0;
 const SSH_EDITOR_AVATAR_H: f32 = 44.0;
-const SSH_HOST_ROW_H: f32 = 58.0;
-const SSH_HOST_GAP: f32 = 8.0;
 const COMMON_SSH_USERNAMES: &[&str] = &["root", "ubuntu", "deploy", "admin", "debian", "ec2-user"];
 
 fn username_candidates(recent: &[String], query: &str) -> Vec<String> {

@@ -8,7 +8,7 @@ mod tls;
 mod transport;
 
 pub use access::RelayAccess;
-pub use host::{HostState, PersistHost};
+pub use host::{DeviceSummary, HostState, PersistHost};
 pub use transport::{Handle, start_relay};
 
 pub(crate) fn invalid() -> std::io::Error {

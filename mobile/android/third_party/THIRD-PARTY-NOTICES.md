@@ -9,6 +9,10 @@ notices remain applicable; inclusion does not relicense upstream sources.
   with Zig 0.15.2; native dependency notices and build provenance are bundled
   under assets/licenses/Ghostty and Ghostty-UPSTREAM.json.
 - AndroidX / Jetpack Compose and Kotlin / kotlinx libraries: Apache License 2.0.
+- Google Material Icons, outlined `settings` (24px): Apache License 2.0.
+  Source: https://github.com/google/material-design-icons/blob/master/src/action/settings/materialiconsoutlined/24px.svg.
+  Converted to Android VectorDrawable without changing the icon geometry;
+  the Apache-2.0 license is included in licenses/Apache-2.0.txt.
 - russh 0.62.2: https://github.com/warp-tech/russh, Apache License 2.0.
   The independent Rust transport is built from public source using ring and RSA
   support. JNI, Tokio, ring and the other resolved dependencies retain their own

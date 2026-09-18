@@ -379,6 +379,7 @@ impl SettingsPane {
         // 构造体内按当前协议回填。
         let backup_remote_inputs: Vec<Entity<InputState>> =
             (0..4).map(|_| cx.new(|cx| InputState::new(window, cx))).collect();
+        let backup_remote = crate::backup_remote::BackupRemoteConfig::load();
 
         let ssh_library =
             crate::gpui_shell::ssh_settings::library::HostLibraryState::new(window, cx);
@@ -553,7 +554,7 @@ impl SettingsPane {
             runtime,
             launch_at_login: crate::platform::startup::launch_at_login(),
             active_section: 1,
-            mobile: mobile::MobileState::new(window,cx),
+            mobile: mobile::MobileState::new(window, cx),
             appearance_picker: None,
             appearance_picker_seq: 0,
             theme_editor: None,
@@ -629,7 +630,8 @@ impl SettingsPane {
             font_family_input,
             font_family_cjk_input,
             font_picker_trigger_bounds: None,
-            backup_selection: crate::encrypted_backup::BackupSelection::default(),
+            backup_selection: backup_remote.selection,
+            backup_ui: backup::BackupUiState::default(),
             backup_pass_input: cx.new(|cx| {
                 InputState::new(window, cx)
                     .masked(true)
@@ -639,7 +641,7 @@ impl SettingsPane {
             backup_busy: false,
             backup_seq: 0,
             backup_remote: {
-                let cfg = crate::backup_remote::BackupRemoteConfig::load();
+                let cfg = backup_remote;
                 for (ix, input) in backup_remote_inputs.iter().enumerate() {
                     let value = cfg.slot(ix).unwrap_or_default().to_owned();
                     input.update(cx, |input, cx| input.set_value(value, window, cx));

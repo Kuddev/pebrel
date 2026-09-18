@@ -6,7 +6,14 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
-use std::{io, sync::Arc};
+use std::{
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 /// Called on a blocking worker. Must atomically replace the OS credential entry;
@@ -16,6 +23,37 @@ pub type PersistHost = Arc<dyn Fn(&[u8]) -> io::Result<()> + Send + Sync>;
 pub struct HostState {
     key: HostKey,
     book: PairingBook,
+    active: Option<(String, CancellationToken, Arc<AtomicBool>)>,
+}
+
+/// Public display data only: never expose grant secrets to a settings view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceSummary {
+    pub id: String,
+    pub name: String,
+    pub allow_input: bool,
+    pub connected: bool,
+}
+
+pub(crate) struct DeviceSession {
+    token: CancellationToken,
+    connected: Arc<AtomicBool>,
+}
+
+impl DeviceSession {
+    pub async fn cancelled(&self) {
+        self.token.cancelled().await;
+    }
+
+    pub fn mark_connected(&self) {
+        self.connected.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for DeviceSession {
+    fn drop(&mut self) {
+        self.token.cancel();
+    }
 }
 
 #[derive(Deserialize)]
@@ -31,6 +69,7 @@ impl HostState {
         Ok(Self {
             key: HostKey::generate().map_err(io::Error::other)?,
             book: PairingBook::default(),
+            active: None,
         })
     }
 
@@ -82,6 +121,7 @@ impl HostState {
                 public,
             ),
             book: PairingBook::restore_devices(saved.devices.as_bytes()).map_err(|_| invalid())?,
+            active: None,
         })
     }
 
@@ -131,8 +171,8 @@ impl HostState {
         name: &str,
         now: u64,
         persist: &PersistHost,
-    ) -> io::Result<(String, bool)> {
-        if hello.invitation {
+    ) -> io::Result<(String, bool, DeviceSession)> {
+        let (response, allow_input, id) = if hello.invitation {
             let grant = self
                 .book
                 .approve_authenticated(&hello.grant, name, now)
@@ -143,22 +183,123 @@ impl HostState {
                 "secret":&*grant.secret.expose_encoded()})
                 .to_string(),
                 grant.allow_input,
+                id.clone(),
             );
             if let Err(error) = persist(&self.encode()?) {
                 self.book.revoke(&id);
                 return Err(error);
             }
-            Ok(result)
+            result
         } else {
             let grant = self.book.device(&hello.grant).ok_or_else(authentication)?;
-            Ok((
+            (
                 serde_json::json!({"type":"secure.accepted","grant":grant.id}).to_string(),
                 grant.allow_input,
-            ))
+                grant.id.clone(),
+            )
+        };
+        let token = CancellationToken::new();
+        let connected = Arc::new(AtomicBool::new(false));
+        if let Some((_, previous, _)) = self.active.replace((id, token.clone(), connected.clone()))
+        {
+            previous.cancel();
         }
+        Ok((response, allow_input, DeviceSession { token, connected }))
+    }
+
+    pub fn devices(&self) -> Vec<DeviceSummary> {
+        let mut devices: Vec<_> = self
+            .book
+            .devices()
+            .map(|grant| DeviceSummary {
+                id: grant.id.clone(),
+                name: grant.name.clone(),
+                allow_input: grant.allow_input,
+                connected: self.active.as_ref().is_some_and(|(id, token, connected)| {
+                    id == &grant.id && !token.is_cancelled() && connected.load(Ordering::Acquire)
+                }),
+            })
+            .collect();
+        devices.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+        devices
+    }
+
+    /// Commit removal before changing live grants. A failed credential-store write
+    /// leaves both authorization and the running session intact for a safe retry.
+    pub fn revoke(&mut self, id: &str, persist: &PersistHost) -> io::Result<bool> {
+        let mut replacement = Self::restore(&self.encode()?)?;
+        if !replacement.book.revoke(id) {
+            return Ok(false);
+        }
+        persist(&replacement.encode()?)?;
+        self.book.revoke(id);
+        if let Some((active_id, token, _)) = &self.active {
+            if active_id == id {
+                token.cancel();
+            }
+        }
+        Ok(true)
     }
 
     pub fn id(&self) -> String {
         device_id(&self.key.public())
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn mobile_pairing_revoke_persists_before_disconnect_and_denies_future_access() {
+        let mut host = HostState::generate().unwrap();
+        let invite = host.book.issue(100, true).unwrap();
+        let hello = Hello {
+            host: URL_SAFE_NO_PAD.encode(host.key.public()),
+            grant: invite.id,
+            invitation: true,
+        };
+        let saved = Arc::new(Mutex::new(Vec::new()));
+        let output = saved.clone();
+        let persist: PersistHost = Arc::new(move |bytes| {
+            *output.lock().unwrap() = bytes.to_vec();
+            Ok(())
+        });
+        let (_, _, session) = host.enroll(&hello, "My phone", 101, &persist).unwrap();
+        assert!(!host.devices()[0].connected);
+        session.mark_connected();
+        let device = host.devices().remove(0);
+        assert!(device.connected && device.allow_input);
+        let reject: PersistHost = Arc::new(|_| Err(io::Error::other("write_failed")));
+        assert!(host.revoke(&device.id, &reject).is_err());
+        assert!(!session.token.is_cancelled());
+        assert!(host.book.device(&device.id).is_some());
+        assert!(host.revoke(&device.id, &persist).unwrap());
+        assert!(session.token.is_cancelled());
+        assert!(host.devices().is_empty());
+        let restored = HostState::restore(&saved.lock().unwrap()).unwrap();
+        assert!(restored.devices().is_empty());
+        let resume = Hello { grant: device.id, invitation: false, ..hello };
+        assert!(restored.handshake(&resume, &Secret::generate().unwrap().hash(), 102).is_err());
+    }
+
+    #[test]
+    fn mobile_pairing_leaving_a_session_changes_presence_not_authorization() {
+        let mut host = HostState::generate().unwrap();
+        let invite = host.book.issue(100, false).unwrap();
+        let hello = Hello {
+            host: URL_SAFE_NO_PAD.encode(host.key.public()),
+            grant: invite.id,
+            invitation: true,
+        };
+        let persist: PersistHost = Arc::new(|_| Ok(()));
+        let (_, _, session) = host.enroll(&hello, "Phone", 101, &persist).unwrap();
+        session.mark_connected();
+        assert!(host.devices()[0].connected);
+        drop(session);
+        assert!(!host.devices()[0].connected);
+        assert_eq!(HostState::restore(&host.encode().unwrap()).unwrap().devices().len(), 1);
+        assert!(!host.revoke("unknown", &persist).unwrap());
     }
 }

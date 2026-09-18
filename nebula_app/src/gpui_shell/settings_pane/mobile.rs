@@ -9,6 +9,12 @@ use crate::{
 };
 use pebrel_mobile_link::{endpoint::RelayAccess, preview::RelaySettings, qr::PairingQr};
 
+mod advanced;
+mod pairing_board;
+#[cfg(test)]
+mod tests;
+mod view;
+
 pub(super) struct MobileState {
     mode: Mode,
     addresses: Vec<connection::LanAddress>,
@@ -17,6 +23,7 @@ pub(super) struct MobileState {
     server_hosts: Vec<(String, String)>,
     server_input: Entity<InputState>,
     server_loading: bool,
+    server_request: u64,
     server_failure: bool,
     inputs: Vec<Entity<InputState>>,
     form_values: Vec<String>,
@@ -33,6 +40,17 @@ pub(super) struct MobileState {
     qr_side: f32,
     copy_feedback: Entity<CopyFeedback>,
     monitor: Option<Task<()>>,
+    devices: Vec<connection::DeviceSummary>,
+    devices_loading: bool,
+    devices_failure: bool,
+    revoke_pending: Option<String>,
+    revoking: bool,
+    shortcut_failure: bool,
+    expires_at: Option<u64>,
+    auto_prepare: bool,
+    device_sequence: u64,
+    server_needs_check: bool,
+    loading_saved_relay: bool,
 }
 
 impl MobileState {
@@ -59,6 +77,7 @@ impl MobileState {
             server_hosts: Vec::new(),
             server_input,
             server_loading: false,
+            server_request: 0,
             server_failure: false,
             inputs,
             form_values: ["wss://", "", "", "", "0", ""].into_iter().map(str::to_owned).collect(),
@@ -75,6 +94,17 @@ impl MobileState {
             qr_side: 240.0,
             copy_feedback: cx.new(|_| CopyFeedback::new()),
             monitor: None,
+            devices: Vec::new(),
+            devices_loading: false,
+            devices_failure: false,
+            revoke_pending: None,
+            revoking: false,
+            shortcut_failure: false,
+            expires_at: None,
+            auto_prepare: true,
+            device_sequence: 0,
+            server_needs_check: false,
+            loading_saved_relay: false,
         }
     }
 
@@ -86,15 +116,22 @@ impl MobileState {
         let changed = self.snapshot.as_ref().map(|s| &s.invitation)
             != snapshot.as_ref().map(|s| &s.invitation);
         if changed {
+            if let Some(value) = snapshot.as_ref().filter(|value| !value.invitation.is_empty()) {
+                self.expires_at = serde_json::from_str::<serde_json::Value>(&value.invitation)
+                    .ok()
+                    .and_then(|value| value["secure"]["expiresAt"].as_u64());
+            } else if snapshot.is_none() {
+                self.expires_at = None;
+            }
             self.qr = snapshot.as_ref().and_then(|snapshot| {
                 if snapshot.invitation.is_empty() {
                     return None;
                 }
                 let qr = PairingQr::encode(snapshot.invitation.as_bytes()).ok()?;
-                let scale = (280 / qr.width()).clamp(2, 4);
-                let side = (qr.width() * scale) as u32;
-                self.qr_side = side as f32;
-                let pixels = image::RgbaImage::from_raw(side, side, qr.rgba(scale).ok()?)?;
+                let scale = (240 / qr.width()).clamp(1, 4);
+                self.qr_side = (qr.width() * scale) as f32;
+                let side = (qr.width() * scale * 2) as u32;
+                let pixels = image::RgbaImage::from_raw(side, side, qr.rgba(scale * 2).ok()?)?;
                 Some(Arc::new(RenderImage::new([image::Frame::new(pixels)])))
             });
         }
@@ -111,7 +148,108 @@ impl Drop for MobileState {
 }
 
 impl SettingsPane {
+    fn mobile_stop(&mut self, cx: &mut Context<Self>) {
+        self.mobile.auto_prepare = false;
+        self.mobile.edit_sequence = self.mobile.edit_sequence.wrapping_add(1);
+        self.mobile_invalidate(cx);
+    }
+
+    fn mobile_relay_json(&self) -> Result<String, Failure> {
+        if self.mobile.server_needs_check {
+            return Err(Failure::Invalid);
+        }
+        let values = &self.mobile.form_values;
+        let relay = if self.mobile.relay_version == 2 {
+            serde_json::json!({"version":2,"url":values[0].trim(),"room":values[1].trim(),
+                "desktopToken":values[2].trim(),"mobileToken":values[3].trim(),"tlsPin":values[5].trim()}).to_string()
+        } else {
+            serde_json::json!({"version":1,"url":values[0].trim(),"device":values[1].trim(),
+                "desktopToken":values[2].trim(),"mobileToken":values[3].trim(),"name":"Pebrel PC"})
+            .to_string()
+        };
+        let valid = if self.mobile.relay_version == 2 {
+            RelayAccess::parse(relay.as_bytes()).is_ok()
+        } else {
+            RelaySettings::parse(relay.as_bytes()).is_ok()
+        };
+        if valid { Ok(relay) } else { Err(Failure::Invalid) }
+    }
+
+    fn mobile_relay_valid(&self) -> bool {
+        self.mobile_relay_json().is_ok()
+    }
+
+    fn mobile_generate_if_ready(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mobile.auto_prepare = true;
+        let ready = match self.mobile.mode {
+            Mode::Lan => !self.mobile.addresses.is_empty(),
+            Mode::Relay => self.mobile_relay_valid(),
+        };
+        if ready && self.mobile.failure.is_none() {
+            self.mobile_generate(window, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn mobile_refresh_devices(&mut self, cx: &mut Context<Self>) {
+        if self.mobile.devices_loading || self.mobile.revoking {
+            return;
+        }
+        self.mobile.devices_loading = true;
+        let sequence = self.mobile.device_sequence;
+        let load = cx.background_executor().spawn(async { connection::paired_devices() });
+        cx.spawn(async move |this, cx| {
+            let result = load.await;
+            let _ = this.update(cx, |this, cx| {
+                if sequence != this.mobile.device_sequence {
+                    return;
+                }
+                this.mobile.devices_loading = false;
+                match result {
+                    Ok(devices) => {
+                        this.mobile.devices = devices;
+                        this.mobile.devices_failure = false;
+                    },
+                    Err(_) => this.mobile.devices_failure = true,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn mobile_revoke_device(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.mobile.revoking {
+            return;
+        }
+        self.mobile.revoking = true;
+        self.mobile.device_sequence = self.mobile.device_sequence.wrapping_add(1);
+        self.mobile.devices_loading = false;
+        let target = id.clone();
+        let operation =
+            cx.background_executor().spawn(async move { connection::revoke_device(&target) });
+        cx.spawn(async move |this, cx| {
+            let result = operation.await;
+            let _ = this.update(cx, |this, cx| {
+                this.mobile.revoking = false;
+                match result {
+                    Ok(_) => {
+                        this.mobile.devices.retain(|device| device.id != id);
+                        this.mobile.revoke_pending = None;
+                        this.mobile_refresh_devices(cx);
+                    },
+                    Err(_) => this.mobile.devices_failure = true,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn mobile_invalidate(&mut self, cx: &mut Context<Self>) {
+        self.mobile.server_request = self.mobile.server_request.wrapping_add(1);
         self.mobile.server_loading = false;
         self.mobile.server_failure = false;
         if self.mobile.snapshot.is_some() || self.mobile.operation.is_some() {
@@ -129,14 +267,16 @@ impl SettingsPane {
             return;
         }
         self.mobile.initialized = true;
+        self.mobile.loading_saved_relay = true;
         if let Some(snapshot) = connection::snapshot() {
             self.mobile.mode = snapshot.mode;
             self.mobile.display_snapshot(Some(snapshot));
         }
         let select = self.mobile.address_select.clone();
-        self._subscriptions.push(cx.subscribe_in(&select, window, |this, _, event, _, cx| {
+        self._subscriptions.push(cx.subscribe_in(&select, window, |this, _, event, window, cx| {
             if matches!(event, SelectEvent::Confirm(_)) {
                 this.mobile_invalidate(cx);
+                this.mobile_generate_if_ready(window, cx);
             }
         }));
         for input in self.mobile.inputs.clone() {
@@ -160,6 +300,21 @@ impl SettingsPane {
         self._subscriptions.push(cx.observe(&feedback, |_, _, cx| cx.notify()));
         self.mobile_refresh_addresses(window, cx);
         self.mobile_refresh_servers(window, cx);
+        self.mobile_refresh_devices(cx);
+        let server_input = self.mobile.server_input.clone();
+        self._subscriptions.push(cx.subscribe_in(
+            &server_input,
+            window,
+            |this, _, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.mobile.edit_sequence = this.mobile.edit_sequence.wrapping_add(1);
+                    this.mobile.server_needs_check = true;
+                    if this.mobile.mode == Mode::Relay {
+                        this.mobile_invalidate(cx);
+                    }
+                }
+            },
+        ));
         let server_select = self.mobile.server_select.clone();
         self._subscriptions.push(cx.subscribe_in(
             &server_select,
@@ -183,13 +338,24 @@ impl SettingsPane {
         ));
         let load = cx.background_executor().spawn(async { connection::saved_relay() });
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Some(saved)) = load.await {
-                let _ = this.update_in(cx, |this, window, cx| {
+            let saved = load.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.mobile.loading_saved_relay = false;
+                if let Ok(Some(saved)) = saved {
                     if this.mobile.edit_sequence == 0 {
                         this.mobile_import(&saved, window, cx);
                     }
-                });
-            }
+                }
+                // Initial address discovery and credential loading may finish in
+                // either order. Wait for both before auto-preparing the LAN QR.
+                if this.mobile.auto_prepare
+                    && this.mobile.snapshot.is_none()
+                    && this.mobile.operation.is_none()
+                {
+                    this.mobile_generate_if_ready(window, cx);
+                }
+                cx.notify();
+            });
         })
         .detach();
         self.mobile.monitor = Some(cx.spawn(async move |this, cx| {
@@ -200,9 +366,11 @@ impl SettingsPane {
                         let snapshot = connection::snapshot();
                         if snapshot != this.mobile.snapshot {
                             this.mobile.display_snapshot(snapshot);
-                            if this.active_section == 10 {
-                                cx.notify();
-                            }
+                        }
+                        if this.active_section == 10 {
+                            this.mobile_refresh_devices(cx);
+                            // Countdown and device presence are live while this page is visible.
+                            cx.notify();
                         }
                     })
                     .is_err()
@@ -260,6 +428,14 @@ impl SettingsPane {
                         {
                             this.mobile_invalidate(cx);
                         }
+                        if this.mobile.mode == Mode::Lan
+                            && !this.mobile.loading_saved_relay
+                            && this.mobile.auto_prepare
+                            && this.mobile.snapshot.is_none()
+                            && this.mobile.operation.is_none()
+                        {
+                            this.mobile_generate_if_ready(window, cx);
+                        }
                     },
                     Err(_) => this.mobile.failure = Some(Failure::Address),
                 }
@@ -277,6 +453,7 @@ impl SettingsPane {
         if version == Some(2) {
             match RelayAccess::parse(text.as_bytes()) {
                 Ok(access) => {
+                    self.mobile.server_needs_check = false;
                     self.mobile.relay_version = 2;
                     for (index, value) in [
                         (0, &access.url),
@@ -301,6 +478,7 @@ impl SettingsPane {
         }
         match RelaySettings::parse(text.as_bytes()) {
             Ok(settings) => {
+                self.mobile.server_needs_check = false;
                 self.mobile.relay_version = 1;
                 for (index, (input, value)) in self
                     .mobile
@@ -348,32 +526,16 @@ impl SettingsPane {
             cx.notify();
             return;
         };
-        let values: Vec<_> = self
-            .mobile
-            .inputs
-            .iter()
-            .take(4)
-            .map(|input| input.read(cx).value().trim().to_owned())
-            .collect();
-        let relay = if self.mobile.relay_version == 2 {
-            serde_json::json!({"version":2,"url":values[0],"room":values[1],
-                "desktopToken":values[2],"mobileToken":values[3],"tlsPin":self.mobile.inputs[5].read(cx).value().trim()}).to_string()
-        } else {
-            serde_json::json!({"version":1,"url":values[0],"device":values[1],
-                "desktopToken":values[2],"mobileToken":values[3],"name":"Pebrel PC"})
-            .to_string()
+        let relay = match self.mobile_relay_json() {
+            Ok(relay) => relay,
+            Err(_) if mode == Mode::Lan => String::new(),
+            Err(error) => {
+                self.mobile.failure = Some(error);
+                self.mobile.advanced = true;
+                cx.notify();
+                return;
+            },
         };
-        let valid = if self.mobile.relay_version == 2 {
-            RelayAccess::parse(relay.as_bytes()).is_ok()
-        } else {
-            RelaySettings::parse(relay.as_bytes()).is_ok()
-        };
-        if mode == Mode::Relay && !valid {
-            self.mobile.failure = Some(Failure::Invalid);
-            self.mobile.advanced = true;
-            cx.notify();
-            return;
-        }
         self.mobile_invalidate(cx);
         let generation = connection::begin();
         self.mobile.operation = Some(generation);
@@ -432,6 +594,7 @@ impl SettingsPane {
         self.mobile_invalidate(cx);
         self.mobile.edit_sequence = self.mobile.edit_sequence.wrapping_add(1);
         let sequence = self.mobile.edit_sequence;
+        let request = self.mobile.server_request;
         self.mobile.server_loading = true;
         self.mobile.server_failure = false;
         let load =
@@ -439,12 +602,19 @@ impl SettingsPane {
         cx.spawn_in(window, async move |this, cx| {
             let result = load.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.mobile.edit_sequence != sequence || this.mobile.mode != Mode::Relay {
+                if this.mobile.server_request != request {
                     return;
                 }
                 this.mobile.server_loading = false;
+                if this.mobile.edit_sequence != sequence || this.mobile.mode != Mode::Relay {
+                    cx.notify();
+                    return;
+                }
                 match result {
-                    Ok(data) => this.mobile_import(&data, window, cx),
+                    Ok(data) => {
+                        this.mobile_import(&data, window, cx);
+                        this.mobile_generate_if_ready(window, cx);
+                    },
                     Err(_) => this.mobile.server_failure = true,
                 }
                 cx.notify();
@@ -486,7 +656,10 @@ impl SettingsPane {
                 this.mobile_invalidate(cx);
                 this.mobile.edit_sequence = this.mobile.edit_sequence.wrapping_add(1);
                 match read {
-                    Ok(data) => this.mobile_import(&data, window, cx),
+                    Ok(data) => {
+                        this.mobile_import(&data, window, cx);
+                        this.mobile_generate_if_ready(window, cx);
+                    },
                     Err(_) => {
                         this.mobile.failure = Some(Failure::Invalid);
                         cx.notify();
@@ -495,340 +668,5 @@ impl SettingsPane {
             });
         })
         .detach();
-    }
-
-    pub(super) fn section_mobile(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        self.mobile_initialize(window, cx);
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let text = |message| language.text(message);
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
-        let selected_bg = cx.theme().list_active;
-        let busy = self.mobile.operation.is_some() || self.mobile.server_loading;
-        let mut choices =
-            v_flex().w_full().rounded_md().border_1().border_color(border).overflow_hidden();
-        for (index, mode, title, hint) in [
-            (0, Mode::Lan, Message::MobileLan, Message::MobileLanHint),
-            (1, Mode::Relay, Message::MobileRelay, Message::MobileRelayHint),
-        ] {
-            let selected = self.mobile.mode == mode;
-            choices = choices.child(
-                Button::new(("mobile-mode", index as usize))
-                    .w_full()
-                    .h_auto()
-                    .py_3()
-                    .px_3()
-                    .tooltip(text(title))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_3()
-                            .items_start()
-                            .child(div().child(if selected { "●" } else { "○" }))
-                            .child(
-                                v_flex()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(text(title)),
-                                    )
-                                    .child(div().text_sm().text_color(muted).child(text(hint))),
-                            ),
-                    )
-                    .when(selected, |button| button.bg(selected_bg))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.mobile.mode != mode {
-                            this.mobile_invalidate(cx);
-                            this.mobile.edit_sequence = this.mobile.edit_sequence.wrapping_add(1);
-                            this.mobile.mode = mode;
-                            cx.notify();
-                        }
-                    })),
-            );
-        }
-        let mut card = v_flex()
-            .w_full()
-            .p_5()
-            .gap_4()
-            .rounded_lg()
-            .border_1()
-            .border_color(border)
-            .child(
-                div().font_weight(gpui::FontWeight::SEMIBOLD).child(text(Message::MobilePairTitle)),
-            )
-            .child(div().text_sm().text_color(muted).child(text(Message::MobilePairHint)))
-            .child(choices);
-        if self.mobile.mode == Mode::Lan {
-            card = card
-                .child(div().text_sm().child(text(Message::MobileAddress)))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .flex_wrap()
-                        .child(
-                            div()
-                                .w(px(340.0))
-                                .max_w_full()
-                                .child(Select::new(&self.mobile.address_select).disabled(busy)),
-                        )
-                        .child(
-                            Button::new("mobile-refresh-addresses")
-                                .label(text(Message::MobileRefresh))
-                                .disabled(busy || self.mobile.loading_addresses)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.mobile_refresh_addresses(window, cx)
-                                })),
-                        ),
-                )
-                .child(div().text_sm().text_color(muted).child(text(
-                    if self.mobile.addresses.is_empty() {
-                        Message::MobileNoAddress
-                    } else {
-                        Message::MobileAddressHint
-                    },
-                )));
-        } else {
-            card = card
-                .child(div().text_sm().child(text(Message::MobileSelectServer)))
-                .when(!self.mobile.server_hosts.is_empty(), |card| {
-                    card.child(Select::new(&self.mobile.server_select).disabled(busy))
-                })
-                .child(Input::new(&self.mobile.server_input).disabled(busy))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .flex_wrap()
-                        .child(
-                            Button::new("mobile-use-server")
-                                .label(text(if self.mobile.server_loading {
-                                    Message::MobileReadingServer
-                                } else {
-                                    Message::MobileUseServer
-                                }))
-                                .disabled(busy)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.mobile_use_server(window, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new("mobile-refresh-servers")
-                                .label(text(Message::MobileRefresh))
-                                .disabled(busy)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.mobile_refresh_servers(window, cx)
-                                })),
-                        ),
-                )
-                .child(
-                    div().text_sm().text_color(muted).child(text(Message::MobileSelectServerHint)),
-                )
-                .when(self.mobile.server_failure, |card| {
-                    card.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().danger)
-                            .child(text(Message::MobileServerReadError)),
-                    )
-                })
-                .when(self.mobile.form_values[0] != "wss://", |card| {
-                    card.child(div().text_sm().child(self.mobile.form_values[0].clone()))
-                });
-            if self.mobile.advanced {
-                card = card
-                    .child(
-                        Button::new("mobile-import-file")
-                            .label(text(Message::MobileImportFile))
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.mobile_import_file(window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("mobile-import-relay")
-                            .label(text(Message::MobileImport))
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let data = cx.read_from_clipboard().and_then(|item| item.text());
-                                if let Some(data) = data {
-                                    this.mobile_invalidate(cx);
-                                    this.mobile.edit_sequence =
-                                        this.mobile.edit_sequence.wrapping_add(1);
-                                    this.mobile_import(&data, window, cx);
-                                } else {
-                                    this.mobile.failure = Some(Failure::Invalid);
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child(text(Message::MobileRelaySetupHint)),
-                    );
-            }
-            card = card.child(div().text_sm().text_color(cx.theme().warning).child(text(
-                if self.mobile.relay_version == 2 {
-                    Message::MobileRelaySecure
-                } else {
-                    Message::MobileRelaySecurity
-                },
-            )));
-        }
-        card = card
-            .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .gap_3()
-                    .child(v_flex().gap_1().child(text(Message::MobileAllowInput)).child(
-                        div().text_sm().text_color(muted).child(text(Message::MobileReadOnlyHint)),
-                    ))
-                    .child(
-                        NebulaSwitch::new("mobile-allow-input")
-                            .checked(self.mobile.allow_input)
-                            .on_click(cx.listener(|this, enabled: &bool, _, cx| {
-                                this.mobile_invalidate(cx);
-                                this.mobile.allow_input = *enabled;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                Button::new("mobile-advanced")
-                    .label(text(if self.mobile.advanced {
-                        Message::MobileAdvancedClose
-                    } else {
-                        Message::MobileAdvanced
-                    }))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.mobile.advanced = !this.mobile.advanced;
-                        cx.notify();
-                    })),
-            );
-        if self.mobile.advanced {
-            let fields: &[(usize, Message)] = if self.mobile.mode == Mode::Lan {
-                &[(4, Message::MobilePort)]
-            } else if self.mobile.relay_version == 2 {
-                &[
-                    (0, Message::MobileServer),
-                    (1, Message::MobileDeviceId),
-                    (2, Message::MobileDesktopToken),
-                    (3, Message::MobilePhoneToken),
-                    (5, Message::MobileTlsPin),
-                ]
-            } else {
-                &[
-                    (0, Message::MobileServer),
-                    (1, Message::MobileDeviceId),
-                    (2, Message::MobileDesktopToken),
-                    (3, Message::MobilePhoneToken),
-                ]
-            };
-            let mut advanced = v_flex().gap_3().p_3().border_1().border_color(border).rounded_md();
-            for (index, label) in fields {
-                advanced = advanced.child(
-                    v_flex()
-                        .gap_1()
-                        .child(div().text_sm().child(text(*label)))
-                        .child(Input::new(&self.mobile.inputs[*index]).disabled(busy)),
-                );
-            }
-            card = card.child(advanced);
-        }
-        card = card.child(
-            h_flex()
-                .gap_2()
-                .flex_wrap()
-                .child(
-                    NebulaButton::new("mobile-generate")
-                        .primary()
-                        .label(text(if busy {
-                            Message::MobileGenerating
-                        } else if self.mobile.allow_input {
-                            Message::MobileGenerateControl
-                        } else {
-                            Message::MobileGenerateReadOnly
-                        }))
-                        .disabled(
-                            busy || (self.mobile.mode == Mode::Lan
-                                && self.mobile.addresses.is_empty()),
-                        )
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.mobile_generate(window, cx)),
-                        ),
-                )
-                .when(busy || self.mobile.snapshot.is_some(), |row| {
-                    row.child(
-                        Button::new("mobile-stop")
-                            .label(text(Message::MobileStop))
-                            .on_click(cx.listener(|this, _, _, cx| this.mobile_invalidate(cx))),
-                    )
-                }),
-        );
-        if let Some(failure) = self.mobile.failure {
-            let message = match failure {
-                Failure::Invalid => Message::MobileInvalid,
-                Failure::Address => Message::MobileNoAddress,
-                Failure::Port => Message::MobilePortBusy,
-                Failure::Credentials => Message::MobileCredentialsError,
-                Failure::Connection | Failure::Cancelled => Message::MobileConnectionError,
-            };
-            card = card.child(div().text_sm().text_color(cx.theme().danger).child(text(message)));
-        }
-        if let Some(snapshot) = &self.mobile.snapshot {
-            let status = match snapshot.status {
-                Status::Starting => Message::MobileGenerating,
-                Status::Waiting => Message::MobileWaiting,
-                Status::Connected => Message::MobileConnected,
-                Status::Reconnecting => Message::MobileReconnecting,
-                Status::Failed => Message::MobileConnectionError,
-                Status::Stopped => Message::MobileStopped,
-            };
-            let copied = self.mobile.copy_feedback.read(cx).is_copied();
-            card = card
-                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(text(status)))
-                .when(snapshot.invitation.is_empty(), |card| {
-                    card.child(
-                        div().text_sm().text_color(muted).child(text(Message::MobileQrConsumed)),
-                    )
-                })
-                .when_some(self.mobile.qr.clone(), |card, qr| {
-                    card.child(img(qr).size(px(self.mobile.qr_side)).flex_shrink_0())
-                })
-                .child(div().text_sm().text_color(muted).child(text(Message::MobileQrPrivate)))
-                .child(
-                    Button::new("mobile-copy-invitation")
-                        .disabled(snapshot.invitation.is_empty())
-                        .label(text(if copied {
-                            Message::MobileCopied
-                        } else {
-                            Message::MobileCopy
-                        }))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(snapshot) = &this.mobile.snapshot {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                    snapshot.invitation.clone(),
-                                ));
-                                this.mobile
-                                    .copy_feedback
-                                    .update(cx, |feedback, cx| feedback.mark_copied(cx));
-                            }
-                        })),
-                );
-        }
-        v_flex()
-            .w_full()
-            .gap_4()
-            .child(div().text_sm().text_color(muted).child(text(Message::MobileOverview)))
-            .child(card)
     }
 }

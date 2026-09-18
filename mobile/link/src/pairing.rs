@@ -150,6 +150,10 @@ impl PairingBook {
         self.devices.get(id)
     }
 
+    pub fn devices(&self) -> impl Iterator<Item = &DeviceGrant> {
+        self.devices.values()
+    }
+
     /// The connection owner must cancel any active session for this ID as well.
     pub fn revoke(&mut self, id: &str) -> bool {
         self.devices.remove(id).is_some()

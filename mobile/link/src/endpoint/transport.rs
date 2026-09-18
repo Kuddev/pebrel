@@ -90,16 +90,20 @@ pub async fn start_relay(
                     _=shutdown.cancelled()=>break,
                     result=time::timeout(Duration::from_secs(15),authenticate(&mut socket,&epoch,host.clone(),persist.clone(),invitation.clone()))=>result,
                 };
-                if let Ok(Ok((channel, grant_input))) = result {
+                if let Ok(Ok((channel, grant_input, session))) = result {
                     failures = 0;
+                    session.mark_connected();
                     status(&state, Status::Connected);
-                    let _ = exchange(
+                    tokio::select! {
+                    biased;
+                    _ = session.cancelled() => {},
+                    _ = exchange(
                         &mut socket,
                         channel,
                         factory(allow_input && grant_input),
                         shutdown.clone(),
-                    )
-                    .await;
+                    ) => {},
+                    }
                 }
             }
             if shutdown.is_cancelled() {
@@ -266,7 +270,7 @@ async fn authenticate(
     host: Arc<Mutex<HostState>>,
     persist: PersistHost,
     invitation: Arc<Mutex<Option<String>>>,
-) -> io::Result<(SecureChannel, bool)> {
+) -> io::Result<(SecureChannel, bool, super::host::DeviceSession)> {
     let first = binary(socket).await?;
     if first.len() > 512 || first[0] != 1 {
         return Err(invalid());
@@ -286,7 +290,7 @@ async fn authenticate(
         .ok_or_else(invalid)?
         .to_owned();
     let was_invite = hello.invitation;
-    let (response, allow_input) = tokio::task::spawn_blocking(move || {
+    let (response, allow_input, session) = tokio::task::spawn_blocking(move || {
         host.lock().map_err(|_| invalid())?.enroll(&hello, &name, now()?, &persist)
     })
     .await
@@ -301,7 +305,7 @@ async fn authenticate(
     if ack != json!({"type":"secure.ack","grant":expected["grant"]}) {
         return Err(invalid());
     }
-    Ok((channel, allow_input))
+    Ok((channel, allow_input, session))
 }
 
 async fn exchange(

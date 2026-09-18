@@ -33,6 +33,8 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "pin",
     "pencil",
     "trash-2",
+    "phone",
+    "refresh",
     "vcs-changes",
     "vcs-history",
     "vcs-conflict",
@@ -75,6 +77,8 @@ pub mod nav {
     pub const PENCIL: &str = "icons/nebula-pencil.svg";
     /// Lucide trash-2；删除保存命令不能借用表示 Backspace 的 `IconName::Delete`。
     pub const TRASH: &str = "icons/nebula-trash-2.svg";
+    pub const PHONE: &str = "icons/nebula-phone.svg";
+    pub const REFRESH: &str = "icons/nebula-refresh.svg";
     /// IDEA Commit 工具窗口同语义的“基线 + 提交节点”：工作区变更入口。
     pub const VCS_CHANGES: &str = "icons/nebula-vcs-changes.svg";
     /// 带分叉节点的提交线路：版本历史入口。

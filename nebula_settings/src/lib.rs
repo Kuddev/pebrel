@@ -1003,6 +1003,8 @@ pub struct RuntimeSettings {
     /// AI message toasts inside the application. System notifications and
     /// terminal/tab state are independent. Default on for existing users.
     pub ai_toasts: bool,
+    /// A direct route to pairing in the desktop sidebar. Does not enable a listener.
+    pub mobile_shortcut: bool,
     /// 新会话欢迎屏 fastfetch（默认关：启动速度优先于观感，旧壳裁定）。
     pub fetch: bool,
     /// Check GitHub Releases after startup. Manual checks remain available
@@ -1177,6 +1179,7 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             bell: raw.value("bell").and_then(BellModeName::from_settings).unwrap_or_default(),
             ai_toasts: raw.bool_on("ai_toasts").unwrap_or(true),
+            mobile_shortcut: raw.bool_on("mobile_shortcut").unwrap_or(true),
             fetch: raw.bool_on("fetch").unwrap_or(false),
             auto_check_updates: raw.bool_on("auto_check_updates").unwrap_or(true),
             auto_download_updates: raw.bool_on("auto_download_updates").unwrap_or(false),
@@ -1544,6 +1547,20 @@ mod tests {
             !RuntimeSettings::from_raw(&RawSettings::from_text("auto_check_updates=0\n"))
                 .auto_check_updates
         );
+    }
+
+    #[test]
+    fn mobile_shortcut_default_and_round_trip_preserve_other_settings() {
+        assert!(RuntimeSettings::from_raw(&RawSettings::default()).mobile_shortcut);
+        let original = "# preferences\nshell=zsh\ncustom_key=keep\nmobile_shortcut=1\n";
+        let disabled = apply_updates(original, &[("mobile_shortcut", "0".to_owned())]);
+        let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&disabled));
+        assert!(!settings.mobile_shortcut);
+        assert_eq!(settings.shell.as_deref(), Some("zsh"));
+        assert!(disabled.contains("custom_key=keep\n"));
+        let enabled = apply_updates(&disabled, &[("mobile_shortcut", "1".to_owned())]);
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).mobile_shortcut);
+        assert_eq!(enabled.matches("mobile_shortcut=").count(), 1);
     }
 
     #[test]

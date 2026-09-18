@@ -81,6 +81,7 @@ pub struct Settings {
     pub dim_inactive_panes: bool,
     /// Cached in-app toast preference, independent of native system notifications.
     pub ai_toasts: bool,
+    pub mobile_shortcut: bool,
     /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
     pub tab_close_visible: bool,
     pub tab_reveal: nebula_settings::TabRevealName,
@@ -275,6 +276,7 @@ impl Settings {
                 .unwrap_or(raw.mouse.focus_follows_mouse),
             dim_inactive_panes: runtime.dim_inactive_panes,
             ai_toasts: runtime.ai_toasts,
+            mobile_shortcut: runtime.mobile_shortcut,
             tab_close_visible: runtime.tab_close_visible,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,

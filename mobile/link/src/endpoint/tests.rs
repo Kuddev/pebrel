@@ -104,7 +104,7 @@ async fn phone(
 }
 
 #[tokio::test]
-async fn native_server_enrolls_persists_and_reconnects_without_replaying_commands() {
+async fn mobile_pairing_native_server_enrolls_reconnects_and_revokes_live_device() {
     tokio::time::timeout(Duration::from_secs(20),async {
         let f=Fixture::start().await;
         let host=Arc::new(Mutex::new(HostState::generate().unwrap()));
@@ -119,6 +119,7 @@ async fn native_server_enrolls_persists_and_reconnects_without_replaying_command
         let enrollment:Value=serde_json::from_slice(&plaintext(&mut socket,&mut channel).await.unwrap()).unwrap();
         assert_eq!(enrollment["type"],"secure.enrolled");
         assert_eq!(opens.load(Ordering::SeqCst),0,"runtime cannot open before ack");
+        assert!(!host.lock().unwrap().devices()[0].connected, "enrollment is not a live session before ack");
         assert!(!stored.lock().unwrap().is_empty());
         encrypted(&mut socket,&mut channel,json!({"type":"secure.ack","grant":enrollment["grant"]}).to_string().as_bytes()).await.unwrap();
         assert!(plaintext(&mut socket,&mut channel).await.unwrap().starts_with(b"{\"type\":\"mobile.ready\""));
@@ -146,6 +147,11 @@ async fn native_server_enrolls_persists_and_reconnects_without_replaying_command
         assert_eq!(ready["type"],"mobile.ready");
         assert_eq!(opens.load(Ordering::SeqCst),2);
         assert!(tokio::time::timeout(Duration::from_millis(100),plaintext(&mut socket,&mut channel)).await.is_err(),"no prior command replay");
+        assert!(restored.lock().unwrap().devices()[0].connected);
+        assert!(restored.lock().unwrap().revoke(enrollment["grant"].as_str().unwrap(), &persist).unwrap());
+        assert!(tokio::time::timeout(Duration::from_secs(3), plaintext(&mut socket, &mut channel)).await.unwrap().is_err(), "revocation closes the authenticated transport");
+        assert!(HostState::restore(&stored.lock().unwrap()).unwrap().devices().is_empty());
+        assert_eq!(opens.load(Ordering::SeqCst), 2);
         drop(socket); drop(handle); f.close().await;
     }).await.unwrap();
 }

@@ -67,6 +67,8 @@ jobs:
         run: cargo test --locked -p pebrel-mobile-link --features relay relay::service::tests
       - name: Verify bounded endpoint backpressure
         run: cargo test --locked -p pebrel-mobile-link --features preview mobile_latency
+      - name: Verify pairing presence and durable revocation
+        run: cargo test --locked -p pebrel-mobile-link --features preview mobile_pairing
       - name: Verify install and uninstall on disposable systemd host
         run: python3 mobile/tools/test_native_relay_service.py target/${{ matrix.target }}/release/pebrel-relay
       - name: Verify Alpine OpenRC lifecycle in disposable container
@@ -112,7 +114,19 @@ jobs:
         shell: pwsh
         run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
       - name: Verify targeted mobile latency contracts
-        run: cargo test --locked --release -p nebula --bin pebrel --features gpui-shell mobile_latency
+        run: cargo test --locked --release -p nebula --bin pebrel --features gpui-test-support mobile_latency
+      - name: Verify targeted settings layout and backup contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($filter in @('pairing_design', 'mobile_pairing', 'settings_nav_')) {
+            cargo test --locked --release -p nebula --bin pebrel --features gpui-test-support $filter
+            if ($LASTEXITCODE -ne 0) { throw "Targeted check failed: $filter" }
+          }
+          cargo test --locked --release -p nebula-settings mobile_shortcut
+          if ($LASTEXITCODE -ne 0) { throw 'Shortcut preference check failed' }
+          cargo test --locked --manifest-path tools/i18n-contract/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Localization contract failed' }
       - name: Build and package the GPUI desktop
         shell: pwsh
         run: |

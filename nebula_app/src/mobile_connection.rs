@@ -10,8 +10,25 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
+pub(crate) use endpoint::DeviceSummary;
 pub(crate) use preview::Status;
 pub(crate) use preview::network::{LanAddress, addresses};
+
+/// Cold-path settings operations, always called off the UI thread. The host
+/// remains the authority for grants, persistence and active-session revocation.
+pub(crate) fn paired_devices() -> Result<Vec<DeviceSummary>, Failure> {
+    Ok(secure_host()?.lock().map_err(|_| Failure::Credentials)?.devices())
+}
+
+pub(crate) fn revoke_device(id: &str) -> Result<bool, Failure> {
+    let host = secure_host()?;
+    let persist: endpoint::PersistHost =
+        Arc::new(|bytes| crate::platform::credentials::store(HOST_KEY, bytes));
+    host.lock()
+        .map_err(|_| Failure::Credentials)?
+        .revoke(id, &persist)
+        .map_err(|_| Failure::Credentials)
+}
 
 const LAN_KEY: &str = "Pebrel/Mobile/NativePreview/LAN";
 const RELAY_KEY: &str = "Pebrel/Mobile/NativePreview/Relay";

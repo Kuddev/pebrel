@@ -57,8 +57,8 @@ mod initialization;
 mod keymap;
 mod launcher_actions;
 mod localization;
-mod navigation;
 mod mobile;
+mod navigation;
 mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
@@ -207,6 +207,7 @@ pub struct SettingsPane {
     font_picker_trigger_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     /// 备份类别选择（本地 UI 态；出厂默认 = 共享 `BackupSelection::default`）。
     backup_selection: crate::encrypted_backup::BackupSelection,
+    backup_ui: backup::BackupUiState,
     /// 备份密码（masked；只在导出/恢复动作瞬时读取，不落任何配置）。
     backup_pass_input: Entity<InputState>,
     backup_status: Option<BackupStatus>,
@@ -235,6 +236,12 @@ pub struct SettingsPane {
 }
 
 impl SettingsPane {
+    pub(super) fn open_mobile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search_origin_section = None;
+        self.settings_search_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.active_section = 10;
+        cx.notify();
+    }
     /// 写盘 → 重载单一事实源与全局 `Settings` → 通知宿主热应用。
     pub(super) fn persist(&mut self, updates: &[(&str, String)], cx: &mut Context<Self>) {
         if let Err(err) = self.try_persist(updates, cx) {
@@ -1482,7 +1489,10 @@ impl Render for SettingsPane {
                     // 页头固定高度；正文单独滚动，滚动设置时仍能知道
                     // 自己在哪个分区，也不会让标题与首组的距离随内容变化。
                     .child(header)
-                    .child(
+                    .child(if self.active_section == 10 {
+                        v_flex().flex_1().min_h_0().w_full().p_5().overflow_hidden()
+                            .child(content).into_any_element()
+                    } else {
                         v_flex()
                             .flex_1()
                             .min_h_0()
@@ -1529,8 +1539,9 @@ impl Render for SettingsPane {
                                     .flex()
                                     .justify_center()
                                     .child(v_flex().w_full().when(application_page, |content| content.max_w(px(960.0))).child(content)),
-                            ),
-                    ),
+                            )
+                        .into_any_element()
+                    }),
             )
             .when_some(ssh_editor_modal, |root, modal| root.child(modal))
             .when_some(appearance_picker_modal, |root, modal| root.child(modal))

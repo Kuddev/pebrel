@@ -16,11 +16,12 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, ElementId, IntoElement, RenderImage, RenderOnce, SharedString, Window,
+    App, ClickEvent, ElementId, IntoElement, ParentElement as _, RenderImage, RenderOnce,
+    SharedString, Styled as _, Window, div, px,
 };
-use gpui_component::Disableable as _;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::switch::Switch;
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon};
 use image::Frame;
 
 /// Shell 的彩色品牌图标（`extra/shell-icons` 的 PNG）预缩放成与物理像素
@@ -109,6 +110,27 @@ pub struct NebulaButton {
     kind: NebulaButtonKind,
     disabled: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+}
+
+/// Decorative anchor for a device card, distinct from a button's hit target.
+/// Shared by phone pairing and SSH cards; theme roles keep light/dark contrast.
+pub(crate) fn device_icon_anchor(icon: impl Into<Icon>, cx: &App) -> gpui::Div {
+    device_icon_container(cx)
+        .child(Icon::new(icon).size(px(18.0)).text_color(cx.theme().muted_foreground))
+}
+
+/// The same anchor can host a meaningful OS/font glyph without replacing it.
+pub(crate) fn device_icon_container(cx: &App) -> gpui::Div {
+    div()
+        .size(px(36.0))
+        .flex_shrink_0()
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary)
+        .flex()
+        .items_center()
+        .justify_center()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

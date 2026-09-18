@@ -1,5 +1,46 @@
 # Architecture decisions / 架构决策记录
 
+## ADR-0026 — Task-first pairing and shared device-card presentation
+
+- **Context (2026-09-18):** The approved settings prototypes place connection
+  setup beside the QR code and use compact, bordered icon anchors in host cards.
+  Protocol fields, repeated search bars and fake status controls obscure the task.
+- **Presentation:** GPUI owns layout and transient form state. Mobile configuration
+  and its QR board scroll independently on wide windows; narrow windows put the
+  QR first. The SSH library keeps its shared cached source, filtering and virtual
+  list; each item includes its card gutter. The shared 36px icon container is
+  decoration, not an additional interaction target. UI strings use static IDs.
+- **Preference:** `mobile_shortcut` defaults on and follows the existing runtime
+  setting, persistence and reset contracts. It routes to the existing settings
+  pane and clears an unrelated search; it does not introduce a second pairing UI.
+- **Authorization:** The existing encrypted endpoint's `HostState` remains the
+  only grant authority. Settings reads secret-free device summaries on a worker.
+  Online state requires the encrypted acknowledgement, not just registration.
+  Revocation persists a candidate credential entry before changing live grants
+  and cancelling the matching session; failed storage leaves the session intact.
+  Dropping the session cancels presence but preserves a reconnectable grant.
+  No new wire protocol, service, runtime dependency or key store is introduced.
+- **Honest boundaries:** LAN still uses its shared pairing code, not per-device
+  revocation. A relay invitation expires at its actual expiry; LAN has no invented
+  countdown. Background recovery is described, not exposed as a desktop switch
+  that claims control over a phone OS. Metadata export remains CSV only.
+- **Backup persistence:** The existing remote-backup adapter remains the storage
+  authority. Its optional selection field defaults compatibly for older files.
+  A coalescing worker keeps only the latest pending configuration and writes via
+  same-directory atomic replacement; it drains accepted edits after a view closes.
+  No network request or credential write is implied by autosave. Credentials still
+  use the platform store explicitly, and encryption passphrases remain session-only.
+  Snapshot listing and selection reuse the existing owned-name validation. The UI
+  does not invent file sizes, incremental sync or a retention policy beyond 10 copies.
+  This adds no dependency or daemon. Worker completion and stale network results
+  are guarded separately from view rendering; native restore requires confirmation.
+- **Validation:** Focused preference, reset, enrollment/reconnect/revocation and
+  GPUI layout/hit-target regressions accompany the change. Native visual review
+  at light/dark themes and different DPI remains distinct from compilation and
+  test results; this record does not assert packaged/device acceptance.
+- **Revisit:** Per-device LAN control requires a separately versioned enrollment
+  design; do not simulate it with UI-only records or reuse relay grants implicitly.
+
 ## ADR-0025 — Change-driven mobile screens and foreground connection recovery
 
 - **Context (2026-09-18):** An encrypted WebSocket does not remove round trips

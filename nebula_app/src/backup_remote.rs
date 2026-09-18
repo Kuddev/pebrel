@@ -17,6 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use log::warn;
 
+pub(crate) mod preferences;
+
 /// 远程备份配置文件（位于 `nebula_data_dir()`），独立于 `nebula_sync.txt`：
 /// 备份管道自身的配置不该被备份恢复覆盖到不可用。
 const CONFIG_FILE: &str = "pebrel_backup.txt";
@@ -28,7 +30,7 @@ const LEGACY_ARCHIVE_PREFIX: &str = "nebula-backup-";
 const ARCHIVE_SUFFIX: &str = ".nbk";
 
 /// 每个远端保留的归档份数。
-const KEEP_ARCHIVES: usize = 10;
+pub(crate) const KEEP_ARCHIVES: usize = 10;
 
 /// Windows 凭据管理器条目（与 `sync.rs` 的通用 DPAPI 存取同一后端）。
 #[cfg(windows)]
@@ -86,6 +88,7 @@ pub struct BackupRemoteConfig {
     pub sftp_path: String,
     /// 手写豁免开关（UI 故意不给入口）：自建内网 WebDAV/S3 允许 http。
     pub allow_http: bool,
+    pub selection: crate::encrypted_backup::BackupSelection,
 }
 
 pub fn config_path() -> PathBuf {
@@ -139,6 +142,11 @@ impl BackupRemoteConfig {
                 "sftp_destination" => cfg.sftp_destination = value.to_owned(),
                 "sftp_path" => cfg.sftp_path = value.to_owned(),
                 "allow_http" => cfg.allow_http = matches!(value, "1" | "true" | "on"),
+                "selection" => {
+                    if let Ok(selection) = serde_json::from_str(value) {
+                        cfg.selection = selection;
+                    }
+                },
                 _ => {},
             }
         }
@@ -181,8 +189,29 @@ impl BackupRemoteConfig {
     }
 
     pub fn save(&self) -> Result<(), String> {
+        self.save_at(&config_path())
+    }
+
+    fn save_at(&self, path: &std::path::Path) -> Result<(), String> {
+        use std::io::Write;
+        if [
+            &self.folder_path,
+            &self.webdav_url,
+            &self.webdav_username,
+            &self.s3_endpoint,
+            &self.s3_region,
+            &self.s3_bucket,
+            &self.s3_access_key,
+            &self.sftp_destination,
+            &self.sftp_path,
+        ]
+        .iter()
+        .any(|value| value.contains(['\r', '\n']))
+        {
+            return Err("Configuration values cannot contain line breaks".into());
+        }
         let text = format!(
-            "protocol={}\nfolder_path={}\nwebdav_url={}\nwebdav_username={}\ns3_endpoint={}\ns3_region={}\ns3_bucket={}\ns3_access_key={}\nsftp_destination={}\nsftp_path={}\nallow_http={}\n",
+            "protocol={}\nfolder_path={}\nwebdav_url={}\nwebdav_username={}\ns3_endpoint={}\ns3_region={}\ns3_bucket={}\ns3_access_key={}\nsftp_destination={}\nsftp_path={}\nallow_http={}\nselection={}\n",
             self.protocol.settings_value(),
             self.folder_path.trim(),
             self.webdav_url.trim(),
@@ -194,8 +223,16 @@ impl BackupRemoteConfig {
             self.sftp_destination.trim(),
             self.sftp_path.trim(),
             self.allow_http as u8,
+            serde_json::to_string(&self.selection).map_err(|error| error.to_string())?,
         );
-        std::fs::write(config_path(), text).map_err(|err| format!("写入备份配置失败：{err}"))
+        let parent = path.parent().ok_or("Invalid configuration path")?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+        temporary.write_all(text.as_bytes()).map_err(|error| error.to_string())?;
+        temporary.as_file().sync_all().map_err(|error| error.to_string())?;
+        temporary.persist(path).map_err(|error| error.to_string())?;
+        Ok(())
     }
 }
 
@@ -443,7 +480,11 @@ pub fn validate() -> Result<(), String> {
 /// 上传一份新归档并尽力清理超出保留数的旧份。阻塞，跑在后台线程。
 pub fn push(packet: &[u8]) -> Result<String, String> {
     let cfg = BackupRemoteConfig::load();
-    let backend = backend(&cfg)?;
+    push_to(&cfg, packet)
+}
+
+pub(crate) fn push_to(cfg: &BackupRemoteConfig, packet: &[u8]) -> Result<String, String> {
+    let backend = backend(cfg)?;
     let name = archive_name(now_unix());
     backend.put(&name, packet)?;
     let mut message =
@@ -463,15 +504,32 @@ pub fn push(packet: &[u8]) -> Result<String, String> {
 /// 取回远端最新一份归档：`(归档名, 密文字节)`。阻塞，跑在后台线程。
 pub fn pull_latest() -> Result<(String, Vec<u8>), String> {
     let cfg = BackupRemoteConfig::load();
-    let backend = backend(&cfg)?;
+    pull_from(&cfg, None)
+}
+
+/// Read-only listing doubles as the settings connection check. No probe file or
+/// directory is created and no retention cleanup runs until an explicit upload.
+pub(crate) fn snapshots(cfg: &BackupRemoteConfig) -> Result<Vec<String>, String> {
+    let backend = backend(cfg)?;
     let mut names: Vec<String> =
         backend.list()?.into_iter().filter(|name| is_archive_name(name)).collect();
     sort_archives(&mut names);
-    let Some(latest) = names.pop() else {
-        return Err(format!("{}上没有 Pebrel 备份归档", backend.describe()));
+    names.dedup();
+    names.reverse();
+    Ok(names)
+}
+
+pub(crate) fn pull_from(
+    cfg: &BackupRemoteConfig,
+    name: Option<&str>,
+) -> Result<(String, Vec<u8>), String> {
+    let name = match name {
+        Some(name) if is_archive_name(name) => name.to_owned(),
+        Some(_) => return Err("Invalid backup name".into()),
+        None => snapshots(cfg)?.into_iter().next().ok_or("No backup archives")?,
     };
-    let bytes = backend.get(&latest)?;
-    Ok((latest, bytes))
+    let bytes = backend(cfg)?.get(&name)?;
+    Ok((name, bytes))
 }
 
 /// 删除超出 [`KEEP_ARCHIVES`] 的最旧归档，返回清理后的份数。
@@ -1064,6 +1122,7 @@ mod tests {
             sftp_destination: "dev@10.0.0.8:2222".into(),
             sftp_path: "/home/dev/backups".into(),
             allow_http: true,
+            selection: Default::default(),
         };
         let text = format!(
             "protocol={}\nfolder_path={}\nwebdav_url={}\nwebdav_username={}\ns3_endpoint={}\ns3_region={}\ns3_bucket={}\ns3_access_key={}\nsftp_destination={}\nsftp_path={}\nallow_http=1\n",

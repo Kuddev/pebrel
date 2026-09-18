@@ -41,6 +41,7 @@ const RESET_KEYS: &[&str] = &[
     "vcs_display",
     "bell",
     "ai_toasts",
+    "mobile_shortcut",
     "fetch",
     "auto_check_updates",
     "auto_download_updates",
@@ -89,6 +90,15 @@ fn default_settings_text(text: &str) -> String {
             })
         })
         .collect()
+}
+
+#[test]
+fn mobile_shortcut_reset_preserves_hosts_and_restores_default() {
+    let reset = default_settings_text("mobile_shortcut=0\nsaved_hosts=my-pc\n");
+    assert_eq!(reset, "saved_hosts=my-pc\n");
+    assert!(
+        super::RuntimeSettings::from_raw(&super::RawSettings::from_text(&reset)).mobile_shortcut
+    );
 }
 
 fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {

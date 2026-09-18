@@ -7,7 +7,7 @@ pub(super) const REPOSITORY_URL: &str = "https://github.com/Kuddev/pebrel";
 pub(super) const BUG_REPORT_TEMPLATE: &str = "bug_report.yml";
 
 /// 左侧分区的稳定路由表。2026-08-28 产品裁定：默认 GPUI 导航收敛为常用项，
-/// 暂时隐藏“AI 供应商”和“备份”；页面实现与索引继续保留。后续恢复入口时只改
+/// 暂时隐藏“AI 供应商”；2026-09-18 云备份改版恢复入口，索引继续保留。后续恢复入口时只改
 /// [`HIDDEN_NAV_SECTIONS`]，不得删除或重排这里的条目。
 pub(super) const SECTION_IDS: [&str; 11] = [
     "application",
@@ -36,11 +36,11 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 11] = [
     "interaction 交互 copy 复制 paste 粘贴 tab 标签 panel 面板 focus follows mouse 焦点跟随鼠标 自动聚焦",
     "keymap key binding shortcut quick terminal 快速终端 独立窗口 已有窗口 按键映射 快捷键",
     "advanced 高级 session 会话 tray 托盘 restore 恢复 startup autostart login silent 自启动 静默启动 开机 登录",
-    "backup 备份 export 导出 restore 恢复",
+    "backup cloud 备份 云存储 云备份 webdav s3 snapshots 快照 export 导出 restore 恢复",
     "mobile phone pairing qr 手机 连接 配对 二维码 lan wifi 局域网 relay 中转 服务器",
 ];
 
-pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3, 9];
+pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
 
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
 /// 下标，不复制设置状态或路由。
