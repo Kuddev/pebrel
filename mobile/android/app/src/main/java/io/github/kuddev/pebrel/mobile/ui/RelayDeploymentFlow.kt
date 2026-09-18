@@ -215,7 +215,7 @@ internal fun serviceStageText(stage: String?): Int = when (stage) {
 
 internal fun serviceErrorText(error: Exception): Int = when ((error as? RelayServiceFailure)?.code) {
     "asset_missing", "binary_integrity_failed" -> R.string.service_asset_error
-    "linux_systemd_required", "systemd_247_required", "unsupported_arch", "supported_init_required" -> R.string.service_system_error
+    "linux_systemd_required", "systemd_247_required", "systemd_239_required", "unsupported_arch", "supported_init_required" -> R.string.service_system_error
     "openrc_supervisor_required" -> R.string.service_openrc_error
     "remote_tools_missing" -> R.string.service_tools_error
     "service_command_failed", "service_command_output_limit" -> R.string.service_manager_error

@@ -64,7 +64,7 @@ jobs:
       - name: Build native service
         run: cargo build --locked --release -p pebrel-mobile-link --features relay --bin pebrel-relay --target ${{ matrix.target }}
       - name: Verify relay lifecycle contracts
-        run: cargo test --locked -p pebrel-mobile-link --features relay relay::service::tests
+        run: cargo test --locked -p pebrel-mobile-link --features relay relay::service
       - name: Verify bounded endpoint backpressure
         run: cargo test --locked -p pebrel-mobile-link --features preview mobile_latency
       - name: Verify pairing presence and durable revocation
@@ -85,6 +85,47 @@ jobs:
         with:
           name: native-relay-${{ matrix.arch }}
           path: relay-native/
+          if-no-files-found: error
+  relay-installer:
+    name: Online relay installer and systemd 239
+    needs: native-relay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-relay-*
+          merge-multiple: true
+          path: relay-native
+      - name: Package versioned online installer
+        run: |
+          python3 mobile/tools/package_relay_installer.py --source relay-native --output relay-installer --commit "$GITHUB_SHA" --tag "relay-${GITHUB_SHA:0:12}"
+          sh -n relay-installer/pebrel-relay.sh
+          chmod 755 relay-installer/pebrel-relay-linux-*
+      - name: Verify script on disposable systemd host
+        run: sudo env PEBREL_DISPOSABLE_INSTALL_TEST=1 sh mobile/tools/test_online_relay.sh "$PWD/relay-installer/pebrel-relay.sh" "$PWD/relay-installer/pebrel-relay-linux-x86_64"
+      - name: Verify real systemd 239 and RHEL init.d layout
+        run: |
+          container=$(docker run -d --privileged --cgroupns=host --network none \
+            --tmpfs /run --tmpfs /tmp \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD/relay-installer:/fixture:ro" \
+            -v "$PWD/mobile/tools/test_online_relay.sh:/test.sh:ro" \
+            rockylinux/rockylinux:8-ubi-init /usr/sbin/init)
+          trap 'docker stop "$container" >/dev/null; docker rm "$container" >/dev/null' EXIT
+          for attempt in $(seq 1 30); do
+            state=$(docker exec "$container" systemctl is-system-running || true)
+            case "$state" in running|degraded) break;; esac
+            sleep 1
+          done
+          docker exec -e PEBREL_DISPOSABLE_INSTALL_TEST=1 "$container" sh /test.sh /fixture/pebrel-relay.sh /fixture/pebrel-relay-linux-x86_64 239
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pebrel-relay-online-installer
+          path: relay-installer/
           if-no-files-found: error
   windows:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_only && inputs.include_windows }}
@@ -255,6 +296,7 @@ jobs:
           --tests '*DesktopReconnectTest' --tests '*DesktopRecoveryTest'
           --tests '*DesktopScreenSyncTest' --tests '*HomeSessionsTest'
           --tests '*RelayConnectionTest' --tests '*CommandComposerTest'
+          --tests '*NativeRelayDeploymentTest'
       - name: Verify installable APK and record source and checksum
         run: |
           if [ "${{ inputs.package_only }}" != "true" ]; then python3 mobile/tools/test_apk_audit.py; fi

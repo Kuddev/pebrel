@@ -4,6 +4,48 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## Pebrel Relay — 0.4.10 preview
+
+### English
+
+#### Added
+
+- A downloadable Linux x64/ARM64 shell installer verifies a pinned executable,
+  starts the relay and checks local TLS readiness, with status/start/stop and
+  ownership-checked uninstall. Default TCP 443 falls back to 8443 when occupied;
+  other services and firewall rules are not modified.
+
+#### Fixed
+
+- Support systemd 239–246 with privilege dropping before accepting connections;
+  newer systemd retains DynamicUser/credential passing and OpenRC remains supported.
+- Normal RHEL `/etc/init.d` directory links no longer block systemd installation;
+  actual target links and foreign service files remain protected.
+- Android upload completion waits for remote integrity verification.
+
+### 中文
+
+#### 新增
+
+- Linux x64/ARM64 在线 Shell 安装脚本核对固定程序校验值，启动服务并检查本机
+  加密连接，提供状态、启停和所有权校验卸载。默认 TCP 443，占用时改用 8443，
+  不修改其他服务与防火墙。
+
+#### 修复
+
+- 支持 systemd 239–246，在接受连接前永久降权；新版 systemd 保留动态用户与
+  凭据传递，继续支持 OpenRC。
+- RHEL 正常的 `/etc/init.d` 目录链接不再阻止 systemd 安装；实际目标链接与
+  其他服务文件仍受保护。
+- Android 等待远端校验通过后才显示上传完成。
+
+Testing prerelease; local readiness is not proof of public reachability. Other
+installed versions are not silently upgraded. Uninstall retains credentials unless
+purge is explicit. Final relay asset hashes are supplied in `SHA256SUMS`.
+
+这是测试预发布；本机就绪不代表公网可达，不静默升级已有其他版本。
+卸载默认保留配对凭据，只有明确清理才删除。最终中转资产哈希见 `SHA256SUMS`。
+
 ## 1.8.1 - 2026-09-15
 
 ### English

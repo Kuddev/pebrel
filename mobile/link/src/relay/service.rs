@@ -53,6 +53,13 @@ pub trait ServiceControl {
     fn run(&self, args: &[&str]) -> io::Result<()>;
     fn ready(&self) -> io::Result<()>;
 
+    fn definition(&self) -> io::Result<&'static str> {
+        Ok(match self.manager() {
+            ServiceManager::Systemd => unit(),
+            ServiceManager::OpenRc => manager::openrc_script(),
+        })
+    }
+
     /// Only stable stage identifiers may leave this boundary, never command
     /// output, access credentials or a guessed completion percentage.
     fn progress(&self, _stage: ServiceStage) {}
@@ -249,19 +256,42 @@ fn install_under(
             executable_permissions(&executable)?;
         }
         if !service.exists() {
-            write_service(&service, control.manager())?;
+            // Restore the exact recorded definition, even after an OS upgrade.
+            // Never silently replace a recorded legacy unit with a modern one.
+            let definitions = match control.manager() {
+                ServiceManager::Systemd => vec![unit(), manager::legacy_systemd_unit()],
+                ServiceManager::OpenRc => vec![manager::openrc_script()],
+            };
+            let definition = definitions
+                .into_iter()
+                .find(|value| digest(value.as_bytes()) == previous.files[files[1]])
+                .ok_or_else(|| io::Error::other("managed_file_changed"))?;
+            write_service(&service, control.manager(), definition)?;
         }
         control.run(&["daemon-reload"])?;
         control.progress(ServiceStage::Starting);
         control.run(&["enable", "--now", UNIT])?;
         return wait_until_ready(control);
     }
-    for relative in files.into_iter().chain([OWNED[1], OPENRC_UNIT]) {
+    for relative in files {
         if safe(root, relative)?.exists() {
             return Err(io::Error::other("installation_conflict"));
         }
     }
+    // An absent alternate-manager service is not an installation target. RHEL
+    // legitimately symlinks /etc/init.d to rc.d/init.d. Only inspect the leaf;
+    // actual writes still go through safe(), including every ancestor.
+    let alternate = match control.manager() {
+        ServiceManager::Systemd => OPENRC_UNIT,
+        ServiceManager::OpenRc => OWNED[1],
+    };
+    match fs::symlink_metadata(root.join(alternate)) {
+        Ok(_) => return Err(io::Error::other("installation_conflict")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+        Err(error) => return Err(error),
+    }
     control.run(&["--version"])?;
+    let definition = control.definition()?;
     let config_dir = root.join("etc/pebrel-relay");
     if config_dir.exists() && fs::read_dir(&config_dir)?.next().is_some() {
         return Err(io::Error::other("configuration_directory_not_empty"));
@@ -277,7 +307,7 @@ fn install_under(
     control.progress(ServiceStage::Installing);
     setup::write_new_private(&executable, &bytes)?;
     executable_permissions(&executable)?;
-    write_service(&service, control.manager())?;
+    write_service(&service, control.manager(), definition)?;
     let mut record = Manifest {
         product: "pebrel-relay".into(),
         version: 1,
@@ -306,15 +336,8 @@ fn executable_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn write_service(path: &Path, manager: ServiceManager) -> io::Result<()> {
-    setup::write_new_private(
-        path,
-        if manager == ServiceManager::OpenRc {
-            manager::openrc_script().as_bytes()
-        } else {
-            unit().as_bytes()
-        },
-    )?;
+fn write_service(path: &Path, manager: ServiceManager, definition: &str) -> io::Result<()> {
+    setup::write_new_private(path, definition.as_bytes())?;
     if manager == ServiceManager::OpenRc {
         executable_permissions(path)?;
     }
@@ -377,6 +400,95 @@ mod tests {
     }
 
     struct OpenRcControl(FakeControl);
+
+    struct LegacySystemdControl(FakeControl);
+    impl ServiceControl for LegacySystemdControl {
+        fn run(&self, args: &[&str]) -> io::Result<()> {
+            self.0.run(args)
+        }
+        fn ready(&self) -> io::Result<()> {
+            Ok(())
+        }
+        fn definition(&self) -> io::Result<&'static str> {
+            Ok(manager::legacy_systemd_unit())
+        }
+    }
+
+    #[test]
+    fn legacy_systemd_unit_is_recorded_and_restored_without_rotating_credentials() {
+        let (root, binary) = fixture();
+        let control = LegacySystemdControl(FakeControl::default());
+        install_under(
+            &root,
+            &binary,
+            &digest(b"fixture-executable"),
+            "localhost",
+            "0.0.0.0:8443".parse().unwrap(),
+            &control,
+        )
+        .unwrap();
+        let access = fs::read(root.join(OWNED[3])).unwrap();
+        let definition = fs::read(root.join(OWNED[1])).unwrap();
+        fs::remove_file(root.join(OWNED[1])).unwrap();
+        install_under(
+            &root,
+            &binary,
+            &digest(b"fixture-executable"),
+            "localhost",
+            "0.0.0.0:8443".parse().unwrap(),
+            &FakeControl::default(),
+        )
+        .unwrap();
+        assert_eq!(definition, fs::read(root.join(OWNED[1])).unwrap());
+        assert_eq!(access, fs::read(root.join(OWNED[3])).unwrap());
+        uninstall_under(&root, true, &control).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rhel_init_directory_symlink_is_allowed_but_foreign_service_is_not() {
+        use std::os::unix::fs::symlink;
+        let (root, binary) = fixture();
+        fs::create_dir_all(root.join("etc/rc.d/init.d")).unwrap();
+        symlink("rc.d/init.d", root.join("etc/init.d")).unwrap();
+        let control = FakeControl::default();
+        let install = || {
+            install_under(
+                &root,
+                &binary,
+                &digest(b"fixture-executable"),
+                "localhost",
+                "0.0.0.0:8443".parse().unwrap(),
+                &control,
+            )
+        };
+        fs::write(root.join(OPENRC_UNIT), b"foreign service").unwrap();
+        assert_eq!(install().unwrap_err().to_string(), "installation_conflict");
+        assert!(!root.join(MANIFEST).exists());
+        fs::remove_file(root.join(OPENRC_UNIT)).unwrap();
+        symlink("missing-script", root.join(OPENRC_UNIT)).unwrap();
+        assert_eq!(install().unwrap_err().to_string(), "installation_conflict");
+        fs::remove_file(root.join(OPENRC_UNIT)).unwrap();
+        install().unwrap();
+        uninstall_under(&root, true, &control).unwrap();
+        assert!(root.join("etc/init.d").is_symlink());
+        // The same link is still forbidden when it IS the write target.
+        assert_eq!(
+            install_under(
+                &root,
+                &binary,
+                &digest(b"fixture-executable"),
+                "localhost",
+                "0.0.0.0:8443".parse().unwrap(),
+                &OpenRcControl(FakeControl::default())
+            )
+            .unwrap_err()
+            .to_string(),
+            "symlink_installation_path"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
     impl ServiceControl for OpenRcControl {
         fn manager(&self) -> ServiceManager {
             ServiceManager::OpenRc

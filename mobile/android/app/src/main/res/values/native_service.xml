@@ -14,7 +14,7 @@
     <string name="service_uninstall">Uninstall</string>
     <string name="service_uninstall_hint">Stops the relay and removes only Pebrel-managed service files. Connected devices will disconnect. Credentials are kept for reinstallation unless you choose to remove them.</string>
     <string name="service_purge">Also remove pairing configuration and keys</string>
-    <string name="service_requirements">Supports Linux x64/ARM64 with systemd 247+ or Alpine OpenRC. Root SSH access is required for management; the relay runs without root privileges. Both devices must reach the relay port (443 by default); Pebrel does not change your firewall.</string>
+    <string name="service_requirements">Supports Linux x64/ARM64 with systemd 239+ or Alpine OpenRC. Root SSH access is required for management; the relay runs without root privileges. Both devices must reach the relay port (443 by default); Pebrel does not change your firewall.</string>
     <string name="service_pc_next">On your computer, open Settings → Phone connection → Relay, select this SSH server and choose Use this relay server. Then generate a QR code for your phone. You can also save a private configuration file below.</string>
     <string name="service_export_private">This file contains server access credentials. Transfer it privately to your computer; do not publish it.</string>
     <string name="service_uploading">Uploading the bundled service to the server…</string>
@@ -40,7 +40,7 @@
     <string name="service_not_installed">Not installed</string>
     <string name="service_unchecked">Status not checked</string>
     <string name="service_asset_error">The verified native service package is missing or invalid. Install an updated Pebrel package.</string>
-    <string name="service_system_error">Requires Linux x64/ARM64 with a running systemd 247+ or OpenRC service manager. SSH login alone does not provide a service manager.</string>
+    <string name="service_system_error">Requires Linux x64/ARM64 with a running systemd 239+ or OpenRC service manager. SSH login alone does not provide a service manager.</string>
     <string name="service_operation_failed">Operation failed</string>
     <string name="service_openrc_error">OpenRC is missing rc-update or supervise-daemon. Check that OpenRC is fully installed and running.</string>
     <string name="service_tools_error">The SSH host needs head, base64, sha256sum, mktemp and chmod to receive and verify the service.</string>

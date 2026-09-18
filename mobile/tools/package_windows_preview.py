@@ -50,7 +50,7 @@ def package(desktop: Path, output: Path, commit: str) -> Path:
             if required not in record["files"]:
                 raise ValueError(f"Missing desktop runtime: {required}")
         # Native Settings replaces the external Node/browser pairing launcher.
-        for name in ("Start-Pebrel-Preview.cmd", "START-NATIVE-LAN.md", "SETTINGS-PREVIEW-0.4.9.md"):
+        for name in ("Start-Pebrel-Preview.cmd", "START-NATIVE-LAN.md", "SETTINGS-PREVIEW-0.4.9.md", "RELAY-PREVIEW-0.4.10.md"):
             data = (root / "mobile/desktop" / name).read_bytes()
             if name.endswith(".cmd"):
                 data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")

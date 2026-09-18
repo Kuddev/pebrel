@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.kuddev.pebrel.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.4.9-preview"
+        versionCode = 17
+        versionName = "0.4.10-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }

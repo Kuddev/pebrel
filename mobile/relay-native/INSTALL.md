@@ -1,4 +1,45 @@
-# Manual native relay installation / 手动安装原生中转
+# Native relay installation / 安装原生中转
+
+## Online installer / 在线脚本（推荐）
+
+Download `pebrel-relay.sh` from the dedicated **Pebrel Relay** GitHub prerelease,
+then run `sh pebrel-relay.sh` as root. The exact public download command is included
+in that release. Do not execute the unrendered source template: a published script
+pins its release and both binary SHA256 values. No GitHub login, Docker, Node.js,
+archive upload or extraction is needed on the server.
+
+从独立的 **Pebrel Relay** GitHub 预发布下载 `pebrel-relay.sh`，以 root 执行
+`sh pebrel-relay.sh`。对应发布页提供可复制的下载命令。不要执行源码模板；
+发布脚本已固定版本与两种架构的 SHA256，不需要 GitHub 登录、Docker、Node.js
+或手动上传、解压安装包。
+
+- Enter the server IP or domain when prompted. Default TCP port is 443; a busy
+  443 selects 8443. If both are busy, installation stops without killing services.
+- `--address HOST --port PORT` explicitly chooses another address/port. A domain
+  is optional. Cloud security groups, NAT and firewalls remain user-controlled.
+- `sh pebrel-relay.sh status|start|stop|uninstall|purge` manages the same native
+  service used by the app. `uninstall` retains pairing; `purge` deletes it.
+- Repeated installation retains an existing identity/port. Different installed
+  binary versions are not silently overwritten. The script requires outbound HTTPS
+  access to GitHub and curl or wget. It fails closed on download/checksum errors.
+
+安装仅询问服务器 IP 或域名；默认 443，被占用则使用 8443，两者都占用时停止并
+提示指定端口，不结束其他服务。用 `--address 地址 --port 端口` 可明确指定。
+重复安装保留原配对身份与端口，已有不同版本不会被静默覆盖。状态、启停与卸载
+仍使用应用共用的原生服务实现，脚本不维护第二套服务规则。`uninstall` 保留配置，
+`purge` 删除配对凭据。服务器须有 curl 或 wget 且能通过 HTTPS 访问 GitHub。
+
+Systemd 239–246 starts the same bounded native relay with a read/bind-then-drop
+privilege boundary, also used by OpenRC. Systemd 247+ retains credential passing
+and DynamicUser. Runtime traffic never runs as root; only installation and the
+old-manager single-threaded startup need root. A successful local TLS probe does
+not prove public port reachability. No firewall or unrelated service is modified.
+
+systemd 239–246 与 OpenRC 使用程序已有的启动降权路径：读取凭据并绑定端口后，
+先永久降权，再创建线程和处理连接；247+ 保留凭据传递与动态用户方案。
+本机加密连接检查成功不等于公网端口已放行，脚本不改防火墙或其他服务。
+
+## Offline kit / 离线包
 
 This offline kit contains Linux x86_64 and aarch64 static executables extracted
 from the verified preview APK, their hashes and exact source manifests. It does
@@ -7,7 +48,8 @@ SHA256 against the separately supplied delivery checksum before uploading.
 
 本离线包包含从已核验 APK 提取的 Linux x64 / ARM64 静态程序、哈希和源码清单。
 不需要 Docker、Node.js、域名或在线下载脚本。先按交付的 SHA256 核对压缩包，
-再上传到服务器。支持 Alpine OpenRC 或 systemd 247+，需要 root 登录。
+再上传到服务器。新版支持 Alpine OpenRC 或 systemd 239+，需要 root 登录。
+历史 0.4.6 离线包仍包含旧安装器，不具备本次兼容性修复。
 没有正在运行的服务管理器的 SSH 容器不属于此安装器支持的主机，不要伪造
 `/run/openrc` 或创建 `softlevel` 文件来绕过检查。
 

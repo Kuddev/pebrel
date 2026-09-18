@@ -25,7 +25,8 @@ class NativeRelayDeploymentTest {
         assertEquals(InstallStepState.WAITING, failed.state(4))
         assertEquals(failed, failed.advance(RelayServiceProgress("ready")))
         val uploaded = progress.advance(RelayServiceProgress("uploaded", 65536, 65536))
-        assertEquals(3, uploaded.step) // Not installed just because the sender reached 100%.
+        assertEquals(3, uploaded.step) // Remote hash verified; not yet installed.
+        assertEquals(uploaded, uploaded.advance(RelayServiceProgress("uploading", 65536, 65536)))
         val verifying = uploaded.advance(RelayServiceProgress("verifying"))
         assertEquals(InstallStepState.ACTIVE, verifying.state(4))
         assertEquals(InstallStepState.CANCELLED, verifying.copy(cancelled = true).state(4))
@@ -67,7 +68,7 @@ class NativeRelayDeploymentTest {
     }
 
     @Test fun managerFailuresAreNotCollapsedAndUnknownOutputStaysPrivate() {
-        for (code in listOf("supported_init_required", "openrc_supervisor_required", "service_command_failed", "configuration_directory_not_empty")) {
+        for (code in listOf("systemd_239_required", "supported_init_required", "openrc_supervisor_required", "service_command_failed", "configuration_directory_not_empty")) {
             val error = assertThrows(RelayServiceFailure::class.java) {
                 NativeRelayDeployment.checkedMessages(1, emptyList(), listOf(JSONObject().put("error", code)))
             }
@@ -99,11 +100,12 @@ class NativeRelayDeploymentTest {
     }
     @Test fun onlyRealAllowlistedStagesReachProgressAndExportsRemainPrivate() {
         val updates = mutableListOf<String>()
-        val stream = ("{\"event\":\"progress\",\"stage\":\"starting\"}\n" + access().toString(2) +
+        val stream = ("{\"event\":\"progress\",\"stage\":\"uploaded\"}\n" +
+            "{\"event\":\"progress\",\"stage\":\"starting\"}\n" + access().toString(2) +
             "\n{\"event\":\"progress\",\"stage\":\"private-server-output\"}\n" +
             "{\"installed\":true,\"running\":true,\"ready\":false,\"configuration_retained\":true}\n").byteInputStream()
         val results = NativeRelayDeployment.readMessages(stream) { updates += it }
-        assertEquals(listOf("starting"), updates)
+        assertEquals(listOf("uploaded", "starting"), updates)
         assertEquals(2, results.size)
         assertFalse(NativeRelayDeployment.parseState(results.last()).ready)
     }

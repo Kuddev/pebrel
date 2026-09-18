@@ -18,8 +18,8 @@ class RelayServiceFailure(val code: String) : java.io.IOException(code)
  */
 object NativeRelayDeployment {
     private const val BINARY = "/opt/pebrel-relay/pebrel-relay"
-    private val stages = setOf("checking", "initializing", "installing", "starting", "verifying", "ready", "stopping", "stopped", "removing", "uninstalled")
-    private val failures = setOf("systemd_247_required", "linux_systemd_required", "root_required",
+    private val stages = setOf("checking", "uploaded", "initializing", "installing", "starting", "verifying", "ready", "stopping", "stopped", "removing", "uninstalled")
+    private val failures = setOf("systemd_247_required", "systemd_239_required", "linux_systemd_required", "root_required",
         "installation_conflict", "managed_file_changed", "explicit_update_required", "service_not_ready",
         "port_in_use", "permission_denied", "file_or_service_not_found", "binary_integrity_failed",
         "supported_init_required", "openrc_supervisor_required", "service_manager_changed",
@@ -61,8 +61,8 @@ object NativeRelayDeployment {
                     stage=${'$'}(mktemp -d /tmp/pebrel-relay.XXXXXXXX)
                     trap 'rm -f "${'$'}stage/pebrel-relay"; rmdir "${'$'}stage"' EXIT
                     head -c ${encoded.size} | base64 -d > "${'$'}stage/pebrel-relay"
-                    printf '{"event":"progress","stage":"installing"}\n'
                     printf '%s  %s\n' '$sha' "${'$'}stage/pebrel-relay" | sha256sum -c - >/dev/null || { printf '{"error":"binary_integrity_failed"}\n'; exit 1; }
+                    printf '{"event":"progress","stage":"uploaded"}\n'
                     chmod 700 "${'$'}stage/pebrel-relay"
                     "${'$'}stage/pebrel-relay" service-install --source "${'$'}stage/pebrel-relay" --sha256 '$sha' --address ${quote(endpoint)} --port $port
                     $BINARY export-access --directory /etc/pebrel-relay
@@ -71,7 +71,7 @@ object NativeRelayDeployment {
                 """.trimIndent()
                 progress(RelayServiceProgress("uploading", 0, encoded.size))
                 val result = command(ssh, install, encoded, stage) { sent, total ->
-                    progress(RelayServiceProgress(if (sent == total) "uploaded" else "uploading", sent, total))
+                    progress(RelayServiceProgress("uploading", sent, total))
                 }
                 val access = result.firstOrNull { it.optInt("version") == 2 && it.has("desktopToken") }
                     ?: throw RelayServiceFailure("invalid_access")

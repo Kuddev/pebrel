@@ -18,6 +18,7 @@ fn main() {
 fn error_code(error: &io::Error) -> &'static str {
     const CODES: &[&str] = &[
         "systemd_247_required",
+        "systemd_239_required",
         "linux_systemd_required",
         "root_required",
         "supported_init_required",

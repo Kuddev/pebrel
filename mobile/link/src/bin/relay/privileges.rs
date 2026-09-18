@@ -1,4 +1,4 @@
-//! OpenRC has no systemd DynamicUser/LoadCredential. Read keys and bind first,
+//! OpenRC and older systemd lack LoadCredential. Read keys and bind first,
 //! then permanently drop to nobody before creating threads or accepting peers.
 use std::io;
 

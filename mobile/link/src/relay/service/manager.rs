@@ -38,17 +38,7 @@ impl ServiceControl for SystemService {
     fn run(&self, args: &[&str]) -> io::Result<()> {
         if self.0 == ServiceManager::Systemd {
             if args == ["--version"] {
-                let output = process::run("/usr/bin/systemctl", args, true)?;
-                let version = std::str::from_utf8(&output)
-                    .ok()
-                    .and_then(|text| text.split_whitespace().nth(1))
-                    .and_then(|value| value.parse::<u32>().ok())
-                    .unwrap_or(0);
-                return if version >= 247 {
-                    Ok(())
-                } else {
-                    Err(io::Error::other("systemd_247_required"))
-                };
+                return systemd_version().map(|_| ());
             }
             return process::run("/usr/bin/systemctl", args, false).map(|_| ());
         }
@@ -91,6 +81,14 @@ impl ServiceControl for SystemService {
         .map(|_| ())
     }
 
+    fn definition(&self) -> io::Result<&'static str> {
+        if self.0 == ServiceManager::OpenRc {
+            Ok(openrc_script())
+        } else {
+            systemd_definition(systemd_version()?)
+        }
+    }
+
     fn progress(&self, stage: ServiceStage) {
         use io::Write;
         let _ = writeln!(
@@ -98,6 +96,58 @@ impl ServiceControl for SystemService {
             "{}",
             serde_json::json!({"event":"progress", "stage":stage})
         );
+    }
+}
+
+fn systemd_version() -> io::Result<u32> {
+    let output = process::run("/usr/bin/systemctl", &["--version"], true)?;
+    let version = std::str::from_utf8(&output)
+        .ok()
+        .and_then(|text| text.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| io::Error::other("systemd_239_required"))?;
+    systemd_definition(version)?;
+    Ok(version)
+}
+
+fn systemd_definition(version: u32) -> io::Result<&'static str> {
+    match version {
+        247.. => Ok(super::unit()),
+        239..=246 => Ok(legacy_systemd_unit()),
+        _ => Err(io::Error::other("systemd_239_required")),
+    }
+}
+
+/// Read protected credentials and bind before permanently dropping to nobody.
+/// This is the same single-threaded privilege boundary already used by OpenRC;
+/// systemd 239 has no LoadCredential/%d support. No accounts are created.
+pub(super) fn legacy_systemd_unit() -> &'static str {
+    "[Unit]\nDescription=Pebrel encrypted mobile relay\nAfter=network-online.target\nWants=network-online.target\n\n\
+[Service]\nType=simple\nUMask=0077\n\
+ExecStart=/opt/pebrel-relay/pebrel-relay serve-unprivileged --config /etc/pebrel-relay/relay.json\n\
+Restart=on-failure\nRestartSec=3\nTimeoutStopSec=10\n\
+NoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nPrivateDevices=yes\n\
+ProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\n\
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID\n\
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nLimitNOFILE=1024\nTasksMax=64\n\n\
+[Install]\nWantedBy=multi-user.target\n"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_matches_available_systemd_features() {
+        assert!(systemd_definition(238).is_err());
+        for version in [239, 245, 246] {
+            let unit = systemd_definition(version).unwrap();
+            assert!(unit.contains("serve-unprivileged"));
+            assert!(unit.contains("CAP_SETUID CAP_SETGID"));
+            assert!(!unit.contains("LoadCredential"));
+            assert!(!unit.contains("%d/"));
+        }
+        assert!(systemd_definition(247).unwrap().contains("LoadCredential"));
     }
 }
 
