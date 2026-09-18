@@ -1,5 +1,12 @@
 {
   "mobile": {
+    "select_server": "SSH server",
+    "use_server": "Use this relay server",
+    "reading_server": "Reading server configuration…",
+    "select_server_hint": "Select a saved SSH host or enter root@host. Install the relay from your phone first, then read its configuration here over verified SSH. Existing SSH credentials are reused; no file transfer is needed.",
+    "server_read_error": "Could not read relay configuration. First connect to this host in the SSH host list to verify login and host key, and confirm the relay is installed. Reading its private configuration requires root access.",
+    "generate_control": "Generate QR · allow terminal input",
+    "generate_read_only": "Generate QR · view only",
     "title": "Mobile connection",
     "overview": "Pair Pebrel on your phone with this computer. QR codes are generated inside Pebrel; no browser or Node.js helper is needed on this computer.",
     "pair_title": "Pair a phone",

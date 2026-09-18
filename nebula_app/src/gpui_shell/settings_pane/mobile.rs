@@ -13,6 +13,11 @@ pub(super) struct MobileState {
     mode: Mode,
     addresses: Vec<connection::LanAddress>,
     address_select: SharedSelect,
+    server_select: SharedSelect,
+    server_hosts: Vec<(String, String)>,
+    server_input: Entity<InputState>,
+    server_loading: bool,
+    server_failure: bool,
     inputs: Vec<Entity<InputState>>,
     form_values: Vec<String>,
     relay_version: u32,
@@ -34,6 +39,9 @@ impl MobileState {
     pub(super) fn new(window: &mut Window, cx: &mut Context<SettingsPane>) -> Self {
         let address_select =
             cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
+        let server_select =
+            cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
+        let server_input = cx.new(|cx| InputState::new(window, cx).placeholder("root@server"));
         let inputs = ["wss://", "", "", "", "0", ""]
             .into_iter()
             .enumerate()
@@ -47,6 +55,11 @@ impl MobileState {
             mode: Mode::Lan,
             addresses: Vec::new(),
             address_select,
+            server_select,
+            server_hosts: Vec::new(),
+            server_input,
+            server_loading: false,
+            server_failure: false,
             inputs,
             form_values: ["wss://", "", "", "", "0", ""].into_iter().map(str::to_owned).collect(),
             relay_version: 2,
@@ -99,6 +112,8 @@ impl Drop for MobileState {
 
 impl SettingsPane {
     fn mobile_invalidate(&mut self, cx: &mut Context<Self>) {
+        self.mobile.server_loading = false;
+        self.mobile.server_failure = false;
         if self.mobile.snapshot.is_some() || self.mobile.operation.is_some() {
             connection::stop();
         }
@@ -144,6 +159,28 @@ impl SettingsPane {
         let feedback = self.mobile.copy_feedback.clone();
         self._subscriptions.push(cx.observe(&feedback, |_, _, cx| cx.notify()));
         self.mobile_refresh_addresses(window, cx);
+        self.mobile_refresh_servers(window, cx);
+        let server_select = self.mobile.server_select.clone();
+        self._subscriptions.push(cx.subscribe_in(
+            &server_select,
+            window,
+            |this, _, event, window, cx| {
+                if matches!(event, SelectEvent::Confirm(_)) {
+                    if let Some(destination) = this
+                        .mobile
+                        .server_select
+                        .read(cx)
+                        .selected_index(cx)
+                        .and_then(|index| this.mobile.server_hosts.get(index.row))
+                        .map(|host| host.0.clone())
+                    {
+                        this.mobile
+                            .server_input
+                            .update(cx, |state, cx| state.set_value(destination, window, cx));
+                    }
+                }
+            },
+        ));
         let load = cx.background_executor().spawn(async { connection::saved_relay() });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Some(saved)) = load.await {
@@ -291,7 +328,7 @@ impl SettingsPane {
     }
 
     fn mobile_generate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.mobile.operation.is_some() {
+        if self.mobile.operation.is_some() || self.mobile.server_loading {
             return;
         }
         // A late credential load must not overwrite a form already submitted
@@ -363,6 +400,60 @@ impl SettingsPane {
         cx.notify();
     }
 
+    fn mobile_refresh_servers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let load = cx.background_executor().spawn(async { connection::relay_hosts() });
+        cx.spawn_in(window, async move |this, cx| {
+            let hosts = load.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Ok(hosts) = hosts {
+                    let labels = hosts
+                        .iter()
+                        .map(|host| SharedString::from(format!("{} ({})", host.1, host.0)))
+                        .collect();
+                    this.mobile.server_hosts = hosts;
+                    this.mobile
+                        .server_select
+                        .update(cx, |state, cx| state.set_items(labels, window, cx));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn mobile_use_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mobile.server_loading || self.mobile.operation.is_some() {
+            return;
+        }
+        let destination = self.mobile.server_input.read(cx).value().trim().to_owned();
+        if destination.is_empty() {
+            return;
+        }
+        self.mobile_invalidate(cx);
+        self.mobile.edit_sequence = self.mobile.edit_sequence.wrapping_add(1);
+        let sequence = self.mobile.edit_sequence;
+        self.mobile.server_loading = true;
+        self.mobile.server_failure = false;
+        let load =
+            cx.background_executor().spawn(async move { connection::relay_from_ssh(&destination) });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = load.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.mobile.edit_sequence != sequence || this.mobile.mode != Mode::Relay {
+                    return;
+                }
+                this.mobile.server_loading = false;
+                match result {
+                    Ok(data) => this.mobile_import(&data, window, cx),
+                    Err(_) => this.mobile.server_failure = true,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn mobile_import_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
@@ -417,7 +508,7 @@ impl SettingsPane {
         let muted = cx.theme().muted_foreground;
         let border = cx.theme().border;
         let selected_bg = cx.theme().list_active;
-        let busy = self.mobile.operation.is_some();
+        let busy = self.mobile.operation.is_some() || self.mobile.server_loading;
         let mut choices =
             v_flex().w_full().rounded_md().border_1().border_color(border).overflow_hidden();
         for (index, mode, title, hint) in [
@@ -506,39 +597,91 @@ impl SettingsPane {
                 )));
         } else {
             card = card
+                .child(div().text_sm().child(text(Message::MobileSelectServer)))
+                .when(!self.mobile.server_hosts.is_empty(), |card| {
+                    card.child(Select::new(&self.mobile.server_select).disabled(busy))
+                })
+                .child(Input::new(&self.mobile.server_input).disabled(busy))
                 .child(
-                    Button::new("mobile-import-file")
-                        .label(text(Message::MobileImportFile))
-                        .disabled(busy)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.mobile_import_file(window, cx)),
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Button::new("mobile-use-server")
+                                .label(text(if self.mobile.server_loading {
+                                    Message::MobileReadingServer
+                                } else {
+                                    Message::MobileUseServer
+                                }))
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.mobile_use_server(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("mobile-refresh-servers")
+                                .label(text(Message::MobileRefresh))
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.mobile_refresh_servers(window, cx)
+                                })),
                         ),
                 )
                 .child(
-                    Button::new("mobile-import-relay")
-                        .label(text(Message::MobileImport))
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let data = cx.read_from_clipboard().and_then(|item| item.text());
-                            if let Some(data) = data {
-                                this.mobile_invalidate(cx);
-                                this.mobile.edit_sequence =
-                                    this.mobile.edit_sequence.wrapping_add(1);
-                                this.mobile_import(&data, window, cx);
-                            } else {
-                                this.mobile.failure = Some(Failure::Invalid);
-                                cx.notify();
-                            }
-                        })),
+                    div().text_sm().text_color(muted).child(text(Message::MobileSelectServerHint)),
                 )
-                .child(div().text_sm().text_color(muted).child(text(Message::MobileRelaySetupHint)))
-                .child(div().text_sm().text_color(cx.theme().warning).child(text(
-                    if self.mobile.relay_version == 2 {
-                        Message::MobileRelaySecure
-                    } else {
-                        Message::MobileRelaySecurity
-                    },
-                )));
+                .when(self.mobile.server_failure, |card| {
+                    card.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(text(Message::MobileServerReadError)),
+                    )
+                })
+                .when(self.mobile.form_values[0] != "wss://", |card| {
+                    card.child(div().text_sm().child(self.mobile.form_values[0].clone()))
+                });
+            if self.mobile.advanced {
+                card = card
+                    .child(
+                        Button::new("mobile-import-file")
+                            .label(text(Message::MobileImportFile))
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.mobile_import_file(window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("mobile-import-relay")
+                            .label(text(Message::MobileImport))
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let data = cx.read_from_clipboard().and_then(|item| item.text());
+                                if let Some(data) = data {
+                                    this.mobile_invalidate(cx);
+                                    this.mobile.edit_sequence =
+                                        this.mobile.edit_sequence.wrapping_add(1);
+                                    this.mobile_import(&data, window, cx);
+                                } else {
+                                    this.mobile.failure = Some(Failure::Invalid);
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child(text(Message::MobileRelaySetupHint)),
+                    );
+            }
+            card = card.child(div().text_sm().text_color(cx.theme().warning).child(text(
+                if self.mobile.relay_version == 2 {
+                    Message::MobileRelaySecure
+                } else {
+                    Message::MobileRelaySecurity
+                },
+            )));
         }
         card = card
             .child(
@@ -610,8 +753,10 @@ impl SettingsPane {
                         .primary()
                         .label(text(if busy {
                             Message::MobileGenerating
+                        } else if self.mobile.allow_input {
+                            Message::MobileGenerateControl
                         } else {
-                            Message::MobileGenerate
+                            Message::MobileGenerateReadOnly
                         }))
                         .disabled(
                             busy || (self.mobile.mode == Mode::Lan

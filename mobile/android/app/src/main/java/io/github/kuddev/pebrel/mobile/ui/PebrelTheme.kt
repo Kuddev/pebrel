@@ -53,6 +53,7 @@ fun PebrelTheme(content: @Composable () -> Unit) {
         surfaceVariant = palette.color("selected"),
         onSecondaryContainer = palette.color("foreground"), error = palette.color("red"),
         surfaceContainer = background, surfaceContainerLow = background,
+        surfaceContainerLowest = background, surfaceContainerHighest = palette.color("selected"),
         surfaceContainerHigh = palette.color("shell"), surfaceTint = Color.Transparent,
     )
     val view = LocalView.current

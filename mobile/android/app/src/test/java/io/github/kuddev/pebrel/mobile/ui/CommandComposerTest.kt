@@ -29,6 +29,33 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CommandComposerTest {
+    @Test fun readOnlyPaneExplainsAuthorizationAndOffersPairingWithoutSending() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        var scanned = false
+        compose.setContent { MaterialTheme { DesktopTerminalScreen(
+            DesktopWorkspace("pc", HostProfile("host", "PC", "192.0.2.1", 22, "root"), status = "ready", allowInput = false),
+            DesktopPane(1, 1, "shell", "", "", "idle", 0), repository, {}, {}, { scanned = true }) } }
+        compose.onNodeWithText(context.getString(R.string.composer_pc_read_only_short)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.composer_pc_enable_input)).performClick()
+        compose.onNodeWithText(context.getString(R.string.composer_pc_read_only)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.composer_pc_scan_again)).performClick()
+        compose.runOnIdle { assertTrue(scanned) }
+    }
+
+    @Test fun terminalChromeUsesRemoteDarkAndLightColorsAndFailureEndsProgress() {
+        val fallback = androidx.compose.material3.lightColorScheme()
+        for ((bg, fg) in listOf(0xff2e3440.toInt() to 0xffeceff4.toInt(), 0xfffcfbf9.toInt() to 0xff222222.toInt())) {
+            val frame = io.github.kuddev.pebrel.terminal.TerminalFrame(emptyArray(), intArrayOf(1, 1, 0, 0, 0, bg, fg, 2, fg, 0xffbf616a.toInt()))
+            val scheme = desktopTerminalColors(frame, fallback)
+            assertEquals(androidx.compose.ui.graphics.Color(bg), scheme.background)
+            assertEquals(scheme.background, scheme.surface)
+            assertEquals(androidx.compose.ui.graphics.Color(fg), scheme.onSurface)
+        }
+        assertEquals(fallback, desktopTerminalColors(null, fallback))
+        assertEquals(R.string.service_operation_failed, serviceStageText("failed"))
+        assertEquals(R.string.service_openrc_error, serviceErrorText(io.github.kuddev.pebrel.mobile.connection.RelayServiceFailure("openrc_supervisor_required")))
+    }
     @get:Rule val compose = createComposeRule()
     private var renderedView: View? = null
 

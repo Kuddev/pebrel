@@ -1,5 +1,36 @@
 # Architecture decisions / 架构决策记录
 
+## ADR-0024 — Alpine service support and explicit desktop server selection
+
+- **Context (2026-09-18):** User testing found a reachable Alpine SSH host could
+  not install the systemd-only relay. Native error identifiers were also collapsed
+  by Android, and read-only invitations looked like broken terminal input.
+- **Service ownership:** Both init systems share the existing install manifest,
+  hash verification, readiness, retained-key reinstall and purge implementation.
+  A backward-compatible manager field selects the one managed unit path; switching
+  managers or adopting unowned files is rejected. OpenRC uses its existing
+  supervise-daemon, not an additional runtime or package installed by Pebrel.
+- **Privileges:** On OpenRC only, the native executable reads TLS inputs and binds
+  the socket while single-threaded, then permanently drops supplementary groups,
+  gid and uid to the existing nobody account before starting Tokio or accepting
+  peers. Linux libc is an opt-in relay dependency for these OS calls. Failure is
+  fatal, with no root fallback. No service account or firewall rules are created.
+  This does not claim systemd's filesystem sandbox on OpenRC; the Unix uid and
+  no-new-privileges boundary are the explicit minimum.
+- **Desktop selection:** The settings picker reads saved SSH hosts off-thread and
+  reuses the existing host verification/authentication stack. A separate bounded
+  private exec channel reads only the installed relay's access configuration;
+  it never writes inside the user's shell or logs credential-bearing stderr.
+  Late results cannot replace a subsequently selected mode or edited form.
+  Installation remains a phone action; import-file is an advanced alternative.
+- **UI:** Active PC terminal chrome and system insets use the decoded remote
+  palette without persisting a phone-theme change. Read-only grants remain enforced,
+  with a visible authorization action and an explicitly labelled QR permission.
+- **Validation:** Targeted Android tests, native service ownership tests, real
+  systemd CI lifecycle and an isolated Alpine/OpenRC lifecycle check. Container
+  tooling is test infrastructure only, never a server installation requirement.
+
+
 ## ADR-0023 — Shared phone input and native relay management UI
 
 - **Status:** User-requested on 2026-09-18; implementation, not device/VPS acceptance.

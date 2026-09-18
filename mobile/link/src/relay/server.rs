@@ -186,12 +186,44 @@ pub async fn serve(config: RelayConfig, shutdown: CancellationToken) -> io::Resu
     serve_listener(config, listener, shutdown).await
 }
 
+/// Prepare the privileged inputs before OpenRC drops uid/gid and before Tokio
+/// starts worker threads. No peer is accepted during this privileged phase.
+pub struct PreparedRelay {
+    config: RelayConfig,
+    listener: std::net::TcpListener,
+    acceptor: Option<TlsAcceptor>,
+}
+
+impl PreparedRelay {
+    pub fn new(config: RelayConfig) -> io::Result<Self> {
+        config.validate().map_err(io::Error::other)?;
+        let acceptor = config.tls.as_ref().map(tls).transpose()?;
+        let listener = std::net::TcpListener::bind(config.listen)?;
+        listener.set_nonblocking(true)?;
+        Ok(Self { config, listener, acceptor })
+    }
+
+    pub async fn serve(self, shutdown: CancellationToken) -> io::Result<()> {
+        serve_ready(self.config, TcpListener::from_std(self.listener)?, self.acceptor, shutdown)
+            .await
+    }
+}
+
 pub(crate) async fn serve_listener(
     config: RelayConfig,
     listener: TcpListener,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
     let acceptor = config.tls.as_ref().map(tls).transpose()?;
+    serve_ready(config, listener, acceptor, shutdown).await
+}
+
+async fn serve_ready(
+    config: RelayConfig,
+    listener: TcpListener,
+    acceptor: Option<TlsAcceptor>,
+    shutdown: CancellationToken,
+) -> io::Result<()> {
     let connections = Arc::new(Semaphore::new(config.max_peers * 2));
     let state = AppState {
         registry: Registry::new(config.rooms),

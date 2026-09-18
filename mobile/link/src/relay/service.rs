@@ -1,6 +1,5 @@
-//! Linux systemd lifecycle. No shell interpolation, recursive deletion, user
-//! account creation, firewall changes or package manager. systemd credentials
-//! let the unprivileged dynamic user read only its three runtime inputs.
+//! Ownership-checked Linux service lifecycle, shared by systemd and OpenRC.
+//! No recursive deletion, user account creation, firewall or package changes.
 
 use std::{
     collections::BTreeMap,
@@ -14,7 +13,9 @@ use sha2::{Digest, Sha256};
 
 use super::setup;
 
+mod manager;
 mod process;
+pub use manager::{ServiceManager, SystemService};
 
 const UNIT: &str = "pebrel-relay.service";
 const OWNED: [&str; 6] = [
@@ -25,6 +26,14 @@ const OWNED: [&str; 6] = [
     "etc/pebrel-relay/certificate.pem",
     "etc/pebrel-relay/private-key.pem",
 ];
+const OPENRC_UNIT: &str = "etc/init.d/pebrel-relay";
+fn owned(manager: ServiceManager) -> [&'static str; 6] {
+    let mut files = OWNED;
+    if manager == ServiceManager::OpenRc {
+        files[1] = OPENRC_UNIT;
+    }
+    files
+}
 const MANIFEST: &str = "opt/pebrel-relay/installation.json";
 
 #[derive(Serialize, Deserialize)]
@@ -32,10 +41,15 @@ const MANIFEST: &str = "opt/pebrel-relay/installation.json";
 struct Manifest {
     product: String,
     version: u32,
+    #[serde(default)]
+    manager: ServiceManager,
     files: BTreeMap<String, String>,
 }
 
 pub trait ServiceControl {
+    fn manager(&self) -> ServiceManager {
+        ServiceManager::Systemd
+    }
     fn run(&self, args: &[&str]) -> io::Result<()>;
     fn ready(&self) -> io::Result<()>;
 
@@ -47,8 +61,6 @@ pub trait ServiceControl {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }
-
-pub struct Systemd;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,8 +87,10 @@ pub struct ServiceStatus {
 
 pub fn status(control: &impl ServiceControl) -> ServiceStatus {
     let root = Path::new("/");
-    let owned = manifest(root).is_ok();
-    let installed = owned && root.join(OWNED[0]).is_file() && root.join(OWNED[1]).is_file();
+    let record = manifest(root).ok();
+    let files = owned(control.manager());
+    let owned = record.as_ref().is_some_and(|record| record.manager == control.manager());
+    let installed = owned && root.join(files[0]).is_file() && root.join(files[1]).is_file();
     let running = installed && control.run(&["is-active", "--quiet", UNIT]).is_ok();
     ServiceStatus {
         installed,
@@ -89,7 +103,8 @@ pub fn status(control: &impl ServiceControl) -> ServiceStatus {
 pub fn change_running(start: bool, control: &impl ServiceControl) -> io::Result<()> {
     let root = Path::new("/");
     let record = manifest(root)?;
-    verify(root, &record, &OWNED, false)?;
+    check_manager(&record, control)?;
+    verify(root, &record, &owned(record.manager), false)?;
     control.progress(if start { ServiceStage::Starting } else { ServiceStage::Stopping });
     control.run(&[if start { "start" } else { "stop" }, UNIT])?;
     if start {
@@ -100,41 +115,11 @@ pub fn change_running(start: bool, control: &impl ServiceControl) -> io::Result<
     Ok(())
 }
 
-impl ServiceControl for Systemd {
-    fn run(&self, args: &[&str]) -> io::Result<()> {
-        if args == ["--version"] {
-            let output = process::run("/usr/bin/systemctl", &["--version"], true)?;
-            let version = std::str::from_utf8(&output)
-                .ok()
-                .and_then(|text| text.split_whitespace().nth(1))
-                .and_then(|value| value.parse::<u32>().ok())
-                .unwrap_or(0);
-            return if version >= 247 {
-                Ok(())
-            } else {
-                Err(io::Error::other("systemd_247_required"))
-            };
-        }
-        process::run("/usr/bin/systemctl", args, false).map(|_| ())
+fn check_manager(record: &Manifest, control: &impl ServiceControl) -> io::Result<()> {
+    if record.manager != control.manager() {
+        return Err(io::Error::other("service_manager_changed"));
     }
-    fn ready(&self) -> io::Result<()> {
-        process::run(
-            "/opt/pebrel-relay/pebrel-relay",
-            &["probe", "--config", "/etc/pebrel-relay/relay.json"],
-            false,
-        )
-        .map(|_| ())
-    }
-    fn progress(&self, stage: ServiceStage) {
-        // A broken SSH progress pipe must not panic halfway through installation.
-        // Completion/failure is still determined by the command exit status.
-        use io::Write;
-        let _ = writeln!(
-            io::stdout().lock(),
-            "{}",
-            serde_json::json!({"event": "progress", "stage": stage})
-        );
-    }
+    Ok(())
 }
 
 fn wait_until_ready(control: &impl ServiceControl) -> io::Result<()> {
@@ -162,7 +147,7 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 fn safe(root: &Path, relative: &str) -> io::Result<PathBuf> {
-    if relative != MANIFEST && !OWNED.contains(&relative) {
+    if relative != MANIFEST && relative != OPENRC_UNIT && !OWNED.contains(&relative) {
         return Err(io::Error::other("unowned_path"));
     }
     let path = root.join(relative);
@@ -181,7 +166,7 @@ fn manifest(root: &Path) -> io::Result<Manifest> {
     if value.product != "pebrel-relay"
         || value.version != 1
         || value.files.len() != OWNED.len()
-        || value.files.keys().any(|path| !OWNED.contains(&path.as_str()))
+        || value.files.keys().any(|path| !owned(value.manager).contains(&path.as_str()))
     {
         return Err(io::Error::other("invalid_ownership_manifest"));
     }
@@ -241,17 +226,19 @@ fn install_under(
     control: &impl ServiceControl,
 ) -> io::Result<()> {
     control.progress(ServiceStage::Checking);
+    let files = owned(control.manager());
     let bytes = setup::read_bounded(source, 64 * 1024 * 1024)?;
     if bytes.is_empty() || bytes.len() > 64 * 1024 * 1024 || digest(&bytes) != expected_sha256 {
         return Err(io::Error::other("binary_integrity_failed"));
     }
     let executable = safe(root, OWNED[0])?;
-    let service = safe(root, OWNED[1])?;
+    let service = safe(root, files[1])?;
     let record_path = safe(root, MANIFEST)?;
     if record_path.exists() {
         let previous = manifest(root)?;
+        check_manager(&previous, control)?;
         verify(root, &previous, &OWNED[2..], false)?;
-        verify(root, &previous, &OWNED[..2], true)?;
+        verify(root, &previous, &files[..2], true)?;
         // A repeated install is idempotent, not an implicit replacement/update.
         if previous.files[OWNED[0]] != expected_sha256 {
             return Err(io::Error::other("explicit_update_required"));
@@ -262,14 +249,14 @@ fn install_under(
             executable_permissions(&executable)?;
         }
         if !service.exists() {
-            setup::write_new_private(&service, unit().as_bytes())?;
+            write_service(&service, control.manager())?;
         }
         control.run(&["daemon-reload"])?;
         control.progress(ServiceStage::Starting);
         control.run(&["enable", "--now", UNIT])?;
         return wait_until_ready(control);
     }
-    for relative in OWNED {
+    for relative in files.into_iter().chain([OWNED[1], OPENRC_UNIT]) {
         if safe(root, relative)?.exists() {
             return Err(io::Error::other("installation_conflict"));
         }
@@ -290,10 +277,14 @@ fn install_under(
     control.progress(ServiceStage::Installing);
     setup::write_new_private(&executable, &bytes)?;
     executable_permissions(&executable)?;
-    setup::write_new_private(&service, unit().as_bytes())?;
-    let mut record =
-        Manifest { product: "pebrel-relay".into(), version: 1, files: BTreeMap::new() };
-    for relative in OWNED {
+    write_service(&service, control.manager())?;
+    let mut record = Manifest {
+        product: "pebrel-relay".into(),
+        version: 1,
+        manager: control.manager(),
+        files: BTreeMap::new(),
+    };
+    for relative in files {
         record.files.insert(relative.into(), digest(&fs::read(safe(root, relative)?)?));
     }
     setup::write_new_private(
@@ -315,6 +306,21 @@ fn executable_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn write_service(path: &Path, manager: ServiceManager) -> io::Result<()> {
+    setup::write_new_private(
+        path,
+        if manager == ServiceManager::OpenRc {
+            manager::openrc_script().as_bytes()
+        } else {
+            unit().as_bytes()
+        },
+    )?;
+    if manager == ServiceManager::OpenRc {
+        executable_permissions(path)?;
+    }
+    Ok(())
+}
+
 pub fn uninstall(purge: bool, control: &impl ServiceControl) -> io::Result<()> {
     uninstall_under(Path::new("/"), purge, control)
 }
@@ -322,10 +328,12 @@ pub fn uninstall(purge: bool, control: &impl ServiceControl) -> io::Result<()> {
 fn uninstall_under(root: &Path, purge: bool, control: &impl ServiceControl) -> io::Result<()> {
     control.progress(ServiceStage::Checking);
     let record = manifest(root)?;
-    let targets = if purge { &OWNED[..] } else { &OWNED[..2] };
+    check_manager(&record, control)?;
+    let files = owned(record.manager);
+    let targets = if purge { &files[..] } else { &files[..2] };
     // Verify every selected file before changing anything, including stop state.
     verify(root, &record, targets, true)?;
-    if safe(root, OWNED[1])?.exists() {
+    if safe(root, files[1])?.exists() {
         control.progress(ServiceStage::Stopping);
         control.run(&["disable", "--now", UNIT])?;
     }
@@ -366,6 +374,57 @@ mod tests {
         fn ready(&self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    struct OpenRcControl(FakeControl);
+    impl ServiceControl for OpenRcControl {
+        fn manager(&self) -> ServiceManager {
+            ServiceManager::OpenRc
+        }
+        fn run(&self, args: &[&str]) -> io::Result<()> {
+            self.0.run(args)
+        }
+        fn ready(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn openrc_uses_the_same_ownership_checks_and_retained_config_lifecycle() {
+        let (root, binary) = fixture();
+        let control = OpenRcControl(FakeControl::default());
+        let install = || {
+            install_under(
+                &root,
+                &binary,
+                &digest(b"fixture-executable"),
+                "localhost",
+                "0.0.0.0:443".parse().unwrap(),
+                &control,
+            )
+        };
+        install().unwrap();
+        assert!(!root.join(OWNED[1]).exists());
+        let script = fs::read_to_string(root.join(OPENRC_UNIT)).unwrap();
+        assert!(script.contains("supervisor=supervise-daemon"));
+        assert!(script.contains("serve-unprivileged"));
+        let access = fs::read(root.join(OWNED[3])).unwrap();
+        assert_eq!(
+            uninstall_under(&root, true, &FakeControl::default()).unwrap_err().to_string(),
+            "service_manager_changed"
+        );
+        uninstall_under(&root, false, &control).unwrap();
+        assert!(!root.join(OPENRC_UNIT).exists());
+        install().unwrap();
+        assert_eq!(access, fs::read(root.join(OWNED[3])).unwrap());
+        fs::write(root.join(OPENRC_UNIT), b"user modified service").unwrap();
+        assert_eq!(
+            uninstall_under(&root, true, &control).unwrap_err().to_string(),
+            "managed_file_changed"
+        );
+        assert_eq!(access, fs::read(root.join(OWNED[3])).unwrap());
+        assert!(root.file_name().unwrap().to_string_lossy().starts_with("pebrel-owned-service-"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn fixture() -> (PathBuf, PathBuf) {

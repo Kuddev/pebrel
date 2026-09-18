@@ -20,7 +20,7 @@ adapter; no v2 failure ever selects it automatically.
   browser, image generation service or external QR endpoint.
 - A TLS WebSocket relay binary. No application payload logging or decryption,
   database, offline replay, user account system, Docker or Node dependency.
-- Linux systemd 247+ install/start/stop/status/uninstall backend. systemd supplies
+- Linux systemd 247+ and Alpine/OpenRC install/start/stop/status/uninstall backend. systemd supplies
   an unprivileged DynamicUser and read-only credentials. Port binding capability
   is isolated to the service. The installer does not modify firewall rules or
   existing web servers. Keep-configuration uninstall and later reinstall work;
@@ -29,6 +29,9 @@ adapter; no v2 failure ever selects it automatically.
   Service-manager commands have deadlines; start waits for bounded readiness
   probes rather than assuming process creation means the listener is ready.
   A readiness failure can be retried without generating replacement access keys.
+  On OpenRC, the existing supervise-daemon owns restart. The listener loads keys
+  and binds once, drops root to nobody before starting network threads, and fails
+  closed if that privilege drop is unavailable. No account or package is installed.
 - Android JNI uses this same Rust channel implementation; it does not duplicate
   cryptographic framing in Kotlin. The app adapter validates versioned invitations,
   persists approved profiles only after Runtime validation and a first snapshot,

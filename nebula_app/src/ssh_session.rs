@@ -914,6 +914,27 @@ pub(crate) async fn exec_capture(
     script: &[u8],
     budget: Duration,
 ) -> Result<String, SessionError> {
+    let channel = open_exec_channel(raw_destination).await?;
+    exec::capture(channel, command, script, budget, raw_destination).await
+}
+
+/// Credential-bearing service output must be bounded and never logged.
+pub(crate) async fn exec_private(
+    raw_destination: &str,
+    command: &str,
+    budget: Duration,
+) -> Result<Vec<u8>, SessionError> {
+    tokio::time::timeout(budget, async {
+        let channel = open_exec_channel(raw_destination).await?;
+        exec::capture_private(channel, command).await
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "private_exec_timeout"))?
+}
+
+async fn open_exec_channel(
+    raw_destination: &str,
+) -> Result<russh::Channel<russh::client::Msg>, SessionError> {
     let profiles_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
     let raw = raw_destination.to_owned();
     let (destination, profile) = tokio::task::spawn_blocking(move || {
@@ -926,8 +947,7 @@ pub(crate) async fn exec_capture(
     .map_err(|err| format!("SSH 地址解析任务失败: {err}"))??;
 
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
-    let channel = lifecycle::network("exec channel", session.channel_open_session()).await?;
-    exec::capture(channel, command, script, budget, raw_destination).await
+    Ok(lifecycle::network("exec channel", session.channel_open_session()).await?)
 }
 
 /// 在现有认证连接上打开独立 SFTP 子系统；连接池和认证策略仍只有一份。

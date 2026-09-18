@@ -6491,6 +6491,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hyper-util",
  "if-addrs",
+ "libc",
  "qrcode",
  "rcgen",
  "rustls-pemfile",

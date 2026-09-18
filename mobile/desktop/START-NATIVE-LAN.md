@@ -28,12 +28,14 @@ PC 必须已授权终端操作；只读连接会显示原因。电脑配色修�
 手机“连接电脑 → 中转服务器 → 部署服务器”已接入原生服务管理卡片：
 填写 SSH 登录信息，点击安装并启动，卡片显示服务端实际阶段。
 端口、连接地址覆盖位于高级设置，无需域名、Docker、Node.js 或 HTTP 验证端口。
-当前支持 Linux x64/ARM64、systemd 247+ 和 root SSH 登录；不会修改防火墙。
+当前支持 Linux x64/ARM64、systemd 247+ 或 Alpine OpenRC，需要 root SSH 登录；不会修改防火墙。
 电脑、手机仍需能访问中转端口（默认 443），服务监听就绪不等于公网已可达。
-安装后保存配置文件，在电脑此设置页导入，再生成二维码供手机扫描。
+安装后在电脑此设置页选择同一 SSH 服务器（或输入 root@地址），点击“使用此中转服务器”，
+通过已验证的 SSH 读取配置，再生成二维码供手机扫描。复用电脑已有的 SSH 凭据；
+如尚未连接过该主机，请先从 SSH 主机列表验证登录。文件导入保留在高级设置中。
 可检查状态、启动、停止、卸载；卸载默认保留凭据，清除配置须额外确认。
 取消操作不会自动回滚已安装的服务，应先检查状态；不支持自动升级或接管旧 Docker 安装。
-电脑设置页目前负责导入和二维码，不在电脑上执行 SSH 安装。没有服务器也可测试局域网。
+电脑设置页负责选择已安装的服务器和二维码，不在电脑上执行 SSH 安装。没有服务器也可测试局域网。
 
 ## 建议反馈
 
@@ -68,12 +70,15 @@ inside Pebrel. v2 requires the new phone build, uses end-to-end encryption and
 one-use five-minute invitations, and never silently downgrades to v1. Explicitly
 imported legacy v1 settings retain per-hop TLS: that relay can read the content.
 The Android relay setup now manages the native service over verified SSH, with
-real progress, status, start/stop and uninstall. Linux x64/ARM64, systemd 247+ and
-root SSH login are required. Ports and address overrides are under Advanced;
+real progress, status, start/stop and uninstall. Linux x64/ARM64, systemd 247+ or
+Alpine OpenRC, and root SSH login are required. Ports and address overrides are under Advanced;
 no domain, Docker, Node.js or HTTP validation port is needed. No firewall rules
 are changed. Both clients must still reach the relay port (443 by default).
-Save its access configuration, import the file on this desktop page, then scan
-the generated QR. Uninstall retains credentials unless purge is confirmed.
+Select the same SSH server on this desktop page (or enter root@host) and choose
+Use this relay server to read its configuration over verified SSH, then scan
+the generated QR. Existing desktop SSH credentials are reused; verify login from
+the SSH host list first if needed. File import remains under Advanced.
+Uninstall retains credentials unless purge is confirmed.
 Cancellation is not rollback; check status before retrying. Automatic updates and
 adoption of old Docker installs are not supported. The desktop page imports and
 pairs; it does not administer SSH servers. LAN requires no server.

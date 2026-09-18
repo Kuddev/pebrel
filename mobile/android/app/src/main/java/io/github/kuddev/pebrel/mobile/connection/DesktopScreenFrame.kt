@@ -77,5 +77,8 @@ internal fun decodeDesktopScreen(screen: JSONObject, theme: IntArray): TerminalF
     val cx = cursor.getInt(0)
     val cy = cursor.getInt(1)
     if (cursor.getInt(2) == 1) require(cx in 0 until columns && cy in decoded.indices)
-    return TerminalFrame(decoded, intArrayOf(columns, decoded.size, cx, cy, cursor.getInt(2), palette[257], palette[258], 2))
+    // The optional tail belongs to the phone's surrounding chrome. Native PTY
+    // frames keep their original eight entries; the cell painter is unchanged.
+    return TerminalFrame(decoded, intArrayOf(columns, decoded.size, cx, cy, cursor.getInt(2),
+        palette[257], palette[258], 2, palette[256], palette[1]))
 }

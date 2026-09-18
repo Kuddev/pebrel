@@ -12,7 +12,7 @@ data class RelayServiceState(val installed: Boolean, val running: Boolean, val r
 data class RelayServiceResult(val state: RelayServiceState, val access: String? = null)
 class RelayServiceFailure(val code: String) : java.io.IOException(code)
 
-/** Native systemd adapter. Only explicit actions mutate the selected SSH host.
+/** Native Linux service adapter. Only explicit actions mutate the selected SSH host.
  * A v2 access export belongs to the desktop, not to the phone's saved-PC list.
  */
 object NativeRelayDeployment {
@@ -20,7 +20,12 @@ object NativeRelayDeployment {
     private val stages = setOf("checking", "initializing", "installing", "starting", "verifying", "ready", "stopping", "stopped", "removing", "uninstalled")
     private val failures = setOf("systemd_247_required", "linux_systemd_required", "root_required",
         "installation_conflict", "managed_file_changed", "explicit_update_required", "service_not_ready",
-        "port_in_use", "permission_denied", "file_or_service_not_found", "binary_integrity_failed")
+        "port_in_use", "permission_denied", "file_or_service_not_found", "binary_integrity_failed",
+        "supported_init_required", "openrc_supervisor_required", "service_manager_changed",
+        "configuration_directory_not_empty", "symlink_installation_path", "invalid_ownership_manifest",
+        "service_command_failed", "service_command_timeout", "service_command_output_limit",
+        "unprivileged_account_required", "privilege_drop_failed", "remote_tools_missing",
+        "operation_timeout", "relay_operation_failed")
 
     suspend fun execute(
         context: Context, host: HostProfile, password: CharArray,
@@ -32,12 +37,7 @@ object NativeRelayDeployment {
         val endpoint = validatedAddress(address)
         DeploymentSsh(host, password, verify).use { ssh ->
             progress("connecting")
-            val preflight = command(ssh, """
-                set -eu
-                [ "${'$'}(uname -s)" = Linux ] || { printf '{"error":"linux_systemd_required"}\n'; exit 1; }
-                [ "${'$'}(id -u)" = 0 ] || { printf '{"error":"root_required"}\n'; exit 1; }
-                printf '{"arch":"%s"}\n' "${'$'}(uname -m)"
-            """.trimIndent(), progress = progress)
+            val preflight = command(ssh, preflightCommand(), progress = progress)
             val arch = preflight.last().getString("arch")
             val state = command(ssh, """
                 set -eu
@@ -90,6 +90,31 @@ object NativeRelayDeployment {
         }
     }
 
+    internal fun preflightCommand() = """
+        set -eu
+        fail() { printf '{"error":"%s"}\n' "${'$'}1"; exit 1; }
+        [ "${'$'}(uname -s)" = Linux ] || fail linux_systemd_required
+        [ "${'$'}(id -u)" = 0 ] || fail root_required
+        for tool in head base64 sha256sum mktemp chmod; do
+            command -v "${'$'}tool" >/dev/null 2>&1 || fail remote_tools_missing
+        done
+        if [ -d /run/systemd/system ]; then
+            command -v systemctl >/dev/null 2>&1 || fail supported_init_required
+        elif [ -d /run/openrc ] && [ -x /sbin/rc-service ] && [ -x /sbin/openrc-run ]; then
+            [ -x /sbin/supervise-daemon ] && [ -x /sbin/rc-update ] || fail openrc_supervisor_required
+        else
+            fail supported_init_required
+        fi
+        printf '{"arch":"%s"}\n' "${'$'}(uname -m)"
+    """.trimIndent()
+
+    internal fun checkedMessages(exit: Int, messages: List<JSONObject>, errors: List<JSONObject>): List<JSONObject> {
+        val failure = (messages + errors).firstOrNull { it.has("error") }?.optString("error")
+        if (exit != 0 || failure != null) throw RelayServiceFailure(failure?.takeIf { it in failures } ?: "service_failed")
+        if (messages.isEmpty()) throw RelayServiceFailure("invalid_response")
+        return messages
+    }
+
     internal fun validatedAddress(value: String): String {
         val host = value.trim().removePrefix("[").removeSuffix("]")
         if (host.isEmpty() || host.length > 253 || !Regex("[A-Za-z0-9.:-]+").matches(host) || host.startsWith('-'))
@@ -136,9 +161,7 @@ object NativeRelayDeployment {
                 val exit = code.await()
                 writer.await()
                 val messages = output.await()
-                val failure = (messages + errors.await()).firstOrNull { it.has("error") }?.optString("error")
-                if (exit != 0 || failure != null) throw RelayServiceFailure(failure?.takeIf { it in failures } ?: "service_failed")
-                messages
+                checkedMessages(exit, messages, errors.await())
             }
         } finally { ssh.release(connection) }
     }

@@ -8,7 +8,7 @@ publish = false
 
 [features]
 default = []
-relay = ["dep:axum", "dep:hyper-util", "dep:tokio", "dep:tokio-rustls", "dep:tokio-util", "dep:futures-util", "dep:rustls-pemfile", "dep:rcgen"]
+relay = ["dep:axum", "dep:hyper-util", "dep:tokio", "dep:tokio-rustls", "dep:tokio-util", "dep:futures-util", "dep:rustls-pemfile", "dep:rcgen", "dep:libc"]
 endpoint = ["relay", "dep:tokio-tungstenite", "dep:x509-parser"]
 preview = ["endpoint", "dep:if-addrs"]
 
@@ -42,3 +42,6 @@ x509-parser = { version = "0.18.1", optional = true }
 
 [dev-dependencies]
 tokio-tungstenite = "0.29"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2", optional = true }

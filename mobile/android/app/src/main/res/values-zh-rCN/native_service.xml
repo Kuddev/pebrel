@@ -12,8 +12,8 @@
     <string name="service_uninstall">卸载</string>
     <string name="service_uninstall_hint">停止中转并仅移除 Pebrel 管理的服务文件，已连接的设备会断开。默认保留凭据以便重装，除非你勾选同时删除配置。</string>
     <string name="service_purge">同时删除配对配置和密钥</string>
-    <string name="service_requirements">当前需要 Linux x64/ARM64、systemd 247+ 及 root SSH 权限，仅安装一个服务。电脑和手机需能访问中转端口（默认 443）；Pebrel 不会修改防火墙。登录密码仅用于本次操作。</string>
-    <string name="service_pc_next">保存连接配置，在电脑的“设置 → 手机连接 → 中转服务器”中导入，再生成二维码供手机扫描。</string>
+    <string name="service_requirements">支持 Linux x64/ARM64、systemd 247+ 或 Alpine OpenRC。管理服务需要 root SSH 权限，中转运行时不使用 root 权限。电脑和手机需能访问中转端口（默认 443）；Pebrel 不会修改防火墙。</string>
+    <string name="service_pc_next">在电脑“设置 → 手机连接 → 中转服务器”选择此 SSH 服务器，点击“使用此中转服务器”，再生成二维码供手机扫描。也可在下方保存私有配置文件备用。</string>
     <string name="service_export_private">此文件包含服务器访问凭据，请私下传给自己的电脑，不要公开。</string>
     <string name="service_uploading">正在上传并安装原生服务…</string>
     <string name="service_starting">正在启动服务…</string>
@@ -25,7 +25,13 @@
     <string name="service_not_installed">尚未安装</string>
     <string name="service_unchecked">尚未检查状态</string>
     <string name="service_asset_error">缺少经过校验的原生服务包或文件损坏，请安装更新后的 Pebrel 包。</string>
-    <string name="service_system_error">当前安装器支持 Linux x64/ARM64，需 systemd 247 或更新版本。</string>
+    <string name="service_system_error">需要 Linux x64/ARM64，以及正在运行的 systemd 247+ 或 OpenRC。能登录 SSH 不代表系统已提供服务管理器。</string>
+    <string name="service_operation_failed">操作失败</string>
+    <string name="service_openrc_error">OpenRC 缺少 rc-update 或 supervise-daemon，请检查 OpenRC 是否完整安装并已运行。</string>
+    <string name="service_tools_error">服务器需提供 head、base64、sha256sum、mktemp 和 chmod，用于接收并校验服务文件。</string>
+    <string name="service_manager_error">系统服务管理器拒绝了操作，请先在服务器检查 pebrel-relay 服务状态后重试。</string>
+    <string name="service_privilege_error">中转未能放弃 root 权限。请检查服务器是否存在非 root 的 nobody 账户；服务不会以 root 身份继续运行。</string>
+    <string name="service_missing">缺少必要的服务文件或服务管理程序，请检查服务状态和服务器环境。</string>
     <string name="service_permission_error">当前安装及管理系统服务需要 root SSH 账户。</string>
     <string name="service_conflict">现有服务文件已被修改或属于其他安装，未进行覆盖或删除。请先检查服务器上的安装。</string>
     <string name="service_not_ready">服务未能就绪。请检查所选端口是否已被占用，再检查服务状态。</string>

@@ -93,9 +93,9 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
                     action == RelayServiceAction.UNINSTALL -> "uninstalled"
                     else -> "not_installed"
                 }
-            } catch (_: TimeoutCancellationException) { failure = R.string.ssh_error_timeout }
+            } catch (_: TimeoutCancellationException) { failure = R.string.ssh_error_timeout; stage = "failed" }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { failure = serviceErrorText(error) }
+            catch (error: Exception) { failure = serviceErrorText(error); stage = "failed" }
             finally { secret?.fill('\u0000'); operation = null; running = false; job = null }
         }
     }
@@ -165,7 +165,8 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
         dismissButton = { TextButton({ confirmRemove = false }) { Text(stringResource(R.string.cancel)) } })
 }
 
-private fun serviceStageText(stage: String?): Int = when (stage) {
+internal fun serviceStageText(stage: String?): Int = when (stage) {
+    "failed" -> R.string.service_operation_failed
     "connecting" -> R.string.establishing_connection
     "checking" -> R.string.deploy_prerequisites
     "uploading", "installing" -> R.string.service_uploading
@@ -182,11 +183,18 @@ private fun serviceStageText(stage: String?): Int = when (stage) {
     else -> R.string.service_unchecked
 }
 
-private fun serviceErrorText(error: Exception): Int = when ((error as? RelayServiceFailure)?.code) {
+internal fun serviceErrorText(error: Exception): Int = when ((error as? RelayServiceFailure)?.code) {
     "asset_missing", "binary_integrity_failed" -> R.string.service_asset_error
-    "linux_systemd_required", "systemd_247_required", "unsupported_arch" -> R.string.service_system_error
+    "linux_systemd_required", "systemd_247_required", "unsupported_arch", "supported_init_required" -> R.string.service_system_error
+    "openrc_supervisor_required" -> R.string.service_openrc_error
+    "remote_tools_missing" -> R.string.service_tools_error
+    "service_command_failed", "service_command_output_limit" -> R.string.service_manager_error
+    "service_command_timeout", "operation_timeout" -> R.string.ssh_error_timeout
+    "unprivileged_account_required", "privilege_drop_failed" -> R.string.service_privilege_error
     "root_required", "permission_denied" -> R.string.service_permission_error
-    "managed_file_changed", "installation_conflict", "explicit_update_required" -> R.string.service_conflict
+    "managed_file_changed", "installation_conflict", "explicit_update_required", "service_manager_changed",
+    "configuration_directory_not_empty", "symlink_installation_path", "invalid_ownership_manifest" -> R.string.service_conflict
+    "file_or_service_not_found" -> R.string.service_missing
     "service_not_ready", "port_in_use" -> R.string.service_not_ready
     "invalid_address" -> R.string.service_address_error
     else -> when (classifySshFailure(error)) {

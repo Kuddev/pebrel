@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
         val trust by repository.trust.collectAsStateWithLifecycle()
         val error by repository.error.collectAsStateWithLifecycle()
         val savedCredentials by repository.savedCredentials.collectAsStateWithLifecycle()
+        val desktopOutput by repository.output.collectAsStateWithLifecycle()
         val credentialScope = rememberCoroutineScope()
         var credentialBusy by remember { mutableStateOf(false) }
         var page by rememberSaveable { mutableStateOf("home") }
@@ -132,6 +133,10 @@ class MainActivity : ComponentActivity() {
                 showPage("pane")
             }
         }
+        val paneFrame = desktopOutput.frame.takeIf {
+            page == "pane" && desktopOutput.target == "$desktopId:$windowId:$paneId"
+        }
+        DesktopTerminalTheme(paneFrame, systemBars = true) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                 AnimatedContent(
@@ -176,7 +181,7 @@ class MainActivity : ComponentActivity() {
                         else LaunchedEffect(selected) { showPage("home") }
                     }
                     "pane" -> {
-                        if (desktop != null && pane != null) DesktopTerminalScreen(desktop, pane, repository, ::back, { switcher = true })
+                        if (desktop != null && pane != null) DesktopTerminalScreen(desktop, pane, repository, ::back, { switcher = true }, onPairAgain = { addRelay = true })
                         else {
                             PageHeader(stringResource(R.string.computer_tabs), ::back)
                             HelperText(stringResource(R.string.device_unavailable), Modifier.padding(22.dp))
@@ -200,6 +205,7 @@ class MainActivity : ComponentActivity() {
                 }
                 }
             }
+        }
         }
         if (switcher) AlertDialog(onDismissRequest = { switcher = false }, title = { Text(stringResource(R.string.all_sessions)) }, text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {

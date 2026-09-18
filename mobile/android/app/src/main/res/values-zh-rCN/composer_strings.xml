@@ -1,4 +1,7 @@
 <resources>
+    <string name="composer_pc_read_only_short">仅查看 · 尚未授权终端输入</string>
+    <string name="composer_pc_enable_input">启用输入</string>
+    <string name="composer_pc_scan_again">扫描新二维码</string>
     <string name="composer_pc_read_only">当前为只读连接。如需输入，请在电脑“手机连接”设置中允许操作终端，再重新配对。</string>
     <string name="composer_placeholder">对 Pebrel 说…</string>
     <string name="composer_undo">撤销草稿编辑</string>

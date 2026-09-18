@@ -67,6 +67,13 @@ jobs:
         run: cargo test --locked -p pebrel-mobile-link --features relay relay::service::tests
       - name: Verify install and uninstall on disposable systemd host
         run: python3 mobile/tools/test_native_relay_service.py target/${{ matrix.target }}/release/pebrel-relay
+      - name: Verify Alpine OpenRC lifecycle in disposable container
+        run: |
+          docker run --rm --init --network bridge \
+            -e PEBREL_DISPOSABLE_OPENRC_TEST=1 \
+            -v "$PWD/target/${{ matrix.target }}/release/pebrel-relay:/fixture/pebrel-relay:ro" \
+            -v "$PWD/mobile/tools/test_native_relay_openrc.sh:/fixture/test.sh:ro" \
+            alpine:3.22.2 sh /fixture/test.sh
       - name: Package verified relay executable
         run: python3 mobile/tools/package_native_relay.py --binary target/${{ matrix.target }}/release/pebrel-relay --output relay-native --arch ${{ matrix.arch }} --commit "$GITHUB_SHA"
       - uses: actions/upload-artifact@v4

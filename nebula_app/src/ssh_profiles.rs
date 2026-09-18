@@ -92,6 +92,11 @@ impl Default for SshProfiles {
 }
 
 impl SshProfiles {
+    /// Borrowed saved entries for server pickers; callers load off the UI thread.
+    pub(crate) fn entries(&self) -> &[SshProfileAuth] {
+        &self.profiles
+    }
+
     pub fn load(path: &Path) -> io::Result<Self> {
         let data = match std::fs::read(path) {
             Ok(data) => data,

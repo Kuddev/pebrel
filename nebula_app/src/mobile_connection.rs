@@ -17,6 +17,44 @@ const LAN_KEY: &str = "Pebrel/Mobile/NativePreview/LAN";
 const RELAY_KEY: &str = "Pebrel/Mobile/NativePreview/Relay";
 const HOST_KEY: &str = "Pebrel/Mobile/SecureHostV2";
 
+/// Selecting a host never installs anything or changes its SSH credentials.
+/// Installation remains an explicit action in the phone's service card.
+pub(crate) fn relay_hosts() -> Result<Vec<(String, String)>, Failure> {
+    let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
+    let profiles =
+        crate::ssh_profiles::SshProfiles::load(&path).map_err(|_| Failure::Credentials)?;
+    Ok(profiles
+        .entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry.destination.clone(),
+                entry
+                    .label
+                    .clone()
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or_else(|| entry.destination.clone()),
+            )
+        })
+        .collect())
+}
+
+pub(crate) fn relay_from_ssh(destination: &str) -> Result<String, Failure> {
+    crate::ssh_profiles::validate_ssh_destination(destination).map_err(|_| Failure::Invalid)?;
+    // Reuse host-key verification, credentials and the existing authenticated
+    // transport. No second password store or invocation inside the user's shell.
+    let bytes = crate::ssh_session::runtime()
+        .map_err(|_| Failure::Connection)?
+        .block_on(crate::ssh_session::exec_private(
+            destination,
+            "/opt/pebrel-relay/pebrel-relay export-access --directory /etc/pebrel-relay",
+            std::time::Duration::from_secs(45),
+        ))
+        .map_err(|_| Failure::Credentials)?;
+    RelayAccess::parse(&bytes).map_err(|_| Failure::Invalid)?;
+    String::from_utf8(bytes).map_err(|_| Failure::Invalid)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Lan,

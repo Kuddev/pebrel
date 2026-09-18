@@ -8,6 +8,6 @@ pub mod service;
 pub mod setup;
 
 pub use config::{RelayConfig, RoomConfig, TlsConfig};
-pub use server::serve;
 #[cfg(test)]
 pub(crate) use server::serve_listener;
+pub use server::{PreparedRelay, serve};

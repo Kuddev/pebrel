@@ -1,5 +1,12 @@
 {
   "mobile": {
+    "select_server": "SSH 服务器",
+    "use_server": "使用此中转服务器",
+    "reading_server": "正在读取服务器配置…",
+    "select_server_hint": "选择已保存的 SSH 主机，或输入 root@服务器地址。先在手机上安装中转，再在这里通过已验证的 SSH 读取配置；复用已有登录凭据，无需传配置文件。",
+    "server_read_error": "无法读取中转配置。请先从 SSH 主机列表连接此服务器，确认登录和主机密钥，并确认中转已安装。读取私有配置需要 root 权限。",
+    "generate_control": "生成二维码 · 允许终端输入",
+    "generate_read_only": "生成二维码 · 仅查看",
     "title": "手机连接",
     "overview": "将手机上的 Pebrel 与这台电脑配对。二维码直接在 Pebrel 内生成，电脑无需浏览器或 Node.js 配对工具。",
     "pair_title": "配对手机",

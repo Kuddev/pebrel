@@ -10,6 +10,20 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class NativeRelayDeploymentTest {
+    @Test fun managerFailuresAreNotCollapsedAndUnknownOutputStaysPrivate() {
+        for (code in listOf("supported_init_required", "openrc_supervisor_required", "service_command_failed", "configuration_directory_not_empty")) {
+            val error = assertThrows(RelayServiceFailure::class.java) {
+                NativeRelayDeployment.checkedMessages(1, emptyList(), listOf(JSONObject().put("error", code)))
+            }
+            assertEquals(code, error.code)
+        }
+        val error = assertThrows(RelayServiceFailure::class.java) {
+            NativeRelayDeployment.checkedMessages(1, emptyList(), listOf(JSONObject().put("error", "private credentials")))
+        }
+        assertEquals("service_failed", error.code)
+        assertTrue(NativeRelayDeployment.preflightCommand().contains("/sbin/openrc-run"))
+        assertTrue(NativeRelayDeployment.preflightCommand().contains("supported_init_required"))
+    }
     private fun access() = JSONObject().put("version", 2).put("url", "wss://192.0.2.10:443")
         .put("room", "r".repeat(43)).put("tlsPin", "sha256/" + "A".repeat(43) + "=")
         .put("desktopToken", "a".repeat(43)).put("mobileToken", "b".repeat(43))

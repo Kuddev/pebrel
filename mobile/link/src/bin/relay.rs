@@ -2,6 +2,8 @@ use std::{io, path::Path};
 
 use pebrel_mobile_link::relay::{self, setup};
 use tokio_util::sync::CancellationToken;
+#[path = "relay/privileges.rs"]
+mod privileges;
 
 fn main() {
     if let Err(error) = run() {
@@ -18,6 +20,11 @@ fn error_code(error: &io::Error) -> &'static str {
         "systemd_247_required",
         "linux_systemd_required",
         "root_required",
+        "supported_init_required",
+        "openrc_supervisor_required",
+        "service_manager_changed",
+        "unprivileged_account_required",
+        "privilege_drop_failed",
         "installation_conflict",
         "configuration_directory_not_empty",
         "symlink_installation_path",
@@ -56,13 +63,18 @@ fn run() -> io::Result<()> {
         ["service-status"] => {
             println!(
                 "{}",
-                serde_json::to_string(&relay::service::status(&relay::service::Systemd))
-                    .map_err(io::Error::other)?
+                serde_json::to_string(&relay::service::status(
+                    &relay::service::SystemService::detect()?
+                ))
+                .map_err(io::Error::other)?
             );
         },
         [command @ ("service-start" | "service-stop")] => {
             require_linux_root()?;
-            relay::service::change_running(*command == "service-start", &relay::service::Systemd)?;
+            relay::service::change_running(
+                *command == "service-start",
+                &relay::service::SystemService::detect()?,
+            )?;
             println!("{}", serde_json::json!({"ok": true, "operation": command}));
         },
         [
@@ -84,14 +96,14 @@ fn run() -> io::Result<()> {
                 hash,
                 address,
                 listen,
-                &relay::service::Systemd,
+                &relay::service::SystemService::detect()?,
             )?;
             println!("{}", serde_json::json!({"ok": true, "stage": "ready"}));
         },
         ["service-uninstall"] | ["service-uninstall", "--purge"] => {
             require_linux_root()?;
             let purge = args.len() == 2;
-            relay::service::uninstall(purge, &relay::service::Systemd)?;
+            relay::service::uninstall(purge, &relay::service::SystemService::detect()?)?;
             println!(
                 "{}",
                 serde_json::json!({"ok": true, "stage": "uninstalled", "configuration_retained": !purge})
@@ -110,18 +122,29 @@ fn run() -> io::Result<()> {
             use io::Write;
             io::stdout().lock().write_all(&bytes)?;
         },
-        [command @ ("serve" | "probe" | "check-config"), "--config", path] => {
+        [
+            command @ ("serve" | "serve-unprivileged" | "probe" | "check-config"),
+            "--config",
+            path,
+        ] => {
             let config = setup::read_config(Path::new(path))?;
             if *command == "check-config" {
                 println!("{}", serde_json::json!({"ok": true, "stage": "validated"}));
                 return Ok(());
             }
+            let (prepared, config) = if *command == "serve-unprivileged" {
+                let prepared = relay::PreparedRelay::new(config)?;
+                privileges::drop_root()?;
+                (Some(prepared), None)
+            } else {
+                (None, Some(config))
+            };
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()?;
             if *command == "probe" {
-                runtime.block_on(setup::probe(&config))?;
+                runtime.block_on(setup::probe(config.as_ref().unwrap()))?;
                 println!("{}", serde_json::json!({"ok": true, "ready": true}));
             } else {
                 runtime.block_on(async {
@@ -136,7 +159,10 @@ fn run() -> io::Result<()> {
                         #[cfg(not(unix))] { let _ = tokio::signal::ctrl_c().await; }
                         signal.cancel();
                     });
-                    relay::serve(config, shutdown).await
+                    match prepared {
+                        Some(prepared) => prepared.serve(shutdown).await,
+                        None => relay::serve(config.unwrap(), shutdown).await,
+                    }
                 })?;
             }
         },

@@ -79,7 +79,8 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
 }
 
 @Composable
-fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit) {
+fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit,
+                          onPairAgain: (() -> Unit)? = null) {
     val output by repository.output.collectAsStateWithLifecycle()
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current
@@ -87,6 +88,7 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     var direct by rememberSaveable(identity, prefs.directInput) { mutableStateOf(prefs.directInput) }
     var keyboardRequest by remember(identity) { mutableIntStateOf(0) }
     var focused by rememberSaveable(identity) { mutableStateOf(false) }
+    var showPermission by remember(identity) { mutableStateOf(false) }
     val enabled = desktop.allowInput && desktop.status == "ready"
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val input = remember(identity, enabled) { repository.desktopInput(desktop.id, pane) }
@@ -97,10 +99,15 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
         }
     }
     DisposableEffect(identity) { onDispose { repository.leaveDesktopPane() } }
+    DesktopTerminalTheme(if (output.target == identity) output.frame else null) {
     if (!focused) TerminalHeader(pane.title, desktop.host.name, desktop.status, onBack, onSessions)
     Column(Modifier.fillMaxSize()) {
         if (desktop.status != "ready") HelperText(stringResource(R.string.device_unavailable), Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
-        else if (!desktop.allowInput) HelperText(stringResource(R.string.composer_pc_read_only), Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        else if (!desktop.allowInput) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            HelperText(stringResource(R.string.composer_pc_read_only_short), Modifier.weight(1f))
+            TextButton({ showPermission = true }) { Text(stringResource(R.string.composer_pc_enable_input)) }
+        }
         DesktopOutputSurface(identity, if (output.target == identity) output.text else "", prefs.fontSize,
             prefs.pinchZoom, { size -> repository.display.update { it.copy(fontSize = size) } },
             Modifier.weight(1f).fillMaxWidth(), frame = if (output.target == identity) output.frame else null,
@@ -122,6 +129,14 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
             input.key(code, if (label == "Ctrl+C") 2 else 0)
         }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused },
             send = input::submit)
+    }
+    if (showPermission) AlertDialog(onDismissRequest = { showPermission = false },
+        title = { Text(stringResource(R.string.composer_pc_enable_input)) },
+        text = { Text(stringResource(R.string.composer_pc_read_only)) },
+        confirmButton = { TextButton({ showPermission = false; onPairAgain?.invoke() }) {
+            Text(stringResource(if (onPairAgain != null) R.string.composer_pc_scan_again else R.string.close))
+        } },
+        dismissButton = { TextButton({ showPermission = false }) { Text(stringResource(R.string.close)) } })
     }
 }
 
