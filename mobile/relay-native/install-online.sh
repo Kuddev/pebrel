@@ -7,6 +7,8 @@ umask 077
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 release_base='https://github.com/Kuddev/pebrel/releases/download/@RELEASE_TAG@'
+download_base=${PEBREL_RELAY_MIRROR:-}
+github_only=${PEBREL_RELAY_GITHUB_ONLY:-0}
 installed_binary=/opt/pebrel-relay/pebrel-relay
 action=install
 address=
@@ -47,6 +49,10 @@ usage() {
     say 'uninstall keeps credentials; purge explicitly removes them too.'
     say 'uninstall 保留配置；purge 同时清除配对凭据（不可恢复）。'
     say 'Advanced/offline: --binary PATH (the same pinned SHA256 is required).'
+    say 'Advanced mirror: --download-base https://YOUR-MIRROR/RELEASE (same files and SHA256).'
+    say 'GitHub failures try public third-party download proxies; all bytes must match the pinned SHA256.'
+    say 'GitHub 失败会尝试公共第三方下载通道；所有文件必须通过固定 SHA256 校验。'
+    say 'Use --github-only to disable public proxies. / 用 --github-only 禁用公共代理。'
 }
 case "${1:-}" in
     install|status|start|stop|uninstall|purge) action=$1; shift;;
@@ -57,10 +63,22 @@ while [ "$#" -gt 0 ]; do
         --address) [ "$#" -ge 2 ] || fail 'Missing address / 缺少地址'; address=$2; shift 2;;
         --port) [ "$#" -ge 2 ] || fail 'Missing port / 缺少端口'; port=$2; shift 2;;
         --binary) [ "$#" -ge 2 ] || fail 'Missing binary path / 缺少程序路径'; binary_source=$2; shift 2;;
+        --download-base) [ "$#" -ge 2 ] || fail 'Missing mirror URL / 缺少镜像地址'; download_base=$2; shift 2;;
+        --github-only) github_only=1; shift;;
         --help|-h) usage; exit 0;;
         *) usage; fail 'Unknown option / 无效参数';;
     esac
 done
+if [ -n "$download_base" ]; then
+    case "$download_base" in
+        https://?*) ;;
+        *) fail 'Mirror must use HTTPS / 镜像地址必须使用 HTTPS';;
+    esac
+    case "$download_base" in
+        *[!A-Za-z0-9./:_-]*) fail 'Use a public mirror URL without credentials or query parameters / 请使用不含凭据或查询参数的公开镜像地址';;
+    esac
+    download_base=${download_base%/}
+fi
 
 say '1/4 Check server / 检查服务器'
 [ "$(uname -s)" = Linux ] || fail 'Linux required / 需要 Linux 服务器'
@@ -138,17 +156,40 @@ say '2/4 Download and verify executable / 下载并校验服务程序'
 scratch=$(mktemp -d /tmp/pebrel-install.XXXXXXXX)
 binary=$scratch/pebrel-relay
 if [ -n "$binary_source" ]; then
-    cp "$binary_source" "$binary.part"
+    cp -- "$binary_source" "$binary.part"
+elif [ -f "$installed_binary" ] && [ ! -L "$installed_binary" ] &&
+    [ "$(sha256sum "$installed_binary" | awk '{print $1}')" = "$expected" ]; then
+    say 'Verified local executable; no download needed. / 本机程序校验通过，无需下载。'
+    cp "$installed_binary" "$binary.part"
 else
-    url=$release_base/pebrel-relay-linux-$arch
     downloaded=0
-    if command -v curl >/dev/null 2>&1; then
-        if curl --proto '=https' --proto-redir '=https' --fail --location --show-error --progress-bar \
-            --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$binary.part"; then downloaded=1; fi
+    # Mirrors/proxies are transport only, NOT sources of trust or checksums.
+    # No SSH/password/token is ever included in these public asset requests.
+    proxy_one=
+    proxy_two=
+    if [ "$github_only" != 1 ]; then
+        proxy_one=https://gh-proxy.com/$release_base
+        proxy_two=https://ghfast.top/$release_base
     fi
-    if [ "$downloaded" = 0 ] && command -v wget >/dev/null 2>&1; then
-        if wget -T 30 -t 3 "$url" -O "$binary.part"; then downloaded=1; fi
-    fi
+    for base in "$download_base" "$release_base" "$proxy_one" "$proxy_two"; do
+        [ -n "$base" ] || continue
+        url=$base/pebrel-relay-linux-$arch
+        printf 'Source / 下载源: %s\n' "$base"
+        case "$base" in
+            https://gh-proxy.com/*|https://ghfast.top/*)
+                say 'Public third-party transport; fixed SHA256 verification is mandatory. / 使用公共第三方下载通道，必须通过固定 SHA256 校验。';;
+        esac
+        if command -v curl >/dev/null 2>&1; then
+            if curl --proto '=https' --proto-redir '=https' --fail --location --show-error --progress-bar \
+                --connect-timeout 10 --max-time 120 --retry 1 --retry-max-time 150 \
+                --speed-limit 1024 --speed-time 30 "$url" -o "$binary.part"; then downloaded=1; fi
+        fi
+        if [ "$downloaded" = 0 ] && command -v wget >/dev/null 2>&1; then
+            if wget -T 20 -t 2 "$url" -O "$binary.part"; then downloaded=1; fi
+        fi
+        [ "$downloaded" = 0 ] || break
+        say 'Source unavailable, trying the next source. / 当前下载源不可用，尝试下一个。'
+    done
     [ "$downloaded" = 1 ] || fail 'Download failed; curl or wget and HTTPS access to GitHub are required. / 下载失败，需要 curl 或 wget，并能通过 HTTPS 访问 GitHub。'
 fi
 actual=$(sha256sum "$binary.part")

@@ -14,6 +14,9 @@ Every release entry is provided in English and Simplified Chinese.
   starts the relay and checks local TLS readiness, with status/start/stop and
   ownership-checked uninstall. Default TCP 443 falls back to 8443 when occupied;
   other services and firewall rules are not modified.
+- GitHub download failures can use public third-party transports with the same
+  mandatory pinned checksum. Custom HTTPS mirrors and `--github-only` are supported;
+  matching local executables are reused. Public proxies have no availability guarantee.
 
 #### Fixed
 
@@ -30,6 +33,8 @@ Every release entry is provided in English and Simplified Chinese.
 - Linux x64/ARM64 在线 Shell 安装脚本核对固定程序校验值，启动服务并检查本机
   加密连接，提供状态、启停和所有权校验卸载。默认 TCP 443，占用时改用 8443，
   不修改其他服务与防火墙。
+- GitHub 下载失败可使用公共第三方通道，仍强制核对固定校验值；支持自定义 HTTPS
+  镜像与 `--github-only`，复用本机同版本程序。公共代理没有可用性保证。
 
 #### 修复
 

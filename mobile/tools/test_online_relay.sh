@@ -16,7 +16,7 @@ cleanup() {
     if [ -f /opt/pebrel-relay/installation.json ]; then "$binary" service-uninstall --purge; fi
     if [ -n "$decoy_pid" ]; then kill "$decoy_pid" 2>/dev/null || :; wait "$decoy_pid" 2>/dev/null || :; fi
     rm -f "$fixture/relay.json" "$fixture/access.json" "$fixture/certificate.pem" \
-        "$fixture/private-key.pem" "$fixture/corrupt" "$fixture/executed" "$fixture/download.log"
+        "$fixture/private-key.pem" "$fixture/corrupt" "$fixture/executed" "$fixture/download.log" "$fixture/corrupt.log"
     rmdir "$fixture"
 }
 trap cleanup EXIT
@@ -38,9 +38,11 @@ printf '#!/bin/sh\ntouch "%s/executed"\n' "$fixture" > "$fixture/corrupt"
 if sh -c '
     installer=$1; shift
     curl() { for destination; do :; done; cp "$PEBREL_FIXTURE_DIR/corrupt" "$destination"; }
-    . "$installer"+' fixture "$installer" --address 127.0.0.1; then
+    . "$installer"
+' fixture "$installer" --address 127.0.0.1 > "$fixture/corrupt.log" 2>&1; then
     printf 'Corrupt download was accepted\n' >&2; exit 1
 fi
+grep -q 'SHA256 mismatch' "$fixture/corrupt.log"
 [ ! -e "$fixture/executed" ] && [ ! -e /opt/pebrel-relay ]
 
 # Force curl failure and verify that wget's bytes are checked and installed.
@@ -52,7 +54,8 @@ sh -c '
         for destination; do :; done
         cp "$PEBREL_FIXTURE_BINARY" "$destination"
     }
-    . "$installer"+' fixture "$installer" --address 127.0.0.1
+    . "$installer"
+' fixture "$installer" --address 127.0.0.1
 [ "$(wc -l < "$fixture/download.log")" -eq 2 ]
 grep -q '0.0.0.0:8443' /etc/pebrel-relay/relay.json
 "$binary" probe --config "$fixture/relay.json"
@@ -64,7 +67,7 @@ if [ "${3:-}" = 239 ]; then
     grep -q '^CapEff:[[:space:]]*0000000000000000$' "/proc/$pid/status"
 fi
 before=$(sha256sum /etc/pebrel-relay/access.json)
-sh "$installer" status --binary "$binary"
+sh "$installer" status # Verified installed binary works without network.
 sh "$installer" stop --binary "$binary"
 sh "$installer" start --binary "$binary"
 sh "$installer" uninstall --binary "$binary"
@@ -73,5 +76,20 @@ sh "$installer" install --binary "$binary"
 grep -q '0.0.0.0:8443' /etc/pebrel-relay/relay.json
 sh "$installer" purge --binary "$binary"
 [ ! -e /etc/pebrel-relay/access.json ]
+# Simulate unreachable GitHub. A proxy is only a transport for already pinned
+# bytes; it never supplies a new expected checksum or an executable script.
+sh -c '
+    installer=$1; shift
+    curl() {
+        for arg; do case "$arg" in https://*) url=$arg;; esac; destination=$arg; done
+        case "$url" in
+            https://gh-proxy.com/*) cp "$PEBREL_FIXTURE_BINARY" "$destination";;
+            *) return 22;;
+        esac
+    }
+    wget() { return 4; }
+    . "$installer"
+' fixture "$installer" --address 127.0.0.1
+sh "$installer" purge --binary "$binary"
 "$binary" probe --config "$fixture/relay.json"
-printf 'Online script: corrupt download rejection, curl/wget fallback, 443 preservation, 8443 selection, non-root listener, retained reinstall and purge passed\n'
+printf 'Online script: corrupt download rejection, curl/wget and proxy fallback, 443 preservation, 8443 selection, non-root listener, retained reinstall and purge passed\n'

@@ -9,6 +9,9 @@
   It provides status, start, stop and ownership-checked uninstall commands.
 - The script defaults to TCP 443 and selects 8443 when 443 is occupied. It stops
   if the selected port is also occupied; it does not stop other services.
+- Downloads can fall back to public third-party transports after GitHub fails,
+  with the same mandatory pinned SHA256. A custom HTTPS mirror is supported;
+  `--github-only` disables public proxies. A matching local executable is reused.
 
 ### Fixed
 
@@ -28,6 +31,8 @@
   启动服务并检查本机加密连接；提供状态、启停和带所有权校验的卸载命令。
 - 脚本默认使用 TCP 443，占用时改用 8443；所选端口也被占用时停止，
   不会结束其他服务。
+- GitHub 下载失败后可切换公共第三方通道，仍强制核对同一固定 SHA256；
+  支持自定义 HTTPS 镜像，`--github-only` 可禁用公共代理，本机同版本程序会复用。
 
 ### 修复
 
@@ -41,10 +46,12 @@ This is a testing prerelease, separate from desktop releases. No Docker/Node.js
 is required on the server. Firewall/cloud rules are not changed. Local readiness
 does not prove external reachability. Existing different versions are not
 automatically upgraded; uninstall retains credentials unless purge is explicit.
+Public proxies are not Pebrel-operated and have no availability guarantee.
 
 这是独立于桌面正式版本的测试预发布。服务器无需 Docker/Node.js，不改防火墙和
 云安全组。本机就绪不代表公网可达；已有不同版本不自动升级，卸载默认保留凭据，
 只有明确清理时才删除。
+公共代理不是 Pebrel 自营服务，不保证在所有网络中可用。
 
 ## SHA256
 

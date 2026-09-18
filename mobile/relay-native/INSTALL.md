@@ -29,6 +29,26 @@ archive upload or extraction is needed on the server.
 仍使用应用共用的原生服务实现，脚本不维护第二套服务规则。`uninstall` 保留配置，
 `purge` 删除配对凭据。服务器须有 curl 或 wget 且能通过 HTTPS 访问 GitHub。
 
+For restricted networks, a trusted HTTPS mirror can host the exact release files.
+Pass `--download-base https://YOUR-MIRROR/RELEASE` or set `PEBREL_RELAY_MIRROR`.
+The mirror is tried first, then GitHub; the embedded checksums never change with
+the source. After GitHub fails, public third-party download proxies `gh-proxy.com`
+and `ghfast.top` are tried. These are not Pebrel-owned services and have no uptime
+guarantee. They receive only public asset requests, never server credentials.
+`--github-only` (or `PEBREL_RELAY_GITHUB_ONLY=1`) disables public proxies.
+If an installed executable already matches, no download is needed.
+The bootstrap script itself also needs to be distributed through that mirror or
+sent directly. GitHub/CDN reachability in mainland China is not guaranteed merely
+by providing a fallback option; an actual hosted mirror and network checks are needed.
+
+受限网络可用自有 HTTPS 镜像存放同一版本文件，通过 `--download-base` 或
+`PEBREL_RELAY_MIRROR` 指定；先访问镜像，失败再访问 GitHub，校验值保持不变。
+GitHub 失败后会尝试 `gh-proxy.com` 和 `ghfast.top` 公共第三方下载通道；
+它们不是 Pebrel 自营服务，没有可用性保证，只接收公开资产请求，不传递服务器凭据。
+可用 `--github-only` 或 `PEBREL_RELAY_GITHUB_ONLY=1` 禁用公共代理。
+本机程序版本与校验值一致时无需重新下载。启动脚本本身也需由镜像分发或直接发送。
+仅有备用源参数不代表已提供国内可用下载服务，须实际部署镜像并核实网络可达。
+
 Systemd 239–246 starts the same bounded native relay with a read/bind-then-drop
 privilege boundary, also used by OpenRC. Systemd 247+ retains credential passing
 and DynamicUser. Runtime traffic never runs as root; only installation and the
