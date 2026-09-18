@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -83,22 +84,44 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current
     val identity = "${desktop.id}:${pane.window}:${pane.id}"
-    LaunchedEffect(identity, desktop.status) {
+    var direct by rememberSaveable(identity, prefs.directInput) { mutableStateOf(prefs.directInput) }
+    var keyboardRequest by remember(identity) { mutableIntStateOf(0) }
+    var focused by rememberSaveable(identity) { mutableStateOf(false) }
+    val enabled = desktop.allowInput && desktop.status == "ready"
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val input = remember(identity, enabled) { repository.desktopInput(desktop.id, pane) }
+    DisposableEffect(input) { onDispose { input.close() } }
+    LaunchedEffect(identity, desktop.status, direct, keyboardVisible) {
         if (desktop.status == "ready") lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (true) { repository.readDesktop(desktop.id, pane); delay(2000) }
+            while (true) { repository.readDesktop(desktop.id, pane); delay(if (enabled && direct && keyboardVisible) 250 else 2000) }
         }
     }
     DisposableEffect(identity) { onDispose { repository.leaveDesktopPane() } }
-    TerminalHeader(pane.title, desktop.host.name, desktop.status, onBack, onSessions)
+    if (!focused) TerminalHeader(pane.title, desktop.host.name, desktop.status, onBack, onSessions)
     Column(Modifier.fillMaxSize()) {
         if (desktop.status != "ready") HelperText(stringResource(R.string.device_unavailable), Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        else if (!desktop.allowInput) HelperText(stringResource(R.string.composer_pc_read_only), Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
         DesktopOutputSurface(identity, if (output.target == identity) output.text else "", prefs.fontSize,
             prefs.pinchZoom, { size -> repository.display.update { it.copy(fontSize = size) } },
-            Modifier.weight(1f).fillMaxWidth(), frame = if (output.target == identity) output.frame else null)
+            Modifier.weight(1f).fillMaxWidth(), frame = if (output.target == identity) output.frame else null,
+            inputTarget = input.takeIf { enabled && direct }, keyboardRequest = keyboardRequest)
         if (output.loading && output.text.isBlank()) LinearProgressIndicator(Modifier.fillMaxWidth())
-        CommandComposer(identity, repository, desktop.allowInput && desktop.status == "ready", false, null, null) { command ->
-            repository.sendDesktop(desktop.id, pane, command)
-        }
+        CommandComposer(identity, repository, enabled, direct, {
+            direct = it
+            if (it) keyboardRequest++
+        }, { label ->
+            val code = when (label) {
+                "Ctrl+C" -> KeyEvent.KEYCODE_C
+                "Esc" -> KeyEvent.KEYCODE_ESCAPE
+                "Tab" -> KeyEvent.KEYCODE_TAB
+                "←" -> KeyEvent.KEYCODE_DPAD_LEFT
+                "→" -> KeyEvent.KEYCODE_DPAD_RIGHT
+                "↑" -> KeyEvent.KEYCODE_DPAD_UP
+                else -> KeyEvent.KEYCODE_DPAD_DOWN
+            }
+            input.key(code, if (label == "Ctrl+C") 2 else 0)
+        }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused },
+            send = input::submit)
     }
 }
 

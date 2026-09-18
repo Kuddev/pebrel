@@ -1,4 +1,4 @@
-# Pebrel 0.4.4 手机连接测试 / Mobile connection preview
+# Pebrel 0.4.5 手机连接测试 / Mobile connection preview
 
 ## 局域网测试
 
@@ -14,17 +14,26 @@
 
 关闭设置页不会断开已启动的连接；**停止连接**会断开手机，但不会结束电脑任务。
 二维码包含连接凭据，请勿发送截图、公开二维码或分享系统凭据。
-此次局域网继续兼容 Android 0.4.3；建议覆盖安装配套 0.4.4 APK 测试输入区修复。
+此次局域网继续兼容 Android 0.4.3；请覆盖安装配套 0.4.5 APK 测试输入区修复。
+PC 与 SSH 默认使用紧凑快捷栏，点击终端即可输入；气泡按钮切到编辑卡片，关闭按钮切回。
+PC 必须已授权终端操作；只读连接会显示原因。电脑配色修复需要本轮电脑包与 APK 配套。
 
 ## 中转测试边界
 
 设置内同时有中转服务器入口，可以导入原生 v2 服务导出的连接配置，生成原生二维码。
-新 v2 链路使用端到端加密，需配套 0.4.4 手机构建；旧 0.4.3 不支持。
+新 v2 链路使用端到端加密，建议配套 0.4.5 手机构建；旧 0.4.3 不支持。
 二维码 5 分钟有效且只使用一次；配对后使用单独的设备凭据重新连接。
 协议失败不自动降级。显式导入旧 v1 配置仍是旧的 TLS 分段加密，服务器可见内容。
 
-**一键 SSH 安装、更新和卸载的设置卡片尚未接入，本包不将其标记为可用。**
-没有服务器也能完整测试局域网。请勿为了这次局域网测试去安装 Docker 或中转服务。
+手机“连接电脑 → 中转服务器 → 部署服务器”已接入原生服务管理卡片：
+填写 SSH 登录信息，点击安装并启动，卡片显示服务端实际阶段。
+端口、连接地址覆盖位于高级设置，无需域名、Docker、Node.js 或 HTTP 验证端口。
+当前支持 Linux x64/ARM64、systemd 247+ 和 root SSH 登录；不会修改防火墙。
+电脑、手机仍需能访问中转端口（默认 443），服务监听就绪不等于公网已可达。
+安装后保存配置文件，在电脑此设置页导入，再生成二维码供手机扫描。
+可检查状态、启动、停止、卸载；卸载默认保留凭据，清除配置须额外确认。
+取消操作不会自动回滚已安装的服务，应先检查状态；不支持自动升级或接管旧 Docker 安装。
+电脑设置页目前负责导入和二维码，不在电脑上执行 SSH 安装。没有服务器也可测试局域网。
 
 ## 建议反馈
 
@@ -50,14 +59,24 @@ No Node.js, Docker, browser or pairing command is required on the computer.
 The launcher uses an isolated `preview-profile`. Closing Settings preserves an
 established link; Stop connection disconnects the phone without ending PC tasks.
 Do not share the QR or credentials. LAN remains compatible with Android 0.4.3;
-the paired 0.4.4 build includes the input-mode and connection-state fixes.
+the paired 0.4.5 build unifies compact/direct input and the optional editor for PC
+and SSH. Tap the terminal to type when control is authorized. Pair both new builds
+to receive the computer's effective terminal palette.
 
 The relay option imports native v2 service access settings and generates its QR
 inside Pebrel. v2 requires the new phone build, uses end-to-end encryption and
 one-use five-minute invitations, and never silently downgrades to v1. Explicitly
 imported legacy v1 settings retain per-hop TLS: that relay can read the content.
-The one-click SSH install/update/uninstall card is **not connected yet**.
-You do not need any server to test LAN.
+The Android relay setup now manages the native service over verified SSH, with
+real progress, status, start/stop and uninstall. Linux x64/ARM64, systemd 247+ and
+root SSH login are required. Ports and address overrides are under Advanced;
+no domain, Docker, Node.js or HTTP validation port is needed. No firewall rules
+are changed. Both clients must still reach the relay port (443 by default).
+Save its access configuration, import the file on this desktop page, then scan
+the generated QR. Uninstall retains credentials unless purge is confirmed.
+Cancellation is not rollback; check status before retrying. Automatic updates and
+adoption of old Docker installs are not supported. The desktop page imports and
+pairs; it does not administer SSH servers. LAN requires no server.
 
 Focused tests were run; no emulator or physical-phone/visual acceptance is
 claimed. This is a branch preview, not a stable release. Source and hashes are

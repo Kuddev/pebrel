@@ -386,8 +386,17 @@ impl TerminalView {
             self.exited.clone(),
         );
         if screen {
-            read.screen = Some(nebula_terminal::snapshot::capture(&term, lines).ok_or_else(||
-                crate::runtime_api::ApiError::new("screen_too_large", "terminal screen exceeds the mirror budget"))?);
+            let mut snapshot =
+                nebula_terminal::snapshot::capture(&term, lines).ok_or_else(|| {
+                    crate::runtime_api::ApiError::new(
+                        "screen_too_large",
+                        "terminal screen exceeds the mirror budget",
+                    )
+                })?;
+            // A mirror must not substitute the phone's light/dark theme for
+            // desktop defaults. Reuse the same palette/OSC authority as the PC.
+            snapshot.palette = self.palette.mirror_palette(term.colors());
+            read.screen = Some(snapshot);
         }
         Ok(read)
     }

@@ -13,8 +13,8 @@ android {
         applicationId = "io.github.kuddev.pebrel.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.4.4-preview"
+        versionCode = 12
+        versionName = "0.4.5-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -54,6 +54,7 @@ android {
     testBuildType = "preview"
     testOptions { unitTests.isIncludeAndroidResources = true }
     sourceSets["main"].assets.srcDir("build/generated/pebrelAssets")
+    sourceSets["main"].assets.srcDir("build/generated/nativeRelayAssets")
     sourceSets["main"].res.srcDir("build/generated/pebrelResources")
 }
 

@@ -280,6 +280,9 @@ fn install_under(
         return Err(io::Error::other("configuration_directory_not_empty"));
     }
     fs::create_dir_all(executable.parent().unwrap())?;
+    // SSH installers use umask 077. The DynamicUser still needs to traverse
+    // this owned executable directory; credentials remain in their 0700 path.
+    executable_permissions(executable.parent().unwrap())?;
     fs::create_dir_all(service.parent().unwrap())?;
     fs::create_dir_all(&config_dir)?;
     control.progress(ServiceStage::Initializing);

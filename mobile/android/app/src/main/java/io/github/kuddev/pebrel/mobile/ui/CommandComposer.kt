@@ -77,11 +77,13 @@ fun CommandComposer(
     var editorWidth by remember { mutableIntStateOf(0) }
     var historyRoom by remember { mutableStateOf(0.dp) }
     var toolsOpen by remember(id, direct) { mutableStateOf(false) }
+    var undoDraft by remember(id) { mutableStateOf<String?>(null) }
 
     val voice = rememberComposerVoice(id, enabled && !direct && !sending) { spoken ->
         val next = appendVoiceDraft(repository.drafts.value[id].orEmpty(), spoken)
         voiceTooLong = next == null
         if (next != null) {
+            undoDraft = repository.drafts.value[id].orEmpty()
             selectedHistory = null
             repository.setDraft(id, next)
         }
@@ -89,6 +91,7 @@ fun CommandComposer(
     val voiceState by voice.state.collectAsStateWithLifecycle()
 
     fun updateDraft(value: String) {
+        if (value != draft) undoDraft = draft
         selectedHistory = null
         historyDismissed = false
         repository.setDraft(id, value)
@@ -158,9 +161,9 @@ fun CommandComposer(
                     Column(
                         Modifier.fillMaxWidth().testTag("composer-editor")
                             .animateContentSize(motion.contentSizeSpec())
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(26.dp))
                             .background(colors.surfaceVariant.copy(alpha = .42f))
-                            .padding(4.dp),
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
                         Box(
                             Modifier.fillMaxWidth()
@@ -172,7 +175,7 @@ fun CommandComposer(
                                 modifier = Modifier.fillMaxWidth()
                                     .heightIn(min = 48.dp, max = if (editorExpanded) 208.dp else 96.dp)
                                     .focusRequester(focusRequester)
-                                    .padding(start = 8.dp, end = 42.dp, top = 12.dp, bottom = 12.dp),
+                                    .padding(start = 6.dp, end = 42.dp, top = 12.dp, bottom = 14.dp),
                                 maxLines = if (editorExpanded) 8 else 3,
                                 interactionSource = editorInteractions,
                                 textStyle = TextStyle(
@@ -187,7 +190,7 @@ fun CommandComposer(
                                     autoCorrectEnabled = false,
                                 ),
                                 decorationBox = { inner ->
-                                    if (draft.isEmpty()) HelperText(stringResource(R.string.local_edit))
+                                    if (draft.isEmpty()) HelperText(stringResource(R.string.composer_placeholder))
                                     inner()
                                 },
                             )
@@ -202,16 +205,6 @@ fun CommandComposer(
                             )
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            onDirect?.let { toggle ->
-                                ComposerIconButton(
-                                    icon = R.drawable.ic_terminal,
-                                    label = stringResource(R.string.composer_mode_direct),
-                                    onClick = {
-                                        focusManager.clearFocus()
-                                        toggle(true)
-                                    },
-                                )
-                            }
                             Box {
                                 ComposerIconButton(
                                     icon = R.drawable.ic_plus,
@@ -249,14 +242,34 @@ fun CommandComposer(
                                     )
                                 }
                             }
+                            onDirect?.let { toggle ->
+                                ComposerIconButton(
+                                    icon = R.drawable.ic_close,
+                                    label = stringResource(R.string.composer_mode_direct),
+                                    onClick = {
+                                        focusManager.clearFocus()
+                                        toggle(true)
+                                    },
+                                )
+                            }
+                            ComposerIconButton(
+                                icon = R.drawable.ic_undo,
+                                label = stringResource(R.string.composer_undo),
+                                enabled = undoDraft != null && !sending,
+                                onClick = {
+                                    undoDraft?.let { repository.setDraft(id, it) }
+                                    undoDraft = null
+                                },
+                            )
                             Spacer(Modifier.weight(1f))
                             ComposerVoiceButton(voice, voiceState, enabled && !sending)
                             ComposerIconButton(
-                                icon = R.drawable.ic_send,
+                                icon = R.drawable.ic_send_up,
                                 label = stringResource(R.string.send),
                                 enabled = enabled && !sending && draft.isNotBlank(),
                                 selected = true,
                                 selectedContainer = colors.primary,
+                                circular = true,
                                 tint = colors.onPrimary,
                                 onClick = ::requestSend,
                             )
@@ -273,6 +286,7 @@ fun CommandComposer(
                             maxHeight = minOf(208.dp, historyRoom),
                             onDismiss = { historyDismissed = true },
                             onSelect = { command ->
+                                undoDraft = draft
                                 selectedHistory = command
                                 historyDismissed = true
                                 repository.setDraft(id, command)

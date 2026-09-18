@@ -17,6 +17,15 @@ class DesktopScreenFrameTest {
         [["中",2,14251863,-258,0],["▛",1,-2,25,1],[" ",1,-257,-26,0]]
         ],"cursor":[3,0,1],"palette":[[1,16711680]]}""")
 
+    @Test fun desktopPaletteWinsOverOppositePhoneTheme() {
+        val snapshot = screen().put("palette", JSONArray("[[256,15787730],[257,660510],[258,16777215],[1,16711680]]"))
+        val dark = decodeDesktopScreen(snapshot, theme)
+        val light = decodeDesktopScreen(snapshot, IntArray(19) { 0xffffffff.toInt() }.apply { this[0] = 0xff101010.toInt() })
+        assertEquals(0xff0a141e.toInt(), light.background)
+        assertEquals(dark.background, light.background)
+        assertEquals(dark.rows[0]!!.cells[21], light.rows[0]!!.cells[21])
+    }
+
     @Test fun preservesCellWidthsForegroundBackgroundPaletteAndCursor() {
         val frame = decodeDesktopScreen(screen(), theme)
         val row = frame.rows[0]!!

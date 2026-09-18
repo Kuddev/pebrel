@@ -88,6 +88,17 @@ impl Default for Palette {
 }
 
 impl Palette {
+    /// Bounded wire palette for remote physical-cell mirrors, including defaults
+    /// and indexed theme overrides. No renderer dependency enters the VT core.
+    pub fn mirror_palette(&self, overrides: &Colors) -> Vec<(usize, u32)> {
+        (0..nebula_terminal::term::color::COUNT)
+            .map(|index| {
+                let rgb = self.query_reply(index, overrides);
+                (index, (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b))
+            })
+            .collect()
+    }
+
     /// 主应用的 dimming 系数。
     pub fn dim_of(color: Rgba) -> Rgba {
         Rgba { r: color.r * 0.66, g: color.g * 0.66, b: color.b * 0.66, a: color.a }
@@ -217,4 +228,25 @@ fn index_to_named(index: usize) -> Option<NamedColor> {
     ]
     .into_iter()
     .find(|n| *n as usize == index)
+}
+
+#[cfg(test)]
+mod mirror_tests {
+    use super::*;
+
+    #[test]
+    fn mirror_contains_desktop_defaults_indexed_and_runtime_overrides() {
+        let mut palette = Palette::default();
+        palette.foreground = rgb8(240, 230, 210);
+        palette.background = rgb8(10, 20, 30);
+        palette.indexed.push((42, rgb8(12, 34, 56)));
+        let mut overrides = Colors::default();
+        overrides[4] = Some(Rgb { r: 1, g: 2, b: 3 });
+        let wire = palette.mirror_palette(&overrides);
+        assert_eq!(wire.len(), nebula_terminal::term::color::COUNT);
+        assert_eq!(wire[256], (256, 0xf0e6d2));
+        assert_eq!(wire[257], (257, 0x0a141e));
+        assert_eq!(wire[42], (42, 0x0c2238));
+        assert_eq!(wire[4], (4, 0x010203));
+    }
 }

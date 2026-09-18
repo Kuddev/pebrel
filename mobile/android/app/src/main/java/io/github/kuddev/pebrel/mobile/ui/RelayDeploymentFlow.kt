@@ -1,12 +1,8 @@
 package io.github.kuddev.pebrel.mobile.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -22,35 +18,40 @@ import io.github.kuddev.pebrel.mobile.session.SessionRepository
 import kotlinx.coroutines.*
 import java.util.UUID
 
-/** A deployment has its own cancelable lifecycle and never occupies a terminal session. */
+/** Native service management is separate from terminal and PC-pairing lifecycles. */
 @Composable
-fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit, onConnect: (String) -> Unit) {
+fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
     val context = LocalContext.current
     val hosts by repository.hosts.collectAsStateWithLifecycle()
     val credentials by repository.savedCredentials.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val owner = remember { repository.beginSshOperation() }
     DisposableEffect(owner) { onDispose { repository.endSshOperation(owner) } }
-    var source by remember { mutableStateOf(if (hosts.isEmpty()) "manual" else "saved") }
-    var selectedId by remember { mutableStateOf(hosts.firstOrNull()?.id.orEmpty()) }
-    var choosingHost by remember { mutableStateOf(false) }
+    var selectedId by remember { mutableStateOf(hosts.firstOrNull()?.id) }
     var address by remember { mutableStateOf("") }
     var user by remember { mutableStateOf("root") }
-    var sshPort by remember { mutableStateOf("22") }
     var password by remember { mutableStateOf("") }
-    var domain by remember { mutableStateOf("") }
-    var httpsPort by remember { mutableStateOf("443") }
-    var httpPort by remember { mutableStateOf("80") }
-    var directory by remember { mutableStateOf("~/.pebrel-relay") }
-    var computerName by remember { mutableStateOf("") }
-    var allowInput by remember { mutableStateOf(false) }
-    var running by remember { mutableStateOf(false) }
+    var sshPort by remember { mutableStateOf("22") }
+    var servicePort by remember { mutableStateOf("443") }
+    var advertisedAddress by remember { mutableStateOf("") }
+    var advanced by remember { mutableStateOf(false) }
+    var choosing by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<RelayServiceResult?>(null) }
+    var stage by remember { mutableStateOf<String?>(null) }
+    var failure by remember { mutableStateOf<Int?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
-    var progress by remember { mutableStateOf(RelayDeploymentStage.VALIDATING) }
-    var error by remember { mutableStateOf<RelayDeploymentErrorCode?>(null) }
-    var result by remember { mutableStateOf<RelayDeploymentResult?>(null) }
-    var exportText by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(false) }
+    var operation by remember { mutableStateOf<Any?>(null) }
+    var confirmRemove by remember { mutableStateOf(false) }
+    var purge by remember { mutableStateOf(false) }
     var exportFeedback by remember { mutableStateOf<Int?>(null) }
+    var exportText by remember { mutableStateOf("") }
+    val busy = running
+    val host = hosts.find { it.id == selectedId }
+    val endpoint = runCatching { parseSshEndpoint(address, user) }.getOrNull()
+    val savedPassword = credentials.isNotEmpty() && host != null && repository.hasSavedPassword(host)
+    val valid = (host != null || endpoint != null && (sshPort.toIntOrNull() ?: 0) in 1..65535) &&
+        (password.isNotEmpty() || savedPassword) && (servicePort.toIntOrNull() ?: 0) in 1..65535
     val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val text = exportText
         exportText = ""
@@ -62,130 +63,137 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit, onC
             catch (_: Exception) { R.string.deploy_export_failed }
         }
     }
-    val savedHost = hosts.find { it.id == selectedId }
-    val endpoint = runCatching { parseSshEndpoint(address, user) }.getOrNull()
-    val usesSavedPassword = source == "saved" && savedHost != null && credentials.isNotEmpty() && repository.hasSavedPassword(savedHost)
-    val valid = (if (source == "saved") savedHost != null else endpoint != null && (sshPort.toIntOrNull() ?: 0) in 1..65535) &&
-        (password.isNotEmpty() || usesSavedPassword) && domain.isNotBlank() && computerName.isNotBlank() &&
-        (httpsPort.toIntOrNull() ?: 0) in 1..65535 && (httpPort.toIntOrNull() ?: 0) in 1..65535 && directory.isNotBlank()
-    fun dismiss() { job?.cancel(); repository.endSshOperation(owner); onCancel() }
-    ConnectionForm(stringResource(R.string.pair_deploy_server), ::dismiss) {
-        val completed = result
-        when {
-            completed != null -> {
-                GroupHeading(stringResource(R.string.deploy_done))
-                HelperText(stringResource(R.string.deploy_pc_next))
-                HelperText(completed.mobileProfile.url, Modifier.padding(vertical = 12.dp))
-                OutlinedButton({ exportText = completed.desktopConfig; saveFile.launch(completed.desktopConfigFileName) }, Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.deploy_save_pc))
+    fun execute(action: RelayServiceAction) {
+        if (!valid || busy) return
+        val selected = host ?: HostProfile(UUID.randomUUID().toString(), address, checkNotNull(endpoint).address, sshPort.toInt(), endpoint.user)
+        val entered = password.takeIf(String::isNotEmpty)?.toCharArray()
+        val relayAddress = advertisedAddress.ifBlank { selected.address }
+        val port = servicePort.toInt()
+        val removeConfiguration = purge
+        password = ""
+        failure = null
+        stage = "connecting"
+        running = true
+        val token = Any()
+        operation = token
+        job = scope.launch {
+            var secret = entered
+            try {
+                if (secret == null) secret = repository.loadSavedPassword(selected)
+                if (secret == null) throw RelayServiceFailure("missing_credentials")
+                result = NativeRelayDeployment.execute(context, selected, checkNotNull(secret),
+                    { h, fingerprint -> repository.verifySshOperation(owner, h, fingerprint) },
+                    action, relayAddress, port, removeConfiguration) { update ->
+                    scope.launch { if (operation === token) stage = update }
                 }
-                OutlinedButton({ exportText = completed.mobileInvitation; saveFile.launch(completed.mobileInvitationFileName) }, Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.deploy_save_phone))
+                stage = when {
+                    result?.state?.ready == true -> "ready"
+                    result?.state?.running == true -> "not_ready"
+                    result?.state?.installed == true -> "stopped"
+                    action == RelayServiceAction.UNINSTALL -> "uninstalled"
+                    else -> "not_installed"
                 }
-                TextButton({
-                    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Pebrel", completed.desktopCommand))
-                    exportFeedback = R.string.deploy_command_copied
-                }) { Text(stringResource(R.string.deploy_copy_command)) }
-                exportFeedback?.let { HelperText(stringResource(it), Modifier.padding(vertical = 8.dp)) }
-                ConnectionButton(stringResource(R.string.connect)) { onConnect(completed.mobileInvitation) }
-            }
-            running -> {
-                Column(Modifier.fillMaxWidth().padding(vertical = 32.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Text(stringResource(deploymentStageText(progress)))
-                    HelperText(stringResource(R.string.deploy_wait_hint))
-                    OutlinedButton(::dismiss) { Text(stringResource(R.string.cancel)) }
-                }
-            }
-            else -> {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ConnectionSegments(listOf("saved" to stringResource(R.string.deploy_existing_host), "manual" to stringResource(R.string.deploy_manual)),
-                        source, { source = it; password = "" }, Modifier.fillMaxWidth(), disabled = if (hosts.isEmpty()) setOf("saved") else emptySet())
-                    if (source == "saved") {
-                        NavigationRow(R.drawable.ic_server, savedHost?.name ?: stringResource(R.string.deploy_choose_host),
-                            savedHost?.endpointLabel.orEmpty(), onClick = { choosingHost = true })
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            ConnectionField(address, { value ->
-                                address = value
-                                if ('@' in value) runCatching { parseSshEndpoint(value, user) }.onSuccess { address = it.address; user = it.user }
-                            }, R.string.host_address, Modifier.weight(1f), keyboard = KeyboardType.Uri)
-                            ConnectionField(sshPort, { sshPort = it }, R.string.port, Modifier.width(82.dp), KeyboardType.Number, limit = 5)
-                        }
-                        ConnectionField(user, { user = it }, R.string.username, limit = 80)
-                    }
-                    ConnectionField(password, { password = it }, R.string.password, keyboard = KeyboardType.Password,
-                        placeholder = if (usesSavedPassword) stringResource(R.string.password_saved_placeholder) else "",
-                        transformation = PasswordVisualTransformation(), limit = 1024)
-                    ConnectionField(domain, { domain = it }, R.string.deploy_domain, keyboard = KeyboardType.Uri, limit = 253)
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        ConnectionField(httpsPort, { httpsPort = it }, R.string.deploy_https_port, Modifier.weight(1f), KeyboardType.Number, limit = 5)
-                        ConnectionField(httpPort, { httpPort = it }, R.string.deploy_http_port, Modifier.weight(1f), KeyboardType.Number, limit = 5)
-                    }
-                    ConnectionField(directory, { directory = it }, R.string.deploy_directory, limit = 240)
-                    ConnectionField(computerName, { computerName = it }, R.string.pair_computer_name, limit = 80)
-                    Row {
-                        Checkbox(allowInput, { allowInput = it })
-                        Text(stringResource(R.string.allow_input), Modifier.padding(top = 12.dp))
-                    }
-                    HelperText(stringResource(R.string.deploy_requirements))
-                    error?.let { Text(stringResource(deploymentErrorText(it)), color = MaterialTheme.colorScheme.error) }
-                    ConnectionButton(stringResource(R.string.deploy_start), enabled = valid) {
-                        val host = if (source == "saved") checkNotNull(savedHost) else HostProfile(UUID.randomUUID().toString(), address,
-                            checkNotNull(endpoint).address, sshPort.toInt(), endpoint.user)
-                        val request = RelayDeploymentRequest(domain.trim(), httpsPort.toInt(), httpPort.toInt(), directory.trim(), computerName.trim(), allowInput)
-                        val entered = password.takeIf { it.isNotEmpty() }?.toCharArray()
-                        password = ""; error = null; running = true
-                        job = scope.launch {
-                            var secret: CharArray? = entered
-                            try {
-                                if (secret == null) secret = repository.loadSavedPassword(host)
-                                if (secret == null) throw RelayDeploymentException(RelayDeploymentErrorCode.MISSING_CREDENTIALS)
-                                result = RelayDeployment.deploy(context, host, checkNotNull(secret),
-                                    { h, fingerprint -> repository.verifySshOperation(owner, h, fingerprint) }, request) { update ->
-                                    scope.launch { progress = update.stage }
-                                }
-                            } catch (cancelled: CancellationException) { throw cancelled }
-                            catch (failure: RelayDeploymentException) { error = failure.code }
-                            catch (_: Exception) { error = RelayDeploymentErrorCode.UNKNOWN }
-                            finally { secret?.fill('\u0000'); running = false }
-                        }
-                    }
-                }
-            }
+            } catch (_: TimeoutCancellationException) { failure = R.string.ssh_error_timeout }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { failure = serviceErrorText(error) }
+            finally { secret?.fill('\u0000'); operation = null; running = false; job = null }
         }
     }
-    if (choosingHost) AlertDialog(onDismissRequest = { choosingHost = false }, title = { Text(stringResource(R.string.deploy_choose_host)) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) { hosts.forEach { host -> NavigationRow(R.drawable.ic_server, host.name, host.endpointLabel) {
-                selectedId = host.id; password = ""; choosingHost = false
-            } } }
-        }, confirmButton = { TextButton({ choosingHost = false }) { Text(stringResource(R.string.cancel)) } })
+    fun resetStatus() { result = null; stage = null; failure = null; exportFeedback = null }
+    ConnectionForm(stringResource(R.string.pair_deploy_server), onCancel) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            HelperText(stringResource(R.string.service_intro))
+            if (!busy) {
+                if (hosts.isNotEmpty()) OutlinedButton({ choosing = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(host?.name ?: stringResource(R.string.deploy_choose_host))
+                }
+                if (host == null) {
+                    ConnectionField(address, { address = it; resetStatus() }, R.string.host_address, keyboard = KeyboardType.Uri)
+                    ConnectionField(user, { user = it; resetStatus() }, R.string.username)
+                }
+                ConnectionField(password, { password = it }, R.string.password, keyboard = KeyboardType.Password,
+                    placeholder = if (savedPassword) stringResource(R.string.password_saved_placeholder) else "",
+                    transformation = PasswordVisualTransformation(), limit = 1024)
+                TextButton({ advanced = !advanced }) { Text(stringResource(R.string.service_advanced)) }
+                if (advanced) {
+                    if (host == null) ConnectionField(sshPort, { sshPort = it; resetStatus() }, R.string.port, keyboard = KeyboardType.Number, limit = 5)
+                    ConnectionField(servicePort, { servicePort = it; resetStatus() }, R.string.service_port, keyboard = KeyboardType.Number, limit = 5)
+                    ConnectionField(advertisedAddress, { advertisedAddress = it; resetStatus() }, R.string.service_address, keyboard = KeyboardType.Uri,
+                        placeholder = host?.address ?: endpoint?.address.orEmpty())
+                    HelperText(stringResource(R.string.service_address_hint))
+                }
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(stringResource(R.string.service_title))
+                    Text(stringResource(serviceStageText(stage)), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    failure?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
+                    if (!busy) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button({ execute(RelayServiceAction.INSTALL) }, enabled = valid) { Text(stringResource(R.string.service_install)) }
+                            TextButton({ execute(RelayServiceAction.STATUS) }, enabled = valid) { Text(stringResource(R.string.service_check)) }
+                        }
+                        if (result?.state?.installed == true) Row {
+                            TextButton({ execute(if (result?.state?.running == true) RelayServiceAction.STOP else RelayServiceAction.START) }, enabled = valid) {
+                                Text(stringResource(if (result?.state?.running == true) R.string.service_stop else R.string.service_start))
+                            }
+                            TextButton({ purge = false; confirmRemove = true }, enabled = valid) { Text(stringResource(R.string.service_uninstall)) }
+                        }
+                    }
+                }
+            }
+            HelperText(stringResource(R.string.service_requirements))
+            if (result?.access != null) {
+                HelperText(stringResource(R.string.service_pc_next))
+                OutlinedButton({ exportText = result?.access.orEmpty(); saveFile.launch("pebrel-relay-access.json") }) {
+                    Text(stringResource(R.string.deploy_save_pc))
+                }
+                HelperText(stringResource(R.string.service_export_private))
+            }
+            exportFeedback?.let { HelperText(stringResource(it)) }
+            if (busy) TextButton({ job?.cancel(); stage = "cancelled" }) { Text(stringResource(R.string.cancel)) }
+        }
+    }
+    if (choosing) AlertDialog(onDismissRequest = { choosing = false }, title = { Text(stringResource(R.string.deploy_choose_host)) },
+        text = { Column { hosts.forEach { entry -> TextButton({ selectedId = entry.id; password = ""; choosing = false; resetStatus() }) { Text(entry.name) } }
+            TextButton({ selectedId = null; password = ""; choosing = false; resetStatus() }) { Text(stringResource(R.string.deploy_manual)) } } },
+        confirmButton = { TextButton({ choosing = false }) { Text(stringResource(R.string.close)) } })
+    if (confirmRemove) AlertDialog(onDismissRequest = { confirmRemove = false }, title = { Text(stringResource(R.string.service_uninstall)) },
+        text = { Column { Text(stringResource(R.string.service_uninstall_hint)); Row { Checkbox(purge, { purge = it }); Text(stringResource(R.string.service_purge)) } } },
+        confirmButton = { TextButton({ confirmRemove = false; execute(RelayServiceAction.UNINSTALL) }) { Text(stringResource(R.string.service_uninstall)) } },
+        dismissButton = { TextButton({ confirmRemove = false }) { Text(stringResource(R.string.cancel)) } })
 }
 
-private fun deploymentStageText(stage: RelayDeploymentStage): Int = when (stage) {
-    RelayDeploymentStage.VALIDATING -> R.string.deploy_validating
-    RelayDeploymentStage.CONNECTING -> R.string.establishing_connection
-    RelayDeploymentStage.CHECKING_PREREQUISITES -> R.string.deploy_prerequisites
-    RelayDeploymentStage.PREPARING, RelayDeploymentStage.UPLOADING, RelayDeploymentStage.EXTRACTING -> R.string.deploy_uploading
-    RelayDeploymentStage.INITIALIZING -> R.string.deploy_initializing
-    RelayDeploymentStage.STARTING -> R.string.deploy_starting
-    RelayDeploymentStage.HEALTH_CHECK -> R.string.deploy_health
-    RelayDeploymentStage.COMPLETE -> R.string.deploy_done
+private fun serviceStageText(stage: String?): Int = when (stage) {
+    "connecting" -> R.string.establishing_connection
+    "checking" -> R.string.deploy_prerequisites
+    "uploading", "installing" -> R.string.service_uploading
+    "initializing" -> R.string.deploy_initializing
+    "starting" -> R.string.service_starting
+    "verifying" -> R.string.service_verifying
+    "ready" -> R.string.deploy_done
+    "stopping", "removing" -> R.string.service_removing
+    "stopped" -> R.string.service_stopped
+    "uninstalled" -> R.string.service_uninstalled
+    "cancelled" -> R.string.service_cancelled
+    "not_installed" -> R.string.service_not_installed
+    "not_ready" -> R.string.service_not_ready
+    else -> R.string.service_unchecked
 }
 
-private fun deploymentErrorText(code: RelayDeploymentErrorCode): Int = when (code) {
-    RelayDeploymentErrorCode.MISSING_CREDENTIALS -> R.string.credential_missing
-    RelayDeploymentErrorCode.SSH_AUTH -> R.string.ssh_error_auth
-    RelayDeploymentErrorCode.SSH_TIMEOUT -> R.string.ssh_error_timeout
-    RelayDeploymentErrorCode.SSH_HOST_KEY_CHANGED -> R.string.ssh_error_host_key
-    RelayDeploymentErrorCode.SSH_TRUST_REJECTED -> R.string.ssh_error_trust
-    RelayDeploymentErrorCode.SSH_FAILED -> R.string.ssh_error_network
-    RelayDeploymentErrorCode.INVALID_INPUT -> R.string.deploy_invalid
-    RelayDeploymentErrorCode.DOCKER_MISSING, RelayDeploymentErrorCode.DOCKER_UNAVAILABLE,
-    RelayDeploymentErrorCode.COMPOSE_MISSING -> R.string.deploy_docker_required
-    RelayDeploymentErrorCode.INSTALL_DIRECTORY_NOT_EMPTY, RelayDeploymentErrorCode.UNSUPPORTED_PROJECT_LAYOUT -> R.string.deploy_directory_conflict
-    RelayDeploymentErrorCode.HEALTH_FAILED, RelayDeploymentErrorCode.HEALTH_CLIENT_MISSING -> R.string.deploy_health_failed
-    RelayDeploymentErrorCode.CANCELLED -> R.string.cancel
-    else -> R.string.deploy_failed
+private fun serviceErrorText(error: Exception): Int = when ((error as? RelayServiceFailure)?.code) {
+    "asset_missing", "binary_integrity_failed" -> R.string.service_asset_error
+    "linux_systemd_required", "systemd_247_required", "unsupported_arch" -> R.string.service_system_error
+    "root_required", "permission_denied" -> R.string.service_permission_error
+    "managed_file_changed", "installation_conflict", "explicit_update_required" -> R.string.service_conflict
+    "service_not_ready", "port_in_use" -> R.string.service_not_ready
+    "invalid_address" -> R.string.service_address_error
+    else -> when (classifySshFailure(error)) {
+        SshFailureKind.AUTH -> R.string.ssh_error_auth
+        SshFailureKind.TIMEOUT -> R.string.ssh_error_timeout
+        SshFailureKind.HOST_KEY_CHANGED -> R.string.ssh_error_host_key
+        SshFailureKind.TRUST_REJECTED -> R.string.ssh_error_trust
+        else -> R.string.service_failed
+    }
 }

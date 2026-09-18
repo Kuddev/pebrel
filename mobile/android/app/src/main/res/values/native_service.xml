@@ -1,0 +1,34 @@
+<resources>
+    <string name="service_intro">Choose the server you want to use. Pebrel installs a small encrypted relay over SSH; no Docker, Node.js or domain name is required.</string>
+    <string name="service_title">Pebrel relay service</string>
+    <string name="service_advanced">Advanced connection settings</string>
+    <string name="service_port">Relay port</string>
+    <string name="service_address">Connection address override (optional)</string>
+    <string name="service_address_hint">Defaults to the SSH host address. Change this only when your computer and phone use a different route to this server.</string>
+    <string name="service_install">Install and start</string>
+    <string name="service_check">Check status</string>
+    <string name="service_start">Start</string>
+    <string name="service_stop">Stop</string>
+    <string name="service_uninstall">Uninstall</string>
+    <string name="service_uninstall_hint">Stops the relay and removes only Pebrel-managed service files. Connected devices will disconnect. Credentials are kept for reinstallation unless you choose to remove them.</string>
+    <string name="service_purge">Also remove pairing configuration and keys</string>
+    <string name="service_requirements">Linux x64/ARM64, systemd 247+ and root SSH access are currently required. Only one service is installed. Both devices must be able to reach the relay port (443 by default); Pebrel does not change your firewall. Passwords are used only for the selected operation.</string>
+    <string name="service_pc_next">Save the connection configuration. On your computer, open Settings → Phone connection → Relay, import the configuration, then generate the QR code for your phone.</string>
+    <string name="service_export_private">This file contains server access credentials. Transfer it privately to your computer; do not publish it.</string>
+    <string name="service_uploading">Uploading and installing the native service…</string>
+    <string name="service_starting">Starting the service…</string>
+    <string name="service_verifying">Checking the service listener…</string>
+    <string name="service_removing">Stopping and removing the service…</string>
+    <string name="service_stopped">Installed · stopped</string>
+    <string name="service_uninstalled">Service uninstalled</string>
+    <string name="service_cancelled">Operation cancelled. Any installed service is retained; check status before retrying.</string>
+    <string name="service_not_installed">Not installed</string>
+    <string name="service_unchecked">Status not checked</string>
+    <string name="service_asset_error">The verified native service package is missing or invalid. Install an updated Pebrel package.</string>
+    <string name="service_system_error">This installer supports Linux x64/ARM64 with systemd 247 or newer.</string>
+    <string name="service_permission_error">Service installation and management currently require a root SSH account.</string>
+    <string name="service_conflict">Existing service files differ or belong to another installation. They were not overwritten or removed. Check the server installation first.</string>
+    <string name="service_not_ready">The service did not become ready. Check whether the selected port is already in use, then check status.</string>
+    <string name="service_address_error">Enter a server IP address or hostname, without a URL scheme, path or credentials.</string>
+    <string name="service_failed">The operation did not complete. Check the server connection and service status before retrying.</string>
+</resources>

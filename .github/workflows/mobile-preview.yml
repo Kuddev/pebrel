@@ -32,6 +32,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-relay:
+    name: Native relay (${{ matrix.arch }})
+    env:
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+          targets: ${{ matrix.target }}
+      - name: Install native static linker
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-mobile-relay-${{ matrix.target }}
+      - name: Build native service
+        run: cargo build --locked --release -p pebrel-mobile-link --features relay --bin pebrel-relay --target ${{ matrix.target }}
+      - name: Verify relay lifecycle contracts
+        run: cargo test --locked -p pebrel-mobile-link --features relay relay::service::tests
+      - name: Verify install and uninstall on disposable systemd host
+        run: python3 mobile/tools/test_native_relay_service.py target/${{ matrix.target }}/release/pebrel-relay
+      - name: Package verified relay executable
+        run: python3 mobile/tools/package_native_relay.py --binary target/${{ matrix.target }}/release/pebrel-relay --output relay-native --arch ${{ matrix.arch }} --commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-relay-${{ matrix.arch }}
+          path: relay-native/
+          if-no-files-found: error
   windows:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_only && inputs.include_windows }}
     name: Windows desktop for mobile LAN testing
@@ -114,6 +156,7 @@ jobs:
           path: relay-kit/
           if-no-files-found: error
   android:
+    needs: native-relay
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -124,6 +167,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-relay-*
+          merge-multiple: true
+          path: mobile/android/app/build/generated/nativeRelayAssets/native-relay
       - uses: android-actions/setup-android@v3
         with:
           packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018 cmake;3.22.1"
@@ -182,6 +230,7 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" > mobile/android/app/build/outputs/apk/preview/SOURCE_COMMIT
           sha256sum mobile/android/app/build/outputs/apk/preview/*.apk > mobile/android/app/build/outputs/apk/preview/SHA256SUMS
           python3 mobile/tools/verify_ghostty_apk.py mobile/android/app/build/outputs/apk/preview/app-preview.apk > mobile/android/app/build/outputs/apk/preview/ghostty-audit.txt
+          python3 mobile/tools/verify_native_relay_apk.py mobile/android/app/build/outputs/apk/preview/app-preview.apk --commit "$GITHUB_SHA" > mobile/android/app/build/outputs/apk/preview/native-relay-audit.txt
       - uses: actions/upload-artifact@v4
         with:
           name: pebrel-android-connection-preview

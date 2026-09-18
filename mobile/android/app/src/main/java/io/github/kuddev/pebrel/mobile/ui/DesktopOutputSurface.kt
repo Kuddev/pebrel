@@ -25,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.kuddev.pebrel.terminal.TerminalFrame
 import io.github.kuddev.pebrel.terminal.TerminalSnapshotView
+import io.github.kuddev.pebrel.terminal.TerminalInputTarget
 import io.github.kuddev.pebrel.mobile.PebrelApplication
 import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.session.TerminalPreferenceValues
@@ -40,17 +41,25 @@ internal fun DesktopOutputSurface(
     onFontSize: (Int) -> Unit,
     modifier: Modifier = Modifier,
     frame: TerminalFrame? = null,
+    inputTarget: TerminalInputTarget? = null,
+    keyboardRequest: Int = 0,
 ) {
-    if (frame != null) {
+    if (frame != null || text.isEmpty()) {
         var copiedText by remember(identity) { mutableStateOf<String?>(null) }
+        var lastKeyboardRequest by remember(identity) { mutableIntStateOf(keyboardRequest) }
         key(identity) {
             AndroidView(modifier = modifier, factory = { context -> TerminalSnapshotView(context) }, update = { view ->
                 val app = view.context.applicationContext as PebrelApplication
                 view.setFont(app.terminalTypeface(app.sessions.display.state.value.fontFamily), fontSize)
                 view.pinchZoom = pinchZoom
                 view.frame = frame
-                view.contentDescription = frame.text()
+                view.contentDescription = frame?.text().orEmpty()
                 view.onCopyRequested = { copiedText = it }
+                view.inputTarget = inputTarget
+                if (lastKeyboardRequest != keyboardRequest) {
+                    lastKeyboardRequest = keyboardRequest
+                    view.post { if (view.isAttachedToWindow) view.showKeyboard() }
+                }
             })
         }
         copiedText?.let { content ->

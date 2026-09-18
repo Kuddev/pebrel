@@ -1,5 +1,36 @@
 # Architecture decisions / 架构决策记录
 
+## ADR-0023 — Shared phone input and native relay management UI
+
+- **Status:** User-requested on 2026-09-18; implementation, not device/VPS acceptance.
+- **Input:** Both PTY views and desktop mirrors share one IME composition contract
+  and one composer slot. A visible desktop pane owns a bounded 64-batch writer,
+  at most 8 KiB and 128 commands per batch. It uses existing authorized Runtime
+  text/key methods, validates the original connection before each request, cancels
+  on departure, and never replays after uncertain delivery. Clipboard control
+  characters are rejected until the bridge exposes bracketed paste. Desktop
+  snapshots retain physical widths, pan at readable font sizes, and receive the
+  computer's effective theme palette rather than the phone's fallback colors.
+- **Preferences:** One migration marker switches old previews to compact/direct
+  input. Later explicit settings remain authoritative. Drafts survive mode changes.
+- **Deployment:** The Android deployment route uses the existing native systemd
+  service, not the legacy Docker adapter. Same-build Linux x64/ARM64 executables
+  and hashes travel inside the signed APK; installation never runs an unpinned
+  download. Host-key-verified SSH owns administration, with per-operation secrets,
+  bounded output, cancellation and allowlisted progress stages. Only root/systemd
+  247+ is supported initially; unsupported hosts fail explicitly. No package manager,
+  firewall change, database or additional server runtime is introduced.
+- **Ownership:** Uninstall verifies the service's ownership manifest and retains
+  credentials by default. Purge requires explicit confirmation. Cancelling SSH
+  does not claim rollback; the UI directs a status check. Service readiness and
+  desktop pairing remain separate: private server access is exported to desktop
+  settings, which generates the phone invitation internally.
+- **Validation:** Focused IME/queue/decoder/UI regressions and disposable-host
+  systemd lifecycle checks. Build results, generated UI images and actual-device/
+  public-network acceptance are reported as separate evidence.
+- **Revisit:** A desktop-side SSH installer may reuse these native commands; it
+  must not introduce a second installation-ownership or cryptographic authority.
+
 ## ADR-0022 — Physical cell mirroring and a shared mobile cell painter
 
 - **Status:** Requested on 2026-09-17; working tree, not device acceptance.

@@ -1,4 +1,7 @@
 <resources>
+    <string name="composer_pc_read_only">Read-only connection. Enable terminal control in the computer’s Phone connection settings, then pair again to type.</string>
+    <string name="composer_placeholder">Write to Pebrel…</string>
+    <string name="composer_undo">Undo draft edit</string>
     <string name="composer_tools">Input actions</string>
     <string name="composer_attach">Attach file</string>
     <string name="composer_voice">Voice input</string>

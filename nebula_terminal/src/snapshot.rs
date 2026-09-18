@@ -26,7 +26,8 @@ pub struct ScreenSnapshot {
     pub columns: usize,
     pub rows: Vec<Vec<ScreenCell>>,
     pub cursor: [i32; 3],
-    /// Only OSC overrides; unspecified entries use the viewer's terminal theme.
+    /// OSC overrides from the core. Product adapters should populate the full
+    /// effective palette; unspecified entries use the viewer's fallback theme.
     pub palette: Vec<(usize, u32)>,
 }
 

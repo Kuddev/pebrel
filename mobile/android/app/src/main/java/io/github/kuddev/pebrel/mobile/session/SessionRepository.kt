@@ -406,6 +406,18 @@ class SessionRepository(private val context: Context) {
         readJob?.cancel()
         output.value = DesktopOutput()
     }
+    fun desktopInput(id: String, pane: DesktopPane): DesktopTerminalInput {
+        val client = desktopClients[id]
+        return DesktopTerminalInput(
+            request = { method, params ->
+                checkNotNull(client).request(method, params.put("window_id", pane.window).put("pane_id", pane.id))
+            },
+            active = { client != null && desktopClients[id] === client &&
+                computers.value.any { it.id == id && it.allowInput && it.status == "ready" } },
+            onAccepted = { if (output.value.target == "$id:${pane.window}:${pane.id}") readDesktop(id, pane) },
+            onRejected = { uncertain -> error.value = if (uncertain) "delivery_unknown" else "input_rejected" },
+        )
+    }
     suspend fun sendDesktop(id: String, pane: DesktopPane, text: String): Boolean {
         if (computers.value.none { it.id == id && it.allowInput && it.status == "ready" }) return false
         return try {

@@ -72,6 +72,7 @@ class GhosttyView(context: Context) : View(context) {
     private var selectionTouchY = 0f
     private var actionMode: ActionMode? = null
     internal var composingText = ""
+    private var inputGeneration = 0
     private var pinchInProgress = false
     private var pinchFontSize = fontSize.toFloat()
     private var pinchChanged = false
@@ -91,6 +92,7 @@ class GhosttyView(context: Context) : View(context) {
     var session: TerminalSession? = null
         set(value) {
             if (field === value) return
+            inputGeneration++
             stopScrolling()
             field?.setVisible(false)
             clearSelection()
@@ -103,6 +105,7 @@ class GhosttyView(context: Context) : View(context) {
     var directInput = false
         set(value) {
             if (field == value) return
+            inputGeneration++
             field = value
             isFocusable = value
             isFocusableInTouchMode = value
@@ -209,6 +212,8 @@ class GhosttyView(context: Context) : View(context) {
         resetCursorBlink()
     }
     override fun onDetachedFromWindow() {
+        inputGeneration++
+        composingText = ""
         stopScrolling()
         session?.setVisible(false)
         clearSelection()
@@ -821,7 +826,16 @@ class GhosttyView(context: Context) : View(context) {
         info.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_ACTION_NONE
         info.initialSelStart = 0
         info.initialSelEnd = 0
-        return GhosttyInputConnection(this)
+        val owner = session ?: return null
+        val generation = inputGeneration
+        val target = object : TerminalInputTarget {
+            override fun text(text: String) = owner.sendText(text).also(::accept)
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int) =
+                owner.key(code, modifiers, action, text, unshifted).also(::accept)
+            override fun paste(text: String) = owner.paste(text).also(::accept)
+        }
+        return TerminalInputConnection(this, target,
+            { directInput && session === owner && inputGeneration == generation }, { composingText = it })
     }
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean = handleKey(code, event, if (event.repeatCount > 0) 2 else 1) || super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean = handleKey(code, event, 0) || super.onKeyUp(code, event)

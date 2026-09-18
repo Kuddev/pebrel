@@ -1,0 +1,34 @@
+<resources>
+    <string name="service_intro">选择要使用的服务器，Pebrel 通过 SSH 安装轻量加密中转服务，无需 Docker、Node.js 或域名。</string>
+    <string name="service_title">Pebrel 中转服务</string>
+    <string name="service_advanced">高级连接设置</string>
+    <string name="service_port">中转端口</string>
+    <string name="service_address">连接地址覆盖（可选）</string>
+    <string name="service_address_hint">默认沿用 SSH 主机地址。仅当电脑、手机访问此服务器所用地址不同时修改。</string>
+    <string name="service_install">安装并启动</string>
+    <string name="service_check">检查状态</string>
+    <string name="service_start">启动</string>
+    <string name="service_stop">停止</string>
+    <string name="service_uninstall">卸载</string>
+    <string name="service_uninstall_hint">停止中转并仅移除 Pebrel 管理的服务文件，已连接的设备会断开。默认保留凭据以便重装，除非你勾选同时删除配置。</string>
+    <string name="service_purge">同时删除配对配置和密钥</string>
+    <string name="service_requirements">当前需要 Linux x64/ARM64、systemd 247+ 及 root SSH 权限，仅安装一个服务。电脑和手机需能访问中转端口（默认 443）；Pebrel 不会修改防火墙。登录密码仅用于本次操作。</string>
+    <string name="service_pc_next">保存连接配置，在电脑的“设置 → 手机连接 → 中转服务器”中导入，再生成二维码供手机扫描。</string>
+    <string name="service_export_private">此文件包含服务器访问凭据，请私下传给自己的电脑，不要公开。</string>
+    <string name="service_uploading">正在上传并安装原生服务…</string>
+    <string name="service_starting">正在启动服务…</string>
+    <string name="service_verifying">正在检查服务监听…</string>
+    <string name="service_removing">正在停止并移除服务…</string>
+    <string name="service_stopped">已安装 · 已停止</string>
+    <string name="service_uninstalled">服务已卸载</string>
+    <string name="service_cancelled">操作已取消，已安装的服务会保留。请先检查状态再重试。</string>
+    <string name="service_not_installed">尚未安装</string>
+    <string name="service_unchecked">尚未检查状态</string>
+    <string name="service_asset_error">缺少经过校验的原生服务包或文件损坏，请安装更新后的 Pebrel 包。</string>
+    <string name="service_system_error">当前安装器支持 Linux x64/ARM64，需 systemd 247 或更新版本。</string>
+    <string name="service_permission_error">当前安装及管理系统服务需要 root SSH 账户。</string>
+    <string name="service_conflict">现有服务文件已被修改或属于其他安装，未进行覆盖或删除。请先检查服务器上的安装。</string>
+    <string name="service_not_ready">服务未能就绪。请检查所选端口是否已被占用，再检查服务状态。</string>
+    <string name="service_address_error">请输入服务器 IP 或主机名，不要包含网址协议、路径或登录信息。</string>
+    <string name="service_failed">操作未完成，请检查服务器连接和服务状态后重试。</string>
+</resources>

@@ -7,6 +7,9 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.app.Activity
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
 import androidx.test.core.app.ApplicationProvider
 import io.github.kuddev.pebrel.mobile.connection.decodeDesktopScreen
 import io.github.kuddev.pebrel.terminal.GhosttyView
@@ -16,11 +19,13 @@ import io.github.kuddev.pebrel.terminal.TerminalFrame
 import io.github.kuddev.pebrel.terminal.TerminalRow
 import io.github.kuddev.pebrel.terminal.TerminalSession
 import io.github.kuddev.pebrel.terminal.TerminalSnapshotView
+import io.github.kuddev.pebrel.terminal.TerminalInputTarget
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayInputStream
@@ -31,6 +36,53 @@ import java.io.File
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class TerminalSnapshotViewTest {
+    @Test fun tappingPcSurfaceOpensDirectInputAndStaleImeCannotWriteAfterToggle() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val messages = mutableListOf<String>()
+        val target = object : TerminalInputTarget {
+            override fun text(text: String): Boolean { messages += text; return true }
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int): Boolean {
+                messages += "key:$code"; return true
+            }
+        }
+        val view = TerminalSnapshotView(activity).apply { inputTarget = target }
+        activity.setContentView(view)
+        view.clearFocus()
+        val down = eventTime
+        touch(view, down, MotionEvent.ACTION_DOWN, 12f to 12f)
+        touch(view, down, MotionEvent.ACTION_UP, 12f to 12f)
+        assertTrue(view.hasFocus())
+        assertTrue(view.onCheckIsTextEditor())
+        val ime = checkNotNull(view.onCreateInputConnection(EditorInfo()))
+        assertTrue(ime.setComposingText("中", 1))
+        assertTrue("preedit must remain local", messages.isEmpty())
+        assertTrue(ime.commitText("中文😀", 1))
+        assertTrue(ime.deleteSurroundingText(1, 0))
+        assertEquals(listOf("中文😀", "key:${KeyEvent.KEYCODE_DEL}"), messages)
+        view.inputTarget = null
+        assertNull(view.onCreateInputConnection(EditorInfo()))
+        assertFalse(ime.commitText("stale", 1))
+        view.inputTarget = target
+        assertFalse("re-entering direct mode must not revive old IME", ime.commitText("stale", 1))
+        assertEquals(2, messages.size)
+        activity.finish()
+    }
+
+    @Test fun pcReadOnlyTapDoesNotCreateAnInputConnection() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val view = TerminalSnapshotView(activity)
+        activity.setContentView(view)
+        view.performClick()
+        assertFalse(view.onCheckIsTextEditor())
+        assertNull(view.onCreateInputConnection(EditorInfo()))
+        activity.finish()
+    }
+
+    @Test fun widePcGridDoesNotShrinkTheChosenFontToFitPhoneWidth() {
+        val small = view(row("████"), width = 240)
+        val wide = view(row("█".repeat(200)), width = 240)
+        assertEquals(colorBounds(render(small), red).height(), colorBounds(render(wide), red).height())
+    }
     private val red = 0xffff0000.toInt()
     private val green = 0xff00ff00.toInt()
     private val background = 0xff101010.toInt()

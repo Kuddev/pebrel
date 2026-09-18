@@ -119,7 +119,7 @@ data class RelayDeploymentResult(
  * opens a fresh authenticated session for every remote command while retaining the
  * fingerprint accepted during the first session.
  */
-private class DeploymentSsh(
+internal class DeploymentSsh(
     private val host: HostProfile,
     private val password: CharArray,
     private val verifyHost: (HostProfile, String) -> Boolean,

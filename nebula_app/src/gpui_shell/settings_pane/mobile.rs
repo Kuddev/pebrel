@@ -363,6 +363,49 @@ impl SettingsPane {
         cx.notify();
     }
 
+    fn mobile_import_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(
+                crate::gpui_shell::config::ui_language(cx).text(Message::MobileImportFile).into(),
+            ),
+        });
+        let sequence = self.mobile.edit_sequence;
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            let Some(path) = paths.into_iter().next() else { return };
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    use std::io::Read;
+                    let mut data = String::new();
+                    std::fs::File::open(path)?.take(8193).read_to_string(&mut data)?;
+                    if data.len() > 8192 {
+                        return Err(std::io::Error::other("configuration_too_large"));
+                    }
+                    Ok::<_, std::io::Error>(data)
+                })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if sequence != this.mobile.edit_sequence || this.mobile.operation.is_some() {
+                    return;
+                }
+                this.mobile_invalidate(cx);
+                this.mobile.edit_sequence = this.mobile.edit_sequence.wrapping_add(1);
+                match read {
+                    Ok(data) => this.mobile_import(&data, window, cx),
+                    Err(_) => {
+                        this.mobile.failure = Some(Failure::Invalid);
+                        cx.notify();
+                    },
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn section_mobile(
         &mut self,
         window: &mut Window,
@@ -463,8 +506,14 @@ impl SettingsPane {
                 )));
         } else {
             card = card
-                .child(div().text_sm().child(text(Message::MobileServer)))
-                .child(Input::new(&self.mobile.inputs[0]).disabled(busy))
+                .child(
+                    Button::new("mobile-import-file")
+                        .label(text(Message::MobileImportFile))
+                        .disabled(busy)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.mobile_import_file(window, cx)),
+                        ),
+                )
                 .child(
                     Button::new("mobile-import-relay")
                         .label(text(Message::MobileImport))
@@ -527,6 +576,7 @@ impl SettingsPane {
                 &[(4, Message::MobilePort)]
             } else if self.mobile.relay_version == 2 {
                 &[
+                    (0, Message::MobileServer),
                     (1, Message::MobileDeviceId),
                     (2, Message::MobileDesktopToken),
                     (3, Message::MobilePhoneToken),
@@ -534,6 +584,7 @@ impl SettingsPane {
                 ]
             } else {
                 &[
+                    (0, Message::MobileServer),
                     (1, Message::MobileDeviceId),
                     (2, Message::MobileDesktopToken),
                     (3, Message::MobilePhoneToken),

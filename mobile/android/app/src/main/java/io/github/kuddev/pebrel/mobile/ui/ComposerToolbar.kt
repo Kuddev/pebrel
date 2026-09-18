@@ -57,6 +57,7 @@ internal fun ComposerIconButton(
     tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     modifier: Modifier = Modifier,
     busy: Boolean = false,
+    circular: Boolean = false,
     onClick: () -> Unit,
 ) {
     val interactions = remember { MutableInteractionSource() }
@@ -64,9 +65,9 @@ internal fun ComposerIconButton(
     val focused by interactions.collectIsFocusedAsState()
     val hovered by interactions.collectIsHoveredAsState()
     val colors = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(if (circular) 24.dp else 12.dp)
     val fill = when {
-        !enabled -> Color.Transparent
+        !enabled -> if (circular) colors.onSurface.copy(alpha = .06f) else Color.Transparent
         selected -> selectedContainer ?: colors.primary.copy(alpha = .14f)
         pressed -> colors.primary.copy(alpha = .10f)
         hovered -> colors.primary.copy(alpha = .06f)

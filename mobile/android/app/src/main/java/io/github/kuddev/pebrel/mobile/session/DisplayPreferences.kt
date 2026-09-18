@@ -52,6 +52,13 @@ data class TerminalPreferences(
 /** Small UI preferences only. Session identity, credentials and terminal state remain elsewhere. */
 class DisplayPreferences(context: Context) {
     private val stored = context.getSharedPreferences("terminal_display", Context.MODE_PRIVATE)
+    init {
+        // Old previews persisted composer-first even when the user had never
+        // selected it. Migrate once; subsequent explicit preferences still win.
+        if (!stored.getBoolean("compact_input_default_v1", false)) {
+            stored.edit().putBoolean("direct_input", true).putBoolean("compact_input_default_v1", true).apply()
+        }
+    }
     private val current = MutableStateFlow(
         TerminalPreferences(
             fontFamily = stored.getString("font_family", TerminalPreferenceValues.MAPLE_FONT).orEmpty(),

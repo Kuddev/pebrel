@@ -253,9 +253,7 @@ class MainActivity : ComponentActivity() {
         if (addRelay) RelayForm(onCancel = { addRelay = false }, onConnect = { invitation ->
             repository.importRelay(invitation)?.let { openDesktop(it); addRelay = false }
         }, onDeploy = { addRelay = false; deployRelay = true })
-        if (deployRelay) RelayDeploymentFlow(repository, onCancel = { deployRelay = false }, onConnect = { invitation ->
-            repository.importRelay(invitation)?.let { openDesktop(it); deployRelay = false }
-        })
+        if (deployRelay) RelayDeploymentFlow(repository, onCancel = { deployRelay = false })
         login?.let { host -> LoginForm(
             host = host,
             onCancel = { login = null; retrySession = null },
