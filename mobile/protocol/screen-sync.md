@@ -59,6 +59,12 @@ reported only after all replies arrive. Failure or cancellation closes that
 writer, cancels outstanding receipts and preserves unsent drafts. Input replies
 omit redundant desktop snapshots; state remains on its separate subscription.
 
+The native endpoint keeps its eight-slot request/reply channels. It reserves a
+request slot before reading the next WebSocket message while continuing to drain
+output. Runtime worker replies wait for bounded channel space; they do not abort
+the connection merely because a burst filled that queue. No async network worker
+blocks on a synchronous send, and dropping the receiver releases waiting writers.
+
 Background cancels screen observation, not the remote PTY. Returning probes the
 transport and reconnects previously successful LAN/relay profiles if necessary.
 Retry delays back off from 500 ms to 15 s while foregrounded; trust/authentication

@@ -314,12 +314,19 @@ async fn exchange(
     loop {
         tokio::select! {
             _=shutdown.cancelled()=>return Ok(()),
-            frame=next(socket)=>match frame? {
+            frame=async {
+                let permit = input.reserve().await.map_err(|_|invalid())?;
+                let frame = next(socket).await?;
+                Ok::<_,io::Error>((permit,frame))
+            }=>{
+                let (permit,frame) = frame?;
+                match frame {
                 Message::Binary(bytes)=>if let Some(plain)=channel.open(&bytes).map_err(|_|authentication())? {
                     if plain.len()>MAX_REQUEST {return Err(invalid());}
-                    input.try_send(plain.to_vec()).map_err(|_|invalid())?;
+                    permit.send(plain.to_vec());
                 },
                 _=>return Err(invalid()),
+                }
             },
             response=output.recv()=>{
                 let bytes=response.ok_or_else(invalid)?;

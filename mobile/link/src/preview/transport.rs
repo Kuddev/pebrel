@@ -65,7 +65,11 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
                 let body: Value = serde_json::from_slice(&bytes).map_err(|_|io::Error::other("invalid_runtime_frame"))?;
                 send(socket,json!({"type":"relay.data","link":epoch,"body":body})).await?;
             },
-            frame = socket.next() => {
+            frame = async {
+                let permit = input.reserve().await.map_err(|_|io::Error::other("mobile_input_closed"))?;
+                Ok::<_,io::Error>((permit,socket.next().await))
+            } => {
+                let (permit,frame) = frame?;
                 last_received = time::Instant::now();
                 match frame {
                     Some(Ok(Message::Ping(_)|Message::Pong(_))) => {},
@@ -77,7 +81,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
                         }
                         let request = serde_json::to_vec(&value["body"]).map_err(io::Error::other)?;
                         if request.len() > MAX_REQUEST { return Err(io::Error::other("mobile_request_too_large")); }
-                        input.try_send(request).map_err(|_|io::Error::other("mobile_input_backpressure"))?;
+                        permit.send(request);
                     },
                     _ => return Err(io::Error::other("mobile_disconnected")),
                 }

@@ -65,6 +65,8 @@ jobs:
         run: cargo build --locked --release -p pebrel-mobile-link --features relay --bin pebrel-relay --target ${{ matrix.target }}
       - name: Verify relay lifecycle contracts
         run: cargo test --locked -p pebrel-mobile-link --features relay relay::service::tests
+      - name: Verify bounded endpoint backpressure
+        run: cargo test --locked -p pebrel-mobile-link --features preview mobile_latency
       - name: Verify install and uninstall on disposable systemd host
         run: python3 mobile/tools/test_native_relay_service.py target/${{ matrix.target }}/release/pebrel-relay
       - name: Verify Alpine OpenRC lifecycle in disposable container

@@ -18,6 +18,10 @@
   these are configured limits, not measured universal latency guarantees. The
   existing runtime connection worker owns the stream and releases it on explicit
   unsubscribe, socket failure or ACK timeout. No new dependency or relay service.
+  The existing eight-slot endpoint request/reply bounds are retained. Async socket
+  reads reserve request capacity while draining replies; dedicated Runtime
+  workers wait for output capacity instead of disconnecting on a burst. Dropping
+  the receiver releases blocked writers; no async executor thread blocks on I/O.
 - **Phone:** Apply and decode off the UI thread, publish before ACK, and allow
   multiple ACKs in flight. A corrupt/missing baseline permits two read-only
   resubscriptions; input is never replayed. One ordered input writer allows eight
