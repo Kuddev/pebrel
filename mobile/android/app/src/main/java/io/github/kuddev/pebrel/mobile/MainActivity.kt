@@ -39,6 +39,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); launchTarget.value = intent }
+    override fun onStart() {
+        super.onStart()
+        (application as PebrelApplication).sessions.foregroundChanged(true)
+    }
+    override fun onStop() {
+        (application as PebrelApplication).sessions.foregroundChanged(false)
+        super.onStop()
+    }
 
     @OptIn(ExperimentalAnimationApi::class)
     @Composable
@@ -58,6 +66,7 @@ class MainActivity : ComponentActivity() {
         var desktopId by rememberSaveable { mutableStateOf("") }
         var paneId by rememberSaveable { mutableLongStateOf(-1L) }
         var windowId by rememberSaveable { mutableLongStateOf(-1L) }
+        var paneProcess by rememberSaveable { mutableStateOf<Long?>(null) }
         var pageDirection by rememberSaveable { mutableStateOf("forward") }
         var settingsInitial by rememberSaveable { mutableStateOf("") }
         var hostForm by rememberSaveable { mutableStateOf(false) }
@@ -78,7 +87,11 @@ class MainActivity : ComponentActivity() {
         fun openSession(id: String) { selected = id; showPage("terminal"); switcher = false }
         fun openDesktop(id: String) { desktopId = id; paneId = -1L; showPage("desktop"); switcher = false }
         fun openPane(id: String, entry: DesktopPane) {
+            paneProcess = desktops.find { it.id == id }?.runtimeProcess
             desktopId = id; windowId = entry.window; paneId = entry.id; showPage("pane"); switcher = false
+        }
+        LaunchedEffect(desktopId, relays) {
+            if (page == "pane" || page == "desktop") repository.restoreDesktop(desktopId)
         }
         fun connectHost(host: HostProfile, previous: String? = null) {
             if (credentialBusy) return
@@ -181,10 +194,12 @@ class MainActivity : ComponentActivity() {
                         else LaunchedEffect(selected) { showPage("home") }
                     }
                     "pane" -> {
-                        if (desktop != null && pane != null) DesktopTerminalScreen(desktop, pane, repository, ::back, { switcher = true }, onPairAgain = { addRelay = true })
+                        if (desktop != null && pane != null && (paneProcess == null || paneProcess == desktop.runtimeProcess)) DesktopTerminalScreen(desktop, pane, repository, ::back, { switcher = true }, onPairAgain = { addRelay = true })
                         else {
                             PageHeader(stringResource(R.string.computer_tabs), ::back)
-                            HelperText(stringResource(R.string.device_unavailable), Modifier.padding(22.dp))
+                            HelperText(if (desktop?.status == "connecting") stringResource(R.string.desktop_reconnecting)
+                                else stringResource(R.string.desktop_session_changed), Modifier.padding(22.dp))
+                            if (desktop != null) TextButton({ openDesktop(desktop.id) }) { Text(stringResource(R.string.computer_tabs)) }
                         }
                     }
                     "desktop" -> {
@@ -199,7 +214,7 @@ class MainActivity : ComponentActivity() {
                         HomeScreen(sessions, hosts, desktops, relays, ::openSession, { switcher = true }, { showPage("hosts") },
                             { connectHost(it) }, { editHost = it; hostForm = true }, { deleteHost = it }, { editHost = null; hostForm = true },
                             ::openDesktop, { openDesktop(repository.connectRelay(it)) }, { showPage("computers") }, { addRelay = true },
-                            openLocal)
+                            openLocal, ::openPane)
                     }
                 }
                 }
@@ -209,11 +224,18 @@ class MainActivity : ComponentActivity() {
         }
         if (switcher) AlertDialog(onDismissRequest = { switcher = false }, title = { Text(stringResource(R.string.all_sessions)) }, text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (sessions.isEmpty() && desktops.all { it.panes.isEmpty() }) HelperText(stringResource(R.string.no_sessions))
-                sessions.forEach { session -> NavigationRow(R.drawable.ic_terminal, session.title, statusLabel(session.status)) { openSession(session.id) } }
-                desktops.forEach { computer -> computer.panes.forEach { entry ->
-                    NavigationRow(R.drawable.ic_monitor, entry.title, computer.host.name) { openPane(computer.id, entry) }
-                } }
+                val cards = sessionCards(sessions, desktops)
+                if (cards.isEmpty()) HelperText(stringResource(R.string.no_sessions))
+                cards.forEach { card ->
+                    val local = card.local
+                    if (local != null) NavigationRow(R.drawable.ic_terminal, local.title, statusLabel(local.status)) { openSession(local.id) }
+                    else card.desktop?.let { computer ->
+                        NavigationRow(R.drawable.ic_monitor, card.pane?.title ?: computer.host.name,
+                            "${computer.host.name} · ${statusLabel(computer.status)}") {
+                            card.pane?.let { openPane(computer.id, it) } ?: openDesktop(computer.id)
+                        }
+                    }
+                }
             }
         }, confirmButton = { TextButton({ switcher = false }) { Text(stringResource(R.string.close)) } })
         if (hostForm) HostForm(

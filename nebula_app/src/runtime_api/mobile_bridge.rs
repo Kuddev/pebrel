@@ -113,12 +113,15 @@ fn write_frame(output: &Output, value: &impl Serialize) -> io::Result<()> {
 }
 
 struct Subscription {
+    id: u64,
+    cancelled: Arc<AtomicBool>,
     shutdown: TcpStream,
     thread: std::thread::JoinHandle<()>,
 }
 
 impl Subscription {
     fn stop(self) {
+        self.cancelled.store(true, Ordering::Release);
         let _ = self.shutdown.shutdown(Shutdown::Both);
         // A hostile/paused SSH peer can stop reading stdout indefinitely. Do not
         // join its blocked writer. This CLI process owns no desktop session;
@@ -127,12 +130,28 @@ impl Subscription {
     }
 }
 
+fn stop_screen(endpoint: &Endpoint, target: (u64, u64), subscription: Subscription) {
+    subscription.cancelled.store(true, Ordering::Release);
+    // Retire the runtime watcher immediately on replacement/drop. If the local
+    // runtime already exited, closing the socket still bounds cleanup by heartbeat.
+    let request = ApiRequest::new(
+        endpoint.token.clone(),
+        "pane.screen.unsubscribe",
+        json!({
+            "window_id":target.0,"pane_id":target.1,"subscription_id":subscription.id
+        }),
+    );
+    let _ = connect(endpoint, &request);
+    subscription.stop();
+}
+
 fn start_subscription(
     endpoint: &Endpoint,
     request: Request,
     output: Output,
     stopped: Arc<AtomicBool>,
 ) -> io::Result<Subscription> {
+    let screen_only = request.method == "pane.screen.subscribe";
     let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
     local.id = request.id;
     let stream = connect(endpoint, &local)?;
@@ -146,21 +165,57 @@ fn start_subscription(
     if !response.ok {
         return Err(io::Error::other("runtime rejected subscription"));
     }
+    let id = response
+        .result
+        .as_ref()
+        .and_then(|value| value["subscription_id"].as_u64())
+        .ok_or_else(|| io::Error::other("invalid_subscription"))?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = cancelled.clone();
     reader.get_mut().set_read_timeout(None)?;
     let thread =
         std::thread::Builder::new().name("pebrel-mobile-events".into()).spawn(move || {
-            while !stopped.load(Ordering::Acquire) {
+            while !stopped.load(Ordering::Acquire) && !worker_cancelled.load(Ordering::Acquire) {
                 let Ok(Some(frame)) = read_frame(&mut reader, MAX_BRIDGE_FRAME) else { break };
                 let Ok(event) = serde_json::from_slice::<Value>(&frame) else { break };
                 if write_frame(&output, &event).is_err() {
                     break;
                 }
+                if screen_only && event["event"] == "pane.screen.error" {
+                    return;
+                }
             }
-            if !stopped.swap(true, Ordering::AcqRel) {
+            if screen_only {
+                if !worker_cancelled.load(Ordering::Acquire) && !stopped.load(Ordering::Acquire) {
+                    let _ = write_frame(&output, &json!({
+                        "protocol":PROTOCOL_NAME,"version":PROTOCOL_VERSION,
+                        "event":"pane.screen.error","subscription_id":id,
+                        "error":{"code":"screen_stream_lost","message":"resubscribe for a full screen"}
+                    }));
+                }
+            } else if !worker_cancelled.load(Ordering::Acquire) && !stopped.swap(true, Ordering::AcqRel) {
                 let _ = write_frame(&output, &json!({"type":"mobile.disconnected"}));
             }
         })?;
-    Ok(Subscription { shutdown, thread })
+    Ok(Subscription { id, cancelled, shutdown, thread })
+}
+
+fn supports_screen_stream(endpoint: &Endpoint) -> bool {
+    let request = ApiRequest::new(endpoint.token.clone(), "runtime.describe", json!({}));
+    let result = (|| -> io::Result<ApiResponse> {
+        let mut reader = BufReader::new(connect(endpoint, &request)?);
+        let bytes = read_frame(&mut reader, MAX_BRIDGE_FRAME)?
+            .ok_or_else(|| io::Error::other("missing_description"))?;
+        serde_json::from_slice(&bytes).map_err(io::Error::other)
+    })();
+    cfg!(feature = "gpui-shell")
+        && result.ok().filter(|reply| reply.ok).and_then(|reply| reply.result).is_some_and(
+            |value| {
+                value["capabilities"]
+                    .as_array()
+                    .is_some_and(|caps| caps.iter().any(|cap| cap == "pane.screen.subscribe"))
+            },
+        )
 }
 
 pub(crate) fn run(allow_input: bool) -> Result<(), Box<dyn Error>> {
@@ -187,6 +242,7 @@ pub(crate) struct BridgeSession {
     output: Output,
     stopped: Arc<AtomicBool>,
     subscription: Option<Subscription>,
+    screen_subscription: Option<((u64, u64), Subscription)>,
     allow_input: bool,
     screen: super::mobile_screen::ScreenBaseline,
 }
@@ -203,7 +259,7 @@ impl BridgeSession {
                 "capabilities": {
                     "snapshot": true, "read_tail": true, "state_subscription": true,
                     "input": allow_input, "exclusive_input": false, "replay_notifications": false,
-                    "terminal_grid_stream": false, "screen_delta": true
+                    "terminal_grid_stream": supports_screen_stream(&endpoint), "screen_delta": true
                 },
                 "max_request_bytes": MAX_BRIDGE_REQUEST,
                 "max_frame_bytes": MAX_BRIDGE_FRAME
@@ -214,6 +270,7 @@ impl BridgeSession {
             output,
             stopped,
             subscription: None,
+            screen_subscription: None,
             allow_input,
             screen: Default::default(),
         })
@@ -223,7 +280,15 @@ impl BridgeSession {
         if self.stopped.load(Ordering::Acquire) || frame.len() > MAX_BRIDGE_REQUEST {
             return Err(io::Error::other("mobile_connection_closed"));
         }
-        let Self { endpoint, output, stopped, subscription, allow_input, screen } = self;
+        let Self {
+            endpoint,
+            output,
+            stopped,
+            subscription,
+            screen_subscription,
+            allow_input,
+            screen,
+        } = self;
         let request: Request = match serde_json::from_slice(&frame) {
             Ok(request) => request,
             Err(_) => {
@@ -256,8 +321,47 @@ impl BridgeSession {
             }
             return Ok(());
         }
+        if request.method == "pane.screen.subscribe" {
+            let target = (
+                request.params["window_id"].as_u64().unwrap(),
+                request.params["pane_id"].as_u64().unwrap(),
+            );
+            if let Some((target, previous)) = screen_subscription.take() {
+                stop_screen(endpoint, target, previous);
+            }
+            *screen_subscription = Some((
+                target,
+                start_subscription(endpoint, request, output.clone(), stopped.clone())?,
+            ));
+            return Ok(());
+        }
+        let unsubscribe = request.method == "pane.screen.unsubscribe";
+        if unsubscribe || request.method == "pane.screen.ack" {
+            let owned = screen_subscription.as_ref().is_some_and(|(target, sub)| {
+                request.params["subscription_id"].as_u64() == Some(sub.id)
+                    && request.params["window_id"].as_u64() == Some(target.0)
+                    && request.params["pane_id"].as_u64() == Some(target.1)
+            });
+            if !owned {
+                write_frame(
+                    output,
+                    &ApiResponse::failure(
+                        request.id,
+                        ApiError::invalid_params("screen subscription belongs to another link"),
+                    ),
+                )?;
+                return Ok(());
+            }
+            // Prevent intentional teardown from reporting a connection loss.
+            if unsubscribe {
+                if let Some((_, sub)) = screen_subscription.as_ref() {
+                    sub.cancelled.store(true, Ordering::Release);
+                }
+            }
+        }
         let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
         local.id = request.id.clone();
+        let input_reply = matches!(local.method.as_str(), "pane.prompt" | "pane.send_key");
         // This extension belongs to the link, not the resident Runtime API.
         let baseline = if local.method == "pane.read" && local.params["screen"] == true {
             local
@@ -278,12 +382,24 @@ impl BridgeSession {
         })();
         match response {
             Ok(mut response) => {
+                // Input acknowledgements need the result, not a repeated copy of
+                // every window/tab. State already has its own ordered subscription.
+                if input_reply {
+                    if let Some(result) = response.result.as_mut().and_then(Value::as_object_mut) {
+                        result.remove("snapshot");
+                    }
+                }
                 if response.ok
                     && let (Some(result), Some(sequence)) = (&mut response.result, baseline)
                 {
                     screen.encode(result, sequence);
                 }
                 write_frame(&output, &response)?;
+                if unsubscribe {
+                    if let Some((_, sub)) = screen_subscription.take() {
+                        sub.stop();
+                    }
+                }
             },
             Err(_) => {
                 write_frame(
@@ -309,6 +425,9 @@ impl Drop for BridgeSession {
         self.stopped.store(true, Ordering::Release);
         if let Some(subscription) = self.subscription.take() {
             subscription.stop();
+        }
+        if let Some((target, subscription)) = self.screen_subscription.take() {
+            stop_screen(&self.endpoint, target, subscription);
         }
     }
 }

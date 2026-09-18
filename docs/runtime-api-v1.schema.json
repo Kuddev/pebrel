@@ -25,6 +25,9 @@
     },
     {
       "$ref": "#/$defs/event"
+    },
+    {
+      "$ref": "#/$defs/screen_event"
     }
   ],
   "$defs": {
@@ -59,6 +62,9 @@
             "runtime.snapshot",
             "runtime.orchestrate",
             "events.subscribe",
+            "pane.screen.subscribe",
+            "pane.screen.ack",
+            "pane.screen.unsubscribe",
             "agents.list",
             "agent.start",
             "agent.fork",
@@ -106,6 +112,18 @@
         {
           "if": { "properties": { "method": { "const": "events.subscribe" } } },
           "then": { "properties": { "params": { "$ref": "#/$defs/subscribe_params" } } }
+        },
+        {
+          "if": { "properties": { "method": { "const": "pane.screen.subscribe" } } },
+          "then": { "properties": { "params": { "$ref": "#/$defs/screen_subscribe_params" } } }
+        },
+        {
+          "if": { "properties": { "method": { "const": "pane.screen.ack" } } },
+          "then": { "properties": { "params": { "$ref": "#/$defs/screen_control_params", "required": ["sequence"] } } }
+        },
+        {
+          "if": { "properties": { "method": { "const": "pane.screen.unsubscribe" } } },
+          "then": { "properties": { "params": { "$ref": "#/$defs/screen_control_params", "not": {"required": ["sequence"]} } } }
         },
         {
           "if": { "properties": { "method": { "const": "agents.list" } } },
@@ -556,6 +574,68 @@
         "submit": { "type": "boolean", "default": true }
       },
       "additionalProperties": false
+    },
+    "screen_subscribe_params": {
+      "type": "object",
+      "required": ["window_id", "pane_id"],
+      "properties": {
+        "window_id": {"type":"integer", "minimum":1},
+        "pane_id": {"type":"integer", "minimum":1},
+        "lines": {"type":"integer", "minimum":1, "maximum":100, "default":100}
+      },
+      "additionalProperties": false
+    },
+    "screen_control_params": {
+      "type": "object",
+      "required": ["window_id", "pane_id", "subscription_id"],
+      "properties": {
+        "window_id": {"type":"integer", "minimum":1},
+        "pane_id": {"type":"integer", "minimum":1},
+        "subscription_id": {"type":"integer", "minimum":1},
+        "sequence": {"type":"integer", "minimum":0}
+      },
+      "additionalProperties": false
+    },
+    "screen_event": {
+      "type": "object",
+      "required": ["protocol", "version", "event", "subscription_id"],
+      "properties": {
+        "protocol": {"const":"nebula.runtime"},
+        "version": {"const":1},
+        "event": {"enum":["pane.screen", "pane.screen.error", "pane.screen.heartbeat"]},
+        "subscription_id": {"type":"integer", "minimum":1},
+        "sequence": {"type":"integer", "minimum":1},
+        "error": {"$ref":"#/$defs/error"},
+        "data": {
+          "$ref":"#/$defs/pane_read",
+          "required":["screen_seq"],
+          "oneOf":[{"required":["screen"]}, {"required":["screen_delta"]}]
+        }
+      },
+      "allOf": [
+        {"if":{"properties":{"event":{"const":"pane.screen"}}}, "then":{"required":["sequence","data"]}},
+        {"if":{"properties":{"event":{"const":"pane.screen.error"}}}, "then":{"required":["error"]}}
+      ],
+      "additionalProperties": false
+    },
+    "screen_delta": {
+      "type":"object",
+      "required":["base", "rows", "cursor", "palette"],
+      "properties": {
+        "base":{"type":"integer", "minimum":1},
+        "rows": {
+          "type":"array", "maxItems":200,
+          "items": {
+            "type":"array", "minItems":2, "maxItems":2,
+            "prefixItems":[{"type":"integer", "minimum":0, "maximum":199},
+              {"$ref":"#/$defs/terminal_screen/properties/rows/items"}],
+            "items": false
+          }
+        },
+        "cursor":{"$ref":"#/$defs/terminal_screen/properties/cursor"},
+        "palette":{"$ref":"#/$defs/terminal_screen/properties/palette"}
+      },
+      "additionalProperties":false
     },
     "read_params": {
       "type": "object",
@@ -1199,6 +1279,8 @@
         "pane_id": { "type": "integer", "minimum": 0 },
         "text": { "type": "string" },
         "screen": { "$ref": "#/$defs/terminal_screen" },
+        "screen_seq": {"type":"integer", "minimum":1},
+        "screen_delta": {"$ref":"#/$defs/screen_delta"},
         "requested_lines": { "type": "integer", "minimum": 1, "maximum": 2000 },
         "returned_lines": { "type": "integer", "minimum": 0, "maximum": 2000 },
         "history_available": { "type": "integer", "minimum": 0 },

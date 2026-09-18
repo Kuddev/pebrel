@@ -3,7 +3,7 @@
 //! snapshot. No terminal bytes or user input are replayed by this adapter.
 use serde_json::{Value, json};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct ScreenBaseline {
     target: Option<(u64, u64)>,
     screen: Option<Value>,

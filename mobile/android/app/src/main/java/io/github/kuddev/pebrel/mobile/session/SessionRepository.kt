@@ -25,13 +25,15 @@ data class LocalSession(
     val stage: SshStage = SshStage.NETWORK, val failure: SshFailureKind? = null, val hasConnected: Boolean = false,
 )
 data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH", val failure: DesktopFailureKind? = null,
-                            val hasConnected: Boolean = false, val relayProfile: RelayProfile? = null)
+                            val hasConnected: Boolean = false, val relayProfile: RelayProfile? = null,
+                            val connectionGeneration: Long = 0, val runtimeProcess: Long? = null)
 data class TrustRequest(val ownerId: String, val host: HostProfile, val fingerprint: String, val answer: CompletableFuture<Boolean>)
 data class DesktopOutput(val target: String = "", val text: String = "", val loading: Boolean = false,
                          val frame: io.github.kuddev.pebrel.terminal.TerminalFrame? = null)
 
 /** Application owns sessions; activities only attach views. Metadata never updates per cell. */
-class SessionRepository(private val context: Context) {
+class SessionRepository(private val context: Context,
+                        private val relayTransport: (RelayProfile) -> DesktopTransport = { RelayTransport(it) }) {
     val display = DisplayPreferences(context)
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -66,6 +68,44 @@ class SessionRepository(private val context: Context) {
     private var readGeneration = 0L
     private var desktopReader: DesktopReadScheduler? = null
     private val desktopClients = java.util.concurrent.ConcurrentHashMap<String, DesktopRuntimeClient>()
+    private var foreground = false
+    private val resumeChecks = mutableMapOf<String, Job>()
+    private val reconnect = DesktopReconnect(scope) { id ->
+        val current = computers.value.find { it.id == id }
+        if (foreground && current?.hasConnected == true && current.status != "ready" &&
+            current.status != "connecting" && DesktopReconnect.retryable(current.failure)) {
+            current.relayProfile?.let { connectRelay(it) }
+        }
+    }
+
+    fun foregroundChanged(value: Boolean) {
+        foreground = value
+        reconnect.foreground(value)
+        resumeChecks.values.forEach(Job::cancel)
+        resumeChecks.clear()
+        if (!value) return
+        for (desktop in computers.value.filter { it.hasConnected && it.relayProfile != null }) {
+            val client = desktopClients[desktop.id]
+            if (client == null && DesktopReconnect.retryable(desktop.failure)) reconnect.schedule(desktop.id, immediate = true)
+            else if (client != null && desktop.status == "ready") resumeChecks[desktop.id] = scope.launch {
+                try { withTimeout(5000) { client.request("runtime.describe") } }
+                catch (error: Exception) {
+                    if (error is CancellationException && error !is TimeoutCancellationException) throw error
+                    withContext(Dispatchers.Main) {
+                        if (foreground) {
+                            desktopFailed(desktop.id, client, DesktopFailureKind.NETWORK, immediate = true)
+                            client.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun restoreDesktop(id: String) {
+        if (computers.value.any { it.id == id }) return
+        savedRelays.value.find { "relay:${it.id}" == id }?.let(::connectRelay)
+    }
     private var renderOwner: String? = null
     private var renderToken: Any? = null
     private var redraw: (() -> Unit)? = null
@@ -317,9 +357,10 @@ class SessionRepository(private val context: Context) {
     }
     fun connectRelay(profile: RelayProfile): String {
         computers.value.find { it.host.id == profile.id && it.status in setOf("ready", "connecting") }?.let { return it.id }
-        computers.value.filter { it.host.id == profile.id }.forEach { closeDesktop(it.id) }
+        val previous = computers.value.find { it.host.id == profile.id }
         val host = HostProfile(profile.id, profile.name, profile.url, 443, "")
-        return addDesktop(host, true, RelayTransport(profile), if (profile.mode == "lan") "LAN" else "Relay", relayProfile = profile)
+        return addDesktop(host, true, relayTransport(profile), if (profile.mode == "lan") "LAN" else "Relay",
+            id = previous?.id ?: "relay:${profile.id}", relayProfile = profile)
     }
     fun connectDesktop(host: HostProfile, password: CharArray, allowInput: Boolean): String {
         val id = UUID.randomUUID().toString()
@@ -329,7 +370,12 @@ class SessionRepository(private val context: Context) {
 
     private fun addDesktop(host: HostProfile, allowInput: Boolean, transport: DesktopTransport, source: String,
                            id: String = UUID.randomUUID().toString(), relayProfile: RelayProfile? = null): String {
-        computers.value = computers.value + DesktopWorkspace(id, host, allowInput = false, transport = source, relayProfile = relayProfile)
+        val previous = computers.value.find { it.id == id }
+        val entry = if (previous == null) DesktopWorkspace(id, host, allowInput = false, transport = source, relayProfile = relayProfile,
+            hasConnected = relayProfile != null && savedRelays.value.any { it.id == relayProfile.id })
+            else previous.copy(host = host, status = "connecting", allowInput = false, failure = null,
+                connectionGeneration = previous.connectionGeneration + 1, relayProfile = relayProfile)
+        computers.value = computers.value.filterNot { it.id == id } + entry
         SessionService.ensureStarted(context)
         val transitions = DesktopTransitions()
         lateinit var client: DesktopRuntimeClient
@@ -338,44 +384,46 @@ class SessionRepository(private val context: Context) {
             val events = transitions.observe(snapshot)
             main.post {
                 if (desktopClients[id] !== client) return@post
-                val current = computers.value.find { it.id == id } ?: return@post
-                if (!current.hasConnected && relayProfile != null) {
+                if (computers.value.none { it.id == id }) return@post
+                if (relayProfile != null && savedRelays.value.find { it.id == relayProfile.id } != relayProfile) {
                     if (savedRelays.value.size < 64 || savedRelays.value.any { it.id == relayProfile.id }) {
                         savedRelays.value = savedRelays.value.filterNot { it.id == relayProfile.id } + relayProfile
                         persistRelays()
                     } else error.value = "relay_storage_failed"
                 }
-                computers.value = computers.value.map { if (it.id == id) it.copy(panes = panes, status = "ready", hasConnected = true, failure = null) else it }
+                reconnect.forget(id)
+                computers.value = computers.value.map { if (it.id == id) it.copy(panes = panes, status = "ready", hasConnected = true, failure = null,
+                    runtimeProcess = snapshot.getLong("process_id")) else it }
                 if (computers.value.any { it.id == id }) events.forEach { SessionNotices.task(context, id, host.name, it) }
             }
         }, { failure -> main.post {
-            desktopClients.remove(id)
-            computers.value = computers.value.map { if (it.id == id) it.copy(status = "disconnected", failure = failure) else it }
-            stopIdleService()
+            desktopFailed(id, client, failure)
         } })
         desktopClients[id] = client
         scope.launch {
             try {
                 val hello = client.connect(allowInput)
                 val input = allowInput && hello.optJSONObject("capabilities")?.optBoolean("input") == true
-                main.post { computers.value = computers.value.map { if (it.id == id) it.copy(allowInput = input) else it } }
+                main.post { if (desktopClients[id] === client) computers.value = computers.value.map { if (it.id == id) it.copy(allowInput = input) else it } }
             } catch (cancelled: CancellationException) {
                 client.close()
                 throw cancelled
             } catch (failure: Exception) {
-                desktopClients.remove(id, client)
                 client.close()
                 main.post {
-                    if (computers.value.any { it.id == id }) {
-                        val kind = classifyDesktopFailure(failure)
-                        computers.value = computers.value.map { if (it.id == id) it.copy(status = "failed", failure = kind) else it }
-                        error.value = kind.code
-                    }
-                    stopIdleService()
+                    desktopFailed(id, client, classifyDesktopFailure(failure))
                 }
             }
         }
         return id
+    }
+    private fun desktopFailed(id: String, client: DesktopRuntimeClient, failure: DesktopFailureKind, immediate: Boolean = false) {
+        if (!desktopClients.remove(id, client)) return // A late old callback cannot remove a recovered client.
+        val current = computers.value.find { it.id == id } ?: return
+        computers.value = computers.value.map { if (it.id == id) it.copy(status = if (it.hasConnected) "disconnected" else "failed", allowInput = false, failure = failure) else it }
+        if (current.hasConnected && current.relayProfile != null && DesktopReconnect.retryable(failure)) reconnect.schedule(id, immediate)
+        else error.value = failure.code
+        stopIdleService()
     }
     fun readDesktop(id: String, pane: DesktopPane) {
         if (output.value.target == "$id:${pane.window}:${pane.id}") desktopReader?.refresh()
@@ -390,6 +438,22 @@ class SessionRepository(private val context: Context) {
         readJob = currentCoroutineContext().job
         output.value = if (output.value.target == identity) output.value else DesktopOutput(identity, loading = true)
         try {
+            suspend fun publish(read: DesktopPaneRead) {
+                val previous = output.value
+                val next = withContext(Dispatchers.IO) {
+                    val response = read.response
+                    val frame = if (!read.screenChanged && previous.frame != null) previous.frame else response.optJSONObject("screen")?.let {
+                        decodeDesktopScreen(it, checkNotNull(terminalColors))
+                    }
+                    DesktopOutput(identity, response.optString("text"), frame = frame)
+                }
+                currentCoroutineContext().ensureActive()
+                if (generation != readGeneration || desktopClients[id] !== client) throw CancellationException()
+                output.value = next
+            }
+            // Negotiated change stream: no pane.read timer or input-triggered
+            // round trip. Older desktops retain the explicit snapshot fallback.
+            if (client.streamPane(target(pane).put("lines", 100), ::publish)) return
             reader.run {
                 val previous = output.value
                 val result = runCatching {
@@ -411,6 +475,13 @@ class SessionRepository(private val context: Context) {
                     error.value = "desktop_read_failed"
                 }
                 next.frame !== previous.frame || next.text != previous.text
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            if (generation == readGeneration) {
+                output.value = output.value.copy(loading = false)
+                error.value = "desktop_read_failed"
             }
         } finally {
             if (generation == readGeneration) {
@@ -435,6 +506,9 @@ class SessionRepository(private val context: Context) {
                 computers.value.any { it.id == id && it.allowInput && it.status == "ready" } },
             onAccepted = { if (output.value.target == "$id:${pane.window}:${pane.id}") readDesktop(id, pane) },
             onRejected = { uncertain -> error.value = if (uncertain) "delivery_unknown" else "input_rejected" },
+            dispatch = { method, params ->
+                checkNotNull(client).dispatchInput(method, params.put("window_id", pane.window).put("pane_id", pane.id))
+            },
         )
     }
     suspend fun sendDesktop(id: String, pane: DesktopPane, text: String): Boolean {
@@ -452,6 +526,9 @@ class SessionRepository(private val context: Context) {
     }
     private fun target(pane: DesktopPane) = JSONObject().put("window_id", pane.window).put("pane_id", pane.id)
     fun closeAll() {
+        reconnect.clear()
+        resumeChecks.values.forEach(Job::cancel)
+        resumeChecks.clear()
         leaveDesktopPane()
         pendingTrust.values.forEach { it.complete(false) }; pendingTrust.clear()
         trust.value?.answer?.complete(false); trust.value = null
@@ -463,6 +540,8 @@ class SessionRepository(private val context: Context) {
         stopIdleService()
     }
     fun closeDesktop(id: String) {
+        reconnect.forget(id)
+        resumeChecks.remove(id)?.cancel()
         cancelTrust(id)
         leaveDesktopPane()
         val client = desktopClients.remove(id)

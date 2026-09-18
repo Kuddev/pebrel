@@ -104,6 +104,10 @@ pub(super) fn handle_connection(
             write_response(&mut stream, &ApiResponse::success(request.id, runtime_description()))
         },
         "events.subscribe" => subscribe_connection(&mut stream, request, hub),
+        "pane.screen.subscribe" => super::screen_stream::subscribe(&mut stream, request, sink, hub),
+        "pane.screen.ack" | "pane.screen.unsubscribe" => {
+            super::screen_stream::control(&mut stream, request, hub)
+        },
         "agents.list" => agent_api::agents_connection(&mut stream, request, hub),
         "agent.get" => agent_api::agent_get_connection(&mut stream, request, hub),
         "agent.delegate" => agent_api::agent_delegate_connection(&mut stream, request, sink, hub),
@@ -138,7 +142,7 @@ pub(super) fn handle_legacy(
 }
 
 pub(super) fn runtime_description() -> Value {
-    json!({
+    let mut description = json!({
         "app_version": env!("VERSION"),
         "protocol": PROTOCOL_NAME,
         "protocol_version": PROTOCOL_VERSION,
@@ -146,6 +150,9 @@ pub(super) fn runtime_description() -> Value {
         "schema": "docs/runtime-api-v1.schema.json",
         "capabilities": [
             "runtime.describe",
+            "pane.screen.subscribe",
+            "pane.screen.ack",
+            "pane.screen.unsubscribe",
             "runtime.snapshot",
             "runtime.orchestrate",
             "events.subscribe",
@@ -218,7 +225,13 @@ pub(super) fn runtime_description() -> Value {
             "pane": ["list", "read", "send", "paste", "wait", "exec", "close", "zoom", "resize"],
             "agent": ["list", "send", "delegate", "paste", "read", "wait"]
         }
-    })
+    });
+    if !cfg!(feature = "gpui-shell") {
+        description["capabilities"].as_array_mut().unwrap().retain(|method| {
+            !method.as_str().is_some_and(|method| method.starts_with("pane.screen."))
+        });
+    }
+    description
 }
 
 pub(super) fn subscribe_connection(

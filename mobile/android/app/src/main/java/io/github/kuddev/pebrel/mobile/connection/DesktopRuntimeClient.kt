@@ -31,6 +31,16 @@ class DesktopRuntimeClient(
     private val closed = AtomicBoolean()
     @Volatile private var screenUnsupported = false
     @Volatile private var screenDelta = false
+    @Volatile private var screenStream = false
+    private val streaming = DesktopScreenStream(::request, acknowledge = { params ->
+        val call = startRequest("pane.screen.ack", params)
+        scope.async(start = CoroutineStart.UNDISPATCHED) { finishRequest(call); Unit }
+    })
+    suspend fun streamPane(params: JSONObject, consume: suspend (DesktopPaneRead) -> Unit): Boolean {
+        if (!screenStream) return false
+        streaming.run(params, consume)
+        return true
+    }
     private val screenSync = DesktopScreenSync()
     private val screenReader = Mutex()
     suspend fun resetScreen() = screenReader.withLock { screenSync.reset() }
@@ -66,6 +76,7 @@ class DesktopRuntimeClient(
                         message.optString("type") == "mobile.ready" -> ready.complete(message)
                         message.optString("type") == "mobile.disconnected" -> disconnect(
                             DesktopConnectionFailure(DesktopFailureKind.RUNTIME_UNAVAILABLE))
+                        message.optString("event").startsWith("pane.screen") -> streaming.receive(message)
                         message.optString("event") == "runtime.snapshot" -> synchronized(snapshotLock) {
                             val snapshot = message.getJSONObject("data")
                             latestSnapshot = snapshot
@@ -84,6 +95,7 @@ class DesktopRuntimeClient(
                 throw DesktopConnectionFailure(DesktopFailureKind.PROTOCOL)
             }
             screenDelta = hello.optJSONObject("capabilities")?.optBoolean("screen_delta") == true
+            screenStream = hello.optJSONObject("capabilities")?.optBoolean("terminal_grid_stream") == true
             try { request("events.subscribe") }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {
@@ -112,6 +124,21 @@ class DesktopRuntimeClient(
     }
 
     suspend fun request(method: String, params: JSONObject = JSONObject()): JSONObject {
+        return finishRequest(startRequest(method, params))
+    }
+
+    /** Send in wire order, without spending a network RTT before the next key.
+     * The input owner bounds this pipeline and must cancel abandoned receipts.
+     */
+    internal suspend fun dispatchInput(method: String, params: JSONObject): Deferred<Unit> {
+        require(method == "pane.prompt" || method == "pane.send_key")
+        val call = startRequest(method, params)
+        return scope.async(start = CoroutineStart.UNDISPATCHED) { finishRequest(call); Unit }
+    }
+
+    private data class Call(val id: String, val completion: CompletableDeferred<JSONObject>)
+
+    private suspend fun startRequest(method: String, params: JSONObject): Call {
         val id = sequence.incrementAndGet().toString()
         val completion = CompletableDeferred<JSONObject>()
         val frame = JSONObject().put("id", id).put("method", method).put("params", params)
@@ -131,11 +158,24 @@ class DesktopRuntimeClient(
                     }
                 }
             }
-            val response = withTimeout(35_000) { completion.await() }
+            return Call(id, completion)
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+
+    private suspend fun finishRequest(call: Call): JSONObject {
+        try {
+            val response = withTimeout(35_000) { call.completion.await() }
             if (!response.optBoolean("ok")) throw DesktopRpcFailure(
                 response.optJSONObject("error")?.optString("code")?.take(80) ?: "runtime_error")
             return response.optJSONObject("result") ?: JSONObject()
-        } finally { pending.remove(id) }
+        } catch (timeout: TimeoutCancellationException) {
+            val failure = DesktopConnectionFailure(DesktopFailureKind.TIMEOUT, timeout)
+            disconnect(failure)
+            throw failure
+        } finally { pending.remove(call.id) }
     }
     private fun disconnect(error: Throwable?) {
         if (!closed.compareAndSet(false, true)) return
@@ -145,6 +185,7 @@ class DesktopRuntimeClient(
         scope.launch { try { transport.close() } finally { scope.cancel() } }
     }
     private fun settle(failure: DesktopConnectionFailure = DesktopConnectionFailure(DesktopFailureKind.DISCONNECTED)) {
+        streaming.close(failure)
         ready.completeExceptionally(failure)
         firstSnapshot.completeExceptionally(failure)
         pending.values.forEach { it.completeExceptionally(failure) }

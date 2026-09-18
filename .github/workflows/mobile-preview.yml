@@ -230,6 +230,15 @@ jobs:
         if: ${{ inputs.package_only }}
         working-directory: mobile/android
         run: gradle --no-daemon :app:assemblePreview
+      - name: Verify focused mobile streaming and recovery contracts
+        if: ${{ inputs.package_only }}
+        working-directory: mobile/android
+        run: >-
+          gradle --no-daemon :app:testDebugUnitTest
+          --tests '*DesktopTerminalInputTest' --tests '*DesktopScreenStreamTest'
+          --tests '*DesktopReconnectTest' --tests '*DesktopRecoveryTest'
+          --tests '*DesktopScreenSyncTest' --tests '*HomeSessionsTest'
+          --tests '*RelayConnectionTest' --tests '*CommandComposerTest'
       - name: Verify installable APK and record source and checksum
         run: |
           if [ "${{ inputs.package_only }}" != "true" ]; then python3 mobile/tools/test_apk_audit.py; fi

@@ -11,6 +11,7 @@ mod command;
 pub(crate) mod mobile_bridge;
 mod mobile_screen;
 mod orchestrate;
+mod screen_stream;
 mod server;
 mod transport;
 
@@ -953,6 +954,7 @@ impl EventSink {
 #[derive(Clone, Default)]
 pub struct RuntimeHub {
     inner: Arc<Mutex<HubState>>,
+    pub(crate) screens: screen_stream::Registry,
 }
 
 type PaneIdentity = (u64, u64);
@@ -1120,6 +1122,7 @@ impl RuntimeHub {
     }
 
     fn record_pane_lifecycle(&self, window_id: u64, pane_id: u64, event: RuntimePaneLifecycleKind) {
+        self.screens.changed(window_id, pane_id);
         let republish = {
             let mut state = self.lock();
             record_pane_lifecycle_locked(&mut state, window_id, pane_id, event)

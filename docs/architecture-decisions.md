@@ -1,5 +1,42 @@
 # Architecture decisions / 架构决策记录
 
+## ADR-0025 — Change-driven mobile screens and foreground connection recovery
+
+- **Context (2026-09-18):** An encrypted WebSocket does not remove round trips
+  caused by `pane.read` polling and waiting for each input acknowledgement. The
+  phone also had no foreground recovery and omitted PC panes from its gallery.
+- **Decision:** The GPUI Runtime owns an optional physical-grid subscription,
+  driven by terminal output/resize and palette changes. Mobile links retain the
+  same permission policy and per-link ownership checks. Initial/recovery frames
+  are complete; subsequent frames use the existing row-delta authority. This is
+  a grid stream, not a second VT parser or raw PTY replay. Legacy runtimes keep
+  the explicit pull fallback and do not advertise a push capability.
+- **Cost/lifetime:** One visible screen subscription per link, at most four
+  unacknowledged frames and 256 KiB (a larger bounded recovery frame runs alone).
+  Slow consumers retain one dirty marker rather than queued grids. Idle output
+  triggers no captures. Sustained work is coalesced at 33 ms and paced at 2 MiB/s;
+  these are configured limits, not measured universal latency guarantees. The
+  existing runtime connection worker owns the stream and releases it on explicit
+  unsubscribe, socket failure or ACK timeout. No new dependency or relay service.
+- **Phone:** Apply and decode off the UI thread, publish before ACK, and allow
+  multiple ACKs in flight. A corrupt/missing baseline permits two read-only
+  resubscriptions; input is never replayed. One ordered input writer allows eight
+  RPCs in flight and stops on an uncertain outcome. This bounds resource use and
+  preserves the desktop's authorization/key encoding instead of optimistic echo.
+- **Recovery:** Background pauses observation/retry timers, not the desktop PTY.
+  Foreground probes existing transports and reconnects previously successful
+  LAN/relay computers with capped backoff. Certificate, authentication and protocol
+  failures require user action. Stable computer identity retains drafts and pane
+  selection; changed runtime process identity requires explicit pane reselection.
+  Both gallery and switcher project successful desktop panes from the repository.
+- **Evidence/validation:** Existing stream-credit and leading-edge coalescing
+  designs motivated this change; no external implementation was copied. Focused
+  native socket/credit/schema tests and Android pipeline, recovery, lifecycle and
+  real Compose card-click tests cover contracts. Compilation and these tests are
+  not physical-device background survival or public-network latency acceptance.
+- **Revisit:** Consider raw PTY streams only with a versioned parser/geometry and
+  recovery contract. Do not introduce input replay to disguise a disconnected link.
+
 ## ADR-0024 — Alpine service support and explicit desktop server selection
 
 - **Context (2026-09-18):** User testing found a reachable Alpine SSH host could

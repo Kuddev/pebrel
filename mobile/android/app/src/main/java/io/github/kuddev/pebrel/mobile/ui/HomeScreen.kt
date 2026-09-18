@@ -27,6 +27,7 @@ import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.connection.HostProfile
 import io.github.kuddev.pebrel.mobile.connection.endpointLabel
 import io.github.kuddev.pebrel.mobile.connection.RelayProfile
+import io.github.kuddev.pebrel.mobile.connection.DesktopPane
 import io.github.kuddev.pebrel.mobile.session.DesktopWorkspace
 import io.github.kuddev.pebrel.mobile.session.LocalSession
 
@@ -49,17 +50,19 @@ fun HomeScreen(
     onEditHost: (HostProfile) -> Unit, onDeleteHost: (HostProfile) -> Unit, onAddHost: () -> Unit,
     onDesktop: (String) -> Unit, onRelay: (RelayProfile) -> Unit, onComputers: () -> Unit,
     onAddRelay: () -> Unit, onLocal: () -> Unit,
+    onPane: ((String, DesktopPane) -> Unit)? = null,
 ) {
     val motion = rememberPebrelMotion()
+    val cards = sessionCards(sessions, desktops)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val thumbnailWidth = ((maxWidth - 44.dp) * .45f).coerceAtLeast(133.dp)
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 8.dp, bottom = 105.dp)) {
             item {
-                GroupHeading(stringResource(R.string.sessions), sessions.size, stringResource(R.string.all_sessions), onSessions)
+                GroupHeading(stringResource(R.string.sessions), cards.size, stringResource(R.string.all_sessions), onSessions)
                 Spacer(Modifier.height(8.dp))
                 AnimatedContent(
-                    targetState = sessions.take(6),
-                    contentKey = { visibleSessions -> visibleSessions.map { it.id } },
+                    targetState = cards,
+                    contentKey = { visibleSessions -> visibleSessions.map { it.key } },
                     transitionSpec = { motion.collectionTransition() },
                     label = "home_sessions",
                 ) { visibleSessions ->
@@ -71,8 +74,13 @@ fun HomeScreen(
                             HelperText(stringResource(R.string.no_sessions))
                         }
                     } else LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        items(visibleSessions, key = { it.id }) { session ->
-                            SessionThumbnail(session, Modifier.width(thumbnailWidth)) { onSession(session.id) }
+                        items(visibleSessions, key = { it.key }) { card ->
+                            val local = card.local
+                            if (local != null) SessionThumbnail(local, Modifier.width(thumbnailWidth)) { onSession(local.id) }
+                            else DesktopSessionThumbnail(checkNotNull(card.desktop), card.pane, Modifier.width(thumbnailWidth)) {
+                                if (card.pane != null && onPane != null) onPane.invoke(card.desktop.id, card.pane)
+                                else onDesktop(card.desktop.id)
+                            }
                         }
                     }
                 }
@@ -130,6 +138,43 @@ fun HomeScreen(
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = 23.dp).size(58.dp)) {
             Icon(painterResource(R.drawable.ic_plus), stringResource(R.string.add_ssh), Modifier.size(27.dp))
         }
+    }
+}
+
+internal data class SessionCard(val key: String, val local: LocalSession? = null,
+                                val desktop: DesktopWorkspace? = null, val pane: DesktopPane? = null)
+
+internal fun sessionCards(sessions: List<LocalSession>, desktops: List<DesktopWorkspace>): List<SessionCard> = buildList {
+    sessions.forEach { add(SessionCard("local:${it.id}", local = it)) }
+    desktops.filter { it.hasConnected }.forEach { computer ->
+        if (computer.panes.isEmpty()) add(SessionCard("pc:${computer.id}", desktop = computer))
+        else computer.panes.forEach { pane ->
+            add(SessionCard("pc:${computer.id}:${pane.window}:${pane.id}", desktop = computer, pane = pane))
+        }
+    }
+}
+
+@Composable
+private fun DesktopSessionThumbnail(desktop: DesktopWorkspace, pane: DesktopPane?, modifier: Modifier, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val status = statusLabel(desktop.status)
+    Column(modifier.aspectRatio(1f).workspaceFrame().clickable(onClick = onClick)) {
+        Column(Modifier.weight(1f).fillMaxWidth().background(colors.surfaceVariant.copy(alpha = .3f)).padding(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Glyph(R.drawable.ic_monitor, Modifier.size(14.dp))
+                Text("${desktop.transport} · $status", fontSize = 9.sp, color = colors.onSurfaceVariant,
+                    modifier = Modifier.weight(1f).padding(start = 6.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(desktop.host.name, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            pane?.task?.takeIf(String::isNotBlank)?.let {
+                Text(it, fontSize = 10.sp, fontFamily = LocalTerminalFont.current, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text(pane?.cwd.orEmpty(), fontSize = 9.sp, lineHeight = 13.sp, maxLines = 3,
+                color = colors.onSurfaceVariant, overflow = TextOverflow.Ellipsis)
+        }
+        Text(pane?.title ?: desktop.host.name, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp))
     }
 }
 

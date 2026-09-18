@@ -148,6 +148,8 @@ fn ui_language() -> crate::display::UiLanguage {
 
 /// 终端视图对宿主（Panel/Workspace）暴露的状态变化。
 pub enum TerminalViewEvent {
+    /// Output/resize/theme changed; remote mirrors coalesce this notification.
+    ScreenChanged,
     /// OSC 标题变化，宿主应刷新 Tab 标题。
     TitleChanged,
     /// Newly confirmed native recovery metadata must reach a checkpoint promptly.
@@ -521,6 +523,7 @@ impl TerminalView {
             TermEvent::Wakeup => {
                 self.flush_pending_runtime_submit(cx);
                 self.flush_pending_shell_command(cx);
+                cx.emit(TerminalViewEvent::ScreenChanged);
                 cx.notify();
             },
             TermEvent::MouseCursorDirty => {
@@ -890,6 +893,7 @@ impl TerminalView {
             );
         }
         self.palette = palette;
+        cx.emit(TerminalViewEvent::ScreenChanged);
         self.copy_on_select = copy_on_select;
         self.default_cursor_style = default_cursor_style;
         if let Some(session) = &self.session {

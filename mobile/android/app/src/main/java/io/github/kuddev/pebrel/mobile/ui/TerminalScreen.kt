@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.connection.DesktopPane
+import io.github.kuddev.pebrel.mobile.connection.DesktopReconnect
 import io.github.kuddev.pebrel.mobile.session.DesktopWorkspace
 import io.github.kuddev.pebrel.mobile.session.LocalSession
 import io.github.kuddev.pebrel.mobile.session.SessionRepository
@@ -90,9 +91,9 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     var focused by rememberSaveable(identity) { mutableStateOf(false) }
     var showPermission by remember(identity) { mutableStateOf(false) }
     val enabled = desktop.allowInput && desktop.status == "ready"
-    val input = remember(identity, enabled) { repository.desktopInput(desktop.id, pane) }
+    val input = remember(identity, enabled, desktop.connectionGeneration) { repository.desktopInput(desktop.id, pane) }
     DisposableEffect(input) { onDispose { input.close() } }
-    LaunchedEffect(identity, desktop.status) {
+    LaunchedEffect(identity, desktop.status, desktop.connectionGeneration) {
         if (desktop.status == "ready") lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             repository.watchDesktop(desktop.id, pane)
         }
@@ -101,7 +102,15 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     DesktopTerminalTheme(if (output.target == identity) output.frame else null) {
     if (!focused) TerminalHeader(pane.title, desktop.host.name, desktop.status, onBack, onSessions)
     Column(Modifier.fillMaxSize()) {
-        if (desktop.status != "ready") HelperText(stringResource(R.string.device_unavailable), Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        if (desktop.status != "ready") Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            val recovering = desktop.hasConnected && desktop.relayProfile != null && DesktopReconnect.retryable(desktop.failure)
+            HelperText(if (recovering) stringResource(R.string.desktop_reconnecting)
+                else desktop.failure?.let { desktopFailureText(it) } ?: statusLabel(desktop.status), Modifier.weight(1f))
+            if (desktop.status != "connecting") desktop.relayProfile?.let { profile ->
+                TextButton({ repository.connectRelay(profile) }) { Text(stringResource(R.string.retry)) }
+            }
+        }
         else if (!desktop.allowInput) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically) {
             HelperText(stringResource(R.string.composer_pc_read_only_short), Modifier.weight(1f))

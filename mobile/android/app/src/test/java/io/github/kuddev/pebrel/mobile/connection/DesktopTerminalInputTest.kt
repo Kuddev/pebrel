@@ -13,6 +13,49 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class DesktopTerminalInputTest {
+    @Test fun interruptedAcknowledgementStopsPipelineAndSettlesDraftWithoutReplay() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val receipts = mutableListOf<CompletableDeferred<Unit>>()
+        val rejected = mutableListOf<Boolean>()
+        val input = DesktopTerminalInput({ _, _ -> error("sequential path") }, { true }, {}, { rejected += it },
+            dispatch = { _, _ -> CompletableDeferred<Unit>().also(receipts::add) })
+        try {
+            val draft = async { input.submit("keep this draft") }
+            runCurrent()
+            assertEquals(2, receipts.size)
+            receipts.first().cancel()
+            runCurrent()
+            assertFalse(draft.await())
+            assertEquals(listOf(true), rejected)
+            assertTrue(receipts.all { it.isCancelled })
+            assertFalse(input.text("must not replay"))
+        } finally { input.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun highRttInputPipelinesEightInOrderInsteadOfOneKeyPerRoundTrip() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val writes = mutableListOf<String>()
+        val receipts = mutableListOf<CompletableDeferred<Unit>>()
+        val failures = mutableListOf<Boolean>()
+        val input = DesktopTerminalInput({ _, _ -> error("sequential path used") }, { true }, {}, { failures += it },
+            dispatch = { _, params ->
+                writes += params.getString("text")
+                CompletableDeferred<Unit>().also(receipts::add)
+            })
+        try {
+            repeat(12) { assertTrue(input.text(it.toString())) }
+            runCurrent()
+            assertEquals((0..7).map(Int::toString), writes)
+            receipts.first().complete(Unit)
+            runCurrent()
+            assertEquals((0..8).map(Int::toString), writes)
+            receipts[1].completeExceptionally(java.io.IOException("unknown delivery"))
+            runCurrent()
+            assertEquals(9, writes.size)
+            assertEquals(listOf(true), failures)
+            assertTrue(receipts.drop(2).all { it.isCancelled })
+        } finally { input.close(); Dispatchers.resetMain() }
+    }
     @Test fun printableTextDoesNotSubmitAndKeysKeepTheirOwnProtocol() {
         val command = DesktopTerminalInput.encodeText("你好 😀")!!.single()
         assertEquals("pane.prompt", command.method)

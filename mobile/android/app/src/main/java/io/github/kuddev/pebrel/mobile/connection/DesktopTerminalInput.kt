@@ -4,6 +4,7 @@ import android.view.KeyEvent
 import io.github.kuddev.pebrel.terminal.TerminalInputTarget
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Semaphore
 import org.json.JSONObject
 import java.io.Closeable
 
@@ -15,38 +16,73 @@ class DesktopTerminalInput(
     private val active: () -> Boolean,
     private val onAccepted: () -> Unit,
     private val onRejected: (Boolean) -> Unit,
+    private val dispatch: (suspend (String, JSONObject) -> Deferred<Unit>)? = null,
 ) : TerminalInputTarget, Closeable {
     private data class Batch(val commands: List<Command>, val result: CompletableDeferred<Boolean>)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val queue = Channel<Batch>(64, onUndeliveredElement = { it.result.complete(false) })
     private var closed = false
+    // Leave half of the RPC budget for screen acknowledgements and navigation.
+    private val credits = Semaphore(8)
+    private val results = mutableSetOf<CompletableDeferred<Boolean>>()
 
     init {
         scope.launch {
             for (batch in queue) {
                 try {
+                    val receipts = mutableListOf<Deferred<Unit>>()
                     for (command in batch.commands) {
-                        check(active())
-                        request(command.method, command.params)
+                        credits.acquire()
+                        if (!active()) { credits.release(); error("inactive_input_owner") }
+                        if (dispatch == null) {
+                            try { request(command.method, command.params) }
+                            finally { credits.release() }
+                        } else {
+                            val receipt = try { dispatch.invoke(command.method, command.params) }
+                            catch (error: Throwable) { credits.release(); throw error }
+                            receipts += scope.async(start = CoroutineStart.UNDISPATCHED) {
+                                try { receipt.await() }
+                                catch (cancelled: CancellationException) {
+                                    if (currentCoroutineContext().isActive) rejectUncertain()
+                                    throw cancelled
+                                }
+                                catch (error: Exception) { rejectUncertain(); throw error }
+                                finally { receipt.cancel(); credits.release() }
+                            }
+                        }
                     }
-                    batch.result.complete(true)
-                    onAccepted()
+                    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        try {
+                            receipts.awaitAll()
+                            if (!closed) { batch.result.complete(true); onAccepted() }
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { rejectUncertain() }
+                        finally { batch.result.complete(false); results.remove(batch.result) }
+                    }
                 } catch (cancelled: CancellationException) {
                     batch.result.complete(false)
+                    results.remove(batch.result)
                     throw cancelled
                 } catch (_: Exception) {
                     batch.result.complete(false)
-                    onRejected(true)
-                    close()
+                    results.remove(batch.result)
+                    rejectUncertain()
                 }
             }
         }
     }
 
+    private fun rejectUncertain() {
+        if (!closed) { onRejected(true); close() }
+    }
+
     private fun enqueue(commands: List<Command>?): CompletableDeferred<Boolean>? {
         if (closed || !active() || commands == null) { onRejected(false); return null }
         val result = CompletableDeferred<Boolean>()
-        if (queue.trySend(Batch(commands, result)).isFailure) { onRejected(false); return null }
+        results += result
+        if (queue.trySend(Batch(commands, result)).isFailure) {
+            results.remove(result); result.complete(false); onRejected(false); return null
+        }
         return result
     }
 
@@ -67,6 +103,9 @@ class DesktopTerminalInput(
     }
     override fun close() {
         closed = true
+        val pendingResults = results.toList()
+        results.clear()
+        pendingResults.forEach { it.complete(false) }
         queue.cancel()
         scope.cancel()
     }

@@ -1,4 +1,6 @@
 <resources>
+    <string name="desktop_reconnecting">正在重新连接电脑…草稿已保留。</string>
+    <string name="desktop_session_changed">原电脑会话已不可用，请重新选择会话后继续。</string>
     <string name="desktop_dns">无法解析电脑或中转服务器地址。请检查地址和网络连接。</string>
     <string name="desktop_timeout">连接超时。请检查地址和端口；局域网连接时，两台设备应处于同一网络，并保持电脑配对工具运行。</string>
     <string name="desktop_refused">无法连接此端口。请保持配对工具运行，并检查地址、端口和防火墙设置。</string>

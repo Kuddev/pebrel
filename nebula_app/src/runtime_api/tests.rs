@@ -273,7 +273,7 @@ fn layout_mutations_parse_and_enforce_their_bounds() {
 }
 
 #[test]
-fn runtime_capabilities_match_the_versioned_schema() {
+fn mobile_latency_runtime_capabilities_match_the_versioned_schema() {
     let schema: Value =
         serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json"))
             .expect("runtime schema must be valid JSON");
@@ -283,6 +283,7 @@ fn runtime_capabilities_match_the_versioned_schema() {
             .expect("schema method enum")
             .iter()
             .map(|method| method.as_str().expect("method string"))
+            .filter(|method| cfg!(feature = "gpui-shell") || !method.starts_with("pane.screen."))
             .collect();
     let described = runtime_description();
     let described_methods: std::collections::BTreeSet<_> = described["capabilities"]
