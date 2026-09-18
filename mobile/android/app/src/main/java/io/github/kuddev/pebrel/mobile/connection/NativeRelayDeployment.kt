@@ -58,7 +58,9 @@ object NativeRelayDeployment {
                 val install = """
                     set -eu
                     umask 077
-                    stage=${'$'}(mktemp -d /tmp/pebrel-relay.XXXXXXXX)
+                    [ ! -L /opt ] || { printf '{"error":"symlink_installation_path"}\n'; exit 1; }
+                    mkdir -p /opt
+                    stage=${'$'}(mktemp -d /opt/.pebrel-relay.XXXXXXXX)
                     trap 'rm -f "${'$'}stage/pebrel-relay"; rmdir "${'$'}stage"' EXIT
                     head -c ${encoded.size} | base64 -d > "${'$'}stage/pebrel-relay"
                     printf '%s  %s\n' '$sha' "${'$'}stage/pebrel-relay" | sha256sum -c - >/dev/null || { printf '{"error":"binary_integrity_failed"}\n'; exit 1; }

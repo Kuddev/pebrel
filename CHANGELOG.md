@@ -25,6 +25,8 @@ Every release entry is provided in English and Simplified Chinese.
 - Normal RHEL `/etc/init.d` directory links no longer block systemd installation;
   actual target links and foreign service files remain protected.
 - Android upload completion waits for remote integrity verification.
+- Online and Android installers use private executable staging outside `/tmp`,
+  supporting hosts where `/tmp` is mounted no-execute without changing mount policy.
 
 ### 中文
 
@@ -43,6 +45,8 @@ Every release entry is provided in English and Simplified Chinese.
 - RHEL 正常的 `/etc/init.d` 目录链接不再阻止 systemd 安装；实际目标链接与
   其他服务文件仍受保护。
 - Android 等待远端校验通过后才显示上传完成。
+- 在线脚本和 Android 使用 `/tmp` 以外的私有程序暂存目录，兼容 `/tmp` 禁止执行
+  的服务器，不修改挂载规则。
 
 Testing prerelease; local readiness is not proof of public reachability. Other
 installed versions are not silently upgraded. Uninstall retains credentials unless

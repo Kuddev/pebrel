@@ -22,6 +22,8 @@
   install. Actual target symlinks and foreign service files remain protected.
 - The companion Android preview reports upload completion only after remote
   integrity verification, rather than when the sender finishes writing bytes.
+- Both online and Android installers stage the verified executable privately on
+  the installation filesystem, so a no-execute `/tmp` does not prevent startup.
 
 ## 中文
 
@@ -41,6 +43,8 @@
 - RHEL 系统正常的 `/etc/init.d` 目录链接不再阻止 systemd 安装；
   实际安装目标的符号链接和其他服务文件仍受保护。
 - 配套 Android 预览版等待服务器校验通过后才报告上传完成，不再只依据发送进度。
+- 在线脚本和 Android 将已校验程序暂存于安装文件系统的私有目录，避免 `/tmp`
+  禁止执行导致无法启动；不修改服务器的挂载规则。
 
 This is a testing prerelease, separate from desktop releases. No Docker/Node.js
 is required on the server. Firewall/cloud rules are not changed. Local readiness

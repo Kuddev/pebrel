@@ -153,7 +153,11 @@ fi
 
 step=2
 say '2/4 Download and verify executable / 下载并校验服务程序'
-scratch=$(mktemp -d /tmp/pebrel-install.XXXXXXXX)
+# A hardened /tmp is frequently noexec. Stage beside the executable's final
+# filesystem without changing mount policy or touching an existing installation.
+[ ! -L /opt ] || fail 'Refusing a symlinked installation path / 安装路径不能是符号链接'
+mkdir -p /opt
+scratch=$(mktemp -d /opt/.pebrel-install.XXXXXXXX)
 binary=$scratch/pebrel-relay
 if [ -n "$binary_source" ]; then
     cp -- "$binary_source" "$binary.part"
