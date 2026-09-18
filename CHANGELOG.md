@@ -55,6 +55,27 @@ purge is explicit. Final relay asset hashes are supplied in `SHA256SUMS`.
 这是测试预发布；本机就绪不代表公网可达，不静默升级已有其他版本。
 卸载默认保留配对凭据，只有明确清理才删除。最终中转资产哈希见 `SHA256SUMS`。
 
+The SH installer is committed directly to the repository, not uploaded as a
+Release asset. See the [verified download command and checksums](docs/release-notes/v0.4.10-relay-preview.md).
+
+SH 安装脚本直接放在仓库，不作为 Release 附件；[下载命令与校验值](docs/release-notes/v0.4.10-relay-preview.md)
+对应已经验证的程序文件。
+
+### Contributors
+
+[@Kuddev](https://github.com/Kuddev)
+
+### SHA256
+
+```text
+e7469213f9ea0707cdbd534580f49dbbb7269563cfc131ffbdb77cd036fb52ad  pebrel-relay-linux-x86_64
+a11f55204fff9c2ee01778f901a2acd3da7e0782d445a430d8aaa9e5473fbe3b  pebrel-relay-linux-aarch64
+af4b48fee1a0763143068e7326047c414b942621cd39a9818b5311749903edf8  build.json
+7adc27d4b2d4fb2b7d3b5c395d0903fc7763362f0fa553a13023cbacdccc2972  SHA256SUMS
+```
+
+Repository installer / 仓库安装脚本: `2679d4b626a078a86b09a175e471d4699a64a8902532538779129a11ea239a9a`
+
 ## 1.8.1 - 2026-09-15
 
 ### English

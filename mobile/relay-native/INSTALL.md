@@ -2,15 +2,18 @@
 
 ## Online installer / 在线脚本（推荐）
 
-Download `pebrel-relay.sh` from the dedicated **Pebrel Relay** GitHub prerelease,
+Download [`pebrel-relay.sh`](./pebrel-relay.sh) directly from this repository,
 then run `sh pebrel-relay.sh` as root. The exact public download command is included
-in that release. Do not execute the unrendered source template: a published script
+in [the verified installation instructions](./RELEASE-NOTES.md#install--安装).
+The SH is not a Release asset; only compiled executables and their metadata are.
+Do not execute the unrendered source template: the repository installer
 pins its release and both binary SHA256 values. No GitHub login, Docker, Node.js,
 archive upload or extraction is needed on the server.
 
-从独立的 **Pebrel Relay** GitHub 预发布下载 `pebrel-relay.sh`，以 root 执行
-`sh pebrel-relay.sh`。对应发布页提供可复制的下载命令。不要执行源码模板；
-发布脚本已固定版本与两种架构的 SHA256，不需要 GitHub 登录、Docker、Node.js
+直接从本仓库下载 [`pebrel-relay.sh`](./pebrel-relay.sh)，以 root 执行
+`sh pebrel-relay.sh`。[安装说明](./RELEASE-NOTES.md#install--安装) 提供可复制命令。
+SH 不作为 Release 附件；只有编译后的服务程序与校验信息通过版本化资产分发。
+不要执行源码模板；仓库脚本已固定版本与两种架构的 SHA256，不需要 GitHub 登录、Docker、Node.js
 或手动上传、解压安装包。
 
 - Enter the server IP or domain when prompted. Default TCP port is 443; a busy
