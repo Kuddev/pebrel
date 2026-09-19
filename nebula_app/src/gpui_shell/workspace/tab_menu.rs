@@ -84,8 +84,22 @@ impl NebulaWorkspace {
         let ai_fork = tab_ai_fork_enabled(self, ix, cx);
         let color = self.meta(ix).color;
         let tab_count = self.tabs.len();
+        let retry =
+            self.tabs[ix].focused_view().filter(|view| view.read(cx).can_retry_recovery()).cloned();
         let workspace = cx.entity().downgrade();
-        let menu = PopupMenu::build(window, cx, move |menu, _window, _cx| {
+        let menu = PopupMenu::build(window, cx, move |mut menu, _window, _cx| {
+            if let Some(view) = retry {
+                menu = menu
+                    .item(
+                        PopupMenuItem::new(
+                            super::workspace_ui_language().text(crate::i18n::Message::SessionRetry),
+                        )
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |view, cx| view.retry_recovery(cx))
+                        }),
+                    )
+                    .separator();
+            }
             Self::tab_popup_menu(
                 menu.external_link_icon(false),
                 workspace,

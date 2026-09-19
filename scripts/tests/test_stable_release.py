@@ -68,21 +68,23 @@ def notes(checksum_placeholder: bool = True) -> str:
 
 
 class StableReleaseTests(unittest.TestCase):
-    def test_stable_workflow_runs_gpui_interaction_tests_on_every_platform(self) -> None:
+    def test_stable_workflow_requires_full_native_tests_before_aggregation(self) -> None:
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        command = "cargo test --locked -p nebula --bin pebrel --features gpui-test-support gpui_shell::"
-        self.assertEqual(workflow.count(command), 3)
-        windows_step = workflow.split("      - name: Test workspace and native harness\n", 1)[1]
-        windows_step = windows_step.split("      - name:", 1)[0]
-        self.assertIn("shell: pwsh", windows_step)
-        lines = [line.strip() for line in windows_step.splitlines()]
-        commands = 0
-        for index, line in enumerate(lines):
-            if line.startswith(("cargo test ", "python -m unittest ")):
-                commands += 1
-                self.assertEqual(lines[index + 1], "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
-        self.assertEqual(commands, 5)
+        native = workflow.split("  native-tests:\n", 1)[1].split("\n  linux:\n", 1)[0]
+        self.assertIn("uses: ./.github/workflows/linux-lua.yml", native)
+        shared = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
+        for platform in ("ubuntu-24.04", "windows-2022", "windows-11-arm", "macos-26", "macos-26-intel"):
+            self.assertIn(platform, shared)
+        self.assertIn("workflow_call:", shared)
+        self.assertIn("run: python scripts/ci_native_tests.py", shared)
+        self.assertIn("cargo check --locked --workspace --release", shared)
+        self.assertIn("tools/i18n-contract/Cargo.toml", shared)
+        self.assertNotIn("continue-on-error", shared)
+        self.assertNotIn("continue-on-error", native)
+        aggregate = workflow.split("\n  aggregate:\n", 1)[1].split("\n  publish:\n", 1)[0]
+        self.assertIn("needs: [prepare, native-tests, linux, macos, windows]", aggregate)
+        self.assertNotIn("always()", aggregate)
 
     def test_native_packagers_expose_stable_channel_without_preview_id(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -180,6 +182,27 @@ class StableReleaseTests(unittest.TestCase):
             source.write_text(notes().replace("https://github.com/Kuddev", "https://example.invalid"), encoding="utf-8")
             with self.assertRaisesRegex(StableReleaseError, "GitHub links"):
                 validate_notes(source, VERSION)
+
+    def test_notes_allow_no_pr_contributors_but_keep_section_contracts(self) -> None:
+        before, rest = notes().split("## Contributors\n", 1)
+        contributor_body, after = rest.split("## SHA256\n", 1)
+        without_contributors = before + "## SHA256\n" + after
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "notes.md"
+            source.write_text(without_contributors, encoding="utf-8")
+            self.assertEqual(validate_notes(source, VERSION), without_contributors)
+            invalid = (
+                (before + "## Contributors\n\n## SHA256\n" + after, "GitHub links"),
+                (notes().replace("## Contributors", "## Contributors\n\n## Contributors"), "at most one"),
+                (without_contributors + "\n## Contributors\n" + contributor_body, "out of order"),
+                (without_contributors.replace("### 新增", "### 修复"), "matching bilingual"),
+                (without_contributors.replace("## 中文", "## Chinese"), "require one"),
+            )
+            for body, error in invalid:
+                with self.subTest(error=error):
+                    source.write_text(body, encoding="utf-8")
+                    with self.assertRaisesRegex(StableReleaseError, error):
+                        validate_notes(source, VERSION)
 
     def test_changelog_must_list_the_same_stable_asset_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

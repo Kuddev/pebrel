@@ -143,7 +143,7 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
-        let label_px = settings.map(|settings| settings.base_font_size_px).unwrap_or(15.0);
+        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let tab_capacity_w =
             (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W).max(TOP_TAB_MIN_W);
         let tab_w = tab_width(tab_capacity_w, self.top_tab_count());
@@ -167,10 +167,15 @@ impl NebulaWorkspace {
         let items_running = std::cell::Cell::new(false);
         let items = (0..self.top_tab_count())
             .map(|ix| {
-                let settings_navigation = self.settings_open && ix == self.tabs.len();
-                let active = settings_navigation || (!self.settings_open && ix == self.active);
+                let settings_navigation = self.settings_tab_open && ix == self.tabs.len();
+                let active = if settings_navigation {
+                    self.settings_open
+                } else {
+                    !self.settings_open && ix == self.active
+                };
                 let TabPresentation {
                     title,
+                    tooltip,
                     is_settings,
                     activity,
                     logo_image,
@@ -183,6 +188,14 @@ impl NebulaWorkspace {
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
                 let status_color = if active { active_fg } else { muted };
+                let status_width = Self::shell_status_width(
+                    window,
+                    shell_tag.as_ref(),
+                    &chrome_family,
+                    label_px * 0.8,
+                    TOP_TAB_STATUS_W,
+                    tab_w * 0.4,
+                );
                 let resting_status: Option<gpui::AnyElement> = match activity {
                     SidebarActivity::Running => {
                         items_running.set(true);
@@ -226,13 +239,13 @@ impl NebulaWorkspace {
                             .into_any_element(),
                     ),
                     SidebarActivity::Idle => shell_tag.map(|tag| {
-                        div()
-                            .font_family(chrome_family.clone())
-                            .text_size(px(label_px * 0.8))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(status_color)
-                            .child(tag)
-                            .into_any_element()
+                        Self::shell_status_label(
+                            tag,
+                            chrome_family.clone(),
+                            label_px * 0.8,
+                            status_color,
+                        )
+                        .into_any_element()
                     }),
                 };
                 let strip = color.map(|color| gpui::Rgba {
@@ -254,6 +267,10 @@ impl NebulaWorkspace {
 
                 let row = h_flex()
                     .id(("top-tab", ix))
+                    .when_some(tooltip, |row, text| row.tooltip(move |window, cx| {
+                        super::tab_presentation::tooltip(text.clone(), window, cx)
+                    }))
+                    .debug_selector(|| format!("top-tab-{ix}"))
                     .group(hover_group.clone())
                     .relative()
                     .w(px(tab_w))
@@ -446,11 +463,7 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        div()
-                            .relative()
-                            .w(px(TOP_TAB_STATUS_W))
-                            .h_full()
-                            .flex_shrink_0()
+                        Self::tab_status_slot(status_width)
                             .when_some(resting_status, |slot, status| {
                                 slot.child(
                                     h_flex()

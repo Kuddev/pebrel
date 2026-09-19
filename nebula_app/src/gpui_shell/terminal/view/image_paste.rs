@@ -286,14 +286,13 @@ async fn stage_image(target: ImageTarget, png: Vec<u8>) -> Result<StagedImage, S
 
 #[cfg(windows)]
 fn wsl_image_path(distro: Option<&str>, path: &Path) -> Result<String, String> {
-    use std::os::windows::process::CommandExt as _;
     use std::time::Duration;
 
     let system = std::env::var_os("SystemRoot").ok_or("Windows system directory is unavailable")?;
     let executable = Path::new(&system).join("System32").join("wsl.exe");
     let command = || {
         let mut command = std::process::Command::new(&executable);
-        command.creation_flags(0x0800_0000);
+        crate::platform::process::hidden_command(&mut command);
         if let Some(distro) = distro {
             command.args(["--distribution", distro]);
         }

@@ -19,6 +19,7 @@ _pebrel() {
 '--config-file=[Specify an alternative configuration file.]:CONFIG_FILE:_files' \
 '--socket=[Path for IPC socket creation]:SOCKET:_files' \
 '--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
+'(-e --command)--shell=[Start this shell instead of the configured default one, by the same id the \`shell\` setting uses (\`pwsh\`, \`cmd\`, \`wsl\:Ubuntu\`, or a profile'\''s settings id)]:ID:_default' \
 '*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
 '*--command=[Command and args to execute (must be last argument)]:COMMAND:_default' \
 '-T+[Defines the window title \[default\: Pebrel\]]:TITLE:_default' \

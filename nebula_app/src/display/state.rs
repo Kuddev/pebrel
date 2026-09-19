@@ -216,6 +216,7 @@ pub struct NebulaPaneState {
     /// 改写。`cwd` 只说"在哪个目录"，这个说"在哪台机器"——两者都对了补齐才
     /// 补得对，见 [`crate::display::suggest_engine::SuggestEnv`]。
     pub suggest_env: crate::display::suggest_engine::SuggestEnv,
+    pub(crate) completion_context: crate::completion_context::CompletionContext,
     /// 上一次重算发现"这个来宾/远端目录还没缓存"，壳该去异步拉一次。
     ///
     /// 补齐本身绝不做 IO（WSL 冷启动可达 7.5 秒），所以它只能把需求登记在

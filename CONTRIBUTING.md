@@ -101,6 +101,18 @@ Run affected behavior tests and the appropriate real product checks as well:
 cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked
 ```
 
+`Full native tests` runs on every PR and merge-group update, and on `main` pushes.
+It tests the full workspace on Linux, Windows x64 / ARM64 and both macOS
+architectures. New commits cancel obsolete PR runs. Package validation has its own
+input filters and can also be dispatched manually; a package job does not replace
+the native test suite. These triggers do not configure required status checks.
+
+GitHub may show **Waiting for approval** for a first-time fork contributor. A
+maintainer must inspect the submitted changes and approve that workflow run from
+the Actions page before tests start. Pushing more commits does not remove this
+GitHub approval requirement; do not run fork code through `pull_request_target`
+or give it a write token to work around the wait.
+
 The isolated i18n test compiles production files, not copied implementations. It
 does not test real window layout, every OS integration, or the full application.
 Existing platform build/package checks still apply. Never turn a metadata-only

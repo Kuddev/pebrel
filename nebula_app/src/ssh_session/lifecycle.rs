@@ -418,12 +418,22 @@ async fn pump<H: SshEventHost>(
             message = input.recv() => match message {
                 Some(Msg::Input(bytes)) => network("channel write", channel.data(bytes.as_ref())).await?,
                 Some(Msg::Resize(size)) => {
+                    // SSH has no local EventLoop to apply the grid half of a
+                    // resize. Keep the terminal model in lockstep with the
+                    // stream and the remote PTY, just as the local event loop
+                    // does before calling ResizePseudoConsole.
+                    terminal.lock().resize(size);
                     stream.resize(size);
+                    event_proxy.send_event(TerminalEvent::Wakeup);
                     network("channel resize", channel.window_change(u32::from(size.num_cols), u32::from(size.num_lines),
                         u32::from(size.cell_width) * u32::from(size.num_cols),
                         u32::from(size.cell_height) * u32::from(size.num_lines))).await?;
                 },
-                Some(Msg::ResizeGrid(size)) => stream.resize(size),
+                Some(Msg::ResizeGrid(size)) => {
+                    terminal.lock().resize(size);
+                    stream.resize(size);
+                    event_proxy.send_event(TerminalEvent::Wakeup);
+                },
                 Some(Msg::Shutdown) | None => return Ok(()),
             },
             message = channel.wait() => match message {

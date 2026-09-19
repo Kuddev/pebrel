@@ -64,13 +64,16 @@ pub fn update(
 /// pane 状态清空等下一行。空行只清不记。
 pub fn commit_line(state: &mut NebulaPaneState) {
     let line = state.screen_line.trim().to_owned();
+    let committed = if line.is_empty() { state.line_buf.trim().to_owned() } else { line.clone() };
     if !line.is_empty() {
-        shared().history.record(&state.suggest_env.history_scope(), &line, &state.cwd);
+        state.record_completion_command(&mut shared().history, &line);
+    } else {
+        state.completion_submitted(&state.line_buf.clone());
     }
     // 旧壳 `nebula_commit_line` 同一条：OSC 133;C 到达时 PTY 已把行缓冲清
     // 空，程序身份（侧栏 tab 图标）必须在 Enter 这一刻从屏幕真值捕获。
     // grid 读失败时退回按键镜像——取首 token 做身份已足够。
-    state.last_committed = if line.is_empty() { state.line_buf.trim().to_owned() } else { line };
+    state.last_committed = committed;
     crate::display::nebula_clear_line(state);
 }
 

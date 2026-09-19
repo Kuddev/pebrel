@@ -1,7 +1,10 @@
-use gpui::{App, Context, Window};
+use gpui::{App, AppContext as _, Context, Focusable as _, Window};
 use nebula_settings::TabsPositionName;
 
-use super::{NebulaWorkspace, SidebarActivity, TabPresentation};
+use super::{NebulaWorkspace, SettingsPane, SidebarActivity, TabPresentation, windowing};
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod ui_tests;
 
 fn sidebar_state(
     settings_open: bool,
@@ -17,6 +20,63 @@ fn sidebar_state(
 }
 
 impl NebulaWorkspace {
+    /// Open Settings as a window-level page while preserving the active tab.
+    /// Side-tab mode folds its real left rail; top-tab mode has no such rail,
+    /// so touching `sidebar_collapsed` there would only create hidden state.
+    pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            if let Some((view, _)) = self.settings_surface.as_ref() {
+                let focus = view.read(cx).focus_handle(cx);
+                window.defer(cx, move |window, cx| window.focus(&focus, cx));
+            }
+            return;
+        }
+
+        if self.settings_surface.is_none() {
+            let view = cx.new(|cx| SettingsPane::new(window, cx));
+            let subscription = cx.subscribe_in(&view, window, Self::on_settings_event);
+            self.settings_surface = Some((view, subscription));
+        }
+
+        self.settings_tab_open = true;
+        self.settings_open = true;
+        self.sync_settings_layout();
+
+        self.settings_restore_side_panel_open = self.side_panel.open;
+        if self.side_panel.open {
+            self.side_panel.toggle(self.side_panel.view);
+            self.side_panel_anim_armed = true;
+            self.file_tree_menu = None;
+        }
+
+        if let Some((view, _)) = self.settings_surface.as_ref() {
+            let focus = view.read(cx).focus_handle(cx);
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.settings_tab_open {
+            return;
+        }
+        self.settings_tab_open = false;
+        self.leave_settings(window, cx);
+        self.reveal_active_tab();
+        cx.notify();
+        if self.tabs.is_empty() {
+            windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
+        }
+    }
+
+    pub(super) fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            self.close_settings(window, cx);
+        } else {
+            self.open_settings(window, cx);
+        }
+    }
+
     pub(super) fn sync_settings_layout(&mut self) {
         let (collapsed, restore) = sidebar_state(
             self.settings_open,
@@ -49,7 +109,7 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn top_tab_count(&self) -> usize {
-        self.tabs.len() + usize::from(self.settings_open)
+        self.tabs.len() + usize::from(self.settings_tab_open)
     }
 
     pub(super) fn top_tab_presentation(
@@ -63,6 +123,7 @@ impl NebulaWorkspace {
         }
         TabPresentation {
             title: super::workspace_ui_language().text(crate::i18n::Message::CommonSettings).into(),
+            tooltip: None,
             is_settings: true,
             activity: SidebarActivity::Idle,
             logo_image: None,
@@ -80,7 +141,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open && index == self.tabs.len() {
+        if self.settings_tab_open && index == self.tabs.len() {
             self.open_settings(window, cx);
         } else {
             self.activate_tab(index, window, cx);
@@ -93,7 +154,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open && index == self.tabs.len() {
+        if self.settings_tab_open && index == self.tabs.len() {
             self.close_settings(window, cx);
         } else {
             self.request_close_tab(index, window, cx);

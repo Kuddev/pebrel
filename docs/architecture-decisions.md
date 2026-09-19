@@ -306,3 +306,453 @@ unrelated feature's growth. Remote approval/enforcement is not implied by this l
   Native compilation and UI results must be reported separately.
 - **Revisit condition:** Add separate system-notification or per-agent controls
   only when requested, rather than expanding the meaning of this persisted key.
+
+## ADR-0010 — Administrator shells hosted by the GPUI product
+
+- **Status:** Requested by the maintainer and implemented, 2026-09-13. Native
+  Windows behavior tests passed; interactive UAC acceptance remains manual.
+- **Context:** Elevating a shell executable directly opens an external console.
+  Elevating Pebrel without preserving the explicit startup command can instead
+  reach the ordinary resident process and lose both privilege and Shell selection.
+- **Decision:** The launcher requests Windows UAC for the current Pebrel executable
+  on a worker. It passes the selected Shell's argument vector and working directory
+  through the existing CLI, using Windows argument quoting without a command shell.
+  GPUI startup consumes that command as its first terminal. An already elevated
+  process creates the terminal in its current workspace.
+- **Ownership:** A process-token check separates elevated instances from ordinary
+  resident forwarding. Elevated instances use the existing loopback API transport
+  with a private endpoint supplied only in local PTY child environments, including
+  WSL passthrough. They do not publish a privileged bearer token in `runtime.port`,
+  acquire its ownership lock, restore/write the shared session, or hide on close.
+  Ordinary discovery files and settings formats remain compatible. Token-query
+  failure uses the isolated policy; launch failure remains visible to the user.
+- **Lifetime and cost:** UAC runs off the UI thread, one request per workspace at
+  a time. Completion updates only a still-live workspace and does not dismiss a
+  subsequently opened picker. Token status is cached; endpoint injection runs only
+  during PTY creation. No application dependency or additional server is added.
+- **Validation:** Tests cover native argument parsing, explicit-command startup,
+  ordinary-session exclusion, private discovery/authentication, right-click versus
+  launch, keyboard dismissal, and SSH target stability. Automated coverage does not
+  imply a completed UAC desktop acceptance test.
+- **Revisit condition:** Supporting an elevated pane inside an existing ordinary
+  process requires a separately reviewed broker and authenticated PTY transport.
+  A future privileged-residency feature must have explicit recovery/discovery.
+
+The two pane preferences in the same request reuse `nebula_settings`: mouse focus
+has an optional GUI override of the compatible TOML setting (default off), while
+inactive-pane dimming defaults on to preserve the existing appearance. Both are
+cached by the GPUI settings adapter; pointer movement and rendering do not read
+settings files.
+
+## ADR-0011 — Editable theme snapshots and preview before application
+
+- **Status:** Implemented in the working tree, 2026-09-14. Windows GPUI product
+  build and native interaction checks have run; this is not a release claim.
+- **Context:** The fixed built-in theme enum cannot represent user-created themes.
+  Users need to start from an existing theme, adjust common settings, preview text
+  colors and exchange themes without making the selection page an editor.
+- **Decision:** Keep built-in identities compatible. Shared, dependency-free theme
+  values and validation belong to `nebula_settings`; versioned JSON, external format
+  adapters and library I/O belong to the application's `theme_library` capability.
+  A custom theme is an independent snapshot with a stable library identity and a
+  built-in fallback. Copying or renaming does not edit its source or create a runtime
+  inheritance chain. Existing atomic replacement and OS handle locks protect writes;
+  a revision check rejects a competing edit. Unknown native extension data survives
+  a round trip. External input is bounded static data and never executes configuration
+  scripts, includes or commands.
+- **Interaction:** The theme dialog's lower-left custom action opens a dedicated
+  editor: existing template, name, visible common settings, then collapsed advanced
+  settings. Theme and icon category selections use the same rounded treatment.
+  The three suggested foreground swatches contain the original color and readable
+  cool/warm alternatives; a fourth multicolor swatch opens arbitrary color selection.
+  Foreground changes affect the preview and are saved with explicit application.
+  Back returns to the preserved theme picker selection and filter; it confirms
+  discarding editor changes before returning. Cancel, close and Escape separately
+  exit the workflow and confirm before discarding a changed draft. Saving alone
+  writes an independent library copy while leaving the active snapshot unchanged.
+  Font selection and color palettes belong to the editor draft, with component
+  popovers above the editor surface. Text and numeric inputs use a focusable
+  underline; inherited cursor color presentation follows foreground edits.
+- **Runtime and cost:** Resolve the active theme on settings changes and read prepared
+  values during rendering. Theme defaults, explicit personal preferences and per-session
+  OSC overrides remain distinct; changing defaults must not erase session overrides or
+  reinterpret truecolor RGB as palette indices. Font and geometry overrides are optional.
+  Import, export and library writes use scoped background work with stale-result checks.
+  No extra production dependency or resident worker is justified by this feature.
+- **Alternatives:** Extending the built-in enum with mutable global data, keeping a
+  second renderer-specific validation model, or translating each pair of formats
+  independently would couple unrelated lifecycles and duplicate behavior.
+- **Validation:** Required evidence includes original-theme preservation, foreground
+  persistence/cancellation, malformed input and unknown fields, conflicting saves,
+  native palette behavior, keyboard/real control interaction and approved-layout
+  comparison. A contrast calculation for opaque default foreground/background is
+  not a guarantee for arbitrary transparency, syntax colors or displays. Browser
+  prototype checks and native GPUI acceptance are reported separately. The working
+  implementation has passed 54 settings-model tests, 24 document/store/format
+  contracts (including 90 static color round trips), 14 catalog/allocation tests,
+  and Windows native theme interaction checks. Actual window inspection exposed
+  and corrected a hidden font popup and stale inherited cursor HEX presentation.
+  Window captures cover the theme picker, common editor, font selector, palette,
+  and Back confirmation; these are Windows results, not cross-platform visual
+  or universal performance guarantees.
+- **Revisit condition:** Dynamic inheritance, downloaded resources, additional format
+  semantics or system appearance slot changes require their own compatibility and
+  ownership evidence; they do not silently expand this snapshot contract.
+
+
+## ADR-0012 — Bounded background images and explicit atlas retirement
+
+- **Status:** Requested by the maintainer, 2026-09-14; implementation and validation in progress.
+- **Evidence:** With blur disabled, twenty window size changes retained an additional
+  84 MiB (card) / 190 MiB (window-cover) of dedicated GPU memory on the local Windows
+  QA binary. The pinned GPUI atlas does not retire image IDs when Rust Arcs drop.
+- **Decision:** Keep one bounded CPU RenderImage shared by the background layers and
+  windows. Use the existing renderer authority for fit/alignment and GPUI image
+  bounds for GPU sampling; resizing no longer produces new images. Opacity is a
+  layer property. Explicitly retire replaced image IDs across window atlases and
+  invalidate replayed scenes. Platform atlas copies remain per window.
+- **Loading and ownership:** The App visual-effects state owns one active background
+  executor job and one latest desired source. Generation checks cancel superseded
+  work before expensive stages and prevent stale publication; dropping the owner
+  invalidates outstanding work. Metadata and decoding run off the UI thread. There
+  is no new service, thread pool, dependency, persisted format or AI lifecycle change.
+- **Memory policy:** Retained BGRA is limited to 8 MiB and an edge of 2048 pixels;
+  encoded input is streamed with a 64 MiB file limit, and decoder/output admission
+  is limited to 128 MiB. Integer thumbnailing precedes RGBA conversion and avoids
+  a full-image floating-point resize buffer. These are owned-resource limits, not
+  a whole-process or undocumented decoder-scratch guarantee. Existing native-fit
+  geometry remains independent of reduced texture resolution.
+- **Tradeoff:** High-resolution wallpaper detail is reduced and inputs over the
+  admission limits receive a visible error. The window can appear with its normal
+  base color while the background loads. These favor the user's explicit memory
+  and responsiveness priorities.
+- **Validation:** Targeted decode/lifetime/geometry tests, Windows GPUI build,
+  repeated-size memory probes and real card/crop/opacity visual checks are required.
+  Results are recorded separately and are not implied by this decision.
+- **Revisit condition:** Replace manual atlas retirement if upstream introduces
+  equivalent ownership-aware image resources. Adopt target-size native decoding
+  only with verified peak accounting and compatibility evidence.
+
+
+## ADR-0013 — Bounded, on-demand filename search
+
+- **Date:** 2026-09-14
+- **Context:** Opening Files previously crawled up to 500,000 paths even with an
+  empty query. The index retained its full array and several strings per path.
+  Users requested approximately 10–15 MiB of sustained browsing/search overhead,
+  unchanged matching options and reuse during repeated panel use.
+- **Decision:** Keep filename matching in the shared side-panel model. Empty
+  queries only enumerate the visible tree. Nonempty queries reuse one bounded
+  cache and stream uncached paths through the same matcher/ranker. Cache capacity
+  never determines search coverage. Plain, case-sensitive, whole-word and regex
+  matching retain their existing semantics and best-first ordering.
+- **Ownership and budgets:** Each existing worker owns one root cache (6 MiB);
+  all caches share an 8 MiB allocation quota. Published rows carry a lease into
+  their consuming view (512 KiB per snapshot, 2 MiB shared). One process-wide
+  execution lock bounds simultaneous traversal/ranking buffers; UI threads never
+  acquire it. Ranking retains at most 1,000 candidates and 1 MiB. Query regex and
+  path parsing have independent bounds. These are allocation budgets, not a
+  promise that OS working set or total application memory equals those values.
+- **Lifecycle:** A latest-request mailbox replaces the unbounded command queue.
+  Revisions cancel obsolete traversal and reject stale publication. Clearing or
+  closing Files releases result rows, while a bounded warm cache survives reopening.
+  Root changes replace that cache. Local nonrecursive watches are installed before
+  enumeration, capped at 128 directories / 64 KiB of path storage. Caches with
+  incomplete watch coverage (including WSL) expire after two seconds. WSL search
+  executes `find` directly with `wsl.exe --exec`, streams NUL records through a
+  four-record channel and terminates its owned command on cancellation/timeout.
+  Direct execution preserves paths and `find` arguments containing shell syntax.
+  It never terminates terminal sessions.
+- **Tradeoff:** Unchanged directories that fit in the watched cache avoid repeat
+  walks. Larger trees reuse a prefix for early results but require streaming for
+  full coverage. Search reports partial results at its existing 500,000-entry
+  ceiling, depth 64, inaccessible paths or result limits. Explicit refresh remains
+  available. No new dependency, persisted index or daemon is introduced.
+- **Validation:** Matching, watch changes, cancellation, panel reopening, root
+  replacement, bounded ranking and allocation ownership have focused regressions.
+  An opt-in Windows stress test drives the production panel through multiple
+  directories, clear/query/reopen cycles and records actual Vec/String capacities,
+  the Windows array heap block and process private commit after allocator warmup.
+  Runtime evidence must accompany any claim about the sustained memory target.
+- **Replacement condition:** Revisit the budgets or an OS-backed index only with
+  measured query latency, completeness and sustained allocation evidence. Do not
+  restore eager full-tree indexing to improve a synthetic latency number.
+
+## ADR-0014 — Parallel release validation with one product build graph
+
+- **Date:** 2026-09-14
+- **Context:** The 1.7.0 Windows release job took 41m28s despite a full dependency
+  cache hit. Its logs show three application test compilations (4m44s, 9m16s and
+  4m07s), a 15m08s release build, and 4m16s of additional dependency compilation
+  during packaging. The user requested a slowest-job target of ten minutes.
+- **Decision:** Run the complete Rust workspace with the product interaction
+  feature enabled in one unfiltered invocation. Run native tests independently
+  from package construction; asset aggregation depends on both. Each native
+  platform still runs the complete Python helper and harness suites. Separate
+  test and release cache keys prevent concurrent jobs from replacing one another's
+  compiled workload. Dependency archives and Git objects are shared within each
+  platform; each workload saves only the profiles it uses (native tests also keep
+  release-check metadata). A fallback
+  reads existing combined caches during migration. Cargo still validates source,
+  profile and feature fingerprints before reuse. Each source revision saves an
+  immutable entry while restoring compatible earlier revisions; a partially built
+  cache from a failed revision cannot prevent later successful cache updates.
+- **Scheduling:** Stable releases call the same complete four-platform native
+  workflow used for contributions, including architecture, translation allocation
+  contracts and the release-workspace check. Release branch pushes omit a duplicate
+  automatic invocation; the release aggregation still requires the called suite.
+- **Test profile:** An explicit CI-only profile removes developer-preview
+  optimization and debug information from test compilation, including named
+  dependency overrides. It retains debug assertions and overflow checks. The
+  native suite also checks the actual product feature configuration, since GPUI
+  test support changes dependency features. Release optimization is unaffected.
+- **Product compilation:** The application keeps O3 and Thin LTO and uses 16
+  codegen units to parallelize its large translation unit. Other package settings
+  retain their existing values. Both Windows packagers call one explicit builder
+  for the product and its packaged hook, preserving the same feature graph.
+  Packaging still invokes Cargo and validates source freshness and binary identity.
+- **Contract clarification:** The old packaging test required the literal
+  `--workspace --exclude nebula`, rejecting a valid explicit selection of the two
+  shipped binaries. It now verifies the actual selected packages, binaries and
+  product feature, plus failure propagation and restoration of the caller's target.
+  No test filtering, freshness bypass, size-budget increase or dependency change
+  is part of this decision.
+- **Validation:** The release pipeline runs native tests, packaging fixtures,
+  package-size/identity checks and installed or mounted conformance on all four
+  platforms. Actual job timings determine whether the target is met; cache input
+  changes and first compilation must be reported separately. A configured timeout
+  or parallel scheduling alone is not evidence of a ten-minute successful build.
+- **Windows host privileges:** The first hosted run exposed administrator-token
+  dependence in ordinary-window persistence fixtures and runtime discovery.
+  Persistence tests now explicitly select ordinary-window state while retaining
+  privileged isolation tests. Native conformance launches under a restricted copy
+  of the runner's own token, verifies that elevation was removed and preserves
+  the desktop, environment and child exit status. It does not weaken the product's
+  administrator isolation or create a separate user account. Native launch tests
+  cover elevation, literal argument passing and successful/failed child exit.
+- **Revisit condition:** Retain only changes whose complete CI run and package
+  checks pass. Reconsider codegen partitioning if artifact size or runtime
+  measurements regress, and remove redundant caches if restore/save cost grows.
+
+## ADR-0015 — Native font ownership and terminal resource reclamation
+
+- **Status:** Existing local fixes selected for commit at the maintainer's request,
+  2026-09-15. This records ownership contracts, not a release or process-memory claim.
+- **Context:** Registering immutable font bytes without a DirectWrite owner creates
+  a full private copy. Retained caller-side ConPTY pipe handles prevent output EOF
+  after a terminal closes, leaving reader tasks and buffers alive. Process-ID reuse
+  can also attach an unrelated older process to a newly created terminal's tree.
+- **Font decision:** Pin the existing GPUI fork and its component consumers to the
+  matching font-owner revisions. A COM owner retains borrowed static bytes or the
+  original owned buffer until the last native consumer releases it. Preserve font
+  data, fallback behavior and lifetime; do not remove CJK coverage to reduce memory.
+  All GPUI dependency edges retain one source identity and exact revision.
+- **PTY decision:** Close caller-owned pipe ends after ConPTY has duplicated them.
+  Own the process handle, primary-thread handle, process attribute list and loaded
+  console library separately. Keep output draining during teardown and failed spawn.
+  Wait for cancellation and completion of native exit callbacks before releasing
+  their context; an unconfirmed cancellation retains the context and reports an
+  error instead of permitting native code to access freed memory.
+- **Process boundary:** The platform adapter reads identifiers and creation times
+  in one bounded Windows snapshot, without opening protected processes. The shared
+  process-tree rules reject an older child's edge to a younger reused parent PID.
+  Unknown creation times preserve the edge and existing busy-process protection.
+  Unix retains its existing process listing behavior. No resident polling service,
+  persistence change or additional production crate is introduced.
+- **Validation:** Native font regressions cover borrowed and owned buffers, original
+  pointers, final-reference release and invalid lengths. Terminal regressions cover
+  idle and busy close, failed launch, in-flight callbacks and native handle recovery
+  using the packaged console host. Process tests cover PID reuse, real busy children,
+  unknown timestamps and malformed native records. The maintained memory stress
+  tool distinguishes peak, warmup and retained growth, and fails incomplete runs or
+  forced cleanup. Historical native results and new checks must be reported with
+  their actual source/build identities; budgets are not whole-process guarantees.
+- **Revisit condition:** Remove the font fork patch when upstream provides the same
+  ownership contract. Revisit native adapters when supported platform interfaces
+  provide equivalent process identity and resource-lifetime guarantees.
+
+
+## ADR-0016 — Completion ownership follows the active connection
+
+- **Date:** 2026-09-15
+- **Context:** Launch-time Local/WSL/SSH pools do not follow a typed SSH/WSL
+  connection. History and directory candidates consequently retain the outer
+  pane's source. A remote command-done marker does not mean SSH has exited.
+- **Decision:** Keep one shared completion context for both UI adapters. Record
+  the connection command in the parent scope, then select a separate connection
+  scope for subsequent commands. A known parent shell's prompt restores its scope.
+  Clear ghost/popup candidates, dismissal state, input mirrors, cwd and pending
+  directory requests on scope changes. Every cache/result retains its environment.
+  Local directory history only accepts local reports. Empty/unreadable input and
+  ordinary shell commands do not disable completion or learning.
+- **Shell adapter:** Reuse OSC 1337 SetUserVar. `pebrel_shell` identifies a shell
+  instance at its prompt. `pebrel_command` carries that instance and PSReadLine's
+  accepted command, including simple PowerShell alias resolution. This handles
+  recall and completed input that the key mirror cannot reconstruct. The SSH/WSL
+  execution wrapper reports expanded argv as NUL-separated `pebrel_connection`
+  fields, then restores the owner when the actual process returns. Thus a variable
+  such as `$targetHost` does not merge different destinations, and return inside a
+  compound command does not wait for the next prompt. PowerShell invokes the
+  native application; bash/zsh share one payload and preserve user wrappers and
+  redirected command output. Integration tokens are generated once per shell and remain unexported. Existing local
+  PowerShell/bash/zsh, WSL bash hooks and SSH bootstrap hooks carry these signals.
+  Preserve terminal event order across chunks so a cwd cannot move past the
+  parent-context report. A new shell on the same host keeps that host's history.
+- **Connection identity:** Existing JSONL files/schema remain authoritative. Typed
+  SSH/WSL contexts use a `typed:` SHA-256 key in their respective history category,
+  incorporating the parent history scope and argument boundaries. This separates
+  bastion/config/port routes without reusing an outer SFTP channel for an inner
+  host. Typed-connection path completion stays with the native shell. WSL launch
+  resolves the default distro from Windows' Lxss registry; an unavailable name
+  stays a distinct WSL scope, never Local, and its shell report can supply the
+  actual distro. No new service or dependency is added.
+- **Native completion:** Preserve PSReadLine prediction settings. The existing
+  grid reconciliation yields when shell text occupies the space after the cursor,
+  so native inline predictions keep their own acceptance keys. The Pebrel toggle
+  only controls its candidates; it does not reconfigure the shell editor.
+- **Scope:** This change addresses connection history and candidate ownership.
+  It adds no deletion, exit-status filtering, command blacklist or input-quality
+  learning switch. Existing records without provenance are retained. Return from
+  nested connections is verified with parent shell integration; it is not inferred
+  from an untagged exit code or claimed to cover arbitrary uninstrumented wrappers.
+- **Validation:** Regressions cover local/SSH/WSL entry, parent return, nested
+  reported shells, failed connections, options/ancestry separation, native accepted
+  commands, same-host shells and candidate invalidation. Test delayed directory
+  results against a changed context and parser order at every byte split. Native
+  PowerShell hook tests validate emitted identity, accepted alias text and native
+  prediction preservation. A Windows integration test sends execution/return
+  reports through the production ConPTY and parses the resulting byte stream. Report
+  actual executed checks separately from live remote-server validation.
+
+## ADR-0017 — Scrollback allocation and user scrolling preferences
+
+- **Date:** 2026-09-15
+- **Context:** The first history expansion initialized at least 1,000 full-width
+  rows per grid. Large column reductions retained oversized cell vectors. Users
+  requested lower memory without reducing retained history or scrolling behavior.
+- **Decision:** Keep history limits and ring indexing intact. Initialize ahead by
+  one viewport, bounded to 32–128 rows, and reclaim surplus against the current
+  viewport. During row shrinking, release capacity only when at least 32 cells and
+  half the allocation are unused. Retain enough space for short reflow tails to
+  reach the destination width without immediately growing again.
+- **Cost:** Smaller batches increase ring normalization frequency; vector growth
+  is still geometric. Row reclamation runs synchronously during resize and can
+  increase a large shrink's latency. Allocation reduction is not a working-set or
+  universal throughput guarantee. Existing-history scrolling does not allocate
+  new history rows. Compare identical content, geometry and build profiles.
+- **Preferences:** `nebula_settings` owns additive `scrollback_lines` and
+  `scroll_speed` keys, validation and defaults. History offers seven values from
+  1,000 to 100,000, defaults to 10,000 and is passed only to newly created terminal
+  sessions; changing it cannot truncate open sessions. Wheel speed defaults to
+  1.0 and is bounded to 0.25–4.0. GPUI reads its cached value, retains fractional
+  input and leaves pixel-precise trackpad input, font zoom and completion scrolling
+  independent. Dragging previews speed; release persists it with failure feedback.
+  No smoothing timer, new dependency, worker or terminal persistence format is added.
+- **Validation:** Cover rotated growth/reclamation, threshold boundaries, reflow
+  content/cursor space, preference round trips/reset and actual selector/slider
+  interactions. Record native product, allocation and timing results separately.
+- **Revisit condition:** Reconsider batching or deferred reclamation if measured
+  large-history output or resize latency becomes unacceptable; preserve the same
+  history, ordering and input contracts when evaluating alternatives.
+
+## ADR-0018 — Durable recovery targets and update handoff
+
+- **Status:** Implementation authorized by the maintainer on 2026-09-15; native
+  upgrade acceptance is required before declaring this behavior delivered.
+- **Context:** Launching setup before terminal shutdown races executable-file
+  ownership. A failed snapshot write must be able to cancel exit. A resume command
+  submitted to a PTY is not evidence that the provider opened the requested chat.
+- **Recovery ownership:** The shared v4 session schema gains optional native file
+  and per-pane launch fields. Older snapshots remain readable; per-tab launch is
+  only the compatibility fallback. The terminal owns a durable recovery target
+  separately from native-confirmed foreground identity. Failed verification or
+  resume keeps that target available for retry, while an intentional exit after
+  confirmation clears it. Provider metadata is read on the background executor,
+  within bounded file/output/time budgets and the original execution environment.
+  No conversation text, arbitrary environment map or authentication secret is saved.
+- **Identity:** Pi metadata/header IDs are authoritative; process badges and
+  timestamped filenames are not native IDs. Legacy timestamp IDs require an exact
+  header match. Multiple matching files are an error, never a most-recent-file rule.
+  Bridge process identity orders Pi session switches within one monotonic stream.
+- **Persistence:** Quit freezes only after durable success. Failure leaves windows
+  open and allows later checkpoints to include new native identity. Draft approval
+  covers all participating windows, including drafts changed while prompts are up.
+  Renderer adapters capture window state; shared persistence owns the write rule.
+  Optional window boundaries partition the existing flat tab list in the same
+  atomically replaced session document. Old readers retain that flat list; both
+  immediate and next-start installation use the last durable window partition
+  and reopen the active window last. Invalid partitions cancel installation.
+  This preserves window/tab grouping, not desktop coordinates or window sizes
+  that the current startup policy deliberately derives from preferences.
+- **Download ownership:** Optional predownload grants no permission to install.
+  One process-wide state serves prompts and settings. Generation checks reject
+  cancelled/obsolete progress and completion. Disk metadata is a cache descriptor;
+  reopening and installing reverify the package bytes using the existing official
+  asset, proxy, length and SHA-256 contracts.
+- **Handoff boundary:** A temporary Windows helper must live outside the target
+  installation. It acquires exact process handles, verifies the package, and
+  acknowledges readiness before an explicit durable commit allows exit/install.
+  Setup starts only after participant exit, with a specific validated target
+  directory and without process-name force termination. Kernel lifetime locks
+  block competing installation/startup and cannot remain owned after a crash.
+  Upgrade restore state and installation failures survive process exit. Inno
+  in-place installation is not claimed to provide arbitrary mid-install rollback.
+  Native path normalization, process creation time and hidden helper spawning
+  belong to `platform::update_installation`; transaction state and commit authority
+  remain in the updater. UI startup consults the existing installation capability.
+- **Validation boundary:** Provider bridge execution, serialization/failure cases,
+  actual GPUI lifecycle tests and native simulated upgrades are separate evidence.
+  Metadata compilation alone does not validate restoration or installer behavior.
+  Debug-only local rehearsal shares version eligibility with scheduled updates:
+  it permits an exact-version reinstall, never a downgrade. Such a reinstall
+  must replace the executable bytes; an unchanged executable after setup exits
+  zero is a failure. This does not substitute for a full packaged upgrade test.
+
+## ADR-0019 — Optional release contributor section
+
+- **Status:** Approved by the maintainer on 2026-09-15.
+- **Context:** A release without new PR contributors previously failed validation
+  unless it listed a contributor. This encouraged crediting maintainers or issue
+  reporters in the PR contributor area, contrary to the maintainer's policy.
+- **Decision:** Omit Contributors when there are no PR contributors to credit.
+  When present, the section still requires GitHub links, occurs once after both
+  languages, and precedes SHA256. PR eligibility is checked against GitHub during
+  release review; the local Markdown checker cannot establish it from a link.
+- **Validation:** A bilingual release without Contributors passes. Empty,
+  duplicated, unlinked or misplaced contributor sections fail; language and
+  asset checksum contracts remain required.
+
+## ADR-0020 — Saved command organization
+
+- **Status:** User-requested working-tree implementation, 2026-09-16; pending
+  repository review by `@Kuddev`. No release claim.
+- **Context:** Users need named command groups, builtin defaults, drag assignment
+  and removal without duplicating immutable builtin command templates.
+- **Decision:** Add optional organization metadata to the existing version 1
+  command store. Stable group IDs and command IDs own membership; names remain
+  display text. Absent builtin membership means the builtin group; explicit null
+  means ungrouped. Old stores load unchanged. Older applications can read command
+  content but do not preserve this additional metadata when rewriting the store.
+  The user also requested deletable builtins: an optional `deleted_builtins` set
+  records stable IDs in the same store. Template content stays in the catalog;
+  changing language, platform or grouping cannot bring a deleted entry back.
+  Older applications also discard this set on rewrite.
+- **Ownership:** `saved_commands` remains the sole validation and persistence
+  authority. Every mutation locks, reloads, validates and atomically writes both
+  commands and organization. No extra file, dependency, worker or service is added.
+  The UI sorts and renders a snapshot; it never writes JSON itself.
+- **Alternatives:** Per-command group fields would require materializing builtin
+  templates and could freeze their platform/localization behavior. A separate
+  group file would need a transaction spanning two files.
+- **Consequences:** Deleting a group leaves its commands ungrouped; deleting a
+  command removes its membership. Stale drag targets fail without changing disk.
+  Deleted builtin IDs remain valid after catalog reduction, but cannot be assigned
+  to a group. Concurrent mutations preserve deletions through the same transaction.
+  Search and keyboard selection use the same displayed command order; headings
+  never execute commands. Group names and counts use bounded validation.
+- **Validation:** Regression coverage includes old stores, explicit builtin
+  removal, restart persistence, stale targets and serialized multiwindow writes.
+  Actual GPUI drag, menu and keyboard checks are reported separately from model
+  tests; a successful compile is not visual acceptance.
+- **Revisit condition:** Reconsider schema versioning if preserving organization
+  through edits by older application versions becomes a supported requirement.

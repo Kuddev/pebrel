@@ -3,7 +3,11 @@ use super::*;
 impl SettingsPane {
     pub(super) fn matching_settings_sections(&self, cx: &App) -> Vec<usize> {
         let query = self.settings_search_input.read(cx).value();
-        matching_sections(&query, crate::gpui_shell::config::ui_language(cx))
+        let sections = matching_sections(&query, crate::gpui_shell::config::ui_language(cx));
+        let keymap_matches = self.keymap_matches_query(&query);
+        visible_nav_sections()
+            .filter(|index| sections.contains(index) || (*index == 7 && keymap_matches))
+            .collect()
     }
 
     pub(super) fn update_settings_search(&mut self, cx: &mut Context<Self>) {
@@ -32,6 +36,15 @@ impl SettingsPane {
             .flex_shrink_0()
             .px_5()
             .items_center()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.keymap_capture.take().is_some() {
+                        this.keymap_capture_preview.clear();
+                        cx.notify();
+                    }
+                }),
+            )
             .child(
                 Input::new(&self.settings_search_input)
                     .w_full()

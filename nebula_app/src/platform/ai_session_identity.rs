@@ -62,6 +62,13 @@ struct ProbeRecord {
     first_line: String,
 }
 
+/// Identity and working directory from the active rollout's own metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexSession {
+    pub session_id: String,
+    pub cwd: Option<String>,
+}
+
 /// Probe the active Codex rollout for one pane.
 ///
 /// WSL panes are inspected inside the guest because Windows Toolhelp cannot
@@ -71,7 +78,7 @@ struct ProbeRecord {
 pub(crate) fn probe_codex_session(
     pane_id: u64,
     exec_context: Option<&crate::runtime_exec::PaneExecContext>,
-) -> Option<String> {
+) -> Option<CodexSession> {
     let pane_id = pane_id.to_string();
     let context = exec_context?;
     let instance = context.process_instance()?;
@@ -90,7 +97,7 @@ pub(crate) fn probe_codex_session(
     }
 }
 
-fn parse_probe_records(output: &str) -> Option<String> {
+fn parse_probe_context(output: &str) -> Option<CodexSession> {
     let mut candidate = None;
     for record in output.lines().filter_map(parse_probe_record) {
         let Ok(meta) = serde_json::from_str::<serde_json::Value>(&record.first_line) else {
@@ -118,15 +125,28 @@ fn parse_probe_records(output: &str) -> Option<String> {
         if filename_id != id {
             continue;
         }
-        if candidate.as_ref().is_some_and(|existing| existing != id) {
+        let context = CodexSession {
+            session_id: id.to_owned(),
+            cwd: payload
+                .get("cwd")
+                .and_then(serde_json::Value::as_str)
+                .filter(|cwd| cwd.starts_with('/') && !cwd.chars().any(char::is_control))
+                .map(str::to_owned),
+        };
+        if candidate.as_ref().is_some_and(|existing| existing != &context) {
             // More than one distinct main/user rollout is ambiguous.  A
             // process can have guardian/sub-agent files open, but it must not
             // have two possible user conversations silently choose one.
             return None;
         }
-        candidate = Some(id.to_owned());
+        candidate = Some(context);
     }
     candidate
+}
+
+#[cfg(test)]
+fn parse_probe_records(output: &str) -> Option<String> {
+    parse_probe_context(output).map(|context| context.session_id)
 }
 
 fn parse_probe_record(line: &str) -> Option<ProbeRecord> {
@@ -170,14 +190,10 @@ fn probe_wsl(
     user: Option<&str>,
     pane_id: &str,
     instance: &str,
-) -> Option<String> {
+) -> Option<CodexSession> {
     let mut command = Command::new("wsl.exe");
     command.args(wsl_probe_args(distro, user, pane_id, instance));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::platform::process::hidden_command(&mut command);
     run_probe_command(command)
 }
 
@@ -208,7 +224,7 @@ fn wsl_probe_args(
 
 /// Bound the guest lookup by time and output size. A temporary file avoids a
 /// reader thread surviving when a descendant keeps the output handle open.
-fn run_probe_command(mut command: Command) -> Option<String> {
+fn run_probe_command(mut command: Command) -> Option<CodexSession> {
     let mut output = tempfile::tempfile().ok()?;
     command.stdin(Stdio::null()).stdout(output.try_clone().ok()?).stderr(Stdio::null());
     let mut child = command.spawn().ok()?;
@@ -238,7 +254,7 @@ fn run_probe_command(mut command: Command) -> Option<String> {
     };
     output.rewind().ok()?;
     let output = read_bounded(output, MAX_PROBE_OUTPUT).ok()?;
-    status.success().then(|| parse_probe_records(&String::from_utf8_lossy(&output)))?
+    status.success().then(|| parse_probe_context(&String::from_utf8_lossy(&output)))?
 }
 
 fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
@@ -258,7 +274,7 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(unix)]
-fn probe_local_proc(pane_id: &str, instance: &str) -> Option<String> {
+fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut output = String::new();
     let mut records = 0;
@@ -309,7 +325,7 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<String> {
             }
         }
     }
-    parse_probe_records(&output)
+    parse_probe_context(&output)
 }
 
 #[cfg(unix)]
@@ -398,6 +414,26 @@ mod tests {
     fn oversized_output_is_rejected_instead_of_selecting_a_partial_candidate() {
         assert_eq!(read_bounded(&b"1234"[..], 4).unwrap(), b"1234");
         assert!(read_bounded(&b"12345"[..], 4).is_err());
+    }
+
+    #[test]
+    fn review_regression_active_rollout_supplies_cwd_without_accepting_invalid_paths() {
+        for (cwd, expected) in [
+            ("/mnt/d/temp_build/project", Some("/mnt/d/temp_build/project")),
+            ("/home/hello/项目 with spaces", Some("/home/hello/项目 with spaces")),
+            ("relative/path", None),
+            ("/bad\npath", None),
+        ] {
+            let metadata = serde_json::json!({"type":"session_meta", "payload": {
+                "id": ROOT_ID, "cwd": cwd, "source": "cli", "thread_source": "user",
+            }});
+            let output = format!(
+                "42\t7\t/home/hello/.codex/sessions/rollout-x-{ROOT_ID}.jsonl\t{metadata}\n"
+            );
+            let context = parse_probe_context(&output).unwrap();
+            assert_eq!(context.session_id, ROOT_ID);
+            assert_eq!(context.cwd.as_deref(), expected);
+        }
     }
 
     #[test]

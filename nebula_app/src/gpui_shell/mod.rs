@@ -75,7 +75,28 @@ pub(crate) enum GpuiShellEvent {
 ///
 /// GPUI 拥有自己的消息循环：主窗形态从主线程调用（winit 不启动）；
 /// spike 形态从专用线程调用。一个进程内只允许调用一次。
-pub fn run_shell(initial_cwd: Option<std::path::PathBuf>) {
+pub fn run_shell(
+    initial_cwd: Option<std::path::PathBuf>,
+    initial_command: Option<crate::config::ui_config::Program>,
+    shell_id: Option<String>,
+) {
+    if crate::platform::CAPABILITIES.self_update_install {
+        match crate::update_download::handoff::installation_in_progress() {
+            Ok(true) => {
+                log::info!("Installation is being updated; resident startup deferred");
+                return;
+            },
+            Err(error) => {
+                log::warn!("Could not inspect installation ownership: {error}");
+            },
+            Ok(false) => {},
+        }
+    }
+    if crate::platform::CAPABILITIES.self_update_install
+        && crate::update_download::handoff::apply_scheduled()
+    {
+        return;
+    }
     let (shell_tx, shell_rx) = std::sync::mpsc::channel();
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::ssh_prompt::install({
@@ -111,19 +132,28 @@ pub fn run_shell(initial_cwd: Option<std::path::PathBuf>) {
         },
         runtime_hub.clone(),
     );
-    if runtime_server.is_none() {
+    if runtime_server.is_none()
+        && initial_command.is_none()
+        && !crate::platform::elevation::requires_isolation()
+    {
         // 与另一份进程同时启动时，对方可能已经拿到 owner lock、但尚未来得及
         // 发布 endpoint。短暂等待并交接，避免继续打开一个无控制面的空窗口。
+        let handover_cwd = initial_cwd.clone().or_else(|| std::env::current_dir().ok());
         for _ in 0..40 {
             let behavior = nebula_settings::RuntimeSettings::load().windowing_behavior;
             let handed_over = match behavior {
                 nebula_settings::WindowingBehaviorName::UseNew => {
-                    crate::runtime_api::try_open_window_existing(initial_cwd.as_deref())
+                    crate::runtime_api::try_open_window_existing(
+                        handover_cwd.as_deref(),
+                        shell_id.as_deref(),
+                    )
                 },
-                _ => initial_cwd.as_deref().map_or_else(
-                    crate::runtime_api::try_open_default_tab_existing,
-                    crate::runtime_api::try_open_directory_existing,
-                ),
+                _ => match handover_cwd.as_deref() {
+                    Some(dir) => {
+                        crate::runtime_api::try_open_directory_existing(dir, shell_id.as_deref())
+                    },
+                    None => crate::runtime_api::try_open_default_tab_existing(shell_id.as_deref()),
+                },
             };
             if handed_over {
                 crate::tray::shutdown();
@@ -146,8 +176,12 @@ pub fn run_shell(initial_cwd: Option<std::path::PathBuf>) {
             #[cfg(windows)]
             crate::ai_hook::spawn_config_guard();
             init(cx);
-            cx.activate(true);
-            open_main_window(cx, ai_events, shell_rx, runtime_hub, initial_cwd);
+            if initial_cwd.is_some()
+                || !crate::platform::startup::start_hidden(&nebula_settings::RuntimeSettings::load())
+            {
+                cx.activate(true);
+            }
+            open_main_window(cx, ai_events, shell_rx, runtime_hub, initial_cwd, initial_command, shell_id);
         });
     crate::tray::shutdown();
 }
@@ -167,15 +201,21 @@ fn init(cx: &mut App) {
     // 网络图片加载：gpui 默认 NullHttpClient，markdown 文档里的 http(s)
     // 图源全部失败；换成 ureq 实现（跑在后台 executor）。
     http::register(cx);
+    // Read one runtime snapshot before installing any renderer. The resolved
+    // custom theme, terminal palette and chrome therefore start from the same
+    // immutable value and cannot diverge during bootstrap.
+    let runtime = nebula_settings::RuntimeSettings::load();
+    let theme = theme::resolve_theme_name(
+        runtime.theme,
+        runtime.follow_system_theme,
+        theme::system_is_light(cx),
+    );
+    let settings = config::Settings::load_with_runtime(theme, runtime);
+    gpui_component::set_locale(settings.ui_language.gpui_component_locale());
+    cx.set_global(settings);
     theme::apply_chrome_theme(cx);
     terminal::init(cx);
     workspace::init(cx);
-
-    // 用户 nebula.toml + nebula_settings.txt，启动读一次；失败回退默认，
-    // 具体错误由 config 的 notice 上浮，并在可用时写入 stderr。
-    let settings = config::Settings::load(theme::effective_theme_name(cx));
-    gpui_component::set_locale(settings.ui_language.gpui_component_locale());
-    cx.set_global(settings);
     toast::init(cx);
 }
 
@@ -183,9 +223,10 @@ fn register_bundled_fonts(cx: &App) {
     // GPUI resolves a family through the system collection first and silently
     // falls back when it is absent. Add Maple before any component/window can
     // resolve a font so the default remains the same private face as winit.
-    if let Err(error) =
-        cx.text_system().add_fonts(vec![Cow::Borrowed(crate::font_install::REQUIRED_FONT_BYTES)])
-    {
+    if let Err(error) = cx.text_system().add_fonts(vec![
+        Cow::Borrowed(crate::font_install::REQUIRED_FONT_BYTES),
+        Cow::Borrowed(include_bytes!("../../../assets/fonts/MapleMono-NF-CN-Regular.ttf")),
+    ]) {
         try_write_stderr(format_args!(
             "[nebula:gpui] failed to register bundled Maple font: {error}"
         ));
@@ -220,9 +261,18 @@ fn open_main_window(
     shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
     runtime_hub: crate::runtime_api::RuntimeHub,
     initial_cwd: Option<std::path::PathBuf>,
+    initial_command: Option<crate::config::ui_config::Program>,
+    shell_id: Option<String>,
 ) {
     workspace::windowing::initialize(cx, runtime_hub);
-    workspace::windowing::open_initial_window(cx, ai_events, shell_events, initial_cwd);
+    workspace::windowing::open_initial_window(
+        cx,
+        ai_events,
+        shell_events,
+        initial_cwd,
+        initial_command,
+        shell_id,
+    );
 }
 
 /// 按 `tray` 设置挂上或摘掉系统托盘图标（旧壳 `tray::set_enabled`）。
@@ -318,6 +368,8 @@ pub(crate) fn apply_app_icon(variant: nebula_settings::AppIconName, cx: &mut App
         return;
     }
     crate::tray::refresh_app_icon();
+    #[cfg(windows)]
+    crate::app_icon::windows::refresh_pinned(variant);
     #[cfg(windows)]
     cx.defer(|cx| {
         for handle in cx.windows() {

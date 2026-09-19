@@ -122,12 +122,10 @@ impl SettingsPane {
 
     /// 恢复后的单一重载入口（设置/SSH 主机/远端配置）。
     pub(super) fn reload_after_restore(&mut self, cx: &mut Context<Self>) {
-        self.runtime = RuntimeSettings::load();
         self.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists::load();
         self.backup_remote = crate::backup_remote::BackupRemoteConfig::load();
-        let settings = crate::gpui_shell::config::Settings::load(
-            crate::gpui_shell::theme::effective_theme_name(cx),
-        );
+        let (runtime, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
+        self.runtime = runtime;
         cx.set_global(settings);
         cx.emit(SettingsPaneEvent::Changed);
         cx.notify();

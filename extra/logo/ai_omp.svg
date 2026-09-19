@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Oh My Pi</title>
+  <defs>
+    <linearGradient id="pi" x1="10" y1="12" x2="51" y2="55" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e873d6"/>
+      <stop offset=".58" stop-color="#9362ef"/>
+      <stop offset="1" stop-color="#57a8ed"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#pi)" d="M8 12h48v10H44v34H34V22H24v25H14V22H8z"/>
+</svg>

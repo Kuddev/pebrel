@@ -1,7 +1,35 @@
 use super::*;
 
 impl SettingsPane {
-    pub(super) fn reset_all_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_reset_all_settings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::i18n::Message;
+
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let pane = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, window, _cx| {
+            let pane = pane.clone();
+            confirm_dialog(
+                dialog,
+                window,
+                language.text(Message::SettingsResetTitle),
+                language.text(Message::SettingsResetDescription),
+                language.text(Message::CommonRestoreDefaults),
+                language.text(Message::CommonCancel),
+                ButtonVariant::Danger,
+            )
+            .on_ok(move |_, window, cx| {
+                let _ = pane.update(cx, |this, cx| this.reset_all_settings(window, cx));
+                true
+            })
+        });
+        cx.notify();
+    }
+
+    fn reset_all_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let language = crate::gpui_shell::config::ui_language(cx);
         self.slider_persist = None;
         let backup = match nebula_settings::restore_default_settings() {
@@ -29,9 +57,7 @@ impl SettingsPane {
         let ssh_test_seq = self.ssh_test_seq.wrapping_add(1);
         let ssh_undo_seq = self.ssh_undo_seq.wrapping_add(1);
         let backup_seq = self.backup_seq.wrapping_add(1);
-        let settings = crate::gpui_shell::config::Settings::load(
-            crate::gpui_shell::theme::effective_theme_name(cx),
-        );
+        let (_, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
         gpui_component::set_locale(settings.ui_language.gpui_component_locale());
         cx.set_global(settings);
         *self = Self::new(window, cx);

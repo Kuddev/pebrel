@@ -67,6 +67,7 @@ use crate::window_transition::{NativeWindowStage, NativeWindowStageTracker};
 
 mod agent_runtime;
 mod input_state;
+mod link_open;
 mod proxy;
 mod quick_hotkey;
 mod runtime_control;
@@ -2095,17 +2096,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     /// 资源管理器里定位到条目本身（文件树右键「在资源管理器中显示」）。
-    /// `/select,` 与路径必须是同一个参数，逗号后直接拼路径。
+    /// 命令构造统一在 `platform::file_manager`（Windows 必须是
+    /// `/select,"<path>"`，引号只包路径），这里不再另写一份。
     fn reveal_in_file_manager(&mut self, path: &std::path::Path) {
-        #[cfg(windows)]
-        {
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path.as_os_str());
-            self.spawn_daemon("explorer.exe", &[arg.as_os_str()]);
-        }
-        #[cfg(not(windows))]
-        if let Some(parent) = path.parent() {
-            self.spawn_daemon("xdg-open", &[parent.as_os_str()]);
+        if let Err(err) = crate::platform::file_manager::reveal(path) {
+            warn!("Unable to reveal {} in file manager: {err}", path.display());
         }
     }
 
@@ -2129,26 +2124,19 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         match &hint.action() {
             // Launch an external program.
             HintAction::Command(command) => {
-                // On Windows, a `file://` OSC 8 link (our clickable `ls`) is
-                // opened via `explorer.exe` with a translated native path. This
-                // sidesteps `cmd /c start` mangling spaces/unicode and lets
-                // WSL/MSYS posix paths (`/mnt/c/…`, `/d/…`) actually resolve.
-                #[cfg(windows)]
-                if let Some(path) = crate::file_uri::file_uri_to_local_path(&text) {
-                    crate::display::nebula_link_log(format!(
-                        "trigger_hint file-uri explorer path={path:?} (from {text:?})"
-                    ));
-                    self.spawn_daemon("explorer.exe", &[path.as_os_str()]);
-                    return;
+                if command == &crate::config::ui_config::default_hint_command() {
+                    link_open::open(
+                        command.clone(),
+                        text.into_owned(),
+                        self.display.ui_language(),
+                        self.event_proxy.clone(),
+                        self.display.window.id(),
+                    );
+                } else {
+                    let mut args = command.args().to_vec();
+                    args.push(text.into_owned());
+                    self.spawn_daemon(command.program(), &args);
                 }
-
-                let mut args = command.args().to_vec();
-                args.push(text.into());
-                crate::display::nebula_link_log(format!(
-                    "trigger_hint spawn program={:?} args={args:?}",
-                    command.program()
-                ));
-                self.spawn_daemon(command.program(), &args);
             },
             // Copy the text to the clipboard.
             HintAction::Action(HintInternalAction::Copy) => {
@@ -2821,6 +2809,10 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     self.ctx.message_buffer.push(message);
                     self.ctx.display.pending_update.dirty = true;
                 },
+                EventType::LinkOpenFailed(message) => {
+                    self.ctx.display.push_toast(message, ToastKind::Warning);
+                    *self.ctx.dirty = true;
+                },
                 EventType::Terminal(event) => match event {
                     // OSC 9;4：程序自报任务进度。旧壳一个窗口只投一次，不像
                     // GPUI 壳那样先判「这个 pane 是不是正被看着」——旧壳的多
@@ -2845,10 +2837,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         if let Some(rest) = title.strip_prefix("NEBULA|") {
                             let mut parts = rest.splitn(3, '|');
                             let cwd = parts.next().unwrap_or("").to_owned();
-                            if self.ctx.nebula_state.cwd != cwd {
-                                self.ctx.nebula_state.cwd.clone_from(&cwd);
-                                self.ctx.display.nebula_record_directory(&cwd);
-                            }
+                            self.ctx.display.nebula_report_cwd(self.ctx.nebula_state, &cwd);
                             self.ctx.nebula_state.branch = parts.next().unwrap_or("").to_owned();
                             if let Some(program) = parts.next() {
                                 self.ctx.nebula_state.running_program = if program.is_empty() {
@@ -2895,9 +2884,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         // Standard OSC 7 / 9;9 directory report. Update cwd only,
                         // leaving any branch captured from a `NEBULA|cwd|branch`
                         // title intact, so the two channels coexist.
-                        if self.ctx.nebula_state.cwd != cwd {
-                            self.ctx.nebula_state.cwd.clone_from(&cwd);
-                            self.ctx.display.nebula_record_directory(&cwd);
+                        if self.ctx.display.nebula_report_cwd(self.ctx.nebula_state, &cwd) {
                             *self.ctx.dirty = true;
                         }
                     },
@@ -3060,8 +3047,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         }
                     },
                     TerminalEvent::UserVar { name, value } => {
-                        // `nebula_ai_query`（`#` 自然语言转命令）是阶段二的
-                        // 消费者；通道先贯通，其余变量目前无人认领。
+                        self.ctx.nebula_state.completion_shell_report(&name, &value);
                         if name == "nebula_ai_query" {
                             info!(
                                 "assistant: query channel received ({} chars)",

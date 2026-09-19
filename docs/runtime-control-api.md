@@ -159,10 +159,10 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `agent.paste` | 向同一 Agent generation 发送受控 bracketed-paste 文本 | `agent`, `generation?`, `text`, `submit?` |
 | `agent.read` | 读取命名 Agent 所在 Pane 的真实 Grid 尾部 | `agent`, `generation?`, `lines?` |
 | `agent.wait` | 等待同一 Agent generation 的状态跃迁；被替换/退出即明确失败 | `agent`, `generation`, `state`, `timeout_ms`, `after_seq?` |
-| `window.create` | 创建新窗口 | 无 |
+| `window.create` | 创建新窗口 | `cwd?`, `shell?` |
 | `window.close` | 关闭空闲窗口；忙碌 Pane 返回显式确认错误 | `window_id?` |
 | `window.focus` | 聚焦窗口或 Pane | `window_id?`, `pane_id?` |
-| `tab.new` | 创建默认 Shell 标签 | `window_id?` |
+| `tab.new` | 创建标签（默认 Shell，或 `shell` 点名的那个） | `window_id?`, `cwd?`, `shell?` |
 | `tab.close` | 按窗口内零基索引关闭空闲 Tab | `window_id?`, `tab_index` |
 | `tab.rename` | 设置或清除 Tab 自定义名称 | `window_id?`, `tab_index`, `name` |
 | `tab.move` | 在同一窗口内移动 Tab | `window_id?`, `tab_index`, `to_index` |
@@ -182,6 +182,13 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 `pane.prompt` 有意拒绝换行、ESC 和其他控制字符，并限制为 32 KiB。它是 Prompt 接口，不是
 任意终端字节注入接口。控制键走 `pane.send_key`：只开放命名键，字母必须配
 `control=true`，`repeat` 上限 64；API 不接受任意 bytes 或 ANSI 字符串。
+
+`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置相同的 id（`pwsh`、`cmd`、
+`wsl:Ubuntu`，或某个 profile 的 settings id），只作用于这一次创建；缺省照旧用设置里的
+默认 Shell。id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
+静默换掉用户点名要的 Shell 是最难查的失败。注意参数是 `deny_unknown_fields` 的：
+升级后的客户端带 `shell` 请求旧运行时会在解析阶段被拒（`invalid_params`），因此升级后
+需要重启驻留实例。
 
 `pane.paste` 专用于确实需要保留换行的输入：只接受 UTF-8，限制 32 KiB，拒绝 ESC、NUL
 与危险控制字符，并要求目标终端已启用 bracketed-paste。SSH Pane 明确拒绝本地文件/文本

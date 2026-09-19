@@ -11,6 +11,9 @@ use crate::grid::GridCell;
 use crate::index::Column;
 use crate::term::cell::ResetDiscriminant;
 
+/// Avoid reallocating on every column while still releasing materially oversized rows.
+const MIN_RECLAIMABLE_CELLS: usize = 32;
+
 /// A row in the grid.
 #[derive(Default, Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -87,6 +90,7 @@ impl<T: Default> Row<T> {
         T: GridCell,
     {
         if self.inner.len() <= columns {
+            Self::reclaim_excess_capacity(&mut self.inner, columns);
             return None;
         }
 
@@ -97,9 +101,29 @@ impl<T: Default> Row<T> {
         let index = max(content, cursor);
         new_row.truncate(index);
 
+        Self::reclaim_excess_capacity(&mut self.inner, columns);
+
         self.occ = min(self.occ, columns);
 
-        if new_row.is_empty() { None } else { Some(new_row) }
+        if new_row.is_empty() {
+            None
+        } else {
+            // Reflow may grow a short tail back to the new width. Keep that
+            // much capacity so reclaiming it does not force an immediate grow.
+            Self::reclaim_excess_capacity(&mut new_row, columns);
+            Some(new_row)
+        }
+    }
+
+    #[inline]
+    fn reclaim_excess_capacity(cells: &mut Vec<T>, columns: usize) {
+        let retained = max(cells.len(), columns);
+        let capacity = cells.capacity();
+        if capacity.saturating_sub(retained) >= MIN_RECLAIMABLE_CELLS
+            && capacity >= retained.saturating_mul(2)
+        {
+            cells.shrink_to(retained);
+        }
     }
 
     /// Reset all cells in the row to the `template` cell.
@@ -310,5 +334,85 @@ impl<T> IndexMut<RangeToInclusive<Column>> for Row<T> {
     fn index_mut(&mut self, index: RangeToInclusive<Column>) -> &mut [T] {
         self.occ = max(self.occ, *index.end + 1);
         &mut self.inner[..=(index.end.0)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Row;
+    use crate::index::Column;
+    use crate::term::cell::Cell;
+
+    #[test]
+    fn small_width_changes_keep_row_capacity() {
+        let mut row = Row::<Cell>::new(100);
+        let original_capacity = row.inner.capacity();
+
+        let _ = row.shrink(70);
+
+        assert_eq!(row.len(), 70);
+        assert_eq!(row.inner.capacity(), original_capacity);
+    }
+
+    #[test]
+    fn large_width_changes_reclaim_row_capacity() {
+        let mut row = Row::<Cell>::new(100);
+        let original_capacity = row.inner.capacity();
+
+        let _ = row.shrink(40);
+
+        assert_eq!(row.len(), 40);
+        assert!(row.inner.capacity() < original_capacity);
+    }
+
+    #[test]
+    fn capacity_reclamation_requires_both_thresholds() {
+        for (old, new, reclaim) in [(60, 30, false), (100, 60, false), (64, 32, true)] {
+            let mut row = Row::<Cell>::new(old);
+            let original_capacity = row.inner.capacity();
+
+            let _ = row.shrink(new);
+
+            assert_eq!(row.inner.capacity() < original_capacity, reclaim, "{old} -> {new}");
+        }
+    }
+
+    #[test]
+    fn short_rows_reclaim_without_losing_occupied_cells() {
+        let mut cells = Vec::with_capacity(200);
+        cells.resize(20, Cell::default());
+        cells[10].c = 'x';
+        let mut row = Row::from_vec(cells, 11);
+
+        assert!(row.shrink(40).is_none());
+
+        assert_eq!(row.len(), 20);
+        assert_eq!(row.occ, 11);
+        assert_eq!(row[Column(10)].c, 'x');
+        assert!(row.inner.capacity() < 200);
+        let capacity = row.inner.capacity();
+        row.grow(40);
+        assert_eq!(row.inner.capacity(), capacity);
+    }
+
+    #[test]
+    fn reclaimed_tail_preserves_content_and_cursor_space_without_regrowing_capacity() {
+        let mut row = Row::<Cell>::new(200);
+        row[Column(39)].c = 'a';
+        row[Column(45)].c = '界';
+
+        let tail = row.shrink_with_minimum(40, 60).unwrap();
+
+        assert_eq!(row.len(), 40);
+        assert_eq!(row.occ, 40);
+        assert_eq!(row[Column(39)].c, 'a');
+        assert_eq!(tail.len(), 20);
+        assert_eq!(tail[5].c, '界');
+        assert!(tail[6..].iter().all(|cell| *cell == Cell::default()));
+        assert!(tail.capacity() < 160);
+        let capacity = tail.capacity();
+        let mut tail = Row::from_vec(tail, 20);
+        tail.grow(40);
+        assert_eq!(tail.inner.capacity(), capacity);
     }
 }

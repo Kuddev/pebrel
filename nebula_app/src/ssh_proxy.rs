@@ -317,7 +317,9 @@ pub async fn connect_command(
     let mut command = {
         let mut command = tokio::process::Command::new("cmd.exe");
         command.args(["/D", "/S", "/C", &rendered]);
-        command.creation_flags(0x08000000);
+        // `tokio::process::Command` 不是 `std::process::Command`，用不了
+        // `platform::process::hidden_command`；flag 取值仍只有那一个来源。
+        command.creation_flags(crate::platform::process::CREATE_NO_WINDOW);
         command
     };
     #[cfg(not(windows))]

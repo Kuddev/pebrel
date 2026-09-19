@@ -19,6 +19,11 @@ struct WindowParams {
     /// `tab.new` 可选：新标签的工作目录（Explorer 右键并入驻留实例时携带）。
     #[serde(default)]
     cwd: Option<PathBuf>,
+    /// `tab.new` / `window.create` 可选：新标签用哪个 shell（`shell=` 设置与
+    /// `--shell` 同一套 id，如 `wsl:Ubuntu`）。缺省 = 设置里的默认 shell，所以
+    /// 老客户端不带这个字段的行为不变。
+    #[serde(default)]
+    shell: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,7 +227,7 @@ impl RuntimeCommand {
             "runtime.snapshot" => Ok(Self::Snapshot),
             "window.create" => {
                 let params: WindowParams = parse_params(&request.params)?;
-                Ok(Self::NewWindow { cwd: params.cwd })
+                Ok(Self::NewWindow { cwd: params.cwd, shell_id: params.shell })
             },
             "window.close" => {
                 let params: WindowTargetParams = parse_params(&request.params)?;
@@ -234,7 +239,11 @@ impl RuntimeCommand {
             },
             "tab.new" => {
                 let params: WindowParams = parse_params(&request.params)?;
-                Ok(Self::NewTab { window_id: params.window_id, cwd: params.cwd })
+                Ok(Self::NewTab {
+                    window_id: params.window_id,
+                    cwd: params.cwd,
+                    shell_id: params.shell,
+                })
             },
             "tab.close" => {
                 let params: TabTargetParams = parse_params(&request.params)?;

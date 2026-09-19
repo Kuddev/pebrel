@@ -27,14 +27,14 @@ pub(super) const SECTION_IDS: [&str; 10] = [
 /// section that owns the control instead of merely filtering the current page.
 pub(super) const SECTION_SEARCH_TERMS: [&str; 10] = [
     "application app 应用 update 更新 version 版本 github support 支持",
-    "appearance 外观 theme 主题 font 字体 opacity 透明度 background 背景 cursor 光标 icon 图标",
+    "appearance 外观 theme 主题 custom 自定义 template 模板 import 导入 export 导出 font 字体 opacity 透明度 background 背景 cursor 光标 icon 图标 dim inactive panes 调暗非活动窗格 分屏变暗 scrollback scrolling speed history 回滚 滚动 速度 历史",
     "profiles 配置文件 shell terminal 终端 completion 补全 startup 启动 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声",
     "providers provider ai 供应商 模型 api",
     "ssh host 主机 remote 远程 connection 连接",
     "network 网络 proxy 代理 connectivity 连接",
-    "interaction 交互 copy 复制 paste 粘贴 tab 标签 panel 面板",
+    "interaction 交互 copy 复制 paste 粘贴 tab 标签 panel 面板 focus follows mouse 焦点跟随鼠标 自动聚焦",
     "keymap key binding shortcut quick terminal 快速终端 独立窗口 已有窗口 按键映射 快捷键",
-    "advanced 高级 session 会话 tray 托盘 restore 恢复",
+    "advanced 高级 session 会话 tray 托盘 restore 恢复 startup autostart login silent 自启动 静默启动 开机 登录",
     "backup 备份 export 导出 restore 恢复",
 ];
 

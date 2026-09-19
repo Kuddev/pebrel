@@ -2,6 +2,47 @@ use super::*;
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
+fn settings_search_replaces_keymap_search_and_keeps_section_queries(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    let origin = pane.read_with(cx, |pane, _| pane.active_section);
+    for query in ["命令面板", "command palette", "keymap", ""] {
+        cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.replace_all(query, window, cx));
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        if !query.is_empty() {
+            assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 7);
+            assert!(cx.debug_bounds("settings-keymap-row-1").is_some());
+            if query != "keymap" {
+                assert!(cx.debug_bounds("settings-keymap-row-4").is_none());
+            } else {
+                assert!(cx.debug_bounds("settings-keymap-row-4").is_some());
+            }
+        }
+    }
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), origin);
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
 fn ai_toast_setting_is_searchable_and_has_a_visible_switch(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);

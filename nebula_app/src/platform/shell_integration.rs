@@ -35,6 +35,11 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
                 (".zprofile", include_str!("../../res/shell/zprofile")),
                 (".zshrc", include_str!("../../res/shell/zshrc")),
             ] {
+                let content = if name == ".zshrc" {
+                    format!("{content}\n{}", tty::connection_shell())
+                } else {
+                    content.to_owned()
+                };
                 crate::atomic_file::write(&directory.join(name), content.as_bytes())?;
             }
             if let Some(original) = std::env::var_os("ZDOTDIR") {
@@ -53,7 +58,9 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
         "bash" => {
             std::fs::create_dir_all(&root)?;
             let init = root.join("bashrc");
-            crate::atomic_file::write(&init, include_bytes!("../../res/shell/bashrc"))?;
+            let content =
+                format!("{}\n{}", include_str!("../../res/shell/bashrc"), tty::connection_shell());
+            crate::atomic_file::write(&init, content.as_bytes())?;
             options.shell = Some(tty::Shell::new(
                 program,
                 vec!["--rcfile".into(), init.to_string_lossy().into_owned(), "-i".into()],

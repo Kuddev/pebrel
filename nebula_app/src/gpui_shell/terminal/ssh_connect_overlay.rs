@@ -105,9 +105,8 @@ fn lerp_hsla(a: Hsla, b: Hsla, k: f32) -> Hsla {
 
 /// 品牌紫→青（旧壳 palette.edge_l/edge_r；浅色主题压暗 0.28）。
 fn brand_pair(cx: &gpui::App) -> (Hsla, Hsla) {
-    let chrome = crate::gpui_shell::theme::chrome_theme_resolved(cx);
-    let sk = chrome.skin();
-    let palette = chrome.palette();
+    let sk = crate::gpui_shell::theme::resolved_skin(cx);
+    let palette = crate::gpui_shell::theme::resolved_palette(cx);
     let darken = |v: crate::renderer::ui::Rgba| -> Hsla {
         let mut h = hsla_from_rgba(v.r, v.g, v.b);
         if sk.is_light {
@@ -293,9 +292,9 @@ pub(super) fn overlay(
     // chrome 文本锚定配置字号（旧壳 ui_font 合同），不跟终端缩放。
     let ui_px = cx
         .try_global::<crate::gpui_shell::config::Settings>()
-        .map(|settings| settings.base_font_size_px)
+        .map(|settings| settings.ui_font_size_px)
         .unwrap_or(15.0);
-    let chrome_family = theme.mono_font_family.clone();
+    let chrome_family = theme.font_family.clone();
     let log_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
     let ink_strong = theme.sidebar_accent_foreground;
     let ink = theme.foreground;

@@ -11,7 +11,7 @@ config.scrolling = {
 
 -- Font example. Remove the leading `--` from each line below to enable it.
 -- config.font = {
---     normal = { family = 'Maple Mono NF CN', style = 'Regular' },
+--     normal = { family = 'Maple Mono Normal NF CN', style = 'Regular' },
 --     size = 13.0,
 --     builtin_box_drawing = true,
 -- }

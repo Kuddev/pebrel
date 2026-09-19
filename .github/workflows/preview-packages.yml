@@ -5,10 +5,46 @@ run-name: >-
 
 on:
   pull_request:
-    paths: ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "nebula_app/res/**", "assets/**", "packaging/**", "scripts/**", ".github/workflows/preview-packages.yml"]
+    # Native tests cover every PR; package only when package inputs change.
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "nebula_app/build.rs"
+      - "nebula_app/build/**"
+      - "nebula_app/res/**"
+      - "nebula_app/windows/**"
+      - "assets/**"
+      - "packaging/**"
+      - "scripts/package*"
+      - "scripts/build-*"
+      - "scripts/installer*"
+      - "scripts/prepare-windows-runtime.ps1"
+      - "scripts/preview_release.py"
+      - "scripts/conformance/**"
+      - "scripts/tests/test_preview_release.py"
+      - ".github/workflows/preview-packages.yml"
   push:
     branches: [main]
-    paths: ["**/*.rs", "**/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "nebula_app/res/**", "assets/**", "packaging/**", "scripts/**", ".github/workflows/preview-packages.yml"]
+    # Native tests cover every PR; package only when package inputs change.
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "nebula_app/build.rs"
+      - "nebula_app/build/**"
+      - "nebula_app/res/**"
+      - "nebula_app/windows/**"
+      - "assets/**"
+      - "packaging/**"
+      - "scripts/package*"
+      - "scripts/build-*"
+      - "scripts/installer*"
+      - "scripts/prepare-windows-runtime.ps1"
+      - "scripts/preview_release.py"
+      - "scripts/conformance/**"
+      - "scripts/tests/test_preview_release.py"
+      - ".github/workflows/preview-packages.yml"
   workflow_dispatch:
     inputs:
       preview_id:
@@ -165,8 +201,8 @@ jobs:
       - name: Test real Bash and Zsh startup contracts
         run: python3 -m unittest scripts.tests.test_shell_integration -v
 
-      - name: Test all GPUI product and interaction cases
-        run: cargo test --locked -p nebula --features gpui-test-support
+      - name: Test SSH confirmation and password dialogs
+        run: cargo test --locked -p nebula --features gpui-test-support dialog
 
       - name: Build GPUI release binary
         run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
@@ -347,8 +383,8 @@ jobs:
           python3 -m unittest scripts.tests.test_shell_integration
           scripts.conformance.tests.test_posix_lifecycle -v
 
-      - name: Test all GPUI product and interaction cases
-        run: cargo test --locked -p nebula --features gpui-test-support
+      - name: Test SSH confirmation and password dialogs
+        run: cargo test --locked -p nebula --features gpui-test-support dialog
 
       - name: Release completed test artifacts before building the package
         run: |
@@ -497,17 +533,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - name: Prepare pinned Windows console runtime
+        shell: pwsh
+        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
       - name: Test workspace natively
         run: cargo test --locked --workspace
-      - name: Test all GPUI product and interaction cases
-        run: cargo test --locked -p nebula --features gpui-test-support
+      - name: Test SSH confirmation and password dialogs
+        run: cargo test --locked -p nebula --features gpui-test-support dialog
       - name: Build GPUI comparison binary
         run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
       - name: Run Windows conformance
         env:
           NEBULA_RESIZE_TRACE: "1"
         run: >-
-          python scripts/conformance/run.py --app target/release/pebrel.exe
+          python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app target/release/pebrel.exe
           --platform windows-x86_64 --output dist/conformance/windows-report.json
       - name: Upload Windows conformance evidence
         if: always()

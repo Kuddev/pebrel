@@ -53,6 +53,13 @@ impl SettingsPane {
         let warning = theme.warning;
         let danger = theme.danger;
         let base_px = self.font_size_px(cx);
+        let cached_update = crate::update_download::cached_asset().filter(|asset| {
+            crate::update_check::is_newer(&asset.version, env!("CARGO_PKG_VERSION"))
+                || matches!(
+                    crate::update_download::status(asset),
+                    crate::update_download::DownloadStatus::InstallFailed(_)
+                )
+        });
         let checking = matches!(self.about_update, AboutUpdateState::Checking);
         let (status, status_color): (SharedString, Hsla) = match &self.about_update {
             AboutUpdateState::Idle => (language.pick("尚未检查", "Not checked yet").into(), muted),
@@ -140,7 +147,27 @@ impl SettingsPane {
                                 .child(status_badge),
                         ),
                 )
-                .child(div().flex_shrink_0().child(update_button));
+                .child(v_flex().gap_2().flex_shrink_0().child(update_button).when_some(
+                    cached_update,
+                    |actions, asset| {
+                        actions.child(
+                            Button::new("about-cached-update")
+                                .label(language.text(crate::i18n::Message::UpdateViewDetails))
+                                .on_click(move |_, window, cx| {
+                                    crate::gpui_shell::workspace::open_update_dialog(
+                                        crate::update_check::UpdateCheckResult {
+                                            current: env!("CARGO_PKG_VERSION").into(),
+                                            latest: asset.version.clone(),
+                                            update_available: true,
+                                            asset: Some(asset.clone()),
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                        )
+                    },
+                ));
 
         let auto_update_switch =
             crate::gpui_shell::widgets::NebulaSwitch::new("auto-check-updates")
@@ -159,6 +186,11 @@ impl SettingsPane {
                 },
             ))
             .child(auto_update_switch);
+        let predownload = crate::gpui_shell::widgets::NebulaSwitch::new("auto-download-updates")
+            .checked(self.runtime.auto_download_updates)
+            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                this.persist(&[("auto_download_updates", (*checked as u8).to_string())], cx);
+            }));
         let last_checked: SharedString = self
             .about_last_checked
             .clone()
@@ -179,6 +211,11 @@ impl SettingsPane {
             .child(Self::about_value_row(
                 language.pick("自动检查更新", "Automatically check for updates"),
                 auto_update,
+                cx,
+            ))
+            .child(Self::about_value_row(
+                language.text(crate::i18n::Message::UpdateAutoDownload),
+                predownload,
                 cx,
             ))
             .child(Self::about_value_row(
