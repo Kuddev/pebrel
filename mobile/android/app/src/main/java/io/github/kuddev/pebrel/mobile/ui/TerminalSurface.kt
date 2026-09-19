@@ -2,10 +2,12 @@ package io.github.kuddev.pebrel.mobile.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kuddev.pebrel.mobile.PebrelApplication
 import io.github.kuddev.pebrel.mobile.session.LocalSession
 import io.github.kuddev.pebrel.mobile.session.SessionRepository
@@ -14,7 +16,7 @@ import io.github.kuddev.pebrel.terminal.GhosttyView
 
 @Composable
 fun TerminalSurface(session: LocalSession, repository: SessionRepository, modifier: Modifier, direct: Boolean, fontSize: Int) {
-    val stored = repository.display.state.value
+    val stored by repository.display.state.collectAsStateWithLifecycle()
     TerminalSurface(
         session = session,
         repository = repository,
