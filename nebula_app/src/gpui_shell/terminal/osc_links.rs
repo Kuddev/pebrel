@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use gpui::{App, ClipboardItem};
+use gpui::{App, ClipboardItem, Window};
 use nebula_terminal::event::EventListener;
 use nebula_terminal::index::Point;
 use nebula_terminal::term::{Term, point_to_viewport_from};
@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthChar;
 use winit::keyboard::ModifiersState;
 
 use crate::config::UiConfig;
-use crate::config::ui_config::{HintAction, HintInternalAction};
+use crate::config::ui_config::{HintAction, HintInternalAction, default_hint_command};
 use crate::display::hint::{self, HintMatch};
 
 /// 悬停目标：旧壳 `highlighted_hint` + 已经解码好的预览文案。
@@ -87,10 +87,11 @@ pub(super) fn hover_from_hint<T: EventListener>(
     rows: usize,
     cols: usize,
 ) -> Option<LinkHover> {
-    let uri = hint
+    let raw = hint
         .hyperlink()
         .map(|link| link.uri().to_owned())
         .or_else(|| hint.text(term).map(|text| text.into_owned()))?;
+    let uri = crate::file_uri::extract_link_target(&raw);
     let origin = term.viewport_origin_for(rows);
     let start = *hint.bounds().start();
     let vp =
@@ -99,34 +100,121 @@ pub(super) fn hover_from_hint<T: EventListener>(
         vp.map(|vp| (vp.line as u16, vp.column.0 as u16)).unwrap_or((0, 0));
     const HINT: &str = " · Ctrl+点击";
     let width = |s: &str| -> usize { s.chars().map(|c| c.width().unwrap_or(0)).sum() };
-    let target = crate::display::strip_file_scheme(&uri);
+    let target = crate::display::strip_file_scheme(uri);
     let budget = cols.saturating_sub(width(HINT) + 1);
     let target = crate::display::fit_tail(&target, budget);
     Some(LinkHover { hint, preview: format!("{target}{HINT}"), anchor_row, anchor_col })
 }
 
-pub(super) fn open_hint<T: EventListener>(hint: &HintMatch, term: &Term<T>, cx: &App) {
-    let Some(text) = hint.text(term) else { return };
-    #[cfg(windows)]
-    if let Some(path) = crate::file_uri::file_uri_to_local_path(&text) {
-        let _ = crate::daemon::spawn_detached("explorer.exe", &[path.as_os_str()]);
-        return;
-    }
-    match hint.action() {
-        HintAction::Command(command) => {
-            let mut args = command.args().to_vec();
-            args.push(text.into_owned());
-            let _ = crate::daemon::spawn_detached(command.program(), &args);
-        },
+pub(super) fn open_hint_match(
+    hint: &HintMatch,
+    text: &str,
+    cwd: Option<&std::path::Path>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    dispatch_hint_action(hint.action(), hint.hyperlink().is_some(), text, cwd, window, cx);
+}
+
+fn dispatch_hint_action(
+    action: &HintAction,
+    hyperlink: bool,
+    text: &str,
+    cwd: Option<&std::path::Path>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    // Internal actions operate on the original match, without filesystem work.
+    let command = match action {
         HintAction::Action(HintInternalAction::Copy) => {
-            cx.write_to_clipboard(ClipboardItem::new_string(text.into_owned()));
+            cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
+            return;
         },
-        HintAction::Action(
-            HintInternalAction::Paste
-            | HintInternalAction::Select
-            | HintInternalAction::MoveViModeCursor,
-        ) => {
-            // 默认 hint 走 Command（打开 URI）。这三项仍由旧壳键盘 hint 使用。
-        },
+        HintAction::Action(_) => return,
+        HintAction::Command(command) => command.clone(),
+    };
+    let text = text.to_owned();
+    let cwd = cwd.map(std::path::Path::to_path_buf);
+    let language = crate::gpui_shell::config::ui_language(cx);
+    let task = cx.background_executor().spawn(async move {
+        let target = if command == default_hint_command() {
+            if let Some(result) =
+                crate::file_uri::try_open_local_link_with_cwd(&text, cwd.as_deref())
+            {
+                return result.map_err(|error| error.localized_message(language));
+            }
+            let target = crate::file_uri::extract_link_target(&text);
+            if !hyperlink && !crate::file_uri::is_web_or_protocol_uri(target) {
+                return Err(language
+                    .format(crate::i18n::Message::CommonLinkUnrecognized, &[("target", target)]));
+            }
+            target
+        } else {
+            &text
+        };
+        let mut args = command.args().to_vec();
+        args.push(target.to_owned());
+        crate::daemon::spawn_detached(command.program(), &args).map_err(|error| {
+            language.format(
+                crate::i18n::Message::CommonLinkOpenUrlFailed,
+                &[("error", &error.to_string())],
+            )
+        })
+    });
+    window
+        .spawn(cx, async move |cx| {
+            if let Err(message) = task.await {
+                let _ = cx.update(|window, cx| {
+                    crate::gpui_shell::toast::toast(
+                        window,
+                        cx,
+                        crate::display::ToastKind::Warning,
+                        message,
+                    );
+                });
+            }
+        })
+        .detach();
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::{Context, IntoElement, Render, TestAppContext};
+
+    struct Surface;
+    impl Render for Surface {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn copying_local_markdown_and_custom_matches_never_opens_them(cx: &mut TestAppContext) {
+        let (_, window) = cx.add_window_view(|_, _| Surface);
+        for text in [
+            "[notes](./missing notes.md)",
+            "file:///C:/missing-copy-test.md",
+            r"\\server\share\copy-only.md",
+            "custom match without a URL",
+            "[site](https://example.com)",
+        ] {
+            window.update(|window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+                dispatch_hint_action(
+                    &HintAction::Action(HintInternalAction::Copy),
+                    false,
+                    text,
+                    None,
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+                    Some(text)
+                );
+            });
+        }
+        cx.run_until_parked();
     }
 }

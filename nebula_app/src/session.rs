@@ -20,6 +20,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::display::color::Rgb;
 
+mod window_layout;
+pub use window_layout::WindowLayout;
+pub(crate) use window_layout::combine_sessions;
+
 /// Highest snapshot format this build understands.
 const VERSION: u32 = 4;
 
@@ -76,6 +80,22 @@ pub struct AgentSession {
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Native session file, interpreted only inside the owning pane environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_file: Option<String>,
+}
+
+/// Validate both Windows and guest absolute paths without consulting the host
+/// filesystem. Actual existence and native identity are checked in the owner.
+pub(crate) fn valid_native_session_file(path: &str) -> bool {
+    path.len() <= 4096
+        && path.ends_with(".jsonl")
+        && !path.chars().any(char::is_control)
+        && (path.starts_with('/')
+            || path.starts_with(r"\\")
+            || (path.as_bytes().get(1) == Some(&b':')
+                && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                && matches!(path.as_bytes().get(2), Some(b'/' | b'\\'))))
 }
 
 impl AgentSession {
@@ -85,6 +105,7 @@ impl AgentSession {
     pub fn resume_command(&self) -> Option<String> {
         let agent = crate::ai_agents::AgentKind::parse(&self.source)?;
         match self.session_id.as_deref() {
+            Some(id) if agent == crate::ai_agents::AgentKind::Pi && id.starts_with("pid-") => None,
             Some(id) => agent.resume_command(id),
             // claude 无 id（hook 未装、OSC 认出的启动）：`--continue` 恢复
             // 当前目录最近一次对话——pane 的 cwd 已经先被恢复，语义正好。
@@ -109,6 +130,9 @@ pub enum LayoutSession {
         /// 该 pane 前台的 AI CLI 对话，冷恢复据此自动接续。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<AgentSession>,
+        /// Frozen per-pane shell/WSL/SSH launch. Older snapshots use tab defaults.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        launch: Option<LaunchSession>,
     },
     Split {
         axis: SplitAxis,
@@ -207,6 +231,9 @@ pub struct Session {
     pub tabs: Vec<TabSession>,
     #[serde(default)]
     pub window: Option<WindowState>,
+    /// Optional window boundaries over `tabs`; older readers retain the flat list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub window_layout: Vec<WindowLayout>,
     /// 上一次退出有没有走完收尾。1 Hz 自动保存一律写 `false`，只有真正的
     /// 收尾路径（关窗、退出、detach 驻留）在最后一笔写 `true`——所以启动时
     /// 读到 `false` 就说明上次是崩溃、强杀或断电。
@@ -226,6 +253,7 @@ impl Session {
             active_tab,
             tabs,
             window: None,
+            window_layout: Vec::new(),
             clean_exit: false,
         }
     }
@@ -251,6 +279,21 @@ fn parse(data: &str) -> Option<Session> {
 /// Load the previous session, if any and version-compatible.
 pub fn load() -> Option<Session> {
     load_from(&session_path())
+}
+
+/// An update must not replace an unreadable workspace with an empty snapshot.
+pub(crate) fn load_update_windows() -> std::io::Result<Vec<Session>> {
+    let data = match std::fs::read_to_string(session_path()) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(vec![Session::new(0, Vec::new())]);
+        },
+        Err(error) => return Err(error),
+    };
+    let session = parse(&data).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid saved workspace")
+    })?;
+    session.into_update_windows()
 }
 
 /// Load a session/workspace file from an explicit path (workspace import).
@@ -417,8 +460,10 @@ mod tests {
             axis: SplitAxis::LeftRight,
             ratio_permille: 618,
             first: Box::new(LayoutSession::Pane {
+                launch: None,
                 cwd: "D:/work".into(),
                 agent: Some(AgentSession {
+                    session_file: None,
                     source: "claude".into(),
                     session_id: Some("0199a213-c2a4-7cf5-8f6b-d746fbb6e86c".into()),
                 }),
@@ -426,8 +471,16 @@ mod tests {
             second: Box::new(LayoutSession::Split {
                 axis: SplitAxis::TopBottom,
                 ratio_permille: 500,
-                first: Box::new(LayoutSession::Pane { cwd: "D:/logs".into(), agent: None }),
-                second: Box::new(LayoutSession::Pane { cwd: String::new(), agent: None }),
+                first: Box::new(LayoutSession::Pane {
+                    launch: None,
+                    cwd: "D:/logs".into(),
+                    agent: None,
+                }),
+                second: Box::new(LayoutSession::Pane {
+                    launch: None,
+                    cwd: String::new(),
+                    agent: None,
+                }),
             }),
         });
         tab.active_pane = 2;
@@ -447,12 +500,17 @@ mod tests {
         let session = parse(json).expect("v4 without agent must parse");
         assert_eq!(
             session.tabs[0].layout,
-            Some(LayoutSession::Pane { cwd: "D:/w".into(), agent: None })
+            Some(LayoutSession::Pane { launch: None, cwd: "D:/w".into(), agent: None })
         );
 
         let with_agent = LayoutSession::Pane {
+            launch: None,
             cwd: "D:/w".into(),
-            agent: Some(AgentSession { source: "codex".into(), session_id: Some("abc-1".into()) }),
+            agent: Some(AgentSession {
+                session_file: None,
+                source: "codex".into(),
+                session_id: Some("abc-1".into()),
+            }),
         };
         let json = serde_json::to_string(&with_agent).unwrap();
         assert_eq!(serde_json::from_str::<LayoutSession>(&json).unwrap(), with_agent);
@@ -463,6 +521,7 @@ mod tests {
     #[test]
     fn agent_resume_commands_are_exact_and_injection_safe() {
         let agent = |source: &str, id: Option<&str>| AgentSession {
+            session_file: None,
             source: source.into(),
             session_id: id.map(str::to_owned),
         };
@@ -495,12 +554,16 @@ mod tests {
         let tree = LayoutSession::Split {
             axis: SplitAxis::LeftRight,
             ratio_permille: 500,
-            first: Box::new(LayoutSession::Pane { cwd: "a".into(), agent: None }),
+            first: Box::new(LayoutSession::Pane { launch: None, cwd: "a".into(), agent: None }),
             second: Box::new(LayoutSession::Split {
                 axis: SplitAxis::TopBottom,
                 ratio_permille: 500,
-                first: Box::new(LayoutSession::Pane { cwd: "b".into(), agent: None }),
-                second: Box::new(LayoutSession::Pane { cwd: "c".into(), agent: None }),
+                first: Box::new(LayoutSession::Pane { launch: None, cwd: "b".into(), agent: None }),
+                second: Box::new(LayoutSession::Pane {
+                    launch: None,
+                    cwd: "c".into(),
+                    agent: None,
+                }),
             }),
         };
         let leaves = tree.leaves();
@@ -525,8 +588,10 @@ mod tests {
             .map(|id| {
                 let mut tab = TabSession::single("/home/user/project".into(), None, None);
                 tab.layout = Some(LayoutSession::Pane {
+                    launch: None,
                     cwd: "/home/user/project".into(),
                     agent: Some(AgentSession {
+                        session_file: None,
                         source: "codex".into(),
                         session_id: Some((*id).into()),
                     }),

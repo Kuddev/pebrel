@@ -317,32 +317,22 @@ impl NebulaWorkspace {
         let search_active = !self.side_panel.search.trim().is_empty();
         let search_pending = self.side_panel.file_search_pending();
         let search_error = self.side_panel.file_search_error().is_some();
-        let indexed_count = self.side_panel.file_indexed_count();
-        let indexed_more = if self.side_panel.file_index_truncated() { "+" } else { "" };
         let search_status = if search_active {
+            use crate::i18n::Message;
             Some(if search_error {
-                language.pick("正则表达式无效", "Invalid regular expression").to_owned()
-            } else if self.side_panel.file_index_status()
-                == crate::display::side_panel::FileIndexStatus::Building
-            {
-                language.pick("正在建立文件索引…", "Building file index...").to_owned()
+                language.text(Message::FilesSearchFailed).to_owned()
             } else if search_pending {
-                language.pick("正在搜索…", "Searching...").to_owned()
+                language.text(Message::FilesSearchRunning).to_owned()
+            } else if self.side_panel.file_index_truncated() {
+                language.format(
+                    Message::FilesSearchLimited,
+                    &[("count", &self.side_panel.file_rows().len().to_string())],
+                )
             } else {
-                match language {
-                    crate::display::UiLanguage::ZhCn => format!(
-                        "{} 个结果 · 已索引 {}{} 项",
-                        self.side_panel.file_search_total(),
-                        indexed_count,
-                        indexed_more
-                    ),
-                    _ => format!(
-                        "{} results · {}{} indexed",
-                        self.side_panel.file_search_total(),
-                        indexed_count,
-                        indexed_more
-                    ),
-                }
+                language.format(
+                    Message::FilesSearchCount,
+                    &[("count", &self.side_panel.file_search_total().to_string())],
+                )
             })
         } else {
             None
@@ -625,26 +615,35 @@ impl NebulaWorkspace {
             return None;
         }
         if !self.side_panel.search.trim().is_empty() {
+            use crate::i18n::Message;
+            let language = super::workspace_ui_language();
             return Some(if let Some(error) = self.side_panel.file_search_error() {
                 crate::ux::EmptyState::new(
-                    "正则表达式无效",
+                    language.text(Message::FilesSearchFailed),
                     error.to_owned(),
-                    "修改表达式，或关闭右侧的 .* 选项。",
+                    language.text(Message::FilesSearchRetry),
                 )
             } else if self.side_panel.file_search_pending() {
                 crate::ux::EmptyState::new(
-                    "正在建立索引",
-                    "文件名索引正在后台准备，界面仍可继续使用。",
-                    "索引完成后会自动显示当前查询的结果。",
+                    language.text(Message::FilesSearchRunning),
+                    language.text(Message::FilesSearchProgress),
+                    language.text(Message::FilesSearchContinue),
+                )
+            } else if self.side_panel.file_index_truncated() {
+                crate::ux::EmptyState::new(
+                    language.text(Message::FilesSearchIncomplete),
+                    language.text(Message::FilesSearchLimitReason),
+                    language.text(Message::FilesSearchNarrow),
                 )
             } else {
                 crate::ux::EmptyState::new(
-                    "没有匹配的文件",
-                    "当前目录的索引中没有符合条件的文件或文件夹。",
-                    "修改查询，或关闭大小写、全词、正则选项后重试。",
+                    language.text(Message::FilesSearchEmpty),
+                    language.text(Message::FilesSearchEmptyReason),
+                    language.text(Message::FilesSearchRetry),
                 )
             });
         }
+
         Some(if self.side_panel.snapshot_pending() {
             crate::ux::EmptyState::new(
                 "正在读取目录",

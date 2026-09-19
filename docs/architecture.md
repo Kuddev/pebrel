@@ -88,7 +88,8 @@ whole product.
   direction, cost, ownership and why an existing module is insufficient.
 
 See [CONTRIBUTING](../CONTRIBUTING.md), [enforced contracts](project-constraints.md),
-and [decision records](architecture-decisions.md). Architectural review evaluates
+the [causal note policy](../architecture/notes/AGENTS.md), and the
+[legacy decision archive](architecture-decisions.md). Architectural review evaluates
 cohesion and knowledge shared across boundaries; CI provides narrower mechanical
 checks, not a guarantee against every future design mistake.
 

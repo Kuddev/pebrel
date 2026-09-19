@@ -202,6 +202,9 @@ pub enum SuggestEnv {
     /// SSH tab：文件系统只能经 SFTP 往返，命令集是远端的。`destination` 进
     /// 缓存键——同一条 `/home/kud` 在两台远端上是两个不同的目录。
     Ssh { destination: String },
+    /// A shell reached through a typed command. History has its own route;
+    /// there is no verified local WSL/SFTP channel for filesystem queries.
+    Shell { scope: crate::nebula_history::HistoryScope },
 }
 
 impl SuggestEnv {
@@ -210,13 +213,25 @@ impl SuggestEnv {
         matches!(self, Self::Local)
     }
 
+    pub(crate) fn can_query_remote_paths(&self) -> bool {
+        matches!(self, Self::Ssh { .. })
+            || matches!(self, Self::Wsl { distro } if !distro.is_empty())
+    }
+
     pub(crate) fn history_scope(&self) -> crate::nebula_history::HistoryScope {
         match self {
             Self::Local => crate::nebula_history::HistoryScope::Local,
-            Self::Wsl { distro } => crate::nebula_history::HistoryScope::Wsl(distro.clone()),
+            Self::Wsl { distro } => {
+                crate::nebula_history::HistoryScope::Wsl(if distro.is_empty() {
+                    "<default>".to_owned()
+                } else {
+                    distro.clone()
+                })
+            },
             Self::Ssh { destination } => {
                 crate::nebula_history::HistoryScope::Ssh(destination.clone())
             },
+            Self::Shell { scope } => scope.clone(),
         }
     }
 }
@@ -245,7 +260,10 @@ pub(crate) fn suggest_update(
     // 远端目录是异步拉回来的，那一刻 cwd 与行都没变——少了这个代际，拉到的
     // 条目要等用户再多打一个字符才会显形。
     let remote_generation = crate::remote_dirs::generation();
-    let key = format!("{}\u{0}{line}\u{0}{command_generation}\u{0}{remote_generation}", state.cwd);
+    let key = format!(
+        "{:?}\0{}\0{line}\0{command_generation}\0{remote_generation}",
+        state.suggest_env, state.cwd
+    );
     if state.completion_suppressed_line.as_deref() == Some(line.as_str()) {
         state.suggestion_key = key;
         state.suggestion.clear();
@@ -422,6 +440,9 @@ fn remote_path_matches(
     line: &str,
     token: &str,
 ) -> Vec<(String, bool)> {
+    if !state.suggest_env.can_query_remote_paths() {
+        return Vec::new();
+    }
     if nebula_is_command_position(line) && !token.contains('/') {
         return Vec::new();
     }
@@ -621,6 +642,77 @@ mod tests {
     use super::*;
     use crate::directory_history::DirectoryHistory;
     use crate::nebula_history::NebulaHistory;
+
+    #[test]
+    fn changing_environment_invalidates_an_identical_input_cache() {
+        let fixture = Fixture::new();
+        let mut state = NebulaPaneState::default();
+        suggest_update(
+            &fixture.sources(CompletionStyle::Inline),
+            &mut state,
+            Some("notepad".into()),
+        );
+        assert_eq!(state.suggestion, ".exe");
+        state.suggest_env = SuggestEnv::Ssh { destination: "cache-test".into() };
+        suggest_update(
+            &fixture.sources(CompletionStyle::Inline),
+            &mut state,
+            Some("notepad".into()),
+        );
+        assert!(state.suggestion.is_empty());
+    }
+
+    #[test]
+    fn late_outer_directory_results_cannot_complete_an_inner_shell() {
+        let fixture = Fixture::new();
+        let outer = SuggestEnv::Ssh { destination: "late-directory-test".into() };
+        let mut state = NebulaPaneState {
+            suggest_env: outer.clone(),
+            cwd: "/scope-test".into(),
+            ..Default::default()
+        };
+        state.completion_shell_report(crate::completion_context::SHELL_VAR, "outer");
+        suggest_update(
+            &fixture.sources(CompletionStyle::Inline),
+            &mut state,
+            Some("cat ./outer-".into()),
+        );
+        let dir = state.pending_remote_dir.clone().expect("missing outer directory");
+        assert!(crate::remote_dirs::begin_fetch(&outer, &dir));
+        state.completion_submitted("ssh inner");
+        state.completion_shell_report(crate::completion_context::SHELL_VAR, "inner");
+        crate::remote_dirs::finish_fetch(
+            &outer,
+            &dir,
+            Some(vec![crate::remote_dirs::RemoteEntry {
+                name: "outer-only-file".into(),
+                is_dir: false,
+            }]),
+        );
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup] {
+            suggest_update(&fixture.sources(style), &mut state, Some("cat ./outer-".into()));
+            assert!(state.suggestion.is_empty());
+            assert!(state.completion_items.is_empty());
+            assert!(state.pending_remote_dir.is_none());
+        }
+        state.completion_shell_report(crate::completion_context::SHELL_VAR, "outer");
+        suggest_update(
+            &fixture.sources(CompletionStyle::Inline),
+            &mut state,
+            Some("cat ./outer-".into()),
+        );
+        assert_eq!(state.suggestion, "only-file");
+    }
+
+    #[test]
+    fn unnamed_wsl_keeps_guest_commands_and_never_queries_the_host_filesystem() {
+        let fixture = Fixture::new();
+        let env = SuggestEnv::Wsl { distro: String::new() };
+        assert!(fixture.ghost(env.clone(), "", "notepad").is_empty());
+        assert!(!fixture.ghost(env.clone(), "", "gre").is_empty());
+        assert!(!crate::remote_dirs::begin_fetch(&env, "/"));
+        assert_ne!(env.history_scope(), crate::nebula_history::HistoryScope::Local);
+    }
 
     struct Fixture {
         history: NebulaHistory,

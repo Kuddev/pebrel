@@ -17,8 +17,19 @@ use std::collections::HashMap;
 
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
+mod custom_theme;
+pub use custom_theme::{
+    IndexedPalette, TerminalThemeColors, ThemeAppearance, ThemeDefinition, ThemeEffects,
+    ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, foreground_recommendations,
+    meets_wcag_aa, wcag_contrast_ratio,
+};
 mod language;
 mod quick_terminal;
+mod scrolling;
+pub use scrolling::{
+    DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
+    SCROLL_SPEED_STEP, SCROLLBACK_VALUES, normalize_scroll_speed,
+};
 mod themes;
 pub use language::{LanguageInfo, LanguagePref};
 pub use quick_terminal::{QuickTerminalMode, QuickTerminalSize};
@@ -180,6 +191,8 @@ pub fn apply_updates(text: &str, updates: &[(&str, String)]) -> String {
 }
 
 pub type Rgb8 = [u8; 3];
+/// RGBA color used where the reviewed UI palette carries an explicit alpha.
+pub type Rgba8 = [u8; 4];
 
 /// 主题标识；`nebula_settings.txt` 里 `theme=` 持久化 [`Self::prompt_name`]。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -934,6 +947,7 @@ impl ProxyModeName {
 /// 新 UI 消费的运行时设置。字段与出厂默认逐项对照旧壳
 /// `nebula_settings_load`；`Option` 字段的 `None` = 键未设置，调用方自选
 /// 回退（如 font_family 回落 nebula.toml）。
+#[derive(Clone)]
 pub struct RuntimeSettings {
     pub language: LanguagePref,
     pub theme: ThemeName,
@@ -941,12 +955,23 @@ pub struct RuntimeSettings {
     /// 系统外观变化时自动在主题家族的深浅成员间切换（默认关，尊重显式选择）。
     pub follow_system_theme: bool,
     pub font_family: Option<String>,
+    pub font_family_cjk: Option<String>,
+    pub ui_font_family: Option<String>,
+    pub ui_font_size_px: Option<f32>,
     /// **逻辑像素**（旧壳写盘语义：设置页 spinner 与 Ctrl+滚轮缩放持久化时
     /// 已除以 scale factor）。`None` = 跟随 nebula.toml 的 `font.size`（pt）。
     pub font_size_px: Option<f32>,
     pub cursor_shape: Option<CursorShapeName>,
     pub cursor_blink: Option<bool>,
     pub copy_on_select: bool,
+    /// Maximum retained history for new terminals, without altering open sessions.
+    pub scrollback_lines: usize,
+    /// Wheel multiplier; pixel-precise trackpad input is independent.
+    pub scroll_speed: f32,
+    /// GUI override for mouse.focus_follows_mouse in TOML; absent there too means false.
+    pub focus_follows_mouse: Option<bool>,
+    /// Preserve the existing dimming of inactive split panes unless explicitly disabled.
+    pub dim_inactive_panes: bool,
     /// 裸 shell 风险粘贴确认：开 = 换行、提权命令或控制字符先确认；关 = 直接粘贴。
     pub multiline_paste_confirm: bool,
     /// 标签页关闭按钮（叉号）是否渲染：关 = 不渲染，仍可用中键关闭。
@@ -983,15 +1008,31 @@ pub struct RuntimeSettings {
     /// Check GitHub Releases after startup. Manual checks remain available
     /// from the Application settings page when this is disabled.
     pub auto_check_updates: bool,
+    /// Optional background package download; never grants install permission.
+    pub auto_download_updates: bool,
     pub keep_session: bool,
+    /// Start the first window hidden when a system tray is available and enabled.
+    pub silent_start: bool,
     pub restore_session: bool,
     pub resume_ai: bool,
     /// 常驻系统托盘图标。
     pub tray: bool,
     pub blur: BlurModeName,
     pub opacity: f32,
+    /// Whether the corresponding material value was explicitly present in
+    /// `nebula_settings.txt`. Theme defaults may fill an absent value, while
+    /// an explicit user value (including `none` or `1.0`) remains authoritative.
+    opacity_explicit: bool,
+    blur_explicit: bool,
     /// 终端背景覆盖色（设置页取色器写入，优先于主题背景）。
     pub background: Option<Rgb8>,
+    /// 终端主题默认文字色覆盖。与 `background` 分开持久化，切换主题时
+    /// 可由调用方清除以恢复主题内置前景色。
+    pub theme_foreground: Option<Rgb8>,
+    /// Serialized custom theme identifier or payload. The settings layer only
+    /// preserves this value; file loading and format decoding belong to the
+    /// application adapter.
+    pub custom_theme: Option<String>,
     /// 壁纸路径（空 = 无壁纸）。fit/alignment 存原文，解析归渲染层
     /// （旧壳 `renderer::image` 的 parse 是权威记号表）。
     pub background_image: Option<String>,
@@ -1066,8 +1107,10 @@ impl RuntimeSettings {
 
     pub fn from_raw(raw: &RawSettings) -> Self {
         let blur = raw.value("blur").and_then(BlurModeName::from_settings).unwrap_or_default();
+        let blur_explicit = raw.value("blur").and_then(BlurModeName::from_settings).is_some();
         // Theme colors are opaque by default. Material selection never lowers opacity.
         let opacity = raw.f32("opacity").unwrap_or(1.0).clamp(0.0, 1.0);
+        let opacity_explicit = raw.f32("opacity").is_some();
 
         Self {
             language: raw
@@ -1081,10 +1124,19 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             follow_system_theme: raw.bool_on("follow_system_theme").unwrap_or(false),
             font_family: raw.value("font_family").map(str::to_owned),
+            font_family_cjk: raw.value("font_family_cjk").map(str::to_owned),
+            ui_font_family: raw.value("ui_font_family").map(str::to_owned),
+            ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
             cursor_shape: raw.value("cursor_shape").and_then(CursorShapeName::from_settings),
             cursor_blink: raw.bool_on("cursor_blink"),
             copy_on_select: raw.bool_on("copy_on_select").unwrap_or(false),
+            scrollback_lines: scrolling::scrollback_lines(raw),
+            scroll_speed: normalize_scroll_speed(
+                raw.f32("scroll_speed").unwrap_or(DEFAULT_SCROLL_SPEED),
+            ),
+            focus_follows_mouse: raw.bool_on("focus_follows_mouse"),
+            dim_inactive_panes: raw.bool_on("dim_inactive_panes").unwrap_or(true),
             multiline_paste_confirm: raw.bool_on("multiline_paste_confirm").unwrap_or(true),
             tab_close_visible: raw.bool_on("tab_close_visible").unwrap_or(true),
             terminal_proxy: raw.bool_on("terminal_proxy").unwrap_or(false),
@@ -1127,13 +1179,19 @@ impl RuntimeSettings {
             ai_toasts: raw.bool_on("ai_toasts").unwrap_or(true),
             fetch: raw.bool_on("fetch").unwrap_or(false),
             auto_check_updates: raw.bool_on("auto_check_updates").unwrap_or(true),
+            auto_download_updates: raw.bool_on("auto_download_updates").unwrap_or(false),
             keep_session: raw.bool_on("keep_session").unwrap_or(false),
+            silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
             opacity,
+            opacity_explicit,
+            blur_explicit,
             background: raw.value("background").and_then(parse_hex_rgb),
+            theme_foreground: raw.value("theme_foreground").and_then(parse_hex_rgb),
+            custom_theme: raw.value("custom_theme").map(str::to_owned),
             background_image: raw
                 .value("background_image")
                 .map(str::trim)
@@ -1188,14 +1246,32 @@ impl RuntimeSettings {
                 .map(|d| d.clamp(0.0, MAX_PANE_CARD_DIVIDER)),
         }
     }
+
+    /// True when the user supplied a valid opacity value, including the
+    /// explicit default `1.0`.
+    pub fn opacity_is_explicit(&self) -> bool {
+        self.opacity_explicit
+    }
+
+    /// True when the user supplied a valid blur/material value, including the
+    /// explicit `none` choice.
+    pub fn blur_is_explicit(&self) -> bool {
+        self.blur_explicit
+    }
 }
 
-/// 解析 `#rrggbb`（旧壳 `parse_hex_rgb` 同款：# 前缀可省）。
+/// 解析 `#rgb` 或 `#rrggbb`；# 前缀可省，写盘统一使用六位形式。
 pub fn parse_hex_rgb(value: &str) -> Option<Rgb8> {
     let hex = value.trim();
     let hex = hex.strip_prefix('#').unwrap_or(hex);
-    if hex.len() != 6 || !hex.is_ascii() {
+    if !matches!(hex.len(), 3 | 6) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
+    }
+    if hex.len() == 3 {
+        let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+        let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+        let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+        return Some([r, g, b]);
     }
     let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
@@ -1210,6 +1286,33 @@ pub fn format_hex_rgb(rgb: Rgb8) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pane_preferences_round_trip_and_allow_a_missing_mouse_override() {
+        let defaults = RuntimeSettings::from_raw(&RawSettings::default());
+        assert_eq!(defaults.focus_follows_mouse, None);
+        assert!(defaults.dim_inactive_panes);
+        let mut text = "theme=Nord\nfuture_option=keep\n".to_owned();
+        for (focus, dim) in [(true, false), (false, true)] {
+            text = apply_updates(
+                &text,
+                &[
+                    ("focus_follows_mouse", (focus as u8).to_string()),
+                    ("dim_inactive_panes", (dim as u8).to_string()),
+                ],
+            );
+            let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&text));
+            assert_eq!(settings.focus_follows_mouse, Some(focus));
+            assert_eq!(settings.dim_inactive_panes, dim);
+            assert_eq!(settings.theme, ThemeName::Nord);
+            assert!(text.contains("future_option=keep"));
+        }
+        text = apply_updates(&text, &[("focus_follows_mouse", String::new())]);
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_text(&text)).focus_follows_mouse,
+            None
+        );
+    }
+
     #[test]
     fn empty_quick_terminal_hotkey_is_distinct_from_an_unset_preference() {
         let unset = RuntimeSettings::from_raw(&RawSettings::from_text("theme=Nord\n"));
@@ -1305,6 +1408,9 @@ mod tests {
              completion_style=popup\n\
              shell=pwsh\n\
              font_family=Maple Mono Normal NF CN\n\
+             ui_font_family=Arial\n\
+             ui_font_size=18\n\
+             font_family_cjk=PingFang SC\n\
              font_size=16.3\n\
              cursor_shape=beam\n\
              cursor_blink=1\n\
@@ -1322,12 +1428,15 @@ mod tests {
              fetch=1\n\
              powerline=0\n\
              keep_session=1\n\
+             silent_start=1\n\
              restore_session=0\n\
              resume_ai=0\n\
              tray=0\n\
              blur=0\n\
              opacity=0.87\n\
              background=#101216\n\
+             theme_foreground=#d6dae6\n\
+             custom_theme=my-night\n\
              panel_resize=1\n\
              sidebar_w=222\n\
              ssh_proxy_mode=custom\n\
@@ -1339,6 +1448,9 @@ mod tests {
         assert_eq!(settings.language, LanguagePref::ZhCn);
         assert_eq!(settings.theme, ThemeName::SilverLight);
         assert_eq!(settings.font_family.as_deref(), Some("Maple Mono Normal NF CN"));
+        assert_eq!(settings.font_family_cjk.as_deref(), Some("PingFang SC"));
+        assert_eq!(settings.ui_font_family.as_deref(), Some("Arial"));
+        assert_eq!(settings.ui_font_size_px, Some(18.0));
         // font_size 键存的是逻辑像素（旧壳写盘语义），不做 pt 换算。
         assert_eq!(settings.font_size_px, Some(16.3));
         assert_eq!(settings.cursor_shape, Some(CursorShapeName::Beam));
@@ -1359,12 +1471,15 @@ mod tests {
         assert_eq!(settings.cell_width_mode, CellWidthModeName::Relaxed);
         assert!(settings.fetch);
         assert!(settings.keep_session);
+        assert!(settings.silent_start);
         assert!(!settings.restore_session);
         assert!(!settings.resume_ai);
         assert!(!settings.tray);
         assert_eq!(settings.blur, BlurModeName::None);
         assert!((settings.opacity - 0.87).abs() < 1e-6);
         assert_eq!(settings.background, Some([0x10, 0x12, 0x16]));
+        assert_eq!(settings.theme_foreground, Some([0xd6, 0xda, 0xe6]));
+        assert_eq!(settings.custom_theme.as_deref(), Some("my-night"));
         assert!(settings.panel_resize);
         assert_eq!(settings.sidebar_width, 222.0);
         assert_eq!(settings.ssh_proxy_mode, ProxyModeName::Custom);
@@ -1381,6 +1496,9 @@ mod tests {
         assert_eq!(settings.language, LanguagePref::System);
         assert_eq!(settings.theme, ThemeName::Nord);
         assert_eq!(settings.font_family, None);
+        assert_eq!(settings.font_family_cjk, None);
+        assert_eq!(settings.ui_font_family, None);
+        assert_eq!(settings.ui_font_size_px, None);
         assert!(!settings.copy_on_select);
         assert!(settings.multiline_paste_confirm, "多行粘贴确认默认开（上游兼容）");
         assert!(settings.tab_close_visible, "标签关闭按钮默认可见（上游兼容）");
@@ -1399,12 +1517,15 @@ mod tests {
         assert!(!settings.fetch);
         assert!(settings.auto_check_updates);
         assert!(!settings.keep_session);
+        assert!(!settings.silent_start);
         assert!(settings.restore_session);
         assert!(settings.resume_ai);
         assert!(settings.tray);
         assert_eq!(settings.blur, BlurModeName::None);
         assert_eq!(settings.opacity, 1.0);
         assert_eq!(settings.background, None);
+        assert_eq!(settings.theme_foreground, None);
+        assert_eq!(settings.custom_theme, None);
         assert!(!settings.panel_resize);
         assert_eq!(settings.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
         assert_eq!(settings.ssh_proxy_mode, ProxyModeName::Off);
@@ -1587,6 +1708,18 @@ mod tests {
         assert_eq!(parse_hex_rgb("8bd5ca"), Some([0x8b, 0xd5, 0xca]));
         assert_eq!(parse_hex_rgb("#nothex"), None);
         assert_eq!(format_hex_rgb([0x8b, 0xd5, 0xca]), "#8bd5ca");
+    }
+
+    #[test]
+    fn shorthand_rgb_expands_and_rejects_non_hex_or_alpha_input() {
+        for value in ["#123", "123", "  #123  "] {
+            assert_eq!(parse_hex_rgb(value), Some([0x11, 0x22, 0x33]), "{value:?}");
+        }
+        assert_eq!(parse_hex_rgb("#aBc"), Some([0xaa, 0xbb, 0xcc]));
+        assert_eq!(format_hex_rgb(parse_hex_rgb("#aBc").unwrap()), "#aabbcc");
+        for value in ["", "#", "#12", "#1234", "#12345", "#12345678", "#12g", "+1b2c3", "中文"] {
+            assert_eq!(parse_hex_rgb(value), None, "{value:?}");
+        }
     }
 
     #[test]

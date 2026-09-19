@@ -1,4 +1,4 @@
-//! Workspace 快捷键动作实现（从 `workspace.rs` 拆出以守行数预算）。
+//! Workspace keyboard actions and their tab/focus transitions.
 
 use gpui::{Context, Window};
 
@@ -15,12 +15,43 @@ pub(super) fn move_target(active: usize, len: usize, right: bool) -> Option<usiz
 }
 
 impl NebulaWorkspace {
+    pub(super) fn select_tab(
+        &mut self,
+        action: &super::keyboard_bindings::SelectTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Validate before activate_tab, which also leaves Settings. Missing
+        // numbered tabs must not change the active page or its focus.
+        let top = self.tabs_position == nebula_settings::TabsPositionName::Top;
+        let count = if top { self.top_tab_count() } else { self.tabs.len() };
+        let Some(index) = action.index_for(count) else { return };
+        if top {
+            self.activate_top_tab(index, window, cx);
+        } else {
+            self.activate_tab(index, window, cx);
+        }
+        // Selecting the current tab still returns focus from a side panel.
+        self.focus_active(window, cx);
+    }
+
     pub(super) fn select_adjacent_tab(
         &mut self,
         next: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.tabs_position == nebula_settings::TabsPositionName::Top {
+            let len = self.top_tab_count();
+            if len == 0 {
+                return;
+            }
+            let current = if self.settings_open { self.tabs.len() } else { self.active };
+            let next = if next { (current + 1) % len } else { (current + len - 1) % len };
+            self.activate_top_tab(next, window, cx);
+            self.focus_active(window, cx);
+            return;
+        }
         let len = self.tabs.len();
         if len == 0 {
             return;
@@ -44,6 +75,9 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_open {
+            return;
+        }
         let Some(to) = move_target(self.active, self.tabs.len(), right) else { return };
         let from = self.active;
         self.move_tab(from, to, window, cx);

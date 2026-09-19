@@ -246,7 +246,7 @@ pub(crate) fn spawn(
     }
 }
 
-fn execute(
+pub(crate) fn execute(
     context: PaneExecContext,
     cwd: String,
     argv: Vec<String>,
@@ -364,7 +364,21 @@ fn configure_process_group(command: &mut Command) {
     command.process_group(0);
 }
 
-#[cfg(not(unix))]
+/// Windows：`pane.exec` 的子进程绝不允许弹出控制台窗口。
+///
+/// Pebrel 自己是 `windows_subsystem = "windows"` 的 GUI 进程（见 `main.rs`），
+/// **没有控制台**可给子进程继承；不抑制的话 Windows 会给每条 exec 命令分配一个
+/// 新控制台，而默认终端应用是 Windows Terminal 的机器上那就是**弹一整扇窗口**
+/// （同 [`crate::ssh_session`] 里 `ssh.exe -G` 那条注释说的现象）。
+///
+/// exec 的 stdin 是 null、stdout/stderr 走管道，从头到尾没有交互，也就不需要
+/// 控制台——和 wsl/git 那些 spawn 用 `CREATE_NO_WINDOW` 是同一条规矩。
+#[cfg(windows)]
+fn configure_process_group(command: &mut Command) {
+    crate::platform::process::hidden_command(command);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn configure_process_group(_: &mut Command) {}
 
 struct ProcessGroup {

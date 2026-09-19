@@ -125,7 +125,6 @@ pub(crate) fn nebula_input_from_raw_grid<T: EventListener>(
     nebula_prompt_line_from_raw_grid(terminal, cursor, typed_tail, env).map(|line| line.input)
 }
 
-#[cfg(windows)]
 pub(crate) fn nebula_prompt_line_from_raw_grid<T: EventListener>(
     terminal: &Term<T>,
     cursor: Point,
@@ -134,6 +133,24 @@ pub(crate) fn nebula_prompt_line_from_raw_grid<T: EventListener>(
 ) -> Option<PromptLineSnapshot> {
     let text = raw_grid_logical_line(terminal, cursor)?;
     prompt_line_snapshot(&text, typed_tail, env, terminal.nebula_prompt_active())
+}
+
+/// Cold startup has no typed input mirror yet. Readiness is distinct from
+/// reconciling user keystrokes, which must continue to reject an empty mirror.
+pub(crate) fn nebula_shell_ready_from_raw_grid<T: EventListener>(
+    terminal: &Term<T>,
+    env: &SuggestEnv,
+) -> bool {
+    let Some(text) = raw_grid_logical_line(terminal, terminal.grid().cursor.point) else {
+        return false;
+    };
+    if let Some(line) = prompt_line_snapshot(&text, "", env, terminal.nebula_prompt_active()) {
+        return line.input.trim().is_empty();
+    }
+    let prompt = text.trim_end();
+    let Some(marker) = prompt.chars().next_back() else { return false };
+    safe_shell_prompt_marker(prompt, marker, env)
+        && (terminal.nebula_prompt_active() || likely_prompt(prompt, marker, env))
 }
 
 pub(crate) fn nebula_shell_prompt_restored_from_raw_grid<T: EventListener>(
@@ -232,7 +249,7 @@ fn shell_prompt_restored(expected_prompt: &str, current_line: &str, env: &Sugges
         return true;
     }
 
-    matches!(env, SuggestEnv::Wsl { .. } | SuggestEnv::Ssh { .. })
+    !env.is_this_machine()
         && remote_prompt_anchor(expected, marker)
             .zip(remote_prompt_anchor(current, marker))
             .is_some_and(|(expected, current)| expected == current)
@@ -290,7 +307,7 @@ fn likely_prompt(prompt: &str, marker: char, env: &SuggestEnv) -> bool {
                 || head.get(1..2) == Some(":")
                 || head.starts_with("PS ")
         },
-        SuggestEnv::Wsl { .. } | SuggestEnv::Ssh { .. } => {
+        SuggestEnv::Wsl { .. } | SuggestEnv::Ssh { .. } | SuggestEnv::Shell { .. } => {
             head.contains(['@', ':', '/', '~', ']', ')'])
         },
     }
@@ -322,6 +339,27 @@ mod tests {
         assert!(raw_grid_line_is_readable(Line(29), topmost, bottommost));
         assert!(!raw_grid_line_is_readable(Line(-1500), topmost, bottommost));
         assert!(!raw_grid_line_is_readable(Line(30), topmost, bottommost));
+    }
+
+    #[test]
+    fn shell_text_after_cursor_yields_completion_until_accepted() {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::grid::Grid;
+
+        let size = Grid::<Cell>::new(2, 80, 0);
+        let mut terminal = Term::new(Default::default(), &size, VoidListener);
+        for (column, c) in "❯ echo native_hint".chars().enumerate() {
+            terminal.grid_mut()[Line(0)][Column(column)].c = c;
+        }
+        // The shell owns the visible suffix, so Pebrel must not overlay it or
+        // treat it as an already accepted command. Color is user-configurable.
+        let cursor = Point::new(Line(0), Column(7));
+        assert_eq!(raw_grid_logical_line(&terminal, cursor), None);
+        let accepted = Point::new(Line(0), Column(18));
+        assert_eq!(
+            raw_grid_logical_line(&terminal, accepted).as_deref(),
+            Some("❯ echo native_hint")
+        );
     }
 
     #[test]
@@ -408,9 +446,15 @@ mod tests {
 
     #[test]
     fn remote_prompt_restore_allows_only_same_host_dynamic_cwd() {
-        let env = SuggestEnv::Wsl { distro: "Ubuntu".to_owned() };
-        assert!(shell_prompt_restored("dev@box:~$", "dev@box:/work$ ", &env));
-        assert!(!shell_prompt_restored("dev@box:~$", "dev@other:/work$ ", &env));
-        assert!(!shell_prompt_restored("dev@box:~$", "build:/work$ ", &env));
+        for env in [
+            SuggestEnv::Wsl { distro: "Ubuntu".to_owned() },
+            SuggestEnv::Shell {
+                scope: crate::nebula_history::HistoryScope::Ssh("typed:test".into()),
+            },
+        ] {
+            assert!(shell_prompt_restored("dev@box:~$", "dev@box:/work$ ", &env));
+            assert!(!shell_prompt_restored("dev@box:~$", "dev@other:/work$ ", &env));
+            assert!(!shell_prompt_restored("dev@box:~$", "build:/work$ ", &env));
+        }
     }
 }

@@ -38,15 +38,10 @@ try {
     }
 
     $scriptBody = Get-Content -LiteralPath $packageScript -Raw -Encoding UTF8
-    if ($scriptBody -notmatch '--features gpui-shell') {
-        throw 'Release packaging must rebuild Pebrel with --features gpui-shell so the zip ships the GPUI shell.'
+    if ($scriptBody -notmatch 'build-windows-product.ps1') {
+        throw 'Release packaging must use the shared explicit product build.'
     }
-    if ($scriptBody -notmatch '--bin pebrel') {
-        throw 'Release packaging must build the Pebrel product executable.'
-    }
-    if ($scriptBody -notmatch '--exclude nebula') {
-        throw 'Release packaging must exclude nebula from the workspace build so the default-feature binary cannot overwrite the GPUI shell.'
-    }
+    & (Join-Path $PSScriptRoot 'build-windows-product.tests.ps1')
 
     if ($scriptBody -notmatch 'Assert-FreshBinaries') {
         throw 'Release packaging must refuse stale binaries (freshness guard missing).'

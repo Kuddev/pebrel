@@ -34,10 +34,14 @@ use crate::config::selection::Selection;
 use crate::config::terminal::Terminal;
 use crate::config::window::WindowConfig;
 
-/// Regex used for the default URL hint.
+/// Regex used for default terminal hints (Markdown links, URLs, and local paths).
 #[rustfmt::skip]
-const URL_REGEX: &str = "(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)\
-                         [^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`\\\\]+";
+pub const DEFAULT_HINT_REGEX: &str = "(?:\
+    \\[[^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n\\]]+\\]\\((?:[^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n()]|\\([^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n()]*\\))+\\)|\
+    (ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`\\\\]+|\
+    (?:(?-u:\\b)[a-z]:[/\\\\]|\\\\\\\\)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`*?:，。；：！？、]+|\
+    ~[/\\\\][^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`*?:，。；：！？、]+(?:[/\\\\][^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`*?:，。；：！？、]+)*\
+)";
 
 #[derive(ConfigDeserialize, Serialize, Default, Clone, Debug, PartialEq)]
 pub struct UiConfig {
@@ -275,20 +279,12 @@ pub struct Hints {
 
 impl Default for Hints {
     fn default() -> Self {
-        // Add URL hint by default when no other hint is present.
-        let pattern = LazyRegexVariant::Pattern(String::from(URL_REGEX));
+        // Add default hints (Markdown links, URLs, and local paths) when no other hint is present.
+        let pattern = LazyRegexVariant::Pattern(String::from(DEFAULT_HINT_REGEX));
         let regex = LazyRegex(Arc::new(Mutex::new(pattern)));
         let content = HintContent::new(Some(regex), true);
 
-        #[cfg(not(any(target_os = "macos", windows)))]
-        let action = HintAction::Command(Program::Just(String::from("xdg-open")));
-        #[cfg(target_os = "macos")]
-        let action = HintAction::Command(Program::Just(String::from("open")));
-        #[cfg(windows)]
-        let action = HintAction::Command(Program::WithArgs {
-            program: String::from("cmd"),
-            args: vec!["/c".to_string(), "start".to_string(), "".to_string()],
-        });
+        let action = HintAction::Command(default_hint_command());
 
         Self {
             enabled: vec![Arc::new(Hint {
@@ -317,6 +313,20 @@ impl Hints {
     pub fn alphabet(&self) -> &str {
         &self.alphabet.0
     }
+}
+
+/// The system opener used by the default link hint. Custom commands keep their
+/// original matched argument and must not be redirected to the system opener.
+pub fn default_hint_command() -> Program {
+    #[cfg(not(any(target_os = "macos", windows)))]
+    return Program::Just(String::from("xdg-open"));
+    #[cfg(target_os = "macos")]
+    return Program::Just(String::from("open"));
+    #[cfg(windows)]
+    return Program::WithArgs {
+        program: String::from("cmd"),
+        args: vec!["/c".to_string(), "start".to_string(), "".to_string()],
+    };
 }
 
 #[derive(SerdeReplace, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -804,6 +814,7 @@ mod tests {
             "gopher://gopher.example.org",
             "https://www.example.org",
             "http://example.org",
+            "HTTPS://EXAMPLE.COM/A",
             "news:some.news.portal",
             "file:///C:/Windows/",
             "file:/home/user/whatever",
@@ -812,7 +823,7 @@ mod tests {
             "ftp://ftp.example.org",
         ] {
             let term = mock_term(regular_url);
-            let mut regex = RegexSearch::new(URL_REGEX).unwrap();
+            let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
             let matches = visible_regex_match_iter(&term, &mut regex).collect::<Vec<_>>();
             assert_eq!(
                 matches.len(),
@@ -833,12 +844,96 @@ mod tests {
             "mailto:",
         ] {
             let term = mock_term(url_like);
-            let mut regex = RegexSearch::new(URL_REGEX).unwrap();
+            let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
             let matches = visible_regex_match_iter(&term, &mut regex).collect::<Vec<_>>();
             assert!(
                 matches.is_empty(),
                 "Should not match url in string {url_like}, but instead got: {matches:?}"
             )
         }
+    }
+
+    #[test]
+    fn default_hint_parsing_regex_test() {
+        for hint_text in [
+            "[全局新手引导框架需求规格](D:/work/git/gt_project_git_extra/docs/brainstorms/2026-09-18-global-tutorial-framework-requirements.md)",
+            "[Markdown Link](https://example.com/docs)",
+            "[Markdown With Space](<D:/My Documents/project spec.md>)",
+            "[app](C:/Program Files (x86)/foo.exe)",
+            "[Rust](https://en.wikipedia.org/wiki/Rust_(programming_language))",
+            "[Local File](./README.md)",
+            "https://www.example.org",
+            "file:///C:/Windows/",
+            "D:/work/git/project/file.md",
+            r"C:\Users\admin\Desktop\notes.txt",
+            r"[Windows Path With Space](C:\Users\admin\My Documents\notes.txt)",
+            r"\\server\share\file.txt",
+            "~/docs/spec.md",
+            "~/工作文档/新手引导.md",
+        ] {
+            let term = mock_term(hint_text);
+            let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
+            let matches = visible_regex_match_iter(&term, &mut regex).collect::<Vec<_>>();
+            assert_eq!(
+                matches.len(),
+                1,
+                "Should have exactly one hint match for {hint_text}, but instead got: {matches:?}"
+            );
+            let matched_text = term.bounds_to_string(*matches[0].start(), *matches[0].end());
+            assert_eq!(
+                matched_text, hint_text,
+                "Matched text must match expected hint string for {hint_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_hint_regex_test() {
+        // Bare posix, bare relative paths, and non-path words with colons should not be treated as hint links.
+        for text in [
+            "docker run -v /host:/container img",
+            "scp file user@host:/tmp/",
+            "./README.md",
+            "../Cargo.toml",
+            r".\README.md",
+            r"..\Cargo.toml",
+            "/etc/passwd",
+            "/usr/bin/gcc",
+        ] {
+            let term = mock_term(text);
+            let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
+            let matches = visible_regex_match_iter(&term, &mut regex).collect::<Vec<_>>();
+            assert!(
+                matches.is_empty(),
+                "Should NOT match bare path as hint for {text}, but got: {matches:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cjk_punctuation_separation_test() {
+        let text1 = "D:/work/spec.md，然后继续";
+        let term1 = mock_term(text1);
+        let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
+        let matches1 = visible_regex_match_iter(&term1, &mut regex).collect::<Vec<_>>();
+        assert_eq!(matches1.len(), 1);
+        assert_eq!(
+            term1.bounds_to_string(*matches1[0].start(), *matches1[0].end()),
+            "D:/work/spec.md"
+        );
+
+        let text2 = "见 D:/docs/spec.md、D:/docs/plan.md。";
+        let term2 = mock_term(text2);
+        let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
+        let matches2 = visible_regex_match_iter(&term2, &mut regex).collect::<Vec<_>>();
+        assert_eq!(matches2.len(), 2);
+        assert_eq!(
+            term2.bounds_to_string(*matches2[0].start(), *matches2[0].end()),
+            "D:/docs/spec.md"
+        );
+        assert_eq!(
+            term2.bounds_to_string(*matches2[1].start(), *matches2[1].end()),
+            "D:/docs/plan.md"
+        );
     }
 }

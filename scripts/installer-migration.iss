@@ -1,8 +1,14 @@
 // Included by the product installer and the isolated migration fixture.
 const
+#ifdef AcceptanceFixture
+  ProductUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{76B778B5-76C6-4F60-9431-9E67C2A351AF}_is1';
+  ProductSettingsKey = 'Software\PebrelUpdateAcceptance';
+  LegacySettingsKey = 'Software\PebrelUpdateAcceptanceLegacy';
+#else
   ProductUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{61022144-7D0A-4E54-94F2-C329A8F58656}_is1';
   ProductSettingsKey = 'Software\Pebrel';
   LegacySettingsKey = 'Software\Nebula Terminal';
+#endif
 
 var
   PreviousInstallDir: string;
@@ -94,6 +100,18 @@ function DefaultInstallDir(Param: string): string;
 begin
   Result := SuggestedInstallDir(PreviousInstallDir,
     ExpandConstant('{localappdata}\Programs\Pebrel'));
+end;
+
+procedure InitializeWizard;
+begin
+  { Reuse the registered directory for normal upgrades, so Inno recognizes it
+    as an existing installation. Keep the old-brand relocation suggestion and
+    an explicit /DIR selection intact. }
+  if (PreviousInstallDir <> '') and
+    (CompareText(ExtractFileName(NormalizedDirectory(PreviousInstallDir)), 'Nebula Terminal') = 0) and
+    (ExpandConstant('{param:DIR|}') = '') then
+    WizardForm.DirEdit.Text := SuggestedInstallDir(PreviousInstallDir,
+      ExpandConstant('{localappdata}\Programs\Pebrel'));
 end;
 
 procedure DiscoverLegacyInstallation;
@@ -257,6 +275,102 @@ begin
     RaiseException('Unable to remove old context menu: ' + Key);
 end;
 
+{ —— 按 WSL 发行版注册的右键项 ——
+
+  「在 Pebrel 中打开（Ubuntu）」这类菜单项按**安装那一刻**机器上的发行版动态生成：
+  `Lxss` 里的 `DistributionName` 是唯一真相，枚举口径与 Rust 侧
+  `shell_detect::find_wsl_distros` 一致（跳过 `docker-desktop*` 这类 plumbing 发行版）。
+
+  走 `[Code]` 而不是 `[Registry]` 的原因只有一个：键的条数取决于机器上有几个发行版。
+  代价是这些键没有 `uninsdeletekey`，卸载由 `RemoveOwnedWslContextMenus` 按名字前缀
+  加命令串里的可执行文件与 `--shell` 认领后删除。 }
+
+const
+  LxssRoot = 'Software\Microsoft\Windows\CurrentVersion\Lxss';
+
+function WslDistroNames: TArrayOfString;
+var
+  Names: TArrayOfString;
+  Index, Count: Integer;
+  Name: string;
+begin
+  SetArrayLength(Result, 0);
+  if not RegGetSubkeyNames(HKCU, LxssRoot, Names) then
+    Exit;
+  SetArrayLength(Result, GetArrayLength(Names));
+  Count := 0;
+  for Index := 0 to GetArrayLength(Names) - 1 do
+    if RegQueryStringValue(HKCU, LxssRoot + '\' + Names[Index], 'DistributionName', Name) then
+      if (Name <> '') and (Pos('docker-desktop', Lowercase(Name)) <> 1) then begin
+        Result[Count] := Name;
+        Count := Count + 1;
+      end;
+  SetArrayLength(Result, Count);
+end;
+
+{ 删掉本安装器写下的 WSL 右键项：键名以 `PebrelWsl` 开头、命令串里同时有我们的
+  可执行文件和 `--shell`，两条都满足才算我们写的。发行版后来被移除也不会留下
+  点不动的死项。 }
+procedure RemoveOwnedWslContextMenus;
+var
+  Roots: array[0..1] of string;
+  Root, Key, Command: string;
+  Names: TArrayOfString;
+  Index, NameIndex: Integer;
+begin
+  Roots[0] := 'Software\Classes\Directory\shell';
+  Roots[1] := 'Software\Classes\Directory\Background\shell';
+  for Index := 0 to 1 do begin
+    Root := Roots[Index];
+    if RegGetSubkeyNames(HKCU, Root, Names) then
+      for NameIndex := 0 to GetArrayLength(Names) - 1 do
+        if Pos('PebrelWsl', Names[NameIndex]) = 1 then begin
+          Key := Root + '\' + Names[NameIndex];
+          Command := '';
+          if RegQueryStringValue(HKCU, Key + '\command', '', Command) and
+            (Pos(ExpandConstant('{app}\pebrel.exe'), Command) > 0) and
+            (Pos('--shell', Command) > 0) then
+            if not RegDeleteKeyIncludingSubkeys(HKCU, Key) then
+              RaiseException('Unable to remove an owned WSL context menu: ' + Key);
+        end;
+  end;
+end;
+
+procedure RegisterWslContextMenus;
+var
+  Distros: TArrayOfString;
+  Index: Integer;
+  Distro, Verb, LabelText, Executable, Command, Key: string;
+begin
+  { 先清掉上一次写下的：发行版被移除后，残留的索引键会指向一个已经不存在的发行版。 }
+  RemoveOwnedWslContextMenus;
+  Distros := WslDistroNames;
+  if GetArrayLength(Distros) = 0 then
+    Exit;
+  Executable := ExpandConstant('{app}\pebrel.exe');
+  for Index := 0 to GetArrayLength(Distros) - 1 do begin
+    Distro := Distros[Index];
+    { 键名用序号而不是发行版名：注册表键名里带空格与非 ASCII 只会给自己找麻烦，
+      何况我们靠前缀认领。 }
+    Verb := 'PebrelWsl' + IntToStr(Index);
+    LabelText := CustomMessage('OpenInPebrelWsl') + ' (' + Distro + ')';
+    { `--shell` 必须排在 `--working-directory` 之前：盘根（`D:\`）时后者的收尾
+      反斜杠会吃掉它的收尾引号，并把后面整段并进同一个参数（issue #36 的另一面），
+      顺序写反会静默开出一个既没有 cwd、也没用上指定发行版的标签。 }
+    Command := '"' + Executable + '" --gpui --shell "wsl:' + Distro + '" --working-directory ';
+    Key := 'Software\Classes\Directory\shell\' + Verb;
+    if not RegWriteStringValue(HKCU, Key, 'MUIVerb', LabelText) or
+      not RegWriteStringValue(HKCU, Key, 'Icon', Executable + ',0') or
+      not RegWriteStringValue(HKCU, Key + '\command', '', Command + '"%1"') then
+      RaiseException('Unable to register the WSL context menu for ' + Distro + '.');
+    Key := 'Software\Classes\Directory\Background\shell\' + Verb;
+    if not RegWriteStringValue(HKCU, Key, 'MUIVerb', LabelText) or
+      not RegWriteStringValue(HKCU, Key, 'Icon', Executable + ',0') or
+      not RegWriteStringValue(HKCU, Key + '\command', '', Command + '"%V"') then
+      RaiseException('Unable to register the WSL background context menu for ' + Distro + '.');
+  end;
+end;
+
 procedure MigrateLegacyIntegrations;
 var
   Executable, ExistingPath, Key: string;
@@ -324,7 +438,11 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep <> ssPostInstall) or (LegacyInstallDir = '') then
+  if CurStep <> ssPostInstall then
+    Exit;
+  { 与旧版迁移无关，装完就要做：菜单项取决于本机装了哪些 WSL 发行版。 }
+  RegisterWslContextMenus;
+  if LegacyInstallDir = '' then
     Exit;
   try
     if not RegWriteStringValue(HKCU, ProductSettingsKey, 'PendingLegacyInstallDir', LegacyInstallDir) or

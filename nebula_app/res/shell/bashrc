@@ -2,6 +2,8 @@ if [[ -r $HOME/.bashrc ]]; then
     source "$HOME/.bashrc"
 fi
 
+__pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}bash:${HOSTNAME:-localhost}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n')
+
 _nebula_cwd() {
     local LC_ALL=C cwd_value=$PWD encoded='' character ordinal index
     for ((index=0; index<${#cwd_value}; index++)); do
@@ -32,6 +34,7 @@ _nebula_capture_status() {
 }
 
 _nebula_precmd() {
+    printf '\e]1337;SetUserVar=pebrel_shell=%s\a' "$__pebrel_shell_token"
     if [[ ${_nebula_command_running:-0} == 1 ]]; then
         printf '\e]133;D;%s\a' "$_nebula_last_status"
     fi

@@ -133,6 +133,14 @@ the native Liquid Glass window controls. This build requirement does not raise
 the macOS 14 minimum runtime version. Windows requires Windows 10 1809+ / 11
 and a supported Rust linker toolchain.
 
+The matching server compatibility target is **Windows Server 2019 Desktop
+Experience (build 17763)**. The desktop renderer requires Direct3D feature level
+10.1 or later. Server Core and releases before Server 2019 are outside this target.
+The installer retains the 17763 minimum; newer window effects are optional and
+the console transport can fall back to the older ConPTY input mode. Hosted CI
+runs on newer Windows versions, so it does not replace runtime acceptance on a
+Server 2019 desktop or the intended Remote Desktop/graphics configuration.
+
 ```powershell
 git clone https://github.com/Kuddev/pebrel
 cd pebrel

@@ -1,10 +1,9 @@
 //! SVN 工作拷贝状态：直接读 `.svn/wc.db`（SQLite），零外部进程依赖。
 //!
-//! 为什么不调 svn.exe：这台产品的目标机器未必装命令行客户端（TortoiseSVN
-//! 默认只装 GUI），而且逐次 spawn 进程拉状态既慢又抖。SVN 1.7+ 的工作拷贝
-//! 元数据是稳定的 SQLite 库（`NODES` / `ACTUAL_NODE` 表），TortoiseSVN 的
-//! TSVNCache 走的就是这条路：只读打开、快速路径按 `recorded_size` /
-//! `recorded_time` 判嫌疑、嫌疑文件再做 SHA-1 精判——本模块同一合同。
+//! 目标机器未必安装命令行客户端，直接读取可避免逐次启动 svn.exe。
+//! SVN 1.7+ 的工作拷贝元数据保存在 SQLite 库的 `NODES` / `ACTUAL_NODE`
+//! 表中。本模块只读打开，先按 `recorded_size` / `recorded_time` 筛选
+//! 可能修改的文件，再在尺寸上限内用 SHA-1 核验。
 //!
 //! 范围（v1）：
 //! - 状态子集：Added / Replaced / Deleted / Modified / Missing / Conflicted /
@@ -18,7 +17,7 @@ use std::path::{Path, PathBuf};
 use sha1::{Digest as _, Sha1};
 
 /// 修改嫌疑文件做 SHA-1 精判的尺寸上限；超过就直接按 Modified 报告，
-/// 避免状态刷新读几百 MB 大文件（TSVNCache 同款取舍）。
+/// 避免状态刷新时读取几百 MB 的大文件。
 const SHA1_VERIFY_LIMIT: u64 = 4 * 1024 * 1024;
 
 /// 一个目录相对 SVN 的身份。

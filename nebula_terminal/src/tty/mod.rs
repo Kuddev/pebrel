@@ -1,9 +1,10 @@
 //! TTY related functionality.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitStatus;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::{env, io};
 
 use polling::{Event, PollMode, Poller};
@@ -17,6 +18,23 @@ pub use self::unix::*;
 pub mod windows;
 #[cfg(windows)]
 pub use self::windows::*;
+
+/// Shared SSH/WSL execution reports for local and bootstrapped bash/zsh shells.
+pub fn connection_shell() -> &'static str {
+    static SCRIPT: LazyLock<Cow<'static, str>> =
+        LazyLock::new(|| shell_line_endings(include_str!("connection.sh")));
+    &SCRIPT
+}
+
+fn shell_line_endings(script: &str) -> Cow<'_, str> {
+    // include_str! preserves checkout bytes. POSIX shells treat CR in a CRLF
+    // checkout as syntax, including when this script travels via PROMPT_COMMAND.
+    if script.contains("\r\n") {
+        Cow::Owned(script.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(script)
+    }
+}
 
 /// Configuration for the `Pty` interface.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -173,4 +191,21 @@ fn terminfo_exists(terminfo: &str) -> bool {
 
     // No valid terminfo path has been found.
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_script_survives_crlf_and_mixed_checkouts() {
+        let source = connection_shell();
+        assert!(!source.contains('\r'));
+        assert!(matches!(shell_line_endings(source), Cow::Borrowed(_)));
+        for input in [source.replace('\n', "\r\n"), source.replacen('\n', "\r\n", 4)] {
+            assert_eq!(shell_line_endings(&input), source);
+        }
+        // Only line endings change; embedded/escaped carriage returns are data.
+        assert_eq!(shell_line_endings("printf '\\r\\n'\r\n# a\rb\n"), "printf '\\r\\n'\n# a\rb\n");
+    }
 }

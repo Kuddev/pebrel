@@ -347,9 +347,9 @@ impl SettingsPane {
         cx.notify();
     }
 
-    /// 一旦草稿字段变动，之前那次测试就不再能证明当前配置。请求本身不取消
-    /// （网络任务应当自行收尾），但它返回时会按 revision 丢弃过期结果。
+    /// 草稿变动取消旧测试与未决主机确认；revision 继续拒绝已经排队的过期结果。
     pub(super) fn touch_ssh_editor(&mut self, cx: &mut Context<Self>) {
+        self.ssh_test_task = None;
         if let Some(editor) = self.ssh_editor.as_mut() {
             editor.revision = editor.revision.wrapping_add(1);
             editor.test_request_id = None;
@@ -471,6 +471,7 @@ impl SettingsPane {
         // 弹层只能有一个；字体目录若还开着会用它的页面级拦截层盖住
         // SSH 编辑器，因此先把它收起。
         self.font_picker_open = false;
+        self.ssh_test_task = None;
         self.ssh_editor = Some(editor);
         self.ssh_status = None;
         self.set_ssh_editor_masking(window, cx);
@@ -479,6 +480,7 @@ impl SettingsPane {
     }
 
     pub(super) fn close_ssh_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ssh_test_task = None;
         self.ssh_editor = None;
         self.ssh_username_picker_open = false;
         self.ssh_username_trigger_bounds = None;
@@ -549,6 +551,7 @@ impl SettingsPane {
                     Ok(path) => {
                         if let Some(editor) = this.ssh_editor.as_mut() {
                             if crate::display::push_private_key(&mut editor.private_keys, path) {
+                                this.ssh_test_task = None;
                                 editor.revision = editor.revision.wrapping_add(1);
                                 editor.test_request_id = None;
                                 editor.test_status = None;
@@ -623,7 +626,7 @@ impl SettingsPane {
         editor.test_request_id = Some(request_id);
         editor.test_status = Some(SshEditorTestStatus::Connecting);
         self.ssh_status = None;
-        cx.spawn(async move |this, cx| {
+        self.ssh_test_task = Some(cx.spawn(async move |this, cx| {
             let result = receiver.await;
             let _ = this.update(cx, |pane, cx| {
                 let Some(editor) = pane.ssh_editor.as_mut() else { return };
@@ -638,8 +641,7 @@ impl SettingsPane {
                 });
                 cx.notify();
             });
-        })
-        .detach();
+        }));
         cx.notify();
     }
 
@@ -698,6 +700,7 @@ impl SettingsPane {
                 return;
             },
         };
+        self.touch_ssh_editor(cx);
         let Some(mut editor) = self.ssh_editor.take() else { return };
         let original = editor.original_destination.clone();
         let profile_path = crate::display::nebula_data_dir().join("ssh_profiles.json");

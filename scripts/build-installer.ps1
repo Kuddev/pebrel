@@ -85,28 +85,7 @@ if (-not (Test-Path -LiteralPath $installerScript -PathType Leaf)) {
 }
 
 if (-not $SkipBuild) {
-    Push-Location $repo
-    $previousTargetDirectory = $env:CARGO_TARGET_DIR
-    try {
-        $env:CARGO_TARGET_DIR = $cargoTargetRoot
-        $workspaceArgs = @('build', '--workspace', '--exclude', 'nebula', '--locked')
-        $gpuiArgs = @('build', '-p', 'nebula', '--bin', 'pebrel', '--features', 'gpui-shell', '--locked')
-        if ($Configuration -eq 'release') {
-            $workspaceArgs += '--release'
-            $gpuiArgs += '--release'
-        }
-        & cargo @workspaceArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "Cargo workspace build failed with exit code $LASTEXITCODE"
-        }
-        & cargo @gpuiArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "Cargo gpui-shell build failed with exit code $LASTEXITCODE"
-        }
-    } finally {
-        $env:CARGO_TARGET_DIR = $previousTargetDirectory
-        Pop-Location
-    }
+    & (Join-Path $PSScriptRoot 'build-windows-product.ps1') -Configuration $Configuration -TargetDirectory $cargoTargetRoot
 }
 
 $missing = @($requiredFiles | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })

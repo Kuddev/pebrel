@@ -96,7 +96,7 @@ impl NebulaWorkspace {
 
         if let Some(info) = git.as_ref() {
             use crate::display::side_panel::{GitPanelView, VcsKind};
-            /// 分组决定行内操作（VS Code 的 SCM 行合同）。
+            /// 分组决定可用的行内暂存、取消暂存或冲突处理操作。
             #[derive(Clone, Copy, PartialEq)]
             enum RowOps {
                 /// 变更组：暂存 + 丢弃（untracked 不给丢弃——restore 不删新文件）。
@@ -280,7 +280,7 @@ impl NebulaWorkspace {
                             'C' | 'U' => theme.danger,
                             _ => theme.warning,
                         };
-                        // VS Code 式路径拆分：文件名主体 + 灰色父目录。
+                        // 路径拆分显示：文件名主体 + 灰色父目录。
                         let (file_name, parent) = match relative_path.rfind('/') {
                             Some(pos) => (
                                 relative_path[pos + 1..].to_owned(),

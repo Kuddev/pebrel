@@ -11,7 +11,8 @@ when changing them. Internal Rust crate and source-directory names remain stable
 - [Enforced contracts and review rules](docs/project-constraints.md)
 - UI changes must also satisfy the **UI 设计约束 / UI design constraints** chapter
   in that document: interaction states, result feedback, hit targets and visual acceptance.
-- [Decision log and policy change process](docs/architecture-decisions.md)
+- [Causal note policy](architecture/notes/AGENTS.md) for new non-trivial decisions
+- [Legacy decision archive](docs/architecture-decisions.md) for accepted historical context
 - [Evidence behind the rules](docs/engineering-evidence.md)
 - [Internationalization](docs/internationalization.md) when changing UI text
 
@@ -69,7 +70,8 @@ raise any existing tracked private artifact for an explicit maintainer decision.
 
 1. State the user-visible problem and the behavior to preserve. Discuss a new
    cross-layer dependency, persisted format, core abstraction or threading model
-   before implementing it. Record significant decisions in the decision log.
+   before implementing it. Record significant decisions under the owning path in
+   `architecture/notes/`; ordinary fixes do not create a note.
 2. Keep one conceptual change per PR. A necessary extraction and its behavior
    tests may accompany the feature; unrelated rewrites and formatting may not.
 3. Put shared rules in their existing authority. UI modules adapt those rules;
@@ -100,6 +102,18 @@ Run affected behavior tests and the appropriate real product checks as well:
 ```sh
 cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked
 ```
+
+`Full native tests` runs on every PR and merge-group update, and on `main` pushes.
+It tests the full workspace on Linux, Windows x64 / ARM64 and both macOS
+architectures. New commits cancel obsolete PR runs. Package validation has its own
+input filters and can also be dispatched manually; a package job does not replace
+the native test suite. These triggers do not configure required status checks.
+
+GitHub may show **Waiting for approval** for a first-time fork contributor. A
+maintainer must inspect the submitted changes and approve that workflow run from
+the Actions page before tests start. Pushing more commits does not remove this
+GitHub approval requirement; do not run fork code through `pull_request_target`
+or give it a write token to work around the wait.
 
 The isolated i18n test compiles production files, not copied implementations. It
 does not test real window layout, every OS integration, or the full application.

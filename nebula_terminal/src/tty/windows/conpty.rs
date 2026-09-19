@@ -4,11 +4,13 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::IntoRawHandle;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::{mem, ptr};
 
-use windows_sys::Win32::Foundation::{HANDLE, S_OK};
+use windows_sys::Win32::Foundation::{
+    ERROR_INSUFFICIENT_BUFFER, FreeLibrary, HANDLE, HMODULE, S_OK,
+};
 use windows_sys::Win32::Globalization::{
     CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN, CompareStringOrdinal,
 };
@@ -20,9 +22,10 @@ use windows_sys::core::{HRESULT, PWSTR};
 use windows_sys::s;
 
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
-    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
+    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    STARTUPINFOW, UpdateProcThreadAttribute,
 };
 
 use crate::event::{OnResize, WindowSize};
@@ -55,6 +58,17 @@ struct ConptyApi {
     /// (bundled OpenConsole) rather than the in-box kernel32 ConPTY —
     /// gates the DA1 handshake priming in `new`.
     sideloaded: bool,
+    // Keep the loaded code alive through ClosePseudoConsole, including when
+    // several PTYs share the same DLL. Each LoadLibrary owns one reference.
+    _library: Option<ConptyLibrary>,
+}
+
+struct ConptyLibrary(HMODULE);
+
+impl Drop for ConptyLibrary {
+    fn drop(&mut self) {
+        unsafe { FreeLibrary(self.0) };
+    }
 }
 
 impl ConptyApi {
@@ -79,6 +93,7 @@ impl ConptyApi {
                     resize: ResizePseudoConsole,
                     close: ClosePseudoConsole,
                     sideloaded: false,
+                    _library: None,
                 }
             },
         }
@@ -106,6 +121,7 @@ impl ConptyApi {
             if hmodule.is_null() {
                 return None;
             }
+            let library = ConptyLibrary(hmodule);
             let create_fn = GetProcAddress(hmodule, s!("CreatePseudoConsole"))?;
             let resize_fn = GetProcAddress(hmodule, s!("ResizePseudoConsole"))?;
             let close_fn = GetProcAddress(hmodule, s!("ClosePseudoConsole"))?;
@@ -115,6 +131,7 @@ impl ConptyApi {
                 resize: mem::transmute::<LoadedFn, ResizePseudoConsoleFn>(resize_fn),
                 close: mem::transmute::<LoadedFn, ClosePseudoConsoleFn>(close_fn),
                 sideloaded: true,
+                _library: Some(library),
             })
         }
     }
@@ -187,8 +204,8 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     // flag instead of dying — a host created flagless never issues DECSET
     // 9001, the terminal never sets WIN32_INPUT_MODE, and the encoder stays
     // on the legacy VT path, so the degradation is self-gating end to end.
-    let conin_handle = conin_pty_handle.into_raw_handle() as HANDLE;
-    let conout_handle = conout_pty_handle.into_raw_handle() as HANDLE;
+    let conin_handle = conin_pty_handle.as_raw_handle() as HANDLE;
+    let conout_handle = conout_pty_handle.as_raw_handle() as HANDLE;
     let mut result = unsafe {
         (api.create)(
             window_size.into(),
@@ -216,70 +233,47 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     }
     crate::pty_trace("CreatePseudoConsole done");
 
+    // ConPTY duplicates these handles; it does not take ownership of ours.
+    // Retaining our output writer prevents EOF even after the host exits,
+    // stranding both the reader/drain threads and their bounded pipe buffer.
+    drop(conin_pty_handle);
+    drop(conout_pty_handle);
+
     if result != S_OK {
         return Err(Error::other(format!("CreatePseudoConsole failed: HRESULT {result:#x}")));
     }
 
-    let mut success;
+    let mut conout = UnblockedReader::new(conout, PIPE_CAPACITY);
+    // Declared after conout so every error closes the host while its reader
+    // still exists. Spawn failures need the same drain-before-close order as Pty.
+    let conpty = Conpty { handle: pty_handle, api };
+    let child_watcher = match spawn_shell(config, &conpty) {
+        Ok(watcher) => watcher,
+        Err(error) => {
+            conout.drain_detached();
+            return Err(error);
+        },
+    };
+    let conin = UnblockedWriter::new(conin, PIPE_CAPACITY);
 
-    // Prepare child process startup info.
+    Ok(Pty::new(conpty, conout, conin, child_watcher))
+}
 
-    let mut size: usize = 0;
-
+fn spawn_shell(config: &Options, conpty: &Conpty) -> Result<ChildExitWatcher> {
+    let mut attributes = ProcThreadAttributes::new()?;
     let mut startup_info_ex: STARTUPINFOEXW = unsafe { mem::zeroed() };
-
-    startup_info_ex.StartupInfo.lpTitle = std::ptr::null_mut() as PWSTR;
-
     startup_info_ex.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
-
-    // Setting this flag but leaving all the handles as default (null) ensures the
-    // PTY process does not inherit any handles from this Nebula process.
-    startup_info_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
-
-    // Create the appropriately sized thread attribute list.
-    unsafe {
-        let failure =
-            InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size as *mut usize) > 0;
-
-        // This call was expected to return false.
-        if failure {
-            return Err(Error::last_os_error());
-        }
-    }
-
-    let mut attr_list: Box<[u8]> = vec![0; size].into_boxed_slice();
-
-    // Set startup info's attribute list & initialize it
-    //
-    // Lint failure is spurious; it's because winapi's definition of PROC_THREAD_ATTRIBUTE_LIST
-    // implies it is one pointer in size (32 or 64 bits) but really this is just a dummy value.
-    // Casting a *mut u8 (pointer to 8 bit type) might therefore not be aligned correctly in
-    // the compiler's eyes.
-    #[allow(clippy::cast_ptr_alignment)]
-    {
-        startup_info_ex.lpAttributeList = attr_list.as_mut_ptr() as _;
-    }
-
-    unsafe {
-        success = InitializeProcThreadAttributeList(
-            startup_info_ex.lpAttributeList,
-            1,
-            0,
-            &mut size as *mut usize,
-        ) > 0;
-
-        if !success {
-            return Err(Error::last_os_error());
-        }
-    }
+    // Null standard handles and disabled inheritance keep parent handles private.
+    startup_info_ex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup_info_ex.lpAttributeList = attributes.as_mut_ptr();
 
     // Set thread attribute list's Pseudo Console to the specified ConPTY.
     unsafe {
-        success = UpdateProcThreadAttribute(
+        let success = UpdateProcThreadAttribute(
             startup_info_ex.lpAttributeList,
             0,
             PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-            pty_handle as *mut std::ffi::c_void,
+            conpty.handle as *mut std::ffi::c_void,
             mem::size_of::<HPCON>(),
             ptr::null_mut(),
             ptr::null_mut(),
@@ -291,7 +285,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     }
 
     // Prepare child process creation arguments.
-    let cmdline = win32_string(&cmdline(config));
+    let mut cmdline = win32_string(&cmdline(config));
     let cwd = config.working_directory.as_ref().map(win32_string);
     let mut creation_flags = EXTENDED_STARTUPINFO_PRESENT;
     let custom_env_block = convert_custom_env(&config.env, config.env_is_complete);
@@ -306,9 +300,9 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     let mut proc_info: PROCESS_INFORMATION = unsafe { mem::zeroed() };
     crate::pty_trace("CreateProcessW (shell attach) begin");
     unsafe {
-        success = CreateProcessW(
+        let success = CreateProcessW(
             ptr::null(),
-            cmdline.as_ptr() as PWSTR,
+            cmdline.as_mut_ptr() as PWSTR,
             ptr::null_mut(),
             ptr::null_mut(),
             false as i32,
@@ -325,13 +319,47 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     }
     crate::pty_trace("CreateProcessW (shell attach) done");
 
-    let conin = UnblockedWriter::new(conin, PIPE_CAPACITY);
-    let conout = UnblockedReader::new(conout, PIPE_CAPACITY);
+    // CreateProcess returns two caller-owned handles, even though the primary
+    // thread needs no further interaction. The watcher owns the process handle.
+    let process = unsafe { OwnedHandle::from_raw_handle(proc_info.hProcess) };
+    let thread = unsafe { OwnedHandle::from_raw_handle(proc_info.hThread) };
+    drop(thread);
+    ChildExitWatcher::new(process)
+}
 
-    let child_watcher = ChildExitWatcher::new(proc_info.hProcess)?;
-    let conpty = Conpty { handle: pty_handle as HPCON, api };
+struct ProcThreadAttributes {
+    // The opaque native list requires pointer alignment, not byte alignment.
+    storage: Box<[usize]>,
+}
 
-    Ok(Pty::new(conpty, conout, conin, child_watcher))
+impl ProcThreadAttributes {
+    fn new() -> Result<Self> {
+        let mut size = 0;
+        let success =
+            unsafe { InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut size) };
+        let error = Error::last_os_error();
+        if success != 0 || error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) {
+            return Err(error);
+        }
+        let mut storage = vec![0_usize; size.div_ceil(mem::size_of::<usize>())].into_boxed_slice();
+        if unsafe {
+            InitializeProcThreadAttributeList(storage.as_mut_ptr().cast(), 1, 0, &mut size)
+        } == 0
+        {
+            return Err(Error::last_os_error());
+        }
+        Ok(Self { storage })
+    }
+
+    fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.storage.as_mut_ptr().cast()
+    }
+}
+
+impl Drop for ProcThreadAttributes {
+    fn drop(&mut self) {
+        unsafe { DeleteProcThreadAttributeList(self.as_mut_ptr()) };
+    }
 }
 
 // Windows environment variables are case-insensitive, and the caller is responsible for

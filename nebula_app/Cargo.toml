@@ -1,6 +1,6 @@
 [package]
 name = "nebula"
-version = "1.7.0"
+version = "1.8.2"
 license = "GPL-3.0-or-later"
 description = "Pebrel — a GPU-accelerated terminal emulator"
 readme = "README.md"
@@ -15,15 +15,15 @@ path = "src/main.rs"
 
 [dependencies.nebula_terminal]
 path = "../nebula_terminal"
-version = "1.7.0"
+version = "1.8.2"
 
 [dependencies.nebula_config_derive]
 path = "../nebula_config_derive"
-version = "1.7.0"
+version = "1.8.2"
 
 [dependencies.nebula_config]
 path = "../nebula_config"
-version = "1.7.0"
+version = "1.8.2"
 
 # 可选：GPUI UI 层（feature = "gpui-shell"，模块 src/gpui_shell/）。
 # GPUI/component 的版本和 Git 来源由根 Cargo.toml 统一精确固定。
@@ -67,7 +67,7 @@ optional = true
 
 [dependencies.nebula-completions]
 path = "../nebula-completions"
-version = "1.7.0"
+version = "1.8.2"
 
 [dependencies]
 ahash = { version = "0.8.6", features = ["no-rng"] }
@@ -125,7 +125,11 @@ tokio = { version = "1", features = ["fs", "io-util", "net", "process", "rt-mult
 unicode-width = "0.2.0"
 # Assistant fix requests: blocking HTTP on a background OS thread (spec 001).
 # ureq over reqwest: no tokio coupling for one short JSON POST, small tree.
-ureq = { version = "3", features = ["json"] }
+# 更新下载要能跟随用户代理：socks-proxy 让 ureq 支持 socks5:// 代理地址；
+# Windows 系统代理（注册表）由 update_proxy 模块用 winreg 解析后显式传入。
+# 刻意不启用 ureq 自带的 win-system-proxy：它对所有 ureq agent 生效，且把
+# 注册表 socks= 条目错拼成 http:// 代理。
+ureq = { version = "3", features = ["json", "socks-proxy"] }
 zeroize = "1"
 winit = { version = "0.30.9", default-features = false, features = ["rwh_06", "serde"] }
 global-hotkey = "0.8.0"
@@ -141,7 +145,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha1 = "0.11.0"
 
 [build-dependencies]
-nebula-settings = { path = "../nebula_settings", version = "1.7.0" }
+nebula-settings = { path = "../nebula_settings", version = "1.8.2" }
 gl_generator = { version = "0.14.0", optional = true }
 serde = "1"
 serde_json = "1"
@@ -191,7 +195,7 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "=0.61.2"
-windows = { version = "=0.61.3", features = ["Data_Pdf", "Storage", "Storage_Streams", "Foundation", "Win32_System_WinRT", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "=0.61.3", features = ["Data_Pdf", "Storage", "Storage_Streams", "Foundation", "Win32_System_WinRT", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Variant", "Win32_Storage_FileSystem", "Win32_UI_Input_KeyboardAndMouse"] }
 dirs = "6.0.0"
 dwrote = "0.11.5"
 # Registry reads for installed-shell detection (WSL distros under Lxss, Git /
@@ -226,6 +230,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
+    # A single process snapshot includes creation times even for protected
+    # processes, so reused parent PIDs cannot attach unrelated processes to a pane.
+    "Wdk_System_SystemInformation",
     # RtlGetVersion：系统 backdrop 只从 Windows 11 build 22621 起可用，
     # 不能依赖会受兼容清单影响的旧版本查询 API。
     "Wdk_System_SystemServices",
@@ -295,3 +302,5 @@ gpui-shell = [
 # 真实 GPUI hitbox / 鼠标路由测试显式启用；不能放进 dev-dependencies，
 # 否则不带 gpui-shell 的默认 `cargo test -p nebula` 也会编译整棵 GPUI。
 gpui-test-support = ["gpui-shell", "gpui/test-support", "gpui-component/test-support"]
+# Explicit local updater acceptance harness; compile-rejected in release builds.
+update-test-source = ["gpui-shell"]

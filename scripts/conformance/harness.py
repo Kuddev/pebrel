@@ -337,13 +337,13 @@ class _WindowsJob:
         self._process_handles: list[int] = []
         self._handle = self._api.CreateJobObjectW(None, None)
         if not self._handle:
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error(), "CreateJobObjectW failed")
         limits = ExtendedLimits()
         limits.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
         if not self._api.SetInformationJobObject(
             self._handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)
         ):
-            error = ctypes.WinError(ctypes.get_last_error())
+            error = ctypes.WinError(ctypes.get_last_error(), "SetInformationJobObject failed")
             self.close()
             raise error
 
@@ -351,7 +351,7 @@ class _WindowsJob:
         # CPython retains the native process handle on Windows. Using that
         # handle avoids opening a PID that could have been recycled.
         if not self._api.AssignProcessToJobObject(self._handle, int(process._handle)):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
 
     def terminate(self, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout

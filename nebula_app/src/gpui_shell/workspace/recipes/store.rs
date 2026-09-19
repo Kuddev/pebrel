@@ -35,7 +35,7 @@ fn valid_layout(layout: &LayoutSession, depth: usize) -> bool {
         return false;
     }
     match layout {
-        LayoutSession::Pane { cwd, agent } => {
+        LayoutSession::Pane { cwd, agent, .. } => {
             !cwd.contains('\0') && cwd.len() <= 32768 && agent.is_none()
         },
         LayoutSession::Split { ratio_permille, first, second, .. } => {
@@ -150,13 +150,19 @@ mod tests {
             axis: SplitAxis::TopBottom,
             ratio_permille: 370,
             first: Box::new(LayoutSession::Pane {
+                launch: None,
                 cwd: "D:/api".into(),
                 agent: Some(AgentSession {
+                    session_file: None,
                     source: "claude".into(),
                     session_id: Some("private-id".into()),
                 }),
             }),
-            second: Box::new(LayoutSession::Pane { cwd: "D:/web".into(), agent: None }),
+            second: Box::new(LayoutSession::Pane {
+                launch: None,
+                cwd: "D:/web".into(),
+                agent: None,
+            }),
         });
         let recipe = Recipe::new("开发环境".into(), Session::new(0, vec![tab])).unwrap();
         let directory = tempfile::tempdir().unwrap();

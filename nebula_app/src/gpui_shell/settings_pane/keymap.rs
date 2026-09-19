@@ -13,6 +13,33 @@
 use super::*;
 
 impl SettingsPane {
+    fn keymap_query(&self, cx: &App) -> String {
+        let query = self.settings_search_input.read(cx).value().trim().to_lowercase();
+        // A section-name query opens the complete page; action/key queries filter rows.
+        if search_header::matching_sections(&query, crate::gpui_shell::config::ui_language(cx))
+            .contains(&7)
+        {
+            String::new()
+        } else {
+            query
+        }
+    }
+
+    pub(super) fn keymap_matches_query(&self, query: &str) -> bool {
+        use crate::display::keymap;
+        let query = query.trim().to_lowercase();
+        let matches = |text: String| query.split_whitespace().all(|word| text.contains(word));
+        (0..keymap::editable_row_count())
+            .filter(|flat| {
+                crate::platform::CAPABILITIES.quick_terminal_hotkey
+                    || *flat != keymap::QUICK_TERMINAL_ROW
+            })
+            .any(|flat| matches(self.keymap_row_haystack(flat)))
+            || keymap::READONLY_ROWS
+                .iter()
+                .any(|(zh, en, combo)| matches(format!("{zh} {en} {combo}").to_lowercase()))
+    }
+
     // ---- 按键映射编辑器（模型层 `display::keymap`，两壳同读同写）----
 
     /// 搜索口径与旧壳一致：动作名（中/英）+ 当前生效键文本。
@@ -39,12 +66,14 @@ impl SettingsPane {
     /// 过滤后的可见行（flat 下标，升序）。空查询 = 全部。
     fn keymap_visible(&self, cx: &App) -> Vec<usize> {
         use crate::display::keymap;
-        let query = self.keymap_search_input.read(cx).value().trim().to_lowercase();
+        let query = self.keymap_query(cx);
         // 快速终端热键在没实现该功能的平台上不列出：改了也没有效果。
         let quick_terminal = crate::platform::CAPABILITIES.quick_terminal_hotkey;
         (0..keymap::editable_row_count())
             .filter(|flat| quick_terminal || *flat != keymap::QUICK_TERMINAL_ROW)
-            .filter(|flat| query.is_empty() || self.keymap_row_haystack(*flat).contains(&query))
+            .filter(|flat| {
+                query.split_whitespace().all(|word| self.keymap_row_haystack(*flat).contains(word))
+            })
             .collect()
     }
 
@@ -270,6 +299,7 @@ impl SettingsPane {
         };
         h_flex()
             .id(("keymap-row", flat))
+            .debug_selector(move || format!("settings-keymap-row-{flat}"))
             .w_full()
             .h(px(SETTINGS_ROW_HEIGHT))
             .flex_shrink_0()
@@ -354,11 +384,13 @@ impl SettingsPane {
         }
 
         // 只读行：数字系/AI 贴入键（表驱动，不可在图形页编辑）。随搜索过滤。
-        let query = self.keymap_search_input.read(cx).value().trim().to_lowercase();
+        let query = self.keymap_query(cx);
         let readonly: Vec<&(&str, &str, &str)> = keymap::READONLY_ROWS
             .iter()
             .filter(|(zh, en, combo)| {
-                query.is_empty() || format!("{zh} {en} {combo}").to_lowercase().contains(&query)
+                query
+                    .split_whitespace()
+                    .all(|word| format!("{zh} {en} {combo}").to_lowercase().contains(word))
             })
             .collect();
         if !readonly.is_empty() {
@@ -405,13 +437,11 @@ impl SettingsPane {
             }
         }
 
-        // 旧壳按键映射页没有悬挂分组标题：搜索框独占整行（row_w × 34px），
-        // 占位「搜索动作或按键…」，下面再空 12px 才到冲突条 / 分组。
         v_flex()
             .w_full()
             // 捕获态的「点击任何位置先撤销」（旧壳 input/chrome.rs 的统一撤
             // 销合同）：行的 mouse_down 会 stop_propagation 自行处理转移/
-            // 取消，搜索框这里显式撤销（旧壳点搜索框 = blur 捕获），其余
+            // 取消，其余
             // 任何落点冒泡到这里 = 纯取消。
             .when(self.keymap_capture.is_some(), |section| {
                 section.on_mouse_down(
@@ -424,14 +454,6 @@ impl SettingsPane {
                     }),
                 )
             })
-            .child(
-                div()
-                    .w_full()
-                    .h(px(34.0))
-                    .flex_shrink_0()
-                    .child(Input::new(&self.keymap_search_input).w_full()),
-            )
-            .child(div().h(px(12.0)).w_full().flex_shrink_0())
             // 冲突是允许存在的可见状态，用组件库的 Warning Alert 呈现；
             // 不再用自绘 danger 色块，也不静默删掉另一个动作。
             .when_some(clash_note, |section, note| {

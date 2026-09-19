@@ -675,8 +675,10 @@ fn execute_step(
 
     let mut tail_request = None;
     let command = match step {
+        // 编排步骤暂不带 shell：`orchestrate` 里开标签用的一直是默认 shell，
+        // 与 `tab.new` 的 `shell` 参数是两件事（要接的话得同时扩 schema 与文档）。
         OrchestrateStep::NewTab { window_id, cwd, .. } => {
-            RuntimeCommand::NewTab { window_id: *window_id, cwd: cwd.clone() }
+            RuntimeCommand::NewTab { window_id: *window_id, cwd: cwd.clone(), shell_id: None }
         },
         OrchestrateStep::Focus { id, target } => {
             let (window_id, pane_id) = resolve_target(id, target, actions)?;

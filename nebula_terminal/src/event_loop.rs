@@ -195,11 +195,15 @@ impl StreamProcessor {
         bytes: &[u8],
     ) {
         let osc_events = self.cwd_sniffer.feed(bytes);
-        let mut latest_cwd = None;
         let mut advanced = 0;
         for (offset, event) in osc_events {
+            // Titles and shell identity/cwd reports must retain wire order:
+            // coalescing a remote cwd past a parent prompt would attribute that
+            // directory to the parent shell's completion history.
+            self.parser.advance(terminal, &bytes[advanced..offset]);
+            advanced = offset;
             match event {
-                OscEvent::Cwd(cwd) => latest_cwd = Some(cwd),
+                OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
                 OscEvent::CommandStart => {
                     terminal.nebula_end_prompt();
                     event_proxy.send_event(Event::CommandStart);
@@ -221,13 +225,9 @@ impl StreamProcessor {
                     }
                 },
                 OscEvent::PromptMark => {
-                    self.parser.advance(terminal, &bytes[advanced..offset]);
-                    advanced = offset;
                     terminal.nebula_add_prompt_mark();
                 },
                 OscEvent::InlineImage { data, width, height } => {
-                    self.parser.advance(terminal, &bytes[advanced..offset]);
-                    advanced = offset;
                     let (cell_w, cell_h) = self.window_size.map_or((9.0, 20.0), |ws| {
                         (f32::from(ws.cell_width), f32::from(ws.cell_height))
                     });
@@ -250,9 +250,6 @@ impl StreamProcessor {
             }
         }
         self.parser.advance(terminal, &bytes[advanced..]);
-        if let Some(cwd) = latest_cwd {
-            event_proxy.send_event(Event::CwdReport(cwd));
-        }
     }
 }
 
@@ -919,6 +916,37 @@ mod tests {
     use crate::event::VoidListener;
     use crate::term::Config;
     use crate::term::test::TermSize;
+
+    #[test]
+    fn shell_identity_cwd_and_title_keep_wire_order_across_chunk_boundaries() {
+        #[derive(Clone, Default)]
+        struct Listener(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                let label = match event {
+                    Event::UserVar { value, .. } => format!("shell:{value}"),
+                    Event::CwdReport(cwd) => format!("cwd:{cwd}"),
+                    Event::Title(title) => format!("title:{title}"),
+                    _ => return,
+                };
+                self.0.lock().unwrap().push(label);
+            }
+        }
+        let bytes = b"\x1b]1337;SetUserVar=pebrel_shell=cmVtb3Rl\x07\x1b]7;file://box/remote\x07\x1b]2;remote\x07\x1b]1337;SetUserVar=pebrel_shell=bG9jYWw=\x07\x1b]7;file://localhost/local\x07";
+        for split in 0..=bytes.len() {
+            let listener = Listener::default();
+            let size = TermSize::new(80, 24);
+            let mut terminal = Term::new(Config::default(), &size, listener.clone());
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut terminal, &listener, &bytes[..split]);
+            stream.feed(&mut terminal, &listener, &bytes[split..]);
+            assert_eq!(
+                *listener.0.lock().unwrap(),
+                ["shell:remote", "cwd:/remote", "title:remote", "shell:local", "cwd:/local"],
+                "split at {split}"
+            );
+        }
+    }
 
     #[test]
     fn shell_semantic_events_track_the_active_prompt() {

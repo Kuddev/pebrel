@@ -99,3 +99,36 @@ fn details_panel_drag_updates_shared_width_and_releases_on_mouse_up(cx: &mut Tes
         assert!(window.selected_text(cx).is_empty(), "resizing must not select reader text");
     });
 }
+
+/// 目录行高只由「一行」决定，与标题长度无关。
+///
+/// 目录是导航列，行高必须统一：长标题只截断，不折行。折行之所以是缺陷，是因为
+/// 行高在布局测量阶段按单行定型，文字却在最终宽度下折成两行画到行框之外，压住
+/// 下一行的标题（用户 09-17 在数学笔记目录上报告的窄面板重叠）。这种「画到框
+/// 外」本身在布局 bounds 里看不见，所以这里钉住的是让它不可能发生的前提：面板
+/// 压到最小宽度时，最长标题行仍与最短标题行同高。
+#[gpui::test]
+fn long_outline_headings_stay_one_line_in_a_narrow_details_panel(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("outline.md");
+    let long = "## 这是一个在窄目录面板里一定会超出可用宽度的很长很长的标题";
+    std::fs::write(&path, format!("# 短标题\n\n{long}\n")).unwrap();
+    let (file, mut cx) = open(path, cx);
+
+    cx.update(|window, cx| {
+        file.update(cx, |view, cx| {
+            view.show_details = true;
+            view.info = false;
+            view.details_width = reader_presentation::DETAILS_MIN_WIDTH;
+            cx.notify();
+        });
+        let _ = window.draw(cx);
+    });
+
+    let short_row = cx.debug_bounds("outline-row-0").expect("短标题的目录行");
+    let long_row = cx.debug_bounds("outline-row-1").expect("长标题的目录行");
+    assert_eq!(
+        long_row.size.height, short_row.size.height,
+        "长标题必须在一行内截断：折行会画到行框之外压住下一行"
+    );
+}

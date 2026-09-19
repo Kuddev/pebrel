@@ -46,7 +46,7 @@ class PebrelBrandingTests(unittest.TestCase):
             "AppName=Pebrel",
             "AppId={{61022144-7D0A-4E54-94F2-C329A8F58656}",
             "DefaultDirName={code:DefaultInstallDir}",
-            "UsePreviousAppDir=no",
+            "UsePreviousAppDir=yes",
             r"Software\Pebrel",
             r"App Paths\pebrel.exe",
             r"shell\Pebrel",
@@ -89,7 +89,11 @@ class PebrelBrandingTests(unittest.TestCase):
 
     def test_notification_identity_uses_pebrel(self):
         source = self.source("nebula_app/src/platform/notifications.rs")
-        self.assertIn('AUMID: &str = "com.pebrel.terminal";', source)
+        brand = self.source("nebula_app/src/brand.rs")
+        taskbar = self.source("nebula_app/src/app_icon/windows/taskbar.rs")
+        self.assertIn('WINDOWS_APP_ID: &str = "com.pebrel.terminal";', brand)
+        self.assertIn('AUMID: &str = crate::brand::WINDOWS_APP_ID;', source)
+        self.assertIn('set_string(&store, &APP_ID, crate::brand::WINDOWS_APP_ID)', taskbar)
         self.assertIn('set_reg_sz(&subkey, "DisplayName", crate::brand::NAME)', source)
 
     def test_config_directory_uses_pebrel_and_migrates_legacy_data(self):

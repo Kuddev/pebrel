@@ -29,6 +29,7 @@ use crate::renderer::shader::ShaderError;
 use crate::renderer::ui::{UiQuad, UiRenderer};
 
 pub mod image;
+mod image_layout;
 pub(crate) mod math;
 pub mod platform;
 pub mod rects;

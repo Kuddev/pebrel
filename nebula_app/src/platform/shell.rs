@@ -8,6 +8,20 @@
 #[cfg(unix)]
 use std::path::Path;
 
+/// Locate the host's WSL launcher; unsupported hosts never synthesize a WSL launch.
+pub(crate) fn wsl_executable() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let path =
+            std::path::PathBuf::from(std::env::var_os("SystemRoot")?).join(r"System32\wsl.exe");
+        path.is_file().then(|| path.to_string_lossy().into_owned())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Stable id for the shell the PTY backend starts when no override is set.
 pub fn default_shell_id() -> String {
     #[cfg(windows)]
@@ -47,6 +61,19 @@ pub fn interactive_args(id: &str) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+/// Preserve the actual Windows PTY default in a pane's durable launch snapshot.
+/// Unix keeps an unspecified shell unspecified so the login-shell policy applies.
+pub(crate) fn snapshot_shell(
+    configured: Option<nebula_terminal::tty::Shell>,
+) -> Option<nebula_terminal::tty::Shell> {
+    #[cfg(windows)]
+    {
+        configured.or_else(|| Some(nebula_terminal::tty::resolved_default_shell()))
+    }
+    #[cfg(not(windows))]
+    configured
 }
 
 #[cfg(target_os = "macos")]
@@ -90,9 +117,37 @@ pub fn uses_legacy_pty_bootstrap(id: &str) -> bool {
     }
 }
 
+/// Resolve the same default distro that wsl.exe launches, without starting a
+/// subprocess on the pane-spawn path.
+pub(crate) fn default_wsl_distro() -> Option<String> {
+    #[cfg(windows)]
+    {
+        use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+        let lxss = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
+            .ok()?;
+        let guid: String = lxss.get_value("DefaultDistribution").ok()?;
+        let distro: String = lxss.open_subkey(guid).ok()?.get_value("DistributionName").ok()?;
+        (!distro.is_empty()).then_some(distro)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(not(windows), feature = "gpui-shell"))]
+    #[test]
+    fn unix_rejects_wsl_instead_of_selecting_another_shell() {
+        assert!(wsl_executable().is_none());
+        for id in ["wsl", "wsl:Ubuntu"] {
+            assert!(crate::gpui_shell::workspace::shell_launch::resolve_shell_id(id).is_err());
+        }
+    }
 
     #[test]
     fn default_shell_id_is_never_empty() {

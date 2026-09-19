@@ -39,6 +39,7 @@ tocodex-docs/
 # this private tree and must never be allowlisted — tracked files bypass these
 # rules until `git rm --cached`.
 /docs/**
+!/docs/AGENTS.md
 !/docs/lua-configuration.md
 !/docs/math-rendering-test.md
 !/docs/chemistry-rendering-test.md

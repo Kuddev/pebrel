@@ -3,6 +3,7 @@ use super::*;
 use crate::font_install::{FontSource, REQUIRED_FONT_FAMILY};
 
 const FONT_PICKER_LIST_PREFERRED_HEIGHT: f32 = 220.0;
+const FONT_PICKER_PANEL_WIDTH: f32 = 360.0;
 const FONT_PICKER_PANEL_CHROME_HEIGHT: f32 = 74.0;
 const FONT_PICKER_OFFSET_Y: f32 = 6.0;
 const FONT_PICKER_WINDOW_MARGIN: f32 = 8.0;
@@ -86,7 +87,7 @@ impl SettingsPane {
 
     /// 系统字体和导入字体的探测都可能读大量文件，必须离开 UI 线程；目录
     /// 结果只装配一次，整个字体组下拉框共享这一份缓存。
-    fn ensure_font_catalog(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn ensure_font_catalog(&mut self, cx: &mut Context<Self>) {
         if self.font_system.is_some() || self.font_loading {
             return;
         }
@@ -104,7 +105,7 @@ impl SettingsPane {
             });
             cx.spawn(async move |this, cx| {
                 let (system, imported) = task.await;
-                let _ = this.update(cx, |pane, cx| {
+                let _ = this.update_in(cx, |pane, window, cx| {
                     pane.font_system = Some(system);
                     for family in imported {
                         if !pane
@@ -116,6 +117,7 @@ impl SettingsPane {
                         }
                     }
                     pane.font_loading = false;
+                    pane.refresh_theme_font_select(window, cx);
                     cx.notify();
                 });
             })
@@ -198,14 +200,14 @@ impl SettingsPane {
             .relative()
             .w(px(SETTINGS_SELECT_WIDTH))
             .min_w_0()
-            .h(px(32.0))
-            .when(self.active_section == 1, |control| control.w_full().h(px(36.0)))
+            .h(px(36.0))
+            .debug_selector(|| "font-family-input".to_owned())
             .flex_shrink_0()
             .overflow_hidden()
             .child(
                 Input::new(&self.font_family_input)
                     .w_full()
-                    .when(self.active_section == 1, |input| input.h(px(36.0)))
+                    .h(px(36.0))
                     .cleanable(false)
                     .suffix(Button::new("font-picker-chevron")
                             .debug_selector(|| "font-picker-chevron".to_owned()).ghost().xsmall()
@@ -219,7 +221,7 @@ impl SettingsPane {
                             cx.stop_propagation();
                             cx.notify();
                         })))
-                    .aria_label(language.pick("终端字体", "Terminal font")),
+                    .aria_label(language.text(crate::i18n::Message::SettingsFontEnglish)),
             )
             // 弹层仍须取输入框的真实窗口坐标，才能正确处理滚动、缩放与 DPI。
             .child(
@@ -240,13 +242,14 @@ impl SettingsPane {
                     |_, _, _, _| {},
                 )
                 .absolute()
+                .inset_0()
                 .size_full(),
             );
         if self.active_section == 1 {
             return control.into_any_element();
         }
         self.row(
-            language.pick("终端字体", "Terminal font"),
+            language.text(crate::i18n::Message::SettingsFontEnglish),
             help("font_family", language),
             control,
             cx,
@@ -400,6 +403,7 @@ impl SettingsPane {
                     families.iter().any(|family| family.eq_ignore_ascii_case(&entry.name));
                 h_flex()
                     .id(SharedString::from(format!("font-available-row-{index}")))
+                    .debug_selector(move || format!("font-available-{index}"))
                     .h(px(38.0))
                     .w_full()
                     .min_w_0()
@@ -450,7 +454,9 @@ impl SettingsPane {
         let available_empty = available_rows.is_empty();
 
         v_flex()
-            // 与输入字段使用同一真实宽度，右缘和左右边界都不会跳变。
+            // The menu needs room for family names and ordering actions; the trigger
+            // remains aligned with the other settings fields.
+            .debug_selector(|| "font-picker-panel".to_owned())
             .w(width)
             .max_w_full()
             .p_3()
@@ -485,7 +491,7 @@ impl SettingsPane {
                 )
             })
             .when(!self.font_loading, |panel| {
-                panel.child(v_flex().h(list_height).min_h_0().overflow_y_scrollbar().child(
+                panel.child(v_flex().debug_selector(|| "font-picker-list".to_owned()).h(list_height).min_h_0().overflow_y_scrollbar().child(
                     v_flex()
                         .w_full()
                         // gpui-component 的纵向滚动条以 16px 绝对定位覆盖在
@@ -526,7 +532,7 @@ impl SettingsPane {
             })
     }
 
-    /// 可编辑字体字段及其同宽延迟弹层；较长内容只在列表内部滚动。
+    /// Keep the menu inside the window, preferring the side with room for candidates.
     pub(super) fn font_picker_dropdown(
         &mut self,
         window: &mut Window,
@@ -534,39 +540,56 @@ impl SettingsPane {
     ) -> gpui::Div {
         let row = self.font_picker_row(cx);
         let trigger_bounds = self.font_picker_trigger_bounds;
-        let panel_width = trigger_bounds
-            .as_ref()
-            .map(|bounds| bounds.size.width)
-            .unwrap_or(px(SETTINGS_SELECT_WIDTH));
-        let list_height = trigger_bounds
+        let viewport = window.viewport_size();
+        let panel_width = px(FONT_PICKER_PANEL_WIDTH
+            .min((f32::from(viewport.width) - 2.0 * FONT_PICKER_WINDOW_MARGIN).max(0.0)));
+        let (open_above, list_height) = trigger_bounds
             .as_ref()
             .map(|bounds| {
-                let viewport_height = f32::from(window.viewport_size().height);
-                let trigger_bottom = f32::from(bounds.origin.y + bounds.size.height);
-                let available_below = (viewport_height
-                    - trigger_bottom
+                let below = (f32::from(viewport.height - bounds.bottom_right().y)
                     - FONT_PICKER_OFFSET_Y
                     - FONT_PICKER_WINDOW_MARGIN)
                     .max(0.0);
-
-                // 头部保持稳定，只压缩候选区。弹层因此不会再因超出窗口
-                // 而被整体吸附到输入框上方，候选区仍有明确高度承接滚轮。
-                px((available_below - FONT_PICKER_PANEL_CHROME_HEIGHT)
-                    .clamp(0.0, FONT_PICKER_LIST_PREFERRED_HEIGHT))
+                let above =
+                    (f32::from(bounds.origin.y) - FONT_PICKER_OFFSET_Y - FONT_PICKER_WINDOW_MARGIN)
+                        .max(0.0);
+                let preferred = FONT_PICKER_PANEL_CHROME_HEIGHT + FONT_PICKER_LIST_PREFERRED_HEIGHT;
+                let open_above = below < preferred && above > below;
+                let available = if open_above { above } else { below };
+                (
+                    open_above,
+                    px((available - FONT_PICKER_PANEL_CHROME_HEIGHT)
+                        .clamp(0.0, FONT_PICKER_LIST_PREFERRED_HEIGHT)),
+                )
             })
-            .unwrap_or(px(FONT_PICKER_LIST_PREFERRED_HEIGHT));
+            .unwrap_or((false, px(FONT_PICKER_LIST_PREFERRED_HEIGHT)));
         let panel =
             self.font_picker_open.then(|| self.font_picker_panel(panel_width, list_height, cx));
 
-        div().relative().w_full().flex_shrink_0().child(row).when_some(
+        div().relative().w(px(SETTINGS_SELECT_WIDTH)).flex_shrink_0().child(row).when_some(
             panel.zip(trigger_bounds),
             |anchor, (panel, trigger_bounds)| {
                 anchor.child(
                     deferred(
                         anchored()
-                            .anchor(gpui::Anchor::TopRight)
-                            .position(trigger_bounds.bottom_right())
-                            .offset(gpui::point(px(0.0), px(FONT_PICKER_OFFSET_Y)))
+                            .anchor(if open_above {
+                                gpui::Anchor::BottomRight
+                            } else {
+                                gpui::Anchor::TopRight
+                            })
+                            .position(if open_above {
+                                trigger_bounds.top_right()
+                            } else {
+                                trigger_bounds.bottom_right()
+                            })
+                            .offset(gpui::point(
+                                px(0.0),
+                                px(if open_above {
+                                    -FONT_PICKER_OFFSET_Y
+                                } else {
+                                    FONT_PICKER_OFFSET_Y
+                                }),
+                            ))
                             .snap_to_window_with_margin(px(FONT_PICKER_WINDOW_MARGIN))
                             .child(panel),
                     )
@@ -584,7 +607,9 @@ mod interaction_tests {
     use gpui_component::Root;
 
     #[gpui::test]
-    fn dropdown_arrow_toggles_and_search_filters_without_navigation_click(cx: &mut TestAppContext) {
+    fn review_regression_font_fields_align_and_dropdown_toggles_with_search(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_global(crate::gpui_shell::config::Settings::load(
@@ -592,7 +617,7 @@ mod interaction_tests {
             ));
         });
         let mut pane = None;
-        let (_, mut cx) = cx.add_window_view(|window, cx| {
+        let (_, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| SettingsPane::new(window, cx));
             pane = Some(view.clone());
             Root::new(view, window, cx)
@@ -603,6 +628,22 @@ mod interaction_tests {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
+        let english = cx.debug_bounds("font-family-input").expect("English field is visible");
+        let chinese = cx.debug_bounds("font-family-cjk-input").expect("Chinese field is visible");
+        assert_eq!(english.size.width, px(SETTINGS_SELECT_WIDTH));
+        assert_eq!(english.size, chinese.size, "both font fields share the same dimensions");
+        assert_eq!(
+            english.origin.x, chinese.origin.x,
+            "both font fields align in the control column"
+        );
+        assert_eq!(
+            pane.read_with(cx, |pane, cx| pane.font_family_input.read(cx).value().to_string()),
+            REQUIRED_FONT_FAMILY
+        );
+        assert_eq!(
+            pane.read_with(cx, |pane, cx| pane.font_family_cjk_input.read(cx).value().to_string()),
+            REQUIRED_FONT_FAMILY
+        );
         let bounds =
             cx.debug_bounds("font-picker-chevron").expect("font field exposes a dropdown arrow");
         let center = point(
@@ -615,6 +656,37 @@ mod interaction_tests {
         cx.simulate_click(center, gpui::Modifiers::default());
         cx.run_until_parked();
         assert!(!pane.read_with(cx, |pane, _| pane.font_picker_open));
+        // At the real 144-DPI window's logical height, placing the menu below
+        // the font field used to hide every available family under its header.
+        cx.simulate_resize(gpui::size(px(1280.0), px(735.0)));
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("font-picker-chevron").unwrap();
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let trigger = cx.debug_bounds("font-family-input").unwrap();
+        let panel = cx.debug_bounds("font-picker-panel").unwrap();
+        let list = cx.debug_bounds("font-picker-list").unwrap();
+        let candidate = cx.debug_bounds("font-available-0").unwrap();
+        assert!(
+            panel.origin.y >= px(0.0) && panel.bottom_right().y <= px(735.0),
+            "font menu stays within the window: {panel:?}"
+        );
+        assert_eq!(panel.size.width, px(FONT_PICKER_PANEL_WIDTH));
+        assert!(
+            panel.bottom_right().y <= trigger.origin.y
+                || panel.origin.y >= trigger.bottom_right().y,
+            "menu must not cover the field after focus scrolling: panel={panel:?}, trigger={trigger:?}"
+        );
+        assert!(
+            candidate.origin.y >= list.origin.y
+                && candidate.bottom_right().y <= list.bottom_right().y,
+            "at least the first available family is fully visible without scrolling: list={list:?}, candidate={candidate:?}, trigger={trigger:?}"
+        );
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
         cx.update(|window, cx| {
             pane.update(cx, |pane, cx| {
                 pane.settings_search_input

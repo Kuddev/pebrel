@@ -47,7 +47,7 @@ impl SettingsPane {
         if let Some(rgb) = self.runtime.background {
             return rgb;
         }
-        let term = crate::gpui_shell::theme::chrome_theme_resolved(cx).palette().term_bg;
+        let term = crate::gpui_shell::theme::resolved_palette(cx).term_bg;
         [term.r, term.g, term.b]
     }
 
@@ -217,7 +217,7 @@ impl SettingsPane {
             format!("{}  {hex}", language.pick("主题默认", "Theme default")).into()
         };
         let open = self.bg_picker_open;
-        let sk = crate::gpui_shell::theme::chrome_theme_resolved(cx).skin();
+        let sk = crate::gpui_shell::theme::resolved_skin(cx);
         let accent = super::rgb_hsla(sk.accent.r, sk.accent.g, sk.accent.b);
         let ink_dim = super::rgb_hsla(sk.ink_dim.r, sk.ink_dim.g, sk.ink_dim.b);
         let hairline = cx.theme().border;
@@ -320,7 +320,7 @@ impl SettingsPane {
     fn background_picker_panel(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let (h0, s0, v0) = self.bg_picker_hsv;
         let (pw, _) = popup_size();
-        let sk = crate::gpui_shell::theme::chrome_theme_resolved(cx).skin();
+        let sk = crate::gpui_shell::theme::resolved_skin(cx);
         let hairline = cx.theme().border;
         let accent = super::rgb_hsla(sk.accent.r, sk.accent.g, sk.accent.b);
         let ink_dim = super::rgb_hsla(sk.ink_dim.r, sk.ink_dim.g, sk.ink_dim.b);
@@ -489,7 +489,7 @@ fn rgb_paint(color: Rgb) -> gpui::Hsla {
     .into()
 }
 
-fn paint_sv(window: &mut Window, bounds: Bounds<Pixels>, h0: f32, s0: f32, v0: f32) {
+pub(super) fn paint_sv(window: &mut Window, bounds: Bounds<Pixels>, h0: f32, s0: f32, v0: f32) {
     let origin = bounds.origin;
     let svw = f32::from(bounds.size.width);
     let svh = f32::from(bounds.size.height);
@@ -548,7 +548,7 @@ fn paint_sv(window: &mut Window, bounds: Bounds<Pixels>, h0: f32, s0: f32, v0: f
     );
 }
 
-fn paint_hue(window: &mut Window, bounds: Bounds<Pixels>, h0: f32) {
+pub(super) fn paint_hue(window: &mut Window, bounds: Bounds<Pixels>, h0: f32) {
     let origin = bounds.origin;
     let huw = f32::from(bounds.size.width);
     let huh = f32::from(bounds.size.height);

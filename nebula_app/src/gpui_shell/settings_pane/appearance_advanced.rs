@@ -61,6 +61,14 @@ impl SettingsPane {
             ));
         let interface = self
             .group(language.pick("界面", "Interface"), cx)
+            .child(self.font_size_row(true, cx))
+            .child(self.switch_row(
+                "dim_inactive_panes",
+                language.text(crate::i18n::Message::SettingsPanesDimInactive),
+                language.text(crate::i18n::Message::SettingsPanesDimInactiveDescription),
+                self.runtime.dim_inactive_panes,
+                cx,
+            ))
             .child(self.switch_row(
                 "tab_close_visible",
                 language.pick("显示标签关闭按钮", "Show tab close buttons"),
@@ -96,18 +104,41 @@ impl SettingsPane {
         let terminal = self
             .group(language.pick("终端外观", "Terminal appearance"), cx)
             .child(self.row(
-                language.pick("终端字体", "Terminal font"),
+                language.text(crate::i18n::Message::SettingsFontEnglish),
                 help("font_family", language),
                 font_picker,
                 cx,
             ))
-            .child(self.terminal_font_size_row(cx))
+            .child(
+                self.row(
+                    language.text(crate::i18n::Message::SettingsFontChinese),
+                    language.text(crate::i18n::Message::SettingsFontChineseDescription),
+                    div()
+                        .debug_selector(|| "font-family-cjk-input".to_owned())
+                        .w(px(SETTINGS_SELECT_WIDTH))
+                        .h(px(36.0))
+                        .child(
+                            Input::new(&self.font_family_cjk_input).w_full().h_full().aria_label(
+                                language.text(crate::i18n::Message::SettingsFontChinese),
+                            ),
+                        ),
+                    cx,
+                ),
+            )
+            .child(self.font_size_row(false, cx))
             .child(self.select_row(
                 "cell_width_mode",
                 language.pick("字体间距", "Character spacing"),
                 help("cell_width_mode", language),
                 cx,
             ))
+            .child(self.select_row(
+                "scrollback_lines",
+                language.text(crate::i18n::Message::SettingsScrollingHistory),
+                language.text(crate::i18n::Message::SettingsScrollingHistoryDescription),
+                cx,
+            ))
+            .child(self.scroll_speed_row(cx))
             .child(self.switch_row(
                 "fetch",
                 language.pick("启动欢迎信息", "Startup system information"),

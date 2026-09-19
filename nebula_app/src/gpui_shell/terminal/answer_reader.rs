@@ -441,25 +441,60 @@ impl Render for AnswerReader {
             })
             .when(self.preparing, |root| {
                 root.child(div().p_3().text_sm().text_color(muted).child("正在整理完整回答…"))
-            })
-            .child(
-                div().flex_1().min_h_0().min_w_0().px_3().py_2().child(
-                    TextView::new(text)
-                        .selectable(true)
-                        .scrollable(true)
-                        .markdown_extensions(extensions)
-                        .on_link_click(|url, _, _, cx| {
-                            if url.starts_with("https://") || url.starts_with("http://") {
-                                cx.open_url(url);
-                            }
+            });
+        let cwd = self.snapshot.cwd.clone();
+        let markdown = div().flex_1().min_h_0().min_w_0().px_3().py_2().child(
+            TextView::new(text)
+                .selectable(true)
+                .scrollable(true)
+                .markdown_extensions(extensions)
+                .on_link_click(move |url, _, window, cx| {
+                    if url.starts_with('#') {
+                        return;
+                    }
+                    let language = super::super::config::ui_language(cx);
+                    let url = url.to_owned();
+                    let cwd = cwd.clone();
+                    // Path metadata and system openers can block on mounted/network
+                    // filesystems. Keep both outside the window's render thread.
+                    let task = cx.background_executor().spawn(async move {
+                        let result =
+                            crate::file_uri::try_open_local_link_with_cwd(&url, cwd.as_deref());
+                        (url, result)
+                    });
+                    window
+                        .spawn(cx, async move |cx| {
+                            let (url, result) = task.await;
+                            let _ = cx.update(|window, cx| {
+                                let message = match result {
+                                    Some(Ok(())) => return,
+                                    Some(Err(error)) => error.localized_message(language),
+                                    None if crate::file_uri::is_web_or_protocol_uri(&url) => {
+                                        cx.open_url(&url);
+                                        return;
+                                    },
+                                    None => language.format(
+                                        crate::i18n::Message::CommonLinkUnrecognized,
+                                        &[("target", &url)],
+                                    ),
+                                };
+                                crate::gpui_shell::toast::toast(
+                                    window,
+                                    cx,
+                                    crate::display::ToastKind::Warning,
+                                    message,
+                                );
+                            });
                         })
-                        .style(TextViewStyle {
-                            highlight_theme: cx.theme().highlight_theme.clone(),
-                            is_dark: cx.theme().is_dark(),
-                            ..TextViewStyle::default()
-                        }),
-                ),
-            );
+                        .detach();
+                })
+                .style(TextViewStyle {
+                    highlight_theme: cx.theme().highlight_theme.clone(),
+                    is_dark: cx.theme().is_dark(),
+                    ..TextViewStyle::default()
+                }),
+        );
+        root = root.child(markdown);
         if let Some(image) = self.preview.clone() {
             root = root.child(
                 v_flex()
