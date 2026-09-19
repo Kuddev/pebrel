@@ -67,6 +67,7 @@ use crate::window_transition::{NativeWindowStage, NativeWindowStageTracker};
 
 mod agent_runtime;
 mod input_state;
+mod link_open;
 mod proxy;
 mod quick_hotkey;
 mod runtime_control;
@@ -2123,26 +2124,19 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         match &hint.action() {
             // Launch an external program.
             HintAction::Command(command) => {
-                // On Windows, a `file://` OSC 8 link (our clickable `ls`) is
-                // opened via `explorer.exe` with a translated native path. This
-                // sidesteps `cmd /c start` mangling spaces/unicode and lets
-                // WSL/MSYS posix paths (`/mnt/c/…`, `/d/…`) actually resolve.
-                #[cfg(windows)]
-                if let Some(path) = crate::file_uri::file_uri_to_local_path(&text) {
-                    crate::display::nebula_link_log(format!(
-                        "trigger_hint file-uri explorer path={path:?} (from {text:?})"
-                    ));
-                    self.spawn_daemon("explorer.exe", &[path.as_os_str()]);
-                    return;
+                if command == &crate::config::ui_config::default_hint_command() {
+                    link_open::open(
+                        command.clone(),
+                        text.into_owned(),
+                        self.display.ui_language(),
+                        self.event_proxy.clone(),
+                        self.display.window.id(),
+                    );
+                } else {
+                    let mut args = command.args().to_vec();
+                    args.push(text.into_owned());
+                    self.spawn_daemon(command.program(), &args);
                 }
-
-                let mut args = command.args().to_vec();
-                args.push(text.into());
-                crate::display::nebula_link_log(format!(
-                    "trigger_hint spawn program={:?} args={args:?}",
-                    command.program()
-                ));
-                self.spawn_daemon(command.program(), &args);
             },
             // Copy the text to the clipboard.
             HintAction::Action(HintInternalAction::Copy) => {
@@ -2814,6 +2808,10 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::Message(message) if !self.ctx.message_buffer.is_queued(&message) => {
                     self.ctx.message_buffer.push(message);
                     self.ctx.display.pending_update.dirty = true;
+                },
+                EventType::LinkOpenFailed(message) => {
+                    self.ctx.display.push_toast(message, ToastKind::Warning);
+                    *self.ctx.dirty = true;
                 },
                 EventType::Terminal(event) => match event {
                     // OSC 9;4：程序自报任务进度。旧壳一个窗口只投一次，不像

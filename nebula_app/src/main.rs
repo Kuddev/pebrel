@@ -64,7 +64,6 @@ mod document_io;
 mod encrypted_backup;
 #[cfg(feature = "legacy-shell")]
 mod event;
-#[cfg(windows)]
 mod file_uri;
 mod font_install;
 mod git_worktree;

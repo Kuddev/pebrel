@@ -304,7 +304,12 @@
     "sent_to": "Sent to {target}",
     "yes": "Yes",
     "no": "No",
-    "confirmation_expired": "The confirmation request changed or is no longer active."
+    "confirmation_expired": "The confirmation request changed or is no longer active.",
+    "link_missing_cwd": "Cannot open relative path without working directory: {path}",
+    "link_file_not_found": "File does not exist: {path}",
+    "link_open_failed": "Failed to open file: {error}",
+    "link_unrecognized": "Unrecognized link format: {target}",
+    "link_open_url_failed": "Failed to open link: {error}"
   },
   "editor": {
     "loading": "Loading file…",

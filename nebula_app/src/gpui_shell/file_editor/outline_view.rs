@@ -92,9 +92,28 @@ impl TextFileView {
                                 .flex_1()
                                 .min_w_0()
                                 .py_1()
-                                .whitespace_normal()
+                                // 目录行只在**一行**内截断，绝不折行。行高由父级
+                                // 的布局测量定型，而这一层的横向可用宽度在测量阶段
+                                // 并不可靠（`overflow_y_scroll` 内容层不给百分比宽度
+                                // 兜底）。一旦允许折行，文字会按最终宽度折成两行，却
+                                // 仍被画在按单行算出的行框里——第二行落到行框之外，
+                                // 压在下一行标题上（用户 09-17 报的重叠，窄面板 + 长
+                                // 标题才出现）。改成一个目录行固定一行高之后，行高与
+                                // 标题长度无关，重叠在结构上不可能发生；完整标题走
+                                // 悬停提示与右键“复制标题”。
+                                .truncate()
                                 .child(heading.display_label()),
                         )
+                        .tooltip({
+                            let label = heading.display_label();
+                            move |window, cx| {
+                                let label = label.clone();
+                                Tooltip::element(move |_, _| {
+                                    div().max_w(px(560.0)).whitespace_normal().child(label.clone())
+                                })
+                                .build(window, cx)
+                            }
+                        })
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.jump_to_heading(index, window, cx)
                         }))

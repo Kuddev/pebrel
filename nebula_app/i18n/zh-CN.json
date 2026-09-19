@@ -304,7 +304,12 @@
     "sent_to": "已发送到 {target}",
     "yes": "是",
     "no": "否",
-    "confirmation_expired": "确认请求已经变更或结束。"
+    "confirmation_expired": "确认请求已经变更或结束。",
+    "link_missing_cwd": "无法打开相对路径 (缺少工作目录): {path}",
+    "link_file_not_found": "文件不存在: {path}",
+    "link_open_failed": "打开文件失败: {error}",
+    "link_unrecognized": "无法识别的链接格式: {target}",
+    "link_open_url_failed": "无法打开链接: {error}"
   },
   "editor": {
     "loading": "正在读取文件…",

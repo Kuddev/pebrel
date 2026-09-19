@@ -626,7 +626,11 @@ impl<'a, T> HintPostProcessor<'a, T> {
         // Truncate trailing characters which are likely to be delimiters.
         let start = *regex_match.start();
         while iter.point() != start {
-            if !matches!(c, '.' | ',' | ':' | ';' | '?' | '!' | '(' | '[' | '\'') {
+            if !matches!(
+                c,
+                '.' | ',' | ':' | ';' | '?' | '!' | '(' | '[' | '\''
+                    | '。' | '，' | '、' | '；' | '！' | '？' | '）' | '】' | '》' | '”' | '’'
+            ) {
                 break;
             }
 

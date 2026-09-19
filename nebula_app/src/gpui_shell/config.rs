@@ -115,6 +115,10 @@ pub(crate) fn ui_language(cx: &App) -> UiLanguage {
     cx.try_global::<Settings>().map(|settings| settings.ui_language).unwrap_or(UiLanguage::EnUs)
 }
 
+pub(crate) fn panel_resize(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_some_and(|settings| settings.panel_resize)
+}
+
 pub(crate) fn ai_toasts_enabled(cx: &App) -> bool {
     cx.try_global::<Settings>().is_none_or(|settings| settings.ai_toasts)
 }
@@ -810,7 +814,7 @@ mod tests {
                 cx.set_global(settings);
                 assert_eq!(crate::gpui_shell::theme::effective_theme_name(cx), theme);
                 assert_eq!(super::ui_language(cx), language);
-                assert_eq!(cx.global::<Settings>().panel_resize, panel_resize);
+                assert_eq!(super::panel_resize(cx), panel_resize);
             }
         });
     }

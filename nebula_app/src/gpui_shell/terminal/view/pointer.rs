@@ -169,11 +169,22 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn try_open_hovered_link(&self, cx: &Context<Self>) {
+    pub(super) fn try_open_hovered_link(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(hover) = self.link_hover.as_ref() else { return };
         let Some(session) = self.session.as_ref() else { return };
-        let term = session.term.lock();
-        super::super::osc_links::open_hint(&hover.hint, &term, cx);
+        let text = {
+            let term = session.term.lock();
+            hover.hint.text(&*term).map(|t| t.into_owned())
+        };
+        let Some(text) = text else { return };
+        let cwd = self.local_cwd();
+        super::super::osc_links::open_hint_match(
+            &hover.hint,
+            &text,
+            cwd.as_deref(),
+            window,
+            cx,
+        );
     }
 
     /// 应用是否接管了鼠标（vim/htop 等）。Shift 按住时强制旁路——这是
@@ -583,7 +594,7 @@ impl TerminalView {
             && self.selection_is_empty()
             && self.link_hover.is_some();
         if open_link {
-            self.try_open_hovered_link(cx);
+            self.try_open_hovered_link(window, cx);
         } else if self.copy_on_select {
             self.copy_selection(false, window, cx);
         }
