@@ -748,5 +748,8 @@
     "restore_failed": "This AI conversation could not be restored. Its saved target is preserved. Use Retry recovery in the tab menu, or locate it in session history.",
     "restore_ambiguous": "More than one native session file matches this conversation. The saved target is preserved; choose the exact conversation from session history.",
     "retry": "Retry session recovery"
+  },
+  "ai_hooks": {
+    "announced": "AI turn notifications connected (Claude / Codex / Kimi / Pi / opencode). To revoke: pebrel setup-ai --remove"
   }
 }

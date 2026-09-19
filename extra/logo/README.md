@@ -138,6 +138,29 @@ published in [`@tencent-ai/codebuddy-code` 2.150.0](https://registry.npmjs.org/@
 The `cbc-prewarm` helper is excluded. Recognition does not add session resume,
 fork commands, or AI hooks.
 
+### Kimi Code
+
+`ai_kimi.svg` contains the Kimi color mark from LobeHub's icon collection,
+with only a final newline added. It was retrieved on 2026-09-17 from the
+published npm package `@lobehub/icons-static-svg` 1.95.0 (`icons/kimi-color.svg`),
+the packaged form of the lobe-icons repository's `packages/static-svg` directory
+(the same artwork ships as the `Kimi.Color` component in `@lobehub/icons` 5.18.0):
+
+- Repository source: https://github.com/lobehub/lobe-icons/blob/main/packages/static-svg/icons/kimi-color.svg
+- Collection license: [MIT](LICENSE-lobe-icons), copyright LobeHub. Product names
+  and trademarks remain with their respective owners; use identifies running
+  programs and does not imply endorsement.
+- PNG SHA-256: `FC3F905ADC68DFE9E14AD23B123F55AB71D32BF0D855A2CF6580F6B5CFF0BE99`
+
+`ai_kimi.png` is a 1024 x 1024 transparent export made with `@resvg/resvg-js`
+2.6.2 and the same rendering settings as Claude and Trae above. The mark is a
+white letterform with a blue accent; embedded unchanged it would vanish on light
+surfaces, so both shells treat it as a luminance map at render time (like
+OpenCode): the letterform takes the theme ink at full strength and the accent
+dims proportionally. The committed bytes keep the source colors. The icon
+identifies running `kimi` and `kimi-code` processes and does not imply
+endorsement by Moonshot AI.
+
 ### Oh My Pi
 
 `ai_omp.svg` is a Pebrel-drawn purple gradient π mark following the maintainer's

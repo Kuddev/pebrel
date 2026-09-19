@@ -13,6 +13,7 @@ use super::{
 #[cfg(feature = "legacy-shell")]
 use crate::event::{Event, EventType};
 
+mod kimi;
 mod managed_files;
 
 // ─── pipe server ────────────────────────────────────────────────────────
@@ -195,6 +196,7 @@ fn heal_all() {
     }
     ensure_claude_hooks();
     ensure_codex_notify();
+    kimi::ensure_kimi_hooks();
     ensure_opencode_plugin();
     ensure_pi_extension();
     for (agent, path, result) in ensure_runtime_skills() {
@@ -220,15 +222,17 @@ fn config_guard() {
 
     // Neither CLI installed (yet): re-check occasionally instead of
     // watching directories that do not exist.
-    let (claude_dir, codex_dir) = loop {
+    let (claude_dir, codex_dir, kimi_dir) = loop {
         let claude = claude_config_dir().filter(|d| d.exists());
         let codex = codex_config_dir().filter(|d| d.exists());
+        let kimi = kimi::kimi_config_dir().filter(|d| d.exists());
         if claude.is_some()
             || codex.is_some()
+            || kimi.is_some()
             || opencode_config_dir().is_some_and(|d| d.exists())
             || pi_agent_dir().is_some_and(|d| d.exists())
         {
-            break (claude, codex);
+            break (claude, codex, kimi);
         }
         std::thread::sleep(Duration::from_secs(300));
     };
@@ -245,7 +249,7 @@ fn config_guard() {
             poll_guard()
         },
     };
-    for dir in [&claude_dir, &codex_dir].into_iter().flatten() {
+    for dir in [&claude_dir, &codex_dir, &kimi_dir].into_iter().flatten() {
         if let Err(err) = watcher.watch(dir, RecursiveMode::NonRecursive) {
             log::warn!("ai_hook: cannot watch {}: {err}; polling instead", dir.display());
             poll_guard();
@@ -298,11 +302,18 @@ fn announce() {
     match claim_setup_announcement(&nebula_settings::settings_dir()) {
         Ok(true) => crate::notify::toast(
             "Pebrel",
-            "已接入 AI 回合通知（Claude / Codex / Pi / opencode）。撤销：pebrel setup-ai --remove",
+            announce_language().text(crate::i18n::Message::AiHooksAnnounced),
         ),
         Ok(false) => {},
         Err(error) => log::debug!("ai_hook: could not persist setup announcement: {error}"),
     }
+}
+
+/// announce 触发于后台自愈线程，没有视图状态；语言从设置现读，与
+/// gpui_shell::toast 的兜底路径同一入口。每进程至多一次（ANNOUNCED 闸门）。
+fn announce_language() -> crate::i18n::UiLanguage {
+    crate::i18n::LanguagePreference::from(nebula_settings::RuntimeSettings::load().language)
+        .resolved()
 }
 
 fn claim_setup_announcement(directory: &Path) -> std::io::Result<bool> {
@@ -851,6 +862,14 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
                 failed = true;
             },
         }
+        match kimi::remove_kimi_hooks() {
+            Ok(true) => println!("kimi: 已从 config.toml 移除 hooks。"),
+            Ok(false) => println!("kimi: config.toml 中没有 Pebrel 的 hooks。"),
+            Err(err) => {
+                eprintln!("kimi: 移除失败：{err}");
+                failed = true;
+            },
+        }
         match remove_opencode_plugin() {
             Ok(true) => println!("opencode: 已删除 Pebrel 管理的插件。"),
             Ok(false) => println!("opencode: 没有 Pebrel 的插件，未改动。"),
@@ -889,7 +908,7 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
             }
         }
         // 持久开关：不写它，下次 Nebula 启动（含开机自启）会把上面
-        // 刚清掉的四处原样装回——移除必须比自愈活得久（#8、#38）。
+        // 刚清掉的五处原样装回——移除必须比自愈活得久（#8、#38）。
         match nebula_settings::persist_keys(&[("ai_hooks", "0".to_owned())]) {
             Ok(()) => println!(
                 "已写入 ai_hooks=0：Pebrel 启动时不再自动接线（重新启用：pebrel setup-ai）。"
@@ -938,6 +957,17 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
             }
         },
         _ => println!("codex: 未检测到 config.toml，跳过。"),
+    }
+    match kimi::kimi_config_dir() {
+        Some(cfg_dir) if cfg_dir.exists() => {
+            let cfg = cfg_dir.join("config.toml");
+            if kimi::ensure_kimi_hooks() {
+                println!("kimi: 已写入 {}（首次改动备份 *.pebrel-bak）。", cfg.display());
+            } else {
+                println!("kimi: {} 已是最新。", cfg.display());
+            }
+        },
+        _ => println!("kimi: 未检测到（~/.kimi-code 不存在），跳过。"),
     }
     match opencode_config_dir() {
         Some(cfg) if cfg.exists() => {

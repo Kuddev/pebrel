@@ -1,27 +1,30 @@
 //! pebrel-hook — the bridge between AI-CLI lifecycle hooks and Pebrel.
 //!
-//! Claude Code (`Stop` / `Notification` / `UserPromptSubmit` hooks), Codex
-//! (`notify` program), Pi and opencode (bundled extensions/plugins, shelling out on
-//! `session.idle` / `permission.updated` / user-prompt) invoke this for every
-//! turn event. It forwards the raw payload to the hosting Nebula instance over
-//! a named pipe and exits.
+//! Claude Code (`Stop` / `Notification` / `UserPromptSubmit` hooks), Kimi Code
+//! (`[[hooks]]` commands in `config.toml`, event JSON streamed on stdin like
+//! claude), Codex (`notify` program), Pi and opencode (bundled extensions/
+//! plugins, shelling out on `session.idle` / `permission.updated` / user-prompt)
+//! invoke this for every turn event. It forwards the raw payload to the hosting
+//! Nebula instance over a named pipe and exits.
 //! Design constraints, in order:
 //!
 //! 1. INVISIBLE: a Stop hook's exit code is meaningful to claude (non-zero
-//!    surfaces an error banner, 2 even blocks the turn). Every path —
-//!    including panic — must exit 0, fast. Claude also writes the payload to
-//!    our stdin, so claude mode always drains stdin even when the message
-//!    goes nowhere: an unread pipe could surface as a hook write error.
-//! 2. SCOPED: the hook config is global (settings.json), but the effect must
-//!    be Nebula-only. The scope guard is the environment: NEBULA_NOTIFY_PIPE
-//!    only exists for processes spawned inside Nebula. Anywhere else this is
-//!    an invisible ~10 ms no-op.
+//!    surfaces an error banner, 2 even blocks the turn), and kimi's `Stop` is
+//!    likewise a blockable event. Every path — including panic — must exit 0,
+//!    fast. Claude and kimi also write the payload to our stdin, so those modes
+//!    always drain stdin even when the message goes nowhere: an unread pipe
+//!    could surface as a hook write error.
+//! 2. SCOPED: the hook config is global (settings.json / kimi's config.toml),
+//!    but the effect must be Nebula-only. The scope guard is the environment:
+//!    NEBULA_NOTIFY_PIPE only exists for processes spawned inside Nebula.
+//!    Anywhere else this is an invisible ~10 ms no-op.
 //! 3. FAST: pure std, no JSON handling (Nebula parses), one pipe write.
 //!    Keeps the whole claude→toast chain under ~50 ms.
 //!
 //! Usage (installed by `nebula setup-ai` / Nebula's boot self-heal):
 //! ```text
 //! nebula-hook claude                              # payload on stdin
+//! nebula-hook kimi                                # payload on stdin
 //! nebula-hook codex <json>                        # payload as last arg
 //! nebula-hook codex --chain <exe> <fixed…> <json> # + exec previous notifier
 //! nebula-hook opencode <json>                     # payload as last arg
@@ -175,38 +178,60 @@ fn read_payload(mut reader: impl Read) -> std::io::Result<Option<Vec<u8>>> {
     }
 }
 
+/// 已知调用方白名单。不在名单里的第一参数视为误调用：约束 2 要求在 Nebula 之外
+/// 也必须是无声 no-op。新增 provider 时同步在 `payload_on_stdin` 声明载荷通道。
+fn known_source(source: &str) -> bool {
+    matches!(source, "claude" | "codex" | "opencode" | "pi" | "kimi")
+}
+
+/// 载荷通道。claude 与 kimi 都把事件 JSON 写到我们的 stdin（kimi 的 `[[hooks]]`
+/// command 与 claude 的 hook 同形态，事件经 stdin 传入）；走 stdin 的 source 必须
+/// 无论如何都抽干管道（约束 1：未读的管道会在 CLI 侧变成 hook write error）。
+/// 其余 CLI 把载荷追加为末位参数。
+fn payload_on_stdin(source: &str) -> bool {
+    matches!(source, "claude" | "kimi")
+}
+
+/// 侧信道信封：一行 `nebula-hook/1 source=<s> pane=<p>` 头加原始载荷。helper 不重
+/// 编码，Nebula 侧按 source 路由到对应 provider 的解析分支。
+fn envelope(source: &str, pane: &str, payload: &[u8]) -> Vec<u8> {
+    let mut message = format!("nebula-hook/1 source={source} pane={pane}\n").into_bytes();
+    message.extend_from_slice(payload);
+    message
+}
+
 fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(source) =
-        args.first().filter(|s| matches!(s.as_str(), "claude" | "codex" | "opencode" | "pi"))
-    else {
+    let Some(source) = args.first().filter(|s| known_source(s)) else {
         return;
     };
 
-    // Payload: claude streams JSON on stdin; codex and opencode append it as
-    // the last arg.
-    let payload = match source.as_str() {
-        "claude" => match read_payload(std::io::stdin().lock()) {
+    // Payload: claude and kimi stream JSON on stdin; codex, opencode and pi
+    // append it as the last arg.
+    let payload = if payload_on_stdin(source) {
+        match read_payload(std::io::stdin().lock()) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
                 log_outcome(source, "", MAX_PAYLOAD_BYTES + 1, &Outcome::PayloadTooLarge);
                 return;
             },
             Err(_) => return,
-        },
-        _ => args.last().cloned().unwrap_or_default().into_bytes(),
+        }
+    } else {
+        args.last().cloned().unwrap_or_default().into_bytes()
     };
 
-    // 串台门。放在读完 stdin 之后：约束 1 要求 claude 模式无论如何都把 stdin
-    // 抽干（未读的管道会在 CLI 侧变成 hook write error），所以先读再退。
+    // 串台门。放在读完 stdin 之后：约束 1 要求 stdin 模式的 source 无论如何都把
+    // stdin 抽干（未读的管道会在 CLI 侧变成 hook write error），所以先读再退。
+    // kimi 的 hook 只装在它自己的 config.toml 里，别家 runner 不读那份配置，
+    // 没有串台路径，这道门保持 claude 专属。
     if source == "claude" && foreign_hook_runner().is_some() {
         log_outcome(source, "", payload.len(), &Outcome::ForeignRunner);
         return;
     }
 
     let pane = hook_env("PANE_ID").and_then(|value| value.into_string().ok()).unwrap_or_default();
-    let mut message = format!("nebula-hook/1 source={source} pane={pane}\n").into_bytes();
-    message.extend_from_slice(&payload);
+    let message = envelope(source, &pane, &payload);
 
     // 本地 Pane 使用命名管道；远端 Pane 没有本地管道时，把同一信封写入控制终端的私有 OSC。
     let mut outcome = Outcome::NotHosted;
@@ -312,6 +337,31 @@ mod tests {
             super::read_payload(&b"{\"answer\":\"ok\"}"[..]).unwrap().unwrap(),
             b"{\"answer\":\"ok\"}"
         );
+    }
+
+    /// kimi 与 claude 共用 stdin 载荷通道，但信封头签自己的 source——Nebula 侧
+    /// 靠这个字段把载荷路由给 kimi 的解析分支，签错名字会被静默丢弃。
+    #[test]
+    fn kimi_reads_stdin_and_signs_its_own_envelope() {
+        for source in ["claude", "codex", "opencode", "pi", "kimi"] {
+            assert!(super::known_source(source), "{source} 必须仍在白名单里");
+        }
+        assert!(!super::known_source("kimi-code"), "白名单只认精确的 source 名");
+        assert!(super::payload_on_stdin("claude"));
+        assert!(super::payload_on_stdin("kimi"));
+        for source in ["codex", "opencode", "pi"] {
+            assert!(!super::payload_on_stdin(source), "{source} 的载荷在末位参数");
+        }
+
+        let stdin_json: &[u8] =
+            br#"{"hook_event_name":"Stop","session_id":"s1","client_type":"kimi_code_cli"}"#;
+        let payload = super::read_payload(stdin_json).unwrap().unwrap();
+        assert_eq!(payload, stdin_json);
+
+        let message = super::envelope("kimi", "11", &payload);
+        let header: &[u8] = b"nebula-hook/1 source=kimi pane=11\n";
+        assert!(message.starts_with(header));
+        assert_eq!(&message[header.len()..], stdin_json);
     }
 
     #[test]

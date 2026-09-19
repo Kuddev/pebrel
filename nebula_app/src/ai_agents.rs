@@ -1063,12 +1063,139 @@ mod tests {
         assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
     }
 
+    /// 下面六段是 2026-09-17 用 pebrel 1.8.1 的 runtime `pane.read` 从 kimi
+    /// 0.43.1 真实窗口抓的原文(tmp/pane11*.json)的精简转写,也就是判错的
+    /// 现场。规则改动必须对着它们回归,不能对着记忆里的格式写。
+    #[test]
+    fn real_kimi_working_chrome_reads_working() {
+        // 回合进行中:输入框正上方挂月相 spinner 行(U+1F311–U+1F318 逐帧轮转,
+        // pane11-w2–w8),回合结束该行被重绘消失。输入框与状态行此时同样在
+        // 场,idle 规则必须输给 working。
+        let screen = "✨ 写一首关于秋天的四行短诗,直接输出诗,不要解释\n\
+                      \x20 🌕 · Tip: /tasks to check progress and status for background tasks\n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.4k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Working, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "moon_spinner_working");
+    }
+
+    #[test]
+    fn real_kimi_idle_chrome_reads_idle() {
+        // 回合已结束(pane11-idle.json):月相行消失,只剩历史回答、空输入框
+        // 和状态行。状态行的「K3 thinking: high」是模型名 + 思考档位,
+        // 「context: N%」是用量条,都不是 working 证据。
+        let screen = "● 叶落知秋深,\n\
+                      \x20  风凉染层林。\n\
+                      \x20  雁过长天远,\n\
+                      \x20  霜轻月色沉。\n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.6k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "prompt_idle");
+    }
+
+    #[test]
+    fn real_kimi_approval_panel_reads_blocked() {
+        // 真实审批面板(pane11-blocked.json):面板取代输入框固定在底部,上下
+        // 各一条 ─ 横线;问句是大写 R 的「▶ Run this command?」,底行是
+        // 「↑/↓ select · 1/2/3/4 choose · ↵ confirm」——旧规则写的小写
+        // 问句、无斜杠 ↑↓ 和 esc cancel 都对不上这块面板。
+        let screen = "● Running a command · $ echo hello-kimi-probe\n\
+                      \x20  Press Ctrl+B to run in background\n\
+                      \x20──────────────────────────────────────\n\
+                      \x20  ▶ Run this command?\n\
+                      \n\
+                      \x20  cwd: D:/Documents/HTA/My Projects/pebrel/tmp\n\
+                      \x20  $ echo hello-kimi-probe\n\
+                      \n\
+                      \x20  ▶ 1. Approve once\n\
+                      \x20    2. Approve for this session\n\
+                      \x20    3. Reject\n\
+                      \x20    4. Reject with feedback\n\
+                      \n\
+                      \x20  ↑/↓ select · 1/2/3/4 choose · ↵ confirm\n\
+                      \x20──────────────────────────────────────\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917  ctrl+o expand\n\
+                      \x20                                       context: 4% (33.7k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Blocked, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "approval_panel_blocked");
+    }
+
+    #[test]
+    fn real_kimi_thinking_preview_reads_working() {
+        // 回合内的另一种 working 画面(pane11-x5.json):没有月相行,盲文
+        // spinner + 流式思考预览悬在输入框正上方。盲文行锚定底部后才是有效
+        // 证据,这条把它钉住。
+        let screen = "    /exit\n\
+                      \n\
+                      \x20 ⠙ thinking…\n\
+                      \x20  User input weird: \"D:/Git/exit\n\
+                      \x20  /exit\". Likely trying to exit\n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.8k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Working, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "braille_thinking_working");
+    }
+
+    #[test]
+    fn kimi_stale_braille_thinking_line_does_not_read_working() {
+        // 回合结束后,「⠙ thinking…」预览被最终回答替换,只可能留在滚屏高处
+        // (pane11.json 里旧思考内容距底部 10+ 非空行)。陈旧盲文行没有月相行
+        // 陪同、又不在底部窗口内时,不得把屏幕拖回 Working。
+        let screen = " ⠙ thinking…\n\
+                      \x20  User input weird: \"D:/Git/exit\n\
+                      \x20  /exit\". Likely trying to exit\n\
+                      \n\
+                      \x20● Bash 工具没有运行成功:用户拒绝了执行批准请求,没有产生输出。\n\
+                      \n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.8k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "prompt_idle");
+    }
+
+    #[test]
+    fn kimi_welcome_box_identifies_the_cli() {
+        // 「Welcome to Kimi Code!」与「Send /help for help information.」两条
+        // 顶行文字在 kimi.exe 0.43.1 二进制内核验;30 行 capture 窗口
+        // (pane11.json)只留下框尾和下面的 Web UI 推广行,后者同样品牌独有。
+        let welcome = "╭─────────────────────────────────────╮\n\
+                       \x20│   Welcome to Kimi Code!                │\n\
+                       \x20│   Send /help for help information.     │\n\
+                       \x20╰─────────────────────────────────────╯";
+        assert_eq!(identify(welcome), Some(AgentKind::Kimi));
+        let tail = " │  Version:   0.43.1\n\
+                    │  MCP:       1 connected\n\
+                    ╰──────────────────────────────────────────────╯\n\
+                    ✦ Try Kimi Code Web UI - clearer task progress and settings management";
+        assert_eq!(identify(tail), Some(AgentKind::Kimi));
+        assert_eq!(identify("the docs say welcome to kimi code, warmly"), None);
+        assert_eq!(identify("user@host:~$ \n> generic prompt"), None);
+    }
+
     #[test]
     fn shared_rules_light_up_agents_without_their_own_working_rule() {
         // 归一化的意义：中断提示对每个注册的 CLI 都点亮 working，新接的 CLI
         // 不必从零再写一遍 spinner 正则（cline 至今就没有 working 规则）。
         let screen = "some output\n────────\n> \n  esc to interrupt · ? for shortcuts";
-        for agent in ["grok", "pi", "opencode", "gemini", "cline", "kilo"] {
+        for agent in ["grok", "pi", "opencode", "gemini", "cline", "kilo", "kimi"] {
             let found =
                 detect(agent, screen).unwrap_or_else(|| panic!("{agent} produced no detection"));
             assert_eq!(found.status, AgentStatus::Working, "{agent} rule={}", found.rule_id);
@@ -1081,7 +1208,7 @@ mod tests {
         // 每个 CLI 都记得写 blocked 规则。
         let screen = "Run rm -rf /tmp/x ?\n  Do you want to proceed?\n  1. Yes\n  2. No\n\
                       esc to cancel · enter to confirm";
-        for agent in ["grok", "pi", "cline", "kilo"] {
+        for agent in ["grok", "pi", "cline", "kilo", "kimi"] {
             let found =
                 detect(agent, screen).unwrap_or_else(|| panic!("{agent} produced no detection"));
             assert_eq!(found.status, AgentStatus::Blocked, "{agent} rule={}", found.rule_id);

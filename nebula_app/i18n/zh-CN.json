@@ -748,5 +748,8 @@
     "restore_failed": "此 AI 对话未能恢复，原恢复记录已保留。可在标签菜单中重试恢复，或到历史会话中定位。",
     "restore_ambiguous": "有多个原生会话文件匹配此对话，原恢复记录已保留。请在历史会话中选择准确的对话。",
     "retry": "重试会话恢复"
+  },
+  "ai_hooks": {
+    "announced": "已接入 AI 回合通知（Claude / Codex / Kimi / Pi / opencode）。撤销：pebrel setup-ai --remove"
   }
 }
