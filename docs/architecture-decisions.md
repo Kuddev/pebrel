@@ -1,5 +1,11 @@
 # Architecture decisions / 架构决策记录
 
+> Historical consolidated archive. New non-trivial decisions after the 2026-09-19
+> governance migration live under the owning path in
+> [`architecture/notes/`](../architecture/notes/AGENTS.md). Existing ADRs keep their
+> accepted rationale; a replacement creates a new note with `Supersedes` rather than
+> rewriting the old conclusion.
+
 ## Process
 
 Record decisions that change dependency direction, core ownership, persistent
@@ -12,6 +18,8 @@ Revisit condition.** Identify the accountable maintainer in the PR review. A pol
 change must include a failing legitimate example when correcting a false positive,
 plus a violation that must remain rejected. Do not use a policy edit to conceal an
 unrelated feature's growth. Remote approval/enforcement is not implied by this log.
+The note location and supersession rules above replace only this section's former
+single-file storage process; the records below remain unchanged historical context.
 
 ## ADR-0001 — Evidence-based architecture contracts
 
