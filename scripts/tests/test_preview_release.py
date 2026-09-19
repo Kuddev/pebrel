@@ -42,6 +42,14 @@ def write_fake_asset(path: Path) -> None:
 
 
 class PreviewReleaseTests(unittest.TestCase):
+    def test_macos_package_upload_requires_completed_packaging(self) -> None:
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/preview-packages.yml").read_text(encoding="utf-8")
+        package = workflow.split("- name: Package Preview DMG", 1)[1].split("- name:", 1)[0]
+        upload = workflow.split("- name: Upload macOS Preview package", 1)[1].split("- name:", 1)[0]
+        self.assertIn("id: package", package)
+        self.assertIn("if: ${{ !cancelled() && steps.package.outcome == 'success' }}", upload)
+        self.assertIn("if-no-files-found: error", upload)
+
     def write_reviewed_notes(self, root: Path) -> Path:
         changes = "## English\n\n### Added\n\n- Preview packages.\n\n## 中文\n\n### 新增\n\n- 预览安装包。"
         source = root / "docs/release-notes/v1.5.0-preview.42.md"

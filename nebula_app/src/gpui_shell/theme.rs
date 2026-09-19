@@ -89,15 +89,11 @@ pub(crate) fn resolve_theme_name(
     settings_theme_name(chrome_theme(preference).for_system_appearance(system_is_light))
 }
 
-/// 生效主题：`follow_system_theme` 开启时按系统外观折算到用户主题家族的
-/// 亮/暗成员（规则与旧壳 `NebulaTheme::for_system_appearance` 同一来源）。
-/// chrome 令牌与终端 palette 都必须走这里，两层才不会分家。
+/// 加载设置时已按系统外观折算的生效主题，chrome 与终端 palette 共用。
 pub fn effective_theme_name(cx: &App) -> ThemeName {
-    if let Some(settings) = cx.try_global::<crate::gpui_shell::config::Settings>() {
-        return settings.resolved_theme.base_name();
-    }
-    let rt = nebula_settings::RuntimeSettings::load();
-    resolve_theme_name(rt.theme, rt.follow_system_theme, system_is_light(cx))
+    cx.try_global::<crate::gpui_shell::config::Settings>()
+        .map(|settings| settings.resolved_theme.base_name())
+        .unwrap_or_default()
 }
 
 /// 点选一张主题卡时要写盘的键：对齐旧壳 `select_nebula_theme`
@@ -533,8 +529,7 @@ pub fn apply_chrome_theme(cx: &mut App) {
 /// alpha"这件事是纯浪费，而滑块一次拖拽会发几十上百个事件。2026-08-21 定案：
 /// 拖拽走这里，落盘与整套热应用等停手之后。
 ///
-/// 主题名由调用方传入：[`effective_theme_name`] 内部会 `RuntimeSettings::load()`
-/// 读盘一次，那正是这条路径要避开的东西。设置页自己持有 `runtime` 镜像。
+/// 主题名由设置页尚未落盘的 `runtime` 镜像传入。
 pub fn reapply_shell_opacity(name: ThemeName, follow_system: bool, cx: &mut App) {
     let _ = (name, follow_system);
     reapply_prepared_surface_opacity(cx);

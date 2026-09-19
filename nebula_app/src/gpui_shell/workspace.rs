@@ -3676,7 +3676,7 @@ impl Render for NebulaWorkspace {
                             // 侧栏拖宽热区（旧壳 `panel_resize` 设置门控）：贴在
                             // 侧栏右缘、零布局宽，不挤压终端卡。
                             !self.sidebar_collapsed
-                                && nebula_settings::RuntimeSettings::load().panel_resize,
+                                && crate::gpui_shell::config::panel_resize(cx),
                             |row| {
                                 row.child(
                                     div().relative().w_0().h_full().flex_shrink_0().child(
