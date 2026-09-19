@@ -308,6 +308,11 @@ pub struct TerminalView {
     command_started: Option<std::time::Instant>,
     /// 上次跑进程树探测的时刻，用于节流。
     last_process_probe: Option<std::time::Instant>,
+    prompt_process_probe: Option<gpui::Task<()>>,
+    prompt_input_epoch: u64,
+    native_prompt_seen: bool,
+    native_prompt_epoch: Option<u64>,
+    last_prompt_process_probe: Option<std::time::Instant>,
     active_run: Option<crate::runtime_api::RuntimePaneRun>,
     last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// Shared lifecycle owns hook authority, session scope and fallback evidence.
@@ -633,6 +638,12 @@ impl TerminalView {
             },
             TermEvent::Bell => self.on_bell(cx),
             TermEvent::UserVar { name, value } => {
+                if name == "pebrel_cmd_prompt"
+                    && value == "1"
+                    && self.suggest.suggest_env.is_this_machine()
+                {
+                    self.on_native_cmd_prompt(cx);
+                }
                 self.suggest.completion_shell_report(&name, &value);
                 cx.notify();
             },
@@ -684,6 +695,7 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        self.prompt_input_epoch = self.prompt_input_epoch.wrapping_add(1);
         self.path_drop.invalidate();
         self.image_paste.observe_input(&bytes);
         self.confirmation.observe_input(&bytes);
@@ -691,11 +703,17 @@ impl TerminalView {
         if let Some(session) = &self.session {
             {
                 let mut term = session.term.lock();
+                // Match the parser's Term-lock order before attributing queued prompts.
+                session.native_prompt.observe_input(
+                    self.prompt_input_epoch,
+                    super::event_mailbox::preserves_native_prompt(&bytes),
+                );
                 term.scroll_display(Scroll::Bottom);
                 term.selection = None;
             }
             session.notifier.notify(bytes);
         }
+        self.sync_native_prompt();
         self.restart_cursor_blink(cx);
         cx.notify();
     }
@@ -951,6 +969,7 @@ impl TerminalView {
 
     fn paste_now_impl(&mut self, text: &str, emit: bool, cx: &mut Context<Self>) {
         let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+        self.capture_native_paste_submission(&normalized, cx);
         // 行镜像吃粘贴的字面文本；多行/控制字符由引擎侧作废（与旧壳
         // `nebula_input_text` 的防注入契约一致）。
         if !self.term_mode().contains(TermMode::ALT_SCREEN) {

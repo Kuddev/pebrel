@@ -11,13 +11,24 @@ impl TerminalView {
     /// line_buf 在光标移动/Tab 补全后就是拼接垃圾，不能进历史。Agent 已在
     /// 前台时保留最初 shell 提示符，内部交互的 Enter 不得覆盖退出证据。
     pub(super) fn commit_line(&mut self, cx: &mut Context<Self>) {
-        let agent_already_active =
+        self.sync_native_prompt();
+        let agent_active =
             self.running_program.as_deref().and_then(crate::ai_agents::AgentKind::parse).is_some();
-        if !agent_already_active {
-            self.suggest.pending_command_prompt = None;
+        let command_already_active =
+            self.command_running && !self.command_running_disproved || agent_active;
+        let native_submission =
+            self.native_prompt_epoch == Some(self.prompt_input_epoch) && !agent_active;
+        if command_already_active && !native_submission {
+            // Input belongs to the foreground command, not a new shell submission.
+            crate::display::nebula_clear_line(&mut self.suggest);
+            if agent_active {
+                self.agent_activity.input_sent();
+            }
+            return;
         }
+        self.suggest.pending_command_prompt = None;
         #[cfg(windows)]
-        if !agent_already_active && let Some(session) = &self.session {
+        if let Some(session) = &self.session {
             let term = session.term.lock();
             if !term.mode().intersects(TermMode::ALT_SCREEN | TermMode::VI) {
                 let cursor = term.grid().cursor.point;
@@ -41,10 +52,12 @@ impl TerminalView {
                 self.suggest.pending_command_prompt = None;
             }
         }
+        let confirmed_submission = self.suggest.pending_command_prompt.is_some()
+            && !self.suggest.screen_line.trim().is_empty();
         suggest::commit_line(&mut self.suggest);
-        if agent_already_active {
-            self.agent_activity.input_sent();
-            return;
+        if confirmed_submission {
+            self.mark_submitted_command(native_submission);
+            cx.notify();
         }
         if let Some(agent) =
             crate::ai_agents::AgentKind::parse_command(&self.suggest.last_committed)
@@ -54,6 +67,70 @@ impl TerminalView {
             self.command_started = Some(std::time::Instant::now());
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
+        }
+    }
+
+    fn mark_submitted_command(&mut self, native_submission: bool) {
+        if native_submission && self.command_running {
+            // 前一条的进程检查可能尚未返回；保留外层 Runtime run，
+            // 但下一次提交必须使旧命令/输入的异步结果失效。
+            self.command_started = Some(std::time::Instant::now());
+            self.prompt_process_probe = None;
+            self.last_prompt_process_probe = None;
+        }
+        self.mark_command_running();
+    }
+
+    pub(super) fn capture_native_paste_submission(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.sync_native_prompt();
+        let native_submission = self.native_prompt_epoch == Some(self.prompt_input_epoch);
+        if !self.native_prompt_seen
+            || (self.command_running && !self.command_running_disproved && !native_submission)
+            || self.runtime_agent().is_some()
+            || self
+                .term_mode()
+                .intersects(TermMode::ALT_SCREEN | TermMode::VI | TermMode::BRACKETED_PASTE)
+        {
+            return;
+        }
+        let Some((submitted, _)) = text.rsplit_once('\r') else { return };
+        let prompt = self.session.as_ref().and_then(|session| {
+            let term = session.term.lock();
+            crate::display::nebula_prompt_line_from_raw_grid(
+                &term,
+                term.grid().cursor.point,
+                &self.suggest.line_buf,
+                &self.suggest.suggest_env,
+            )
+        });
+        if let Some(line) = prompt {
+            if !line.input.trim().is_empty() || !submitted.trim().is_empty() {
+                // 尚无 PTY 回显，只捕获活动边界，不把猜测的粘贴内容写入历史。
+                self.suggest.pending_command_prompt = Some(line.prompt);
+                self.mark_submitted_command(native_submission);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Runtime writes text before its echo barrier; retain the idle prompt now,
+    /// rather than trying to infer it after marking the submission as running.
+    pub(super) fn capture_runtime_prompt(&mut self) {
+        if self.command_running || self.runtime_agent().is_some() {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let term = session.term.lock();
+        if term.mode().intersects(TermMode::ALT_SCREEN | TermMode::VI) {
+            return;
+        }
+        if let Some(line) = crate::display::nebula_prompt_line_from_raw_grid(
+            &term,
+            term.grid().cursor.point,
+            "",
+            &self.suggest.suggest_env,
+        ) {
+            self.suggest.pending_command_prompt = Some(line.prompt);
         }
     }
 

@@ -117,6 +117,7 @@ impl TerminalView {
         self.flush_pending_runtime_submit(cx);
         self.flush_pending_shell_command(cx);
         self.reconcile_shell_activity(cx);
+        self.on_native_cmd_prompt(cx);
         self.probe_missing_codex_session(cx);
         let Some(session) = &self.session else { return };
         let (prompt_restored, screen) = {
@@ -143,12 +144,16 @@ impl TerminalView {
             (prompt_restored, screen)
         };
         if prompt_restored
+            && !self.native_prompt_seen
             && self.pending_runtime_submit.is_none()
             && self.pending_shell_command.is_none()
             && !self.recovery.preparing()
         {
-            log::debug!("command lifecycle: shell prompt restored pane={}", self.pane_id);
-            self.finish_foreground_command(None, cx);
+            if self.suggest.suggest_env.is_this_machine() {
+                self.probe_restored_prompt(cx);
+            } else {
+                self.finish_foreground_command(None, cx);
+            }
             return;
         }
         let Some(screen) = screen else { return };

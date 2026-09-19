@@ -145,6 +145,9 @@ impl TerminalView {
         self.command_running_disproved = false;
         self.command_started = None;
         self.last_process_probe = None;
+        self.prompt_process_probe = None;
+        self.last_prompt_process_probe = None;
+        self.consume_native_prompt();
         self.pending_runtime_submit = None;
         self.suggest.pending_command_prompt = None;
         self.awaiting_input = false;
@@ -423,6 +426,9 @@ impl TerminalView {
         self.ensure_runtime_readable()?;
         let bytes = self.runtime_key_sequence(key, modifiers, repeat)?;
         let bytes_sent = bytes.len();
+        if key == crate::runtime_api::RuntimeKey::Enter && modifiers == Default::default() {
+            self.commit_line(cx);
+        }
         self.write_input(bytes, cx);
         Ok(bytes_sent)
     }
@@ -469,6 +475,7 @@ impl TerminalView {
             baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
             submit_bytes,
         });
+        self.capture_runtime_prompt();
         let run = crate::runtime_api::begin_runtime_run();
         let run_id = run.run_id;
         self.active_run = Some(run);
@@ -515,6 +522,9 @@ impl TerminalView {
             ));
         }
         let recognized_agent = submit && self.runtime_agent().is_some();
+        if submit {
+            self.capture_runtime_prompt();
+        }
         let mut bytes =
             crate::input::terminal_input::build_runtime_text_sequence(&text, self.term_mode());
         if submit {
@@ -779,13 +789,149 @@ impl TerminalView {
         .detach();
     }
 
+    pub(super) fn sync_native_prompt(&mut self) {
+        if !self.suggest.suggest_env.is_this_machine() {
+            return;
+        }
+        if let Some(session) = &self.session {
+            let prompt = session.native_prompt.snapshot();
+            self.native_prompt_seen = prompt.seen;
+            self.native_prompt_epoch = prompt.pending.then_some(prompt.input_epoch);
+        }
+    }
+
+    pub(super) fn consume_native_prompt(&mut self) {
+        if let Some(session) = &self.session {
+            session.native_prompt.consume_native_prompt();
+        }
+        self.native_prompt_epoch = None;
+    }
+
+    pub(super) fn on_native_cmd_prompt(&mut self, cx: &mut Context<Self>) {
+        self.sync_native_prompt();
+        if self.pending_runtime_submit.is_some()
+            || self.pending_shell_command.is_some()
+            || self.recovery.preparing()
+            || self.exited.is_some()
+        {
+            return;
+        }
+        if self.command_running && self.native_prompt_epoch == Some(self.prompt_input_epoch) {
+            self.probe_restored_prompt(cx);
+        }
+    }
+
+    pub(super) fn probe_restored_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_process_probe.is_some()
+            || self
+                .last_prompt_process_probe
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1))
+        {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let pid = session.shell_pid;
+        let started = self.command_started;
+        let input_epoch = self.prompt_input_epoch;
+        self.last_prompt_process_probe = Some(std::time::Instant::now());
+        let work =
+            cx.background_executor().spawn(async move { crate::process_tree::descendants(pid) });
+        self.prompt_process_probe = Some(cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |view, cx| {
+                view.prompt_process_probe = None;
+                view.apply_prompt_process_probe(started, input_epoch, result, cx);
+            });
+        }));
+    }
+
+    pub(super) fn apply_prompt_process_probe(
+        &mut self,
+        started: Option<std::time::Instant>,
+        input_epoch: u64,
+        result: Result<Vec<crate::process_tree::ProcessEntry>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_native_prompt();
+        if self.command_started != started
+            || self.prompt_input_epoch != input_epoch
+            || self.pending_runtime_submit.is_some()
+            || self.exited.is_some()
+        {
+            return;
+        }
+        let Ok(processes) = result else { return };
+        if self.native_prompt_seen {
+            if self.native_prompt_epoch != Some(input_epoch) {
+                return;
+            }
+            // Nested shells inherit PROMPT; their marker cannot end the outer run.
+            let root_is_cmd = processes.iter().any(|p| {
+                p.depth == 0
+                    && crate::process_tree::display_name(&p.executable).eq_ignore_ascii_case("cmd")
+            });
+            let nested_shell = processes.iter().any(|p| {
+                p.depth > 0
+                    && crate::process_tree::is_interactive_shell_command(
+                        &crate::process_tree::display_name(&p.executable),
+                    )
+            });
+            self.consume_native_prompt();
+            if root_is_cmd {
+                if nested_shell {
+                    self.command_running_disproved = true;
+                    if !self.agent_activity.hook_seen()
+                        && !self.agent_activity.status().is_decided()
+                    {
+                        self.process_event(
+                            nebula_terminal::event::Event::Progress { state: 0, value: None },
+                            cx,
+                        );
+                    }
+                    cx.notify();
+                } else {
+                    self.finish_foreground_command(None, cx);
+                }
+            }
+            return;
+        }
+        if processes.iter().any(|process| {
+            process.depth > 0
+                && !crate::process_tree::is_interactive_shell_command(
+                    &crate::process_tree::display_name(&process.executable),
+                )
+                && !matches!(
+                    process.executable.to_ascii_lowercase().as_str(),
+                    "conhost.exe" | "openconsole.exe"
+                )
+        }) {
+            return;
+        }
+        let restored = self.session.as_ref().is_some_and(|session| {
+            let term = session.term.lock();
+            self.suggest.pending_command_prompt.as_deref().is_some_and(|expected| {
+                crate::display::nebula_shell_prompt_restored_from_raw_grid(
+                    &term,
+                    expected,
+                    &self.suggest.suggest_env,
+                )
+            })
+        });
+        if restored {
+            self.finish_foreground_command(None, cx);
+        }
+    }
+
     /// `command_running` 的统一置位口：进程树探测的节流窗口从这里起算，
     /// 上一条命令的反证同时作废（新命令开始，「树里没活儿」不再成立）。
     ///
     /// 上一条命令的失败标记与「刚完成」的对勾也在这里作废：新命令一起跑，旧结果
     /// 就不再是这个 pane 的现状。
     pub(super) fn mark_command_running(&mut self) {
+        self.consume_native_prompt();
         if !self.command_running {
+            self.prompt_process_probe = None;
+            self.last_prompt_process_probe = None;
             self.command_started = Some(std::time::Instant::now());
             self.last_process_probe = None;
         }
@@ -864,6 +1010,11 @@ impl TerminalView {
         // Only a deliberately entered interactive shell may use this hint.
         // Start-Sleep and other builtins run inside the shell itself; absence
         // of a child cannot finish them. SSH/WSL were excluded at entry.
+        // A native CMD prompt is stronger than the process fallback. In particular,
+        // an idle nested shell remains a child of the outer command.
+        if self.native_prompt_seen {
+            return;
+        }
         let interactive_shell =
             crate::process_tree::is_interactive_shell_command(&self.suggest.last_committed);
         let disproved = interactive_shell && !evidence.busy;

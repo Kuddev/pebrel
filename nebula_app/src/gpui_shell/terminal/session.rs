@@ -63,6 +63,7 @@ impl Dimensions for GridSize {
 pub struct TerminalSession {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     pub notifier: Notifier,
+    pub(super) native_prompt: super::event_mailbox::NativePromptState,
     /// PTY 直系 shell PID；关闭确认沿用旧壳 `busy_child(shell_pid)` 判据。
     /// SSH 没有本地 shell 进程，固定为 0。
     pub shell_pid: u32,
@@ -71,21 +72,33 @@ pub struct TerminalSession {
 #[cfg(all(test, feature = "gpui-test-support"))]
 pub(super) fn test_session()
 -> (TerminalSession, std::sync::mpsc::Receiver<nebula_terminal::event_loop::Msg>) {
-    let (events, _) = super::event_mailbox::channel();
+    let (session, receiver, _, _) = test_session_with_events();
+    (session, receiver)
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) fn test_session_with_events() -> (
+    TerminalSession,
+    std::sync::mpsc::Receiver<nebula_terminal::event_loop::Msg>,
+    super::event_mailbox::EventReceiver,
+    EventProxy,
+) {
+    let (events, event_rx) = super::event_mailbox::channel();
     let (stages, _) = unbounded();
-    let term = Term::new(
-        Config::default(),
-        &GridSize { columns: 80, screen_lines: 24 },
-        EventProxy { events, stages },
-    );
+    let proxy = EventProxy { events, stages };
+    let term =
+        Term::new(Config::default(), &GridSize { columns: 80, screen_lines: 24 }, proxy.clone());
     let (sender, receiver) = nebula_terminal::event_loop::EventLoopSender::standalone().unwrap();
     (
         TerminalSession {
             term: Arc::new(FairMutex::new(term)),
             notifier: Notifier(sender),
+            native_prompt: proxy.events.native_prompt.clone(),
             shell_pid: 0,
         },
         receiver,
+        event_rx,
+        proxy,
     )
 }
 
@@ -170,11 +183,12 @@ pub fn spawn(
     // NEBULA_PTY_RECORD=1 复用 ref_test 的 conout 录制（./nebula.recording），
     // 用于 resize 锚定问题的字节级取证。
     let record = std::env::var_os("NEBULA_PTY_RECORD").is_some();
+    let native_prompt = proxy.events.native_prompt.clone();
     let event_loop = EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
     let notifier = Notifier(event_loop.channel());
     let _io_thread = event_loop.spawn();
 
-    Ok((TerminalSession { term, notifier, shell_pid }, rx, stage_rx))
+    Ok((TerminalSession { term, notifier, native_prompt, shell_pid }, rx, stage_rx))
 }
 
 /// 启动一个 SSH 直连会话（russh，与旧壳 `create_ssh_pane` 同一业务层）：
@@ -196,6 +210,7 @@ pub fn spawn_ssh(
         screen_lines: window_size.num_lines as usize,
     };
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+    let native_prompt = proxy.events.native_prompt.clone();
     let sender = crate::ssh_session::spawn_session_at(
         destination,
         initial_remote_cwd,
@@ -204,5 +219,9 @@ pub fn spawn_ssh(
         proxy,
     )?;
 
-    Ok((TerminalSession { term, notifier: Notifier(sender), shell_pid: 0 }, rx, stage_rx))
+    Ok((
+        TerminalSession { term, notifier: Notifier(sender), native_prompt, shell_pid: 0 },
+        rx,
+        stage_rx,
+    ))
 }

@@ -14,6 +14,7 @@ use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, Options, Shell};
 
 mod blocking;
 mod child;
+mod cmd_prompt;
 mod conpty;
 mod environment;
 

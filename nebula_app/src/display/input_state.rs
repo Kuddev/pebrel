@@ -158,6 +158,9 @@ pub(crate) fn nebula_shell_prompt_restored_from_raw_grid<T: EventListener>(
     expected_prompt: &str,
     env: &SuggestEnv,
 ) -> bool {
+    if terminal.mode().intersects(nebula_terminal::term::TermMode::ALT_SCREEN) {
+        return false;
+    }
     let cursor = terminal.grid().cursor.point;
     raw_grid_logical_line(terminal, cursor)
         .is_some_and(|line| shell_prompt_restored(expected_prompt, &line, env))
@@ -226,6 +229,13 @@ fn prompt_line_snapshot(
             input: input.strip_prefix(' ').unwrap_or(input).to_owned(),
         });
     }
+    // CMD history recall and completion need not update the keystroke mirror.
+    if matches!(env, SuggestEnv::Local)
+        && let Some((head, input)) = text.split_once('>')
+        && cmd_path_prompt(head)
+    {
+        return Some(PromptLineSnapshot { prompt: format!("{head}>"), input: input.to_owned() });
+    }
     if typed_tail.is_empty() || !text.ends_with(typed_tail) {
         return None;
     }
@@ -249,10 +259,26 @@ fn shell_prompt_restored(expected_prompt: &str, current_line: &str, env: &Sugges
         return true;
     }
 
+    if matches!(env, SuggestEnv::Local)
+        && expected.strip_suffix('>').is_some_and(cmd_path_prompt)
+        && current.strip_suffix('>').is_some_and(cmd_path_prompt)
+    {
+        return true;
+    }
+
     !env.is_this_machine()
         && remote_prompt_anchor(expected, marker)
             .zip(remote_prompt_anchor(current, marker))
             .is_some_and(|(expected, current)| expected == current)
+}
+
+fn cmd_path_prompt(head: &str) -> bool {
+    let bytes = head.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes[2] == b'\\'
+        && !head.contains(['<', '>', '|', '\r', '\n'])
 }
 
 fn safe_shell_prompt_marker(prompt: &str, marker: char, env: &SuggestEnv) -> bool {

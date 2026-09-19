@@ -288,7 +288,8 @@ fn spawn_shell(config: &Options, conpty: &Conpty) -> Result<ChildExitWatcher> {
     let mut cmdline = win32_string(&cmdline(config));
     let cwd = config.working_directory.as_ref().map(win32_string);
     let mut creation_flags = EXTENDED_STARTUPINFO_PRESENT;
-    let custom_env_block = convert_custom_env(&config.env, config.env_is_complete);
+    let child_config = super::cmd_prompt::prepare(config);
+    let custom_env_block = convert_custom_env(&child_config.env, child_config.env_is_complete);
     let custom_env_block_pointer = match &custom_env_block {
         Some(custom_env_block) => {
             creation_flags |= CREATE_UNICODE_ENVIRONMENT;
