@@ -10,6 +10,9 @@ root nebula_settings
 root nebula_split
 root scripts
 root tools
+root mobile/relay
+root mobile/tools
+root mobile/ssh
 nebula_app/src/display/chrome.rs 2442
 nebula_app/src/display/command_palette.rs 3935
 nebula_app/src/display/markdown_view.rs 2067

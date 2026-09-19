@@ -496,7 +496,17 @@
       "required": ["tab_index"],
       "properties": {
         "window_id": { "$ref": "#/$defs/nullable_window_id" },
-        "tab_index": { "type": "integer", "minimum": 0 }
+        "tab_index": { "type": "integer", "minimum": 0 },
+        "expected_pane_id": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Optional stable guard. The close fails with stale_target unless this pane still belongs to tab_index."
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Set only after presenting the confirmation_required response to the user."
+        }
       },
       "additionalProperties": false
     },

@@ -8,6 +8,7 @@
 mod agent_api;
 mod cli;
 mod command;
+pub(crate) mod mobile_bridge;
 mod orchestrate;
 mod server;
 mod transport;
@@ -208,6 +209,35 @@ impl ApiError {
     pub(crate) fn invalid_params(message: impl Into<String>) -> Self {
         Self::new("invalid_params", message)
     }
+}
+
+/// Protect index-addressed tab mutations from closing a different tab after a
+/// concurrent reorder or close. Existing CLI callers may omit the guard; remote
+/// UI clients should send a pane identity from the snapshot they rendered.
+pub(crate) fn validate_tab_close_target(
+    window_id: u64,
+    tab_index: usize,
+    expected_pane_id: Option<u64>,
+    actual_tab_index: Option<usize>,
+) -> Result<(), ApiError> {
+    let Some(expected_pane_id) = expected_pane_id else {
+        return Ok(());
+    };
+    if actual_tab_index == Some(tab_index) {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        "stale_target",
+        format!(
+            "pane {expected_pane_id} no longer identifies tab {tab_index} in window {window_id}"
+        ),
+    )
+    .details(json!({
+        "window_id": window_id,
+        "tab_index": tab_index,
+        "expected_pane_id": expected_pane_id,
+        "actual_tab_index": actual_tab_index
+    })))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -773,6 +803,8 @@ pub enum RuntimeCommand {
     CloseTab {
         window_id: Option<u64>,
         tab_index: usize,
+        expected_pane_id: Option<u64>,
+        confirmed: bool,
     },
     RenameTab {
         window_id: Option<u64>,

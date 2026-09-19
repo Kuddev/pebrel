@@ -163,7 +163,7 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `window.close` | 关闭空闲窗口；忙碌 Pane 返回显式确认错误 | `window_id?` |
 | `window.focus` | 聚焦窗口或 Pane | `window_id?`, `pane_id?` |
 | `tab.new` | 创建默认 Shell 标签 | `window_id?` |
-| `tab.close` | 按窗口内零基索引关闭空闲 Tab | `window_id?`, `tab_index` |
+| `tab.close` | 按窗口内零基索引关闭 Tab；远程 UI 可用 Pane 身份防止下标漂移，忙碌时须二次确认 | `window_id?`, `tab_index`, `expected_pane_id?`, `confirmed?` |
 | `tab.rename` | 设置或清除 Tab 自定义名称 | `window_id?`, `tab_index`, `name` |
 | `tab.move` | 在同一窗口内移动 Tab | `window_id?`, `tab_index`, `to_index` |
 | `pane.split` | 从当前或指定 Pane 向右/向下分屏 | `window_id?`, `pane_id?`, `direction` |
@@ -182,6 +182,11 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 `pane.prompt` 有意拒绝换行、ESC 和其他控制字符，并限制为 32 KiB。它是 Prompt 接口，不是
 任意终端字节注入接口。控制键走 `pane.send_key`：只开放命名键，字母必须配
 `control=true`，`repeat` 上限 64；API 不接受任意 bytes 或 ANSI 字符串。
+
+`tab.close` 的索引不是稳定身份。会跨线程或网络展示 Tab 列表的客户端应同时传
+`expected_pane_id`；如果用户看到列表后 Tab 已被移动、关闭，或该 Pane 已不在目标 Tab，
+服务端返回 `stale_target`，不会误关当前占据该索引的其它 Tab。忙碌 Tab 首次返回
+`confirmation_required`，客户端向用户明确确认后才可用相同目标和 `confirmed=true` 重试。
 
 `pane.paste` 专用于确实需要保留换行的输入：只接受 UTF-8，限制 32 KiB，拒绝 ESC、NUL
 与危险控制字符，并要求目标终端已启用 bracketed-paste。SSH Pane 明确拒绝本地文件/文本

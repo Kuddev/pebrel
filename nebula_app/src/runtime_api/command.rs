@@ -34,6 +34,15 @@ struct TabTargetParams {
     #[serde(default)]
     window_id: Option<u64>,
     tab_index: usize,
+    /// Optional stable guard for callers whose tab list may change while a
+    /// request is in flight. The close is rejected if this pane no longer
+    /// belongs to `tab_index`.
+    #[serde(default)]
+    expected_pane_id: Option<u64>,
+    /// Busy tabs require an explicit second request after the caller has shown
+    /// a confirmation to the user.
+    #[serde(default)]
+    confirmed: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,7 +247,12 @@ impl RuntimeCommand {
             },
             "tab.close" => {
                 let params: TabTargetParams = parse_params(&request.params)?;
-                Ok(Self::CloseTab { window_id: params.window_id, tab_index: params.tab_index })
+                Ok(Self::CloseTab {
+                    window_id: params.window_id,
+                    tab_index: params.tab_index,
+                    expected_pane_id: params.expected_pane_id,
+                    confirmed: params.confirmed,
+                })
             },
             "tab.rename" => {
                 let params: RenameTabParams = parse_params(&request.params)?;

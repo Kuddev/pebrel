@@ -1,0 +1,8 @@
+.gradle/
+**/build/
+local.properties
+*.jks
+*.keystore
+.idea/
+# Deliberately public test identity; never signs the production application ID.
+!pebrel-preview.p12

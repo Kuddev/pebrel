@@ -160,13 +160,18 @@ impl Processor {
                     "pane_id": pane_id
                 }))
             },
-            RuntimeCommand::CloseTab { window_id, tab_index } => {
+            RuntimeCommand::CloseTab {
+                window_id,
+                tab_index,
+                expected_pane_id,
+                confirmed,
+            } => {
                 let id = self.runtime_target_window(*window_id, None)?;
                 let close_window = self
                     .windows
                     .get_mut(&id)
                     .expect("resolved runtime window exists")
-                    .runtime_close_tab(*tab_index)?;
+                    .runtime_close_tab(*tab_index, *expected_pane_id, *confirmed)?;
                 if close_window {
                     self.remove_runtime_window(event_loop, id);
                 }

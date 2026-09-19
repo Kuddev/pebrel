@@ -1,0 +1,12 @@
+{
+  "project": "https://github.com/ghostty-org/ghostty",
+  "revision": "28f9367bee11ad42f40f8aa589eb8c6db62d34be",
+  "source_url": "https://codeload.github.com/ghostty-org/ghostty/tar.gz/28f9367bee11ad42f40f8aa589eb8c6db62d34be",
+  "source_sha256": "b5cf4bfa315467213a84a1b439f857e1a84c149f4a941e65edf06135f552bc4b",
+  "zig_version": "0.15.2",
+  "zig_url": "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz",
+  "zig_sha256": "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239",
+  "ndk_version": "27.2.12479018",
+  "android_api": 26,
+  "license": "MIT"
+}

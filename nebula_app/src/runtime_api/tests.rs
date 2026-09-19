@@ -241,8 +241,21 @@ fn layout_mutations_parse_and_enforce_their_bounds() {
         Ok(RuntimeCommand::CloseWindow { window_id: Some(7) })
     ));
     assert!(matches!(
-        parse("tab.close", json!({ "window_id": 7, "tab_index": 2 })),
-        Ok(RuntimeCommand::CloseTab { window_id: Some(7), tab_index: 2 })
+        parse(
+            "tab.close",
+            json!({
+                "window_id": 7,
+                "tab_index": 2,
+                "expected_pane_id": 17,
+                "confirmed": true
+            })
+        ),
+        Ok(RuntimeCommand::CloseTab {
+            window_id: Some(7),
+            tab_index: 2,
+            expected_pane_id: Some(17),
+            confirmed: true
+        })
     ));
     assert!(matches!(
         parse("tab.rename", json!({ "window_id": 7, "tab_index": 2, "name": "tests" })),
@@ -270,6 +283,19 @@ fn layout_mutations_parse_and_enforce_their_bounds() {
     assert!(parse("tab.rename", json!({ "tab_index": 0, "name": "bad\nname" })).is_err());
     assert!(parse("pane.resize", json!({ "pane_id": 17, "ratio": 0.049 })).is_err());
     assert!(parse("pane.resize", json!({ "pane_id": 17, "ratio": 0.951 })).is_err());
+}
+
+#[test]
+fn guarded_tab_close_rejects_a_stale_index() {
+    assert!(validate_tab_close_target(7, 2, None, None).is_ok());
+    assert!(validate_tab_close_target(7, 2, Some(17), Some(2)).is_ok());
+
+    let error = validate_tab_close_target(7, 2, Some(17), Some(1)).unwrap_err();
+    assert_eq!(error.code, "stale_target");
+    assert_eq!(error.details.unwrap()["actual_tab_index"], json!(1));
+
+    let missing = validate_tab_close_target(7, 2, Some(17), None).unwrap_err();
+    assert_eq!(missing.code, "stale_target");
 }
 
 #[test]

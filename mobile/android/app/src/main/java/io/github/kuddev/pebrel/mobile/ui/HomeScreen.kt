@@ -1,0 +1,239 @@
+package io.github.kuddev.pebrel.mobile.ui
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.kuddev.pebrel.mobile.R
+import io.github.kuddev.pebrel.mobile.connection.HostProfile
+import io.github.kuddev.pebrel.mobile.connection.RelayProfile
+import io.github.kuddev.pebrel.mobile.session.DesktopWorkspace
+import io.github.kuddev.pebrel.mobile.session.LocalSession
+
+@Composable
+fun HomeHeader(onSettings: () -> Unit, onNotices: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(67.dp).background(MaterialTheme.colorScheme.surface).padding(horizontal = 17.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Image(painterResource(R.drawable.ic_pebrel), null, Modifier.size(24.dp))
+        Text("Pebrel", fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(start = 9.dp))
+        GlyphButton(R.drawable.ic_bell, stringResource(R.string.notifications), onNotices)
+        GlyphButton(R.drawable.ic_settings, stringResource(R.string.settings), onSettings)
+    }
+}
+
+@OptIn(ExperimentalAnimationApi::class)
+@Composable
+fun HomeScreen(
+    sessions: List<LocalSession>, hosts: List<HostProfile>, desktops: List<DesktopWorkspace>, relays: List<RelayProfile>,
+    onSession: (String) -> Unit, onSessions: () -> Unit, onHosts: () -> Unit, onLogin: (HostProfile) -> Unit,
+    onEditHost: (HostProfile) -> Unit, onDeleteHost: (HostProfile) -> Unit, onAddHost: () -> Unit,
+    onDesktop: (String) -> Unit, onRelay: (RelayProfile) -> Unit, onComputers: () -> Unit,
+    onAddRelay: () -> Unit, onLocal: () -> Unit,
+) {
+    val motion = rememberPebrelMotion()
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val thumbnailWidth = ((maxWidth - 44.dp) * .45f).coerceAtLeast(133.dp)
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 8.dp, bottom = 105.dp)) {
+            item {
+                GroupHeading(stringResource(R.string.sessions), sessions.size, stringResource(R.string.all_sessions), onSessions)
+                Spacer(Modifier.height(14.dp))
+                AnimatedContent(
+                    targetState = sessions.take(6),
+                    contentKey = { visibleSessions -> visibleSessions.map { it.id } },
+                    transitionSpec = { motion.collectionTransition() },
+                    label = "home_sessions",
+                ) { visibleSessions ->
+                    if (visibleSessions.isEmpty()) {
+                        Column(Modifier.fillMaxWidth().heightIn(min = 154.dp).animateContentSize(motion.contentSizeSpec())
+                            .workspaceFrame().padding(18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                            WorkspaceSymbol { Glyph(R.drawable.ic_terminal, Modifier.size(22.dp)) }
+                            HelperText(stringResource(R.string.no_sessions))
+                        }
+                    } else LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        items(visibleSessions, key = { it.id }) { session ->
+                            SessionThumbnail(session, Modifier.width(thumbnailWidth)) { onSession(session.id) }
+                        }
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(30.dp))
+                GroupHeading(stringResource(R.string.ssh_hosts), action = stringResource(R.string.all_count, hosts.size), onAction = onHosts)
+                Spacer(Modifier.height(8.dp))
+            }
+            item {
+                AnimatedContent(
+                    targetState = hosts.take(2),
+                    contentKey = { visibleHosts -> visibleHosts.map { it.id } },
+                    transitionSpec = { motion.collectionTransition() },
+                    label = "home_hosts",
+                ) { visibleHosts ->
+                    Column(Modifier.animateContentSize(motion.contentSizeSpec())) {
+                        if (visibleHosts.isEmpty()) {
+                            HelperText(stringResource(R.string.no_hosts), Modifier.fillMaxWidth().workspaceFrame().padding(18.dp))
+                        } else {
+                            visibleHosts.forEach { host ->
+                                HostRow(host, { onLogin(host) }, { onEditHost(host) }, { onDeleteHost(host) })
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(26.dp))
+                GroupHeading(stringResource(R.string.computers), action = stringResource(R.string.all), onAction = onComputers)
+                AnimatedContent(
+                    targetState = computerSummaries(desktops, relays),
+                    contentKey = { visibleComputers -> visibleComputers.map { it.id } },
+                    transitionSpec = { motion.collectionTransition() },
+                    label = "home_computers",
+                ) { visibleComputers ->
+                    Column(Modifier.animateContentSize(motion.contentSizeSpec())) {
+                        if (visibleComputers.isEmpty()) {
+                            HelperText(stringResource(R.string.no_computers), Modifier.padding(bottom = 8.dp))
+                        } else visibleComputers.forEach { computer ->
+                            val relay = computer.relay
+                            ComputerRow(computer.title, computer.status, computer.transport) {
+                                if (relay == null) onDesktop(computer.id) else onRelay(relay)
+                            }
+                        }
+                    }
+                }
+                NavigationRow(R.drawable.ic_monitor, stringResource(R.string.relay_connect), onClick = onAddRelay)
+                Spacer(Modifier.height(22.dp))
+                NavigationRow(R.drawable.ic_terminal, stringResource(R.string.local_terminal), onClick = onLocal)
+            }
+        }
+        FloatingActionButton(onAddHost, shape = CircleShape, containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = 23.dp).size(58.dp)) {
+            Icon(painterResource(R.drawable.ic_plus), stringResource(R.string.add_ssh), Modifier.size(27.dp))
+        }
+    }
+}
+
+@Composable
+private fun SessionThumbnail(session: LocalSession, modifier: Modifier, onClick: () -> Unit) {
+    // One bounded capture when the gallery appears. No hidden terminal renderer or polling per card.
+    val preview = remember(session.id, session.status) {
+        session.terminal.previewText()
+    }
+    Column(modifier.workspaceFrame().clickable(onClick = onClick)) {
+        Box(Modifier.fillMaxWidth().height(157.dp).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .35f)).padding(10.dp)) {
+            if (preview.isBlank()) Glyph(R.drawable.ic_terminal, Modifier.align(Alignment.Center).size(24.dp))
+            else Text(preview, fontSize = 9.sp, lineHeight = 15.sp, fontFamily = LocalTerminalFont.current,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, softWrap = false, maxLines = 9)
+            Text(session.source.uppercase(), fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.background).padding(3.dp))
+        }
+        HorizontalDivider(thickness = .5.dp)
+        Row(Modifier.padding(start = 11.dp, end = 11.dp, top = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+            Glyph(R.drawable.ic_terminal, Modifier.size(16.dp))
+            Text(session.title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 7.dp))
+        }
+        Box(Modifier.padding(start = 11.dp, end = 11.dp, top = 7.dp, bottom = 12.dp)) { StatusCaption(session.status) }
+    }
+}
+
+@Composable
+fun HostRow(host: HostProfile, onLogin: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).workspaceFrame().heightIn(min = 83.dp).padding(start = 13.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).clickable(onClick = onLogin).padding(vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            WorkspaceSymbol { HostSymbol(host.icon, Modifier.size(23.dp)) }
+            Column(Modifier.weight(1f)) {
+                Text(host.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val address = if (':' in host.address && !host.address.startsWith('[')) "[${host.address}]" else host.address
+                Text("${host.user}@$address:${host.port}", fontFamily = LocalTerminalFont.current, fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
+            }
+        }
+        Box {
+            GlyphButton(R.drawable.ic_more, "${stringResource(R.string.host_actions)} · ${host.name}", { menu = true })
+            DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem(text = { Text(stringResource(R.string.edit_host)) }, onClick = { menu = false; onEdit() })
+                DropdownMenuItem(text = { Text(stringResource(R.string.delete_host)) }, onClick = { menu = false; onDelete() })
+            }
+        }
+    }
+}
+
+@Composable
+fun ComputerRows(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>, onDesktop: (String) -> Unit, onRelay: (RelayProfile) -> Unit) {
+    computerSummaries(desktops, relays).forEach { computer ->
+        val relay = computer.relay
+        ComputerRow(computer.title, computer.status, computer.transport) {
+            if (relay == null) onDesktop(computer.id) else onRelay(relay)
+        }
+    }
+}
+
+private data class ComputerSummary(
+    val id: String,
+    val title: String,
+    val status: String,
+    val transport: String,
+    val relay: RelayProfile? = null,
+)
+
+private fun computerSummaries(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>): List<ComputerSummary> = buildList {
+    desktops.forEach { desktop ->
+        add(ComputerSummary(desktop.id, desktop.host.name, desktop.status, desktop.transport))
+    }
+    relays.filter { profile -> desktops.none { it.host.id == profile.id } }.forEach { profile ->
+        add(ComputerSummary(profile.id, profile.name, "disconnected", "Relay", profile))
+    }
+}
+
+@Composable
+private fun ComputerRow(title: String, status: String, transport: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).workspaceFrame().clickable(onClick = onClick)
+        .heightIn(min = 82.dp).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        WorkspaceSymbol { Glyph(R.drawable.ic_monitor, Modifier.size(24.dp)) }
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Box(Modifier.padding(top = 7.dp)) { StatusCaption(status, "$transport · ") }
+        }
+        Glyph(R.drawable.ic_chevron, Modifier.size(14.dp))
+    }
+}
+
+@Composable
+fun HostsScreen(hosts: List<HostProfile>, onLogin: (HostProfile) -> Unit, onEdit: (HostProfile) -> Unit, onDelete: (HostProfile) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var group by remember { mutableStateOf("all") }
+    val found = hosts.filter { (group == "all" || it.group == group) && "${it.name} ${it.address} ${it.user}".contains(query, ignoreCase = true) }
+    LazyColumn(contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)) {
+        item {
+            OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), singleLine = true,
+                placeholder = { Text(stringResource(R.string.search_hosts), fontSize = 13.sp) }, leadingIcon = { Glyph(R.drawable.ic_search) })
+        }
+        item {
+            ConnectionSegments(listOf("all" to stringResource(R.string.all), "production" to stringResource(R.string.group_production),
+                "development" to stringResource(R.string.group_development)), group, { group = it }, Modifier.fillMaxWidth().padding(bottom = 14.dp))
+        }
+        items(found, key = { it.id }) { host -> HostRow(host, { onLogin(host) }, { onEdit(host) }, { onDelete(host) }) }
+        item { HelperText(stringResource(if (found.isEmpty() && query.isNotBlank()) R.string.no_search_results else R.string.host_hint), Modifier.padding(top = 20.dp)) }
+    }
+}

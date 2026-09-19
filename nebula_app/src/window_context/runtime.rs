@@ -15,7 +15,7 @@ use crate::event::TabRequest;
 use crate::runtime_api::{
     ApiError, RuntimeAgent, RuntimeAgentStateSource, RuntimeKey, RuntimeKeyModifiers,
     RuntimeLayout, RuntimePane, RuntimePaneProcesses, RuntimePaneRead, RuntimeSplitDirection,
-    RuntimeTab, RuntimeTaskState, RuntimeWindow,
+    RuntimeTab, RuntimeTaskState, RuntimeWindow, validate_tab_close_target,
 };
 
 use super::{Layout, TabLaunch, WindowContext};
@@ -229,16 +229,34 @@ impl WindowContext {
         Ok(())
     }
 
-    pub(crate) fn runtime_close_tab(&mut self, tab_index: usize) -> Result<bool, ApiError> {
+    pub(crate) fn runtime_close_tab(
+        &mut self,
+        tab_index: usize,
+        expected_pane_id: Option<u64>,
+        confirmed: bool,
+    ) -> Result<bool, ApiError> {
         let Some(tab) = self.tabs.get(tab_index) else {
             return Err(ApiError::new(
                 "target_not_found",
                 format!("tab {tab_index} does not exist in window {}", u64::from(self.id())),
             ));
         };
+        let actual_tab_index = expected_pane_id.and_then(|pane_id| {
+            self.tabs.iter().position(|candidate| {
+                let mut pane_ids = Vec::new();
+                candidate.layout.leaves(&mut pane_ids);
+                pane_ids.contains(&pane_id)
+            })
+        });
+        validate_tab_close_target(
+            u64::from(self.id()),
+            tab_index,
+            expected_pane_id,
+            actual_tab_index,
+        )?;
         let mut pane_ids = Vec::new();
         tab.layout.leaves(&mut pane_ids);
-        if let Some(process) = self.busy_process_in(&pane_ids) {
+        if !confirmed && let Some(process) = self.busy_process_in(&pane_ids) {
             return Err(runtime_close_confirmation(
                 process,
                 json!({

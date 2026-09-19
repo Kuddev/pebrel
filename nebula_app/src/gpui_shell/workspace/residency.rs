@@ -18,6 +18,7 @@ use crate::gpui_shell::terminal::view::InputOrigin;
 use crate::runtime_api::{
     ApiError, RuntimeCommand, RuntimeDispatch, RuntimeLayout, RuntimePane, RuntimeSnapshot,
     RuntimeSplitDirection, RuntimeTab, RuntimeTaskState, RuntimeWindow,
+    validate_tab_close_target,
 };
 
 /// 关窗处置。`tray` 故意不参与：旧壳无托盘也会 detach，GPUI 一律 hide，
@@ -234,7 +235,12 @@ impl NebulaWorkspace {
                     cx,
                 )
             },
-            RuntimeCommand::CloseTab { window_id, tab_index } => {
+            RuntimeCommand::CloseTab {
+                window_id,
+                tab_index,
+                expected_pane_id,
+                confirmed,
+            } => {
                 self.runtime_window_requested(*window_id)?;
                 if *tab_index >= self.tabs.len() {
                     return Err(ApiError::new(
@@ -245,7 +251,15 @@ impl NebulaWorkspace {
                         ),
                     ));
                 }
-                if let Some(process) = self.busy_process_in_tab(*tab_index, None, cx) {
+                validate_tab_close_target(
+                    self.runtime_window_id,
+                    *tab_index,
+                    *expected_pane_id,
+                    expected_pane_id.and_then(|pane_id| self.tab_of_pane(pane_id)),
+                )?;
+                if !confirmed
+                    && let Some(process) = self.busy_process_in_tab(*tab_index, None, cx)
+                {
                     return Err(runtime_close_confirmation(
                         process,
                         json!({

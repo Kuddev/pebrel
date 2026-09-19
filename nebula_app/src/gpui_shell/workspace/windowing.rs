@@ -1796,7 +1796,12 @@ mod tests {
             RuntimeCommand::Snapshot,
             RuntimeCommand::CloseWindow { window_id: Some(1) },
             RuntimeCommand::NewTab { window_id: Some(1), cwd: None },
-            RuntimeCommand::CloseTab { window_id: Some(1), tab_index: 0 },
+            RuntimeCommand::CloseTab {
+                window_id: Some(1),
+                tab_index: 0,
+                expected_pane_id: None,
+                confirmed: false,
+            },
             RuntimeCommand::RenameTab {
                 window_id: Some(1),
                 tab_index: 0,
