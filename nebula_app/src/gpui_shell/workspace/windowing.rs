@@ -25,8 +25,8 @@ use std::time::Duration;
 use super::DockTarget;
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity, Window,
-    WindowBounds, WindowOptions, div, point, px, size,
+    ParentElement as _, Render, Styled as _, Subscription, WeakEntity, Window, WindowBounds,
+    WindowOptions, div, point, px, size,
 };
 use gpui_component::{ActiveTheme as _, Root, TitleBar};
 use nebula_split::SplitTree;
@@ -154,7 +154,6 @@ pub(crate) struct CrossWindowTabDrag {
     source: WeakEntity<NebulaWorkspace>,
     source_window_id: u64,
     pane_id: u64,
-    title: SharedString,
 }
 
 impl CrossWindowTabDrag {
@@ -177,23 +176,14 @@ struct NativeCursorTarget {
     client_y: i32,
 }
 
-pub(crate) struct TabDragPreview {
-    title: SharedString,
-}
+/// GPUI requires a renderable entity for native cross-window dragging, while
+/// the source tab row already follows the pointer in our own reorder layer.
+/// Keep this proxy invisible so the tab title is not painted a second time.
+pub(crate) struct TabDragPreview;
 
 impl Render for TabDragPreview {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .max_w(px(280.0))
-            .px_3()
-            .py_2()
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().popover)
-            .text_color(cx.theme().popover_foreground)
-            .shadow_md()
-            .child(self.title.clone())
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(1.0)).opacity(0.0)
     }
 }
 
@@ -1560,15 +1550,14 @@ impl NebulaWorkspace {
             source: cx.entity().downgrade(),
             source_window_id: self.runtime_window_id,
             pane_id: *focused,
-            title: self.tab_title(ix, cx),
         })
     }
 
     pub(crate) fn cross_window_drag_preview(
-        payload: &CrossWindowTabDrag,
+        _payload: &CrossWindowTabDrag,
         cx: &mut App,
     ) -> Entity<TabDragPreview> {
-        cx.new(|_| TabDragPreview { title: payload.title.clone() })
+        cx.new(|_| TabDragPreview)
     }
 
     pub(crate) fn schedule_move_tab_to_new_window(&self, ix: usize, cx: &mut Context<Self>) {
