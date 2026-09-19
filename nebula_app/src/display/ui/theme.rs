@@ -22,12 +22,6 @@ use crate::display::color::{List, Rgb};
 use crate::renderer::ui::Rgba;
 use nebula_terminal::vte::ansi::NamedColor;
 
-/// First 256-color palette slot claimed for the powerline prompt chips
-/// (16..=23: icon bg/fg, path bg/fg, branch bg/fg, time bg/fg). Chosen at the
-/// very start of the 6×6×6 cube — the darkest corner, rarely load-bearing for
-/// TUIs — so hijacking eight slots stays invisible in practice.
-pub(crate) const POWERLINE_SLOT0: usize = 16;
-
 /// Built-in chrome themes exposed from the settings panel. The original seven
 /// Nebula looks remain unchanged; Nord/Paper are an additive dark/light pair
 /// carrying their own complete palettes.
@@ -292,14 +286,6 @@ impl NebulaTheme {
         *colors = *defaults;
         let p = self.palette();
         colors[NamedColor::Background] = p.term_bg;
-        // Powerline prompt slots: the injected prompt paints its segment chips
-        // with indexed colors 16..=23 instead of baked-in truecolor, so a
-        // theme switch remaps the palette and every chip ALREADY PRINTED in
-        // scrollback recolors instantly — indexed cells resolve the palette at
-        // draw time; truecolor is frozen the moment it is printed.
-        for (i, rgb) in self.powerline_colors().into_iter().enumerate() {
-            colors[POWERLINE_SLOT0 + i] = rgb;
-        }
         if let Some(exact) = self.exact_term_colors() {
             let foreground = rgb8(exact.foreground);
             colors[NamedColor::Foreground] = foreground;
@@ -376,8 +362,7 @@ impl NebulaTheme {
         }
     }
 
-    /// Segment colors for the injected powerline prompt, published into the
-    /// 256-color palette at [`POWERLINE_SLOT0`]`..+8` by [`Self::apply_term_colors`].
+    /// 旧提示符段色参考；不发布到终端扩展色表，避免覆盖应用的索引色。
     /// Order: icon bg/fg, path bg/fg, branch bg/fg, time bg/fg — one flat color
     /// per chip (the old per-character truecolor gradient could never follow a
     /// theme switch retroactively, which users read as "the prompt is stuck").

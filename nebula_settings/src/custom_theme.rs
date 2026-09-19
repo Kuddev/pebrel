@@ -60,13 +60,7 @@ impl ThemeDefinition {
             }
         });
 
-        let mut indexed = IndexedPalette::from_ansi(exact.ansi);
-        // These slots are part of Nebula's existing prompt contract.  Keeping
-        // them in the snapshot means a custom theme recolors prompt chips and
-        // the rest of the terminal from one value object.
-        for (offset, color) in term.powerline.into_iter().enumerate() {
-            indexed.colors[16 + offset] = color;
-        }
+        let indexed = IndexedPalette::from_ansi(exact.ansi);
 
         Self {
             name: base.prompt_name().to_owned(),
@@ -725,6 +719,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn builtin_snapshots_preserve_standard_extended_colors() {
+        // 提示符配色不能覆盖应用使用的 xterm 色立方。
+        for name in ThemeName::BUILTIN {
+            let snapshot = ThemeDefinition::from_builtin(name);
+            for (index, expected) in [
+                (16, [0, 0, 0]),
+                (17, [0, 0, 95]),
+                (18, [0, 0, 135]),
+                (19, [0, 0, 175]),
+                (20, [0, 0, 215]),
+                (21, [0, 0, 255]),
+                (22, [0, 95, 0]),
+                (23, [0, 95, 95]),
+                (231, [255, 255, 255]),
+                (255, [238, 238, 238]),
+            ] {
+                assert_eq!(
+                    snapshot.terminal.palette.colors[index],
+                    expected,
+                    "{} index {index}",
+                    name.prompt_name()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn builtin_snapshot_keeps_declared_exact_colors() {
         let nord = ThemeDefinition::from_builtin(ThemeName::Nord);
         let exact = ThemeName::Nord.term_theme().exact.unwrap();
@@ -733,7 +754,7 @@ mod tests {
         assert_eq!(nord.terminal.cursor, exact.cursor);
         assert_eq!(nord.terminal.selection_background, exact.selection_background);
         assert_eq!(nord.terminal.palette.ansi_colors(), exact.ansi);
-        assert_eq!(nord.terminal.palette.colors[16], ThemeName::Nord.term_theme().powerline[0]);
+        assert_eq!(nord.terminal.palette.colors[16], [0, 0, 0]);
         assert_eq!(nord.ui.selection[3], 255);
         assert_eq!(nord.ui.line[3], 255);
 

@@ -142,11 +142,7 @@ pub(crate) fn is_fixed_color(color: Color, overrides: &Colors) -> bool {
     match color {
         Color::Spec(_) => true,
         Color::Named(name) => overrides[name].is_some(),
-        Color::Indexed(index) => {
-            overrides[index as usize].is_some()
-                // 16..=23 是 Nebula 随主题重建的 powerline 动态槽位。
-                || index >= 24
-        },
+        Color::Indexed(index) => overrides[index as usize].is_some() || index >= 16,
     }
 }
 
@@ -328,7 +324,10 @@ mod tests {
         let mut overrides = Colors::default();
         assert!(is_fixed_color(Color::Spec(VteRgb { r: 1, g: 2, b: 3 }), &overrides));
         assert!(is_fixed_color(Color::Indexed(24), &overrides));
-        assert!(!is_fixed_color(Color::Indexed(16), &overrides));
+        for index in 16..=255 {
+            assert!(is_fixed_color(Color::Indexed(index), &overrides));
+        }
+        assert!(!is_fixed_color(Color::Indexed(15), &overrides));
         assert!(!is_fixed_color(Color::Named(NamedColor::Red), &overrides));
 
         overrides[NamedColor::Red] = Some(VteRgb { r: 1, g: 2, b: 3 });

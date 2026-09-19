@@ -496,11 +496,8 @@ function global:prompt {
         if ($global:NebulaPromptCount -gt 1) { $leadingNewline = "`n" }
     }
 
-    # Segment colors come from the terminal's 256-color palette, slots
-    # 16..=23 (icon bg/fg, path bg/fg, branch bg/fg, time bg/fg), published
-    # per-theme by Nebula (theme.rs::apply_term_colors). Indexed colors mean a
-    # theme switch recolors every prompt already in scrollback — truecolor
-    # (the old scheme) is frozen the moment it prints. No theme file, no polling.
+    # 使用主题的 ANSI-16 索引，历史提示符仍随主题换色；不占用应用所需的
+    # xterm 扩展色槽。路径和时间用默认前景/背景，避免浅色主题的 ANSI 灰阶低对比。
 
     if ($userPrompt) {
         # 视觉全部来自用户提示符；Nebula 只补协议：133;A 标出提示符起点，标题
@@ -508,25 +505,25 @@ function global:prompt {
         $output = "$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$userPrompt"
     } elseif (-not (Get-NebulaBoolSetting 'powerline' $true)) {
         $branchText = if ($branch) { " ($branch)" } else { "" }
-        $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$e[38;5;19m$loc$branchText $e[35m$NebPromptArrow $reset"
+        $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$e[38;5;6m$loc$branchText $e[35m$NebPromptArrow $reset"
     } else {
         $segs = New-Object System.Collections.ArrayList
-        [void]$segs.Add(@{ bg=16; fg=17; t=" $NebFolderIcon " })
-        [void]$segs.Add(@{ bg=18; fg=19; t="  $loc  " })
-        if ($branch) { [void]$segs.Add(@{ bg=20; fg=21; t=" $NebGitBranchIcon $branch  " }) }
-        [void]$segs.Add(@{ bg=22; fg=23; t=" $NebClockIcon $time  " })
+        [void]$segs.Add(@{ bg=4; fg='38;5;0'; t=" $NebFolderIcon " })
+        [void]$segs.Add(@{ bg=$null; fg='39'; t="  $loc  " })
+        if ($branch) { [void]$segs.Add(@{ bg=$null; fg='38;5;6'; t=" $NebGitBranchIcon $branch  " }) }
+        [void]$segs.Add(@{ bg=$null; fg='39'; t=" $NebClockIcon $time  " })
 
         # 49 = default background on both caps: the cap cell's square corners
         # always match the real terminal bg (any theme / wallpaper).
         $out = "$reset$e[38;5;$($segs[0].bg)m$e[49m$NebLeftRound$reset"
         for ($i = 0; $i -lt $segs.Count; $i++) {
             $s = $segs[$i]
-            $out += "$e[48;5;$($s.bg)m$e[38;5;$($s.fg)m$($s.t)"
-            if ($i -lt $segs.Count - 1) {
-                $nb = $segs[$i + 1].bg
-                $out += "$reset$e[38;5;$($s.bg)m$e[48;5;${nb}m$NebArrow$reset"
+            $bg = if ($null -eq $s.bg) { '49' } else { "48;5;$($s.bg)" }
+            $out += "$e[${bg}m$e[$($s.fg)m$($s.t)"
+            if ($null -ne $s.bg) {
+                $out += "$reset$e[38;5;$($s.bg)m$e[49m$NebArrow$reset"
             } else {
-                $out += "$reset$e[38;5;$($s.bg)m$e[49m$NebRightRound$reset"
+                $out += $reset
             }
         }
         $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$out`n`n$e[35m$NebPromptArrow $reset"
@@ -1356,6 +1353,39 @@ $env:PEBREL_CONFIG_DIR = Join-Path ([System.IO.Path]::GetTempPath()) 'pebrel-ps-
 $env:NEBULA_CONFIG_DIR = $env:PEBREL_CONFIG_DIR
 function global:Set-PSReadLineOption { }
 "#;
+
+    #[test]
+    fn powershell_prompt_uses_only_theme_ansi_slots() {
+        run_powershell_integration_case(
+            PS_PRELUDE,
+            r#"
+function global:git { $global:LASTEXITCODE = 0; 'test-branch' }
+foreach ($powerline in @($true, $false)) {
+    $global:TestPowerline = $powerline
+    function global:Get-NebulaBoolSetting { param($key, $default); $global:TestPowerline }
+    $rendered = prompt
+    $colors = [regex]::Matches($rendered, '\x1b\[(?:38|48);5;(\d+)m')
+    if ($colors.Count -eq 0) { throw 'No indexed prompt colors' }
+    foreach ($color in $colors) {
+        if ([int]$color.Groups[1].Value -gt 15) {
+            throw "Prompt occupied extended color $($color.Groups[1].Value)"
+        }
+    }
+    if ($powerline) {
+        $e = [char]27
+        if (-not $rendered.Contains("$e[49m$e[39m  $((Get-Location).Path)  ")) {
+            throw 'Path must use theme default foreground and background'
+        }
+        if (-not $rendered.Contains("$e[49m$e[39m $([char]0xf017)")) {
+            throw 'Clock must use theme default foreground and background'
+        }
+    }
+    if ($rendered -notlike '*test-branch*') { throw 'Missing branch' }
+    if ($rendered -notlike "*$([char]27)]133;A*") { throw 'Missing prompt boundary' }
+}
+"#,
+        );
+    }
 
     #[test]
     fn powershell_integration_preserves_the_users_prediction_source() {

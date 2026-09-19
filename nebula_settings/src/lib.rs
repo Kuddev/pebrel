@@ -513,12 +513,9 @@ pub struct TermTheme {
     /// 只有自带完整终端 palette 的主题使用；现有七个主题保持 `None`，继续
     /// 走原来的背景/浅色替换合同。
     pub exact: Option<ExactTermColors>,
-    /// Powerline 提示符段色，发布到 256 色表 [`POWERLINE_SLOT0`]`..+8`。
+    /// 旧提示符段色参考；不再发布到终端扩展色表。
     pub powerline: [Rgb8; 8],
 }
-
-/// Powerline 槽位起点（索引色 16..=23）。
-pub const POWERLINE_SLOT0: u8 = 16;
 
 /// 浅色主题的替换前景（#24292f）。
 pub const LIGHT_FOREGROUND: Rgb8 = [36, 41, 47];
