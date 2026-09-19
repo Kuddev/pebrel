@@ -119,6 +119,9 @@ pub fn preview(variant: AppIconName, requested: u32) -> Option<Arc<gpui::Image>>
 
 #[cfg(windows)]
 pub mod windows {
+    pub(super) mod taskbar;
+    pub(crate) use taskbar::refresh_pinned;
+
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -143,6 +146,7 @@ pub mod windows {
     }
 
     pub fn set_window(hwnd: HWND, variant: AppIconName) {
+        taskbar::set_window(hwnd, variant);
         let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
         ICONS.with(|cache| {
             let mut cache = cache.borrow_mut();
@@ -175,7 +179,7 @@ pub mod windows {
 mod tests {
     use super::*;
 
-    fn ico_png(bytes: &[u8], size: u32) -> &[u8] {
+    pub(super) fn ico_png(bytes: &[u8], size: u32) -> &[u8] {
         let count = u16::from_le_bytes(bytes[4..6].try_into().unwrap()) as usize;
         for index in 0..count {
             let entry = &bytes[6 + index * 16..22 + index * 16];
@@ -285,6 +289,10 @@ mod tests {
         for iteration in 0..10 {
             for (variant_index, variant) in AppIconName::ALL.into_iter().enumerate() {
                 windows::set_window(hwnd, variant);
+                let resource =
+                    windows::taskbar::icon_location(hwnd).expect("taskbar shell property");
+                assert!(resource.contains(variant.settings_value()));
+                assert!(resource.ends_with(".ico,0"));
                 let handles = [ICON_SMALL, ICON_BIG]
                     .map(|slot| unsafe { SendMessageW(hwnd, WM_GETICON, slot as usize, 0) });
                 assert!(handles.iter().all(|handle| *handle != 0));

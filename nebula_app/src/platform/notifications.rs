@@ -191,7 +191,7 @@ mod win {
 
     /// AppUserModelID for Pebrel. Toast notifications fire under this identity
     /// so the system shows "Pebrel" instead of "PowerShell" / "cmd.exe".
-    pub const AUMID: &str = "com.pebrel.terminal";
+    pub const AUMID: &str = crate::brand::WINDOWS_APP_ID;
 
     /// Ensure the AUMID is registered. Best-effort, cached per process: the
     /// write itself is a few syscalls, there is just no point repeating them

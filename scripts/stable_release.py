@@ -121,7 +121,7 @@ def validate_notes(source: Path, version: str) -> str:
     notes = source.read_text(encoding="utf-8").strip()
     if not notes.startswith(f"# Pebrel {version}\n"):
         raise StableReleaseError("stable release notes have the wrong title")
-    for heading in ("## English", "## 中文", "## Contributors"):
+    for heading in ("## English", "## 中文"):
         if notes.splitlines().count(heading) != 1:
             raise StableReleaseError(f"stable release notes require one {heading} section")
     checksum_headings = ("\n## SHA256\n", "\n**SHA256**\n")
@@ -130,9 +130,12 @@ def validate_notes(source: Path, version: str) -> str:
         raise StableReleaseError("stable release notes require one SHA256 section")
     english_start = notes.index("\n## English\n")
     chinese_start = notes.index("\n## 中文\n")
-    contributors_start = notes.index("\n## Contributors\n")
     checksum_start = notes.index(present_checksums[0])
-    if not english_start < chinese_start < contributors_start < checksum_start:
+    contributor_count = notes.splitlines().count("## Contributors")
+    if contributor_count > 1:
+        raise StableReleaseError("stable release notes allow at most one Contributors section")
+    contributors_start = notes.index("\n## Contributors\n") if contributor_count else checksum_start
+    if not english_start < chinese_start < contributors_start <= checksum_start:
         raise StableReleaseError("stable release notes sections are out of order")
     pairs = (("Added", "新增"), ("Fixed", "修复"), ("Improved", "改进"))
     english = notes[english_start:chinese_start]
@@ -142,7 +145,7 @@ def validate_notes(source: Path, version: str) -> str:
     ):
         raise StableReleaseError("stable release notes need matching bilingual change categories")
     contributors = notes[contributors_start:checksum_start]
-    if not re.search(r"github\.com/[^)]+", contributors, flags=re.IGNORECASE):
+    if contributor_count and not re.search(r"github\.com/[^)]+", contributors, flags=re.IGNORECASE):
         raise StableReleaseError("stable release notes must identify contributors with GitHub links")
     checksum_body = notes[checksum_start:].strip()
     if STABLE_SHA256_PLACEHOLDER not in checksum_body:

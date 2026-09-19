@@ -224,7 +224,9 @@
     "window_params": {
       "type": "object",
       "properties": {
-        "window_id": { "$ref": "#/$defs/nullable_window_id" }
+        "window_id": { "$ref": "#/$defs/nullable_window_id" },
+        "cwd": { "type": ["string", "null"] },
+        "shell": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
@@ -487,7 +489,8 @@
       "type": "object",
       "properties": {
         "window_id": { "$ref": "#/$defs/nullable_window_id" },
-        "cwd": { "type": ["string", "null"] }
+        "cwd": { "type": ["string", "null"] },
+        "shell": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },

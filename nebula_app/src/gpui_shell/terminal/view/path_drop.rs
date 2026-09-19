@@ -23,7 +23,7 @@ impl PathDropState {
 }
 
 impl TerminalView {
-    fn path_quote(&self) -> PathQuote {
+    pub(super) fn path_quote(&self) -> PathQuote {
         if self.ssh_destination.is_some()
             || self.exec_context.as_ref().and_then(|context| context.wsl_distribution()).is_some()
         {
@@ -170,6 +170,11 @@ fn wsl_paths(
     user: Option<String>,
 ) -> Result<Vec<String>, String> {
     let mut command = std::process::Command::new("wsl.exe");
+    // `command_output_with_timeout` 只负责超时和管道，压窗口得调用方自己来
+    // （见 `platform::process`）：不压的话，往 WSL pane 拖一次文件就等于从无
+    // 控制台的 GUI 进程起一个新控制台——默认终端是 Windows Terminal 的机器上
+    // 会弹一整扇窗口。
+    crate::platform::process::hidden_command(&mut command);
     if let Some(distro) = distro {
         command.args(["-d", &distro]);
     }

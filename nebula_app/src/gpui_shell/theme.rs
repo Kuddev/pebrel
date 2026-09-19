@@ -6,7 +6,12 @@ use crate::display::ui::theme::NebulaTheme;
 use crate::renderer::ui::Rgba;
 use nebula_settings::ThemeName;
 
+mod custom;
 mod syntax;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod selection_tests;
+pub(crate) use custom::ResolvedTheme;
 
 struct DocumentColors {
     background: Hsla,
@@ -36,7 +41,29 @@ fn settings_theme_name(theme: NebulaTheme) -> ThemeName {
 /// 当前生效的旧壳 chrome 主题（SSH 连接卡片等复用旧 Skin/palette 的
 /// 视图从这里取色，避免第二套品牌色定义）。
 pub(crate) fn chrome_theme_resolved(cx: &App) -> NebulaTheme {
-    chrome_theme(effective_theme_name(cx))
+    resolved_theme(cx).chrome_theme()
+}
+
+/// Resolved snapshot shared by terminal, chrome and settings helpers.  Once
+/// `Settings` is installed this is a pure in-memory lookup; the disk fallback
+/// is only needed during the short bootstrap window before the global exists.
+pub(crate) fn resolved_theme(cx: &App) -> std::sync::Arc<ResolvedTheme> {
+    cx.try_global::<crate::gpui_shell::config::Settings>()
+        .map(|settings| settings.resolved_theme.clone())
+        .unwrap_or_else(|| {
+            let runtime = nebula_settings::RuntimeSettings::load();
+            let fallback =
+                resolve_theme_name(runtime.theme, runtime.follow_system_theme, system_is_light(cx));
+            std::sync::Arc::new(ResolvedTheme::from_runtime(&runtime, fallback))
+        })
+}
+
+pub(crate) fn resolved_skin(cx: &App) -> crate::display::ui::theme::Skin {
+    resolved_theme(cx).skin()
+}
+
+pub(crate) fn resolved_palette(cx: &App) -> crate::display::ui::theme::NebulaPalette {
+    resolved_theme(cx).chrome_palette()
 }
 
 /// 当前 OS 外观是否为浅色。跟随系统时与旧壳 `WinitTheme::Light` 同一判定。
@@ -66,6 +93,9 @@ pub(crate) fn resolve_theme_name(
 /// 亮/暗成员（规则与旧壳 `NebulaTheme::for_system_appearance` 同一来源）。
 /// chrome 令牌与终端 palette 都必须走这里，两层才不会分家。
 pub fn effective_theme_name(cx: &App) -> ThemeName {
+    if let Some(settings) = cx.try_global::<crate::gpui_shell::config::Settings>() {
+        return settings.resolved_theme.base_name();
+    }
     let rt = nebula_settings::RuntimeSettings::load();
     resolve_theme_name(rt.theme, rt.follow_system_theme, system_is_light(cx))
 }
@@ -98,7 +128,7 @@ fn ink(c: Rgb) -> Hsla {
 /// 再暗一档，旧壳只用于「确实在场但不参与层级竞争」的元素——侧栏数量
 /// chip 的数字、未绑定键帽等。GPUI 全局 token 没有这一档，按需来取。
 pub(crate) fn faint_ink(cx: &App) -> Hsla {
-    ink(chrome_theme(effective_theme_name(cx)).skin().ink_faint)
+    ink(resolved_skin(cx).ink_faint)
 }
 
 /// 侧栏运行 spinner 的两端颜色，逐字复用旧壳 `draw_chrome` 的底色裁定：
@@ -106,9 +136,8 @@ pub(crate) fn faint_ink(cx: &App) -> Hsla {
 /// 铺成；若直接交给 GPUI 用半透明 hairline 叠画，交叠处会变深，看起来像
 /// 一圈模糊珠子而不是连续圆环。
 pub(crate) fn sidebar_spinner_colors(cx: &App, active: bool) -> (GpuiRgba, GpuiRgba) {
-    let chrome = chrome_theme(effective_theme_name(cx));
-    let palette = chrome.palette();
-    let sk = chrome.skin();
+    let palette = resolved_palette(cx);
+    let sk = resolved_skin(cx);
     let shell = Rgba::new(palette.shell_bg.r, palette.shell_bg.g, palette.shell_bg.b, 255);
     let base =
         if active { crate::display::ui::surface::over(sk.accent_soft, shell) } else { shell };
@@ -174,8 +203,7 @@ fn wash_scaled(c: Rgba, f: f32) -> Hsla {
 /// 旧壳 `shell_frame_color` 的不透明形态：panel 按自身 alpha 预合成到
 /// shell_bg 上。整窗清到这个色；终端以 term_bg 圆角卡浮于其上，顶栏与
 /// 侧栏融进壳色（一体化外壳）。GPUI 壳暂不接透明度滑块，alpha 取 1。
-fn shell_color(theme: NebulaTheme) -> Hsla {
-    let p = theme.palette();
+fn shell_color(p: crate::display::ui::theme::NebulaPalette) -> Hsla {
     let pa = f32::from(p.panel.a) / 255.0;
     let comp = |pv: u8, bv: u8| (f32::from(pv) * pa + f32::from(bv) * (1.0 - pa)).round() as u8;
     to_hsla(
@@ -221,6 +249,17 @@ impl PaneCardStyle {
     /// 与 `RuntimeSettings`，是唯一能正确合并两层的地方；别处自行读一遍
     /// settings 就会在跟随系统主题时和 chrome 分家。
     pub fn resolve(theme: ThemeName, runtime: &nebula_settings::RuntimeSettings) -> Self {
+        let resolved = ResolvedTheme::builtin(theme, None);
+        Self::resolve_for_resolved_theme(&resolved, runtime)
+    }
+
+    /// Resolve geometry from the same immutable theme snapshot used by the
+    /// terminal and chrome. Custom themes therefore do not silently fall back
+    /// to their built-in base card shape.
+    pub fn resolve_for_resolved_theme(
+        theme: &ResolvedTheme,
+        runtime: &nebula_settings::RuntimeSettings,
+    ) -> Self {
         let geometry = theme.card_geometry();
         let radius = runtime.pane_card_radius.unwrap_or(geometry.radius);
         let rounded = radius > 0.0;
@@ -251,7 +290,7 @@ impl PaneCardStyle {
 /// 侧栏与正文的弱分界直接使用 HTML 对应的 `line` RGBA 令牌。
 /// 它与外窗描边、强调色分别取值，不额外合成一套灰色。
 pub fn card_divider_color(cx: &App) -> Hsla {
-    wash(chrome_theme_resolved(cx).skin().hairline)
+    wash(resolved_skin(cx).hairline)
 }
 
 /// 终端卡圆角。默认值的权威在 `nebula_settings::DEFAULT_PANE_CARD_RADIUS`，
@@ -265,7 +304,7 @@ pub fn card_radius(cx: &App) -> Pixels {
 /// 偏移只给 y、不给 x：光源当作正上方，卡在窗口里居中偏右时也不会出现
 /// 阴影朝一侧甩的违和感。
 pub fn card_shadow(cx: &App) -> gpui::BoxShadow {
-    let is_light = chrome_theme_resolved(cx).palette().is_light;
+    let is_light = resolved_palette(cx).is_light;
     gpui::BoxShadow {
         color: hsla(0.0, 0.0, 0.0, if is_light { 0.10 } else { 0.28 }),
         offset: point(px(0.0), px(6.0)),
@@ -363,7 +402,7 @@ pub fn paint_shell_around_card(
 
 /// 旧壳设置页使用不透明 `Skin.panel`，不让终端壁纸穿透设置内容。
 pub fn settings_panel_bg(cx: &App) -> Hsla {
-    solid(chrome_theme(effective_theme_name(cx)).skin().panel)
+    solid(resolved_skin(cx).panel)
 }
 
 /// Terminal completion colors are derived from the active Nebula skin. The
@@ -393,7 +432,7 @@ pub(crate) struct CompletionColors {
 }
 
 pub(crate) fn completion_colors(cx: &App, _term_bg: GpuiRgba) -> CompletionColors {
-    let sk = chrome_theme(effective_theme_name(cx)).skin();
+    let sk = resolved_skin(cx);
     let alpha = |hex: u32, a: f32| -> Hsla {
         GpuiRgba {
             r: f32::from(((hex >> 16) & 0xff) as u8) / 255.0,
@@ -435,7 +474,7 @@ pub(crate) fn completion_colors(cx: &App, _term_bg: GpuiRgba) -> CompletionColor
 /// 明显——那就是"刺眼"的来源。所以**降饱和、保亮度**：可辨来自亮度差，刺眼
 /// 来自饱和度，两者可以拆开。
 pub fn settings_mark(cx: &App) -> Hsla {
-    if chrome_theme(effective_theme_name(cx)).skin().is_light {
+    if resolved_skin(cx).is_light {
         // 浅色底上要更暗才看得见，同样压饱和。
         hsla(250.0 / 360.0, 0.40, 0.47, 1.0)
     } else {
@@ -449,7 +488,7 @@ pub fn settings_mark(cx: &App) -> Hsla {
 /// 在说"这是两个区"，属于容器。两者同色同粗的话，画面上就出现两条同等分量
 /// 的线在争同一件事的解释权。
 pub fn settings_hairline(cx: &App) -> Hsla {
-    let sk = chrome_theme(effective_theme_name(cx)).skin();
+    let sk = resolved_skin(cx);
     // 浅色底上黑线比深色底上白线更"重"（同 alpha 视觉对比更高），所以浅色
     // 取更低的 alpha。
     let alpha = if sk.is_light { 20 } else { 18 };
@@ -457,7 +496,7 @@ pub fn settings_hairline(cx: &App) -> Hsla {
 }
 
 pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
-    let sk = chrome_theme(effective_theme_name(cx)).skin();
+    let sk = resolved_skin(cx);
     let (hover_alpha, strong_alpha) = if sk.is_light { (10, 18) } else { (30, 46) };
     let alpha = if strong { strong_alpha } else { hover_alpha };
     wash(Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, alpha))
@@ -474,15 +513,17 @@ pub fn apply_chrome_theme(cx: &mut App) {
     // 托盘与 chrome 同一热应用节拍：启动 / 设置变更 / 系统外观。
     crate::gpui_shell::apply_tray_setting();
 
-    let chrome = chrome_theme(effective_theme_name(cx));
-    let mode = if chrome.skin().is_light { ThemeMode::Light } else { ThemeMode::Dark };
+    let resolved = resolved_theme(cx);
+    let mode = if resolved.skin().is_light { ThemeMode::Light } else { ThemeMode::Dark };
     Theme::change(mode, None, cx);
-    apply_skin_tokens(chrome, cx);
-    let colors = settings_theme_name(chrome).reviewed_palette();
-    let [r, g, b] = colors.code_background();
-    let [fr, fg, fb] = colors.foreground;
-    cx.set_global(DocumentColors { background: to_hsla(r, g, b), foreground: to_hsla(fr, fg, fb) });
-    apply_shell_opacity(chrome, cx);
+    apply_skin_tokens(&resolved, cx);
+    let background = resolved.terminal_background();
+    let foreground = resolved.terminal_foreground();
+    cx.set_global(DocumentColors {
+        background: to_hsla(background[0], background[1], background[2]),
+        foreground: to_hsla(foreground[0], foreground[1], foreground[2]),
+    });
+    apply_shell_opacity(&resolved, cx);
 }
 
 /// 只按当前不透明度重算壳色，不做别的。
@@ -495,16 +536,28 @@ pub fn apply_chrome_theme(cx: &mut App) {
 /// 主题名由调用方传入：[`effective_theme_name`] 内部会 `RuntimeSettings::load()`
 /// 读盘一次，那正是这条路径要避开的东西。设置页自己持有 `runtime` 镜像。
 pub fn reapply_shell_opacity(name: ThemeName, follow_system: bool, cx: &mut App) {
-    let chrome = chrome_theme(resolve_theme_name(name, follow_system, system_is_light(cx)));
-    apply_shell_opacity(chrome, cx);
+    let _ = (name, follow_system);
+    reapply_prepared_surface_opacity(cx);
+}
+
+/// Wallpaper readiness can change asynchronously without a settings/theme reload.
+pub(super) fn reapply_prepared_surface_opacity(cx: &mut App) {
+    let resolved = resolved_theme(cx);
+    apply_shell_opacity(&resolved, cx);
 }
 
 /// 一体化外壳（对齐旧壳 draw_chrome）：窗口背景、侧栏、顶栏是同一块
 /// 壳色，各自的分隔线取同色隐形；唯一的结构分界是内容区那张圆角卡。
 /// 壳色带用户透明度（文字 token 不带——对比度不塌，旧壳裁定）。
-fn apply_shell_opacity(chrome: NebulaTheme, cx: &mut App) {
+fn apply_shell_opacity(chrome: &ResolvedTheme, cx: &mut App) {
+    // A theme's explicit material opacity is part of the resolved snapshot;
+    // otherwise keep the user's live/window opacity setting. This is read once
+    // here and never reparsed from the theme document on a frame.
+    // `wallpaper::refresh` has already merged the immutable theme default with
+    // the explicit runtime preference. Reading the resolved visual value here
+    // keeps chrome, terminal cards and native window effects on one contract.
     let opacity = crate::gpui_shell::wallpaper::chrome_surface_opacity(cx);
-    let mut shell = shell_color(chrome);
+    let mut shell = shell_color(chrome.chrome_palette());
     shell.a *= opacity;
     let theme = Theme::global_mut(cx);
     theme.background = shell;
@@ -546,7 +599,11 @@ fn soften(c: crate::display::color::Rgb, keep: f32) -> crate::display::color::Rg
     crate::display::color::Rgb::new(pull(c.r), pull(c.g), pull(c.b))
 }
 
-fn apply_skin_tokens(chrome: NebulaTheme, cx: &mut App) {
+fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
+    let (ui_font_family, ui_font_size) = cx
+        .try_global::<crate::gpui_shell::config::Settings>()
+        .map(|settings| (settings.ui_font_family.clone(), settings.ui_font_size_override))
+        .unwrap_or_default();
     let sk = chrome.skin();
     let transparent = hsla(0.0, 0.0, 0.0, 0.0);
     let theme = Theme::global_mut(cx);
@@ -647,7 +704,10 @@ fn apply_skin_tokens(chrome: NebulaTheme, cx: &mut App) {
     // 焦点 / 选择 / 链接 / 拖拽。
     theme.ring = ink(sk.accent);
     theme.caret = ink(sk.accent);
-    theme.selection = wash(sk.accent_soft);
+    // TextView paints selection over glyphs. Match gpui-component's 0.3 alpha
+    // cap instead of passing through the opaque selected surface from Skin.
+    let selection = wash(sk.accent_soft);
+    theme.selection = selection.alpha(selection.a.min(0.3));
     theme.link = ink(sk.accent);
     theme.link_hover = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.10);
     theme.link_active = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.18);
@@ -666,8 +726,8 @@ fn apply_skin_tokens(chrome: NebulaTheme, cx: &mut App) {
 
     // 字号与圆角：控件 pill 档 = 旧壳 UI_CORNER_RADIUS_LOGICAL(8)；浮层
     // 12，低于终端卡的 14——三档呼应旧壳的圆角层级。
-    theme.font_size = px(14.0);
-    theme.mono_font_size = px(13.0);
+    theme.font_size = px(ui_font_size.unwrap_or(14.0));
+    theme.mono_font_size = theme.font_size * (13.0 / 14.0);
 
     // 整壳的兜底字体（fork `root.rs` 用 `theme.font_family` 给根容器）。上游
     // 默认 `.SystemUIFont` 在 Windows 上没落到 UI 字体，中文最终回落进终端等
@@ -677,21 +737,24 @@ fn apply_skin_tokens(chrome: NebulaTheme, cx: &mut App) {
     // 我们是终端，所以等宽在这里是**语义标记**而不是全局字体：路径、键帽、
     // 命令、数值这类"机器读、要逐字符对齐、要能整段复制"的东西显式走 mono；
     // 标题和说明是给人读的，走 sans。
-    #[cfg(target_os = "windows")]
-    {
-        theme.font_family = "Microsoft YaHei UI".into();
-        // UI 中的等宽语义也必须稳定。终端字体由 TerminalView 单独读取；
-        // 若把用户字体组写进全局 theme，tab、标题和代码字面量的字宽都会
-        // 随终端主字体变化，进而破坏 chrome 的既定间距。
-        theme.mono_font_family = crate::font_install::REQUIRED_FONT_FAMILY.into();
-    }
+    let default_ui_font =
+        if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+            // UI 中的等宽语义也必须稳定。终端字体由 TerminalView 单独读取；
+            // 若把用户字体组写进全局 theme，tab、标题和代码字面量的字宽都会
+            // 随终端主字体变化，进而破坏 chrome 的既定间距。
+            theme.mono_font_family = crate::font_install::REQUIRED_FONT_FAMILY.into();
+            "Microsoft YaHei UI"
+        } else {
+            ".SystemUIFont"
+        };
+    theme.font_family = ui_font_family.unwrap_or_else(|| default_ui_font.to_owned()).into();
     theme.radius = px(crate::display::UI_CORNER_RADIUS_LOGICAL);
     theme.radius_lg = px(12.0);
 
     // 1.16 的 Button、Slider、Switch 等背景统一读取 ThemeTokens。Nebula 的
     // Skin 是纯色权威来源，因此在所有 ThemeColor 覆写完成后一次性解析，避免
     // 新组件悄悄回落到 gpui-component 的默认主题色。
-    syntax::apply(theme, settings_theme_name(chrome).reviewed_palette());
+    syntax::apply(theme, chrome.base_name().reviewed_palette());
     theme.tokens = (&theme.colors).into();
 }
 

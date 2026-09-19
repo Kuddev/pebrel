@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_pebrel_global_optspecs
-	string join \n print-events ref-test embed= gpui config-file= q v daemon working-directory= hold e/command= T/title= class= o/option= h/help V/version
+	string join \n print-events ref-test embed= gpui config-file= q v daemon working-directory= shell= hold e/command= T/title= class= o/option= h/help V/version
 end
 
 function __fish_pebrel_needs_command
@@ -27,6 +27,7 @@ end
 complete -c pebrel -n "__fish_pebrel_needs_command" -l embed -d 'X11 window ID to embed Pebrel within (decimal or hexadecimal with "0x" prefix)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -l config-file -d 'Specify an alternative configuration file.' -r -F
 complete -c pebrel -n "__fish_pebrel_needs_command" -l working-directory -d 'Start the shell in the specified working directory' -r -F
+complete -c pebrel -n "__fish_pebrel_needs_command" -l shell -d 'Start this shell instead of the configured default one, by the same id the `shell` setting uses (`pwsh`, `cmd`, `wsl:Ubuntu`, or a profile\'s settings id)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -s e -l command -d 'Command and args to execute (must be last argument)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -s T -l title -d 'Defines the window title [default: Pebrel]' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -l class -d 'Defines window class/app_id on X11/Wayland [default: Pebrel]' -r

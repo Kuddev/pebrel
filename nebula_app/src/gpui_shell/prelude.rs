@@ -29,6 +29,7 @@ pub use gpui_component::{
     spinner::Spinner,
     switch::Switch,
     tab::{Tab, TabBar},
+    tooltip::Tooltip,
     v_flex,
 };
 

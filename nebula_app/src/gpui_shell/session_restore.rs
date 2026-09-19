@@ -3,7 +3,7 @@
 //! `nebula_split::SplitTree`（运行时布局）与 `LayoutSession`（持久化树）
 //! 之间的纯转换。文档/图片/设置 tab 不进会话（旧壳同合同）。
 
-use crate::session::{AgentSession, LayoutSession, SplitAxis};
+use crate::session::{AgentSession, LaunchSession, LayoutSession, SplitAxis};
 use nebula_split::{SplitDirection, SplitTree};
 
 fn axis_of(direction: SplitDirection) -> SplitAxis {
@@ -25,12 +25,12 @@ fn direction_of(axis: SplitAxis) -> SplitDirection {
 /// 不被 f32 序列化噪声绊倒，旧壳同因）。
 pub fn layout_from_tree(
     tree: &SplitTree<u64>,
-    leaf_data: &impl Fn(u64) -> (String, Option<AgentSession>),
+    leaf_data: &impl Fn(u64) -> (String, Option<AgentSession>, Option<LaunchSession>),
 ) -> LayoutSession {
     match tree {
         SplitTree::Leaf(id) => {
-            let (cwd, agent) = leaf_data(*id);
-            LayoutSession::Pane { cwd, agent }
+            let (cwd, agent, launch) = leaf_data(*id);
+            LayoutSession::Pane { cwd, agent, launch }
         },
         SplitTree::Split { direction, ratio, first, second, .. } => LayoutSession::Split {
             axis: axis_of(*direction),
@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn layout_round_trips_structure_ratio_and_leaf_order() {
         let tree = sample_tree();
-        let layout = layout_from_tree(&tree, &|id| (format!("D:/pane-{id}"), None));
+        let layout = layout_from_tree(&tree, &|id| (format!("D:/pane-{id}"), None, None));
         assert_eq!(layout.pane_count(), 3);
 
         let mut next = 10u64;
@@ -128,7 +128,12 @@ mod tests {
         let layout = layout_from_tree(&tree, &|_| {
             (
                 "D:/work".to_owned(),
-                Some(AgentSession { source: "claude".into(), session_id: Some("abc-1".into()) }),
+                Some(AgentSession {
+                    session_file: None,
+                    source: "claude".into(),
+                    session_id: Some("abc-1".into()),
+                }),
+                None,
             )
         });
         assert!(matches!(

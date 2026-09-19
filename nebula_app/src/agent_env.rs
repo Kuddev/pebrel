@@ -91,6 +91,7 @@ pub fn apply(env: &mut HashMap<String, String>, pane_id: impl Display) {
         }
     }
 
+    crate::runtime_api::apply_child_endpoint(env);
     merge_wslenv(env);
 }
 
@@ -172,6 +173,7 @@ const WSLENV_ENTRIES: &[&str] = &[
     "PEBREL_CLI/p",
     "PEBREL_BIN_DIR/p",
     PROCESS_ENV,
+    crate::runtime_api::ENDPOINT_ENV,
     "NEBULA_CLI/p",
     "NEBULA_BIN_DIR/p",
 ];
@@ -308,6 +310,7 @@ mod tests {
         assert!(names.contains(&CLI_ENV), "{CLI_ENV} missing from WSLENV passthrough: {names:?}");
         assert!(names.contains(&BIN_DIR_ENV), "{BIN_DIR_ENV} missing: {names:?}");
         assert!(names.contains(&PROCESS_ENV), "{PROCESS_ENV} missing: {names:?}");
+        assert!(names.contains(&crate::runtime_api::ENDPOINT_ENV));
     }
 
     #[cfg(windows)]

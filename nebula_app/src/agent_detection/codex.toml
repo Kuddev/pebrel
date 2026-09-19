@@ -8,6 +8,11 @@ id = "codex"
 [[identity]]
 contains = ["openai codex"]
 
+# A restored conversation can omit the startup banner. Require its branded
+# empty prompt immediately followed by the live model/effort footer at the tail.
+[[identity]]
+regex = ['(?m)^[ \t]*› Ask Codex to do anything[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*\S+[ \t]+(?:minimal|low|medium|high|xhigh|max)[ \t]*[·•][^\r\n]*\s*\z']
+
 [[rules]]
 id = "strong_blocker"
 state = "blocked"

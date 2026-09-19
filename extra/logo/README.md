@@ -92,6 +92,63 @@ by Git and are not required by the asset tests.
 
 ## Third-Party Logo Assets
 
+### Claude Code and Trae CLI
+
+`ai_claude.svg` and `ai_trae.svg` are vector masters from LobeHub's icon
+collection, retrieved on 2026-09-13 at these exact revisions:
+
+- Claude: https://github.com/lobehub/lobe-icons/blob/f25f22c0e7295a76077fe417d23deeb56eefdf3e/packages/static-svg/icons/claude-color.svg
+- Trae: https://github.com/lobehub/lobe-icons/blob/0935313ef153c255958754d9d2523862e069c2c9/packages/static-svg/icons/trae-color.svg
+- Collection license: [MIT](LICENSE-lobe-icons), copyright LobeHub. Product names
+  and trademarks remain with their respective owners; use identifies running
+  programs and does not imply endorsement.
+
+The matching PNGs are 1024 x 1024 transparent exports made with
+`@resvg/resvg-js` 2.6.2 and `fitTo: { mode: 'width', value: 1024 }`, without
+changing geometry or colors. The renderer is a development tool, not a product
+dependency. Both shells prepare antialiased textures at the requested physical
+size and keep the source colors on light and dark themes.
+
+- Claude PNG SHA-256: `00EF583DAA55F37717C79269A2641C81B0E77F303BEA9E7EEF08482C84D76269`
+- Trae PNG SHA-256: `C502272694D1ABDD70DBD783F51171A497C136391BE035F2D67146BD9EC0CF23`
+
+Trae's `trae-cli` executable name is declared by ByteDance's
+[`trae-agent` project](https://github.com/bytedance/trae-agent/blob/main/pyproject.toml)
+under `[project.scripts]`. Detection and branding do not imply Hook, cold-start,
+resume, or fork support.
+
+### CodeBuddy Code
+
+`ai_codebuddy.svg` contains the CodeBuddy color mark from LobeHub's icon
+collection, with only a final newline added. It was retrieved on 2026-09-14
+at the following exact revision:
+
+- Source: https://github.com/lobehub/lobe-icons/blob/3928068a986819bedd4feca1a01a9ba9c3229f3b/packages/static-svg/icons/codebuddy-color.svg
+- Collection license: [MIT](LICENSE-lobe-icons), copyright LobeHub. Product names
+  and trademarks remain with their respective owners; use identifies running
+  programs and does not imply endorsement.
+- PNG SHA-256: `56ACBB748F6B324CD3D052EFD1E76A33811B36872489DF20DCB562A3C6087DE4`
+
+`ai_codebuddy.png` is a 1024 x 1024 export made with `@resvg/resvg-js` 2.6.2
+and the same rendering settings as Claude and Trae above. Both shells preserve
+its colors on light and dark themes.
+
+The `codebuddy`, `cbc`, `codebuddy-code`, and `codebuddy-lowmem` aliases are
+published in [`@tencent-ai/codebuddy-code` 2.150.0](https://registry.npmjs.org/@tencent-ai/codebuddy-code/2.150.0).
+The `cbc-prewarm` helper is excluded. Recognition does not add session resume,
+fork commands, or AI hooks.
+
+### Oh My Pi
+
+`ai_omp.svg` is a Pebrel-drawn purple gradient π mark following the maintainer's
+2026-09-13 visual reference. Its simple vector geometry is authored here; no
+third-party application asset is embedded. This is a presentation variant, not the
+upstream white π / orange connector artwork currently published in
+[oh-my-pi/assets/icon.svg](https://github.com/can1357/oh-my-pi/blob/2be354322dee0cdd95bc42fc61c72ef9767b653b/assets/icon.svg).
+`ai_omp.png` is a transparent 1024 x 1024 export made with the same resvg settings
+as Claude and Trae above. It identifies the existing `omp` / `oh-my-pi` agent
+identity and preserves its gradient in both themes.
+
 ### Grok
 
 `ai_grok_dark.png` and `ai_grok_light.png` are unmodified copies of

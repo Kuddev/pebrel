@@ -216,11 +216,16 @@ impl NebulaWorkspace {
             };
 
             let action = item.action.clone();
+            let context_target = self
+                .shell_picker_open
+                .then(|| launcher_menu::LauncherTarget::from_action(&action))
+                .flatten();
             let row_tooltip = item.label.clone();
             let selected = ix == self.command_palette_selected;
             let hover_group = SharedString::from(format!("command-palette-row-hover-{ix}"));
             let row_content = h_flex()
                 .id(SharedString::from(format!("command-palette-row-{ix}")))
+                .debug_selector(move || format!("command-palette-row-{ix}"))
                 .group(hover_group.clone())
                 .h(px(PALETTE_ROW_HEIGHT))
                 .flex_shrink_0()
@@ -248,6 +253,21 @@ impl NebulaWorkspace {
                         .child(item.label),
                 )
                 .when_some(hint, |row, hint| row.child(hint))
+                .when_some(context_target, |row, target| {
+                    row.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.command_palette_selected = ix;
+                            this.open_launcher_context_menu(
+                                target.clone(),
+                                event.position,
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
+                })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.command_palette_selected = ix;
                     match action.clone() {

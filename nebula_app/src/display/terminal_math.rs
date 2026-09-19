@@ -1380,7 +1380,7 @@ pub(crate) fn draw_overlays(
             bottom: plan.clip_bottom,
         };
         if renderer
-            .draw_math(size, layout, plan.origin_x, plan.baseline_y, plan.foreground, clip)
+            .draw_math(size, &layout, plan.origin_x, plan.baseline_y, plan.foreground, clip)
             .is_err()
         {
             renderer.draw_cells(size, glyph_cache, overlay.fallback.iter().cloned());

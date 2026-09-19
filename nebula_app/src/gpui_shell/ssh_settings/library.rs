@@ -53,6 +53,18 @@ impl HostLibraryState {
 }
 
 impl SettingsPane {
+    pub(in crate::gpui_shell) fn prepare_launcher_ssh_host(
+        &mut self,
+        host: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ssh_library.scope = HostScope::All;
+        self.ssh_library.group_filter = None;
+        self.ssh_library.search.update(cx, |input, cx| input.set_value(host, window, cx));
+        self.ssh_library.reset_scroll();
+    }
+
     fn filtered_library_hosts(&self, cx: &gpui::App) -> Vec<String> {
         let query = self.ssh_library.search.read(cx).value();
         let hosts = if self.ssh_library.scope == HostScope::Recent {
@@ -226,7 +238,7 @@ impl SettingsPane {
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let font_px = cx
             .try_global::<crate::gpui_shell::config::Settings>()
-            .map(|s| s.base_font_size_px)
+            .map(|s| s.ui_font_size_px)
             .unwrap_or(15.0);
         let title_h = font_px;
         let subtitle_h = font_px * 0.78;

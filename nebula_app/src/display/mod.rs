@@ -62,6 +62,7 @@ use crate::string::{ShortenDirection, StrShortener};
 mod background_color_model;
 pub mod color;
 mod command_completion;
+mod completion;
 pub mod content;
 pub mod cursor;
 pub mod hint;
@@ -114,12 +115,11 @@ pub use context_menu_model::{ContextMenuAction, ContextMenuHit, ContextMenuTarge
 pub(crate) use file_operations::send_to_recycle_bin;
 pub(crate) use input_state::{
     nebula_clear_line, nebula_input_backspace, nebula_input_char, nebula_input_delete_word,
-    nebula_input_text, nebula_shell_prompt_restored_from_raw_grid,
+    nebula_input_text, nebula_prompt_line_from_raw_grid,
+    nebula_shell_prompt_restored_from_raw_grid, nebula_shell_ready_from_raw_grid,
 };
 #[cfg(windows)]
-pub(crate) use input_state::{
-    nebula_input_from_raw_grid, nebula_prompt_line_from_raw_grid, nebula_raw_grid_row_preview,
-};
+pub(crate) use input_state::{nebula_input_from_raw_grid, nebula_raw_grid_row_preview};
 pub use program_identity::AiLogo;
 pub(crate) use program_identity::{
     ai_logo, ai_logo_for_program, prepare_ai_logo_texture, program_icon,
@@ -2412,12 +2412,11 @@ impl Display {
         let grok_uses_light_mark =
             u32::from(ink.r) * 299 + u32::from(ink.g) * 587 + u32::from(ink.b) * 114 >= 128_000;
         let key = match logo {
-            AiLogo::Claude | AiLogo::Antigravity => (logo, [0, 0, 0], target_size),
             AiLogo::Grok if grok_uses_light_mark => (logo, [255, 255, 255], target_size),
-            AiLogo::Grok => (logo, [0, 0, 0], target_size),
             AiLogo::OpenAi | AiLogo::OpenCode | AiLogo::Pi => {
                 (logo, [ink.r, ink.g, ink.b], target_size)
             },
+            _ => (logo, [0, 0, 0], target_size),
         };
         if let Some(cached) = self.nebula_ai_logo_cache.get(&key) {
             return Some(cached.clone());
@@ -2432,11 +2431,7 @@ impl Display {
             },
         };
         logo.tint_pixels(&mut rgba, [ink.r, ink.g, ink.b]);
-        let (rgba, width, height) = if matches!(logo, AiLogo::Grok | AiLogo::Antigravity) {
-            prepare_ai_logo_texture(&rgba, width, height, target_size)
-        } else {
-            (rgba, width, height)
-        };
+        let (rgba, width, height) = prepare_ai_logo_texture(&rgba, width, height, target_size);
         let id = AI_LOGO_ID_BASE + self.nebula_ai_logo_cache.len() as u64;
         let entry = (id, std::sync::Arc::new(rgba), (width, height));
         self.nebula_ai_logo_cache.insert(key, entry.clone());
@@ -9840,86 +9835,6 @@ impl Display {
         }
 
         dirty
-    }
-
-    /// Commit the current line to history (on Enter) and reset the buffer.
-    ///
-    /// `screen_line` (the input read off the grid, i.e. what the shell's own
-    /// editor really contained) wins over the keystroke-reconstructed
-    /// `line_buf`: the latter desyncs on cursor motion / completion / history
-    /// recall and used to commit spliced garbage like "laudeclaude", which the
-    /// hint would then resurface as a command the user never typed.
-    pub fn nebula_commit_line(&mut self, state: &mut NebulaPaneState) {
-        // On Windows the grid read is the only source that sees tab
-        // completions; when it failed (no prompt arrow — cmd/ssh/REPL — or a
-        // mid-line edit) the keystroke buffer likely holds spliced garbage,
-        // and recording that would resurface it forever as a bogus ghost hint
-        // (truncated CJK paths were the visible symptom). Better no history
-        // entry than a corrupted one.
-        #[cfg(windows)]
-        let line = state.screen_line.trim().to_owned();
-        #[cfg(not(windows))]
-        let line = if state.screen_line.trim().is_empty() {
-            state.line_buf.trim()
-        } else {
-            state.screen_line.trim()
-        }
-        .to_owned();
-        nebula_debug_log(format!(
-            "input_commit cwd={:?} line={line:?} line_buf={:?} screen_line={:?}",
-            state.cwd, state.line_buf, state.screen_line
-        ));
-        self.nebula_history.record(&state.suggest_env.history_scope(), &line, &state.cwd);
-        // Kept for CommandStart (OSC 133;C): by the time it arrives from the
-        // PTY these buffers are already cleared, so the program identity for
-        // the tab icon has to be captured here. Fall back to the keystroke
-        // buffer so the icon still resolves when the grid read failed. Agent
-        // parsing also understands package runners such as npx/uvx.
-        state.last_committed =
-            if line.is_empty() { state.line_buf.trim().to_owned() } else { line };
-        if let Some(agent) = crate::ai_agents::AgentKind::parse_command(&state.last_committed) {
-            state.running_program = Some(agent.slug().to_owned());
-            state.command_started = Some(std::time::Instant::now());
-            state.agent_status = crate::ai_agents::AgentStatus::Working;
-            state.agent_status_source = crate::ai_agents::AgentStatusSource::Process;
-            state.agent_status_rule = None;
-            state.agent_hook_seen = false;
-            state.idle_screen_streak = 0;
-            state.awaiting_input = false;
-            state.finished_unseen = false;
-            state.needs_attention = false;
-        }
-        nebula_clear_line(state);
-    }
-
-    /// Feed the shared directory model from an authoritative shell report.
-    pub fn nebula_record_directory(&self, cwd: &str) {
-        self.directory_history.record(cwd);
-    }
-
-    /// Recompute the inline ghost-text suggestion. `line_override` carries the
-    /// grid-read input on Windows (the authoritative screen truth); when `None`
-    /// the keystroke-tracked `line_buf` is used (other platforms). A whole
-    /// previous command sharing the prefix wins (fish-style history hint);
-    /// otherwise the final token gets path completion against the shell-reported
-    /// cwd. Cached on `cwd\0buffer` so disk is only touched when the line
-    /// changes — not every frame.
-    fn nebula_update_suggestion(
-        &mut self,
-        state: &mut NebulaPaneState,
-        line_override: Option<String>,
-    ) {
-        suggest_engine::suggest_update(
-            &suggest_engine::SuggestSources {
-                history: &self.nebula_history,
-                directories: &self.directory_history,
-                commands: &self.nebula_commands,
-                enabled: self.nebula_ghost_enabled,
-                style: self.nebula_completion_style,
-            },
-            state,
-            line_override,
-        );
     }
 
     /// Render the popup completion list on the terminal cell grid: one padded

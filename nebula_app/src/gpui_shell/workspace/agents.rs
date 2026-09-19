@@ -339,7 +339,7 @@ impl NebulaWorkspace {
             // Default 与旧壳一致取「分叉这一刻」的默认 shell，不是源 tab
             // 创建时的快照。
             None | Some(crate::session::LaunchSession::Default) => {
-                Self::configured_local_launch(cx)
+                super::shell_launch::configured_local_launch(cx)
             },
             Some(shell @ crate::session::LaunchSession::Shell { .. }) => shell,
             // Profile 可能直接把 agent 当启动命令，SSH 会把命令注入认证

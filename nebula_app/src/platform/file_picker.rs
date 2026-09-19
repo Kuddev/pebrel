@@ -47,7 +47,7 @@ fn prompt_paths(
     kind: PickerKind,
     title: &'static str,
 ) -> impl Future<Output = Vec<PathBuf>> + 'static {
-    #[cfg(windows)]
+    #[cfg(all(windows, not(test)))]
     {
         let _ = cx;
         let owner = native_owner(window);
@@ -66,7 +66,9 @@ fn prompt_paths(
         });
         selected_paths::<String>(rx)
     }
-    #[cfg(not(windows))]
+    // GPUI's test platform owns deterministic picker responses on every host.
+    // Production Windows builds retain the owner-bound native worker above.
+    #[cfg(any(not(windows), test))]
     {
         let _ = window;
         selected_paths(cx.prompt_for_paths(prompt_options(kind, title)))
@@ -84,7 +86,7 @@ fn prompt_options(kind: PickerKind, title: &'static str) -> gpui::PathPromptOpti
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 fn native_owner(window: &Window) -> usize {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 

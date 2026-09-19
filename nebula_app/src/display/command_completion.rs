@@ -141,18 +141,15 @@ fn nebula_collect_commands() -> Vec<String> {
 /// commands as the available completion source.
 #[cfg(windows)]
 fn nebula_powershell_commands() -> Vec<String> {
-    use std::os::windows::process::CommandExt;
-
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Get-Command -CommandType Cmdlet,Function,Alias -ErrorAction SilentlyContinue \
-             | Select-Object -ExpandProperty Name",
-        ])
-        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
-        .output();
+    let mut command = std::process::Command::new("powershell");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Get-Command -CommandType Cmdlet,Function,Alias -ErrorAction SilentlyContinue \
+         | Select-Object -ExpandProperty Name",
+    ]);
+    let output = crate::platform::process::hidden_command(&mut command).output();
 
     match output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)

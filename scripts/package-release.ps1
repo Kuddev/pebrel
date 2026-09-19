@@ -144,33 +144,7 @@ function Assert-FreshBinaries {
 }
 
 if (-not $SkipBuild) {
-    Push-Location $repo
-    $previousTargetDirectory = $env:CARGO_TARGET_DIR
-    try {
-        $env:CARGO_TARGET_DIR = $cargoTargetRoot
-        # Never build nebula without gpui-shell first: a workspace default
-        # binary overwrites the product exe with the legacy winit shell.
-        # Exclude nebula from the workspace build, then link GPUI last.
-        if ($Configuration -eq 'release') {
-            & cargo build --workspace --release --exclude nebula --locked
-            if ($LASTEXITCODE -ne 0) {
-                throw "Cargo workspace build failed with exit code $LASTEXITCODE"
-            }
-            & cargo build -p nebula --bin pebrel --release --features gpui-shell --locked
-        } else {
-            & cargo build --workspace --exclude nebula --locked
-            if ($LASTEXITCODE -ne 0) {
-                throw "Cargo workspace build failed with exit code $LASTEXITCODE"
-            }
-            & cargo build -p nebula --bin pebrel --features gpui-shell --locked
-        }
-        if ($LASTEXITCODE -ne 0) {
-            throw "Cargo gpui-shell build failed with exit code $LASTEXITCODE"
-        }
-    } finally {
-        $env:CARGO_TARGET_DIR = $previousTargetDirectory
-        Pop-Location
-    }
+    & (Join-Path $PSScriptRoot 'build-windows-product.ps1') -Configuration $Configuration -TargetDirectory $cargoTargetRoot
 }
 
 $missing = @($manifest.GetEnumerator() | Where-Object {
