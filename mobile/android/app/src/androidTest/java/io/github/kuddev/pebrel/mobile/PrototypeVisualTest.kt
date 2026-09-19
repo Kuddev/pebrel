@@ -35,6 +35,13 @@ class PrototypeVisualTest {
             waitLabel(R.string.computers)
             capture("01-home-empty")
 
+            scrollTo(target.getString(R.string.relay_connect)).click()
+            check(waitLabel(R.string.scan_qr_invite).isEnabled)
+            waitLabel(R.string.relay_invite)
+            capture("01b-relay-qr-import")
+            device.pressBack()
+            waitLabel(R.string.sessions)
+
             waitLabel(R.string.add_ssh).click()
             check(!scrollTo(target.getString(R.string.save)).isEnabled)
             capture("02-host-form")

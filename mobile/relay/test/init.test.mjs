@@ -33,10 +33,13 @@ test('initialization creates matching role credentials and retains existing comp
   for (const device of devices) {
     const computer = JSON.parse(readFileSync(path.join(privateDirectory, `computer-${device.id}.json`), 'utf8'));
     const phone = JSON.parse(readFileSync(path.join(privateDirectory, `phone-${device.id}.txt`), 'utf8'));
+    const phoneQr = readFileSync(path.join(privateDirectory, `phone-${device.id}.svg`), 'utf8');
     assert.equal(computer.device, device.id);
     assert.equal(phone.device, device.id);
     assert.equal(computer.token, device.desktopToken);
     assert.equal(phone.token, device.mobileToken);
+    assert.match(phoneQr, /^<svg[^>]+>/);
+    assert.ok(!phoneQr.includes(phone.token));
     for (const token of [computer.token, phone.token]) {
       assert.match(token, /^[a-zA-Z0-9_-]{43}$/);
       assert.ok(!secrets.has(token));

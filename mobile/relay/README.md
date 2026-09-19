@@ -19,11 +19,12 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
   --url wss://relay.your-domain.com --name Windows-PC --output private
 ```
 
-命令生成三个文件，不把连接密钥打印到终端：
+命令生成四个文件，不把连接密钥打印到终端：
 
 - `private/relay.config.json`：仅保留在服务器，中转服务读取它。
 - `private/computer-设备编号.json`：通过你信任的方式传到对应电脑。
 - `private/phone-设备编号.txt`：在手机添加连接时粘贴其内容。
+- `private/phone-设备编号.svg`：在手机添加连接时直接扫描；它与 TXT 含有同一份私密凭据。
 
 配置使用不同的随机手机／电脑密钥，不要将它们加入 Git 或分享给其他人。
 启动中转，并把检查命令中的域名改为你的域名；Caddy 自动申请和续期 HTTPS 证书：
@@ -63,7 +64,7 @@ Windows PowerShell、Linux 和 macOS 使用相同的 Node 命令。电脑名称�
 ## 3. 在手机连接
 
 1. 打开 APK，在“电脑”区选择“连接电脑 · 自建中转”。
-2. 粘贴对应 `phone-设备编号.txt` 的全部 JSON 内容，点击连接。
+2. 扫描对应的 `phone-设备编号.svg`；无法使用相机时，粘贴 `phone-设备编号.txt` 的全部 JSON 内容并点击连接。
 3. 进入电脑列表后点一个 Tab，查看当前任务和输出。
 4. 若电脑连接工具使用了 `--allow-input`，可在本地编辑命令再发送；可以先测 `pwd`
    或 `Get-Location`。选择真实 Shell Tab，避免把测试命令发进不对应的交互程序。
@@ -111,7 +112,7 @@ docker compose restart relay
 Compose 配置。Android 对 WSS 邀请、TLS/RPC 生命周期另有测试。实际运营网络的
 HTTPS/DNS 连通性以及手机耗电、流畅度仍需你在设备上验收。
 
-Sources use GPLv3-compatible terms. This relay uses `ws` (MIT); its pinned version
-and integrity are recorded in package-lock.json, and its license is retained by
-npm. The relay contains no copied proprietary server source and does not provide
-a deployable cloud service.
+Sources use GPLv3-compatible terms. This relay uses `ws` and `qrcode` (both MIT);
+their pinned versions and integrity are recorded in package-lock.json, and their
+licenses are retained by npm. The relay contains no copied proprietary server
+source and does not provide a deployable cloud service.

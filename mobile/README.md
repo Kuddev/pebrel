@@ -59,8 +59,10 @@ grouped settings. Thumbnail text is a bounded capture of a real terminal when th
 gallery opens; thumbnails do not run hidden render loops. Command candidates only
 fill the per-session draft. Font family/size, cursor shape/blinking, pinch zoom, suggestion visibility and
 default input mode are persisted as display preferences, separate from credentials.
-QR pairing, durable notification recovery, file/media transfer, WebDAV and
-structured reading remain subsequent work. Local and SSH terminals use Ghostty;
+The self-hosted relay can generate a private SVG invitation that Android scans
+locally, with the existing encrypted paste import retained as a fallback. Direct
+desktop-owned pairing, durable notification recovery, file/media transfer, WebDAV
+and structured reading remain subsequent work. Local and SSH terminals use Ghostty;
 the desktop bridge still supplies bounded text at approximately two-second intervals.
 
 The launcher and home icon use the desktop Titanium asset. Other UI icons are Android vectors;

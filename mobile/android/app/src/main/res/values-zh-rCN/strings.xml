@@ -37,12 +37,15 @@
     <string name="enable_notifications">开启系统通知</string>
     <string name="desktop_setup">桌面连接预览</string>
     <string name="desktop_setup_hint">电脑需要可连接的 SSH 服务，并运行包含 mobile-bridge 的 Pebrel；命令需在 PATH 中可用。Windows、Linux、macOS 共用同一通道协议。</string>
-    <string name="native_preview_boundary">原生联通预览：本地 Shell、密码 SSH、桌面任务发现与有界输出读取。二维码配对、通知断线补收、附件、WebDAV 和完整视觉设计尚未在此构建中实现。</string>
+    <string name="native_preview_boundary">原生联通预览：本地 Shell、密码 SSH、桌面任务发现与有界输出读取。已支持扫描中转邀请；电脑直连配对、通知断线补收、附件、WebDAV 和完整视觉设计尚未实现。</string>
     <string name="appearance">外观</string>
     <string name="follow_system">跟随系统</string>
     <string name="relay_connect">连接电脑 · 自建中转</string>
     <string name="relay_invite">手机连接配置</string>
-    <string name="relay_invite_hint">先启动你的中转服务器和电脑连接工具，再粘贴 phone-设备编号.txt 的内容。中转域名需要有效的 HTTPS 证书。</string>
+    <string name="relay_invite_hint">先启动中转服务器和电脑连接工具，再扫描 phone-设备编号.svg，或粘贴 phone-设备编号.txt。中转域名需要有效的 HTTPS 证书。</string>
+    <string name="scan_qr_invite">扫描二维码邀请</string>
+    <string name="scan_qr_prompt">扫描 Pebrel 手机连接邀请</string>
+    <string name="or_paste_invite">或粘贴私密邀请内容</string>
     <string name="relay_trust_hint">此测试版信任你自己的中转服务器，服务器管理者可接触会话数据。连接凭据使用 Android Keystore 保存；电脑端加 --allow-input 才能输入。</string>
     <string name="disconnect">断开连接</string>
     <string name="all">全部</string>
@@ -125,7 +128,7 @@
     <string name="font_boundary">字号设置应用于终端输出，界面文字跟随系统缩放。</string>
     <string name="background_style_hint">终端使用所选主题的背景色，图片背景暂未实现。</string>
     <string name="input_settings_hint">本地编辑先在手机编辑再发送；直接输入用于交互式终端程序。</string>
-    <string name="features_pending">扫码配对、WebDAV、附件和结构化阅读暂未实现。</string>
+    <string name="features_pending">电脑直连配对、WebDAV、附件和结构化阅读暂未实现。</string>
     <string name="notice_boundary">在线电脑任务状态通过系统通知提醒，暂不支持离线补收。</string>
     <string name="connection_boundary">SSH 终端实时传输字节；电脑输出当前约每 2 秒刷新。中转 TLS 在你的服务器终止，尚未实现端到端加密。</string>
     <string name="notifications">通知</string>

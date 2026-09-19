@@ -6,5 +6,5 @@
   "license": "GPL-3.0-only",
   "engines": { "node": ">=22" },
   "scripts": { "test": "node --test test/*.test.mjs", "start": "node server.mjs" },
-  "dependencies": { "ws": "8.18.3" }
+  "dependencies": { "qrcode": "1.5.4", "ws": "8.21.3" }
 }

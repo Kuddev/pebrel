@@ -16,6 +16,10 @@ notices remain applicable; inclusion does not relicense upstream sources.
   assets/licenses/Russh.
 - OkHttp / Okio: https://github.com/square/okhttp and https://github.com/square/okio,
   Apache License 2.0.
+- ZXing Android Embedded 4.3.0 and ZXing Core 3.5.3:
+  https://github.com/journeyapps/zxing-android-embedded and
+  https://github.com/zxing/zxing, Apache License 2.0. Used only for local QR
+  invitation capture and decoding; no Google Play service is required.
 
 Dependency coordinates and versions are recorded in Gradle files. CI publishes
 the runtime dependency report with the build evidence. Dependencies may include
