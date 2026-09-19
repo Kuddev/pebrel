@@ -94,11 +94,15 @@ a failing violation, and fixtures for known false positives. Guardrail bugs are
 bugs: fix them before calling the gate mandatory. A failing architecture check must
 not be ignored, but a demonstrably defective policy must be revisable.
 
-Record important changes in [the decision log](architecture-decisions.md): context,
-evidence, alternatives, consequences, validation and a replacement/removal condition.
-Ordinary fixes do not need ceremonial ADRs. A change to a budget or rule is a
-dedicated governance change, not an unexplained edit hidden inside a feature PR.
-No automatic exception-adding or budget-increasing command is provided.
+Record important changes under the owning path in
+[`architecture/notes/`](../architecture/notes/AGENTS.md): context, evidence, rejected
+alternatives, consequences, validation and a replacement/removal condition. Ordinary
+fixes do not need ceremonial records. The consolidated
+[decision log](architecture-decisions.md) remains the historical archive through the
+governance migration; new conclusions supersede old records instead of rewriting
+their rationale. A change to a budget or rule is a dedicated governance change, not
+an unexplained edit hidden inside a feature PR. No automatic exception-adding or
+budget-increasing command is provided.
 
 Emergency/security repairs must not be forced into a dangerous broad refactor just
 to preserve a flawed metric. Escalate the demonstrated conflict to a maintainer,
@@ -109,7 +113,8 @@ Existing platform-cfg counting is a historical heuristic, not a proof of platfor
 decoupling. It is not promoted to this new gate: its comment/string/nesting behavior
 needs separate work. Fork patches retain exact-revision pins, thin adapter scope,
 recorded motivation and an upstream-removal condition. Release safety remains in
-`AGENTS.md` and the existing verified release instructions.
+the root task entry, `packaging/AGENTS.md`, `docs/release-notes/AGENTS.md` and the
+existing verified release instructions.
 
 ## 5. UI 设计约束 / UI design constraints
 
