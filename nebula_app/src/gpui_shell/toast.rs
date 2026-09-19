@@ -192,7 +192,7 @@ pub fn banner(window: &mut Window, cx: &mut App, kind: ToastKind, text: impl Int
         return;
     }
     log::warn!("banner [{kind:?}]: {text}");
-    push_banner(window, cx, note(kind, text).on_click(|_, _, _| {}), false);
+    push_banner(window, cx, note(kind, text).on_click(|_, _, _| {}), false, BANNER_TTL);
 }
 
 pub(crate) fn banner_for_pane(
@@ -201,8 +201,9 @@ pub(crate) fn banner_for_pane(
     kind: ToastKind,
     text: impl Into<String>,
     pane_id: u64,
-    ai_toast: bool,
+    source: &crate::notify::Notification,
 ) {
+    let ai_toast = source.is_ai();
     let text = text.into();
     if text.trim().is_empty()
         || !PANE_BANNERS.lock().unwrap_or_else(|poison| poison.into_inner()).accepts(
@@ -222,7 +223,16 @@ pub(crate) fn banner_for_pane(
         notification = notification
             .id1::<AiToast>(("ai-banner", NEXT_AI_TOAST.fetch_add(1, Ordering::Relaxed)));
     }
-    push_banner(window, cx, notification, ai_toast);
+    // Only ordinary Pi completion is transient; errors and requests retain their lifetime.
+    let ttl = match source {
+        crate::notify::Notification::AiTurn { program, message: None, attention: false }
+            if program == "pi" =>
+        {
+            Duration::from_secs(5)
+        },
+        _ => BANNER_TTL,
+    };
+    push_banner(window, cx, notification, ai_toast, ttl);
 }
 
 pub(crate) fn confirmation_for_pane(
@@ -286,7 +296,7 @@ pub(crate) fn confirmation_for_pane(
                 )
                 .into_any_element()
         });
-    push_banner(window, cx, notification, true);
+    push_banner(window, cx, notification, true, BANNER_TTL);
 }
 
 fn reply_to_confirmation(
@@ -316,14 +326,20 @@ fn reply_to_confirmation(
     }
 }
 
-fn push_banner(window: &mut Window, cx: &mut App, notification: Notification, ai_toast: bool) {
+fn push_banner(
+    window: &mut Window,
+    cx: &mut App,
+    notification: Notification,
+    ai_toast: bool,
+    ttl: Duration,
+) {
     if ai_toast && !super::config::ai_toasts_enabled(cx) {
         return;
     }
     let note = notification.autohide(false);
     if window.root::<Root>().flatten().is_some() {
         window.push_notification(note, cx);
-        schedule_banner_dismiss(window, cx);
+        schedule_banner_dismiss(window, cx, ttl);
     } else {
         window.defer(cx, move |window, cx| {
             // The preference may change before the startup Root is installed.
@@ -332,7 +348,7 @@ fn push_banner(window: &mut Window, cx: &mut App, notification: Notification, ai
             }
             if window.root::<Root>().flatten().is_some() {
                 window.push_notification(note, cx);
-                schedule_banner_dismiss(window, cx);
+                schedule_banner_dismiss(window, cx, ttl);
             } else {
                 log::warn!("banner dropped because the window Root is unavailable");
             }
@@ -346,14 +362,14 @@ fn push_banner(window: &mut Window, cx: &mut App, notification: Notification, ai
 /// 自定义时长的入口；为这个改 fork 要动 rev pin，不值得。换个办法：push 之后
 /// 队尾那条就是我们刚推的，抓住它的**弱**引用，到点自己调 `dismiss`。用户
 /// 提前点掉时弱引用已经失效，定时器什么也不做，不会去误关后来的消息。
-fn schedule_banner_dismiss(window: &mut Window, cx: &mut App) {
+fn schedule_banner_dismiss(window: &mut Window, cx: &mut App, ttl: Duration) {
     let Some(Some(root)) = window.root::<Root>() else { return };
     let list = root.read(cx).notification.clone();
     let Some(note) = list.read(cx).notifications().last().cloned() else { return };
     let note = note.downgrade();
     window
         .spawn(cx, async move |cx| {
-            cx.background_executor().timer(BANNER_TTL).await;
+            cx.background_executor().timer(ttl).await;
             let _ = cx.update(|window, cx| {
                 if let Some(note) = note.upgrade() {
                     note.update(cx, |note, cx| note.dismiss(window, cx));
@@ -424,6 +440,14 @@ mod tests {
             })
         }
 
+        fn pi_completion() -> crate::notify::Notification {
+            crate::notify::Notification::AiTurn {
+                program: "pi".into(),
+                message: None,
+                attention: false,
+            }
+        }
+
         fn settle_dismissal(cx: &mut VisualTestContext) {
             cx.run_until_parked();
             cx.background_executor.advance_clock(Duration::from_millis(200));
@@ -435,7 +459,14 @@ mod tests {
             initialize(cx, true);
             let (_, cx) = cx.add_window_view(|window, cx| Root::new(cx.new(|_| Empty), window, cx));
             cx.update(|window, cx| {
-                banner_for_pane(window, cx, ToastKind::Info, "AI completed", 7101, true);
+                banner_for_pane(
+                    window,
+                    cx,
+                    ToastKind::Info,
+                    "AI completed",
+                    7101,
+                    &pi_completion(),
+                );
                 confirmation_for_pane(
                     window,
                     cx,
@@ -459,9 +490,72 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(ids(cx), vec![original[2]], "reenabling must not replay old notices");
             cx.update(|window, cx| {
-                banner_for_pane(window, cx, ToastKind::Info, "Next AI turn", 7101, true);
+                banner_for_pane(
+                    window,
+                    cx,
+                    ToastKind::Info,
+                    "Next AI turn",
+                    7101,
+                    &pi_completion(),
+                );
             });
             assert_eq!(ids(cx).len(), 2);
+        }
+
+        #[gpui::test]
+        fn pi_completion_expires_without_dismissing_attention_or_later_turns(
+            cx: &mut TestAppContext,
+        ) {
+            initialize(cx, true);
+            let (_, cx) = cx.add_window_view(|window, cx| Root::new(cx.new(|_| Empty), window, cx));
+            cx.update(|window, cx| {
+                banner_for_pane(
+                    window,
+                    cx,
+                    ToastKind::Info,
+                    "First Pi completion",
+                    7301,
+                    &pi_completion(),
+                );
+                let failed = crate::notify::Notification::AiTurn {
+                    program: "pi".into(),
+                    message: Some("Turn failed".into()),
+                    attention: false,
+                };
+                banner_for_pane(window, cx, ToastKind::Info, "Pi failure", 7302, &failed);
+                confirmation_for_pane(
+                    window,
+                    cx,
+                    "Permission".into(),
+                    7303,
+                    BinaryConfirmation { id: 7304, question: "Continue?".into() },
+                );
+                banner(window, cx, ToastKind::Warning, "Configuration warning");
+            });
+            cx.run_until_parked();
+            let original = ids(cx);
+            assert_eq!(original.len(), 4);
+            cx.background_executor.advance_clock(Duration::from_secs(4));
+            cx.run_until_parked();
+            assert_eq!(ids(cx), original, "completion remains readable before expiry");
+            cx.update(|window, cx| {
+                banner_for_pane(
+                    window,
+                    cx,
+                    ToastKind::Info,
+                    "Second Pi completion",
+                    7301,
+                    &pi_completion(),
+                );
+            });
+            cx.run_until_parked();
+            let later = *ids(cx).last().unwrap();
+            cx.background_executor.advance_clock(Duration::from_secs(1));
+            settle_dismissal(cx);
+            assert_eq!(ids(cx), vec![original[1], original[2], original[3], later]);
+            cx.background_executor.advance_clock(Duration::from_secs(4));
+            settle_dismissal(cx);
+            assert_eq!(ids(cx), original[1..]);
         }
 
         #[gpui::test]
@@ -469,7 +563,14 @@ mod tests {
             initialize(cx, false);
             let (_, cx) = cx.add_window_view(|window, cx| Root::new(cx.new(|_| Empty), window, cx));
             cx.update(|window, cx| {
-                banner_for_pane(window, cx, ToastKind::Info, "Hidden AI turn", 7102, true);
+                banner_for_pane(
+                    window,
+                    cx,
+                    ToastKind::Info,
+                    "Hidden AI turn",
+                    7102,
+                    &pi_completion(),
+                );
                 confirmation_for_pane(
                     window,
                     cx,
@@ -477,7 +578,14 @@ mod tests {
                     7102,
                     BinaryConfirmation { id: 7202, question: "Continue?".into() },
                 );
-                banner_for_pane(window, cx, ToastKind::Info, "Build finished", 7102, false);
+                banner_for_pane(
+                    window,
+                    cx,
+                    ToastKind::Info,
+                    "Build finished",
+                    7102,
+                    &crate::notify::Notification::Bell { program: None },
+                );
             });
             cx.run_until_parked();
             assert_eq!(ids(cx).len(), 1, "ordinary terminal notices remain available");
@@ -487,7 +595,14 @@ mod tests {
         fn deferred_startup_banner_rechecks_the_current_preference(cx: &mut TestAppContext) {
             initialize(cx, true);
             let (_, cx) = cx.add_window_view(|window, cx| {
-                banner_for_pane(window, cx, ToastKind::Info, "Queued AI turn", 7103, true);
+                banner_for_pane(
+                    window,
+                    cx,
+                    ToastKind::Info,
+                    "Queued AI turn",
+                    7103,
+                    &pi_completion(),
+                );
                 cx.update_global::<Settings, _>(|settings, _| settings.ai_toasts = false);
                 Root::new(cx.new(|_| Empty), window, cx)
             });
