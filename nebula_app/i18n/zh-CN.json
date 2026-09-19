@@ -31,6 +31,14 @@
       "save_failed": "无法保存 AI 弹窗设置：{error}"
     },
     "network": {
+      "custom_title": "自定义网络测试",
+      "custom_hint": "输入 HTTP(S) 网址，按当前代理设置发送 GET；仅 2xx 表示成功，重定向只报告、不跟随。国内／国外按域名识别，不代表服务器所在地。",
+      "custom_apply": "应用并测试",
+      "custom_invalid": "请输入有效的 HTTP(S) 网址，不含账号密码或片段标识。",
+      "region_domestic": "国内（域名规则）",
+      "region_international": "国外（域名规则）",
+      "region_unknown": "地区未知",
+      "test_details": "{url} · {method} · {region}",
       "title": "网络代理",
       "mode": {
         "label": "代理方式",

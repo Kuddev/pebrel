@@ -143,6 +143,7 @@ pub struct SettingsPane {
     pub(super) proxy_url_input: Entity<InputState>,
     pub(super) proxy_protocol_select: SharedSelect,
     pub(super) proxy_test_seq: u64,
+    pub(super) proxy_test_target: crate::proxy_test::NetworkTestTarget,
     pub(super) proxy_test_status: crate::display::ProxyTestStatus,
     provider_store: crate::ai_providers::ProviderStore,
     /// Name / note / website / endpoint / model. API keys deliberately do not

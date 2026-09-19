@@ -6,9 +6,14 @@
 //! 读的是落盘后的 `SshProxyConfig::load_global`。
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{Context, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
+use gpui::{
+    AppContext as _, Context, IntoElement, ParentElement as _, SharedString, Styled as _, div, px,
+};
 use gpui_component::input::InputEvent;
 use nebula_settings::ProxyModeName;
+
+use crate::i18n::Message;
+use crate::proxy_test::{NetworkTestTarget, WebsiteRegion};
 
 use crate::display::{
     MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, manual_proxy_parts,
@@ -56,6 +61,67 @@ impl SettingsPane {
         self.proxy_test_status = ProxyTestStatus::Idle;
     }
 
+    fn customize_proxy_test(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("https://github.com/"));
+        input.update(cx, |input, cx| input.set_value(self.proxy_test_target.url(), window, cx));
+        let pane = cx.entity().downgrade();
+        let invalid = std::rc::Rc::new(std::cell::Cell::new(false));
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let save_input = input.clone();
+            let pane = pane.clone();
+            let invalid = invalid.clone();
+            let presets = h_flex().gap_2().children(
+                [
+                    ("GitHub", "https://github.com/"),
+                    ("Google", "https://www.google.com/"),
+                    ("Baidu", "https://www.baidu.com/"),
+                ]
+                .into_iter()
+                .map(|(name, url)| {
+                    let input = input.clone();
+                    Button::new(name).label(name).outline().on_click(move |_, window, cx| {
+                        input.update(cx, |input, cx| input.set_value(url, window, cx));
+                    })
+                }),
+            );
+            confirm_dialog(
+                dialog,
+                window,
+                language.text(Message::SettingsNetworkCustomTitle),
+                language.text(Message::SettingsNetworkCustomHint),
+                language.text(Message::SettingsNetworkCustomApply),
+                language.text(Message::CommonCancel),
+                ButtonVariant::Primary,
+            )
+            .child(v_flex().gap_3().child(Input::new(&input).w_full()).child(presets).when(
+                invalid.get(),
+                |body| {
+                    body.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(language.text(Message::SettingsNetworkCustomInvalid)),
+                    )
+                },
+            ))
+            .on_ok(move |_, window, cx| {
+                let Ok(target) = NetworkTestTarget::parse(save_input.read(cx).value().as_ref())
+                else {
+                    invalid.set(true);
+                    window.refresh();
+                    return false;
+                };
+                let _ = pane.update(cx, |this, cx| {
+                    this.proxy_test_target = target;
+                    this.invalidate_proxy_test();
+                    this.request_proxy_test(cx);
+                });
+                true
+            })
+        });
+    }
+
     fn current_proxy_protocol(&self, cx: &gpui::App) -> ManualProxyProtocol {
         let row = self
             .proxy_protocol_select
@@ -88,7 +154,10 @@ impl SettingsPane {
         self.proxy_test_seq = self.proxy_test_seq.wrapping_add(1);
         let request_id = self.proxy_test_seq;
         self.proxy_test_status = ProxyTestStatus::Running;
-        let receiver = match crate::ssh_session::start_proxy_test(request_id) {
+        let receiver = match crate::ssh_session::start_proxy_test(
+            request_id,
+            self.proxy_test_target.clone(),
+        ) {
             Ok(receiver) => receiver,
             Err(error) => {
                 self.proxy_test_status = ProxyTestStatus::Complete {
@@ -190,9 +259,26 @@ impl SettingsPane {
         } else {
             language.tr("settings.network.action.test")
         };
+        let region = language.text(match self.proxy_test_target.region() {
+            WebsiteRegion::Domestic => Message::SettingsNetworkRegionDomestic,
+            WebsiteRegion::International => Message::SettingsNetworkRegionInternational,
+            WebsiteRegion::Unknown => Message::SettingsNetworkRegionUnknown,
+        });
+        let details = language.format(
+            Message::SettingsNetworkTestDetails,
+            &[
+                ("url", &self.proxy_test_target.url()),
+                (
+                    "method",
+                    if self.proxy_test_target.is_https() { "HTTPS GET" } else { "HTTP GET" },
+                ),
+                ("region", region),
+            ],
+        );
         h_flex()
             .w_full()
-            .h(px(PROXY_TEST_BANNER_H))
+            .min_h(px(PROXY_TEST_BANNER_H))
+            .py_2()
             .flex_shrink_0()
             .items_center()
             .pl(px(14.0))
@@ -202,7 +288,14 @@ impl SettingsPane {
             .border_1()
             .border_color(theme.border)
             .bg(theme.muted)
-            .child(div().flex_1().min_w_0().text_color(status_color).child(status))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().text_color(status_color).child(status))
+                    .child(div().text_sm().text_color(theme.muted_foreground).child(details)),
+            )
             .child(
                 div()
                     .w(px(PROXY_TEST_BUTTON_W))
@@ -214,6 +307,17 @@ impl SettingsPane {
                             .outline()
                             .disabled(running)
                             .on_click(cx.listener(|this, _, _, cx| this.request_proxy_test(cx))),
+                    ),
+            )
+            .child(
+                Button::new("proxy-test-customize")
+                    .icon(IconName::ChevronDown)
+                    .outline()
+                    .size(px(32.0))
+                    .disabled(running)
+                    .tooltip(language.text(Message::SettingsNetworkCustomTitle))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.customize_proxy_test(window, cx)),
                     ),
             )
     }
