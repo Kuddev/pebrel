@@ -1,4 +1,7 @@
 {
+  "notifications": {
+    "turn_failed": "本轮失败。"
+  },
   "language": {
     "self_name": "简体中文",
     "system": "跟随系统",

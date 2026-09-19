@@ -73,7 +73,19 @@ impl WindowContext {
             project_status(state);
         }
         let status = state.agent_activity.status();
-        if matches!(status, AgentStatus::Done | AgentStatus::Blocked) {
+        let message = event
+            .attention
+            .as_ref()
+            .map(|context| context.summary_for_pane(pane_id))
+            .or_else(|| event.message.clone());
+        if matches!(event.kind, AiHookKind::TurnDone | AiHookKind::NeedsAttention)
+            && let Some(notification) = crate::notify::Notification::from_ai_hook(
+                event,
+                message,
+                status == AgentStatus::Blocked,
+                self.display.ui_language(),
+            )
+        {
             let mut background_tab = false;
             for (i, tab) in self.tabs.iter_mut().enumerate() {
                 let mut ids = Vec::new();
@@ -87,18 +99,7 @@ impl WindowContext {
                 }
             }
             if !self.display.window.has_focus() || background_tab {
-                let message = event
-                    .attention
-                    .as_ref()
-                    .map(|context| context.summary_for_pane(pane_id))
-                    .or_else(|| event.message.clone());
-                if let Some(notification) = crate::notify::Notification::from_ai_hook(
-                    event,
-                    message,
-                    status == AgentStatus::Blocked,
-                ) {
-                    crate::notify::deliver(&self.display.window, &notification, Some(pane_id));
-                }
+                crate::notify::deliver(&self.display.window, &notification, Some(pane_id));
             }
         }
         self.dirty = true;

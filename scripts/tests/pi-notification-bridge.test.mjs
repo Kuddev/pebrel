@@ -13,6 +13,7 @@ const code = stripTypeScriptTypes(embedded)
   .replace('import { spawn } from "node:child_process";', "")
   .replace('import { openSync, readSync, closeSync } from "node:fs";', "")
   .replace('import { randomUUID } from "node:crypto";', "")
+  .replace('import { VERSION } from "@earendil-works/pi-coding-agent";', 'const VERSION = "0.85.1";')
   .replace("export default function", "function register");
 
 function bridge() {
@@ -31,6 +32,7 @@ function bridge() {
   return {
     sent,
     emit: (name, event = {}) => handlers.get(name)(event, ctx),
+    settle: () => handlers.get("agent_settled")({}, ctx),
   };
 }
 
@@ -40,10 +42,12 @@ test("API overload preserves the failure instead of sending a bare completion", 
   const b = bridge();
   await b.emit("agent_start");
   await b.emit("agent_end", { messages: [assistant("error", "Our servers are currently overloaded.")] });
+  assert.equal(b.sent.length, 1, "an attempt is not a settled turn");
+  await b.settle();
   assert.equal(b.sent.length, 2);
   assert.equal(b.sent[1].kind, "done");
   assert.equal(b.sent[1].stop_reason, "error");
-  assert.equal(b.sent[1].message, "Our servers are currently overloaded.");
+  assert.equal(b.sent[1].message, undefined);
   assert.equal(b.sent[1].session_id, "session-1");
 });
 
@@ -51,6 +55,7 @@ test("a successful retry overrides an earlier error in the same turn", async () 
   const b = bridge();
   await b.emit("agent_start");
   await b.emit("agent_end", { messages: [assistant("error", "overload"), assistant("stop")] });
+  await b.settle();
   assert.equal(b.sent[1].stop_reason, "stop");
   assert.equal(b.sent[1].message, undefined);
 });
@@ -59,6 +64,7 @@ test("a failed tool is not an assistant request failure", async () => {
   const b = bridge();
   await b.emit("agent_start");
   await b.emit("agent_end", { messages: [{ role: "toolResult", isError: true }, assistant("stop")] });
+  await b.settle();
   assert.equal(b.sent[1].stop_reason, "stop");
 });
 
@@ -67,6 +73,7 @@ test("cancellation and length exhaustion retain their distinct outcomes", async 
     const b = bridge();
     await b.emit("agent_start");
     await b.emit("agent_end", { messages: [assistant(reason)] });
+    await b.settle();
     assert.equal(b.sent[1].stop_reason, reason);
   }
 });
@@ -75,26 +82,32 @@ test("missing assistant metadata never fabricates success", async () => {
   const b = bridge();
   await b.emit("agent_start");
   await b.emit("agent_end", { messages: [] });
-  assert.equal(b.sent[1].stop_reason, undefined);
+  await b.settle();
+  assert.equal(b.sent[1].stop_reason, "unknown");
 });
 
-test("duplicate agent_end emits only once until a new turn starts", async () => {
+test("duplicate agent_end and agent_settled emit only once until a new turn starts", async () => {
   const b = bridge();
   const event = { messages: [assistant("error", "overload")] };
   await b.emit("agent_start");
   await b.emit("agent_end", event);
   await b.emit("agent_end", event);
+  await b.settle();
+  await b.settle();
   assert.equal(b.sent.length, 2);
   await b.emit("agent_start");
   await b.emit("agent_end", event);
+  await b.settle();
   assert.equal(b.sent.length, 4);
   assert.notEqual(b.sent[1].event_id, b.sent[3].event_id);
   assert.ok(BigInt(b.sent[3].bridge_sequence) > BigInt(b.sent[1].bridge_sequence));
 });
 
-test("oversized provider errors are bounded before spawning the helper", async () => {
+test("oversized provider errors are omitted before spawning the helper", async () => {
   const b = bridge();
   await b.emit("agent_start");
   await b.emit("agent_end", { messages: [assistant("error", "x".repeat(10_000))] });
-  assert.equal(b.sent[1].message.length, 4000);
+  await b.settle();
+  assert.equal(b.sent[1].stop_reason, "error");
+  assert.equal(b.sent[1].message, undefined);
 });

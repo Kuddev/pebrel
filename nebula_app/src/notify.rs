@@ -135,21 +135,32 @@ pub(crate) fn clamp_toast_body(body: &str) -> String {
 }
 
 impl Notification {
-    /// Failed, interrupted or incomplete provider turns must not announce completion.
+    /// Failures use fixed localized text; interrupted or incomplete turns stay silent.
     pub(crate) fn from_ai_hook(
         event: &crate::ai_hook::AiHookEvent,
         message: Option<String>,
         attention: bool,
+        language: crate::display::UiLanguage,
     ) -> Option<Self> {
         use crate::ai_hook::{AiHookKind, AiTurnOutcome};
-        if event.kind == AiHookKind::TurnDone
-            && (event.active_background_tasks() > 0
-                || matches!(
-                    event.turn_outcome,
-                    AiTurnOutcome::Failed | AiTurnOutcome::Cancelled | AiTurnOutcome::Incomplete
-                ))
-        {
-            return None;
+        let mut message = message;
+        let mut attention = attention;
+        if event.kind == AiHookKind::TurnDone {
+            if event.active_background_tasks() > 0 {
+                return None;
+            }
+            match event.turn_outcome {
+                AiTurnOutcome::Cancelled | AiTurnOutcome::Incomplete | AiTurnOutcome::Unknown => {
+                    return None;
+                },
+                AiTurnOutcome::Failed => {
+                    message = Some(
+                        language.text(crate::i18n::Message::NotificationsTurnFailed).to_owned(),
+                    );
+                    attention = false;
+                },
+                AiTurnOutcome::Succeeded | AiTurnOutcome::Unspecified => {},
+            }
         }
         Some(Self::AiTurn { program: event.source.clone(), message, attention })
     }
@@ -327,6 +338,42 @@ fn spawn_toast(title: String, body: String, activation: Option<ToastActivation>)
 #[cfg(test)]
 mod delivery_tests {
     use super::*;
+
+    #[test]
+    fn pi_outcomes_do_not_turn_failure_or_cancellation_into_success() {
+        for (reason, expected) in [
+            ("error", Some("本轮失败。")),
+            ("aborted", None),
+            ("unknown", None),
+            ("future", None),
+            ("length", None),
+            ("toolUse", None),
+        ] {
+            let payload =
+                serde_json::json!({"kind": "done", "stop_reason": reason, "message": "SECRET"});
+            let wire = format!("nebula-hook/1 source=pi\n{payload}");
+            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(1)).unwrap();
+            let notification = Notification::from_ai_hook(
+                &event,
+                event.message.clone(),
+                false,
+                crate::display::UiLanguage::ZhCn,
+            );
+            assert_eq!(notification.map(|value| value.toast_text().1).as_deref(), expected);
+        }
+        for reason in [None, Some("stop")] {
+            let mut payload = serde_json::json!({"kind": "done"});
+            if let Some(reason) = reason {
+                payload["stop_reason"] = reason.into();
+            }
+            let wire = format!("nebula-hook/1 source=pi\n{payload}");
+            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(1)).unwrap();
+            assert!(
+                Notification::from_ai_hook(&event, None, false, crate::display::UiLanguage::EnUs)
+                    .is_some()
+            );
+        }
+    }
 
     #[test]
     fn every_registered_ai_is_recognized_for_bell_text_and_command_events() {

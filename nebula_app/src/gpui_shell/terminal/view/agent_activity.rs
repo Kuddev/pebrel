@@ -95,9 +95,12 @@ impl TerminalView {
                 }));
             }
         } else if event.kind == AiHookKind::TurnDone
-            && status == AgentStatus::Done
-            && let Some(notification) =
-                crate::notify::Notification::from_ai_hook(event, event.message.clone(), false)
+            && let Some(notification) = crate::notify::Notification::from_ai_hook(
+                event,
+                event.message.clone(),
+                false,
+                super::ui_language(),
+            )
         {
             cx.emit(TerminalViewEvent::Notification(notification));
         }

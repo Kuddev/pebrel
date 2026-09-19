@@ -139,6 +139,70 @@ fn review_regression_cold_resume_survives_initial_prompt_and_clears_on_exit(
 }
 
 #[gpui::test]
+fn pi_cancelled_turn_becomes_idle_instead_of_completed(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        for payload in [
+            r#"{"kind":"prompt","session_id":"pi-cancelled-test"}"#,
+            r#"{"kind":"done","stop_reason":"aborted","session_id":"pi-cancelled-test"}"#,
+        ] {
+            let wire = format!("nebula-hook/1 source=pi\n{payload}");
+            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(view.pane_id))
+                .expect("Pi hook");
+            assert!(view.handle_ai_hook(&event, cx));
+        }
+        assert_eq!(view.agent_activity.status(), crate::ai_agents::AgentStatus::Idle);
+    });
+}
+
+#[gpui::test]
+fn pi_outcomes_emit_only_the_matching_notification(cx: &mut TestAppContext) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let (view, window, _) = open(cx);
+    let notifications = Rc::new(RefCell::new(Vec::new()));
+    let observed = notifications.clone();
+    let _subscription = view.update(window, |_, cx| {
+        cx.subscribe(&view, move |_, _, event, _| {
+            if let TerminalViewEvent::Notification(notification) = event {
+                observed.borrow_mut().push(notification.clone());
+            }
+        })
+    });
+    for (reason, status, expected_count) in [
+        ("aborted", crate::ai_agents::AgentStatus::Idle, 0),
+        ("unknown", crate::ai_agents::AgentStatus::Idle, 0),
+        ("error", crate::ai_agents::AgentStatus::Idle, 1),
+        ("stop", crate::ai_agents::AgentStatus::Done, 2),
+    ] {
+        view.update(window, |view, cx| {
+            for payload in [
+                serde_json::json!({"kind": "prompt", "session_id": "pi-test"}),
+                serde_json::json!({"kind": "done", "stop_reason": reason, "session_id": "pi-test"}),
+            ] {
+                let wire = format!("nebula-hook/1 source=pi\n{payload}");
+                let event =
+                    crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(view.pane_id))
+                        .expect("Pi hook");
+                assert!(view.handle_ai_hook(&event, cx));
+            }
+            assert_eq!(view.agent_activity.status(), status);
+        });
+        assert_eq!(notifications.borrow().len(), expected_count, "{reason}");
+    }
+    let notifications = notifications.borrow();
+    let crate::notify::Notification::AiTurn { message, attention, .. } = &notifications[0] else {
+        panic!("expected a failure notification");
+    };
+    assert_eq!(
+        message.as_deref(),
+        Some(super::ui_language().text(crate::i18n::Message::NotificationsTurnFailed))
+    );
+    assert!(!attention);
+}
+
+#[gpui::test]
 fn failed_cold_resume_keeps_target_for_retry(cx: &mut TestAppContext) {
     let (view, window, receiver) = open(cx);
     window.update(|_, cx| {

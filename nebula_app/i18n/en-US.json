@@ -1,4 +1,7 @@
 {
+  "notifications": {
+    "turn_failed": "This turn failed."
+  },
   "language": {
     "self_name": "English",
     "system": "Follow system",

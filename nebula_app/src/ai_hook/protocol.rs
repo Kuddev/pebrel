@@ -178,10 +178,11 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             Some("error") => AiTurnOutcome::Failed,
             Some("aborted") => AiTurnOutcome::Cancelled,
             Some("length" | "toolUse") => AiTurnOutcome::Incomplete,
+            None if !payload.as_object()?.contains_key("stop_reason") => AiTurnOutcome::Unspecified,
             _ => AiTurnOutcome::Unknown,
         }
     } else {
-        AiTurnOutcome::Unknown
+        AiTurnOutcome::Unspecified
     };
     let attention = (kind == AiHookKind::NeedsAttention).then(|| AttentionContext {
         source: source.clone(),

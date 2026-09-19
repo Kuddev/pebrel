@@ -23,6 +23,8 @@ pub enum AiHookKind {
 /// provider result metadata may classify it; never scan assistant prose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiTurnOutcome {
+    /// Older bridges carry no result metadata; preserve their notification contract.
+    Unspecified,
     Succeeded,
     Failed,
     Cancelled,

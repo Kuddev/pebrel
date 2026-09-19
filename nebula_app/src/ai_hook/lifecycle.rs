@@ -280,7 +280,16 @@ impl AgentActivity {
             },
             AiHookKind::TurnDone => {
                 self.screen_armed = false;
-                AgentStatus::Done
+                if event.source == "pi"
+                    && !matches!(
+                        event.turn_outcome,
+                        super::AiTurnOutcome::Succeeded | super::AiTurnOutcome::Unspecified
+                    )
+                {
+                    AgentStatus::Idle
+                } else {
+                    AgentStatus::Done
+                }
             },
             AiHookKind::NeedsAttention => AgentStatus::Blocked,
             AiHookKind::SessionEnd => unreachable!("handled above"),

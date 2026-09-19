@@ -9,15 +9,66 @@ fn non_successful_turns_do_not_emit_a_completion_notification() {
             Some(1),
         )
         .unwrap();
-        assert!(crate::notify::Notification::from_ai_hook(&event, None, false).is_none());
+        let notification = crate::notify::Notification::from_ai_hook(
+            &event,
+            None,
+            false,
+            crate::display::UiLanguage::EnUs,
+        );
+        if reason == "error" {
+            assert_eq!(notification.unwrap().toast_text().1, "This turn failed.");
+        } else {
+            assert!(notification.is_none());
+        }
     }
     let event = parse_remote_envelope(
         b"nebula-hook/1 source=pi\n{\"kind\":\"done\",\"stop_reason\":\"stop\"}",
         Some(1),
     )
     .unwrap();
-    assert!(crate::notify::Notification::from_ai_hook(&event, None, false).is_some());
+    assert!(
+        crate::notify::Notification::from_ai_hook(
+            &event,
+            None,
+            false,
+            crate::display::UiLanguage::EnUs
+        )
+        .is_some()
+    );
 }
+#[test]
+fn pi_result_metadata_distinguishes_legacy_unknown_and_background_work() {
+    use crate::ai_agents::AgentStatus;
+    use crate::display::UiLanguage;
+    use crate::notify::Notification;
+    for (metadata, outcome, status, notifies) in [
+        ("", AiTurnOutcome::Unspecified, AgentStatus::Done, true),
+        (",\"stop_reason\":\"stop\"", AiTurnOutcome::Succeeded, AgentStatus::Done, true),
+        (",\"stop_reason\":\"error\"", AiTurnOutcome::Failed, AgentStatus::Idle, true),
+        (",\"stop_reason\":\"aborted\"", AiTurnOutcome::Cancelled, AgentStatus::Idle, false),
+        (",\"stop_reason\":\"length\"", AiTurnOutcome::Incomplete, AgentStatus::Idle, false),
+        (",\"stop_reason\":\"toolUse\"", AiTurnOutcome::Incomplete, AgentStatus::Idle, false),
+        (",\"stop_reason\":\"future\"", AiTurnOutcome::Unknown, AgentStatus::Idle, false),
+        (",\"stop_reason\":null", AiTurnOutcome::Unknown, AgentStatus::Idle, false),
+        (",\"stop_reason\":42", AiTurnOutcome::Unknown, AgentStatus::Idle, false),
+    ] {
+        let wire = format!("nebula-hook/1 source=pi\n{{\"kind\":\"done\"{metadata}}}");
+        let mut event = parse_remote_envelope(wire.as_bytes(), Some(1)).unwrap();
+        assert_eq!(event.turn_outcome, outcome);
+        let mut activity = lifecycle::AgentActivity::default();
+        assert!(activity.apply_hook(&event));
+        assert_eq!(activity.status(), status);
+        assert_eq!(
+            Notification::from_ai_hook(&event, None, false, UiLanguage::EnUs).is_some(),
+            notifies
+        );
+        event.background_tasks = Some(AiBackgroundTasks { active: 1, total: 1 });
+        assert!(activity.apply_hook(&event));
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert!(Notification::from_ai_hook(&event, None, false, UiLanguage::EnUs).is_none());
+    }
+}
+
 use crate::ai_agents::{AgentStatus, AgentStatusSource};
 use lifecycle::AgentActivity;
 use serde_json::{Value, json};
