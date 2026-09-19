@@ -222,6 +222,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    #[cfg(windows)]
+    if options.subcommands.is_none()
+        && let Err(error) = platform::startup::prepare_console_for_gui()
+    {
+        platform::startup::report_error(&error, true);
+        return Err(error.into());
+    }
+
     // 产品主窗：GPUI 作为 nebula.exe 的 UI 层，从主线程直接进 GPUI
     // 消息循环，winit 旧壳完全不启动。1.1.0 安装包 / 双击 / 资源管理器
     // 右键都走这里；`--legacy-shell` 才回旧壳。
