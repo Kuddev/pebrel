@@ -176,6 +176,21 @@ fn start_subscription(
     Ok(Subscription { shutdown, thread })
 }
 
+fn mobile_capabilities(allow_input: bool) -> Value {
+    json!({
+        "snapshot": true,
+        "read_tail": true,
+        "state_subscription": true,
+        "input": allow_input,
+        "exclusive_input": false,
+        "replay_notifications": false,
+        "terminal_grid_stream": false,
+        "send_keys": allow_input,
+        "tab_create": allow_input,
+        "tab_close": allow_input
+    })
+}
+
 pub(crate) fn run(allow_input: bool) -> Result<(), Box<dyn Error>> {
     let endpoint = read_endpoint().ok_or_else(|| io::Error::other("no resident Pebrel runtime"))?;
     let output = Arc::new(Mutex::new(io::stdout()));
@@ -184,12 +199,7 @@ pub(crate) fn run(allow_input: bool) -> Result<(), Box<dyn Error>> {
         &output,
         &json!({
             "type": "mobile.ready", "protocol": "pebrel.mobile.ssh", "version": 1,
-            "capabilities": {
-                "snapshot": true, "read_tail": true, "state_subscription": true,
-                "input": allow_input, "exclusive_input": false, "replay_notifications": false,
-                "terminal_grid_stream": false,
-                "tab_create": allow_input, "tab_close": allow_input
-            },
+            "capabilities": mobile_capabilities(allow_input),
             "max_request_bytes": MAX_BRIDGE_REQUEST,
             "max_frame_bytes": MAX_BRIDGE_FRAME
         }),
@@ -256,6 +266,17 @@ mod tests {
     fn ssh_and_relay_share_wire_budgets() {
         assert_eq!(bridge_policy()["maxFrameBytes"].as_u64(), Some(MAX_BRIDGE_FRAME as u64));
         assert_eq!(bridge_policy()["maxRequestBytes"].as_u64(), Some(MAX_BRIDGE_REQUEST as u64));
+    }
+
+    #[test]
+    fn control_key_capability_requires_explicit_input_authorization() {
+        let readonly = mobile_capabilities(false);
+        assert_eq!(readonly["input"], false);
+        assert_eq!(readonly["send_keys"], false);
+
+        let writable = mobile_capabilities(true);
+        assert_eq!(writable["input"], true);
+        assert_eq!(writable["send_keys"], true);
     }
 
     #[test]

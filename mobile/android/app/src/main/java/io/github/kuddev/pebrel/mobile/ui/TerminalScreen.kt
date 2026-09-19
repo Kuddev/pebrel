@@ -75,6 +75,7 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
     val output by repository.output.collectAsStateWithLifecycle()
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     val lifecycle = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
     val identity = "${desktop.id}:${pane.window}:${pane.id}"
     LaunchedEffect(identity, desktop.status) {
         if (desktop.status == "ready") lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -91,7 +92,17 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
                 fontSize = prefs.fontSize.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp))
         }
         if (output.loading && output.text.isBlank()) LinearProgressIndicator(Modifier.fillMaxWidth())
-        CommandComposer(identity, repository, desktop.allowInput && desktop.status == "ready", false, null, null) { command ->
+        val readyForInput = desktop.allowInput && desktop.status == "ready"
+        val onKey: ((String) -> Unit)? = if (readyForInput && desktop.canSendKeys) {
+            { label ->
+                scope.launch {
+                    if (!repository.sendDesktopKey(desktop.id, pane, label) && repository.error.value == null) {
+                        repository.error.value = "input_rejected"
+                    }
+                }
+            }
+        } else null
+        CommandComposer(identity, repository, readyForInput, false, null, onKey) { command ->
             repository.sendDesktop(desktop.id, pane, command)
         }
     }

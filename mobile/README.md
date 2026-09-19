@@ -46,8 +46,10 @@ Source is available at https://github.com/Kuddev/pebrel at the artifact's record
 - Computer: an SSH server under the same account as the running Pebrel desktop,
   with a build containing `pebrel mobile-bridge` on PATH. Lists existing panes,
   subscribes to semantic task state, reads a bounded output tail and optionally
-  sends validated prompts. The CLI bridge defaults to read-only. This is shared
-  input, not exclusive takeover; coloured desktop grid streaming is not present.
+  sends validated prompts, named control keys, and tab create/close requests. The
+  CLI bridge defaults to read-only. Each input feature is capability-negotiated;
+  this is shared input, not exclusive takeover, and coloured desktop grid
+  streaming is not present.
 - Notifications: Android local notifications for observed live desktop task
   transitions. No proprietary server, push service or durable replay is claimed.
 - The foreground connection service is opt-in. Android can still terminate it;
@@ -103,8 +105,10 @@ The terminal uses the selected theme color without a decorative image background
   loopback API instead of adding a listener or distributing the runtime token.
 - The bridge binds to one runtime endpoint per channel, accepts only an allowlist,
   requires explicit window and pane IDs, and bounds requests/responses at 40 KiB /
-  2 MiB. It never replays prompts after disconnect. `mobile.ready` declares absent
-  features explicitly. A future paired transport must preserve those boundaries.
+  2 MiB. Prompt and control-key requests share one ordered lane on Android, and
+  uncertain input is never replayed after disconnect or timeout. `mobile.ready`
+  declares absent features explicitly. A future paired transport must preserve
+  those boundaries.
 - Desktop output requests carry target identity and generation. Host persistence
   is serialized. Neither late output nor an older save may overwrite newer state.
 - Native visible text uses Android resources (English and Simplified Chinese);

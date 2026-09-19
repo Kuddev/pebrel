@@ -30,6 +30,7 @@ data class DesktopWorkspace(
     val windows: List<DesktopWindow> = emptyList(),
     val status: String = "connecting",
     val allowInput: Boolean = false,
+    val canSendKeys: Boolean = false,
     val canCreateTabs: Boolean = false,
     val canCloseTabs: Boolean = false,
     val transport: String = "SSH",
@@ -80,6 +81,7 @@ class SessionRepository(private val context: Context) {
     private val desktopClients = java.util.concurrent.ConcurrentHashMap<String, DesktopRuntimeClient>()
     private val desktopTransitions = java.util.concurrent.ConcurrentHashMap<String, DesktopTransitions>()
     private val desktopMutationLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+    private val desktopInputLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
     private var renderOwner: String? = null
     private var renderToken: Any? = null
     private var redraw: (() -> Unit)? = null
@@ -320,16 +322,14 @@ class SessionRepository(private val context: Context) {
         scope.launch {
             try {
                 val hello = client.connect(allowInput)
-                val capabilities = hello.optJSONObject("capabilities")
-                val input = allowInput && capabilities?.optBoolean("input") == true
-                val canCreateTabs = input && capabilities?.optBoolean("tab_create") == true
-                val canCloseTabs = input && capabilities?.optBoolean("tab_close") == true
+                val capabilities = desktopBridgeCapabilities(allowInput, hello.optJSONObject("capabilities"))
                 main.post {
                     computers.value = computers.value.map {
                         if (it.id == id) it.copy(
-                            allowInput = input,
-                            canCreateTabs = canCreateTabs,
-                            canCloseTabs = canCloseTabs,
+                            allowInput = capabilities.allowInput,
+                            canSendKeys = capabilities.canSendKeys,
+                            canCreateTabs = capabilities.canCreateTabs,
+                            canCloseTabs = capabilities.canCloseTabs,
                         ) else it
                     }
                 }
@@ -495,17 +495,49 @@ class SessionRepository(private val context: Context) {
         readJob?.cancel()
         output.value = DesktopOutput()
     }
-    suspend fun sendDesktop(id: String, pane: DesktopPane, text: String): Boolean {
-        if (computers.value.none { it.id == id && it.allowInput && it.status == "ready" }) return false
-        return try {
-            checkNotNull(desktopClients[id]).request("pane.prompt", target(pane).put("text", text).put("submit", true))
-            if (output.value.target == "$id:${pane.window}:${pane.id}") readDesktop(id, pane)
-            true
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            error.value = "delivery_unknown"
-            false
+    suspend fun sendDesktop(id: String, pane: DesktopPane, text: String): Boolean =
+        sendDesktopInput(id, pane, "pane.prompt", { it.allowInput }) {
+            put("text", text).put("submit", true)
+        }
+
+    suspend fun sendDesktopKey(id: String, pane: DesktopPane, label: String): Boolean {
+        val key = desktopControlKey(label) ?: return false
+        return sendDesktopInput(id, pane, "pane.send_key", { it.allowInput && it.canSendKeys }) {
+            put("key", key.key)
+            put("modifiers", JSONObject().put("control", key.control))
+            put("repeat", 1)
+        }
+    }
+
+    /** Prompt and key requests share one ordered lane; uncertain input is never retried. */
+    private suspend fun sendDesktopInput(
+        id: String,
+        pane: DesktopPane,
+        method: String,
+        allowed: (DesktopWorkspace) -> Boolean,
+        configure: JSONObject.() -> Unit,
+    ): Boolean {
+        val lock = desktopInputLocks.computeIfAbsent(id) { Mutex() }
+        return lock.withLock {
+            val workspace = computers.value.find { it.id == id && it.status == "ready" }
+                ?: return@withLock false
+            if (!allowed(workspace)) return@withLock false
+            try {
+                checkNotNull(desktopClients[id]).request(method, target(pane).apply(configure))
+                if (output.value.target == "$id:${pane.window}:${pane.id}") readDesktop(id, pane)
+                true
+            } catch (_: TimeoutCancellationException) {
+                error.value = "delivery_unknown"
+                false
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: DesktopRpcException) {
+                error.value = desktopInputFailure(failure.code)
+                false
+            } catch (_: Exception) {
+                error.value = "delivery_unknown"
+                false
+            }
         }
     }
     private fun target(pane: DesktopPane) = JSONObject().put("window_id", pane.window).put("pane_id", pane.id)
@@ -515,7 +547,7 @@ class SessionRepository(private val context: Context) {
         trust.value?.answer?.complete(false); trust.value = null
         live.value.forEach { it.terminal.finishIfRunning() }; live.value = emptyList()
         val clients = desktopClients.values.toList(); desktopClients.clear(); computers.value = emptyList()
-        desktopTransitions.clear(); desktopMutationLocks.clear()
+        desktopTransitions.clear(); desktopMutationLocks.clear(); desktopInputLocks.clear()
         drafts.value = emptyMap()
         scope.launch { clients.forEach { it.close() } }
         stopIdleService()
@@ -526,6 +558,7 @@ class SessionRepository(private val context: Context) {
         val client = desktopClients.remove(id)
         desktopTransitions.remove(id)
         desktopMutationLocks.remove(id)
+        desktopInputLocks.remove(id)
         computers.value = computers.value.filterNot { it.id == id }
         drafts.value = drafts.value.filterKeys { !it.startsWith("$id:") }
         scope.launch { client?.close() }

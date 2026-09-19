@@ -36,14 +36,14 @@ class PrototypeVisualTest {
             capture("01-home-empty")
 
             scrollTo(target.getString(R.string.relay_connect)).click()
-            check(waitLabel(R.string.scan_qr_invite).isEnabled)
+            check(waitLabel(R.string.scan_qr_invite).isEffectivelyEnabled())
             waitLabel(R.string.relay_invite)
             capture("01b-relay-qr-import")
             device.pressBack()
             waitLabel(R.string.sessions)
 
             waitLabel(R.string.add_ssh).click()
-            check(!scrollTo(target.getString(R.string.save)).isEnabled)
+            check(!scrollTo(target.getString(R.string.save)).isEffectivelyEnabled())
             capture("02-host-form")
             device.pressBack()
             waitLabel(R.string.sessions)
@@ -163,6 +163,10 @@ class PrototypeVisualTest {
     }
 
     private fun hasLabel(value: String) = device.hasObject(By.text(value)) || device.hasObject(By.desc(value))
+
+    /** Compose text may be a separate enabled node inside a disabled button. */
+    private fun UiObject2.isEffectivelyEnabled(): Boolean =
+        generateSequence(this) { it.parent }.all { it.isEnabled }
 
     private fun scrollTo(value: String): UiObject2 {
         repeat(10) {

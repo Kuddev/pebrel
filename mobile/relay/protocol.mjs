@@ -35,6 +35,6 @@ export function ready(allowInput) {
   return { type: 'mobile.ready', protocol: 'pebrel.mobile.relay', version: 1,
     capabilities: { snapshot: true, read_tail: true, state_subscription: true, input: allowInput,
       exclusive_input: false, replay_notifications: false, terminal_grid_stream: false,
-      tab_create: allowInput, tab_close: allowInput },
+      send_keys: allowInput, tab_create: allowInput, tab_close: allowInput },
     max_request_bytes: policy.maxRequestBytes, max_frame_bytes: policy.maxFrameBytes };
 }

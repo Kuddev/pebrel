@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { createRelay } from '../server.mjs';
 import { connectDesktop } from '../connector.mjs';
-import { validateRequest } from '../protocol.mjs';
+import { ready, validateRequest } from '../protocol.mjs';
 
 const device = { id: 'test-device', desktopToken: 'd'.repeat(43), mobileToken: 'm'.repeat(43) };
 const snapshot = { process_id: 42, windows: [{ id: 1, tabs: [{ label: 'Test', panes: [
@@ -92,6 +92,7 @@ test('phone reaches the real loopback protocol through relay and reconnect does 
   const pair = await mobile.next(); assert.equal(pair.type, 'relay.paired');
   const hello = await mobile.next(); assert.equal(hello.body.protocol, 'pebrel.mobile.relay');
   assert.equal(hello.body.capabilities.input, true);
+  assert.equal(hello.body.capabilities.send_keys, true);
   assert.equal(hello.body.capabilities.tab_create, true);
   assert.equal(hello.body.capabilities.tab_close, true);
   const send = body => mobile.ws.send(JSON.stringify({ type: 'relay.data', link: pair.link, body }));
@@ -101,6 +102,10 @@ test('phone reaches the real loopback protocol through relay and reconnect does 
   send({ id: 'read', method: 'pane.read', params: { window_id: 1, pane_id: 2, lines: 120 } });
   assert.equal((await mobile.next()).body.result.text, 'terminal output');
   send({ id: 'write', method: 'pane.prompt', params: { window_id: 1, pane_id: 2, text: 'pwd', submit: true } });
+  assert.equal((await mobile.next()).body.ok, true);
+  send({ id: 'key', method: 'pane.send_key', params: {
+    window_id: 1, pane_id: 2, key: 'c', modifiers: { control: true }, repeat: 1,
+  } });
   assert.equal((await mobile.next()).body.ok, true);
   send({ id: 'write', method: 'pane.prompt', params: { window_id: 1, pane_id: 2, text: 'pwd', submit: true } });
   assert.equal((await mobile.next()).body.error.code, 'duplicate_request');
@@ -122,6 +127,7 @@ test('phone reaches the real loopback protocol through relay and reconnect does 
   second.ws.send(JSON.stringify({ type: 'relay.data', link: pair.link, body: { id: 'old', method: 'pane.prompt', params: { window_id: 1, pane_id: 2, text: 'pwd' } } }));
   await closed;
   assert.equal(requests.filter(request => request.method === 'pane.prompt').length, 1);
+  assert.equal(requests.filter(request => request.method === 'pane.send_key').length, 1);
 });
 
 test('temporary proxy failures reconnect while rejected credentials stop retries', { timeout: 8000 }, async t => {
@@ -154,6 +160,7 @@ test('temporary proxy failures reconnect while rejected credentials stop retries
 test('read-only channels reject input, caller tokens and incomplete mutation identities', () => {
   const params = { window_id: 1, pane_id: 2 };
   assert.throws(() => validateRequest({ id: 'x', method: 'pane.prompt', params }, false), /input_not_authorized/);
+  assert.throws(() => validateRequest({ id: 'x', method: 'pane.send_key', params }, false), /input_not_authorized/);
   assert.throws(() => validateRequest({ id: 'x', method: 'tab.new', params: { window_id: 1 } }, false), /input_not_authorized/);
   assert.throws(() => validateRequest({ id: 'x', method: 'runtime.snapshot', token: 'caller' }, false), /invalid_request/);
   assert.throws(() => validateRequest({ id: 'x', method: 'pane.read', params: { pane_id: 2 } }, false), /invalid_target/);
@@ -161,8 +168,18 @@ test('read-only channels reject input, caller tokens and incomplete mutation ide
   assert.throws(() => validateRequest({ id: 'x', method: 'tab.close', params: { window_id: 1, tab_index: 0 } }, true), /invalid_target/);
   assert.throws(() => validateRequest({ id: 'x', method: 'window.close', params }, true), /method_not_found/);
   assert.equal(validateRequest({ id: 'x', method: 'pane.read', params }, false).method, 'pane.read');
+  assert.equal(validateRequest({ id: 'x', method: 'pane.send_key', params: {
+    ...params, key: 'escape', repeat: 1,
+  } }, true).method, 'pane.send_key');
   assert.equal(validateRequest({ id: 'x', method: 'tab.new', params: { window_id: 1 } }, true).method, 'tab.new');
   assert.equal(validateRequest({ id: 'x', method: 'tab.close', params: {
     window_id: 1, tab_index: 0, expected_pane_id: 2, confirmed: true,
   } }, true).method, 'tab.close');
+});
+
+test('ready advertises control keys only on an input-authorized channel', () => {
+  assert.equal(ready(false).capabilities.input, false);
+  assert.equal(ready(false).capabilities.send_keys, false);
+  assert.equal(ready(true).capabilities.input, true);
+  assert.equal(ready(true).capabilities.send_keys, true);
 });
