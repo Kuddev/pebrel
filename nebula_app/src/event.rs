@@ -67,6 +67,7 @@ use crate::window_transition::{NativeWindowStage, NativeWindowStageTracker};
 
 mod agent_runtime;
 mod input_state;
+mod link_open;
 mod proxy;
 mod quick_hotkey;
 mod runtime_control;
@@ -2123,17 +2124,18 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         match &hint.action() {
             // Launch an external program.
             HintAction::Command(command) => {
-                let language = self.display.ui_language();
-                match crate::file_uri::handle_legacy_hint_command(&text, command.args(), language) {
-                    crate::file_uri::LegacyHintOutcome::Handled => {},
-                    crate::file_uri::LegacyHintOutcome::SpawnCommand(args) => {
-                        let arg_refs: Vec<&std::ffi::OsStr> =
-                            args.iter().map(|s| s.as_os_str()).collect();
-                        self.spawn_daemon(command.program(), &arg_refs);
-                    },
-                    crate::file_uri::LegacyHintOutcome::Failed(err) => {
-                        self.display.push_toast(err, ToastKind::Warning);
-                    },
+                if command == &crate::config::ui_config::default_hint_command() {
+                    link_open::open(
+                        command.clone(),
+                        text.into_owned(),
+                        self.display.ui_language(),
+                        self.event_proxy.clone(),
+                        self.display.window.id(),
+                    );
+                } else {
+                    let mut args = command.args().to_vec();
+                    args.push(text.into_owned());
+                    self.spawn_daemon(command.program(), &args);
                 }
             },
             // Copy the text to the clipboard.
@@ -2806,6 +2808,10 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::Message(message) if !self.ctx.message_buffer.is_queued(&message) => {
                     self.ctx.message_buffer.push(message);
                     self.ctx.display.pending_update.dirty = true;
+                },
+                EventType::LinkOpenFailed(message) => {
+                    self.ctx.display.push_toast(message, ToastKind::Warning);
+                    *self.ctx.dirty = true;
                 },
                 EventType::Terminal(event) => match event {
                     // OSC 9;4：程序自报任务进度。旧壳一个窗口只投一次，不像

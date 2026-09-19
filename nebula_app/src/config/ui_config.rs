@@ -284,15 +284,7 @@ impl Default for Hints {
         let regex = LazyRegex(Arc::new(Mutex::new(pattern)));
         let content = HintContent::new(Some(regex), true);
 
-        #[cfg(not(any(target_os = "macos", windows)))]
-        let action = HintAction::Command(Program::Just(String::from("xdg-open")));
-        #[cfg(target_os = "macos")]
-        let action = HintAction::Command(Program::Just(String::from("open")));
-        #[cfg(windows)]
-        let action = HintAction::Command(Program::WithArgs {
-            program: String::from("cmd"),
-            args: vec!["/c".to_string(), "start".to_string(), "".to_string()],
-        });
+        let action = HintAction::Command(default_hint_command());
 
         Self {
             enabled: vec![Arc::new(Hint {
@@ -321,6 +313,20 @@ impl Hints {
     pub fn alphabet(&self) -> &str {
         &self.alphabet.0
     }
+}
+
+/// The system opener used by the default link hint. Custom commands keep their
+/// original matched argument and must not be redirected to the system opener.
+pub fn default_hint_command() -> Program {
+    #[cfg(not(any(target_os = "macos", windows)))]
+    return Program::Just(String::from("xdg-open"));
+    #[cfg(target_os = "macos")]
+    return Program::Just(String::from("open"));
+    #[cfg(windows)]
+    return Program::WithArgs {
+        program: String::from("cmd"),
+        args: vec!["/c".to_string(), "start".to_string(), "".to_string()],
+    };
 }
 
 #[derive(SerdeReplace, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -875,8 +881,7 @@ mod tests {
             );
             let matched_text = term.bounds_to_string(*matches[0].start(), *matches[0].end());
             assert_eq!(
-                matched_text,
-                hint_text,
+                matched_text, hint_text,
                 "Matched text must match expected hint string for {hint_text}"
             );
         }
@@ -912,14 +917,23 @@ mod tests {
         let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
         let matches1 = visible_regex_match_iter(&term1, &mut regex).collect::<Vec<_>>();
         assert_eq!(matches1.len(), 1);
-        assert_eq!(term1.bounds_to_string(*matches1[0].start(), *matches1[0].end()), "D:/work/spec.md");
+        assert_eq!(
+            term1.bounds_to_string(*matches1[0].start(), *matches1[0].end()),
+            "D:/work/spec.md"
+        );
 
         let text2 = "见 D:/docs/spec.md、D:/docs/plan.md。";
         let term2 = mock_term(text2);
         let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
         let matches2 = visible_regex_match_iter(&term2, &mut regex).collect::<Vec<_>>();
         assert_eq!(matches2.len(), 2);
-        assert_eq!(term2.bounds_to_string(*matches2[0].start(), *matches2[0].end()), "D:/docs/spec.md");
-        assert_eq!(term2.bounds_to_string(*matches2[1].start(), *matches2[1].end()), "D:/docs/plan.md");
+        assert_eq!(
+            term2.bounds_to_string(*matches2[0].start(), *matches2[0].end()),
+            "D:/docs/spec.md"
+        );
+        assert_eq!(
+            term2.bounds_to_string(*matches2[1].start(), *matches2[1].end()),
+            "D:/docs/plan.md"
+        );
     }
 }

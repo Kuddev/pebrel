@@ -42,13 +42,14 @@ pub fn file_uri_to_local_path(uri: &str) -> Option<PathBuf> {
 /// Open a local path (file or directory) using the platform's default handler.
 ///
 /// Dispatches via [`crate::platform::file_manager::open`]. If opening directly
-/// fails (e.g. no associated application), gracefully falls back to revealing
+/// fails to launch its platform helper, falls back to revealing
 /// the item in the system file manager ([`crate::platform::file_manager::reveal`]).
-/// All outcomes are logged with `log::debug!` so failure is visible and diagnosable.
+/// Success means the helper process was launched, not that an associated app
+/// finished opening the file. Later helper failures are not reported by this API.
 pub fn open_local_path(path: &Path) -> std::io::Result<()> {
     match crate::platform::file_manager::open(path) {
         Ok(()) => {
-            log::debug!("open_local_path open succeeded for {}", path.display());
+            log::debug!("open_local_path helper launched for {}", path.display());
             Ok(())
         }
         Err(open_err) => {

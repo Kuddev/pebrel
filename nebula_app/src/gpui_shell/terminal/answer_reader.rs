@@ -453,32 +453,40 @@ impl Render for AnswerReader {
                         return;
                     }
                     let language = super::super::config::ui_language(cx);
-                    if url.starts_with("https://") || url.starts_with("http://") {
-                        cx.open_url(url);
-                    } else if let Some(result) =
-                        crate::file_uri::try_open_local_link_with_cwd(url, cwd.as_deref())
-                    {
-                        if let Err(err) = result {
-                            crate::gpui_shell::toast::toast(
-                                window,
-                                cx,
-                                crate::display::ToastKind::Warning,
-                                err.localized_message(language),
-                            );
-                        }
-                    } else if crate::file_uri::is_web_or_protocol_uri(url) {
-                        cx.open_url(url);
-                    } else {
-                        crate::gpui_shell::toast::toast(
-                            window,
-                            cx,
-                            crate::display::ToastKind::Warning,
-                            language.format(
-                                crate::i18n::Message::CommonLinkUnrecognized,
-                                &[("target", url)],
-                            ),
-                        );
-                    }
+                    let url = url.to_owned();
+                    let cwd = cwd.clone();
+                    // Path metadata and system openers can block on mounted/network
+                    // filesystems. Keep both outside the window's render thread.
+                    let task = cx.background_executor().spawn(async move {
+                        let result =
+                            crate::file_uri::try_open_local_link_with_cwd(&url, cwd.as_deref());
+                        (url, result)
+                    });
+                    window
+                        .spawn(cx, async move |cx| {
+                            let (url, result) = task.await;
+                            let _ = cx.update(|window, cx| {
+                                let message = match result {
+                                    Some(Ok(())) => return,
+                                    Some(Err(error)) => error.localized_message(language),
+                                    None if crate::file_uri::is_web_or_protocol_uri(&url) => {
+                                        cx.open_url(&url);
+                                        return;
+                                    },
+                                    None => language.format(
+                                        crate::i18n::Message::CommonLinkUnrecognized,
+                                        &[("target", &url)],
+                                    ),
+                                };
+                                crate::gpui_shell::toast::toast(
+                                    window,
+                                    cx,
+                                    crate::display::ToastKind::Warning,
+                                    message,
+                                );
+                            });
+                        })
+                        .detach();
                 })
                 .style(TextViewStyle {
                     highlight_theme: cx.theme().highlight_theme.clone(),

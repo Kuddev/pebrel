@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use gpui::{ClipboardItem, Context, Window};
+use gpui::{App, ClipboardItem, Window};
 use nebula_terminal::event::EventListener;
 use nebula_terminal::index::Point;
 use nebula_terminal::term::{Term, point_to_viewport_from};
@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthChar;
 use winit::keyboard::ModifiersState;
 
 use crate::config::UiConfig;
-use crate::config::ui_config::{HintAction, HintInternalAction};
+use crate::config::ui_config::{HintAction, HintInternalAction, default_hint_command};
 use crate::display::hint::{self, HintMatch};
 
 /// 悬停目标：旧壳 `highlighted_hint` + 已经解码好的预览文案。
@@ -111,57 +111,110 @@ pub(super) fn open_hint_match(
     text: &str,
     cwd: Option<&std::path::Path>,
     window: &mut Window,
-    cx: &mut Context<super::view::TerminalView>,
+    cx: &mut App,
 ) {
+    dispatch_hint_action(hint.action(), hint.hyperlink().is_some(), text, cwd, window, cx);
+}
+
+fn dispatch_hint_action(
+    action: &HintAction,
+    hyperlink: bool,
+    text: &str,
+    cwd: Option<&std::path::Path>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    // Internal actions operate on the original match, without filesystem work.
+    let command = match action {
+        HintAction::Action(HintInternalAction::Copy) => {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
+            return;
+        },
+        HintAction::Action(_) => return,
+        HintAction::Command(command) => command.clone(),
+    };
+    let text = text.to_owned();
+    let cwd = cwd.map(std::path::Path::to_path_buf);
     let language = crate::gpui_shell::config::ui_language(cx);
-    if let Some(result) = crate::file_uri::try_open_local_link_with_cwd(text, cwd) {
-        if let Err(err) = result {
-            crate::gpui_shell::toast::toast(
-                window,
-                cx,
-                crate::display::ToastKind::Warning,
-                err.localized_message(language),
-            );
-        }
-        return;
-    }
-    let target = crate::file_uri::extract_link_target(text);
-    if hint.hyperlink().is_some() || crate::file_uri::is_web_or_protocol_uri(target) {
-        match hint.action() {
-            HintAction::Command(command) => {
-                let mut args = command.args().to_vec();
-                args.push(target.to_string());
-                if let Err(err) = crate::daemon::spawn_detached(command.program(), &args) {
-                    let err_str = err.to_string();
+    let task = cx.background_executor().spawn(async move {
+        let target = if command == default_hint_command() {
+            if let Some(result) =
+                crate::file_uri::try_open_local_link_with_cwd(&text, cwd.as_deref())
+            {
+                return result.map_err(|error| error.localized_message(language));
+            }
+            let target = crate::file_uri::extract_link_target(&text);
+            if !hyperlink && !crate::file_uri::is_web_or_protocol_uri(target) {
+                return Err(language
+                    .format(crate::i18n::Message::CommonLinkUnrecognized, &[("target", target)]));
+            }
+            target
+        } else {
+            &text
+        };
+        let mut args = command.args().to_vec();
+        args.push(target.to_owned());
+        crate::daemon::spawn_detached(command.program(), &args).map_err(|error| {
+            language.format(
+                crate::i18n::Message::CommonLinkOpenUrlFailed,
+                &[("error", &error.to_string())],
+            )
+        })
+    });
+    window
+        .spawn(cx, async move |cx| {
+            if let Err(message) = task.await {
+                let _ = cx.update(|window, cx| {
                     crate::gpui_shell::toast::toast(
                         window,
                         cx,
                         crate::display::ToastKind::Warning,
-                        language.format(
-                            crate::i18n::Message::CommonLinkOpenUrlFailed,
-                            &[("error", &err_str)],
-                        ),
+                        message,
                     );
-                }
-            },
-            HintAction::Action(HintInternalAction::Copy) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(target.to_string()));
-            },
-            HintAction::Action(
-                HintInternalAction::Paste
-                | HintInternalAction::Select
-                | HintInternalAction::MoveViModeCursor,
-            ) => {},
+                });
+            }
+        })
+        .detach();
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::{Context, IntoElement, Render, TestAppContext};
+
+    struct Surface;
+    impl Render for Surface {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div()
         }
-    } else {
-        crate::gpui_shell::toast::toast(
-            window,
-            cx,
-            crate::display::ToastKind::Warning,
-            language.format(
-                crate::i18n::Message::CommonLinkUnrecognized,
-                &[("target", target)],
-            ),
-        );
+    }
+
+    #[gpui::test]
+    fn copying_local_markdown_and_custom_matches_never_opens_them(cx: &mut TestAppContext) {
+        let (_, window) = cx.add_window_view(|_, _| Surface);
+        for text in [
+            "[notes](./missing notes.md)",
+            "file:///C:/missing-copy-test.md",
+            r"\\server\share\copy-only.md",
+            "custom match without a URL",
+            "[site](https://example.com)",
+        ] {
+            window.update(|window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+                dispatch_hint_action(
+                    &HintAction::Action(HintInternalAction::Copy),
+                    false,
+                    text,
+                    None,
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+                    Some(text)
+                );
+            });
+        }
+        cx.run_until_parked();
     }
 }
