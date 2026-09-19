@@ -803,7 +803,10 @@ mod tests {
                 (ThemeName::Nord, UiLanguage::ZhCn, false),
                 (ThemeName::Paper, UiLanguage::EnUs, true),
             ] {
-                let runtime = RuntimeSettings { panel_resize, ..RuntimeSettings::default() };
+                let runtime = RuntimeSettings {
+                    panel_resize,
+                    ..RuntimeSettings::from_raw(&RawSettings::default())
+                };
                 let mut settings = Settings::load_with_runtime(theme, runtime);
                 settings.ui_language = language;
                 cx.set_global(settings);
