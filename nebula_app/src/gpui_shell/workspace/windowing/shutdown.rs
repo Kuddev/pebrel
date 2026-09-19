@@ -1,6 +1,7 @@
 //! Application shutdown: approve drafts, capture durable state, then stop PTYs.
 use super::*;
 use crate::i18n::Message;
+use gpui::SharedString;
 
 pub(crate) fn quit_all(cx: &mut App) {
     request_quit(None, cx);
