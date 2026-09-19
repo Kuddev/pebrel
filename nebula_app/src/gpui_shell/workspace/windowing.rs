@@ -24,11 +24,11 @@ use std::time::Duration;
 
 use super::DockTarget;
 use gpui::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, WeakEntity, Window, WindowBounds,
-    WindowOptions, div, point, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, IntoElement, Render,
+    Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowOptions, div, point, px,
+    size,
 };
-use gpui_component::{ActiveTheme as _, Root, TitleBar};
+use gpui_component::{Root, TitleBar};
 use nebula_split::SplitTree;
 use serde_json::json;
 
