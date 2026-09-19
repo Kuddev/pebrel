@@ -230,6 +230,45 @@ fn paste_accepts_layout_whitespace_but_not_terminal_control_sequences() {
     assert!(matches!(agent, RuntimeCommand::AgentPaste { generation: Some(9), submit: true, .. }));
 }
 
+/// `tab.new` / `window.create` 的 `shell` 是可选字段。
+///
+/// 老客户端（升级前的第二份进程、`pebrel ctl tab new`）不带它，必须逐字保持
+/// 原行为；带了它的新客户端由驻留实例按 id 解析。注意 `WindowParams` 是
+/// `deny_unknown_fields`：**反向**不兼容（新客户端 → 旧驻留实例）会得到一个
+/// `invalid_params`，调用方会退回冷启动——这是升级后要重启 Pebrel 的原因。
+#[test]
+fn tab_and_window_requests_take_an_optional_shell() {
+    let tab = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "tab.new",
+        json!({ "cwd": "D:\\work", "shell": "wsl:Ubuntu" }),
+    ))
+    .expect("tab.new with shell parses");
+    assert!(matches!(
+        tab,
+        RuntimeCommand::NewTab { shell_id: Some(ref id), .. } if id == "wsl:Ubuntu"
+    ));
+
+    let plain = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "tab.new",
+        json!({ "cwd": "D:\\work" }),
+    ))
+    .expect("tab.new without shell still parses");
+    assert!(matches!(plain, RuntimeCommand::NewTab { shell_id: None, .. }));
+
+    let window = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "window.create",
+        json!({ "shell": "wsl:Ubuntu" }),
+    ))
+    .expect("window.create with shell parses");
+    assert!(matches!(
+        window,
+        RuntimeCommand::NewWindow { shell_id: Some(ref id), .. } if id == "wsl:Ubuntu"
+    ));
+}
+
 #[test]
 fn layout_mutations_parse_and_enforce_their_bounds() {
     let parse = |method: &str, params: Value| {

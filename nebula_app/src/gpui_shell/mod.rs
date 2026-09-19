@@ -78,6 +78,7 @@ pub(crate) enum GpuiShellEvent {
 pub fn run_shell(
     initial_cwd: Option<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
+    shell_id: Option<String>,
 ) {
     if crate::platform::CAPABILITIES.self_update_install {
         match crate::update_download::handoff::installation_in_progress() {
@@ -142,12 +143,17 @@ pub fn run_shell(
             let behavior = nebula_settings::RuntimeSettings::load().windowing_behavior;
             let handed_over = match behavior {
                 nebula_settings::WindowingBehaviorName::UseNew => {
-                    crate::runtime_api::try_open_window_existing(handover_cwd.as_deref())
+                    crate::runtime_api::try_open_window_existing(
+                        handover_cwd.as_deref(),
+                        shell_id.as_deref(),
+                    )
                 },
-                _ => handover_cwd.as_deref().map_or_else(
-                    crate::runtime_api::try_open_default_tab_existing,
-                    crate::runtime_api::try_open_directory_existing,
-                ),
+                _ => match handover_cwd.as_deref() {
+                    Some(dir) => {
+                        crate::runtime_api::try_open_directory_existing(dir, shell_id.as_deref())
+                    },
+                    None => crate::runtime_api::try_open_default_tab_existing(shell_id.as_deref()),
+                },
             };
             if handed_over {
                 crate::tray::shutdown();
@@ -175,7 +181,7 @@ pub fn run_shell(
             {
                 cx.activate(true);
             }
-            open_main_window(cx, ai_events, shell_rx, runtime_hub, initial_cwd, initial_command);
+            open_main_window(cx, ai_events, shell_rx, runtime_hub, initial_cwd, initial_command, shell_id);
         });
     crate::tray::shutdown();
 }
@@ -256,6 +262,7 @@ fn open_main_window(
     runtime_hub: crate::runtime_api::RuntimeHub,
     initial_cwd: Option<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
+    shell_id: Option<String>,
 ) {
     workspace::windowing::initialize(cx, runtime_hub);
     workspace::windowing::open_initial_window(
@@ -264,6 +271,7 @@ fn open_main_window(
         shell_events,
         initial_cwd,
         initial_command,
+        shell_id,
     );
 }
 

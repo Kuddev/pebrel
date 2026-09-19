@@ -68,6 +68,7 @@ mod residency;
 mod send_to_chat;
 mod session_persistence;
 mod session_recovery;
+pub(crate) mod shell_launch;
 mod shell_picker;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
@@ -1111,7 +1112,7 @@ impl NebulaWorkspace {
             windowing::WorkspaceStartup::NewTerminal { cwd } => {
                 this.add_terminal_at(cwd, None, window, cx);
             },
-            windowing::WorkspaceStartup::LaunchTerminal { launch, cwd } => {
+            windowing::WorkspaceStartup::LaunchTerminal { cwd, launch } => {
                 this.add_terminal_with(launch, cwd, None, window, cx);
             },
             windowing::WorkspaceStartup::Empty => {},
@@ -1190,52 +1191,6 @@ impl NebulaWorkspace {
     /// 进程身份相互矛盾。
     fn default_shell_tag() -> SharedString {
         crate::shell_detect::shell_short_tag(&crate::platform::shell::default_shell_id()).into()
-    }
-
-    /// 冻结“新建这一刻”的默认 Shell 为共享 v4 launch 身份。
-    ///
-    /// 旧壳通过 `TabLaunch::Shell` 保存同样的 name/program/args；GPUI 以前只
-    /// 保存 UI 短标，冷恢复时因此失去了真正的启动命令。检测失败才保留
-    /// `Default`，让跨机器工作区按 schema 的既有降级规则使用当地默认值。
-    fn configured_local_launch(cx: &App) -> crate::session::LaunchSession {
-        let shell_id = cx
-            .try_global::<crate::gpui_shell::config::Settings>()
-            .and_then(|settings| settings.shell_id.clone());
-        let Some(shell_id) = shell_id.filter(|id| !id.trim().is_empty()) else {
-            return crate::session::LaunchSession::Default;
-        };
-        if let Some(detected) = crate::shell_detect::detect_shells()
-            .into_iter()
-            .find(|shell| shell.id.eq_ignore_ascii_case(&shell_id))
-        {
-            let shell = detected.shell();
-            return crate::session::LaunchSession::Shell {
-                name: detected.name,
-                program: shell.program().to_owned(),
-                args: shell.args().to_vec(),
-            };
-        }
-        crate::terminal_profiles::TerminalProfiles::load()
-            .ok()
-            .and_then(|store| {
-                store.as_config_profiles().into_iter().find(|profile| {
-                    profile.settings_id().is_some_and(|id| id.eq_ignore_ascii_case(&shell_id))
-                })
-            })
-            .map(Self::profile_launch_session)
-            .unwrap_or(crate::session::LaunchSession::Default)
-    }
-
-    fn profile_launch_session(
-        profile: crate::config::ui_config::Profile,
-    ) -> crate::session::LaunchSession {
-        crate::session::LaunchSession::Profile {
-            name: profile.name,
-            command: profile.command,
-            args: profile.args,
-            cwd: profile.cwd.map(|path| path.to_string_lossy().into_owned()),
-            shell_id: profile.shell_id,
-        }
     }
 
     /// 把一份冻结的会话 launch 还原为一次 GPUI PTY 启动。逐 pane 选择
@@ -1378,7 +1333,7 @@ impl NebulaWorkspace {
         // 默认 shell 只在“创建新 Tab”的这一刻取样，并把实际 program/args
         // 一起冻结进 Tab launch。设置页随后改默认值只影响下一次创建；冷
         // 恢复也按本 Tab 的 launch 重建，不会把混合工作区抹成同一种 shell。
-        let launch_session = Self::configured_local_launch(cx);
+        let launch_session = shell_launch::configured_local_launch(cx);
         self.add_terminal_with(launch_session, cwd, command, window, cx)
     }
 
@@ -2652,7 +2607,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.dismiss_palette_state();
-        let launch = Self::profile_launch_session(profile);
+        let launch = shell_launch::profile_launch_session(profile);
         let cwd = Self::startup_directory().or_else(|| {
             self.tabs
                 .get(self.active)

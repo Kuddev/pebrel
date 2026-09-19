@@ -225,9 +225,20 @@ impl NebulaWorkspace {
                     cx,
                 )
             },
-            RuntimeCommand::NewTab { window_id, cwd } => {
+            RuntimeCommand::NewTab { window_id, cwd, shell_id } => {
                 self.runtime_window_requested(*window_id)?;
-                let pane_id = self.add_terminal_at(cwd.clone(), None, window, cx);
+                // 带 shell 的请求（右键「在 Pebrel 中打开（Ubuntu）」并入驻留实例）
+                // 必须走 add_terminal_with：add_terminal_at 只认目录，会把 shell
+                // 悄悄丢掉，用户拿到一个自己没要过的 PowerShell 标签。
+                let pane_id = match shell_id {
+                    Some(shell_id) => {
+                        let launch =
+                            super::shell_launch::resolve_shell_at(shell_id, cwd.as_deref())
+                                .map_err(|error| ApiError::new("invalid_shell", error))?;
+                        self.add_terminal_with(launch, cwd.clone(), None, window, cx)
+                    },
+                    None => self.add_terminal_at(cwd.clone(), None, window, cx),
+                };
                 self.runtime_result(
                     json!({ "window_id": self.runtime_window_id, "pane_id": pane_id }),
                     window,

@@ -35,7 +35,9 @@ impl NebulaWorkspace {
         } else {
             // Old snapshots without an identity resolve the current default shell.
             let mut launch = match meta.launch {
-                None | Some(LaunchSession::Default) => Self::configured_local_launch(cx),
+                None | Some(LaunchSession::Default) => {
+                    super::shell_launch::configured_local_launch(cx)
+                },
                 Some(launch) => launch,
             };
             // A guest path must never become CreateProcess's host working directory.

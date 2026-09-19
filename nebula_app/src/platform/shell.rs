@@ -8,6 +8,20 @@
 #[cfg(unix)]
 use std::path::Path;
 
+/// Locate the host's WSL launcher; unsupported hosts never synthesize a WSL launch.
+pub(crate) fn wsl_executable() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let path =
+            std::path::PathBuf::from(std::env::var_os("SystemRoot")?).join(r"System32\wsl.exe");
+        path.is_file().then(|| path.to_string_lossy().into_owned())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Stable id for the shell the PTY backend starts when no override is set.
 pub fn default_shell_id() -> String {
     #[cfg(windows)]
@@ -125,6 +139,15 @@ pub(crate) fn default_wsl_distro() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(not(windows), feature = "gpui-shell"))]
+    #[test]
+    fn unix_rejects_wsl_instead_of_selecting_another_shell() {
+        assert!(wsl_executable().is_none());
+        for id in ["wsl", "wsl:Ubuntu"] {
+            assert!(crate::gpui_shell::workspace::shell_launch::resolve_shell_id(id).is_err());
+        }
+    }
 
     #[test]
     fn default_shell_id_is_never_empty() {

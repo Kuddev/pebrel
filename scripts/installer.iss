@@ -1,9 +1,9 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "1.8.1"
+  #define AppVersion "1.8.2"
 #endif
 
 #ifndef NumericVersion
-  #define NumericVersion "1.8.1.0"
+  #define NumericVersion "1.8.2.0"
 #endif
 
 #ifndef Configuration
@@ -77,6 +77,7 @@ english.AutoStart=Start Pebrel when I sign in to Windows
 english.InstallFont=Install Maple Mono font for the current user
 english.AddToPath=Add Pebrel to the user PATH
 english.OpenInPebrel=Open in Pebrel
+english.OpenInPebrelWsl=Open in Pebrel
 english.LaunchProgram=Launch Pebrel
 english.UninstallProgram=Uninstall Pebrel
 english.CloseLegacyProgram=Close the application at %1, then retry the installation.
@@ -88,6 +89,7 @@ chinesesimplified.AutoStart=登录 Windows 后启动 Pebrel
 chinesesimplified.InstallFont=为当前用户安装 Maple Mono 字体
 chinesesimplified.AddToPath=将 Pebrel 添加到当前用户 PATH
 chinesesimplified.OpenInPebrel=在 Pebrel 中打开
+chinesesimplified.OpenInPebrelWsl=在 Pebrel 中打开
 chinesesimplified.LaunchProgram=启动 Pebrel
 chinesesimplified.UninstallProgram=卸载 Pebrel
 chinesesimplified.CloseLegacyProgram=请关闭 %1 中运行的程序，然后重试安装。
@@ -179,6 +181,10 @@ var
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
+
+  { WSL 右键项是 [Code] 动态写的、没有 uninsdeletekey，必须自己认领删除；
+    这一步排在 PATH 那段的早退之前——两条互不依赖。 }
+  RemoveOwnedWslContextMenus;
 
   if not RegValueExists(HKCU, 'Software\Pebrel', 'InstallerAddedToPath') then
     Exit;

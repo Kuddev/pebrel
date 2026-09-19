@@ -96,10 +96,14 @@ impl NebulaWorkspace {
         for (index, leaf) in layout.leaves().into_iter().enumerate() {
             let LayoutSession::Pane { cwd, agent, launch } = leaf else { continue };
             let mut launch_session = launch.clone().unwrap_or_else(|| {
-                if index == 0 { saved_launch.clone() } else { Self::configured_local_launch(cx) }
+                if index == 0 {
+                    saved_launch.clone()
+                } else {
+                    super::shell_launch::configured_local_launch(cx)
+                }
             });
             if matches!(launch_session, LaunchSession::Default) {
-                launch_session = Self::configured_local_launch(cx);
+                launch_session = super::shell_launch::configured_local_launch(cx);
             }
             let guest_directory =
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);

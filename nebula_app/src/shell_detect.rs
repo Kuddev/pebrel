@@ -543,14 +543,27 @@ pub fn wsl_guest_cwd(cwd: &str) -> Option<&str> {
 
 /// Set the WSL guest cwd without changing its distribution, user or command.
 pub fn wsl_args_at(program: &str, args: &[String], cwd: &str) -> Option<Vec<String>> {
+    if !cwd.starts_with('/') || cwd.chars().any(char::is_control) {
+        return None;
+    }
+    wsl_args_with_directory(program, args, Some(cwd))
+}
+
+/// Let WSL inherit an explicit host cwd, removing only its own --cd options.
+pub fn wsl_args_in_host_directory(program: &str, args: &[String]) -> Option<Vec<String>> {
+    wsl_args_with_directory(program, args, None)
+}
+
+fn wsl_args_with_directory(
+    program: &str,
+    args: &[String],
+    cwd: Option<&str>,
+) -> Option<Vec<String>> {
     let name = program.rsplit(['/', '\\']).next()?;
     if !name.eq_ignore_ascii_case("wsl.exe") && !name.eq_ignore_ascii_case("wsl") {
         return None;
     }
-    if !cwd.starts_with('/') || cwd.chars().any(char::is_control) {
-        return None;
-    }
-    let mut result = vec!["--cd".to_owned(), cwd.to_owned()];
+    let mut result = cwd.map_or_else(Vec::new, |cwd| vec!["--cd".to_owned(), cwd.to_owned()]);
     let mut arguments = args.iter();
     while let Some(arg) = arguments.next() {
         match arg.as_str() {
@@ -750,11 +763,10 @@ fn find_wsl_distros() -> Vec<DetectedShell> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
-    let wsl_exe =
-        match env_path("SystemRoot").and_then(|root| existing(root.join(r"System32\wsl.exe"))) {
-            Some(path) => path,
-            None => return Vec::new(),
-        };
+    let wsl_exe = match crate::platform::shell::wsl_executable() {
+        Some(path) => path,
+        None => return Vec::new(),
+    };
 
     let lxss = match RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Lxss")

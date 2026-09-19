@@ -56,7 +56,7 @@ impl LauncherTarget {
                 })
             },
             Self::Profile(profile) => {
-                Some(NebulaWorkspace::profile_launch_session(profile.clone()))
+                Some(super::shell_launch::profile_launch_session(profile.clone()))
             },
             Self::Ssh(_) => None,
         }

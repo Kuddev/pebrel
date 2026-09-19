@@ -77,8 +77,8 @@ fn fresh_token() -> String {
 }
 
 /// 普通二次启动并入驻留实例：先恢复/聚焦窗口，再新建一个默认 shell 标签页。
-pub fn try_open_default_tab_existing() -> bool {
-    try_open_tab_existing(None)
+pub fn try_open_default_tab_existing(shell: Option<&str>) -> bool {
+    try_open_tab_existing(None, shell)
 }
 
 /// 后台任务把一行文本作为输入敲进某个 pane（不回车）。
@@ -96,31 +96,49 @@ pub fn dispatch_prompt(proxy: &EventLoopProxy<Event>, pane_id: u64, text: String
 }
 
 /// Explorer 右键或带 `--working-directory` 的启动并入驻留实例。
-pub fn try_open_directory_existing(dir: &std::path::Path) -> bool {
-    try_open_tab_existing(Some(dir))
+///
+/// `shell` 是命令行 `--shell <id>` 的原文（如 `wsl:Ubuntu`）；驻留实例按同一个
+/// id 解析启动身份。缺省 = 那边的默认 shell。
+pub fn try_open_directory_existing(dir: &std::path::Path, shell: Option<&str>) -> bool {
+    try_open_tab_existing(Some(dir), shell)
 }
 
 /// 按“创建新窗口”策略把一次普通启动交给驻留进程。
 ///
 /// 仍先发送 ATTACH，保证隐藏驻留进程被唤醒；真正的窗口由同一 GPUI App
 /// 创建，避免第二个进程争抢 runtime.port 和托盘所有权。
-pub fn try_open_window_existing(dir: Option<&std::path::Path>) -> bool {
+pub fn try_open_window_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
     if legacy_request("ATTACH").is_none() {
         return false;
     }
-    let params = dir.map_or_else(|| json!({}), |dir| json!({ "cwd": dir }));
-    cli::request_once("window.create", params, IO_TIMEOUT)
+    cli::request_once("window.create", handover_params(dir, shell), IO_TIMEOUT)
         .map(|response| response.ok)
         .unwrap_or(false)
 }
 
-fn try_open_tab_existing(dir: Option<&std::path::Path>) -> bool {
+/// 交接请求的参数：目录与 shell 都可缺省。
+///
+/// 只放**有值**的键——第二份进程与驻留实例可能不是同一个构建，缺省键让老
+/// 那边按 `serde(default)` 走原行为；空白 shell 也当作没给。
+fn handover_params(dir: Option<&std::path::Path>, shell: Option<&str>) -> serde_json::Value {
+    let mut params = serde_json::Map::new();
+    if let Some(dir) = dir {
+        params.insert("cwd".to_owned(), serde_json::json!(dir));
+    }
+    if let Some(shell) = shell.map(str::trim).filter(|shell| !shell.is_empty()) {
+        params.insert("shell".to_owned(), serde_json::json!(shell));
+    }
+    serde_json::Value::Object(params)
+}
+
+fn try_open_tab_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
     if legacy_request("ATTACH").is_none() {
         return false;
     }
     // ATTACH 与 tab.new 落到同一事件队列，窗口先恢复，新标签随后创建。
-    let params = dir.map_or_else(|| json!({}), |dir| json!({ "cwd": dir }));
-    cli::request_once("tab.new", params, IO_TIMEOUT).map(|response| response.ok).unwrap_or(false)
+    cli::request_once("tab.new", handover_params(dir, shell), IO_TIMEOUT)
+        .map(|response| response.ok)
+        .unwrap_or(false)
 }
 
 fn legacy_request(verb: &str) -> Option<()> {
