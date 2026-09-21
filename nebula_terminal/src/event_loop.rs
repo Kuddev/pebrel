@@ -185,7 +185,19 @@ impl StreamProcessor {
     }
 
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
+        terminal.cancel_redraw_anchor();
         self.parser.stop_sync(terminal);
+    }
+
+    fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
+        // VTE 0.15 在约 2 MiB 时强制提交同步缓冲；提前取消兼容锚点，
+        // 但不强制结束/截断输出。分块保证单次大输入也不会绕过检查。
+        for chunk in bytes.chunks(4096) {
+            if self.parser.sync_bytes_count() >= 1024 * 1024 {
+                terminal.cancel_redraw_anchor();
+            }
+            self.parser.advance(terminal, chunk);
+        }
     }
 
     pub fn feed<U: EventListener>(
@@ -200,7 +212,7 @@ impl StreamProcessor {
             // Titles and shell identity/cwd reports must retain wire order:
             // coalescing a remote cwd past a parent prompt would attribute that
             // directory to the parent shell's completion history.
-            self.parser.advance(terminal, &bytes[advanced..offset]);
+            self.advance(terminal, &bytes[advanced..offset]);
             advanced = offset;
             match event {
                 OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
@@ -239,7 +251,7 @@ impl StreamProcessor {
                     let rows = (disp_h / cell_h).ceil().max(1.0) as usize;
                     let abs_line = terminal.nebula_cursor_abs_line();
                     for _ in 0..=rows {
-                        self.parser.advance(terminal, b"\r\n");
+                        self.advance(terminal, b"\r\n");
                     }
                     event_proxy.send_event(Event::InlineImage {
                         data: std::sync::Arc::new(data),
@@ -250,7 +262,7 @@ impl StreamProcessor {
                 },
             }
         }
-        self.parser.advance(terminal, &bytes[advanced..]);
+        self.advance(terminal, &bytes[advanced..]);
     }
 }
 
