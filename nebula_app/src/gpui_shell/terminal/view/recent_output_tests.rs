@@ -350,6 +350,113 @@ fn batch_restore_reads_exact_references_and_skips_changed_panes(cx: &mut TestApp
     missing.update(first_window, |view, _| assert!(view.recent_output_snapshot().is_empty()));
 }
 
+// Unlike startup_tests::feed, this drives the production OSC prompt lifecycle
+// as well as VT parsing, without depending on the host OS or a native CMD marker.
+fn shell_output(view: &mut TerminalView, bytes: &[u8], cx: &mut Context<TerminalView>) {
+    let (_session, _input, mut events, proxy) = session::test_session_with_events();
+    nebula_terminal::event_loop::StreamProcessor::default().feed(
+        &mut view.session.as_ref().unwrap().term.lock(),
+        &proxy,
+        bytes,
+    );
+    while let Ok(event) = events.try_recv() {
+        view.process_event(event, cx);
+    }
+}
+
+#[gpui::test]
+fn local_unix_prompts_capture_commands_with_and_without_osc(cx: &mut TestAppContext) {
+    for (prefix, prompt) in [("", "dev@host:~/work$ "), ("\x1b]133;A\x07", "host% ")] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            shell_output(view, format!("{prefix}{prompt}printf saved").as_bytes(), cx);
+            view.suggest.line_buf = "printf saved".into();
+            view.commit_line(cx);
+            assert_eq!(view.recent_output_snapshot().len(), 1);
+            view.write_input(b"\r".to_vec(), cx);
+            shell_output(view, b"\r\n\x1b]133;C\x07saved result\r\n\x1b]133;D;0\x07", cx);
+            shell_output(view, format!("{prefix}{prompt}not-submitted").as_bytes(), cx);
+            let text = restored_text(view);
+            assert!(text.contains("printf saved"), "{text:?}");
+            assert!(text.contains("saved result"), "{text:?}");
+            assert!(!text.contains("not-submitted"), "{text:?}");
+            assert!(!view.command_running);
+            assert!(!view.native_prompt_seen);
+        });
+    }
+}
+
+#[gpui::test]
+fn semantic_shell_prompt_uses_echo_not_stale_mirror_and_starts_next_record(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        for command in ["printf first", "printf second"] {
+            shell_output(
+                view,
+                format!("\x1b]133;A\x07custom :: \x1b]133;B\x07{command}").as_bytes(),
+                cx,
+            );
+            view.suggest.line_buf = "stale-private-mirror".into();
+            view.suggest.screen_line = "stale-screen".into();
+            view.commit_line(cx);
+            assert_eq!(view.suggest.last_committed, command);
+            view.write_input(b"\r".to_vec(), cx);
+            shell_output(view, b"\r\n\x1b]133;C\x07result\r\n\x1b]133;D;0\x07", cx);
+        }
+        assert_eq!(view.recent_output_snapshot().len(), 2);
+        let text = restored_text(view);
+        assert!(text.find("printf first").unwrap() < text.find("printf second").unwrap());
+        assert!(!text.contains("stale-private-mirror"));
+        assert!(!text.contains("stale-screen"));
+    });
+}
+
+#[gpui::test]
+fn unconfirmed_unix_input_never_starts_output_capture(cx: &mut TestAppContext) {
+    for (screen, mirror) in [
+        ("dev@host:~/work$ ", ""),
+        ("dev@host:~/work$    ", "   "),
+        ("\x1b]133;A\x07custom :: \x1b]133;B\x07", "stale-private-mirror"),
+        ("Password: ", "invisible-secret"),
+        ("dev@host:~/work$ printf actual", "printf stale"),
+        ("\x1b]133;A\x07custom :: \x1b]133;B\x07\x1b]133;C\x07\r\nPassword: ", "invisible-secret"),
+        ("\x1b[?1049hdev@host:~/work$ tui-input", "tui-input"),
+    ] {
+        let (view, window, _) = open(cx);
+        view.update(window, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            shell_output(view, screen.as_bytes(), cx);
+            view.suggest.line_buf = mirror.into();
+            view.suggest.screen_line = "stale-screen".into();
+            view.suggest.pending_command_prompt = Some("stale-prompt".into());
+            view.commit_line(cx);
+            assert!(view.recent_output_snapshot().is_empty(), "{screen:?}");
+            assert!(!view.recent_output_restore_closed, "{screen:?}");
+        });
+    }
+}
+
+#[gpui::test]
+fn agent_internal_enter_does_not_create_a_second_shell_record(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        shell_output(view, b"\x1b]133;A\x07dev@host:~$ \x1b]133;B\x07pi", cx);
+        view.commit_line(cx);
+        view.write_input(b"\r".to_vec(), cx);
+        shell_output(view, b"\r\n\x1b]133;C\x07", cx);
+        feed(view, "❯ tool input".as_bytes());
+        view.suggest.line_buf = "tool input".into();
+        view.commit_line(cx);
+        assert_eq!(view.recent_output_snapshot().len(), 1);
+        assert_eq!(view.suggest.last_committed, "pi");
+    });
+}
+
 #[gpui::test]
 fn runtime_submission_records_echo_only_after_barrier(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);

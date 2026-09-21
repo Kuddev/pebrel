@@ -6,7 +6,7 @@ use nebula_terminal::term::TermMode;
 
 impl TerminalView {
     /// Enter 提交：从 grid 读回显真值（screen truth）记入共享历史，然后清
-    /// 行镜像。读法与旧壳 `nebula_commit_line` 的 Windows 契约一致：无法证明
+    /// 行镜像。所有平台共享提示符/OSC 边界确认：无法证明
     /// 是提示符的 REPL 行或中线编辑读不到就宁缺毋滥——键击重构的
     /// line_buf 在光标移动/Tab 补全后就是拼接垃圾，不能进历史。Agent 已在
     /// 前台时保留最初 shell 提示符，内部交互的 Enter 不得覆盖退出证据。
@@ -27,7 +27,6 @@ impl TerminalView {
             return;
         }
         self.suggest.pending_command_prompt = None;
-        #[cfg(windows)]
         if let Some(session) = &self.session {
             let term = session.term.lock();
             if !term.mode().intersects(TermMode::ALT_SCREEN | TermMode::VI) {
