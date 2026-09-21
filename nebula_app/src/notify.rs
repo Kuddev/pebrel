@@ -48,8 +48,8 @@ pub fn init_proxy(proxy: EventLoopProxy<Event>) {
     let _ = PROXY.set(proxy);
 }
 
+use crate::platform::notifications::ToastActivation;
 pub use crate::platform::notifications::notify_test;
-use crate::platform::notifications::{ToastActivation, toast_clickable};
 
 #[cfg(feature = "gpui-shell")]
 static GPUI_ACTIVATION: OnceLock<std::sync::mpsc::Sender<crate::gpui_shell::GpuiShellEvent>> =
@@ -94,6 +94,8 @@ pub enum Notification {
     Bell { program: Option<String> },
     /// A tracked command finished (OSC 133;C started it, 133;D ended it).
     CommandDone { duration: Duration, program: Option<String> },
+    /// Shell-reported nonzero exit status, including short failed commands.
+    CommandFailed { duration: Duration, program: Option<String>, exit_code: i32 },
     /// Free-text notification from a program (OSC 9, iTerm style). Claude
     /// Code emits these (with the turn's actual message) when its notif
     /// channel is `iterm2`/`iterm2_with_bell`. Carries the tracked program
@@ -137,6 +139,19 @@ pub(crate) fn clamp_toast_body(body: &str) -> String {
 }
 
 impl Notification {
+    pub(crate) fn command_finished(
+        program: Option<String>,
+        duration: Duration,
+        exit_code: Option<i32>,
+        hook_seen: bool,
+    ) -> Option<Self> {
+        if let Some(exit_code) = exit_code.filter(|code| *code != 0) {
+            return Some(Self::CommandFailed { program, duration, exit_code });
+        }
+        (!hook_seen && duration >= COMMAND_NOTIFY_MIN)
+            .then_some(Self::CommandDone { program, duration })
+    }
+
     pub(crate) fn from_ai_hook(
         event: &crate::ai_hook::AiHookEvent,
         message: Option<String>,
@@ -172,11 +187,12 @@ impl Notification {
     pub(crate) fn is_failure(&self) -> bool {
         matches!(
             self,
-            Self::AiTurnIssue {
-                outcome: crate::ai_hook::AiTurnOutcome::Failed
-                    | crate::ai_hook::AiTurnOutcome::Incomplete,
-                ..
-            }
+            Self::CommandFailed { .. }
+                | Self::AiTurnIssue {
+                    outcome: crate::ai_hook::AiTurnOutcome::Failed
+                        | crate::ai_hook::AiTurnOutcome::Incomplete,
+                    ..
+                }
         )
     }
 
@@ -187,6 +203,7 @@ impl Notification {
             Self::AiTurn { .. } | Self::AiTurnIssue { .. } => return true,
             Self::Bell { program }
             | Self::CommandDone { program, .. }
+            | Self::CommandFailed { program, .. }
             | Self::Text { program, .. } => program.as_deref(),
         };
         program.is_some_and(|program| crate::ai_agents::AgentKind::parse(program).is_some())
@@ -208,18 +225,23 @@ impl Notification {
                 ),
                 None => (crate::brand::NAME.to_owned(), "终端响铃".to_owned()),
             },
-            Self::CommandDone { duration, program } => {
-                let secs = duration.as_secs();
-                let human = if secs >= 60 {
-                    format!("{}m {}s", secs / 60, secs % 60)
-                } else {
-                    format!("{secs}s")
-                };
-                match program {
-                    Some(p) => (p.clone(), format!("命令完成，用时 {human}")),
-                    None => (crate::brand::NAME.to_owned(), format!("命令完成，用时 {human}")),
-                }
-            },
+            Self::CommandDone { duration, program } => (
+                program.clone().unwrap_or_else(|| crate::brand::NAME.to_owned()),
+                notification_language().format(
+                    crate::i18n::Message::NotificationCommandFinished,
+                    &[("seconds", &duration.as_secs().to_string())],
+                ),
+            ),
+            Self::CommandFailed { duration, program, exit_code } => (
+                program.clone().unwrap_or_else(|| crate::brand::NAME.to_owned()),
+                notification_language().format(
+                    crate::i18n::Message::NotificationCommandFailed,
+                    &[
+                        ("seconds", &duration.as_secs().to_string()),
+                        ("code", &exit_code.to_string()),
+                    ],
+                ),
+            ),
             Self::Text { body, program } => match program {
                 Some(p) => (p.clone(), body.clone()),
                 None => (crate::brand::NAME.to_owned(), body.clone()),
@@ -345,36 +367,86 @@ impl PaneFailureThrottle {
 #[cfg(any(feature = "gpui-shell", test))]
 #[derive(Default)]
 struct PaneNotificationThrottle {
-    recent: HashMap<(u64, bool), Instant>,
+    recent: HashMap<(u64, bool, Option<u64>), Instant>,
 }
 
 #[cfg(any(feature = "gpui-shell", test))]
 impl PaneNotificationThrottle {
     fn accepts(&mut self, pane_id: u64, attention: bool, now: Instant) -> bool {
+        self.accepts_request(pane_id, attention, None, now)
+    }
+
+    fn accepts_request(
+        &mut self,
+        pane_id: u64,
+        attention: bool,
+        request: Option<u64>,
+        now: Instant,
+    ) -> bool {
         self.recent.retain(|_, last| now.saturating_duration_since(*last) < TOAST_THROTTLE);
-        if self.recent.contains_key(&(pane_id, attention)) {
+        if self.recent.contains_key(&(pane_id, attention, request)) {
             return false;
         }
-        self.recent.insert((pane_id, attention), now);
+        self.recent.insert((pane_id, attention, request), now);
         true
     }
 }
 
 #[cfg(feature = "gpui-shell")]
 pub(crate) fn deliver_gpui(notification: &Notification, pane_id: u64) {
+    deliver_gpui_with_choices(notification, pane_id, None);
+}
+
+#[cfg(feature = "gpui-shell")]
+pub(crate) fn deliver_gpui_with_choices(
+    notification: &Notification,
+    pane_id: u64,
+    confirmation: Option<(u64, Vec<String>)>,
+) {
     static THROTTLE: OnceLock<Mutex<PaneNotificationThrottle>> = OnceLock::new();
     let accepted = THROTTLE
         .get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .accepts(pane_id, notification.is_attention(), Instant::now());
+        .accepts_request(
+            pane_id,
+            notification.is_attention(),
+            confirmation.as_ref().map(|c| c.0),
+            Instant::now(),
+        );
     if !accepted {
         log::debug!("notify: toast suppressed for pane={pane_id}: {notification:?}");
         return;
     }
     let (title, body) = notification.toast_text();
     log::debug!("notify: system toast source for pane={pane_id}: {notification:?}");
-    spawn_toast(title, body, application_activation(Some(pane_id)));
+    let actions = confirmation
+        .and_then(|(request_id, labels)| {
+            let sender = GPUI_ACTIVATION.get()?.clone();
+            Some(
+                labels
+                    .into_iter()
+                    .enumerate()
+                    .map(|(choice, label)| {
+                        let sender = sender.clone();
+                        crate::platform::notifications::ToastAction {
+                            label: label.chars().take(80).collect(),
+                            activate: Arc::new(move || {
+                                let _ = sender.send(
+                                    crate::gpui_shell::GpuiShellEvent::NotificationChoice {
+                                        pane_id,
+                                        request_id,
+                                        choice,
+                                    },
+                                );
+                            }),
+                        }
+                    })
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    spawn_actionable_toast(title, body, application_activation(Some(pane_id)), actions);
 }
 
 /// Deliver `notification` for a window that is currently unfocused.
@@ -436,12 +508,16 @@ pub(crate) fn toast(title: &str, body: &str) {
 }
 
 fn spawn_toast(title: String, body: String, activation: Option<ToastActivation>) {
-    if let Err(error) = std::thread::Builder::new()
-        .name("pebrel-toast".into())
-        .spawn(move || toast_clickable(&title, &body, activation))
-    {
-        log::warn!("notify: failed to spawn toast thread: {error}");
-    }
+    spawn_actionable_toast(title, body, activation, Vec::new());
+}
+
+fn spawn_actionable_toast(
+    title: String,
+    body: String,
+    activation: Option<ToastActivation>,
+    actions: Vec<crate::platform::notifications::ToastAction>,
+) {
+    crate::platform::notifications::dispatch(title, body, activation, actions);
 }
 
 #[cfg(test)]
@@ -454,6 +530,57 @@ mod delivery_tests {
         });
         let envelope = format!("nebula-hook/1 source=pi pane=12\n{payload}");
         crate::ai_hook::parse_remote_envelope(envelope.as_bytes(), Some(12)).unwrap()
+    }
+
+    #[test]
+    fn short_failures_notify_while_success_and_hook_completion_remain_quiet() {
+        for hook in [false, true] {
+            let failed = Notification::command_finished(
+                Some("cargo".into()),
+                Duration::from_millis(50),
+                Some(1),
+                hook,
+            )
+            .unwrap();
+            assert!(failed.is_failure());
+            assert!(!failed.is_attention());
+            assert!(
+                Notification::command_finished(
+                    Some("cargo".into()),
+                    Duration::from_millis(50),
+                    Some(0),
+                    hook
+                )
+                .is_none()
+            );
+        }
+        assert!(
+            Notification::command_finished(
+                Some("codex".into()),
+                Duration::from_secs(60),
+                Some(0),
+                true
+            )
+            .is_none()
+        );
+        assert!(
+            Notification::command_finished(
+                Some("cargo".into()),
+                Duration::from_secs(60),
+                Some(0),
+                false
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn successive_questions_have_independent_native_notification_identity() {
+        let mut throttle = PaneNotificationThrottle::default();
+        let now = Instant::now();
+        assert!(throttle.accepts_request(42, true, Some(100), now));
+        assert!(!throttle.accepts_request(42, true, Some(100), now));
+        assert!(throttle.accepts_request(42, true, Some(101), now));
     }
 
     #[test]

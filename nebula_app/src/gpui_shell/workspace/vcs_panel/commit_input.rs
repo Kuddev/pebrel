@@ -111,3 +111,21 @@ impl CommitInput {
         self.language = language;
     }
 }
+
+impl super::NebulaWorkspace {
+    /// 提交按钮/Enter：读 GPUI 输入框的消息直达共享模型（git 提交暂存区、
+    /// svn 提交工作副本），成功入队后清空输入。
+    pub(in crate::gpui_shell::workspace) fn submit_vcs_commit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let message = self.git_commit_input.input.read(cx).value().trim().to_string();
+        if message.is_empty() {
+            return;
+        }
+        self.side_panel.vcs_commit_message(&message);
+        self.git_commit_input.input.update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+}

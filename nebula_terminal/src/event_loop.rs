@@ -298,6 +298,7 @@ pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     event_proxy: U,
     drain_on_exit: bool,
     ref_test: bool,
+    remote_hook_token: Option<String>,
 }
 
 impl<T, U> EventLoop<T, U>
@@ -324,11 +325,17 @@ where
             event_proxy,
             drain_on_exit,
             ref_test,
+            remote_hook_token: None,
         })
     }
 
     pub fn channel(&self) -> EventLoopSender {
         EventLoopSender { sender: self.tx.clone(), poller: self.poll.clone() }
+    }
+
+    /// Bind in-band hook delivery to this PTY before its reader starts.
+    pub fn set_remote_hook_token(&mut self, token: String) {
+        self.remote_hook_token = Some(token);
     }
 
     /// Drain the channel.
@@ -511,6 +518,9 @@ where
     pub fn spawn(mut self) -> JoinHandle<(Self, State)> {
         thread::spawn_named("PTY reader", move || {
             let mut state = State::default();
+            if let Some(token) = self.remote_hook_token.take() {
+                state.stream.set_remote_hook_token(token);
+            }
             let mut buf = [0u8; READ_BUFFER_SIZE];
 
             let poll_opts = PollMode::Level;
@@ -917,6 +927,44 @@ mod tests {
     use crate::event::VoidListener;
     use crate::term::Config;
     use crate::term::test::TermSize;
+
+    #[test]
+    fn authenticated_hook_frames_survive_every_chunk_boundary_and_reject_other_panes() {
+        #[derive(Clone, Default)]
+        struct Listener(std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                if let Event::AiHookEnvelope(envelope) = event {
+                    self.0.lock().unwrap().push(envelope);
+                }
+            }
+        }
+        // Base64 for a small envelope; authentication is checked before delivery.
+        let frame = b"\x1b]777;nebula-hook;0123456789abcdef0123456789abcdef;bmVidWxhLWhvb2svMSBzb3VyY2U9Y29kZXgKe30=\x07";
+        for token in [
+            None,
+            Some("ffffffffffffffffffffffffffffffff"),
+            Some("0123456789abcdef0123456789abcdef"),
+        ] {
+            for split in 0..=frame.len() {
+                let listener = Listener::default();
+                let mut terminal =
+                    Term::new(Config::default(), &TermSize::new(80, 24), listener.clone());
+                let mut stream = StreamProcessor::default();
+                if let Some(token) = token {
+                    stream.set_remote_hook_token(token.into());
+                }
+                stream.feed(&mut terminal, &listener, &frame[..split]);
+                stream.feed(&mut terminal, &listener, &frame[split..]);
+                let events = listener.0.lock().unwrap();
+                if token == Some("0123456789abcdef0123456789abcdef") {
+                    assert_eq!(events.as_slice(), [b"nebula-hook/1 source=codex\n{}".to_vec()]);
+                } else {
+                    assert!(events.is_empty());
+                }
+            }
+        }
+    }
 
     #[test]
     fn shell_identity_cwd_and_title_keep_wire_order_across_chunk_boundaries() {

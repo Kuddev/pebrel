@@ -64,6 +64,7 @@ pub(crate) fn try_write_stderr(args: std::fmt::Arguments<'_>) {
 pub(crate) enum GpuiShellEvent {
     TrayFocus(Option<u64>),
     NotificationFocus(Option<u64>),
+    NotificationChoice { pane_id: u64, request_id: u64, choice: usize },
     TrayQuit,
     MuxAttach,
     RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),

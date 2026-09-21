@@ -7,7 +7,7 @@ use nebula_settings::NotificationDuration;
 use std::{cell::Cell, rc::Rc};
 
 use crate::gpui_shell::config::Settings;
-use crate::gpui_shell::terminal::confirmation::BinaryConfirmation;
+use crate::gpui_shell::terminal::confirmation::Confirmation;
 
 struct Empty;
 
@@ -185,7 +185,7 @@ fn persistent_mode_has_no_expiry_and_retains_manual_dismissal(cx: &mut TestAppCo
                     cx,
                     "Persistent confirmation".into(),
                     8201,
-                    BinaryConfirmation { id: 8301, question: "Continue?".into() },
+                    Confirmation { choices: Vec::new(), id: 8301, question: "Continue?".into() },
                 );
             } else {
                 toast(window, cx, ToastKind::Success, "Persistent ordinary toast");
@@ -215,7 +215,7 @@ fn refreshed_confirmation_gets_a_new_deadline_even_if_the_old_entity_is_retained
             cx,
             "Refreshed confirmation".into(),
             8202,
-            BinaryConfirmation { id: 8302, question: "Continue?".into() },
+            Confirmation { choices: Vec::new(), id: 8302, question: "Continue?".into() },
         );
     };
     let old = window.update(|window, cx| {
@@ -244,7 +244,7 @@ fn a_refreshed_persistent_card_cannot_be_closed_by_its_predecessors_timer(cx: &m
             cx,
             "Mode switch fixture".into(),
             8203,
-            BinaryConfirmation { id: 8303, question: "Continue?".into() },
+            Confirmation { choices: Vec::new(), id: 8303, question: "Continue?".into() },
         );
     };
     window.update(push);
@@ -280,7 +280,7 @@ fn default_mode_preserves_short_toasts_banners_and_persistent_update_notices(
                     cx,
                     "Default confirmation fixture".into(),
                     8204,
-                    BinaryConfirmation { id: 8304, question: "Continue?".into() },
+                    Confirmation { choices: Vec::new(), id: 8304, question: "Continue?".into() },
                 );
             } else {
                 banner(window, cx, ToastKind::Warning, "Default non-AI configuration fixture");
@@ -323,7 +323,7 @@ fn duration_still_applies_to_non_ai_cards_when_ai_visibility_is_off(cx: &mut Tes
             cx,
             "Hidden AI fixture".into(),
             8205,
-            BinaryConfirmation { id: 8305, question: "Continue?".into() },
+            Confirmation { choices: Vec::new(), id: 8305, question: "Continue?".into() },
         );
     });
     assert_eq!(ids(&mut window).len(), 3);
@@ -408,7 +408,7 @@ fn overflow_removal_cannot_dismiss_a_refreshed_confirmation(cx: &mut TestAppCont
                 cx,
                 "Overflow confirmation".into(),
                 8206,
-                BinaryConfirmation { id: 8306, question: "Continue?".into() },
+                Confirmation { choices: Vec::new(), id: 8306, question: "Continue?".into() },
             );
         };
         push(window, cx);

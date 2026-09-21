@@ -77,7 +77,7 @@ fn native_codex_owns_start_permission_recovery_interrupt_and_end() {
         ("UserPromptSubmit", AgentStatus::Working),
         ("PermissionRequest", AgentStatus::Blocked),
         ("PostToolUse", AgentStatus::Working),
-        ("Interrupt", AgentStatus::Done),
+        ("Interrupt", AgentStatus::Idle),
     ] {
         let hook = codex(event, "native", Some("turn1"));
         assert!(hook.capabilities().lifecycle && hook.capabilities().attention_events);
@@ -217,4 +217,93 @@ fn compaction_does_not_mark_an_active_turn_idle_and_native_stop_supplies_the_ans
         json!({"hook_event_name":"Stop","session_id":"main","turn_id":"turn","last_assistant_message":"complete answer"}),
     );
     assert_eq!(done.answer.unwrap().source().unwrap().as_ref(), "complete answer");
+}
+
+#[test]
+fn kimi_failure_and_interrupt_do_not_announce_success() {
+    for (event_name, expected) in [
+        ("Stop", AiTurnOutcome::Succeeded),
+        ("StopFailure", AiTurnOutcome::Failed),
+        ("Interrupt", AiTurnOutcome::Cancelled),
+    ] {
+        let raw = format!(
+            "nebula-hook/1 source=kimi pane=3\n{}",
+            json!({"hook_event_name":event_name, "session_id":"kimi-1", "error":"rate_limit"})
+        );
+        let event = parse_remote_envelope(raw.as_bytes(), Some(3)).unwrap();
+        assert_eq!(event.turn_outcome, expected);
+        let notification =
+            crate::notify::Notification::from_ai_hook(&event, event.message.clone(), false);
+        match expected {
+            AiTurnOutcome::Succeeded => assert!(!notification.unwrap().is_failure()),
+            AiTurnOutcome::Failed => {
+                assert!(notification.unwrap().is_failure());
+                assert_eq!(event.message.as_deref(), Some("rate_limit"));
+            },
+            AiTurnOutcome::Cancelled => assert!(notification.is_none()),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn queued_input_and_compaction_keep_native_turn_running() {
+    let screens = [
+        "• Working (12s · esc to interrupt)\n• Messages to be submitted after next tool call (press esc to interrupt and send immediately)\n  ↳ Continue the task\n› Ask Codex to do anything\ngpt-6 max · /project",
+        "• Compacting context (1m 41s · esc to interrupt)\n  └ Making room to continue.\n› Ask Codex to do anything\ngpt-6 max · /project",
+        "› Ask Codex to do anything\ngpt-6 max · /project",
+    ];
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&codex("UserPromptSubmit", "main", Some("turn")));
+    activity.input_sent();
+    for screen in screens {
+        for _ in 0..8 {
+            assert!(!activity.observe_screen(crate::ai_agents::detect("codex", screen)));
+            assert_eq!(activity.status(), AgentStatus::Working);
+        }
+    }
+    let compact = native(
+        "full",
+        None,
+        json!({
+            "hook_event_name":"SessionStart", "session_id":"main", "source":"compact"
+        }),
+    );
+    activity.apply_hook(&compact);
+    assert_eq!(activity.status(), AgentStatus::Working);
+    activity.apply_hook(&codex("Stop", "main", Some("turn")));
+    assert_eq!(activity.status(), AgentStatus::Done);
+}
+
+#[test]
+fn claude_question_tool_failure_and_terminal_failure_have_distinct_effects() {
+    let mut activity = AgentActivity::default();
+    let parse = |payload: Value| {
+        parse_remote_envelope(format!("nebula-hook/1 source=claude\n{payload}").as_bytes(), Some(1))
+            .unwrap()
+    };
+    let question = parse(json!({"hook_event_name":"PreToolUse", "tool_name":"AskUserQuestion",
+        "tool_input":{"questions":[{"question":"Choose a scope","options":[{"label":"Current"}]}]}}));
+    assert_eq!(question.kind, AiHookKind::NeedsAttention);
+    activity.apply_hook(&question);
+    assert_eq!(activity.status(), AgentStatus::Blocked);
+    let tool_failure = parse(
+        json!({"hook_event_name":"PostToolUseFailure", "tool_name":"Bash", "error":"exit 1"}),
+    );
+    activity.apply_hook(&tool_failure);
+    assert_eq!(
+        activity.status(),
+        AgentStatus::Working,
+        "the agent can recover from a tool failure"
+    );
+    let failed = parse(json!({"hook_event_name":"StopFailure", "error":"rate_limit"}));
+    activity.apply_hook(&failed);
+    assert_eq!(activity.status(), AgentStatus::Idle);
+    assert_eq!(failed.turn_outcome, AiTurnOutcome::Failed);
+    let notification =
+        crate::notify::Notification::from_ai_hook(&failed, failed.message.clone(), false).unwrap();
+    assert!(notification.is_failure());
+    let success = parse(json!({"hook_event_name":"Stop"}));
+    activity.apply_hook(&success);
+    assert_eq!(activity.status(), AgentStatus::Done);
 }

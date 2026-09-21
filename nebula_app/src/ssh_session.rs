@@ -1745,15 +1745,7 @@ fn clear_secret(secret: &mut Option<Vec<u8>>) {
 }
 
 fn remote_hook_token() -> io::Result<String> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes)
-        .map_err(|err| io::Error::other(format!("生成 SSH Hook 令牌失败: {err}")))?;
-    let mut token = String::with_capacity(32);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(token, "{byte:02x}");
-    }
-    Ok(token)
+    crate::ai_hook::remote::new_token()
 }
 
 fn render_error<H: SshEventHost>(

@@ -284,7 +284,10 @@ mod tests {
         panel.open = true;
         panel.root = Some(root.clone());
         panel.followed_wsl = Some(located.clone());
-        panel.git = Some(GitInfo { branch: "keep-until-ready".to_owned(), ..Default::default() });
+        panel.git = Some(std::sync::Arc::new(GitInfo {
+            branch: "keep-until-ready".to_owned(),
+            ..Default::default()
+        }));
 
         *panel.snapshot_slot.lock().unwrap() = Some(PanelSnapshot {
             root: root.clone(),
@@ -548,7 +551,7 @@ mod tests {
     fn git_hover_only_accepts_real_file_rows() {
         let mut panel = SidePanel::new();
         panel.view = PanelView::Git;
-        panel.git = Some(GitInfo {
+        panel.git = Some(std::sync::Arc::new(GitInfo {
             vcs: VcsKind::Git,
             branch: "main".into(),
             plus: 0,
@@ -560,7 +563,7 @@ mod tests {
             history: Vec::new(),
             repository_root: None,
             repository: None,
-        });
+        }));
 
         assert!(!panel.git_row_is_file(0), "未暂存标题");
         assert!(panel.git_row_is_file(1));

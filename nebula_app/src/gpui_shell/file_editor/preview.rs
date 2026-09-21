@@ -298,6 +298,7 @@ impl TextFileView {
         let frame_blocks = Rc::new(RefCell::new(std::collections::HashSet::new()));
         let rendered_blocks = frame_blocks.clone();
         let retained_blocks = self.blocks.clone();
+        let inline_views = self.inline_views.clone();
         let owner = cx.entity().downgrade();
         let extensions = self.preview_extensions.clone();
         let scroll = self.scroll.clone();
@@ -463,6 +464,7 @@ impl TextFileView {
                         // mounted its visible and overscan items. The active input
                         // is document-owned and survives this eviction.
                         let mounted = std::mem::take(&mut *frame_blocks.borrow_mut());
+                        inline_views.borrow_mut().retain(|(block, _), _| mounted.contains(block));
                         if !mounted.is_empty() {
                             for (index, slot) in retained_blocks.borrow_mut().iter_mut().enumerate()
                             {

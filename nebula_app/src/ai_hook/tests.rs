@@ -448,3 +448,77 @@ fn late_pi_event_cannot_restore_the_previous_native_session_after_a_switch() {
     next_process.bridge_instance = Some("next-process".into());
     assert!(gate.accept(&next_process, 7));
 }
+
+#[test]
+fn kimi_events_map_to_the_shared_lifecycle() {
+    // Stop 是回合终态，且必须带上 kimi 的 session_id 供冷恢复使用。
+    let raw = b"nebula-hook/1 source=kimi pane=3\n{\"hook_event_name\":\"Stop\",\"session_id\":\"kimi-session-1\",\"session_title\":\"fix bug\",\"client_type\":\"kimi_code_cli\",\"cwd\":\"D:/work\"}";
+    let event = parse_remote_envelope(raw, Some(3)).unwrap();
+    assert_eq!(event.kind, AiHookKind::TurnDone);
+    assert_eq!(event.session_id.as_deref(), Some("kimi-session-1"));
+
+    // Interrupt（用户按 Esc 代替 Stop 触发）与 StopFailure（出错结束）同样
+    // 是回合终态：漏掉任何一个，pane 都会永远卡在 Working。
+    for name in ["Interrupt", "StopFailure"] {
+        let raw = format!("nebula-hook/1 source=kimi pane=3\n{{\"hook_event_name\":\"{name}\"}}");
+        let event = parse_remote_envelope(raw.as_bytes(), Some(3)).unwrap();
+        assert_eq!(event.kind, AiHookKind::TurnDone, "{name} must end the turn");
+    }
+
+    for (name, expected) in [
+        ("SessionStart", AiHookKind::SessionStart),
+        ("UserPromptSubmit", AiHookKind::PromptSubmit),
+        ("PermissionResult", AiHookKind::ToolComplete),
+        ("SessionEnd", AiHookKind::SessionEnd),
+    ] {
+        let raw = format!("nebula-hook/1 source=kimi pane=3\n{{\"hook_event_name\":\"{name}\"}}");
+        let event = parse_remote_envelope(raw.as_bytes(), Some(3)).unwrap();
+        assert_eq!(event.kind, expected, "{name}");
+    }
+
+    // PermissionRequest 是「现在需要用户」：工具名经通用字段表提取，cwd
+    // 进入 attention 上下文供通知摘要定位。
+    let raw = b"nebula-hook/1 source=kimi pane=9\n{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"s\",\"tool_name\":\"Bash\",\"cwd\":\"D:/work/kimi\"}";
+    let event = parse_remote_envelope(raw, Some(9)).unwrap();
+    assert_eq!(event.kind, AiHookKind::NeedsAttention);
+    let context = event.attention.as_ref().unwrap();
+    assert_eq!(context.permission_or_tool.as_deref(), Some("Bash"));
+    assert_eq!(context.cwd.as_deref(), Some("D:/work/kimi"));
+    assert_eq!(context.pane_id, Some(9));
+}
+
+/// 心跳与后台任务通知都必须丢弃：SessionHeartbeat 约 60s 一次，放行会让
+/// pane 状态被无意义事件反复触碰；Notification 是后台任务状态变更，不是
+/// 「等你输入」，映射成 NeedsAttention 会点亮一个清不掉的等待徽标。
+#[test]
+fn kimi_heartbeat_and_notification_are_dropped() {
+    for name in ["SessionHeartbeat", "Notification", "TurnStarted", "UserPromptQueued"] {
+        let raw = format!("nebula-hook/1 source=kimi pane=3\n{{\"hook_event_name\":\"{name}\"}}");
+        assert!(parse_remote_envelope(raw.as_bytes(), Some(3)).is_none(), "{name} must be dropped");
+    }
+}
+
+/// PermissionResult 与 claude PostToolUse 同角色：权限答复后把 Blocked
+/// 拉回 Working，而不是等整个回合结束。
+#[test]
+fn kimi_permission_result_resumes_a_blocked_stream() {
+    let mut gate = AiHookEventGate::default();
+    let event = |name: &str| {
+        let raw = format!(
+            "nebula-hook/1 source=kimi pane=4\n{{\"hook_event_name\":\"{name}\",\"session_id\":\"s\"}}"
+        );
+        parse_remote_envelope(raw.as_bytes(), Some(4)).unwrap()
+    };
+    assert!(gate.accept(&event("PermissionRequest"), 4));
+    assert!(gate.accept(&event("PermissionResult"), 4), "Blocked must resume working");
+    assert!(gate.accept(&event("Stop"), 4));
+}
+
+#[test]
+fn kimi_capabilities_are_declared() {
+    let capabilities = capabilities_for("kimi");
+    assert!(capabilities.attention_context);
+    assert!(!capabilities.background_tasks);
+    assert!(!capabilities.bridge_sequence);
+    assert!(!capabilities.serialized_delivery);
+}

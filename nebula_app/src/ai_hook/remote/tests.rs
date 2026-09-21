@@ -172,3 +172,49 @@ fn export_isolated_ssh_acceptance_plan() {
     )
     .unwrap();
 }
+
+#[test]
+fn wsl_installs_guest_command_hooks_and_preserves_custom_notify() {
+    let mut snapshot = snapshot().for_wsl();
+    put(&mut snapshot, "codex_config", "notify = ['user-notifier']\nmodel = 'kept'\n");
+    let edits = snapshot.plan(Action::Install).unwrap().unwrap();
+    assert!(!edits.iter().any(|edit| matches!(edit.name.as_str(), "opencode" | "pi")));
+    apply(&mut snapshot, edits);
+    let hooks: Value = serde_json::from_str(snapshot.raw("codex").unwrap().unwrap()).unwrap();
+    for name in [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PermissionRequest",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "Interrupt",
+        "SessionEnd",
+    ] {
+        let group = hooks["hooks"][name].to_string();
+        assert!(group.contains("--hooks=full"), "{name}: {group}");
+        assert!(group.contains("/home/"));
+        assert!(!group.contains(".exe"));
+    }
+    assert!(snapshot.raw("codex_config").unwrap().unwrap().contains("user-notifier"));
+    assert!(snapshot.plan(Action::Automatic).unwrap().unwrap().is_empty());
+}
+
+#[test]
+fn wsl_replaces_the_legacy_windows_helper_without_chaining_a_dead_executable() {
+    let mut snapshot = snapshot().for_wsl();
+    put(
+        &mut snapshot,
+        "codex_config",
+        "notify = ['D:/Program Files/Nebula Terminal/runtime/nebula-hook.exe', 'codex']\n",
+    );
+    let edits = snapshot.plan(Action::Install).unwrap().unwrap();
+    apply(&mut snapshot, edits);
+    let config =
+        snapshot.raw("codex_config").unwrap().unwrap().parse::<toml_edit::DocumentMut>().unwrap();
+    let argv = notify(&config).unwrap().unwrap();
+    assert_eq!(argv.len(), 2);
+    assert!(argv[0].starts_with("/home/"));
+    assert_eq!(argv[1], "codex");
+    assert!(!argv[0].contains(".exe"));
+}

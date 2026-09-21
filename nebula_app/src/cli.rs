@@ -918,8 +918,14 @@ pub struct SetupAiOptions {
     #[clap(long)]
     pub remove: bool,
     /// Install or remove hooks on an SSH host (alias or user@host).
-    #[clap(long, value_name = "DESTINATION")]
+    #[clap(long, value_name = "DESTINATION", conflicts_with = "wsl")]
     pub ssh: Option<String>,
+    /// Install or remove hooks in a WSL distribution's own user configuration.
+    #[clap(long, value_name = "DISTRIBUTION")]
+    pub wsl: Option<String>,
+    /// WSL user; defaults to that distribution's configured user.
+    #[clap(long, value_name = "USER", requires = "wsl")]
+    pub wsl_user: Option<String>,
 }
 
 /// Options for the `ssh` subcommand: every token after `ssh` is captured raw

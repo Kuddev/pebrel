@@ -61,7 +61,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     // 写法，把它的 session id 当成 claude 的，就会把一个不存在的会话交给
     // `claude --resume`（见 nebula_hook 的 FOREIGN_HOOK_RUNNERS 注释）。
     let session_id_keys: &[&str] = match source.as_str() {
-        "claude" => &["session_id"],
+        "claude" | "kimi" => &["session_id"],
         "codex" if native_codex => &["session_id"],
         "codex" => &["thread-id"],
         // opencode/pi 由我们自己的 bridge 规范化成 snake_case；camelCase 是
@@ -98,8 +98,16 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         "claude" => match payload.get("hook_event_name").and_then(Value::as_str) {
             Some("SessionStart") => (AiHookKind::SessionStart, None),
             Some("UserPromptSubmit") => (AiHookKind::PromptSubmit, None),
-            Some("PostToolUse") => (AiHookKind::ToolComplete, None),
+            Some("PreToolUse")
+                if payload.get("tool_name").and_then(Value::as_str) == Some("AskUserQuestion") =>
+            {
+                (AiHookKind::NeedsAttention, attention_message(&payload))
+            },
+            Some("PreToolUse" | "PostToolUse" | "PostToolUseFailure") => {
+                (AiHookKind::ToolComplete, None)
+            },
             Some("Stop") => (AiHookKind::TurnDone, None),
+            Some("StopFailure") => (AiHookKind::TurnDone, context_string(&payload, &["error"])),
             Some("SessionEnd") => (AiHookKind::SessionEnd, None),
             // `Notification` 覆盖「权限询问」和「idle 提醒」两类，将来也可能
             // 用来传别的东西。类型不可操作时丢掉，读不到类型时照常上报。
@@ -150,6 +158,18 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             ),
             _ => return None,
         },
+        // Kimi's explicit waiting and result events share the pane lifecycle.
+        // Heartbeats and background notifications never request user input.
+        "kimi" => match payload.get("hook_event_name").and_then(Value::as_str) {
+            Some("SessionStart") => (AiHookKind::SessionStart, None),
+            Some("UserPromptSubmit") => (AiHookKind::PromptSubmit, None),
+            Some("Stop") | Some("Interrupt") => (AiHookKind::TurnDone, None),
+            Some("StopFailure") => (AiHookKind::TurnDone, context_string(&payload, &["error"])),
+            Some("PermissionRequest") => (AiHookKind::NeedsAttention, attention_message(&payload)),
+            Some("PermissionResult") => (AiHookKind::ToolComplete, None),
+            Some("SessionEnd") => (AiHookKind::SessionEnd, None),
+            _ => return None,
+        },
         // opencode's Bun plugin normalizes its event bus into a tiny
         // `{"kind":"prompt|done|attention","message":?}` payload (see the
         // embedded plugin in `ensure_opencode_plugin`), so this side stays
@@ -168,7 +188,16 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     if source == "codex" && kind == AiHookKind::TurnDone && event_id.is_none() {
         event_id = turn_id.as_ref().map(|id| format!("codex:turn:{id}:done"));
     }
-    let turn_outcome = if native_codex
+    let turn_outcome = if matches!(source.as_str(), "claude" | "kimi")
+        && kind == AiHookKind::TurnDone
+    {
+        match payload.get("hook_event_name").and_then(Value::as_str) {
+            Some("Stop") => AiTurnOutcome::Succeeded,
+            Some("Interrupt") => AiTurnOutcome::Cancelled,
+            Some("StopFailure") => AiTurnOutcome::Failed,
+            _ => AiTurnOutcome::Unknown,
+        }
+    } else if native_codex
         && payload.get("hook_event_name").and_then(Value::as_str) == Some("Interrupt")
     {
         AiTurnOutcome::Cancelled
@@ -280,11 +309,11 @@ fn unix_time_ms() -> u64 {
         .map_or(0, |duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
 }
 
-/// 远端会话只能提交事件语义，Pane 身份始终由本地 SSH 通道覆盖，
+/// 远端会话只能提交事件语义，Pane 身份始终由本地 PTY 通道覆盖，
 /// 防止远端载荷把通知路由到同一窗口中的其他标签页。
 pub(crate) fn parse_remote_envelope(bytes: &[u8], pane: Option<u64>) -> Option<AiHookEvent> {
     let mut event = parse_envelope(bytes)?;
-    // Only this entrypoint is reached after SSH token verification. Ignore
+    // Only this entrypoint is reached after SSH/WSL token verification. Ignore
     // claimed process metadata on the local named-pipe path.
     let header = std::str::from_utf8(bytes.split(|byte| *byte == b'\n').next()?).ok()?;
     event.remote_process = header.split_whitespace().find_map(|field| {

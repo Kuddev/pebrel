@@ -41,6 +41,22 @@ impl TerminalView {
             return false;
         }
         self.agent_activity.apply_hook(event);
+        if matches!(
+            event.kind,
+            AiHookKind::SessionStart
+                | AiHookKind::NeedsAttention
+                | AiHookKind::PromptSubmit
+                | AiHookKind::ToolComplete
+                | AiHookKind::TurnDone
+        ) {
+            self.last_command_failed = event.kind == AiHookKind::TurnDone
+                && event.active_background_tasks() == 0
+                && matches!(
+                    event.turn_outcome,
+                    crate::ai_hook::AiTurnOutcome::Failed
+                        | crate::ai_hook::AiTurnOutcome::Incomplete
+                );
+        }
         if let Some(target) = target {
             let previous = self.recovery.target.clone();
             self.recovery.confirm(target);
@@ -83,7 +99,11 @@ impl TerminalView {
         let status = self.agent_activity.status();
         self.confirmation.observe_waiting(status == AgentStatus::Blocked);
         if event.kind == AiHookKind::NeedsAttention {
-            self.confirmation.set_provider_request(event.event_id.as_deref());
+            let request = event
+                .event_id
+                .clone()
+                .unwrap_or_else(|| format!("{}:{}", event.source, event.received_sequence));
+            self.confirmation.set_provider_request(Some(&request));
             if let Some(mut attention) = event.attention.clone() {
                 attention.pane_id = Some(self.pane_id);
                 cx.emit(TerminalViewEvent::AiAttention(attention));

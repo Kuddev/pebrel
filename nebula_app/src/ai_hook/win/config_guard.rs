@@ -2,7 +2,7 @@
 use super::{
     ManagedSkillInstall, claude_config_dir, codex_config_dir, ensure_claude_hooks,
     ensure_codex_hooks, ensure_codex_notify, ensure_opencode_plugin, ensure_pi_extension,
-    ensure_runtime_skills, opencode_config_dir, pi_agent_dir,
+    ensure_runtime_skills, kimi, opencode_config_dir, pi_agent_dir,
 };
 use std::time::Duration;
 
@@ -38,6 +38,7 @@ fn heal_all() {
     ensure_claude_hooks();
     ensure_codex_notify();
     ensure_codex_hooks();
+    kimi::ensure_kimi_hooks();
     ensure_opencode_plugin();
     ensure_pi_extension();
     for (agent, path, result) in ensure_runtime_skills() {
@@ -63,15 +64,17 @@ fn config_guard() {
 
     // Neither CLI installed (yet): re-check occasionally instead of
     // watching directories that do not exist.
-    let (claude_dir, codex_dir) = loop {
+    let (claude_dir, codex_dir, kimi_dir) = loop {
         let claude = claude_config_dir().filter(|d| d.exists());
         let codex = codex_config_dir().filter(|d| d.exists());
+        let kimi = kimi::kimi_config_dir().filter(|d| d.exists());
         if claude.is_some()
             || codex.is_some()
+            || kimi.is_some()
             || opencode_config_dir().is_some_and(|d| d.exists())
             || pi_agent_dir().is_some_and(|d| d.exists())
         {
-            break (claude, codex);
+            break (claude, codex, kimi);
         }
         std::thread::sleep(Duration::from_secs(300));
     };
@@ -88,7 +91,7 @@ fn config_guard() {
             poll_guard()
         },
     };
-    for dir in [&claude_dir, &codex_dir].into_iter().flatten() {
+    for dir in [&claude_dir, &codex_dir, &kimi_dir].into_iter().flatten() {
         if let Err(err) = watcher.watch(dir, RecursiveMode::NonRecursive) {
             log::warn!("ai_hook: cannot watch {}: {err}; polling instead", dir.display());
             poll_guard();

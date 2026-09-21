@@ -407,7 +407,7 @@ pub struct SidePanel {
     /// Directories the user expanded (persists across refreshes).
     expanded: HashSet<PathBuf>,
     /// Git snapshot, `None` when the root isn't inside a work tree.
-    git: Option<GitInfo>,
+    git: Option<std::sync::Arc<GitInfo>>,
     /// Scroll offset in rows.
     pub scroll: usize,
     /// Files-view filter query; non-empty switches the tree to a flat list of
@@ -713,7 +713,7 @@ impl SidePanel {
         }
         self.enumeration_failed = !snapshot.enumeration_ok;
         if let Some(git) = snapshot.git {
-            self.git = git;
+            self.git = git.map(std::sync::Arc::new);
         }
         true
     }
@@ -1468,7 +1468,11 @@ impl SidePanel {
     }
 
     pub fn git(&self) -> Option<&GitInfo> {
-        self.git.as_ref()
+        self.git.as_deref()
+    }
+
+    pub fn git_snapshot(&self) -> Option<std::sync::Arc<GitInfo>> {
+        self.git.clone()
     }
 
     pub fn root(&self) -> Option<&Path> {

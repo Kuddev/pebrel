@@ -1,4 +1,4 @@
-//! SSH installation policy. This module plans owned file edits; it never opens
+//! POSIX hook installation policy. This module plans owned file edits; it never opens
 //! a connection, changes a terminal, or interprets screen output.
 
 use std::collections::BTreeMap;
@@ -12,6 +12,18 @@ use super::{CLAUDE_EVENTS, bridges, installation};
 pub(crate) const FILE_ADAPTER: &str = include_str!("../../res/hooks/remote_files.py");
 const BRIDGE: &str = include_str!("../../res/hooks/remote_bridge.py");
 const SHELL: &str = include_str!("../../res/hooks/remote_shell.py");
+pub(crate) const TOKEN_ENV: &str = "PEBREL_REMOTE_HOOK_TOKEN";
+
+pub(crate) fn new_token() -> std::io::Result<String> {
+    use std::fmt::Write as _;
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
+    let mut token = String::with_capacity(32);
+    for byte in bytes {
+        let _ = write!(token, "{byte:02x}");
+    }
+    Ok(token)
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Snapshot {
@@ -99,6 +111,13 @@ pub(crate) fn response(raw: &str) -> Result<Value, String> {
 }
 
 impl Snapshot {
+    /// WSL keeps its normal login shell. Only command hooks have a complete
+    /// transport there; plugin adapters currently need the SSH bootstrap env.
+    pub(crate) fn for_wsl(mut self) -> Self {
+        self.providers.retain(|name, _| matches!(name.as_str(), "claude" | "codex"));
+        self
+    }
+
     fn file(&self, name: &str) -> Result<&File, String> {
         self.files.get(name).ok_or_else(|| format!("missing integration file: {name}"))
     }

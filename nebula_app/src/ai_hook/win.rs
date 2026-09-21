@@ -9,6 +9,7 @@ use super::{CLAUDE_EVENTS, HELPER_ARGS, contains_helper};
 mod codex_hooks;
 mod codex_notify;
 mod config_guard;
+mod kimi;
 mod managed_files;
 mod runtime_skills;
 mod transport;
@@ -32,7 +33,11 @@ fn announce() {
     match claim_setup_announcement(&nebula_settings::settings_dir()) {
         Ok(true) => crate::notify::toast(
             "Pebrel",
-            "已接入 AI 回合通知（Claude / Codex / Pi / opencode）。撤销：pebrel setup-ai --remove",
+            crate::i18n::LanguagePreference::from(
+                nebula_settings::RuntimeSettings::load().language,
+            )
+            .resolved()
+            .text(crate::i18n::Message::AiHooksAnnounced),
         ),
         Ok(false) => {},
         Err(error) => log::debug!("ai_hook: could not persist setup announcement: {error}"),
@@ -239,6 +244,14 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
                 failed = true;
             },
         }
+        match kimi::remove_kimi_hooks() {
+            Ok(true) => println!("kimi: 已从 config.toml 移除 hooks。"),
+            Ok(false) => println!("kimi: config.toml 中没有 Pebrel 的 hooks。"),
+            Err(err) => {
+                eprintln!("kimi: 移除失败：{err}");
+                failed = true;
+            },
+        }
         match remove_opencode_plugin() {
             Ok(true) => println!("opencode: 已删除 Pebrel 管理的插件。"),
             Ok(false) => println!("opencode: 没有 Pebrel 的插件，未改动。"),
@@ -331,6 +344,17 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
             }
         },
         _ => println!("codex: 未检测到 config.toml，跳过。"),
+    }
+    match kimi::kimi_config_dir() {
+        Some(cfg_dir) if cfg_dir.exists() => {
+            let cfg = cfg_dir.join("config.toml");
+            if kimi::ensure_kimi_hooks() {
+                println!("kimi: 已写入 {}（首次改动备份 *.pebrel-bak）。", cfg.display());
+            } else {
+                println!("kimi: {} 已是最新。", cfg.display());
+            }
+        },
+        _ => println!("kimi: 未检测到（~/.kimi-code 不存在），跳过。"),
     }
     match opencode_config_dir() {
         Some(cfg) if cfg.exists() => {

@@ -93,6 +93,23 @@ fn use_win32_input_mode(mode: &TermMode) -> bool {
     crate::input::terminal_input::use_win32_input_mode(*mode)
 }
 
+/// Notification choices are synthetic keystrokes, not an IME composition.
+/// Encode printable keys when the client explicitly requests every key as CSI-u.
+pub(super) fn encode_choice_text(text: &str, mode: &TermMode) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for ch in text.chars() {
+        let key = Keystroke {
+            modifiers: Default::default(),
+            key: ch.to_string(),
+            key_char: Some(ch.to_string()),
+        };
+        bytes.extend(
+            kitty_sequence(&key, mode, true).unwrap_or_else(|| ch.to_string().into_bytes()),
+        );
+    }
+    bytes
+}
+
 /// 子进程是否请求过 kitty 键盘协议（三位标志任一）。kitty 是线上合同，
 /// 压过 DECSET 9001——口径同旧壳 `input/terminal_input.rs`。
 fn kitty_keyboard_active(mode: &TermMode) -> bool {
@@ -165,7 +182,7 @@ pub(super) fn trace_enter(ks: &Keystroke, mode: &TermMode, bytes: &[u8]) {
     );
 }
 
-fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
+fn kitty_sequence(ks: &Keystroke, mode: &TermMode, synthetic: bool) -> Option<Vec<u8>> {
     use crate::input::terminal_input::{KeyInput, build_sequence};
     use winit::event::ElementState;
     use winit::keyboard::{Key, KeyLocation, ModifiersState, NamedKey};
@@ -182,7 +199,9 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
         (Key::Named(NamedKey::Enter), Key::Named(NamedKey::Enter))
     } else {
         if !mode.intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC)
-            || !(ks.modifiers.control || ks.modifiers.alt)
+            || !(ks.modifiers.control
+                || ks.modifiers.alt
+                || synthetic && mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC))
         {
             return None;
         }
@@ -197,7 +216,9 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
                 _ => return None,
             }
         };
-        let character = if ks.modifiers.shift {
+        let character = if synthetic {
+            ks.key_char.as_deref().and_then(|text| text.chars().next()).unwrap_or(base)
+        } else if ks.modifiers.shift {
             ks.key_char
                 .as_deref()
                 .filter(|text| text.len() == 1 && text.as_bytes()[0].is_ascii_graphic())
@@ -208,7 +229,7 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
         };
         (Key::Character(character.to_string().into()), Key::Character(base.to_string().into()))
     };
-    let input = KeyInput {
+    let mut input = KeyInput {
         logical_key,
         state: ElementState::Pressed,
         location: KeyLocation::Standard,
@@ -230,7 +251,12 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     modifiers.set(ModifiersState::ALT, ks.modifiers.alt);
     modifiers.set(ModifiersState::CONTROL, ks.modifiers.control);
     modifiers.set(ModifiersState::SUPER, ks.modifiers.platform);
-    Some(build_sequence(&input, modifiers, *mode))
+    let mut bytes = build_sequence(&input, modifiers, *mode);
+    if synthetic && mode.contains(TermMode::REPORT_EVENT_TYPES) {
+        input.state = ElementState::Released;
+        bytes.extend(build_sequence(&input, modifiers, *mode));
+    }
+    Some(bytes)
 }
 
 /// These Windows chords must reach DefWindowProc so the existing close guard
@@ -279,7 +305,7 @@ pub fn encode(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     if let Some(bytes) = kitty_escape(ks, mode) {
         return Some(bytes);
     }
-    if let Some(bytes) = kitty_sequence(ks, mode) {
+    if let Some(bytes) = kitty_sequence(ks, mode, false) {
         return Some(bytes);
     }
 

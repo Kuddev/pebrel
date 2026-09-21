@@ -1,6 +1,7 @@
 //! Source-backed editable parts. Containers own layout, while each input changes
 //! only its content span; pipes, list markers and fences never enter that input.
 
+pub(super) use super::block_inline::InlineRun;
 use markdown::mdast::{AlignKind, Node};
 use std::ops::Range;
 
@@ -17,6 +18,7 @@ pub(super) struct EditPart {
     pub range: Range<usize>,
     pub kind: PartKind,
     pub heading: Option<u8>,
+    pub preview: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -31,6 +33,8 @@ pub(super) struct ListItem {
 #[derive(Clone, Debug)]
 pub(super) enum StructureNode {
     Text(usize),
+    Inline(Vec<InlineRun>),
+    Literal(usize),
     Code { part: usize, span: Range<usize>, language: String },
     Math { part: usize, span: Range<usize> },
     List(Vec<ListItem>),
@@ -49,7 +53,9 @@ impl BlockStructure {
         if !matches!(
             node,
             Node::List(_) | Node::Table(_) | Node::Code(_) | Node::Math(_) | Node::Blockquote(_)
-        ) {
+        ) && !(matches!(node, Node::Paragraph(_) | Node::Heading(_))
+            && super::block_inline::contains_object(node))
+        {
             return None;
         }
         let mut parts = Vec::new();
@@ -78,6 +84,7 @@ impl BlockStructure {
         let old = self.parts[part].range.clone();
         let delta = length as isize - old.len() as isize;
         self.parts[part].range.end = old.start + length;
+        self.parts[part].preview = None;
         for (i, edit) in self.parts.iter_mut().enumerate() {
             if i != part {
                 shift(&mut edit.range, &old, delta);
@@ -90,7 +97,7 @@ impl BlockStructure {
 impl StructureNode {
     fn shift(&mut self, old: &Range<usize>, delta: isize) {
         match self {
-            Self::Text(_) => {},
+            Self::Text(_) | Self::Literal(_) | Self::Inline(_) => {},
             Self::Code { span, .. } | Self::Math { span, .. } | Self::Table { span, .. } => {
                 shift_container(span, old, delta);
             },
@@ -120,7 +127,11 @@ impl StructureNode {
                 item.children.iter().find_map(|child| child.list_item(part)).or_else(|| {
                     item.children
                         .iter()
-                        .any(|child| matches!(child, Self::Text(id) if *id == part))
+                        .any(|child| match child {
+                            Self::Text(id) | Self::Literal(id) => *id == part,
+                            Self::Inline(runs) => runs.iter().any(|run| run.part == part),
+                            _ => false,
+                        })
                         .then_some(item)
                 })
             }),
@@ -160,19 +171,19 @@ fn shift_container(range: &mut Range<usize>, old: &Range<usize>, delta: isize) {
     }
 }
 
-fn span(node: &Node, offset: usize) -> Option<Range<usize>> {
+pub(super) fn span(node: &Node, offset: usize) -> Option<Range<usize>> {
     let position = node.position()?;
     Some(position.start.offset.checked_sub(offset)?..position.end.offset.checked_sub(offset)?)
 }
 
-fn add(
+pub(super) fn add(
     parts: &mut Vec<EditPart>,
     range: Range<usize>,
     kind: PartKind,
     heading: Option<u8>,
 ) -> usize {
     let index = parts.len();
-    parts.push(EditPart { range, kind, heading });
+    parts.push(EditPart { range, kind, heading, preview: None });
     index
 }
 
@@ -279,6 +290,9 @@ fn build(
             let body = fenced_body(source, range.clone()).unwrap_or(range.clone());
             let part = add(parts, body, PartKind::Math, None);
             StructureNode::Math { part, span: range }
+        },
+        Node::Paragraph(_) | Node::Heading(_) if super::block_inline::contains_object(node) => {
+            return super::block_inline::build(node, source, offset, parts);
         },
         Node::Paragraph(_) | Node::Heading(_) => StructureNode::Text(add(
             parts,

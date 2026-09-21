@@ -256,6 +256,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Subcommands::NotifyTest) => std::process::exit(crate::notify::notify_test()),
         #[cfg(windows)]
         Some(Subcommands::SetupAi(options)) => {
+            if let Some(distro) = &options.wsl {
+                std::process::exit(crate::platform::wsl_hooks::setup_cli(
+                    distro,
+                    options.wsl_user.as_deref(),
+                    options.remove,
+                ));
+            }
             if let Some(destination) = &options.ssh {
                 std::process::exit(crate::ssh_session::setup_ai_cli(destination, options.remove));
             }

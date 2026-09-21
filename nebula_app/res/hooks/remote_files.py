@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -39,13 +40,42 @@ def capture(program, *args):
         return ""
     try:
         with tempfile.TemporaryFile() as output:
+            env = dict(os.environ)
+            # Node-managed launchers use /usr/bin/env node. The interpreter
+            # beside the discovered launcher must be reachable too.
+            env["PATH"] = str(Path(program).parent) + os.pathsep + env.get("PATH", "")
             subprocess.run([program, *args], stdin=subprocess.DEVNULL,
                            stdout=output, stderr=subprocess.DEVNULL,
-                           timeout=2, check=True)
+                           timeout=2, check=True, env=env)
             output.seek(0)
             return output.read(65536).decode("utf-8", "replace")
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def find_program(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    home = Path.home()
+    candidates = [home / ".local/bin" / name, home / ".npm-global/bin" / name]
+    nvm = Path(os.environ.get("NVM_DIR", home / ".nvm"))
+    candidates.append(nvm / "current/bin" / name)
+    # Noninteractive login shells commonly skip nvm initialization. Probe
+    # executable files, not shell output, with a bounded version-directory scan.
+    versions = nvm / "versions/node"
+    try:
+        entries = []
+        for i, entry in enumerate(versions.iterdir()):
+            if i >= 128:
+                break
+            version = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", entry.name)
+            if version:
+                entries.append((tuple(map(int, version.groups())), entry))
+        candidates.extend(entry / "bin" / name for _, entry in sorted(entries, reverse=True))
+    except OSError:
+        pass
+    return next((str(path) for path in candidates if path.is_file() and os.access(path, os.X_OK)), None)
 
 
 def locations():
@@ -76,7 +106,7 @@ def snapshot():
             "path": str(path), "sha256": digest(content),
             "content": content.decode("utf-8") if content is not None else None,
         }
-    codex = shutil.which("codex")
+    codex = find_program("codex")
     return {
         "version": 1, "root": str(root), "python": sys.executable,
         "shell": os.environ.get("SHELL", "/bin/sh"), "files": files,

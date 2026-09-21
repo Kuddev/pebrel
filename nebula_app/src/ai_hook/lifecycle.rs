@@ -280,11 +280,13 @@ impl AgentActivity {
             },
             AiHookKind::TurnDone => {
                 self.screen_armed = false;
-                if event.source == "pi"
-                    && !matches!(
-                        event.turn_outcome,
-                        super::AiTurnOutcome::Succeeded | super::AiTurnOutcome::Unspecified
-                    )
+                if matches!(
+                    event.turn_outcome,
+                    super::AiTurnOutcome::Failed
+                        | super::AiTurnOutcome::Incomplete
+                        | super::AiTurnOutcome::Cancelled
+                ) || (event.source == "pi"
+                    && event.turn_outcome == super::AiTurnOutcome::Unknown)
                 {
                     AgentStatus::Idle
                 } else {

@@ -40,6 +40,27 @@ class RemoteHooksTests(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
+    def test_discovery_finds_nvm_cli_and_its_interpreter_without_login_path(self):
+        files = module("remote_files")
+        bindir = self.root / ".nvm/versions/node/v24.18.0/bin"
+        bindir.mkdir(parents=True)
+        node = bindir / "node"
+        node.write_text("#!/bin/sh\nprintf 'hooks stable true\\n'\n")
+        node.chmod(0o700)
+        cli = bindir / "codex"
+        cli.write_text("#!/usr/bin/env node\n")
+        cli.chmod(0o700)
+        with patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}):
+            self.assertEqual(files.find_program("codex"), str(cli))
+            self.assertEqual(files.capture(str(cli), "features", "list"), "hooks stable true\n")
+            configured = self.root / "bin"
+            configured.mkdir()
+            preferred = configured / "codex"
+            preferred.write_text("#!/bin/sh\n")
+            preferred.chmod(0o700)
+            with patch.dict(os.environ, {"PATH": str(configured)}):
+                self.assertEqual(files.find_program("codex"), str(preferred))
+
     def test_compare_and_swap_does_not_overwrite_concurrent_user_edit(self):
         files = module("remote_files")
         snapshot = files.snapshot()

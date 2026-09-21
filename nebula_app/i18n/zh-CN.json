@@ -867,5 +867,10 @@
     "directories": "目录历史",
     "commands": "命令历史",
     "fonts": "自定义字体"
-  }
+  },
+  "ai_hooks": {
+    "announced": "已接入 AI 回合通知（Claude / Codex / Kimi / Pi / opencode）。撤销：pebrel setup-ai --remove"
+  },
+  "notification.command_finished": "命令结束，用时 {seconds} 秒",
+  "notification.command_failed": "命令失败（退出码 {code}），用时 {seconds} 秒"
 }
