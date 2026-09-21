@@ -98,11 +98,12 @@ impl TerminalView {
     }
 
     /// 把回滚位置落到 `target`（滚动条拖拽的落点提交）。
-    pub(super) fn scroll_to_offset(&self, target: usize, current: usize) {
+    pub(super) fn scroll_to_offset(&mut self, target: usize, current: usize) {
         if target == current {
             return;
         }
         if let Some(session) = &self.session {
+            self.restored_viewport_offset = None;
             session.term.lock().scroll_display(Scroll::Delta(target as i32 - current as i32));
         }
     }
@@ -708,6 +709,7 @@ impl TerminalView {
             return true;
         }
         if let Some(session) = &self.session {
+            self.restored_viewport_offset = None;
             session.term.lock().scroll_display(Scroll::Delta(lines));
         }
         // 滚动换了视口到绝对行的映射，选区末端必须按滚动后的网格重算——
@@ -894,6 +896,7 @@ impl TerminalView {
             }
             session.notifier.notify(bytes);
         } else {
+            self.restored_viewport_offset = None;
             session.term.lock().scroll_display(Scroll::Delta(lines));
         }
         cx.notify();

@@ -53,7 +53,7 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
         } else {
             None
         };
-        cx.update(|cx| {
+        let save = cx.update(|cx| {
             // Recheck the current pane set after asynchronous preparation. A
             // window/pane opened during the handshake also needs a native target.
             let identities_ready = cx
@@ -71,15 +71,24 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
                 });
             if !ready || !identities_ready {
                 abort_quit(Message::SessionIdentityPending, cx);
-                return;
+                return None;
             }
             if !documents_unchanged(&approved, cx) {
                 abort_quit(Message::UpdateDraftChanged, cx);
-                return;
+                return None;
             }
-            if let Err(error) = save_combined_session(cx, true) {
-                log::warn!("Shutdown cancelled because session save failed: {error}");
-                abort_quit(Message::SessionSaveFailed, cx);
+            Some(output_persistence::save(None, SaveReason::Quit, cx))
+        });
+        let Some(save) = save else { return };
+        if !matches!(save.await, Ok(true)) {
+            cx.update(|cx| abort_quit(Message::SessionSaveFailed, cx));
+            return;
+        }
+        cx.update(|cx| {
+            // A document can change while the output is being written.
+            if !documents_unchanged(&approved, cx) {
+                cx.global_mut::<WindowRegistry>().session_persistence.cancel_quit();
+                abort_quit(Message::UpdateDraftChanged, cx);
                 return;
             }
             if let Some(prepared) = prepared.as_mut() {

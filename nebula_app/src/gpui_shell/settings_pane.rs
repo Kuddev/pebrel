@@ -43,6 +43,7 @@ mod appearance_picker;
 #[path = "background_color.rs"]
 mod background_color;
 mod backup;
+mod command_output;
 mod design;
 mod font_picker;
 mod providers;
@@ -210,6 +211,7 @@ pub struct SettingsPane {
     /// 备份密码（masked；只在导出/恢复动作瞬时读取，不落任何配置）。
     backup_pass_input: Entity<InputState>,
     backup_status: Option<BackupStatus>,
+    command_output_clear: command_output::ClearState,
     /// 导出/恢复/推送进行中（按钮禁用 + 忽略过期完成回调）。
     backup_busy: bool,
     backup_seq: u64,
@@ -375,7 +377,10 @@ impl SettingsPane {
             cx.notify();
             return;
         }
-        if matches!(key, "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes") {
+        if matches!(
+            key,
+            "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes" | "save_command_output"
+        ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
                 let language = crate::gpui_shell::config::ui_language(cx);
                 super::toast::toast(
@@ -745,6 +750,7 @@ impl SettingsPane {
             "fetch" => flag!(fetch),
             "keep_session" => flag!(keep_session),
             "restore_session" => flag!(restore_session),
+            "save_command_output" => flag!(save_command_output),
             "resume_ai" => flag!(resume_ai),
             "tray" => flag!(tray),
             "panel_resize" => flag!(panel_resize),
@@ -1260,6 +1266,7 @@ impl SettingsPane {
                 self.runtime.restore_session,
                 cx,
             ))
+            .child(self.command_output_controls(cx))
             .child(self.switch_row(
                 "resume_ai",
                 language.pick("恢复时接续 AI 对话", "Resume AI conversations"),

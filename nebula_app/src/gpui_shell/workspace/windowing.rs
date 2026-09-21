@@ -4,7 +4,11 @@
 //! `NebulaWorkspace`。所有外部启动和 runtime 命令先在这里选择窗口，再把
 //! 变更投递到对应 workspace，避免多个 receiver 竞争消费同一事件流。
 
+pub(super) mod output_persistence;
 mod shutdown;
+pub(crate) use output_persistence::clear as clear_command_output;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) use output_persistence::set_command_output_test_path;
 pub(crate) use shutdown::{quit_all, quit_for_update};
 
 #[cfg(windows)]
@@ -137,6 +141,7 @@ pub(crate) struct WindowRegistry {
     entries: Vec<WindowEntry>,
     runtime_hub: crate::runtime_api::RuntimeHub,
     session_persistence: SessionPersistence,
+    output_persistence: output_persistence::OutputPersistence,
     quit_pending: bool,
     #[cfg(windows)]
     quick_terminal: Option<QuickTerminalWindow>,
@@ -203,6 +208,7 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
         entries: Vec::new(),
         runtime_hub,
         session_persistence: SessionPersistence::default(),
+        output_persistence: output_persistence::OutputPersistence::default(),
         quit_pending: false,
         #[cfg(windows)]
         quick_terminal: None,
@@ -214,19 +220,26 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
     let quit_subscription = cx.on_app_quit(|cx| {
         #[cfg(windows)]
         quick_window::persist_quick_size(cx);
-        if let Err(error) = save_combined_session(cx, true) {
-            log::warn!("Final session write: {error}");
+        let save = output_persistence::save(None, SaveReason::Quit, cx);
+        async move {
+            if !matches!(save.await, Ok(true)) {
+                log::warn!("Final session write failed or was superseded");
+            }
         }
-        async {}
     });
     let closed_subscription = cx.on_window_closed(|cx, _window_id| {
         // A tab transfer can close its source while the destination workspace
         // is still borrowed. Snapshot all windows only after that update ends.
         cx.defer(save_after_window_closed);
     });
-    cx.global_mut::<WindowRegistry>()
-        ._subscriptions
-        .extend([quit_subscription, closed_subscription]);
+    let settings_subscription = cx.observe_global::<crate::gpui_shell::config::Settings>(|cx| {
+        output_persistence::settings_changed(cx);
+    });
+    cx.global_mut::<WindowRegistry>()._subscriptions.extend([
+        quit_subscription,
+        closed_subscription,
+        settings_subscription,
+    ]);
 
     cx.spawn(async move |cx| {
         loop {
@@ -242,9 +255,7 @@ fn save_after_window_closed(cx: &mut App) {
     // 快速终端不能改变普通 session 的生命周期：最后一扇普通窗口关闭后，
     // 即使隐藏的 Quake 窗口仍存活，也不能再补写一份空的普通 session。
     if cx.global::<WindowRegistry>().entries.iter().any(|entry| entry.role == WindowRole::Regular) {
-        if let Err(error) = save_combined_session(cx, false) {
-            log::warn!("Session checkpoint: {error}");
-        }
+        output_persistence::checkpoint(cx);
     }
 }
 
@@ -1091,6 +1102,21 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             return;
         },
     };
+    if let RuntimeCommand::CloseWindow { window_id } = &dispatch.command {
+        let close = entry
+            .workspace
+            .update(cx, |workspace, cx| workspace.runtime_close_window(*window_id, cx));
+        cx.spawn(async move |_| {
+            let response = match close {
+                Ok(Ok(close)) => close.await,
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(ApiError::new("target_not_found", error.to_string())),
+            };
+            dispatch.respond(response);
+        })
+        .detach();
+        return;
+    }
     let command = dispatch.command.clone();
     let workspace = entry.workspace.clone();
     let result = entry.handle.update(cx, move |_, window, cx| {
@@ -1360,10 +1386,10 @@ pub(crate) fn publish_runtime_snapshot_with_current(
 pub(crate) fn autosave_tick(cx: &mut App) {
     #[cfg(windows)]
     quick_window::persist_quick_size(cx);
-    if let Err(error) = save_combined_session(cx, false) {
-        log::warn!("Session checkpoint: {error}");
-        return;
-    }
+    output_persistence::checkpoint(cx);
+}
+
+fn acknowledge_session_restore(cx: &App) {
     let workspaces = cx
         .global::<WindowRegistry>()
         .entries
@@ -1413,27 +1439,6 @@ fn combined_session(
         sessions.push((active_handle == Some(entry.handle), session));
     }
     combine_sessions(sessions)
-}
-
-fn save_combined_session(cx: &mut App, clean: bool) -> std::io::Result<()> {
-    let session = combined_session(None, cx);
-    let reason = if clean { SaveReason::Quit } else { SaveReason::Checkpoint };
-    cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason)
-}
-
-pub(super) fn save_current_window_session(
-    runtime_window_id: u64,
-    session: crate::session::Session,
-    reason: SaveReason,
-    cx: &mut App,
-) -> std::io::Result<()> {
-    if !cx.global::<WindowRegistry>().entries.iter().any(|entry| {
-        entry.runtime_window_id == runtime_window_id && entry.role == WindowRole::Regular
-    }) {
-        return Ok(());
-    }
-    let session = combined_session(Some((runtime_window_id, session)), cx);
-    cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason)
 }
 
 pub(crate) fn move_tab_to_new_window(payload: CrossWindowTabDrag, cx: &mut App) {
@@ -1501,17 +1506,11 @@ fn unregister(runtime_window_id: u64, cx: &mut App) {
     }
 }
 
-pub(super) fn close_saved_workspace_window(
+pub(super) fn remove_saved_workspace_window(
     runtime_window_id: u64,
-    session: crate::session::Session,
     window: &mut Window,
     cx: &mut App,
 ) {
-    if let Err(error) =
-        save_current_window_session(runtime_window_id, session, SaveReason::WindowClose, cx)
-    {
-        log::warn!("Could not checkpoint moved window: {error}");
-    }
     unregister(runtime_window_id, cx);
     window.remove_window();
 }

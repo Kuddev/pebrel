@@ -159,6 +159,7 @@ impl TerminalView {
         exit_code: Option<i32>,
         cx: &mut Context<Self>,
     ) {
+        self.finish_recent_output();
         self.notify_command_done(cx);
         self.last_command_failed = exit_code.is_some_and(|code| code != 0);
         if self.clear_foreground_agent_state(cx) {
@@ -1051,6 +1052,10 @@ impl TerminalView {
             return;
         }
         let pending = self.pending_runtime_submit.take().expect("checked above");
+        // 运行徽章在 echo 前已置位；只有启动前捕获的 shell 提示符允许记录。
+        if self.suggest.pending_command_prompt.is_some() && self.runtime_agent().is_none() {
+            self.begin_recent_output();
+        }
         self.write_input(pending.submit_bytes, cx);
     }
 }

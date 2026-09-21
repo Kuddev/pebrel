@@ -12,9 +12,16 @@ impl NebulaWorkspace {
     ) -> bool {
         self.recovery_boot_attempts = session.boot_attempts.saturating_add(1);
         let mut restored = false;
+        let mut output_targets = Vec::new();
         for tab in &session.tabs {
-            restored |= self.restore_tab(tab, resume_ai, window, cx);
+            restored |=
+                self.restore_tab_with_outputs(tab, resume_ai, &mut output_targets, window, cx);
         }
+        TerminalView::restore_output_batch(
+            crate::recent_output::storage::archive_path(),
+            output_targets,
+            cx,
+        );
         if restored {
             self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
             self.focus_active(window, cx);
@@ -52,11 +59,17 @@ impl NebulaWorkspace {
         crate::session::mark_boot_attempt(&mut session);
         self.recovery_boot_attempts = session.boot_attempts;
         let mut restored = 0usize;
+        let mut output_targets = Vec::new();
         for tab in &session.tabs {
-            if self.restore_tab(tab, resume_ai, window, cx) {
+            if self.restore_tab_with_outputs(tab, resume_ai, &mut output_targets, window, cx) {
                 restored += 1;
             }
         }
+        TerminalView::restore_output_batch(
+            crate::recent_output::storage::archive_path(),
+            output_targets,
+            cx,
+        );
         if restored == 0 {
             return false;
         }
@@ -78,6 +91,18 @@ impl NebulaWorkspace {
         &mut self,
         tab: &crate::session::TabSession,
         resume_ai: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // 手动工作区导入不读取本机输出，即便调用方误传了本机引用。
+        self.restore_tab_with_outputs(tab, resume_ai, &mut Vec::new(), window, cx)
+    }
+
+    fn restore_tab_with_outputs(
+        &mut self,
+        tab: &crate::session::TabSession,
+        resume_ai: bool,
+        output_targets: &mut Vec<(String, gpui::WeakEntity<TerminalView>)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -123,6 +148,9 @@ impl NebulaWorkspace {
             if resume_ai && let Some(agent) = agent {
                 pane.view.update(cx, |view, cx| view.restore_agent(agent.clone(), cx));
             }
+            if let Some(id) = tab.output_refs.get(index).filter(|id| !id.is_empty()) {
+                output_targets.push((id.clone(), pane.view.downgrade()));
+            }
             panes.push(pane);
         }
         if panes.is_empty() {
@@ -149,6 +177,34 @@ impl NebulaWorkspace {
             },
         );
         true
+    }
+
+    pub(super) fn snapshot_local_session(&self, cx: &App) -> session_persistence::LocalSnapshot {
+        let outputs = self
+            .tabs
+            .iter()
+            .filter_map(|tab| {
+                let WorkspaceTab::Terminal { panes, tree, .. } = tab else { return None };
+                Some(
+                    tree.leaves()
+                        .iter()
+                        .map(|id| {
+                            let records = panes
+                                .iter()
+                                .find(|pane| pane.id == *id)
+                                .map(|pane| pane.view.read(cx).recent_output_snapshot())
+                                .unwrap_or_default();
+                            (*id, records)
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        session_persistence::LocalSnapshot {
+            session: self.snapshot_session(cx),
+            outputs,
+            window_id: self.runtime_window_id,
+        }
     }
 
     /// 当前工作区 → 共享 v4 快照。设置/文档/图片 tab 不进会话（旧壳同
@@ -200,6 +256,7 @@ impl NebulaWorkspace {
                 launch: Some(launch),
                 layout: Some(layout),
                 active_pane,
+                output_refs: Vec::new(),
             });
         }
         let mut session = Session::new(active_out, tabs);

@@ -1,12 +1,19 @@
 //! Read-only terminal viewport assembled for the renderer.
 
-use crate::grid::{Dimensions, GridIterator};
+use crate::grid::{Dimensions, Grid, GridIterator};
 use crate::index::{Line, Point};
 use crate::selection::SelectionRange;
 use crate::term::cell::{Cell, Flags};
 use crate::term::color::Colors;
 use crate::term::{Term, TermMode};
 use crate::vte::ansi::CursorShape;
+
+impl<T> Term<T> {
+    /// 主屏显示数据；备用屏活动时仍保留普通命令的输出，不包含 TUI 内容。
+    pub fn primary_grid(&self) -> &Grid<Cell> {
+        if self.mode.contains(TermMode::ALT_SCREEN) { &self.inactive_grid } else { &self.grid }
+    }
+}
 
 /// Terminal cursor rendering information.
 #[derive(Copy, Clone, PartialEq, Eq)]

@@ -1,8 +1,19 @@
 use super::*;
 
 impl NebulaWorkspace {
-    /// GPUI 的 should-close 回调必须同步返回：无繁忙进程时直接允许系统关闭；
-    /// 有繁忙进程时先返回 false，再由对话框确认回调显式移除窗口。
+    pub(super) fn save_clean_window_session(
+        &mut self,
+        cx: &mut App,
+    ) -> gpui::Task<std::io::Result<bool>> {
+        windowing::output_persistence::save(
+            Some(self.snapshot_local_session(cx)),
+            session_persistence::SaveReason::WindowClose,
+            cx,
+        )
+    }
+
+    /// GPUI 关闭回调必须同步返回；普通窗口先等待保存，繁忙窗口还须确认。
+    /// 返回 false 后，由异步保存成功路径显式移除窗口。
     pub(super) fn should_close_window(
         &mut self,
         window: &mut Window,
@@ -84,13 +95,30 @@ impl NebulaWorkspace {
 
     fn finish_close_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.window_close_pending = true;
+        let documents = self.close_document_snapshot(cx);
         let panes = self.prepare_session_save(cx);
         let handle = self.window_handle;
         cx.spawn(async move |this, cx| {
             let ready = wait_for_session_ids(&panes, cx).await;
+            let saved = if ready {
+                let Ok(save) =
+                    this.update(cx, |workspace, cx| workspace.save_clean_window_session(cx))
+                else {
+                    return;
+                };
+                match save.await {
+                    Ok(saved) => saved,
+                    Err(error) => {
+                        log::warn!("Window close cancelled because session save failed: {error}");
+                        false
+                    },
+                }
+            } else {
+                false
+            };
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |workspace, cx| {
-                    if !ready || workspace.save_clean_window_session(cx).is_err() {
+                    if !saved {
                         workspace.window_close_pending = false;
                         let language = crate::gpui_shell::config::ui_language(cx);
                         let message = if ready {
@@ -104,6 +132,12 @@ impl NebulaWorkspace {
                             crate::display::ToastKind::Warning,
                             language.text(message),
                         );
+                        cx.notify();
+                        return;
+                    }
+                    workspace.window_close_pending = false;
+                    if !workspace.close_documents_unchanged(&documents, cx) {
+                        workspace.guard_file_window_close(window, cx);
                         cx.notify();
                         return;
                     }

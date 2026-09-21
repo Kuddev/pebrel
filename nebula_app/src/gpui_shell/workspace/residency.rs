@@ -148,9 +148,77 @@ impl NebulaWorkspace {
     fn drain_runtime_commands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let pending = std::mem::take(&mut self.runtime_pending);
         for dispatch in pending {
-            let response = self.execute_runtime_command(&dispatch.command, window, cx);
-            dispatch.respond(response);
+            if let RuntimeCommand::CloseWindow { window_id } = &dispatch.command {
+                let close = self.runtime_close_window(*window_id, cx);
+                cx.spawn(async move |_, _| {
+                    dispatch.respond(match close {
+                        Ok(close) => close.await,
+                        Err(error) => Err(error),
+                    });
+                })
+                .detach();
+            } else {
+                let response = self.execute_runtime_command(&dispatch.command, window, cx);
+                dispatch.respond(response);
+            }
         }
+    }
+
+    pub(super) fn runtime_close_window(
+        &mut self,
+        window_id: Option<u64>,
+        cx: &mut Context<Self>,
+    ) -> Result<gpui::Task<Result<Value, ApiError>>, ApiError> {
+        self.runtime_window_requested(window_id)?;
+        if self.window_close_pending {
+            return Err(ApiError::new("close_pending", "window close is already pending"));
+        }
+        if !self.close_documents_unchanged(&[], cx) {
+            return Err(ApiError::new(
+                "requires_confirmation",
+                "unsaved documents require confirmation in the GUI",
+            ));
+        }
+        if let Some(process) = self.busy_process_in_window(cx) {
+            return Err(runtime_close_confirmation(
+                process,
+                json!({ "target": "window", "window_id": self.runtime_window_id }),
+            ));
+        }
+        self.window_close_pending = true;
+        let panes = self.prepare_session_save(cx);
+        let handle = self.window_handle;
+        let id = self.runtime_window_id;
+        let tab_count = self.tabs.len();
+        Ok(cx.spawn(async move |this, cx| {
+            let result = async {
+                if !super::closing::wait_for_session_ids(&panes, cx).await {
+                    return Err(ApiError::new("session_identity_pending", "session identity is not ready"));
+                }
+                let save = this.update(cx, |workspace, cx| workspace.save_clean_window_session(cx))
+                    .map_err(|error| ApiError::new("target_not_found", error.to_string()))?;
+                match save.await {
+                    Ok(true) => {},
+                    Ok(false) => return Err(ApiError::new("session_save_failed", "session save was superseded")),
+                    Err(error) => return Err(ApiError::new("session_save_failed", error.to_string())),
+                }
+                let documents_safe = this.update(cx, |workspace, cx| {
+                    workspace.close_documents_unchanged(&[], cx)
+                }).map_err(|error| ApiError::new("target_not_found", error.to_string()))?;
+                if !documents_safe {
+                    return Err(ApiError::new("requires_confirmation", "documents changed while the window was saving"));
+                }
+                handle.update(cx, |_, window, cx| {
+                    super::windowing::remove_saved_workspace_window(id, window, cx);
+                    let snapshot = super::windowing::publish_runtime_snapshot(cx);
+                    json!({ "action": { "window_id": id, "closed": true, "tabs_closed": tab_count }, "snapshot": snapshot })
+                }).map_err(|error| ApiError::new("target_not_found", error.to_string()))
+            }.await;
+            if result.is_err() {
+                let _ = this.update(cx, |workspace, _| workspace.window_close_pending = false);
+            }
+            result
+        }))
     }
 
     pub(crate) fn execute_runtime_command(
@@ -168,39 +236,10 @@ impl NebulaWorkspace {
                 "runtime_unavailable",
                 "window.create is not queued in the GPUI runtime",
             )),
-            RuntimeCommand::CloseWindow { window_id } => {
-                self.runtime_window_requested(*window_id)?;
-                if let Some(process) = self.busy_process_in_window(cx) {
-                    return Err(runtime_close_confirmation(
-                        process,
-                        json!({ "target": "window", "window_id": self.runtime_window_id }),
-                    ));
-                }
-                let tab_count = self.tabs.len();
-                if self.tabs.is_empty() {
-                    super::windowing::close_empty_workspace_window(
-                        self.runtime_window_id,
-                        window,
-                        cx,
-                    );
-                } else {
-                    super::windowing::close_saved_workspace_window(
-                        self.runtime_window_id,
-                        self.snapshot_session(cx),
-                        window,
-                        cx,
-                    );
-                }
-                let snapshot = super::windowing::publish_runtime_snapshot(cx);
-                Ok(json!({
-                    "action": {
-                        "window_id": self.runtime_window_id,
-                        "closed": true,
-                        "tabs_closed": tab_count
-                    },
-                    "snapshot": snapshot
-                }))
-            },
+            RuntimeCommand::CloseWindow { .. } => Err(ApiError::new(
+                "runtime_unavailable",
+                "window.close requires asynchronous session publication",
+            )),
             RuntimeCommand::Focus { window_id, pane_id } => {
                 self.runtime_window_requested(*window_id)?;
                 if let Some(pane_id) = pane_id {
@@ -1013,24 +1052,35 @@ impl NebulaWorkspace {
         {
             return false;
         }
-        if let Err(error) = super::windowing::save_current_window_session(
-            self.runtime_window_id,
-            self.snapshot_session(cx),
+        self.window_close_pending = true;
+        let save = super::windowing::output_persistence::save(
+            Some(self.snapshot_local_session(cx)),
             super::session_persistence::SaveReason::Checkpoint,
             cx,
-        ) {
-            log::warn!("Could not checkpoint before hiding window: {error}");
-            let language = crate::gpui_shell::config::ui_language(cx);
-            crate::gpui_shell::toast::banner(
-                window,
-                cx,
-                crate::display::ToastKind::Warning,
-                language.text(crate::i18n::Message::SessionSaveFailed),
-            );
-            return true;
-        }
-        crate::gpui_shell::hide_native_window(window);
-        self.window_hidden = true;
+        );
+        let handle = self.window_handle;
+        cx.spawn(async move |this, cx| {
+            let saved = matches!(save.await, Ok(true));
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |workspace, cx| {
+                    workspace.window_close_pending = false;
+                    if saved {
+                        crate::gpui_shell::hide_native_window(window);
+                        workspace.window_hidden = true;
+                    } else {
+                        let language = crate::gpui_shell::config::ui_language(cx);
+                        crate::gpui_shell::toast::banner(
+                            window,
+                            cx,
+                            crate::display::ToastKind::Warning,
+                            language.text(crate::i18n::Message::SessionSaveFailed),
+                        );
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
         true
     }
 
