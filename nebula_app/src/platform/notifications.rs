@@ -3,6 +3,38 @@
 
 pub(crate) type ToastActivation = std::sync::Arc<dyn Fn() + Send + Sync>;
 
+#[derive(Clone)]
+pub(crate) struct ToastAction {
+    pub label: String,
+    pub activate: ToastActivation,
+}
+
+#[cfg(windows)]
+mod windows;
+
+pub(crate) fn toast_clickable(title: &str, body: &str, activation: Option<ToastActivation>) {
+    toast_actionable(title, body, activation, Vec::new());
+}
+
+/// Dispatch owns the platform's worker and COM lifetime; notification policy
+/// remains in the application capability.
+pub(crate) fn dispatch(
+    title: String,
+    body: String,
+    activation: Option<ToastActivation>,
+    actions: Vec<ToastAction>,
+) {
+    #[cfg(windows)]
+    toast_actionable(&title, &body, activation, actions);
+    #[cfg(not(windows))]
+    if let Err(error) = std::thread::Builder::new()
+        .name("pebrel-toast".into())
+        .spawn(move || toast_actionable(&title, &body, activation, actions))
+    {
+        log::warn!("notify: failed to spawn toast thread: {error}");
+    }
+}
+
 #[cfg(target_os = "macos")]
 static MACOS_READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
@@ -40,44 +72,23 @@ pub fn show(title: &str, body: &str) {
     });
 }
 
-/// [`toast`], optionally wired for click-to-focus: activating the banner (or
-/// its Action Center entry) surfaces `window` and, when a pane is named, its
-/// tab. Uses the in-process WinRT Activated handler — no COM server, no
-/// protocol registration. The one trade-off: clicks after Pebrel exited do
-/// nothing, which is exactly right (there is nothing left to focus).
 #[cfg(windows)]
-pub(crate) fn toast_clickable(title: &str, body: &str, activation: Option<ToastActivation>) {
-    use tauri_winrt_notification::{IconCrop, Toast};
-
-    // Attribute the toast to the Pebrel AUMID so it reads "Pebrel" instead of
-    // "Windows PowerShell". One registry write, cached per process.
-    win::ensure_aumid();
-
-    let mut toast = Toast::new(win::AUMID)
-        .title(title)
-        .text1(body)
-        .duration(tauri_winrt_notification::Duration::Short);
-    // Belt and braces: besides the AUMID IconUri (which some Windows builds
-    // cache stale), embed the logo per-toast as appLogoOverride so the banner
-    // always carries the Pebrel mark next to the message.
-    if let Some(icon) = win::icon_path() {
-        toast = toast.icon(&icon, IconCrop::Square, crate::brand::NAME);
-    }
-    if let Some(activation) = activation {
-        toast = toast.on_activated(move |_action| {
-            activation();
-            Ok(())
-        });
-    }
-
-    match toast.show() {
-        Ok(()) => log::debug!("notify: toast shown"),
-        Err(err) => log::warn!("notify: toast failed: {err}"),
-    }
+pub(crate) fn toast_actionable(
+    title: &str,
+    body: &str,
+    activation: Option<ToastActivation>,
+    actions: Vec<ToastAction>,
+) {
+    windows::enqueue(title, body, activation, actions);
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn toast_clickable(title: &str, body: &str, activation: Option<ToastActivation>) {
+pub(crate) fn toast_actionable(
+    title: &str,
+    body: &str,
+    activation: Option<ToastActivation>,
+    actions: Vec<ToastAction>,
+) {
     #[cfg(target_os = "macos")]
     {
         if objc2_foundation::NSBundle::mainBundle().bundleIdentifier().is_none() {
@@ -95,14 +106,21 @@ pub(crate) fn toast_clickable(title: &str, body: &str, activation: Option<ToastA
         .resolved();
         notification.action("default", language.text(crate::i18n::Message::CommonOpen));
     }
+    for (index, action) in actions.iter().enumerate() {
+        notification.action(&format!("choice-{index}"), &action.label);
+    }
     match notification.show() {
         Ok(handle) => {
-            if let Some(activation) = activation {
+            if activation.is_some() || !actions.is_empty() {
                 let result = handle.wait_for_response(move |response: &notify_rust::NotificationResponse| {
                     if response.is_default_action()
                         || matches!(response, notify_rust::NotificationResponse::Action(action) if action == "default")
                     {
-                        activation();
+                        if let Some(activation) = &activation { activation(); }
+                    } else if let notify_rust::NotificationResponse::Action(id) = response {
+                        if let Some(index) = id.strip_prefix("choice-").and_then(|id| id.parse::<usize>().ok())
+                            && let Some(action) = actions.get(index)
+                        { (action.activate)(); }
                     }
                 });
                 if let Err(error) = result {
@@ -115,7 +133,12 @@ pub(crate) fn toast_clickable(title: &str, body: &str, activation: Option<ToastA
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-pub(crate) fn toast_clickable(title: &str, body: &str, _activation: Option<ToastActivation>) {
+pub(crate) fn toast_actionable(
+    title: &str,
+    body: &str,
+    _activation: Option<ToastActivation>,
+    _actions: Vec<ToastAction>,
+) {
     crate::platform::notifications::show(title, body);
 }
 

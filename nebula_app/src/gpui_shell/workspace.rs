@@ -767,6 +767,7 @@ pub struct NebulaWorkspace {
     /// Git/SVN 提交信息输入（GPUI 输入组件）；提交动作直达共享模型
     /// `vcs_commit_message`，不经旧壳的内部输入状态机。
     git_commit_input: vcs_panel::CommitInput,
+    vcs_list: vcs_panel::VcsList,
     /// Git 树"丢弃改动"的二次确认（路径）；任何其他 VCS 操作都清掉它。
     vcs_discard_confirm: Option<String>,
     /// 命令面板的行覆盖：`None` = 常规命令目录，`Some` = 某个专用列表
@@ -1053,6 +1054,7 @@ impl NebulaWorkspace {
             saved_commands: crate::saved_commands::SavedCommands::load().unwrap_or_default(),
             _command_manager_subscription: command_manager_subscription,
             git_commit_input,
+            vcs_list: vcs_panel::VcsList::default(),
             vcs_discard_confirm: None,
             palette_override: None,
             shell_picker_open: false,
@@ -2071,18 +2073,6 @@ impl NebulaWorkspace {
         }
         self.details_panel.section = None;
         self.toggle_side_panel(crate::display::side_panel::PanelView::Git, cx);
-    }
-
-    /// 提交按钮/Enter：读 GPUI 输入框的消息直达共享模型（git 提交暂存区、
-    /// svn 提交工作副本），成功入队后清空输入。
-    fn submit_vcs_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let message = self.git_commit_input.input.read(cx).value().trim().to_string();
-        if message.is_empty() {
-            return;
-        }
-        self.side_panel.vcs_commit_message(&message);
-        self.git_commit_input.input.update(cx, |input, cx| input.set_value("", window, cx));
-        cx.notify();
     }
 
     /// The catalog itself is owned by the old/shared command model. This

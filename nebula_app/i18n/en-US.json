@@ -867,5 +867,10 @@
     "directories": "Directory history",
     "commands": "Command history",
     "fonts": "Custom fonts"
-  }
+  },
+  "ai_hooks": {
+    "announced": "AI turn notifications connected (Claude / Codex / Kimi / Pi / opencode). To revoke: pebrel setup-ai --remove"
+  },
+  "notification.command_finished": "Command finished in {seconds}s",
+  "notification.command_failed": "Command failed (exit {code}) after {seconds}s"
 }

@@ -62,8 +62,16 @@ impl Outline {
         let mut outline = Self::parse(source);
         // Rendering may substitute cached still images, but editing always uses
         // byte ranges in the original source, never the rewritten preview text.
-        for block in &mut outline.blocks {
-            *block = super::images::rewrite_doc_images(block, base);
+        for (block, structure) in outline.blocks.iter_mut().zip(&mut outline.structures) {
+            if let Some(structure) = structure {
+                for part in &mut std::sync::Arc::make_mut(structure).parts {
+                    let source = &block[part.range.clone()];
+                    let preview = super::images::rewrite_doc_images(source, base);
+                    part.preview = (preview != source).then_some(preview);
+                }
+            } else {
+                *block = super::images::rewrite_doc_images(block, base);
+            }
         }
         for (definition, _) in outline.definitions.values_mut() {
             *definition = super::images::rewrite_doc_images(definition, base);

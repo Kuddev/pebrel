@@ -30,8 +30,11 @@ any = [
 id = "working_status"
 state = "working"
 priority = 400
-region = "bottom_non_empty_lines(4)"
-line_regex = ['^[•◦]\s+Working \([^)]*esc to interrupt\)(?: · .*)?$']
+region = "bottom_non_empty_lines(16)"
+any = [
+  { line_regex = ['^[•◦]\s+(?:Working|Compacting context) \([^)]*esc to interrupt\)(?: · .*)?$'] },
+  { line_regex = ['^[•◦]\s+Messages to be submitted after next tool call \(press esc to interrupt and send immediately\)$'] },
+]
 
 [[rules]]
 id = "prompt_idle"

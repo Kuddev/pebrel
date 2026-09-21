@@ -19,7 +19,10 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use gpui::{AnyElement, App, IntoElement as _, ParentElement as _, Styled as _, Window, div, px};
+use gpui::{
+    AnyElement, App, InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _,
+    Window, div, px,
+};
 use gpui_component::notification::Notification;
 use gpui_component::{Root, WindowExt as _};
 
@@ -249,7 +252,7 @@ pub(crate) fn confirmation_for_pane(
     cx: &mut App,
     text: String,
     pane_id: u64,
-    confirmation: crate::gpui_shell::terminal::confirmation::BinaryConfirmation,
+    confirmation: crate::gpui_shell::terminal::confirmation::Confirmation,
 ) {
     let language = super::config::ui_language(cx);
     let allow_label = language.text(crate::i18n::Message::CommonYes).to_owned();
@@ -261,6 +264,30 @@ pub(crate) fn confirmation_for_pane(
             cx.defer(move |cx| super::workspace::windowing::focus_notification(Some(pane_id), cx));
         })
         .content(move |_, _, cx| {
+            if !confirmation.choices.is_empty() {
+                return v_flex()
+                    .gap_2()
+                    .child(div().text_sm().child(confirmation.question.clone()))
+                    .children(confirmation.choices.iter().enumerate().map(|(choice, label)| {
+                        Button::new(("confirmation-choice", choice))
+                            .debug_selector(|| format!("confirmation-choice-{choice}"))
+                            .w_full()
+                            .min_h(px(32.0))
+                            .tooltip(label.clone())
+                            .label(label.clone())
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(move |note, _, window, cx| {
+                                cx.stop_propagation();
+                                let feedback = window.window_handle();
+                                note.dismiss(window, cx);
+                                cx.defer(move |cx| {
+                                    reply_to_choice(pane_id, request_id, choice, Some(feedback), cx)
+                                });
+                            }))
+                    }))
+                    .into_any_element();
+            }
             v_flex()
                 .gap_2()
                 .child(div().text_sm().child(confirmation.question.clone()))
@@ -315,11 +342,20 @@ fn reply_to_confirmation(
     feedback: gpui::AnyWindowHandle,
     cx: &mut App,
 ) {
+    reply_to_choice(pane_id, request_id, usize::from(!allow), Some(feedback), cx);
+}
+
+pub(crate) fn reply_to_choice(
+    pane_id: u64,
+    request_id: u64,
+    choice: usize,
+    feedback: Option<gpui::AnyWindowHandle>,
+    cx: &mut App,
+) {
     super::workspace::windowing::focus_notification(Some(pane_id), cx);
-    let applied = super::workspace::windowing::notification_view(pane_id, cx).is_some_and(|view| {
-        view.update(cx, |view, cx| view.answer_confirmation(request_id, allow, cx))
-    });
-    if !applied {
+    let applied = super::workspace::windowing::notification_view(pane_id, cx)
+        .is_some_and(|view| view.update(cx, |view, cx| view.answer_choice(request_id, choice, cx)));
+    if !applied && let Some(feedback) = feedback {
         let _ = feedback.update(cx, |_, window, cx| {
             let language = crate::display::LanguagePreference::from(
                 nebula_settings::RuntimeSettings::load().language,
@@ -446,7 +482,7 @@ mod tests {
         };
 
         use crate::gpui_shell::config::Settings;
-        use crate::gpui_shell::terminal::confirmation::BinaryConfirmation;
+        use crate::gpui_shell::terminal::confirmation::Confirmation;
 
         struct Empty;
 
@@ -488,6 +524,81 @@ mod tests {
         }
 
         #[gpui::test]
+        fn numbered_choice_buttons_have_real_hit_targets_and_report_a_closed_pane(
+            cx: &mut TestAppContext,
+        ) {
+            struct NotificationSurface;
+            impl Render for NotificationSurface {
+                fn render(
+                    &mut self,
+                    window: &mut Window,
+                    cx: &mut Context<Self>,
+                ) -> impl gpui::IntoElement {
+                    div().relative().size_full().children(render_layer(window, cx))
+                }
+            }
+            initialize(cx, true);
+            cx.update(|cx| {
+                cx.set_reduce_motion(true);
+                crate::gpui_shell::workspace::windowing::initialize(
+                    cx,
+                    crate::runtime_api::RuntimeHub::new(),
+                );
+            });
+            let mut surface = None;
+            let (_, cx) = cx.add_window_view(|window, cx| {
+                let view = cx.new(|_| NotificationSurface);
+                surface = Some(view.clone());
+                Root::new(view, window, cx)
+            });
+            let surface = surface.unwrap();
+            cx.update(|window, cx| {
+                confirmation_for_pane(
+                    window,
+                    cx,
+                    "Choose a scope".into(),
+                    99991,
+                    Confirmation {
+                        id: 99991,
+                        question: "Choose a scope".into(),
+                        choices: vec!["Current directory".into(), "Whole workspace".into()],
+                    },
+                )
+            });
+            cx.update(|_, cx| surface.update(cx, |_, cx| cx.notify()));
+            cx.run_until_parked();
+            cx.background_executor.advance_clock(Duration::from_millis(200));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                surface.update(cx, |_, cx| cx.notify());
+                let _ = window.draw(cx);
+            });
+            let original = ids(cx);
+            assert_eq!(original.len(), 1);
+            let bounds =
+                cx.debug_bounds("confirmation-choice-1").expect("numbered option is rendered");
+            assert!(bounds.size.width >= px(100.0) && bounds.size.height >= px(32.0));
+            cx.simulate_mouse_down(
+                bounds.center(),
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            cx.simulate_mouse_up(
+                bounds.center(),
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            settle_dismissal(cx);
+            let current = ids(cx);
+            assert!(!current.contains(&original[0]), "the clicked stale card is dismissed");
+            assert_eq!(
+                current.len(),
+                1,
+                "the closed source produces visible expired-request feedback"
+            );
+        }
+
+        #[gpui::test]
         fn disabling_ai_toasts_removes_only_ai_cards_and_can_be_reenabled(cx: &mut TestAppContext) {
             initialize(cx, true);
             let (_, cx) = cx.add_window_view(|window, cx| Root::new(cx.new(|_| Empty), window, cx));
@@ -505,7 +616,7 @@ mod tests {
                     cx,
                     "AI confirmation".into(),
                     7101,
-                    BinaryConfirmation { id: 7201, question: "Continue?".into() },
+                    Confirmation { choices: Vec::new(), id: 7201, question: "Continue?".into() },
                 );
                 banner(window, cx, ToastKind::Warning, "Configuration needs attention");
             });
@@ -561,7 +672,7 @@ mod tests {
                     cx,
                     "Permission".into(),
                     7303,
-                    BinaryConfirmation { id: 7304, question: "Continue?".into() },
+                    Confirmation { choices: Vec::new(), id: 7304, question: "Continue?".into() },
                 );
             });
             cx.run_until_parked();
@@ -608,7 +719,7 @@ mod tests {
                     cx,
                     "Hidden AI confirmation".into(),
                     7102,
-                    BinaryConfirmation { id: 7202, question: "Continue?".into() },
+                    Confirmation { choices: Vec::new(), id: 7202, question: "Continue?".into() },
                 );
                 banner_for_pane(
                     window,

@@ -872,6 +872,12 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
     for event in events {
         match event {
             GpuiShellEvent::NotificationFocus(pane_id) => focus_notification(pane_id, cx),
+            GpuiShellEvent::NotificationChoice { pane_id, request_id, choice } => {
+                let feedback = entry_with_pane(pane_id, cx).map(|entry| entry.handle);
+                crate::gpui_shell::toast::reply_to_choice(
+                    pane_id, request_id, choice, feedback, cx,
+                );
+            },
             GpuiShellEvent::TrayFocus(pane_id) => {
                 let target =
                     pane_id.and_then(|pane_id| entry_with_pane(pane_id, cx)).or_else(|| {
@@ -1267,6 +1273,7 @@ pub(crate) fn focus_notification(pane_id: Option<u64>, cx: &mut App) {
         }
         super::quick_terminal::show_native_window(entry.native_hwnd);
     }
+    cx.activate(true);
     let workspace = entry.workspace.clone();
     let _ = entry.handle.update(cx, move |_, window, cx| {
         let _ = workspace.update(cx, |workspace, cx| {
@@ -1280,12 +1287,22 @@ pub(crate) fn focus_notification(pane_id: Option<u64>, cx: &mut App) {
             #[cfg(windows)]
             if let Some(hwnd) = native_hwnd(window) {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    IsIconic, SW_RESTORE, ShowWindow,
+                    BringWindowToTop, IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOW,
+                    SetForegroundWindow, ShowWindow,
                 };
+                // Consult native visibility: tray/OS state can differ from the
+                // workspace flag. A notification click is an explicit request
+                // to reveal and foreground this window, including a hidden HWND.
                 unsafe {
                     let hwnd = hwnd as *mut std::ffi::c_void;
                     if IsIconic(hwnd) != 0 {
                         ShowWindow(hwnd, SW_RESTORE);
+                    } else if IsWindowVisible(hwnd) == 0 {
+                        ShowWindow(hwnd, SW_SHOW);
+                    }
+                    BringWindowToTop(hwnd);
+                    if SetForegroundWindow(hwnd) == 0 {
+                        log::debug!("notification foreground request deferred to GPUI activation");
                     }
                 }
             }

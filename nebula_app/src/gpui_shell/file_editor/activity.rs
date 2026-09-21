@@ -26,6 +26,7 @@ impl TextFileView {
             self.preview_task = None;
             self.revision += 1;
             self.stop_preview_selection_scroll();
+            self.inline_views.borrow_mut().clear();
             for block in self.blocks.borrow_mut().iter_mut() {
                 *block = None;
             }
@@ -48,9 +49,8 @@ impl TextFileView {
         let block = self.outline.edit_block_at(cursor.anchor.min(self.input.read(cx).text().len()));
         self.resume_live_at(block, cursor.anchor, window, cx);
         if let Some(edit) = &self.live_edit {
-            let text = &edit.projection.text;
-            let start = text.floor_char_boundary(cursor.selection.start.min(text.len()));
-            let end = text.floor_char_boundary(cursor.selection.end.min(text.len()));
+            let start = edit.projection.visible_offset(cursor.selection.start);
+            let end = edit.projection.visible_offset(cursor.selection.end);
             edit.input.update(cx, |input, cx| input.set_selected_range(start..end, cx));
         }
     }

@@ -46,6 +46,7 @@ impl TextFileView {
     pub(super) fn apply_input_rule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = &self.live_edit else { return };
         if !matches!(edit.kind, super::block_structure::PartKind::Rich)
+            || edit.projection.revealed().is_some()
             || edit.input.update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
         {
             return;

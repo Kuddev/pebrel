@@ -173,5 +173,10 @@
     "copied_lines": "已複製 {lines} 行到剪貼簿",
     "paste_lines": "貼上 {lines} 行文字？",
     "sent_to": "已傳送至 {target}"
-  }
+  },
+  "ai_hooks": {
+    "announced": "已接入 AI 回合通知（Claude / Codex / Kimi / Pi / opencode）。撤銷：pebrel setup-ai --remove"
+  },
+  "notification.command_finished": "命令結束，耗時 {seconds} 秒",
+  "notification.command_failed": "命令失敗（結束代碼 {code}），耗時 {seconds} 秒"
 }

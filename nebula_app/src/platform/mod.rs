@@ -36,6 +36,7 @@ pub mod startup;
 pub(crate) mod update_installation;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod window_chrome;
+pub(crate) mod wsl_hooks;
 
 pub use capabilities::CAPABILITIES;
 

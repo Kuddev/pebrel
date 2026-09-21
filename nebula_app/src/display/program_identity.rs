@@ -13,10 +13,11 @@ pub enum AiLogo {
     Trae,
     OhMyPi,
     CodeBuddy,
+    Kimi,
 }
 
 impl AiLogo {
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::Claude,
         Self::OpenAi,
         Self::OpenCode,
@@ -26,6 +27,7 @@ impl AiLogo {
         Self::Trae,
         Self::OhMyPi,
         Self::CodeBuddy,
+        Self::Kimi,
     ];
 
     /// One source catalog for both shells. Official color assets are embedded unchanged.
@@ -41,6 +43,7 @@ impl AiLogo {
             Self::Trae => include_bytes!("../../../extra/logo/ai_trae.png"),
             Self::OhMyPi => include_bytes!("../../../extra/logo/ai_omp.png"),
             Self::CodeBuddy => include_bytes!("../../../extra/logo/ai_codebuddy.png"),
+            Self::Kimi => include_bytes!("../../../extra/logo/ai_kimi.png"),
         }
     }
 
@@ -48,7 +51,10 @@ impl AiLogo {
         let preserve_luma = match self {
             Self::OpenAi | Self::Pi => false,
             // OpenCode stores a luma map: the frame is white, the inner block gray.
-            Self::OpenCode => true,
+            // Kimi's letterform is solid white with a small blue accent: embedded
+            // unchanged it vanishes on light themes, so it rides the luma map too —
+            // the K tracks the theme ink at full strength, the accent dims with it.
+            Self::OpenCode | Self::Kimi => true,
             Self::Claude
             | Self::Grok
             | Self::Antigravity
@@ -132,6 +138,7 @@ pub(crate) fn ai_logo_for_program(program: &str) -> Option<AiLogo> {
         AgentKind::Trae => Some(AiLogo::Trae),
         AgentKind::OhMyPi => Some(AiLogo::OhMyPi),
         AgentKind::CodeBuddy => Some(AiLogo::CodeBuddy),
+        AgentKind::Kimi => Some(AiLogo::Kimi),
         _ => None,
     }
 }
@@ -154,6 +161,7 @@ pub(crate) fn program_icon(program: &str) -> &'static str {
         "opencode" | "trae-cli" => "\u{f489}",
         "pi" | "omp" | "oh-my-pi" => "\u{f135}",
         "codebuddy" | "cbc" | "codebuddy-code" | "codebuddy-lowmem" => "\u{f06a9}",
+        "kimi" | "kimi-code" => "\u{f186}",
         "git" | "lazygit" => "\u{f418}",
         "vim" | "nvim" | "vi" | "hx" | "nano" => "\u{e62b}",
         "ssh" | "mosh" => "\u{f489}",
@@ -199,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn official_grok_logos_are_embedded_unchanged_and_decodable() {
+    fn official_png_logos_are_embedded_unchanged_and_decodable() {
         use sha2::{Digest, Sha256};
 
         let assets = [
@@ -217,6 +225,14 @@ mod tests {
                     0x35, 0x90, 0x56, 0xee, 0x89, 0x83, 0xcf, 0xa0, 0xba, 0x7e, 0x72, 0x79, 0x50,
                     0x78, 0xc7, 0xc0, 0xdd, 0xf6, 0xc5, 0xd7, 0xa1, 0x87, 0x04, 0x01, 0xab, 0x96,
                     0x0e, 0xd4, 0xf9, 0xdf, 0x9e, 0x53,
+                ],
+            ),
+            (
+                AiLogo::Kimi.png(false),
+                [
+                    0xfc, 0x3f, 0x90, 0x5a, 0xdc, 0x68, 0xdf, 0xe9, 0xe1, 0x4a, 0xd2, 0x3b, 0x12,
+                    0x3f, 0x55, 0xab, 0x71, 0xd3, 0x2b, 0xf0, 0xd8, 0x55, 0xa2, 0xcf, 0x65, 0x80,
+                    0xf6, 0xb5, 0xcf, 0xf0, 0xbe, 0x99,
                 ],
             ),
         ];
@@ -312,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_tint_preserves_color_assets_and_opencode_luminance() {
+    fn shared_tint_preserves_color_assets_and_luminance_maps() {
         let source = [255, 255, 255, 128, 128, 128, 128, 64];
         let ink = [100, 200, 240];
         for logo in [AiLogo::Claude, AiLogo::Grok, AiLogo::Antigravity, AiLogo::Trae] {
@@ -325,14 +341,16 @@ mod tests {
             logo.tint_pixels(&mut pixels, ink);
             assert_eq!(pixels, [100, 200, 240, 128, 100, 200, 240, 64]);
         }
-        let mut pixels = source;
-        AiLogo::OpenCode.tint_pixels(&mut pixels, ink);
-        assert_eq!(pixels, [100, 200, 240, 128, 50, 100, 120, 64]);
+        for logo in [AiLogo::OpenCode, AiLogo::Kimi] {
+            let mut pixels = source;
+            logo.tint_pixels(&mut pixels, ink);
+            assert_eq!(pixels, [100, 200, 240, 128, 50, 100, 120, 64]);
+        }
     }
 
     #[test]
     fn vector_sourced_logos_keep_color_and_antialiased_edges_at_tab_sizes() {
-        for logo in [AiLogo::Claude, AiLogo::Trae, AiLogo::OhMyPi] {
+        for logo in [AiLogo::Claude, AiLogo::Trae, AiLogo::OhMyPi, AiLogo::Kimi] {
             let (width, height, source) = decode_png(logo.png(false));
             assert_eq!((width, height), (1024, 1024));
             for size in [16, 18, 24, 27, 36, 48] {
@@ -346,10 +364,14 @@ mod tests {
                     .filter(|alpha| *alpha > 0 && *alpha < 255)
                     .collect();
                 assert!(edge_levels.len() >= 8, "{logo:?} at {size}px");
-                for ink in [[236, 239, 245], [35, 40, 50]] {
-                    let mut tinted = pixels.clone();
-                    logo.tint_pixels(&mut tinted, ink);
-                    assert_eq!(tinted, pixels);
+                // Kimi 走亮度映射(白字形在浅色主题下不可见),不参与保色断言;
+                // 它的染色行为由 shared_tint_preserves_color_assets_and_luminance_maps 钉住。
+                if logo != AiLogo::Kimi {
+                    for ink in [[236, 239, 245], [35, 40, 50]] {
+                        let mut tinted = pixels.clone();
+                        logo.tint_pixels(&mut tinted, ink);
+                        assert_eq!(tinted, pixels);
+                    }
                 }
             }
         }
@@ -358,6 +380,12 @@ mod tests {
         for command in ["omp", "oh-my-pi", r"C:\tools\OMP.EXE"] {
             assert_eq!(logo_for_command(command), Some(AiLogo::OhMyPi));
         }
+        for command in ["kimi", "kimi-code", r"C:\tools\KIMI.EXE --help"] {
+            assert_eq!(logo_for_command(command), Some(AiLogo::Kimi), "{command}");
+        }
+        assert_eq!(logo_for_command("kimi-helper"), None);
+        assert_eq!(program_icon("kimi"), "\u{f186}");
+        assert_eq!(program_icon("kimi-code"), "\u{f186}");
     }
 
     #[test]

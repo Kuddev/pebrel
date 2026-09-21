@@ -214,7 +214,7 @@ fn inline_formula_itself_can_be_clicked_to_reveal_source(cx: &mut TestAppContext
     click("markdown-math-formula", &mut cx);
     assert_eq!(
         file.read_with(&cx, |view, cx| view.live_edit.as_ref().unwrap().input.read(cx).value()),
-        source
+        "$x^2 + y^2$"
     );
     assert!(!file.read_with(&cx, |view, _| view.dirty));
 }

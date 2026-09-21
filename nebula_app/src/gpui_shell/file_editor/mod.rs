@@ -1,6 +1,7 @@
 //! Editable local text files shared by Markdown and code tabs.
 
 mod activity;
+mod block_inline;
 mod block_structure;
 mod chrome;
 mod code_actions;
@@ -15,10 +16,18 @@ mod image_cache;
 mod images;
 mod info;
 mod inline_edit;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod inline_live_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod inline_object_tests;
+mod inline_selection;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod inline_selection_tests;
 mod input_rules;
 mod live_commands;
 mod live_edit;
 mod live_navigation;
+mod live_selection;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod live_tests;
 mod outline;
@@ -27,6 +36,7 @@ mod preview;
 mod reader_presentation;
 mod source;
 mod structure_commands;
+mod structure_inline_view;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod structure_tests;
 mod structure_view;
@@ -40,9 +50,10 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, ListAlignment,
-    ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    PromptLevel, ScrollHandle, SharedString, Subscription, Task, Window, actions, div, px,
+    App, Bounds, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    KeyBinding, ListAlignment, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, PromptLevel, ScrollHandle, SharedString, Subscription, Task,
+    Window, actions, div, px,
 };
 use gpui_component::text::TextViewState;
 
@@ -114,6 +125,8 @@ pub struct TextFileView {
     info: bool,
     outline: Outline,
     blocks: Rc<RefCell<Vec<Option<Entity<TextViewState>>>>>,
+    inline_views:
+        Rc<RefCell<std::collections::BTreeMap<(usize, usize), gpui::WeakEntity<TextViewState>>>>,
     preview_extensions: gpui_component::text::MarkdownExtensions,
     preview_images: Entity<image_cache::DocumentImageCache>,
     scroll: ListState,
@@ -193,11 +206,14 @@ impl TextFileView {
         });
         let subscription = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
             if matches!(event, InputEvent::Change) {
-                let source = this.input.read(cx).value();
                 if this.markdown {
-                    this.history.record(&source);
+                    let input = this.input.read(cx);
+                    this.history.record_rope(input.text());
                 }
-                this.dirty = this.document.as_ref().is_some_and(|doc| source.as_ref() != doc.text);
+                this.dirty = this.document.as_ref().is_some_and(|doc| {
+                    let input = this.input.read(cx);
+                    input.text().slice(0..input.text().len()) != doc.text.as_str()
+                });
                 if this.markdown {
                     this.schedule_preview(cx);
                 }
@@ -239,6 +255,7 @@ impl TextFileView {
             info: false,
             outline: Outline::default(),
             blocks: Rc::default(),
+            inline_views: Rc::default(),
             scroll: ListState::new(0, ListAlignment::Top, px(500.0)),
             preview_bounds: Rc::default(),
             preview_selection_scroll_epoch: 0,
@@ -535,6 +552,7 @@ impl TextFileView {
 
     fn apply_outline(&mut self, outline: Outline, cx: &mut Context<Self>) {
         self.preview_stale = false;
+        self.inline_views.borrow_mut().clear();
         let top = self.scroll.logical_scroll_top();
         self.blocks = Rc::new(RefCell::new(vec![None; outline.blocks.len()]));
         self.scroll.reset(outline.blocks.len().max(usize::from(self.live_mode)));
@@ -558,6 +576,7 @@ impl TextFileView {
             images.set_active(self.render_active && self.preview, window, cx);
         });
         if !self.preview {
+            self.inline_views.borrow_mut().clear();
             self.stop_preview_selection_scroll();
             for block in self.blocks.borrow_mut().iter_mut() {
                 *block = None;
@@ -677,7 +696,14 @@ impl Render for TextFileView {
             .when(self.markdown, |root| {
                 root.capture_action(cx.listener(
                     |view, _: &gpui_component::input::Undo, window, cx| {
-                        if view.document_input_focused(window, cx) {
+                        let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                            edit.input.update(cx, |input, cx| {
+                                input.marked_text_range(window, cx).is_some()
+                            })
+                        });
+                        if composing {
+                            cx.propagate();
+                        } else if view.document_input_focused(window, cx) {
                             view.travel_history(false, window, cx);
                             cx.stop_propagation();
                         } else {
@@ -686,7 +712,13 @@ impl Render for TextFileView {
                     },
                 ))
                 .capture_action(cx.listener(|view, _: &gpui_component::input::Redo, window, cx| {
-                    if view.document_input_focused(window, cx) {
+                    let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                        edit.input
+                            .update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
+                    });
+                    if composing {
+                        cx.propagate();
+                    } else if view.document_input_focused(window, cx) {
                         view.travel_history(true, window, cx);
                         cx.stop_propagation();
                     } else {
@@ -695,7 +727,14 @@ impl Render for TextFileView {
                 }))
                 .capture_action(cx.listener(
                     |view, _: &gpui_component::input::Escape, window, cx| {
-                        if view.live_edit.is_some() {
+                        let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                            edit.input.update(cx, |input, cx| {
+                                input.marked_text_range(window, cx).is_some()
+                            })
+                        });
+                        if composing {
+                            cx.propagate();
+                        } else if view.live_edit.is_some() {
                             view.finish_live_edit(cx);
                             view.focus.focus(window, cx);
                             cx.stop_propagation();
@@ -706,7 +745,14 @@ impl Render for TextFileView {
                 ))
                 .capture_action(cx.listener(
                     |view, action: &gpui_component::input::Enter, window, cx| {
-                        if action.secondary && view.live_edit.is_some() {
+                        let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                            edit.input.update(cx, |input, cx| {
+                                input.marked_text_range(window, cx).is_some()
+                            })
+                        });
+                        if composing {
+                            cx.propagate();
+                        } else if action.secondary && view.live_edit.is_some() {
                             view.finish_live_edit(cx);
                             view.focus.focus(window, cx);
                             cx.stop_propagation();
@@ -809,8 +855,21 @@ impl Render for TextFileView {
                 ))
             })
             .on_action(cx.listener(|this, _: &FinishBlockEdit, window, cx| {
-                this.finish_live_edit(cx);
-                this.focus.focus(window, cx);
+                let composing = this.live_edit.as_ref().is_some_and(|edit| {
+                    edit.input.update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
+                });
+                if composing {
+                    // Escape/Ctrl-Enter can resolve to the editor's finish
+                    // action before the input's own Escape handler. Keep the
+                    // native entity alive while the IME composition settles.
+                    if let Some(edit) = &this.live_edit {
+                        edit.input.update(cx, |input, cx| input.unmark_text(window, cx));
+                    }
+                    cx.notify();
+                } else {
+                    this.finish_live_edit(cx);
+                    this.focus.focus(window, cx);
+                }
             }))
             .on_action(cx.listener(|view, _: &BoldSelection, window, cx| {
                 view.format_live_selection("**", window, cx);
@@ -829,10 +888,13 @@ impl Render for TextFileView {
                         cx.notify();
                     },
                 ))
-                .capture_action(cx.listener(|this, _: &gpui_component::input::Copy, _, cx| {
+                .capture_action(cx.listener(|this, _: &gpui_component::input::Copy, window, cx| {
                     if this.all_selected {
                         // Do not materialize off-screen preview blocks for copy.
                         let text = this.input.read(cx).value().to_string();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        cx.stop_propagation();
+                    } else if let Some(text) = this.inline_selected_text(window, cx) {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                         cx.stop_propagation();
                     } else {

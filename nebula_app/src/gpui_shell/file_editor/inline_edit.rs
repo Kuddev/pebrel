@@ -20,6 +20,13 @@ struct Leaf {
     text: String,
     marks: Marks,
     raw: bool,
+    revealable: bool,
+}
+
+#[derive(Clone)]
+struct Expandable {
+    source: Range<usize>,
+    visible: Range<usize>,
 }
 
 pub(super) struct Projection {
@@ -27,6 +34,8 @@ pub(super) struct Projection {
     pub text: String,
     leaves: Vec<Leaf>,
     containers: Vec<Range<usize>>,
+    expandables: Vec<Expandable>,
+    reveal_range: Option<Range<usize>>,
     pub rich: bool,
     literal: bool,
 }
@@ -49,6 +58,39 @@ pub(super) fn changed_span(before: &str, after: &str) -> (Range<usize>, Range<us
     (prefix..before.len() - suffix, prefix..after.len() - suffix)
 }
 
+fn shift_reveal(
+    reveal: &Range<usize>,
+    changed: &Range<usize>,
+    inserted: usize,
+    source_len: usize,
+) -> Range<usize> {
+    let delta = inserted as isize - changed.len() as isize;
+    let (start, end) = if changed.is_empty() {
+        if changed.start < reveal.start {
+            (reveal.start.saturating_add_signed(delta), reveal.end.saturating_add_signed(delta))
+        } else if changed.start <= reveal.end {
+            (reveal.start, reveal.end.saturating_add_signed(delta))
+        } else {
+            (reveal.start, reveal.end)
+        }
+    } else if changed.end <= reveal.start {
+        (reveal.start.saturating_add_signed(delta), reveal.end.saturating_add_signed(delta))
+    } else if changed.start >= reveal.end {
+        (reveal.start, reveal.end)
+    } else {
+        let start = reveal.start.min(changed.start);
+        let end = if changed.end <= reveal.end {
+            reveal.end.saturating_add_signed(delta)
+        } else {
+            changed.start.saturating_add(inserted)
+        };
+        (start, end.max(start))
+    };
+    let start = start.min(source_len);
+    let end = end.min(source_len).max(start);
+    start..end
+}
+
 impl Projection {
     /// During a composition or a trailing-space edit, Markdown can temporarily
     /// be incomplete. Retain the existing leaf/mark identity until it parses to
@@ -58,8 +100,18 @@ impl Projection {
             *self = Self::raw(source);
             return true;
         }
-        let parsed = Self::new(source);
-        if parsed.text == text {
+        let (source_before, source_after) = changed_span(&self.source, source);
+        let reveal = self
+            .reveal_range
+            .as_ref()
+            .map(|range| shift_reveal(range, &source_before, source_after.len(), source.len()));
+        let parsed = Self::with_reveal(source, reveal.clone());
+        let replaced_reveal = self.reveal_range.as_ref().is_some_and(|range| {
+            source_before.start <= range.start && source_before.end >= range.end
+        });
+        if parsed.text == text
+            && (self.reveal_range.is_none() || parsed.revealed().is_some() || replaced_reveal)
+        {
             *self = parsed;
             return true;
         }
@@ -69,7 +121,6 @@ impl Projection {
         }) else {
             return false;
         };
-        let (source_before, source_after) = changed_span(&self.source, source);
         let shift =
             |range: &mut Range<usize>, change: &Range<usize>, inserted: usize, affected: bool| {
                 let delta = inserted as isize - change.len() as isize;
@@ -93,15 +144,29 @@ impl Projection {
         }
         self.source = source.to_owned();
         self.text = text.to_owned();
+        self.reveal_range = reveal;
+        self.rebuild_expandables();
         true
     }
 
     pub fn new(source: &str) -> Self {
+        Self::with_reveal(source, None)
+    }
+
+    /// Build a rich projection while exposing one inline node's source syntax.
+    ///
+    /// The returned text contains the selected node's exact source range, while
+    /// all unrelated leaves retain their rendered text and marks. This keeps a
+    /// single native input usable for local source reveal without making the
+    /// surrounding paragraph raw.
+    pub fn with_reveal(source: &str, reveal: Option<Range<usize>>) -> Self {
         let mut result = Self {
             source: source.to_owned(),
             text: String::new(),
             leaves: vec![],
             containers: vec![],
+            expandables: vec![],
+            reveal_range: None,
             rich: false,
             literal: false,
         };
@@ -129,11 +194,21 @@ impl Projection {
         }
         if result.leaves.is_empty() {
             if result.rich {
-                result.push(source.len()..source.len(), String::new(), Marks::default(), false);
-                return result;
+                result.push(
+                    source.len()..source.len(),
+                    String::new(),
+                    Marks::default(),
+                    false,
+                    false,
+                );
+            } else {
+                result.rich = source.is_empty();
+                result.push(0..source.len(), source.to_owned(), Marks::default(), true, false);
             }
-            result.rich = source.is_empty();
-            result.push(0..source.len(), source.to_owned(), Marks::default(), true);
+        }
+        result.rebuild_expandables();
+        if let Some(range) = reveal.and_then(|range| result.normalize_expandable(range)) {
+            result.apply_reveal(range);
         }
         result
     }
@@ -144,10 +219,12 @@ impl Projection {
             text: String::new(),
             leaves: vec![],
             containers: vec![],
+            expandables: vec![],
+            reveal_range: None,
             rich: false,
             literal: true,
         };
-        result.push(0..source.len(), source.to_owned(), Marks::default(), true);
+        result.push(0..source.len(), source.to_owned(), Marks::default(), true, false);
         result
     }
 
@@ -155,10 +232,10 @@ impl Projection {
         let Some(position) = node.position() else { return };
         let span = position.start.offset..position.end.offset;
         match node {
-            Node::Text(text) => self.push(span, text.value.clone(), marks, false),
+            Node::Text(text) => self.push(span, text.value.clone(), marks, false, false),
             Node::InlineCode(code) => {
                 marks.code = true;
-                self.push(span, code.value.clone(), marks, false);
+                self.push(span, code.value.clone(), marks, false, true);
             },
             Node::Strong(_)
             | Node::Emphasis(_)
@@ -176,23 +253,124 @@ impl Projection {
                     self.collect(child, marks);
                 }
             },
-            Node::Break(_) => self.push(span, "\n".to_owned(), marks, false),
+            Node::Break(_) => self.push(span, "\n".to_owned(), marks, false, false),
             Node::Html(html) if matches!(html.value.as_str(), "<br>" | "<br/>" | "<br />") => {
-                self.push(span, "\n".to_owned(), marks, true);
+                self.push(span, "\n".to_owned(), marks, true, false);
             },
             _ => {
                 // Embedded objects keep an explicit Markdown representation in
                 // the focused block; their untouched source is never serialized.
                 let text = self.source[span.clone()].to_owned();
-                self.push(span, text, marks, true);
+                self.push(span, text, marks, true, true);
             },
         }
     }
 
-    fn push(&mut self, source: Range<usize>, text: String, marks: Marks, raw: bool) {
+    fn push(
+        &mut self,
+        source: Range<usize>,
+        text: String,
+        marks: Marks,
+        raw: bool,
+        revealable: bool,
+    ) {
         let start = self.text.len();
         self.text.push_str(&text);
-        self.leaves.push(Leaf { source, visible: start..self.text.len(), text, marks, raw });
+        self.leaves.push(Leaf {
+            source,
+            visible: start..self.text.len(),
+            text,
+            marks,
+            raw,
+            revealable,
+        });
+    }
+
+    fn rebuild_expandables(&mut self) {
+        let mut expandables = Vec::with_capacity(self.containers.len() + self.leaves.len());
+        for source in &self.containers {
+            if let Some(visible) = self.visible_range_for_source(source) {
+                expandables.push(Expandable { source: source.clone(), visible });
+            }
+        }
+        for leaf in &self.leaves {
+            if leaf.revealable {
+                expandables.push(Expandable {
+                    source: leaf.source.clone(),
+                    visible: leaf.visible.clone(),
+                });
+            }
+        }
+        self.expandables = expandables;
+    }
+
+    fn visible_range_for_source(&self, source: &Range<usize>) -> Option<Range<usize>> {
+        let mut visible: Option<Range<usize>> = None;
+        for leaf in &self.leaves {
+            if leaf.source.start < source.start || leaf.source.end > source.end {
+                continue;
+            }
+            if leaf.visible.is_empty() {
+                continue;
+            }
+            visible = Some(match visible {
+                Some(current) => {
+                    current.start.min(leaf.visible.start)..current.end.max(leaf.visible.end)
+                },
+                None => leaf.visible.clone(),
+            });
+        }
+        visible
+    }
+
+    fn normalize_expandable(&self, source: Range<usize>) -> Option<Range<usize>> {
+        self.expandables
+            .iter()
+            .find(|expandable| expandable.source == source)
+            .map(|expandable| expandable.source.clone())
+    }
+
+    fn apply_reveal(&mut self, source: Range<usize>) {
+        let Some(raw) = self.source.get(source.clone()).map(str::to_owned) else { return };
+        let old_leaves = std::mem::take(&mut self.leaves);
+        let mut leaves = Vec::with_capacity(old_leaves.len());
+        let mut text = String::with_capacity(self.text.len() + raw.len());
+        let mut inserted = false;
+
+        for mut leaf in old_leaves {
+            let overlaps = leaf.source.start < source.end && source.start < leaf.source.end;
+            if overlaps {
+                if !inserted {
+                    let start = text.len();
+                    text.push_str(&raw);
+                    leaves.push(Leaf {
+                        source: source.clone(),
+                        visible: start..text.len(),
+                        text: raw.clone(),
+                        marks: Marks::default(),
+                        raw: true,
+                        revealable: true,
+                    });
+                    inserted = true;
+                }
+                continue;
+            }
+            let start = text.len();
+            text.push_str(&leaf.text);
+            leaf.visible = start..text.len();
+            leaves.push(leaf);
+        }
+
+        if !inserted {
+            self.leaves = leaves;
+            return;
+        }
+        self.text = text;
+        self.leaves = leaves;
+        self.containers
+            .retain(|container| !(source.start <= container.start && container.end <= source.end));
+        self.reveal_range = Some(source);
+        self.rebuild_expandables();
     }
 
     pub fn marks(&self) -> impl Iterator<Item = (Range<usize>, Marks)> + '_ {
@@ -237,15 +415,90 @@ impl Projection {
         (Self::new(&source).text == self.text).then_some(source)
     }
 
+    /// Translate a source byte offset to the corresponding projected offset.
+    ///
+    /// Offsets that fall inside Markdown delimiters map to the nearest visible
+    /// leaf boundary. Both sides are clamped to a UTF-8 character boundary.
     pub fn visible_offset(&self, offset: usize) -> usize {
+        let offset = self.source.floor_char_boundary(offset.min(self.source.len()));
         let leaf = self
             .leaves
             .iter()
             .find(|leaf| leaf.source.end >= offset)
             .or_else(|| self.leaves.last())
             .unwrap();
-        let local = offset.saturating_sub(leaf.source.start).min(leaf.text.len());
-        leaf.visible.start + leaf.text.floor_char_boundary(local)
+        let local = offset.saturating_sub(leaf.source.start).min(leaf.source.len());
+        let raw = &self.source[leaf.source.clone()];
+        let local = if leaf.marks.code {
+            inline_code_visible_offset(raw, &leaf.text, local)
+        } else {
+            visible_from_source(raw, &leaf.text, local)
+        }
+        .unwrap_or_else(|| leaf.text.floor_char_boundary(local.min(leaf.text.len())));
+        leaf.visible.start + local
+    }
+
+    /// Translate a projected byte offset back to the source buffer.
+    ///
+    /// This is the inverse of `visible_offset` for leaf content. A projected
+    /// offset at a formatting boundary resolves to the adjacent source boundary;
+    /// revealed raw leaves therefore map delimiters exactly.
+    pub fn source_offset(&self, offset: usize) -> usize {
+        let offset = self.text.floor_char_boundary(offset.min(self.text.len()));
+        let leaf = self
+            .leaves
+            .iter()
+            .find(|leaf| {
+                !leaf.visible.is_empty()
+                    && leaf.visible.start <= offset
+                    && offset < leaf.visible.end
+            })
+            .or_else(|| {
+                self.leaves
+                    .iter()
+                    .find(|leaf| !leaf.visible.is_empty() && leaf.visible.start == offset)
+            })
+            .or_else(|| self.leaves.iter().find(|leaf| leaf.visible.end >= offset))
+            .or_else(|| self.leaves.last())
+            .unwrap();
+        let local = offset.saturating_sub(leaf.visible.start).min(leaf.text.len());
+        let raw = &self.source[leaf.source.clone()];
+        let local = if leaf.marks.code {
+            inline_code_source_offset(raw, &leaf.text, local)
+        } else {
+            raw_offset(raw, &leaf.text, local)
+        }
+        .unwrap_or_else(|| leaf.text.floor_char_boundary(local));
+        leaf.source.start + local
+    }
+
+    /// Return the innermost expandable inline at a projected byte offset.
+    ///
+    /// When this projection already exposes a raw inline, its range wins at the
+    /// end boundary too. This keeps hit testing stable while the source is
+    /// temporarily incomplete during IME or delimiter edits.
+    pub fn reveal_at(&self, visible_offset: usize) -> Option<Range<usize>> {
+        let offset = self.text.floor_char_boundary(visible_offset.min(self.text.len()));
+        if let Some(range) = &self.reveal_range
+            && let Some(expandable) = self.expandables.iter().find(|expandable| {
+                expandable.source == *range
+                    && expandable.visible.start <= offset
+                    && offset <= expandable.visible.end
+            })
+        {
+            return Some(expandable.source.clone());
+        }
+        self.expandables
+            .iter()
+            .filter(|expandable| {
+                expandable.visible.start <= offset && offset < expandable.visible.end
+            })
+            .min_by_key(|expandable| (expandable.source.len(), expandable.source.start))
+            .map(|expandable| expandable.source.clone())
+    }
+
+    pub fn revealed(&self) -> Option<Range<usize>> {
+        self.reveal_range.clone()
     }
 
     /// Translate a visible edit into source edits. Deleting across formatting
@@ -359,19 +612,24 @@ fn raw_offset(raw: &str, text: &str, offset: usize) -> Option<usize> {
     let (mut source, mut visible) = (0, 0);
     while visible < offset {
         let tail = &raw[source..];
-        if tail.starts_with('\\') && tail.as_bytes().get(1).is_some_and(u8::is_ascii_punctuation) {
+        if tail.as_bytes().first() == Some(&b'\\')
+            && tail.as_bytes().get(1).is_some_and(u8::is_ascii_punctuation)
+        {
             source += 2;
             visible += 1;
         } else if tail.starts_with("\r\n") {
             source += 2;
             visible += 1;
-        } else if tail.starts_with('&') {
+        } else if tail.as_bytes().first() == Some(&b'&') {
             let length = tail.find(';').filter(|end| *end < 40).map(|end| end + 1);
             if let Some(length) = length {
                 let decoded = html_escape::decode_html_entities(&tail[..length]);
                 if decoded.as_ref() != &tail[..length]
                     && text[visible..].starts_with(decoded.as_ref())
                 {
+                    if visible + decoded.len() > offset {
+                        return Some(source);
+                    }
                     source += length;
                     visible += decoded.len();
                     continue;
@@ -381,7 +639,7 @@ fn raw_offset(raw: &str, text: &str, offset: usize) -> Option<usize> {
             visible += 1;
         } else {
             let ch = tail.chars().next()?;
-            if !text[visible..].starts_with(ch) {
+            if text[visible..].chars().next() != Some(ch) {
                 return None;
             }
             source += ch.len_utf8();
@@ -389,6 +647,133 @@ fn raw_offset(raw: &str, text: &str, offset: usize) -> Option<usize> {
         }
     }
     (visible == offset).then_some(source)
+}
+
+fn inline_code_content(raw: &str) -> Option<Range<usize>> {
+    let fence = raw.bytes().take_while(|byte| *byte == b'`').count();
+    if fence == 0 || raw.len() < fence * 2 {
+        return None;
+    }
+    let mut start = fence;
+    let mut end = raw.len() - fence;
+    if start < end
+        && raw.as_bytes()[start] == b' '
+        && raw.as_bytes()[end - 1] == b' '
+        && raw[start..end].bytes().any(|byte| byte != b' ')
+    {
+        start += 1;
+        end -= 1;
+    }
+    Some(start..end)
+}
+
+fn inline_code_visible_offset(raw: &str, text: &str, offset: usize) -> Option<usize> {
+    let content = inline_code_content(raw)?;
+    if offset <= content.start {
+        return Some(0);
+    }
+    if offset >= content.end {
+        return Some(text.len());
+    }
+    let mut source = content.start;
+    let mut visible = 0;
+    while source < offset {
+        let tail = &raw[source..content.end];
+        let (source_length, visible_length) = if tail.starts_with("\r\n") {
+            (2, 1)
+        } else if tail.as_bytes().first().is_some_and(|byte| matches!(byte, b'\r' | b'\n')) {
+            (1, 1)
+        } else {
+            let ch = tail.chars().next()?;
+            (ch.len_utf8(), ch.len_utf8())
+        };
+        if source + source_length > offset || visible + visible_length > text.len() {
+            return None;
+        }
+        source += source_length;
+        visible += visible_length;
+    }
+    (source == offset).then_some(visible)
+}
+
+fn inline_code_source_offset(raw: &str, text: &str, offset: usize) -> Option<usize> {
+    let content = inline_code_content(raw)?;
+    if offset == 0 {
+        return Some(content.start);
+    }
+    if offset >= text.len() {
+        return Some(content.end);
+    }
+    let mut source = content.start;
+    let mut visible = 0;
+    while source < content.end {
+        if visible >= offset {
+            return Some(source);
+        }
+        let tail = &raw[source..content.end];
+        let (source_length, visible_length) = if tail.starts_with("\r\n") {
+            (2, 1)
+        } else if tail.as_bytes().first().is_some_and(|byte| matches!(byte, b'\r' | b'\n')) {
+            (1, 1)
+        } else {
+            let ch = tail.chars().next()?;
+            (ch.len_utf8(), ch.len_utf8())
+        };
+        if visible + visible_length > text.len() {
+            return None;
+        }
+        source += source_length;
+        visible += visible_length;
+    }
+    (visible == offset).then_some(source)
+}
+
+fn visible_from_source(raw: &str, text: &str, offset: usize) -> Option<usize> {
+    if raw == text {
+        return Some(offset.min(raw.len()));
+    }
+    let mut source = 0;
+    let mut visible = 0;
+    while source < offset {
+        let tail = &raw[source..];
+        let (source_length, visible_length) = if tail.as_bytes().first() == Some(&b'\\')
+            && tail.as_bytes().get(1).is_some_and(u8::is_ascii_punctuation)
+        {
+            (2, 1)
+        } else if tail.starts_with("\r\n") {
+            (2, 1)
+        } else if tail.as_bytes().first() == Some(&b'&') {
+            let length = tail.find(';').filter(|end| *end < 40).map(|end| end + 1);
+            if let Some(length) = length {
+                let decoded = html_escape::decode_html_entities(&tail[..length]);
+                if decoded.as_ref() != &tail[..length]
+                    && text[visible..].starts_with(decoded.as_ref())
+                {
+                    (length, decoded.len())
+                } else {
+                    let ch = tail.chars().next()?;
+                    (ch.len_utf8(), ch.len_utf8())
+                }
+            } else {
+                let ch = tail.chars().next()?;
+                (ch.len_utf8(), ch.len_utf8())
+            }
+        } else {
+            let ch = tail.chars().next()?;
+            if text[visible..].chars().next() != Some(ch) {
+                return None;
+            }
+            (ch.len_utf8(), ch.len_utf8())
+        };
+        if source + source_length > offset {
+            // A source offset inside an escape, entity, or line-ending token
+            // has no distinct projected position; keep it at the token start.
+            return Some(visible);
+        }
+        source += source_length;
+        visible += visible_length;
+    }
+    (source == offset).then_some(visible)
 }
 
 fn escape_text(text: &str) -> String {
@@ -408,7 +793,13 @@ fn inline_code(text: &str) -> String {
     }
     let length = text.split(|ch| ch != '`').map(str::len).max().unwrap_or(0) + 1;
     let fence = "`".repeat(length);
-    let padding = if text.starts_with(['`', ' ']) || text.ends_with(['`', ' ']) { " " } else { "" };
+    let padding = if text.as_bytes().first().is_some_and(|byte| matches!(byte, b'`' | b' '))
+        || text.as_bytes().last().is_some_and(|byte| matches!(byte, b'`' | b' '))
+    {
+        " "
+    } else {
+        ""
+    };
     format!("{fence}{padding}{text}{padding}{fence}")
 }
 
@@ -494,5 +885,157 @@ mod tests {
             source.replace_range(old, &after[new]);
             assert_eq!(source, after);
         }
+    }
+
+    #[test]
+    fn reveal_exposes_only_the_clicked_formatted_inline() {
+        let source = "left **粗体** middle [link](url \"title\") right";
+        let folded = Projection::new(source);
+        assert_eq!(folded.text, "left 粗体 middle link right");
+
+        let bold_visible = folded.text.find("粗体").unwrap();
+        let bold_start = source.find("**粗体**").unwrap();
+        let bold = bold_start..bold_start + "**粗体**".len();
+        assert_eq!(folded.reveal_at(bold_visible), Some(bold.clone()));
+
+        let revealed = Projection::with_reveal(source, Some(bold.clone()));
+        assert_eq!(revealed.text, "left **粗体** middle link right");
+        assert_eq!(revealed.revealed(), Some(bold));
+        assert_eq!(&revealed.text[0..5], "left ");
+        assert_eq!(&revealed.text[5.."left **粗体**".len()], "**粗体**");
+
+        let link_visible = revealed.text.find("link").unwrap();
+        let link_start = source.find("[link](url \"title\")").unwrap();
+        let link = link_start..link_start + "[link](url \"title\")".len();
+        assert_eq!(revealed.reveal_at(link_visible), Some(link.clone()));
+        let link_revealed = Projection::with_reveal(source, Some(link.clone()));
+        assert_eq!(link_revealed.text, "left 粗体 middle [link](url \"title\") right");
+        assert_eq!(link_revealed.revealed(), Some(link));
+    }
+
+    #[test]
+    fn reveal_picks_the_innermost_nested_mark() {
+        let source = "**outer *inner***";
+        let folded = Projection::new(source);
+        assert_eq!(folded.text, "outer inner");
+
+        let outer = 0..source.len();
+        let inner_start = source.find("*inner*").unwrap();
+        let inner = inner_start..inner_start + "*inner*".len();
+        let inner_visible = folded.text.find("inner").unwrap();
+        assert_eq!(folded.reveal_at(inner_visible), Some(inner.clone()));
+        assert_eq!(folded.reveal_at(folded.text.find("outer").unwrap()), Some(outer.clone()));
+
+        let inner_revealed = Projection::with_reveal(source, Some(inner.clone()));
+        assert_eq!(inner_revealed.text, "outer *inner*");
+        assert_eq!(
+            inner_revealed.reveal_at(inner_revealed.text.find("inner").unwrap()),
+            Some(inner)
+        );
+        assert_eq!(inner_revealed.reveal_at(0), Some(outer));
+    }
+
+    #[test]
+    fn inline_code_offsets_skip_fences_padding_and_preserve_unicode() {
+        for (raw, text) in [
+            ("`code`", "code"),
+            ("` code `", "code"),
+            ("``co`de``", "co`de"),
+            ("`` 中😀 ``", "中😀"),
+        ] {
+            let content = inline_code_content(raw).unwrap();
+            assert_eq!(inline_code_visible_offset(raw, text, content.start), Some(0));
+            assert_eq!(inline_code_source_offset(raw, text, 0), Some(content.start));
+            assert_eq!(inline_code_visible_offset(raw, text, content.end), Some(text.len()));
+            assert_eq!(inline_code_source_offset(raw, text, text.len()), Some(content.end));
+        }
+
+        let source = "prefix `` 中😀 `` suffix";
+        let projection = Projection::new(source);
+        let leaf = projection.leaves.iter().find(|leaf| leaf.marks.code).unwrap();
+        let content = inline_code_content(&source[leaf.source.clone()]).unwrap();
+        for local in [content.start, content.start + "中".len()] {
+            let source_offset = leaf.source.start + local;
+            let visible_offset = projection.visible_offset(source_offset);
+            assert_eq!(projection.source_offset(visible_offset), source_offset);
+        }
+        assert_eq!(projection.visible_offset(leaf.source.end), leaf.visible.end);
+        // At a shared visible boundary the following leaf owns the caret, so
+        // walking out of code can collapse its delimiters without re-entering it.
+        assert_eq!(projection.visible_offset(leaf.source.start + content.end), leaf.visible.end);
+        assert_eq!(projection.source_offset(leaf.visible.end), leaf.source.end);
+        let trailing = Projection::new("`` 中😀 ``");
+        assert_eq!(trailing.source_offset(trailing.text.len()), "`` 中😀".len());
+    }
+
+    #[test]
+    fn source_visible_offsets_clamp_escapes_entities_and_unicode() {
+        let source = "a \\*x\\* &amp; 中😀";
+        let projection = Projection::new(source);
+        assert_eq!(projection.text, "a *x* & 中😀");
+
+        let escaped = source.find("\\*").unwrap();
+        let star = projection.text.find('*').unwrap();
+        assert_eq!(projection.visible_offset(escaped), star);
+        assert_eq!(projection.visible_offset(escaped + 1), star);
+        assert_eq!(projection.source_offset(star), escaped);
+        assert_eq!(projection.source_offset(star + 1), escaped + 2);
+
+        let entity = source.find("&amp;").unwrap();
+        let ampersand = projection.text.find('&').unwrap();
+        assert_eq!(projection.visible_offset(entity), ampersand);
+        assert_eq!(projection.visible_offset(entity + 2), ampersand);
+        assert_eq!(projection.source_offset(ampersand), entity);
+        assert_eq!(projection.source_offset(ampersand + 1), entity + "&amp;".len());
+
+        for visible in projection
+            .text
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .chain(std::iter::once(projection.text.len()))
+        {
+            let source_offset = projection.source_offset(visible);
+            assert!(source.is_char_boundary(source_offset));
+            assert_eq!(projection.visible_offset(source_offset), visible);
+        }
+    }
+
+    #[test]
+    fn image_and_math_fallbacks_have_local_reveal_ranges() {
+        for source in ["before ![alt](image.png) after", "before $x^2$ after"] {
+            let projection = Projection::new(source);
+            let marker = if source.contains("![") { "![alt](image.png)" } else { "$x^2$" };
+            let start = source.find(marker).unwrap();
+            let range = start..start + marker.len();
+            let visible = projection.text.find(marker).unwrap();
+            assert_eq!(projection.reveal_at(visible), Some(range.clone()));
+            let revealed = Projection::with_reveal(source, Some(range.clone()));
+            assert_eq!(revealed.text, projection.text);
+            assert_eq!(revealed.revealed(), Some(range));
+        }
+    }
+
+    #[test]
+    fn invalid_reveal_edit_keeps_the_raw_leaf_active() {
+        let source = "before **bold** after";
+        let start = source.find("**bold**").unwrap();
+        let reveal = start..start + "**bold**".len();
+        let mut projection = Projection::with_reveal(source, Some(reveal.clone()));
+        let edited = "before **bold* after";
+        assert!(projection.accept(edited, edited));
+        assert_eq!(projection.text, edited);
+        let edited_range = edited.find("**bold*").unwrap();
+        assert_eq!(projection.revealed(), Some(edited_range..edited_range + "**bold*".len()));
+    }
+
+    #[test]
+    fn replacing_a_revealed_inline_and_its_neighbour_keeps_the_input_projection() {
+        let source = "before **bold** after";
+        let start = source.find("**bold**").unwrap();
+        let reveal = start..start + "**bold**".len();
+        let mut projection = Projection::with_reveal(source, Some(reveal.clone()));
+        assert!(projection.accept("before after", "before after"));
+        assert_eq!(projection.text, "before after");
+        assert_eq!(projection.revealed(), None);
     }
 }

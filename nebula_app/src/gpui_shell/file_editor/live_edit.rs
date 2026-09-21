@@ -16,14 +16,15 @@ pub(super) struct LiveEdit {
     pub(super) projection: Projection,
     pub(super) part: Option<usize>,
     pub(super) kind: PartKind,
+    pub(super) last_selection: Range<usize>,
     changed: bool,
     heading: Option<u8>,
-    decorations: TextDecorationCollection,
+    pub(super) decorations: TextDecorationCollection,
     _subscription: Subscription,
     _observation: Subscription,
 }
 
-fn decorations(projection: &Projection, cx: &App) -> Vec<TextDecoration> {
+pub(super) fn decorations(projection: &Projection, cx: &App) -> Vec<TextDecoration> {
     projection
         .marks()
         .map(|(range, marks)| {
@@ -95,6 +96,14 @@ impl TextFileView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(gpui::ClickEvent::Mouse(click)) = click {
+            let movement = click.up.position - click.down.position;
+            if f32::from(movement.x).abs() + f32::from(movement.y).abs() > 4.0 {
+                // A completed reader drag belongs to the shared selection
+                // coordinator; opening an input here would discard that range.
+                return;
+            }
+        }
         if !self.live_mode
             || !self.render_active
             || !self.preview
@@ -164,6 +173,7 @@ impl TextFileView {
                 InputEvent::Change => {
                     view.update_live_edit(window, cx);
                     view.apply_input_rule(window, cx);
+                    view.sync_live_selection(window, cx);
                 },
                 InputEvent::Blur => {
                     view.update_live_edit(window, cx);
@@ -175,7 +185,7 @@ impl TextFileView {
         let observation = cx.observe_in(&input, window, |view, input, window, cx| {
             if view.live_edit.as_ref().is_some_and(|edit| edit.input == input) {
                 view.update_live_edit(window, cx);
-                cx.notify();
+                view.sync_live_selection(window, cx);
             }
         });
         self.history.barrier();
@@ -184,6 +194,7 @@ impl TextFileView {
             input: input.clone(),
             range,
             source,
+            last_selection: projection.text.len()..projection.text.len(),
             projection,
             part,
             kind,
@@ -253,10 +264,12 @@ impl TextFileView {
 
     pub(super) fn update_live_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = self.live_edit.as_mut() else { return };
-        let text = edit.input.read(cx).value();
-        if text.as_ref() == edit.projection.text {
+        // Focus, selection and cursor blink notify the same entity. Compare its
+        // Rope before materializing text, so those events allocate no draft.
+        if edit.input.read(cx).text().slice(..) == edit.projection.text.as_str() {
             return;
         }
+        let text = edit.input.read(cx).value();
         let source = self.input.read(cx).text();
         if !source.try_slice(edit.range.clone()).is_ok_and(|slice| slice == edit.source.as_str()) {
             self.finish_live_edit(cx);
@@ -331,7 +344,11 @@ impl TextFileView {
         if let Some(edit) = self.live_edit.take() {
             self.last_edit_cursor = Some(super::activity::EditCursor {
                 anchor: edit.range.start,
-                selection: edit.input.read(cx).selected_range(),
+                selection: {
+                    let range = edit.input.read(cx).selected_range();
+                    edit.projection.source_offset(range.start)
+                        ..edit.projection.source_offset(range.end)
+                },
             });
             // The just-edited text must be visible during the background parse.
             if edit.changed

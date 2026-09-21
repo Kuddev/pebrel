@@ -59,17 +59,40 @@ impl TextFileView {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(edit) = &self.live_edit else { return false };
-        if !edit.projection.rich || edit.part.is_some() {
+        let inline_block =
+            self.outline.structures.get(edit.block).and_then(Option::as_ref).is_some_and(
+                |structure| {
+                    matches!(structure.root, super::block_structure::StructureNode::Inline(_))
+                },
+            );
+        if !edit.projection.rich || (edit.part.is_some() && !inline_block) {
             return false;
         }
         let selection = edit.input.read(cx).selected_range();
-        let left = edit.projection.replace(&edit.projection.text[..selection.start]);
-        let right =
-            paragraph_source(&edit.projection.replace(&edit.projection.text[selection.end..]));
-        let cursor = edit.range.start + left.len() + 2;
+        let (range, left, right) = if inline_block {
+            let range = self.outline.source_ranges[edit.block].clone();
+            let Some(source) = self.source_slice(range.clone(), cx) else { return false };
+            let offset = edit.range.start - range.start;
+            let reveal =
+                edit.projection.revealed().map(|span| offset + span.start..offset + span.end);
+            let projection = super::inline_edit::Projection::with_reveal(&source, reveal);
+            let start =
+                projection.visible_offset(offset + edit.projection.source_offset(selection.start));
+            let end =
+                projection.visible_offset(offset + edit.projection.source_offset(selection.end));
+            let left = projection.replace(&projection.text[..start]);
+            let right = paragraph_source(&projection.replace(&projection.text[end..]));
+            (range, left, right)
+        } else {
+            let left = edit.projection.replace(&edit.projection.text[..selection.start]);
+            let right =
+                paragraph_source(&edit.projection.replace(&edit.projection.text[selection.end..]));
+            (edit.range.clone(), left, right)
+        };
+        let cursor = range.start + left.len() + 2;
         let mut source = self.input.read(cx).value().to_string();
         self.history.record(&source);
-        source.replace_range(edit.range.clone(), &format!("{left}\n\n{right}"));
+        source.replace_range(range, &format!("{left}\n\n{right}"));
         self.finish_live_edit(cx);
         self.replace_document_text(&source, window, cx);
         self.history.record(&source);

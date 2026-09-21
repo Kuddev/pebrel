@@ -95,6 +95,14 @@ pub fn capabilities_for(source: &str) -> AiHookCapabilities {
             bridge_sequence: false,
             serialized_delivery: false,
         },
+        "kimi" => AiHookCapabilities {
+            lifecycle: true,
+            attention_events: true,
+            attention_context: true,
+            background_tasks: false,
+            bridge_sequence: false,
+            serialized_delivery: false,
+        },
         _ => AiHookCapabilities {
             lifecycle: false,
             attention_events: false,

@@ -158,6 +158,7 @@ pub(super) fn local_options(
     // 身份契约必须最后写：它以环境表里 `WSLENV` 的现值为基准合并，才能同时
     // 保住上面那段的 cwd 上报条目。见 [`crate::agent_env`]。
     crate::agent_env::apply(&mut options.env, pane_id);
+    crate::platform::wsl_hooks::prepare(&mut options);
     options
 }
 
@@ -184,7 +185,11 @@ pub fn spawn(
     // 用于 resize 锚定问题的字节级取证。
     let record = std::env::var_os("NEBULA_PTY_RECORD").is_some();
     let native_prompt = proxy.events.native_prompt.clone();
-    let event_loop = EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
+    let mut event_loop =
+        EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
+    if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
+        event_loop.set_remote_hook_token(token.clone());
+    }
     let notifier = Notifier(event_loop.channel());
     let _io_thread = event_loop.spawn();
 

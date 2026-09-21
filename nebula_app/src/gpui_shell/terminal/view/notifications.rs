@@ -6,19 +6,16 @@ impl super::TerminalView {
         self.answer_reader.is_some()
     }
 
-    pub(super) fn notify_command_done(&self, cx: &mut Context<Self>) {
-        if self.agent_activity.hook_seen() {
-            return;
-        }
+    pub(super) fn notify_command_done(&self, exit_code: Option<i32>, cx: &mut Context<Self>) {
         if let Some(started) = self.command_started
-            && started.elapsed() >= crate::notify::COMMAND_NOTIFY_MIN
+            && let Some(notification) = crate::notify::Notification::command_finished(
+                self.running_program.clone(),
+                started.elapsed(),
+                exit_code,
+                self.agent_activity.hook_seen(),
+            )
         {
-            cx.emit(super::TerminalViewEvent::Notification(
-                crate::notify::Notification::CommandDone {
-                    duration: started.elapsed(),
-                    program: self.running_program.clone(),
-                },
-            ));
+            cx.emit(super::TerminalViewEvent::Notification(notification));
         }
     }
 }

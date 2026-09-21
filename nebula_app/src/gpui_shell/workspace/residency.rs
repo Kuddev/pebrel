@@ -79,6 +79,19 @@ impl NebulaWorkspace {
                     let pane = *pane;
                     cx.defer(move |cx| super::windowing::focus_notification(pane, cx));
                 },
+                GpuiShellEvent::NotificationChoice { pane_id, request_id, choice } => {
+                    let (pane_id, request_id, choice) = (*pane_id, *request_id, *choice);
+                    cx.defer(move |cx| {
+                        super::windowing::dispatch_shell_events(
+                            vec![GpuiShellEvent::NotificationChoice {
+                                pane_id,
+                                request_id,
+                                choice,
+                            }],
+                            cx,
+                        )
+                    });
+                },
                 GpuiShellEvent::TrayQuit => {
                     self.quit_from_tray(cx);
                     return;

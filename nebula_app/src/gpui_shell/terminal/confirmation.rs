@@ -1,3 +1,5 @@
+mod choices;
+
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -5,9 +7,10 @@ use nebula_terminal::term::TermMode;
 use regex::Regex;
 
 #[derive(Clone)]
-pub(crate) struct BinaryConfirmation {
+pub(crate) struct Confirmation {
     pub id: u64,
     pub question: String,
+    pub choices: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -19,10 +22,11 @@ struct Fingerprint {
 }
 
 struct Pending {
-    public: BinaryConfirmation,
+    public: Confirmation,
     fingerprint: Fingerprint,
     allow: String,
     deny: String,
+    replies: Vec<String>,
 }
 
 #[derive(Default)]
@@ -30,6 +34,8 @@ pub(super) struct ConfirmationState {
     pending: Option<Pending>,
     consumed: Option<Fingerprint>,
     provider_request: Option<String>,
+    waiting: bool,
+    generation: u64,
 }
 
 fn describe(
@@ -39,7 +45,7 @@ fn describe(
     mode: TermMode,
     waiting: bool,
 ) -> Option<(Fingerprint, String, String, String)> {
-    if !waiting || program.is_empty() || mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+    if !waiting || program.is_empty() {
         return None;
     }
     let context: Vec<String> = screen
@@ -79,7 +85,15 @@ fn describe(
 }
 
 impl ConfirmationState {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn observe_waiting(&mut self, waiting: bool) {
+        if self.waiting != waiting {
+            self.generation = self.generation.wrapping_add(1);
+        }
+        self.waiting = waiting;
         if !waiting {
             self.pending = None;
             self.consumed = None;
@@ -89,6 +103,7 @@ impl ConfirmationState {
 
     pub fn observe_input(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
+            self.generation = self.generation.wrapping_add(1);
             self.invalidate();
         }
     }
@@ -100,6 +115,7 @@ impl ConfirmationState {
             self.pending = None;
             self.consumed = None;
             self.provider_request = Some(request.to_owned());
+            self.generation = self.generation.wrapping_add(1);
         }
     }
 
@@ -116,10 +132,19 @@ impl ConfirmationState {
         session_id: Option<&str>,
         mode: TermMode,
         waiting: bool,
-    ) -> Option<BinaryConfirmation> {
-        let Some((fingerprint, question, allow, deny)) =
-            describe(screen, program, session_id, mode, waiting)
-        else {
+    ) -> Option<Confirmation> {
+        let described = describe(screen, program, session_id, mode, waiting)
+            .map(|(fingerprint, question, allow, deny)| {
+                (fingerprint, question, allow, deny, Vec::new(), Vec::new())
+            })
+            .or_else(|| {
+                choices::describe(screen, program, session_id, mode, waiting).map(
+                    |(fingerprint, question, labels, replies)| {
+                        (fingerprint, question, String::new(), String::new(), labels, replies)
+                    },
+                )
+            });
+        let Some((fingerprint, question, allow, deny, choices, replies)) = described else {
             self.invalidate();
             return None;
         };
@@ -132,8 +157,8 @@ impl ConfirmationState {
             return Some(pending.public.clone());
         }
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        let public = BinaryConfirmation { id: NEXT.fetch_add(1, Ordering::Relaxed), question };
-        self.pending = Some(Pending { public: public.clone(), fingerprint, allow, deny });
+        let public = Confirmation { id: NEXT.fetch_add(1, Ordering::Relaxed), question, choices };
+        self.pending = Some(Pending { public: public.clone(), fingerprint, allow, deny, replies });
         Some(public)
     }
 
@@ -147,18 +172,50 @@ impl ConfirmationState {
         mode: TermMode,
         waiting: bool,
     ) -> Option<Vec<u8>> {
-        if self.pending.as_ref()?.public.id != request_id {
+        self.answer_choice(
+            request_id,
+            usize::from(!allow),
+            screen,
+            program,
+            session_id,
+            mode,
+            waiting,
+        )
+    }
+
+    pub fn answer_choice(
+        &mut self,
+        request_id: u64,
+        choice: usize,
+        screen: &str,
+        program: &str,
+        session_id: Option<&str>,
+        mode: TermMode,
+        waiting: bool,
+    ) -> Option<Vec<u8>> {
+        let pending = self.pending.as_ref()?;
+        if pending.public.id != request_id {
             return None;
         }
-        let pending = self.pending.take()?;
-        self.consumed = Some(pending.fingerprint.clone());
-        let (current, _, _, _) = describe(screen, program, session_id, mode, waiting)?;
-        if current != pending.fingerprint {
-            return None;
-        }
-        let mut reply = if allow { pending.allow } else { pending.deny }.into_bytes();
-        reply.push(b'\r');
-        Some(reply)
+        let reply = if pending.replies.is_empty() {
+            let (current, _, _, _) = describe(screen, program, session_id, mode, waiting)?;
+            if current != pending.fingerprint {
+                return None;
+            }
+            match choice {
+                0 => format!("{}\r", pending.allow),
+                1 => format!("{}\r", pending.deny),
+                _ => return None,
+            }
+        } else {
+            let (current, _, _, _) = choices::describe(screen, program, session_id, mode, waiting)?;
+            if current != pending.fingerprint {
+                return None;
+            }
+            pending.replies.get(choice)?.clone()
+        };
+        self.consumed = self.pending.take().map(|pending| pending.fingerprint);
+        Some(reply.into_bytes())
     }
 }
 

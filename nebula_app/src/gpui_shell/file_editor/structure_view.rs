@@ -29,6 +29,34 @@ impl TextFileView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match node {
+            StructureNode::Inline(runs) => {
+                self.render_inline_parts(runs, structure, source, block, window, cx)
+            },
+            StructureNode::Literal(part) => {
+                let part = *part;
+                let active = self
+                    .live_edit
+                    .as_ref()
+                    .is_some_and(|edit| edit.block == block && edit.part == Some(part));
+                div()
+                    .id(("literal-edit-part", part))
+                    .w_full()
+                    .min_w_0()
+                    .cursor_text()
+                    .on_click(cx.listener(move |view, event, window, cx| {
+                        view.begin_live_part_at(block, Some(part), Some(event), window, cx);
+                        cx.stop_propagation();
+                    }))
+                    .child(if active {
+                        self.render_live_input(cx)
+                    } else {
+                        div()
+                            .whitespace_normal()
+                            .child(source[structure.parts[part].range.clone()].to_owned())
+                            .into_any_element()
+                    })
+                    .into_any_element()
+            },
             StructureNode::Text(part) => {
                 self.render_edit_part(*part, structure, source, block, window, cx)
             },
@@ -247,8 +275,10 @@ impl TextFileView {
         let content = if active {
             self.render_live_input(cx)
         } else {
-            let text =
-                self.outline.part_source(block, &source[structure.parts[part].range.clone()]);
+            let spec = &structure.parts[part];
+            let text = self
+                .outline
+                .part_source(block, spec.preview.as_deref().unwrap_or(&source[spec.range.clone()]));
             let state = window.use_keyed_state(
                 gpui::SharedString::from(format!("document-part-{block}-{part}")),
                 cx,

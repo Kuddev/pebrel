@@ -662,7 +662,7 @@ impl TerminalView {
                 }
             },
             TermEvent::AiHookEnvelope(envelope) => {
-                // SSH pane 里的 agent 靠私有 OSC 把 hook 信封带回本地（本地
+                // SSH/WSL pane 里的 agent 靠私有 OSC 把 hook 信封带回本地（原生本地
                 // agent 走 workspace 的 ai_events 通道）。信封在 event_loop 里
                 // 已核过通道令牌，这里解析出来喂进同一个应用路径。
                 //
