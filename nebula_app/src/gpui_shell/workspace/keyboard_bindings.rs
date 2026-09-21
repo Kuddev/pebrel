@@ -60,6 +60,9 @@ pub(super) fn init(cx: &mut App) {
     cx.bind_keys(default_workspace_bindings());
     #[cfg(target_os = "macos")]
     bind_macos_command_keys(cx);
+    // 退出不属于任何视图，挂全局兜底：⌘Q 与用户自定义的 `keybind=…:Quit`
+    // 都落到与托盘退出同一条「先落盘会话与草稿，再停 PTY」的路径。
+    cx.on_action(|_: &QuitApp, cx: &mut App| cx.defer(super::windowing::quit_all));
 }
 
 /// 工作区静态默认键位表；与 [`STATIC_DEFAULT_COMBOS`] 互为镜像。
@@ -132,37 +135,24 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
 /// 追加而非替换有两个原因：Ctrl+Shift 组合在 Mac 终端里没有别的含义，留着
 /// 不碍事；而 ⌘C/⌘V 必须存在，否则 Mac 用户第一反应就是「复制粘贴坏了」。
 /// 终端里的 Ctrl+C 仍然是 SIGINT——这里只绑 ⌘，不碰 Ctrl 的语义。
+///
+/// 键位来自 `display::keymap::MACOS_COMMAND_ALIASES`：设置页的反查、解绑与
+/// 恢复读的是同一张表，两处不会再各自漂移。注册必须留在这里、且早于用户
+/// 自定义键，这样 `clear_action` 注入的 NoAction 才压得住静态默认绑定。
 #[cfg(target_os = "macos")]
 fn bind_macos_command_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("cmd-t", NewTerminal, None),
-        KeyBinding::new("cmd-n", NewWindow, None),
-        KeyBinding::new("cmd-w", CloseActiveTerminal, None),
+    let mut bindings: Vec<KeyBinding> = crate::display::keymap::MACOS_COMMAND_ALIASES
+        .iter()
+        .filter_map(|(combo, action)| workspace_binding_in_context(combo, action, None))
+        .collect();
+    // 剩下这些没有对应的 `config::Action`，或者需要单独的作用域。
+    bindings.extend([
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-shift-p", ToggleCommandPalette, None),
-        KeyBinding::new("cmd-k", ToggleShellPicker, None),
-        KeyBinding::new("cmd-shift-f", ToggleFileTree, None),
-        KeyBinding::new("cmd-d", SplitRight, None),
-        KeyBinding::new("cmd-shift-d", SplitDown, None),
-        KeyBinding::new("cmd-shift-enter", ToggleZoom, None),
-        KeyBinding::new("cmd-alt-left", FocusPaneLeft, None),
-        KeyBinding::new("cmd-alt-right", FocusPaneRight, None),
-        KeyBinding::new("cmd-alt-up", FocusPaneUp, None),
-        KeyBinding::new("cmd-alt-down", FocusPaneDown, None),
-        KeyBinding::new("cmd-shift-]", SelectNextTab, None),
-        KeyBinding::new("cmd-shift-[", SelectPreviousTab, None),
-        KeyBinding::new("cmd-shift-g", ToggleGitPanel, None),
-        KeyBinding::new("cmd-=", IncreaseFontSize, None),
-        KeyBinding::new("cmd-+", IncreaseFontSize, None),
-        KeyBinding::new("cmd--", DecreaseFontSize, None),
-        KeyBinding::new("cmd-0", ResetFontSize, None),
-        KeyBinding::new("cmd-c", CopySelection, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
-        KeyBinding::new("cmd-v", PasteClipboard, Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
+        // 设置页与对话框的输入框自带 ⌘V，作用域必须和终端分开。
         KeyBinding::new("cmd-v", gpui_component::input::Paste, Some("Input")),
-        KeyBinding::new("cmd-ctrl-f", ToggleFullscreen, None),
-        KeyBinding::new("cmd-shift-o", OpenQuickJump, None),
     ]);
+    cx.bind_keys(bindings);
 }
 
 /// Typed GPUI adapter for the shared numbered/last-tab actions. The existing
@@ -172,6 +162,12 @@ fn bind_macos_command_keys(cx: &mut App) {
 pub(super) struct SelectTab {
     index: Option<usize>,
 }
+
+/// 退出应用，macOS 上绑 ⌘Q（`Action::Quit` 的 GPUI 侧落点）。处理注册在
+/// [`init`] 的全局兜底上，与绑定同一处维护。
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = nebula_workspace, no_json)]
+pub(super) struct QuitApp;
 
 impl SelectTab {
     fn from_config(action: &crate::config::Action) -> Option<Self> {
@@ -249,6 +245,8 @@ fn workspace_binding_in_context(
         )),
         Action::ToggleFullscreen => Some(KeyBinding::new(&combo, ToggleFullscreen, scope)),
         Action::OpenQuickJump => Some(KeyBinding::new(&combo, OpenQuickJump, scope)),
+        // macOS 的退出键走与托盘退出同一条路径：先落盘会话与草稿，再停 PTY。
+        Action::Quit => Some(KeyBinding::new(&combo, QuitApp, scope)),
         // `none` 禁用键：gpui 的 NoAction 绑定在最高优先级命中时吞掉按键，
         // 与旧壳 keybind=combo:none 的语义一致。
         Action::None | Action::ReceiveChar => Some(KeyBinding::new(&combo, gpui::NoAction, scope)),

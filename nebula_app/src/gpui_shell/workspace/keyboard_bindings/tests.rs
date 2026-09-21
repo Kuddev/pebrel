@@ -1,4 +1,54 @@
 use super::*;
+mod macos_command_keys {
+    use super::*;
+
+    /// #238：别名表里的每条都必须落到 gpui 绑定上。表和运行时各写一份时，
+    /// 设置页显示的键可能按下去没有反应；合一之后这条守住两边不再漂移。
+    #[test]
+    fn every_macos_command_alias_binds_a_gpui_action() {
+        for (combo, action) in crate::display::keymap::MACOS_COMMAND_ALIASES {
+            assert!(
+                workspace_binding_in_context(combo, action, None).is_some(),
+                "{combo} → {action:?} 没有对应的 gpui 绑定"
+            );
+        }
+        // ⌘Q 必须落到退出动作，否则退出键不会走保存会话与草稿的路径。
+        let quit = workspace_binding_in_context("cmd+q", &crate::config::Action::Quit, None)
+            .expect("⌘Q 必须有绑定");
+        assert!(quit.action().as_any().is::<QuitApp>(), "⌘Q 必须绑定 QuitApp");
+    }
+
+    /// #238：⌘K 被解绑后，用户注入的 NoAction 必须压得住静态默认绑定。
+    #[test]
+    fn released_cmd_k_is_swallowed_by_no_action() {
+        use crate::config::Action;
+        use gpui::{KeyContext, Keymap, Keystroke};
+        let contexts = [
+            KeyContext::parse("Root").unwrap(),
+            KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+        ];
+        let input = [Keystroke::parse("cmd-k").unwrap()];
+        // 反向对照：只有静态默认键时 ⌘K 必须命中 Shell 选择器，否则本用例空跑。
+        let default =
+            custom_workspace_binding("cmd+k", &Action::ToggleShellPicker).expect("静态默认键");
+        let (bindings, pending) =
+            Keymap::new(vec![default.clone()]).bindings_for_input(&input, &contexts);
+        assert!(!pending, "对照组必须命中");
+        assert!(bindings[0].action().as_any().is::<ToggleShellPicker>());
+        // `update_keybinds` 在两个作用域各注入一条 NoAction，这里照抄运行时形状。
+        let clear = workspace_binding_in_context("cmd+k", &Action::ReceiveChar, None).unwrap();
+        let clear_terminal = workspace_binding_in_context(
+            "cmd+k",
+            &Action::ReceiveChar,
+            Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+        )
+        .unwrap();
+        let released = Keymap::new(vec![default, clear, clear_terminal]);
+        let (bindings, pending) = released.bindings_for_input(&input, &contexts);
+        assert!(bindings.is_empty() && !pending, "解绑后不应有任何应用动作消费 ⌘K");
+    }
+}
+
 #[test]
 fn cleared_shortcut_reaches_terminal_and_can_be_restored_without_restart() {
     use crate::config::Action;
