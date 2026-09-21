@@ -77,6 +77,13 @@ pub(super) fn paint_pane_dividers(
     }
 }
 
+fn title_bar_frame() -> gpui::Div {
+    div().relative().flex_shrink_0().on_mouse_down(MouseButton::Left, |_, _, cx| {
+        // Window dragging owns this press; it must not anchor the document selection.
+        gpui_component::global_state::GlobalState::suppress_text_selection(cx);
+    })
+}
+
 impl NebulaWorkspace {
     pub(super) fn render_window_title_bar(
         &self,
@@ -118,10 +125,53 @@ impl NebulaWorkspace {
             bar
         };
 
-        div()
-            .relative()
-            .flex_shrink_0()
+        title_bar_frame()
             .when(!settings_active, |title| title.child(self.titlebar_background.element()))
             .child(bar)
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::{Modifiers, TestAppContext, point};
+    use gpui_component::{
+        Root, WindowExt,
+        text::{TextView, TextViewState},
+    };
+
+    struct DocumentWindow(Entity<TextViewState>);
+
+    impl Render for DocumentWindow {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            v_flex().size_full().child(title_bar_frame().child(TitleBar::new().h(px(48.0)))).child(
+                div()
+                    .debug_selector(|| "titlebar-selection-document".to_owned())
+                    .child(TextView::new(&self.0).selectable(true)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn title_bar_drag_does_not_anchor_document_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let text = cx.new(|cx| TextViewState::markdown("Document text remains selectable", cx));
+            let view = cx.new(|_| DocumentWindow(text));
+            Root::new(view, window, cx)
+        });
+        let text = cx.debug_bounds("titlebar-selection-document").unwrap();
+        cx.simulate_mouse_down(point(px(140.0), px(24.0)), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(text.center(), Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_move(text.center(), None, Modifiers::default());
+        assert!(cx.update(|window, cx| window.selected_text(cx).is_empty()));
+
+        // The same reader must still support ordinary text dragging afterwards.
+        let start = point(text.left() + px(1.0), text.top() + px(10.0));
+        let end = point(start.x + px(80.0), start.y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        assert!(!cx.update(|window, cx| window.selected_text(cx).is_empty()));
     }
 }

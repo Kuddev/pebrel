@@ -31,7 +31,9 @@ impl TextFileView {
                 .flex_shrink_0()
                 .cursor_text()
                 .text_size(px(reader_presentation::heading_size(spec.heading)))
-                .when(spec.heading.is_some(), |frame| frame.font_semibold())
+                .when(spec.heading.is_some(), |frame| {
+                    frame.font_weight(reader_presentation::heading_weight(spec.heading))
+                })
                 .when(run.marks.bold, |frame| frame.font_bold())
                 .when(run.marks.italic, |frame| frame.italic())
                 .when(run.marks.link, |frame| frame.text_color(cx.theme().link))
@@ -50,6 +52,9 @@ impl TextFileView {
                 } else {
                     cx.theme().font_family.clone()
                 };
+                if spec.heading.is_some() {
+                    style.font_weight = reader_presentation::heading_weight(spec.heading);
+                }
                 if run.marks.bold {
                     style.font_weight = gpui::FontWeight::BOLD;
                 }
