@@ -66,6 +66,26 @@ pub(super) fn tab_ai_fork_enabled(workspace: &NebulaWorkspace, ix: usize, cx: &A
         .is_some()
 }
 
+pub(super) fn copy_working_directory_item(
+    source: &Entity<crate::gpui_shell::terminal::view::TerminalView>,
+    cx: &App,
+) -> PopupMenuItem {
+    let available = source.read(cx).working_directory().is_some();
+    let source = source.downgrade();
+    PopupMenuItem::new(
+        super::workspace_ui_language().text(crate::i18n::Message::CommonCopyWorkingDirectory),
+    )
+    .icon(IconName::Folder)
+    .disabled(!available)
+    .on_click(move |_, window, cx| {
+        if let Some(source) = source.upgrade() {
+            source.update(cx, |view, cx| {
+                view.copy_working_directory(window, cx);
+            });
+        }
+    })
+}
+
 impl NebulaWorkspace {
     /// 右键：先选中该行（旧壳 chrome 同惯例），再按当下的 hook 身份现查
     /// fork 资格，最后把菜单交给根上那一份宿主。
@@ -86,8 +106,25 @@ impl NebulaWorkspace {
         let tab_count = self.tabs.len();
         let retry =
             self.tabs[ix].focused_view().filter(|view| view.read(cx).can_retry_recovery()).cloned();
+        let choose_session = self.tabs[ix]
+            .focused_view()
+            .filter(|view| view.read(cx).can_choose_recovery_session())
+            .cloned();
+        let copy_cwd =
+            self.tabs[ix].focused_view().map(|view| copy_working_directory_item(view, cx));
         let workspace = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |mut menu, _window, _cx| {
+            if let Some(view) = choose_session {
+                menu = menu.item(
+                    PopupMenuItem::new(
+                        super::workspace_ui_language()
+                            .text(crate::i18n::Message::SessionChooseConversation),
+                    )
+                    .on_click(move |_, _, cx| {
+                        view.update(cx, |view, cx| view.choose_recovery_session(cx))
+                    }),
+                );
+            }
             if let Some(view) = retry {
                 menu = menu
                     .item(
@@ -99,6 +136,9 @@ impl NebulaWorkspace {
                         }),
                     )
                     .separator();
+            }
+            if let Some(copy_cwd) = copy_cwd {
+                menu = menu.item(copy_cwd).separator();
             }
             Self::tab_popup_menu(
                 menu.external_link_icon(false),
@@ -357,6 +397,68 @@ impl NebulaWorkspace {
                 row
             },
         ))
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod cwd_copy_tests {
+    use super::*;
+    use crate::gpui_shell::config::Settings;
+    use crate::gpui_shell::terminal::view::{TerminalLaunch, TerminalView};
+    use gpui::{AppContext as _, ClipboardItem, IntoElement, TestAppContext};
+    use gpui_component::Root;
+
+    #[gpui::test]
+    fn cwd_menu_copies_the_reported_directory_via_keyboard(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let source = cx.new(|cx| {
+                let mut view = TerminalView::new(
+                    42,
+                    (80, 24),
+                    TerminalLaunch::Local {
+                        cwd: None,
+                        shell: Some(nebula_terminal::tty::Shell::new(
+                            "pebrel-test-missing-shell-executable".into(),
+                            vec![],
+                        )),
+                        shell_name: None,
+                    },
+                    window,
+                    cx,
+                );
+                view.cwd = "/home/用户/目录 with spaces".into();
+                view
+            });
+            let item = copy_working_directory_item(&source, cx);
+            let menu = PopupMenu::build(window, cx, |menu, _, _| menu.item(item));
+            menu.focus_handle(cx).focus(window, cx);
+            cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+            // Root 必须持有终端实体，否则菜单的弱引用会按真实关闭行为失效。
+            let content = cx.new(|_| CwdMenuProbe { menu, _source: source });
+            Root::new(content, window, cx)
+        });
+        window.simulate_keystrokes("down enter");
+        window.update(|_, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("/home/用户/目录 with spaces".into())
+            );
+        });
+    }
+
+    struct CwdMenuProbe {
+        menu: Entity<PopupMenu>,
+        _source: Entity<TerminalView>,
+    }
+
+    impl gpui::Render for CwdMenuProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.menu.clone()
+        }
     }
 }
 

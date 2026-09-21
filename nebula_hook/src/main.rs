@@ -61,6 +61,7 @@ const FOREIGN_HOOK_RUNNERS: &[&str] = &[
     // 了早期的 GROK_SESSION_ID：后者已不再导出，只在被插值进 hook 命令时才
     // 解析得到——如果当初的门写在那个变量上，今天就是一扇不会响的门。
     "GROK_HOOK_NAME",
+    "GROK_HOOK_EVENT",
 ];
 
 /// 当前进程是否由别家 agent 的 hook runner 启动。
@@ -165,7 +166,14 @@ fn log_outcome(source: &str, pane: &str, bytes: usize, outcome: &Outcome) {
 
 fn main() {
     // Constraint 1: never leak a failure to the calling CLI.
-    let _ = std::panic::catch_unwind(run);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let _ = std::panic::catch_unwind(|| run(&args));
+    // Cursor 的提交前 Hook 有响应合同；传输失败也不能阻止用户提交。
+    if args.first().is_some_and(|source| source == "cursor")
+        && native_event(&args) == Some("prompt")
+    {
+        let _ = std::io::stdout().lock().write_all(b"{\"continue\":true}\n");
+    }
 }
 
 fn read_payload(mut reader: impl Read) -> std::io::Result<Option<Vec<u8>>> {
@@ -182,7 +190,10 @@ fn read_payload(mut reader: impl Read) -> std::io::Result<Option<Vec<u8>>> {
 /// 已知调用方白名单。不在名单里的第一参数视为误调用：约束 2 要求在 Nebula 之外
 /// 也必须是无声 no-op。新增 provider 时同步在 `payload_on_stdin` 声明载荷通道。
 fn known_source(source: &str) -> bool {
-    matches!(source, "claude" | "codex" | "opencode" | "pi" | "kimi")
+    matches!(
+        source,
+        "claude" | "codex" | "opencode" | "pi" | "kimi" | "omp" | "copilot" | "grok" | "cursor"
+    )
 }
 
 /// 载荷通道。claude 与 kimi 都把事件 JSON 写到我们的 stdin（kimi 的 `[[hooks]]`
@@ -190,7 +201,29 @@ fn known_source(source: &str) -> bool {
 /// 无论如何都抽干管道（约束 1：未读的管道会在 CLI 侧变成 hook write error）。
 /// 其余 CLI 把载荷追加为末位参数。
 fn payload_on_stdin(source: &str) -> bool {
-    matches!(source, "claude" | "kimi")
+    matches!(source, "claude" | "kimi" | "copilot" | "grok" | "cursor")
+}
+
+fn native_event(args: &[String]) -> Option<&str> {
+    if args.len() != 3
+        || !matches!(args[0].as_str(), "copilot" | "grok" | "cursor")
+        || args[1] != "--event"
+    {
+        return None;
+    }
+    let event = args[2].as_str();
+    matches!(
+        event,
+        "session-start"
+            | "session-end"
+            | "prompt"
+            | "tool-complete"
+            | "done"
+            | "failed"
+            | "error"
+            | "notification"
+    )
+    .then_some(event)
 }
 
 /// 侧信道信封：一行 `nebula-hook/1 source=<s> pane=<p>` 头加原始载荷。helper 不重
@@ -201,8 +234,7 @@ fn envelope(source: &str, pane: &str, contract: &str, payload: &[u8]) -> Vec<u8>
     message
 }
 
-fn run() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+fn run(args: &[String]) {
     let Some(source) = args.first().filter(|s| known_source(s)) else {
         return;
     };
@@ -225,9 +257,8 @@ fn run() {
 
     // 串台门。放在读完 stdin 之后：约束 1 要求 stdin 模式的 source 无论如何都把
     // stdin 抽干（未读的管道会在 CLI 侧变成 hook write error），所以先读再退。
-    // kimi 的 hook 只装在它自己的 config.toml 里，别家 runner 不读那份配置，
-    // 没有串台路径，这道门保持 claude 专属。
-    if source == "claude" && foreign_hook_runner().is_some() {
+    // Grok 同时读取 Claude 与 Cursor 配置；这些借用的入口不能认领 Grok 会话。
+    if matches!(source.as_str(), "claude" | "cursor") && foreign_hook_runner().is_some() {
         log_outcome(source, "", payload.len(), &Outcome::ForeignRunner);
         return;
     }
@@ -235,6 +266,9 @@ fn run() {
     let pane = hook_env("PANE_ID").and_then(|value| value.into_string().ok()).unwrap_or_default();
     let contract = if native_codex {
         format!(" codex_hooks={}", args[1].strip_prefix("--hooks=").unwrap())
+    } else if matches!(source.as_str(), "copilot" | "grok" | "cursor") {
+        let Some(event) = native_event(args) else { return };
+        format!(" event={event}")
     } else {
         String::new()
     };
@@ -376,6 +410,19 @@ mod tests {
         assert_eq!(base64_encode(b"abc"), "YWJj");
         assert_eq!(base64_encode(b"ab"), "YWI=");
         assert_eq!(base64_encode(b"a"), "YQ==");
+    }
+
+    #[test]
+    fn native_event_contract_accepts_only_known_sources_and_single_header_fields() {
+        let args = |source: &str, event: &str| vec![source.into(), "--event".into(), event.into()];
+        for source in ["copilot", "grok", "cursor"] {
+            assert!(super::known_source(source) && super::payload_on_stdin(source));
+            assert_eq!(super::native_event(&args(source, "prompt")), Some("prompt"));
+            assert_eq!(super::native_event(&args(source, "done\npane=9")), None);
+            assert_eq!(super::native_event(&args(source, "unknown")), None);
+        }
+        assert_eq!(super::native_event(&args("kimi", "done")), None);
+        assert!(super::known_source("omp") && !super::payload_on_stdin("omp"));
     }
 
     /// 这道门是承重的：命中任一别家 runner 的变量就必须闭合。空值不算命中——

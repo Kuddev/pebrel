@@ -135,7 +135,7 @@ class RemoteHooksTests(unittest.TestCase):
             "import json, subprocess, sys\n"
             f"bridge={str(bridge)!r}\n"
             "for event in ['SessionStart','UserPromptSubmit','PermissionRequest','PreToolUse','Stop']:\n"
-            " p={'hook_event_name':event,'session_id':'main','turn_id':'turn','pid':1}\n"
+            " p={'hook_event_name':event,'session_id':'main','turn_id':'turn','pid':1, 'transcript_path':'/home/user/.codex/sessions/rollout-date-0199a213-c2a4-7cf5-8f6b-d746fbb6e86c.jsonl'}\n"
             " if event == 'PreToolUse': p.update(tool_name='request_user_input',tool_input={'questions':[{'id':'scope','question':'Which scope?'}]})\n"
             " if event == 'Stop': p['last_assistant_message']='x'*70000\n"
             " subprocess.run([sys.executable,bridge,'codex','--hooks=full'],input=json.dumps(p).encode(),check=True)\n"
@@ -170,7 +170,22 @@ class RemoteHooksTests(unittest.TestCase):
         self.assertEqual([p["bridge_sequence"] for p in payloads], [1, 2, 3, 4, 5])
         self.assertEqual(payloads[3]["tool_input"]["questions"][0]["question"], "Which scope?")
         self.assertEqual(payloads[-1]["hook_event_name"], "Stop")
+        self.assertEqual(payloads[-1]["transcript_path"], payloads[0]["transcript_path"])
         self.assertNotIn("last_assistant_message", payloads[-1])
+
+    def test_large_pi_events_keep_the_native_file_and_bridge_lifetime(self):
+        bridge = module("remote_bridge")
+        payload = {"kind": "done", "session_id": "pi-native", "session_file": "/sessions/pi.jsonl",
+                   "bridge_instance": "process-start", "stop_reason": "stop",
+                   "last_assistant_message": "x" * 70000}
+        with patch.object(bridge, "write_terminal") as write:
+            bridge.send("pi", False, "", payload, TOKEN)
+        frame = write.call_args.args[0]
+        encoded = frame.split(b";", 3)[3].removesuffix(b"\x07")
+        body = json.loads(base64.b64decode(encoded).split(b"\n", 1)[1])
+        for key in ["session_id", "session_file", "bridge_instance", "stop_reason"]:
+            self.assertEqual(body[key], payload[key])
+        self.assertNotIn("last_assistant_message", body)
 
     def test_invalid_token_never_writes_and_failed_delivery_keeps_notify_chain(self):
         bridge = module("remote_bridge")

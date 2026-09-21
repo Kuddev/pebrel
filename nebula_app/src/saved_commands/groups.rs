@@ -64,7 +64,7 @@ impl SavedCommands {
         Ok(())
     }
 
-    fn assign_group(&mut self, command_id: &str, group: Option<&str>) -> io::Result<()> {
+    pub(super) fn assign_group(&mut self, command_id: &str, group: Option<&str>) -> io::Result<()> {
         if !self.has_command(command_id) || !self.has_group(group) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -136,6 +136,24 @@ impl SavedCommands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inserting_inside_a_folder_is_atomic_and_rejects_a_deleted_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        let mut saved = SavedCommands::load_from(&path).unwrap();
+        saved.create_group("Work").unwrap();
+        let group = saved.groups()[0].id.clone();
+        let command = saved.insert_in_group("Build", "cargo build", true, Some(&group)).unwrap();
+        assert_eq!(
+            SavedCommands::load_from(&path).unwrap().group_for(&command.id),
+            Some(group.as_str())
+        );
+        saved.remove_group(&group).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(saved.insert_in_group("Lost", "echo lost", false, Some(&group)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
 
     #[test]
     fn old_store_defaults_and_explicit_builtin_removal_survive_reload() {

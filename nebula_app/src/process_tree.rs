@@ -153,11 +153,18 @@ fn verified_parentage(rows: Vec<ProcessRow>) -> std::collections::HashMap<u32, (
 /// commands below it. The OS is intentionally sampled on demand; running this
 /// on the 1 Hz UI state pump would scan the whole machine continuously.
 pub fn descendants(root_pid: u32) -> Result<Vec<ProcessEntry>, String> {
+    descendants_from_rows(root_pid, process_snapshot::snapshot()?)
+}
+
+pub(crate) fn descendants_from_rows(
+    root_pid: u32,
+    rows: Vec<ProcessRow>,
+) -> Result<Vec<ProcessEntry>, String> {
     if root_pid == 0 {
         return Err("the pane does not own a local shell process".to_owned());
     }
 
-    descendants_from_snapshot(root_pid, &snapshot()?)
+    descendants_from_snapshot(root_pid, &verified_parentage(rows))
 }
 
 fn descendants_from_snapshot(

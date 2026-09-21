@@ -641,6 +641,8 @@ impl Render for TextFileView {
             self.render_markdown_preview(cx)
         } else {
             div()
+                .id("file-source-content")
+                .debug_selector(|| "file-source-content".to_owned())
                 .flex_1()
                 .min_w_0()
                 .h_full()
@@ -648,6 +650,8 @@ impl Render for TextFileView {
                     Input::new(&self.input)
                         .h_full()
                         .disabled(!editable)
+                        // The workspace owns the document background and wallpaper.
+                        .appearance(false)
                         .bordered(false)
                         .focus_bordered(false)
                         .rounded(px(0.0))

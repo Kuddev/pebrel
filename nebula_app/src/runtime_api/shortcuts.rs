@@ -29,7 +29,10 @@
 //! 同一个 `request_once`、同一套 `ApiResponse` 信封、同样的 generation /
 //! `after_seq` 竞态保护。短的只是命令行，不是语义。
 
-use super::cli::{CliError, PrintedCliError, print_response, request_once, wait_state_name};
+use super::cli::{
+    CliError, PrintedCliError, print_response, request_once, require_submission_baseline,
+    wait_state_name,
+};
 use super::*;
 use crate::cli::{
     AgentCommand, AgentDelegateOptions, AgentOptions, AgentPasteOptions, AgentReadOptions,
@@ -504,6 +507,7 @@ fn pane_read(options: PaneReadOptions) -> Result<(), Box<dyn Error>> {
 
 fn pane_send(options: PaneSendOptions) -> Result<(), Box<dyn Error>> {
     let timeout = validated_timeout(options.timeout_ms)?;
+    let wait_timeout = submission_wait_timeout(options.wait, options.wait_timeout_ms, timeout)?;
     let response = request_once(
         "pane.prompt",
         json!({
@@ -517,19 +521,14 @@ fn pane_send(options: PaneSendOptions) -> Result<(), Box<dyn Error>> {
     if !response.ok || !options.wait {
         return print_response(&response, options.output.pretty);
     }
-    let wait_timeout = validated_timeout(options.wait_timeout_ms)?;
     // 基线取自提交后的那张快照。用它当 `after_seq` 才让随后的等待意味着
     // "又静下来了"，而不是"本来就是静的"——这正是把提交前的 idle 误判成
     // "已完成"的那个经典竞态。
-    let Some(baseline) = dispatched_state_change_seq(&response, options.window, Some(options.pane))
-    else {
-        return Err(CliError::new(
-            "runtime_no_response",
-            "the line was submitted but the response carried no pane state baseline; retry the \
-             wait with the state_change_seq from `pebrel pane list`",
-        )
-        .into());
-    };
+    let baseline = require_submission_baseline(dispatched_state_change_seq(
+        &response,
+        options.window,
+        Some(options.pane),
+    ))?;
     let response = request_once(
         "pane.wait",
         json!({
@@ -546,6 +545,7 @@ fn pane_send(options: PaneSendOptions) -> Result<(), Box<dyn Error>> {
 
 fn pane_paste(options: PanePasteOptions) -> Result<(), Box<dyn Error>> {
     let timeout = validated_timeout(options.timeout_ms)?;
+    let wait_timeout = submission_wait_timeout(options.wait, options.wait_timeout_ms, timeout)?;
     let text = read_paste_source(options.source)?;
     let response = request_once(
         "pane.paste",
@@ -560,16 +560,11 @@ fn pane_paste(options: PanePasteOptions) -> Result<(), Box<dyn Error>> {
     if !response.ok || !options.wait {
         return print_response(&response, options.output.pretty);
     }
-    let wait_timeout = validated_timeout(options.wait_timeout_ms)?;
-    let Some(baseline) = dispatched_state_change_seq(&response, options.window, Some(options.pane))
-    else {
-        return Err(CliError::new(
-            "runtime_no_response",
-            "the paste was submitted but the response carried no pane state baseline; retry the \
-             wait with the state_change_seq from `pebrel pane list`",
-        )
-        .into());
-    };
+    let baseline = require_submission_baseline(dispatched_state_change_seq(
+        &response,
+        options.window,
+        Some(options.pane),
+    ))?;
     let response = request_once(
         "pane.wait",
         json!({
@@ -608,6 +603,7 @@ fn agent_list(options: ListOptions) -> Result<(), Box<dyn Error>> {
 
 fn agent_send(options: AgentSendOptions) -> Result<(), Box<dyn Error>> {
     let timeout = validated_timeout(options.timeout_ms)?;
+    let wait_timeout = submission_wait_timeout(options.wait, options.wait_timeout_ms, timeout)?;
     let response = request_once(
         "agent.prompt",
         json!({
@@ -621,15 +617,7 @@ fn agent_send(options: AgentSendOptions) -> Result<(), Box<dyn Error>> {
     if !response.ok || !options.wait {
         return print_response(&response, options.output.pretty);
     }
-    let wait_timeout = validated_timeout(options.wait_timeout_ms)?;
-    let Some(baseline) = dispatched_state_change_seq(&response, None, None) else {
-        return Err(CliError::new(
-            "runtime_no_response",
-            "the task was delivered but the response carried no agent state baseline; re-resolve \
-             the target with `pebrel agent list` before waiting",
-        )
-        .into());
-    };
+    let baseline = require_submission_baseline(dispatched_state_change_seq(&response, None, None))?;
     // `agent.wait` 要求显式代际——这是"别把另一个会话的静默当成这次任务完成"的
     // 那道锁。派发成功的响应正常都带它；真取不到时明确报错，而不是送一个 `null`
     // 让服务端回一句不知所云的 `invalid_params`。
@@ -681,6 +669,7 @@ fn agent_delegate(options: AgentDelegateOptions) -> Result<(), Box<dyn Error>> {
 
 fn agent_paste(options: AgentPasteOptions) -> Result<(), Box<dyn Error>> {
     let timeout = validated_timeout(options.timeout_ms)?;
+    let wait_timeout = submission_wait_timeout(options.wait, options.wait_timeout_ms, timeout)?;
     let text = read_paste_source(options.source)?;
     let response = request_once(
         "agent.paste",
@@ -695,15 +684,7 @@ fn agent_paste(options: AgentPasteOptions) -> Result<(), Box<dyn Error>> {
     if !response.ok || !options.wait {
         return print_response(&response, options.output.pretty);
     }
-    let wait_timeout = validated_timeout(options.wait_timeout_ms)?;
-    let Some(baseline) = dispatched_state_change_seq(&response, None, None) else {
-        return Err(CliError::new(
-            "runtime_no_response",
-            "the paste was delivered but the response carried no agent state baseline; \
-             re-resolve the target with `pebrel agent list` before waiting",
-        )
-        .into());
-    };
+    let baseline = require_submission_baseline(dispatched_state_change_seq(&response, None, None))?;
     let Some(generation) = options.generation.or_else(|| dispatched_generation(&response)) else {
         return Err(CliError::new(
             "runtime_no_response",
@@ -872,6 +853,16 @@ fn dispatched_generation(response: &ApiResponse) -> Option<u64> {
     result.get("action").unwrap_or(result).get("agent")?.get("generation")?.as_u64()
 }
 
+/// Validate before writing input (and before reading a potentially blocking stdin
+/// paste). An invalid wait option must not leave a submitted task behind.
+fn submission_wait_timeout(
+    wait: bool,
+    timeout_ms: u64,
+    request_timeout: Duration,
+) -> Result<Duration, Box<dyn Error>> {
+    if wait { validated_timeout(timeout_ms) } else { Ok(request_timeout) }
+}
+
 fn validated_timeout(timeout_ms: u64) -> Result<Duration, Box<dyn Error>> {
     if timeout_ms == 0 || Duration::from_millis(timeout_ms) > MAX_WAIT {
         return Err(CliError::new(
@@ -947,6 +938,37 @@ mod tests {
         assert!(validated_timeout(0).is_err());
         assert!(validated_timeout(MAX_WAIT.as_millis() as u64 + 1).is_err());
         assert!(validated_timeout(1).is_ok());
+    }
+
+    #[test]
+    fn runtime_submission_rejects_invalid_wait_before_opening_paste_source() {
+        use clap::Parser as _;
+        for resource in ["pane", "agent"] {
+            let options = crate::cli::Options::try_parse_from([
+                "pebrel",
+                resource,
+                "paste",
+                "17",
+                "--from-file",
+                "pebrel-test-missing-paste-file",
+                "--wait",
+                "--wait-timeout-ms",
+                "0",
+            ])
+            .unwrap();
+            let error = match options.subcommands.unwrap() {
+                crate::cli::Subcommands::Pane(options) => match options.command {
+                    PaneCommand::Paste(options) => pane_paste(options).unwrap_err(),
+                    _ => panic!("expected pane paste"),
+                },
+                crate::cli::Subcommands::Agent(options) => match options.command {
+                    AgentCommand::Paste(options) => agent_paste(options).unwrap_err(),
+                    _ => panic!("expected agent paste"),
+                },
+                _ => panic!("expected resource command"),
+            };
+            assert_eq!(error.downcast_ref::<CliError>().unwrap().code(), "invalid_params");
+        }
     }
 
     #[test]

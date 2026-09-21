@@ -13,7 +13,11 @@
 mod bridges;
 mod event;
 pub(crate) mod installation;
+// Native discovery/configuration keeps the existing private installer boundary.
+#[path = "platform/agent_integrations.rs"]
+pub(crate) mod integrations;
 pub(crate) mod lifecycle;
+mod native_events;
 mod ordering;
 mod payload;
 mod protocol;
@@ -48,10 +52,51 @@ pub const LEGACY_PANE_ENV: &str = "NEBULA_PANE_ID";
 pub const HOOK_EXE_ENV: &str = "PEBREL_HOOK_EXE";
 pub const LEGACY_HOOK_EXE_ENV: &str = "NEBULA_HOOK_EXE";
 
-/// Marker locating our entries inside `settings.json` — matches on the
-/// helper's name so entries survive Nebula moving to a new absolute path.
+/// 仅用于阻止未知 notify 包装器再次套娃；子串不能作为修改/删除的归属依据。
 fn contains_helper(value: &str) -> bool {
     value.contains("pebrel-hook") || value.contains("nebula-hook")
+}
+
+fn is_helper_executable(value: &str) -> bool {
+    let filename = value.rsplit(['/', '\\']).next().unwrap_or_default();
+    let absolute = value.starts_with('/')
+        || value.starts_with("\\\\")
+        || (value.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && value.as_bytes().get(1) == Some(&b':')
+            && matches!(value.as_bytes().get(2), Some(b'/' | b'\\')));
+    (value == filename || absolute)
+        && !value.contains(['"', '\r', '\n', '\0'])
+        && ["pebrel-hook.exe", "nebula-hook.exe", "pebrel-hook", "nebula-hook"]
+            .iter()
+            .any(|name| filename.eq_ignore_ascii_case(name))
+}
+
+/// 只接受历史安装器产生的单条调用；echo、管道和追加命令仍属于用户。
+fn is_helper_shell_command(command: &str, source: &str) -> bool {
+    let Some(path) = command.trim().strip_suffix(source).and_then(|s| s.strip_suffix(' ')) else {
+        return false;
+    };
+    let path = path.trim_end();
+    let executable = if let Some(quoted) = path.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+    {
+        if quoted.contains('"') {
+            return false;
+        }
+        quoted
+    } else if let Some(quoted) = path.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        if quoted.contains('\'') {
+            return false;
+        }
+        quoted
+    } else {
+        if path.chars().any(char::is_whitespace)
+            || path.contains(['"', '\'', ';', '&', '|', '<', '>'])
+        {
+            return false;
+        }
+        path
+    };
+    is_helper_executable(executable)
 }
 
 /// The hook entry's argv tail. `claude` is the source discriminator

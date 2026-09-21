@@ -14,7 +14,7 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, Result, SharedString};
 
-/// 编译期嵌入。就这么几个、每个不到 1KB，用不着 rust-embed 那一套。
+/// 小型 SVG 编译期嵌入，不引入额外资源加载依赖。
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
         &[$((
@@ -37,6 +37,8 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "vcs-changes",
     "vcs-history",
     "vcs-conflict",
+    "agent-cursor",
+    "agent-copilot",
 ];
 
 /// 先查本仓库，未命中再交给组件库。
@@ -64,6 +66,8 @@ impl AssetSource for NebulaAssets {
 
 /// 自带图标的路径。走路径而不是 `IconName`：扩展那个枚举等于改 fork。
 pub mod nav {
+    pub const AGENT_CURSOR: &str = "icons/nebula-agent-cursor.svg";
+    pub const AGENT_COPILOT: &str = "icons/nebula-agent-copilot.svg";
     pub const LAYOUT_GRID: &str = "icons/nebula-layout-grid.svg";
     pub const MOUSE_POINTER: &str = "icons/nebula-mouse-pointer.svg";
     pub const SLIDERS: &str = "icons/nebula-sliders.svg";

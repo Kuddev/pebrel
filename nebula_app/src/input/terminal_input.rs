@@ -307,6 +307,28 @@ pub(crate) fn build_runtime_text_sequence(text: &str, _mode: TermMode) -> Vec<u8
     text.as_bytes().to_vec()
 }
 
+/// Codex flushes its buffered paste on a non-character key before handling that
+/// key. Put Right before Enter in the same ordered PTY write, so even ConPTY's
+/// native reader cannot reinterpret Enter as another line of a paste burst.
+/// A repaint or a fixed delay is not evidence that the input burst has ended.
+/// Call only for an identified Codex submission; shell input keeps its own path.
+pub(crate) fn build_runtime_codex_submission(text: &str, mode: TermMode) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if !text.is_empty() {
+        if mode.contains(TermMode::BRACKETED_PASTE) {
+            bytes.extend_from_slice(b"\x1b[200~");
+            let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+            bytes.extend_from_slice(normalized.replace("\x1b[201~", "").as_bytes());
+            bytes.extend_from_slice(b"\x1b[201~");
+        } else {
+            bytes.extend_from_slice(text.as_bytes());
+        }
+        bytes.extend(build_runtime_sequence(RuntimeKey::Right, Default::default(), 1, mode));
+    }
+    bytes.extend(build_runtime_sequence(RuntimeKey::Enter, Default::default(), 1, mode));
+    bytes
+}
+
 fn runtime_modifiers(modifiers: RuntimeKeyModifiers) -> ModifiersState {
     let mut state = ModifiersState::empty();
     state.set(ModifiersState::SHIFT, modifiers.shift);
@@ -1194,6 +1216,45 @@ mod vt_tests {
         assert!(records[0].starts_with("\x1b[27;"));
         assert!(records[0].contains(";27;1;0;1_"));
         assert!(records[1].contains(";27;0;0;1_"));
+    }
+
+    #[test]
+    fn runtime_submission_codex_flushes_burst_before_enter() {
+        assert_eq!(
+            build_runtime_codex_submission("继续", TermMode::empty()),
+            "继续\x1b[C\r".as_bytes()
+        );
+        assert_eq!(build_runtime_codex_submission("", TermMode::empty()), b"\r");
+        assert_eq!(
+            build_runtime_codex_submission("first\nsecond", TermMode::BRACKETED_PASTE),
+            b"\x1b[200~first\rsecond\x1b[201~\x1b[C\r",
+        );
+        assert_eq!(
+            build_runtime_codex_submission("prompt", TermMode::APP_CURSOR),
+            b"prompt\x1bOC\r",
+        );
+    }
+
+    #[test]
+    fn runtime_submission_codex_large_paste_has_one_boundary_and_one_submit() {
+        let text = "中文\n".repeat(4096);
+        let bytes = build_runtime_codex_submission(&text, TermMode::BRACKETED_PASTE);
+        assert!(bytes.starts_with(b"\x1b[200~"));
+        assert!(bytes.ends_with(b"\x1b[201~\x1b[C\r"));
+        assert_eq!(bytes.windows(6).filter(|part| *part == b"\x1b[201~").count(), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn runtime_submission_codex_native_keys_flush_before_pressing_enter() {
+        let bytes = build_runtime_codex_submission("继续", TermMode::WIN32_INPUT_MODE);
+        let sequence = String::from_utf8(bytes).unwrap();
+        let records: Vec<_> = sequence.strip_prefix("继续").unwrap().split_inclusive('_').collect();
+        assert_eq!(records.len(), 4, "Right press/release then Enter press/release");
+        assert!(records[0].starts_with("\x1b[39;"));
+        assert!(records[1].starts_with("\x1b[39;"));
+        assert!(records[2].starts_with("\x1b[13;"));
+        assert!(records[3].starts_with("\x1b[13;"));
     }
 
     #[cfg(target_os = "windows")]

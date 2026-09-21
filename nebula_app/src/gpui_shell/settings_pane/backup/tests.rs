@@ -31,6 +31,10 @@ fn pairing_design_backup_groups_scope_and_save_feedback_with_storage(
         });
         let card = cx.debug_bounds("cloud-storage-card").expect("storage configuration");
         assert!(card.right() <= px(width));
+        assert!(card.size.width <= px(720.0));
+        let provider = cx.debug_bounds("cloud-provider").expect("bounded provider dropdown");
+        assert!(provider.size.width <= px(220.0));
+        assert!(provider.left() >= card.left() && provider.right() <= card.right());
         for selector in ["cloud-scope-toggle", "cloud-save-status"] {
             let control = cx.debug_bounds(selector).expect("in-card control");
             assert!(control.origin.x >= card.origin.x && control.right() <= card.right());

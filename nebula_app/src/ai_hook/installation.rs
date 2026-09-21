@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use super::CodexHookMode;
 
 mod notify;
-pub(crate) use notify::desired_codex_notify;
+pub(crate) use notify::{desired_codex_notify, has_codex_notify, stripped_codex_notify};
 
 pub(crate) const CODEX_TURN_EVENTS: &[&str] = &["SessionStart", "UserPromptSubmit", "Stop"];
 pub(crate) const CODEX_FULL_EVENTS: &[&str] = &[

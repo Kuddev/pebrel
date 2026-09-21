@@ -526,14 +526,15 @@ fn dock_tree_places_the_source_tree_on_the_nav_side() {
 }
 
 #[test]
-fn cwd_palette_actions_are_available_only_for_local_terminal_tabs() {
+fn copying_cwd_accepts_reported_guest_paths_without_host_filesystem_access() {
     use crate::display::command_palette::PaletteAction;
 
-    assert!(!NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, false,));
-    assert!(!NebulaWorkspace::palette_action_available(&PaletteAction::RevealCwd, false,));
-    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, true,));
-    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::RevealCwd, true,));
-    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::NewTab, false));
+    assert!(!NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, false, false));
+    assert!(!NebulaWorkspace::palette_action_available(&PaletteAction::RevealCwd, false, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, false, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::CopyCwd, true, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::RevealCwd, true, true));
+    assert!(NebulaWorkspace::palette_action_available(&PaletteAction::NewTab, false, false));
 }
 
 /// 新建终端弹窗：默认 shell 必须占首行，因为「开弹窗 → 回车」是旧壳

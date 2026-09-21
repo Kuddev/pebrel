@@ -1,6 +1,6 @@
 //! Codex legacy notify installation, chaining and reversible removal.
-use super::{announce, contains_helper, helper_path, write_atomic};
-use crate::ai_hook::installation::desired_codex_notify;
+use super::{announce, helper_path, write_atomic};
+use crate::ai_hook::installation::{desired_codex_notify, stripped_codex_notify};
 use std::path::PathBuf;
 
 // ─── codex notify (config.toml) ─────────────────────────────────────────
@@ -93,22 +93,15 @@ pub(super) fn remove_codex_notify() -> std::io::Result<bool> {
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|i| i.as_str().map(str::to_owned)).collect())
         .unwrap_or_default();
-    if !current.first().is_some_and(|f| contains_helper(f)) {
-        return Ok(false); // not ours
-    }
-    match current.iter().position(|a| a == "--chain") {
-        // Restore the original argv that lived behind --chain.
-        Some(chain) => {
-            let mut array = toml_edit::Array::new();
-            for arg in &current[chain + 1..] {
-                array.push(arg.as_str());
-            }
-            doc["notify"] = toml_edit::value(array);
-        },
-        // We created the key; remove it outright.
-        None => {
-            doc.as_table_mut().remove("notify");
-        },
+    let Some(restored) = stripped_codex_notify(&current) else { return Ok(false) };
+    if restored.is_empty() {
+        doc.as_table_mut().remove("notify");
+    } else {
+        let mut array = toml_edit::Array::new();
+        for arg in &restored {
+            array.push(arg.as_str());
+        }
+        doc["notify"] = toml_edit::value(array);
     }
     write_atomic(&path, &doc.to_string())?;
     Ok(true)
@@ -116,7 +109,7 @@ pub(super) fn remove_codex_notify() -> std::io::Result<bool> {
 
 #[cfg(test)]
 mod codex_notify_tests {
-    use super::desired_codex_notify;
+    use super::{desired_codex_notify, stripped_codex_notify};
 
     const HELPER: &str = "C:/Program Files/Pebrel/runtime/pebrel-hook.exe";
 
@@ -157,6 +150,33 @@ mod codex_notify_tests {
     fn an_up_to_date_wiring_is_left_alone() {
         let current = argv(&[HELPER, "codex"]);
         assert_eq!(desired_codex_notify(&current, HELPER), None);
+    }
+
+    #[test]
+    fn removal_restores_direct_and_nested_notifiers_without_claiming_similar_names() {
+        let original = argv(&["C:/user/notifier.exe", "turn-ended", "路径 with spaces"]);
+        let installed = desired_codex_notify(&original, HELPER).unwrap();
+        assert_eq!(stripped_codex_notify(&installed), Some(original.clone()));
+        assert_eq!(stripped_codex_notify(&argv(&[HELPER, "codex"])), Some(vec![]));
+        let nested = argv(&[
+            "C:/wrapper/notifier.exe",
+            "--previous-notify",
+            &serde_json::to_string(&installed).unwrap(),
+            "keep",
+        ]);
+        let removed = stripped_codex_notify(&nested).unwrap();
+        assert_eq!(removed[0..2], nested[0..2]);
+        assert_eq!(removed[3], "keep");
+        assert_eq!(serde_json::from_str::<Vec<String>>(&removed[2]).unwrap(), original);
+        assert!(stripped_codex_notify(&removed).is_none());
+        for foreign in [
+            argv(&["C:/pebrel-hook-logger.exe", "codex"]),
+            argv(&["echo", "pebrel-hook.exe"]),
+            argv(&[HELPER, "custom"]),
+            argv(&["foreign.exe", "--notify", "encoded:nebula-hook.exe:payload"]),
+        ] {
+            assert!(stripped_codex_notify(&foreign).is_none());
+        }
     }
 
     // #38 的核心形态：codex-computer-use 重新注册时把我们的 chain JSON

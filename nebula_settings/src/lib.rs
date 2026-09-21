@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 
+mod agent_hooks;
+pub use agent_hooks::AgentHook;
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
 mod custom_theme;
@@ -55,9 +57,16 @@ pub struct RawSettings {
 
 impl RawSettings {
     pub fn load() -> Self {
-        std::fs::read_to_string(settings_path())
-            .map(|text| Self::from_text(&text))
-            .unwrap_or_default()
+        Self::try_load().unwrap_or_default()
+    }
+
+    /// 安装/卸载等授权路径不能把读取失败当成默认开启。
+    pub fn try_load() -> std::io::Result<Self> {
+        match std::fs::read_to_string(settings_path()) {
+            Ok(text) => Ok(Self::from_text(&text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn from_text(text: &str) -> Self {
@@ -96,7 +105,11 @@ impl RawSettings {
 /// 写并存时后写者胜——与旧壳多窗口的既有语义一致。
 pub fn persist_keys(updates: &[(&str, String)]) -> std::io::Result<()> {
     let path = settings_path();
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
     let updated = apply_updates(&text, updates);
     std::fs::create_dir_all(settings_dir())?;
     std::fs::write(&path, updated)

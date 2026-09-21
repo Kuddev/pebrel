@@ -1,5 +1,5 @@
 //! Legacy notify composition shared by Windows and SSH installers.
-use crate::ai_hook::contains_helper;
+use crate::ai_hook::{contains_helper, is_helper_executable};
 
 /// notify 序列化后的字节预算。正常接线只有几百字节；超过它的唯一已知
 /// 途径是与其他 notify 包装器互相包装的指数膨胀（#38，最终 130 MB 撑爆
@@ -17,7 +17,7 @@ const NOTIFY_BYTE_BUDGET: usize = 8 * 1024;
 pub(crate) fn desired_codex_notify(current: &[String], helper: &str) -> Option<Vec<String>> {
     let desired: Vec<String> = match current.first() {
         // Already ours: heal the helper path, keep any chain tail as-is.
-        Some(first) if contains_helper(first) => {
+        Some(_) if owns_notify(current) => {
             let mut argv = current.to_vec();
             argv[0] = helper.to_owned();
             argv
@@ -59,11 +59,9 @@ fn heal_nested_codex_notify(argv: &mut [String], helper: &str, depth: usize) -> 
         return false;
     }
     let mut changed = false;
-    if let Some(first) = argv.first_mut().filter(|first| contains_helper(first)) {
-        if first != helper {
-            *first = helper.to_owned();
-            changed = true;
-        }
+    if owns_notify(argv) && argv[0] != helper {
+        argv[0] = helper.to_owned();
+        changed = true;
     }
     for index in 1..argv.len() {
         if argv[index - 1] != "--previous-notify" {
@@ -77,6 +75,51 @@ fn heal_nested_codex_notify(argv: &mut [String], helper: &str, depth: usize) -> 
                 argv[index] = serialized;
                 changed = true;
             }
+        }
+    }
+    changed
+}
+
+fn owns_notify(argv: &[String]) -> bool {
+    argv.first().is_some_and(|value| is_helper_executable(value))
+        && argv.get(1).is_some_and(|source| source == "codex")
+        && (argv.len() == 2 || (argv.len() > 3 && argv[2] == "--chain"))
+}
+
+/// 只解析已支持的 argv/JSON 包装，不用名字片段把用户文案当成已安装 Hook。
+pub(crate) fn has_codex_notify(argv: &[String]) -> bool {
+    stripped_codex_notify(argv).is_some()
+}
+
+/// 返回移除自身后的原 notifier；空数组表示可以删除 notify 键。
+pub(crate) fn stripped_codex_notify(argv: &[String]) -> Option<Vec<String>> {
+    let mut result = argv.to_vec();
+    strip_nested(&mut result, 0).then_some(result)
+}
+
+fn strip_nested(argv: &mut Vec<String>, depth: usize) -> bool {
+    if depth >= 8 || argv.iter().map(String::len).sum::<usize>() > NOTIFY_BYTE_BUDGET {
+        return false;
+    }
+    let mut changed = false;
+    if owns_notify(argv) {
+        // 两层历史包装也逐层解开，但始终保留最初的程序与参数顺序。
+        *argv = if argv.len() > 3 { argv[3..].to_vec() } else { Vec::new() };
+        strip_nested(argv, depth + 1);
+        changed = true;
+    }
+    for index in 1..argv.len() {
+        if argv[index - 1] != "--previous-notify" {
+            continue;
+        }
+        let Ok(mut previous) = serde_json::from_str::<Vec<String>>(&argv[index]) else {
+            continue;
+        };
+        if strip_nested(&mut previous, depth + 1)
+            && let Ok(serialized) = serde_json::to_string(&previous)
+        {
+            argv[index] = serialized;
+            changed = true;
         }
     }
     changed
