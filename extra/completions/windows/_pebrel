@@ -1129,7 +1129,9 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (setup-ai)
 _arguments "${_arguments_options[@]}" : \
-'--ssh=[Install or remove hooks on an SSH host (alias or user@host)]:DESTINATION:_default' \
+'(--wsl)--ssh=[Install or remove hooks on an SSH host (alias or user@host)]:DESTINATION:_default' \
+'--wsl=[Install or remove hooks in a WSL distribution'\''s own user configuration]:DISTRIBUTION:_default' \
+'--wsl-user=[WSL user; defaults to that distribution'\''s configured user]:USER:_default' \
 '--remove[Remove Pebrel'\''s hooks from claude'\''s settings.json instead of installing them]' \
 '-h[Print help]' \
 '--help[Print help]' \
