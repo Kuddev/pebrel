@@ -56,6 +56,11 @@ fn picker_trigger_popup_search_and_rows_keep_html_geometry(cx: &mut TestAppConte
         let _ = window.draw(cx);
     });
     assert!(cx.debug_bounds("markdown-language-popup").is_some());
+    let popup = cx.debug_bounds("markdown-language-popup").unwrap();
+    assert!(
+        popup.top() >= trigger.bottom(),
+        "the popup opens below its trigger when space permits"
+    );
     assert!(cx.debug_bounds("markdown-language-search").unwrap().size.height >= px(32.0));
     cx.simulate_input("rust");
     cx.run_until_parked();
@@ -63,6 +68,59 @@ fn picker_trigger_popup_search_and_rows_keep_html_geometry(cx: &mut TestAppConte
         let _ = window.draw(cx);
     });
     assert!(cx.debug_bounds("markdown-language-option-rust").is_some());
+}
+
+#[gpui::test]
+fn language_picker_fits_a_resized_window_and_keeps_search_usable(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("picker-edges.md");
+    std::fs::write(&path, "```text\nlet x = 42;\n```\n").unwrap();
+    let (file, mut cx) = open(path, cx);
+    cx.update(|_, cx| {
+        file.update(cx, |view, cx| {
+            view.show_details = false;
+            cx.notify();
+        })
+    });
+    cx.simulate_resize(gpui::size(px(420.0), px(320.0)));
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let trigger = cx.debug_bounds("markdown-language-picker").unwrap();
+    cx.simulate_click(trigger.center(), Modifiers::default());
+    cx.run_until_parked();
+
+    for (width, height) in [(420.0, 320.0), (320.0, 220.0)] {
+        cx.simulate_resize(gpui::size(px(width), px(height)));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+        let popup = cx.debug_bounds("markdown-language-popup").expect("open popup survives resize");
+        assert!(popup.left() >= px(8.0) && popup.right() <= px(width - 8.0), "{popup:?}");
+        assert!(popup.top() >= px(8.0) && popup.bottom() <= px(height - 8.0), "{popup:?}");
+        let search = cx.debug_bounds("markdown-language-search").unwrap();
+        assert!(
+            search.top() >= popup.top() && search.bottom() <= popup.bottom(),
+            "{search:?} outside {popup:?}"
+        );
+    }
+
+    cx.simulate_input("rust");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let option = cx.debug_bounds("markdown-language-option-rust").unwrap();
+    let popup = cx.debug_bounds("markdown-language-popup").unwrap();
+    assert!(option.top() >= popup.top() && option.bottom() <= popup.bottom());
+    cx.simulate_click(option.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert!(file.read_with(&cx, |view, cx| view.draft(cx).starts_with("```rust\n")));
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("markdown-language-popup").is_none());
 }
 
 #[gpui::test]

@@ -306,25 +306,34 @@ fn render_language_picker(
     if !open {
         return picker;
     }
+    let viewport = window.viewport_size();
+    let popup_width = px(224.0).min((viewport.width - px(16.0)).max(px(1.0)));
+    let popup_height = px(280.0).min((viewport.height - px(16.0)).max(px(1.0)));
+    // List 的 max_h 只约束结果列表，搜索框和外层边距需要单独留出空间。
+    let rows_height = (popup_height - px(48.0)).max(px(0.0));
     picker.child(
         deferred(
-            anchored().snap_to_window_with_margin(px(8.0)).child(
-                div()
-                    .id("markdown-language-popup")
-                    .debug_selector(|| "markdown-language-popup".to_owned())
-                    .occlude()
-                    .w(px(224.0))
-                    .max_h(px(280.0))
-                    .bg(colors.popup)
-                    .text_color(colors.ink)
-                    .border_1()
-                    .border_color(colors.line)
-                    .rounded(px(6.0))
-                    .shadow_lg()
-                    .p(px(6.0))
-                    .child(
-                        div().debug_selector(|| "markdown-language-search".to_owned()).child(
-                            List::new(&list)
+            anchored()
+                .offset(gpui::point(px(0.0), px(28.0)))
+                .snap_to_window_with_margin(px(8.0))
+                .child(
+                    div()
+                        .id("markdown-language-popup")
+                        .debug_selector(|| "markdown-language-popup".to_owned())
+                        .occlude()
+                        .w(popup_width)
+                        .max_h(popup_height)
+                        .overflow_hidden()
+                        .bg(colors.popup)
+                        .text_color(colors.ink)
+                        .border_1()
+                        .border_color(colors.line)
+                        .rounded(px(6.0))
+                        .shadow_lg()
+                        .p(px(6.0))
+                        .child(
+                            div().debug_selector(|| "markdown-language-search".to_owned()).child(
+                                List::new(&list)
                                     // Small also shrinks the query field. The
                                     // approved prototype gives the search
                                     // field and every menu row independent
@@ -332,14 +341,14 @@ fn render_language_picker(
                                     .with_size(Size::Medium)
                                     .search_placeholder(search_placeholder)
                                     .scrollbar_visible(false)
-                                    .max_h(px(264.0))
+                                    .max_h(rows_height)
                                     .text_color(colors.ink),
+                            ),
+                        )
+                        .on_mouse_down_out(
+                            window.listener_for(&state, CodeLanguage::close_from_outside),
                         ),
-                    )
-                    .on_mouse_down_out(
-                        window.listener_for(&state, CodeLanguage::close_from_outside),
-                    ),
-            ),
+                ),
         )
         .with_priority(1),
     )

@@ -210,6 +210,7 @@ fn block_frame(index: usize, heading: Option<u8>) -> gpui::Stateful<gpui::Div> {
         .max_w(px(reader_presentation::PAGE_WIDTH))
         .mx_auto()
         .min_w_0()
+        .min_h(px(32.0))
         .pt(px(if index > 0 && heading.is_some() { 20.0 } else { 4.0 }))
         .pb(px(10.0))
         .debug_selector(move || format!("markdown-preview-block-{index}"))
@@ -274,7 +275,7 @@ impl TextFileView {
         if epoch != self.preview_selection_scroll_epoch || !self.preview_selection_scroll_active {
             return None;
         }
-        let bounds = *self.preview_bounds.borrow();
+        let bounds = self.scroll.viewport_bounds();
         let Some(delta) = selection_scroll_delta(
             window.has_text_selection(cx),
             window.mouse_position().y,
@@ -300,9 +301,9 @@ impl TextFileView {
         let retained_blocks = self.blocks.clone();
         let inline_views = self.inline_views.clone();
         let owner = cx.entity().downgrade();
+        let selection_owner = owner.clone();
         let extensions = self.preview_extensions.clone();
         let scroll = self.scroll.clone();
-        let bounds = self.preview_bounds.clone();
         let live_mode = self.live_mode;
         let style = TextViewStyle {
             image_base: self.path.parent().map(Arc::from),
@@ -337,23 +338,10 @@ impl TextFileView {
             .px(px(reader_presentation::PAGE_MARGIN))
             .pt(px(reader_presentation::TOP_MARGIN))
             .debug_selector(|| "markdown-preview-viewport".to_owned())
-            .on_prepaint(move |viewport, _, _| *bounds.borrow_mut() = viewport)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.start_preview_selection_scroll(window, cx);
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.stop_preview_selection_scroll();
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.stop_preview_selection_scroll();
                 }),
             )
             .on_mouse_down(
@@ -416,7 +404,6 @@ impl TextFileView {
                     let edit_owner = owner.clone();
                     let link_owner = owner.clone();
                     block_frame(index, heading)
-                        .min_h(px(32.0))
                         .when(live_mode, |block| {
                             block.cursor_text().on_click(move |event, window, cx| {
                                 let _ = edit_owner.update(cx, |file, cx| {
@@ -474,7 +461,23 @@ impl TextFileView {
                             }
                         }
                     },
-                    |_, _, _, _| {},
+                    move |_, _, window, _| {
+                        let owner = selection_owner.clone();
+                        window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                            if phase.capture() && event.pressed_button != Some(MouseButton::Left) {
+                                let _ = owner
+                                    .update(cx, |view, _| view.stop_preview_selection_scroll());
+                            }
+                        });
+                        let owner = selection_owner.clone();
+                        window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                            // A child can consume release, and the pointer can leave the reader.
+                            if phase.capture() && event.button == MouseButton::Left {
+                                let _ = owner
+                                    .update(cx, |view, _| view.stop_preview_selection_scroll());
+                            }
+                        });
+                    },
                 )
                 .absolute()
                 .inset_0(),

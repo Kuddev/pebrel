@@ -19,9 +19,16 @@ pub(super) struct LiveEdit {
     pub(super) last_selection: Range<usize>,
     changed: bool,
     heading: Option<u8>,
+    pending_click: Option<PendingClick>,
     pub(super) decorations: TextDecorationCollection,
     _subscription: Subscription,
     _observation: Subscription,
+}
+
+struct PendingClick {
+    position: Point<Pixels>,
+    text: SharedString,
+    selection: Range<usize>,
 }
 
 pub(super) fn decorations(projection: &Projection, cx: &App) -> Vec<TextDecoration> {
@@ -200,6 +207,11 @@ impl TextFileView {
             kind,
             changed: false,
             heading,
+            pending_click: click.map(|click| PendingClick {
+                position: click.position(),
+                text: input.read(cx).value(),
+                selection: input.read(cx).selected_range(),
+            }),
             decorations: collection,
             _subscription: subscription,
             _observation: observation,
@@ -208,58 +220,36 @@ impl TextFileView {
         self.stop_preview_selection_scroll();
         self.invalidate_live_block(block);
         input.update(cx, |input, cx| input.focus(window, cx));
-        if let Some(click) = click {
-            let head = click.position();
-            let anchor = match click {
-                gpui::ClickEvent::Mouse(click) => click.down.position,
-                _ => head,
-            };
-            // Use the native input's actual wrapped glyph geometry after layout,
-            // including proportional fonts and CJK, instead of guessing columns.
-            let initial_text = input.read(cx).value();
-            let initial_selection = input.read(cx).selected_range();
-            cx.on_next_frame(window, move |view, window, cx| {
-                if !view.live_edit.as_ref().is_some_and(|edit| edit.input == input) {
-                    return;
-                }
-                input.update(cx, |input, cx| {
-                    // Input arriving before layout owns the caret, especially
-                    // an IME composition or a subsequent keyboard selection.
-                    if input.value() != initial_text
-                        || input.selected_range() != initial_selection
-                        || input.marked_text_range(window, cx).is_some()
-                        || !input.focus_handle(cx).is_focused(window)
-                    {
-                        return;
-                    }
-                    let text = input.value();
-                    let closest = |point: Point<Pixels>| {
-                        text.char_indices()
-                            .map(|(offset, _)| offset)
-                            .chain([text.len()])
-                            .filter_map(|offset| {
-                                let bounds = input.range_to_bounds(&(offset..offset))?;
-                                let dy = if point.y < bounds.top() {
-                                    bounds.top() - point.y
-                                } else if point.y > bounds.bottom() {
-                                    point.y - bounds.bottom()
-                                } else {
-                                    px(0.0)
-                                };
-                                let dx = f32::from(bounds.left() - point.x).abs();
-                                Some((offset, f32::from(dy) * 10000.0 + dx))
-                            })
-                            .min_by(|a, b| a.1.total_cmp(&b.1))
-                            .map(|(offset, _)| offset)
-                            .unwrap_or(0)
-                    };
-                    let start = closest(anchor);
-                    let end = closest(head);
-                    input.set_selected_range(start.min(end)..start.max(end), cx);
-                })
-            });
-        }
         cx.notify();
+    }
+
+    fn finish_live_click(
+        &mut self,
+        input: &Entity<InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(edit) = self.live_edit.as_mut().filter(|edit| edit.input == *input) else {
+            return;
+        };
+        let Some(click) = edit.pending_click.take() else { return };
+        let consumed = input.update(cx, |input, cx| {
+            // 布局前到达的输入、选区或 IME 拥有光标，延后的首次点击不能覆盖它们。
+            if edit.changed
+                || input.text().slice(..) != click.text.as_ref()
+                || input.selected_range() != click.selection
+                || input.marked_text_range(window, cx).is_some()
+                || !input.focus_handle(cx).is_focused(window)
+            {
+                return true;
+            }
+            let Some(offset) = input.offset_for_point(click.position) else { return false };
+            input.set_selected_range(offset..offset, cx);
+            true
+        });
+        if !consumed {
+            edit.pending_click = Some(click);
+        }
     }
 
     pub(super) fn update_live_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -396,6 +386,7 @@ impl TextFileView {
             .relative()
             .w_full()
             .min_w_0()
+            .when(edit.heading.is_some() && edit.part.is_none(), |block| block.pb(gpui::rems(0.3)))
             .child(
                 Input::new(&edit.input)
                     .appearance(false)
@@ -408,7 +399,9 @@ impl TextFileView {
                     .font_family(cx.theme().font_family.clone())
                     .text_size(px(reader_presentation::heading_size(edit.heading)))
                     .line_height(gpui::relative(reader_presentation::LINE_HEIGHT))
-                    .when(edit.heading.is_some(), |input| input.font_semibold())
+                    .when(edit.heading.is_some(), |input| {
+                        input.font_weight(reader_presentation::heading_weight(edit.heading))
+                    })
                     .when(code || math, |input| {
                         input
                             .font_family(cx.theme().mono_font_family.clone())
@@ -464,6 +457,25 @@ impl TextFileView {
                     )
                 },
             )
+            .when(edit.pending_click.is_some(), |block| {
+                let owner = cx.weak_entity();
+                let input = edit.input.clone();
+                block.child(
+                    gpui::canvas(
+                        |_, _, _| (),
+                        move |_, _, window, cx| {
+                            // Input 在 paint 阶段保存字形位置；下一帧回调早于布局，不能用来交接点击。
+                            window.defer(cx, move |window, cx| {
+                                let _ = owner.update(cx, |view, cx| {
+                                    view.finish_live_click(&input, window, cx);
+                                });
+                            });
+                        },
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+            })
             .into_any_element()
     }
 }
