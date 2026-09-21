@@ -189,7 +189,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let grok_dir = dir.path().join(".grok/bin");
         let grok = executable(&grok_dir, "agent");
-        let cursor_dir = dir.path().join("cursor-agent/versions/current");
+        let cursor_dir = dir.path().join("installations/cursor-agent/versions/current");
         let cursor = executable(&cursor_dir, "agent");
         let dirs = vec![grok_dir, cursor_dir];
         assert_eq!(find_executable(AgentKind::Cursor, &dirs), Some(cursor));

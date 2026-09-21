@@ -70,7 +70,8 @@ fn file_path_edit_navigates_and_keeps_the_last_directory_on_error_or_escape(
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let path_button = cx.debug_bounds("file-tree-path").unwrap();
     cx.simulate_click(path_button.center(), Modifiers::default());
-    cx.simulate_keystrokes("ctrl-a");
+    let select_all = if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" };
+    cx.simulate_keystrokes(select_all);
     cx.simulate_input("中文 folder");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -103,7 +104,7 @@ fn file_path_edit_navigates_and_keeps_the_last_directory_on_error_or_escape(
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let path_button = cx.debug_bounds("file-tree-path").unwrap();
     cx.simulate_click(path_button.center(), Modifiers::default());
-    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_keystrokes(select_all);
     cx.simulate_input("missing-directory");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
