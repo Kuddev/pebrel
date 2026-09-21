@@ -13,6 +13,15 @@
     "en_us": "English"
   },
   "settings": {
+    "command_output": {
+      "save": "Remember recent command output",
+      "help": "With session restore enabled, keep up to five commands and their output per terminal on this device. Output may contain sensitive information; full-screen applications are not captured.",
+      "clear": "Clear saved command output",
+      "clear_help": "Remove saved output for all terminals on this device without clearing their screens. New commands are still saved while the option above is enabled.",
+      "clearing": "Clearing…",
+      "cleared": "Saved output cleared",
+      "clear_failed": "Clear failed — retry"
+    },
     "scrolling": {
       "history": "Scrollback lines",
       "history_description": "History lines retained per terminal. Applies to new terminals only.",

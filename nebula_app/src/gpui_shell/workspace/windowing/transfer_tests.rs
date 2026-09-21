@@ -2,7 +2,7 @@ use super::*;
 use crate::gpui_shell::terminal::view::TerminalLaunch;
 use gpui::TestAppContext;
 
-fn initialize_test(cx: &mut TestAppContext) {
+pub(super) fn initialize_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
         crate::gpui_shell::math_view::register(cx);
@@ -12,7 +12,7 @@ fn initialize_test(cx: &mut TestAppContext) {
     });
 }
 
-fn open_test_window(cx: &mut App, count: usize) -> (u64, Entity<NebulaWorkspace>) {
+pub(super) fn open_test_window(cx: &mut App, count: usize) -> (u64, Entity<NebulaWorkspace>) {
     let (id, workspace) =
         open_workspace_window(cx, WorkspaceStartup::Empty, None, None, false, WindowRole::Regular)
             .unwrap();

@@ -1662,15 +1662,6 @@ impl NebulaWorkspace {
         (0..self.tabs.len()).find_map(|tab_ix| self.busy_process_in_tab(tab_ix, None, cx))
     }
 
-    fn save_clean_window_session(&mut self, cx: &mut App) -> std::io::Result<()> {
-        windowing::save_current_window_session(
-            self.runtime_window_id,
-            self.snapshot_session(cx),
-            session_persistence::SaveReason::WindowClose,
-            cx,
-        )
-    }
-
     fn request_close_pane(
         &mut self,
         tab_ix: usize,
@@ -1871,14 +1862,17 @@ impl NebulaWorkspace {
             self.active -= 1;
         }
         self.active = self.active.min(self.tabs.len().saturating_sub(1));
-        if let Err(error) = windowing::save_current_window_session(
-            self.runtime_window_id,
-            self.snapshot_session(cx),
+        let save = windowing::output_persistence::save(
+            Some(self.snapshot_local_session(cx)),
             session_persistence::SaveReason::TabsClosed,
             cx,
-        ) {
-            log::warn!("Could not save closed tabs: {error}");
-        }
+        );
+        cx.spawn(async move |_, _| {
+            if !matches!(save.await, Ok(true)) {
+                log::warn!("Could not save closed tabs");
+            }
+        })
+        .detach();
         self.reveal_active_tab();
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);

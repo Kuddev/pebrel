@@ -48,6 +48,7 @@ const RESET_KEYS: &[&str] = &[
     "auto_download_updates",
     "keep_session",
     "restore_session",
+    "save_command_output",
     "resume_ai",
     "tray",
     "silent_start",

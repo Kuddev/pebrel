@@ -240,6 +240,12 @@ impl TerminalView {
             branch: String::new(),
             running_program: None,
             command_running: false,
+            recent_output: crate::recent_output::RecentOutput::default(),
+            recent_output_restore_closed: false,
+            restored_viewport_offset: None,
+            recent_output_enabled: cx
+                .try_global::<Settings>()
+                .is_none_or(|settings| settings.command_output_enabled),
             command_running_disproved: false,
             command_started: None,
             last_process_probe: None,

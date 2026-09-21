@@ -75,6 +75,7 @@ pub struct Settings {
     pub cursor_blink: Option<bool>,
     /// 选区完成即复制（旧壳 `copy_on_select` 设置）。
     pub copy_on_select: bool,
+    pub(crate) command_output_enabled: bool,
     pub scrollback_lines: usize,
     pub scroll_speed: f32,
     /// Pointer handlers and split rendering only read these cached preferences.
@@ -274,6 +275,7 @@ impl Settings {
             }),
             cursor_blink: runtime.cursor_blink,
             copy_on_select: runtime.copy_on_select,
+            command_output_enabled: runtime.command_output_enabled(),
             scrollback_lines: runtime.scrollback_lines,
             scroll_speed: runtime.scroll_speed,
             focus_follows_mouse: runtime

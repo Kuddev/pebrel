@@ -655,6 +655,7 @@ impl SettingsPane {
                     .placeholder(localized_input_placeholder("backup_password", language))
             }),
             backup_status: None,
+            command_output_clear: super::command_output::ClearState::Idle,
             backup_busy: false,
             backup_seq: 0,
             backup_remote: {

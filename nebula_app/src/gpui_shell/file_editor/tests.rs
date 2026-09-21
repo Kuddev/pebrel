@@ -2,6 +2,17 @@ use super::*;
 use gpui::{TestAppContext, VisualTestContext};
 use gpui_component::Root;
 
+pub(in crate::gpui_shell) fn replace_draft(
+    file: &Entity<TextFileView>,
+    text: &str,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) {
+    file.update(cx, |view, cx| {
+        view.input.update(cx, |input, cx| input.replace_all(text, window, cx));
+    });
+}
+
 pub(super) fn open(
     path: PathBuf,
     cx: &mut TestAppContext,
