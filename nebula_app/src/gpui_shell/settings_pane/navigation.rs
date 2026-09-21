@@ -9,7 +9,7 @@ pub(super) const BUG_REPORT_TEMPLATE: &str = "bug_report.yml";
 /// 左侧分区的稳定路由表。2026-08-28 产品裁定：默认 GPUI 导航收敛为常用项，
 /// 暂时隐藏“AI 供应商”；页面实现与索引继续保留。后续恢复入口时只改
 /// [`HIDDEN_NAV_SECTIONS`]，不得删除或重排这里的条目。
-pub(super) const SECTION_IDS: [&str; 10] = [
+pub(super) const SECTION_IDS: [&str; 11] = [
     "application",
     "appearance",
     "profiles",
@@ -20,12 +20,13 @@ pub(super) const SECTION_IDS: [&str; 10] = [
     "keymap",
     "advanced",
     "backup",
+    "agents",
 ];
 
 /// Bilingual search aliases for the stable section routes. Search is a route
 /// finder, so a query such as "font", "opacity", or "更新" lands on the
 /// section that owns the control instead of merely filtering the current page.
-pub(super) const SECTION_SEARCH_TERMS: [&str; 10] = [
+pub(super) const SECTION_SEARCH_TERMS: [&str; 11] = [
     "application app 应用 update 更新 version 版本 github support 支持",
     "appearance ligatures 连字 外观 theme 主题 custom 自定义 template 模板 import 导入 export 导出 font 字体 opacity 透明度 background 背景 cursor 光标 icon 图标 dim inactive panes 调暗非活动窗格 分屏变暗 scrollback scrolling speed history 回滚 滚动 速度 历史",
     "profiles 配置文件 shell terminal 终端 completion 补全 startup 启动 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 duration timeout persistent auto-dismiss 时长 秒 常驻 自动关闭",
@@ -36,6 +37,7 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 10] = [
     "keymap key binding shortcut quick terminal 快速终端 独立窗口 已有窗口 按键映射 快捷键",
     "advanced 高级 session 会话 tray 托盘 restore 恢复 startup autostart login silent 自启动 静默启动 开机 登录",
     "backup cloud sync 云备份 云同步 云存储 备份 export 导出 restore 恢复 webdav s3 sftp 坚果云 123 123云盘 nextcloud synology 群晖 nas r2 minio snapshots 快照",
+    "agents agent hook hooks 智能体 钩子 接入 claude codex opencode cursor kimi pi omp copilot grok",
 ];
 
 pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
@@ -43,7 +45,7 @@ pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
 /// 下标，不复制设置状态或路由。
 pub(super) const NAV_GROUPS: [(&str, &[usize]); 3] =
-    [("workspace", &[0, 1, 2, 6, 7]), ("connections", &[3, 4, 5]), ("system", &[8, 9])];
+    [("workspace", &[0, 1, 2, 10, 6, 7]), ("connections", &[3, 4, 5]), ("system", &[8, 9])];
 
 pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) -> &'static str {
     match SECTION_IDS.get(index).copied() {
@@ -57,6 +59,7 @@ pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) 
         Some("keymap") => language.tr("settings.sidebar.keymap"),
         Some("advanced") => language.tr("settings.sidebar.advanced"),
         Some("backup") => language.tr("settings.sidebar.backup"),
+        Some("agents") => language.text(crate::i18n::Message::SettingsSidebarAgents),
         _ => "",
     }
 }
@@ -108,14 +111,15 @@ pub(super) fn section_icon(index: usize) -> SharedString {
     match index {
         0 => crate::gpui_shell::assets::nav::LAYOUT_GRID.into(),
         1 => IconName::Palette.path(),
-        2 => IconName::Folder.path(),
+        2 => IconName::SquareTerminal.path(),
         3 => IconName::Bot.path(),
-        4 => IconName::SquareTerminal.path(),
+        4 => IconName::Network.path(),
         5 => IconName::Globe.path(),
         6 => crate::gpui_shell::assets::nav::MOUSE_POINTER.into(),
         7 => crate::gpui_shell::assets::nav::KEYMAP.into(),
         8 => crate::gpui_shell::assets::nav::SLIDERS.into(),
         9 => IconName::HardDrive.path(),
+        10 => IconName::Bot.path(),
         _ => IconName::Inbox.path(),
     }
 }

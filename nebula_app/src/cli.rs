@@ -913,8 +913,9 @@ impl ConfigLanguage {
 #[cfg(windows)]
 #[derive(Args, Debug)]
 pub struct SetupAiOptions {
-    /// Remove Pebrel's hooks from claude's settings.json instead of
-    /// installing them.
+    /// Remove Pebrel-managed hooks for every supported agent and preserve
+    /// other integrations. Without this flag, enable Claude Code and Codex
+    /// plus agents explicitly enabled in settings.
     #[clap(long)]
     pub remove: bool,
     /// Install or remove hooks on an SSH host (alias or user@host).

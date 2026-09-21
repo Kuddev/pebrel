@@ -130,6 +130,16 @@ mod tests {
     use crate::{RawSettings, RuntimeSettings};
 
     #[test]
+    fn reset_preserves_explicit_hook_authorization_and_opt_out() {
+        let text = "ai_hooks=0\nai_hooks_claude=0\nai_hooks_codex=1\nai_hooks_grok=1\n";
+        let restored = RawSettings::from_text(&default_settings_text(text));
+        let original = RawSettings::from_text(text);
+        for agent in crate::AgentHook::ALL {
+            assert_eq!(agent.enabled(&original), agent.enabled(&restored));
+        }
+    }
+
+    #[test]
     fn reset_restores_scrolling_defaults_and_preserves_unknown_keys() {
         let restored =
             default_settings_text("scrollback_lines=100000\nscroll_speed=4.00\ncustom=keep\n");

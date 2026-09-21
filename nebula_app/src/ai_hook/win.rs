@@ -4,14 +4,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
 
-use super::{CLAUDE_EVENTS, HELPER_ARGS, contains_helper};
+use super::{CLAUDE_EVENTS, HELPER_ARGS, is_helper_executable, is_helper_shell_command};
 
 mod codex_hooks;
 mod codex_notify;
 mod config_guard;
+mod cursor;
+mod extended;
 mod kimi;
 mod managed_files;
 mod runtime_skills;
+pub(super) mod settings;
 mod transport;
 use codex_hooks::{ensure_codex_hooks, remove_codex_hooks};
 use codex_notify::{codex_config_dir, ensure_codex_notify, remove_codex_notify};
@@ -83,6 +86,7 @@ pub fn ensure_claude_hooks() -> bool {
     let Some(command) = helper_command() else { return false };
 
     let path = dir.join("settings.json");
+    let Ok(Some(_lock)) = crate::atomic_file::try_lock(&path) else { return false };
     let mut root: Value = match std::fs::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str(&raw) {
             Ok(json) => json,
@@ -94,7 +98,11 @@ pub fn ensure_claude_hooks() -> bool {
                 return false;
             },
         },
-        Err(_) => json!({}),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => {
+            log::warn!("ai_hook: cannot read {} ({error}); left alone", path.display());
+            return false;
+        },
     };
 
     let Some(changed) = install_into(&mut root, &command) else {
@@ -144,8 +152,7 @@ fn install_into(root: &mut Value, command: &str) -> Option<bool> {
                 continue;
             };
             for cmd in cmds {
-                let ours = cmd.get("command").and_then(Value::as_str).is_some_and(contains_helper);
-                if !ours {
+                if !is_our_claude_hook(cmd) {
                     continue;
                 }
                 found = true;
@@ -178,16 +185,42 @@ fn install_into(root: &mut Value, command: &str) -> Option<bool> {
     Some(changed)
 }
 
+fn is_our_claude_hook(entry: &Value) -> bool {
+    if entry.get("type").is_some_and(|kind| kind != "command") {
+        return false;
+    }
+    let Some(command) = entry.get("command").and_then(Value::as_str) else { return false };
+    match entry.get("args") {
+        Some(args) => is_helper_executable(command) && args == &json!(HELPER_ARGS),
+        // 历史 shell 形式和曾缺少 args 的裸路径需要可修复、可卸载。
+        None => is_helper_executable(command) || is_helper_shell_command(command, "claude"),
+    }
+}
+
 /// Strip every nebula-hook entry (and matchers left empty by that).
 fn remove_hooks() -> std::io::Result<bool> {
     let Some(dir) = claude_config_dir() else { return Ok(false) };
     let path = dir.join("settings.json");
+    if !path.exists() {
+        return Ok(false);
+    }
+    let _lock = crate::atomic_file::try_lock(&path)?
+        .ok_or_else(|| std::io::Error::other("Claude hook configuration is busy"))?;
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
-        Err(_) => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
     };
     let mut root: Value =
         serde_json::from_str(&raw).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let changed = remove_claude_hooks_from(&mut root);
+    if changed {
+        write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
+    }
+    Ok(changed)
+}
+
+fn remove_claude_hooks_from(root: &mut Value) -> bool {
     let mut changed = false;
     if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
         for event in CLAUDE_EVENTS {
@@ -197,9 +230,7 @@ fn remove_hooks() -> std::io::Result<bool> {
             for matcher in matchers.iter_mut() {
                 if let Some(cmds) = matcher.get_mut("hooks").and_then(Value::as_array_mut) {
                     let before = cmds.len();
-                    cmds.retain(|c| {
-                        !c.get("command").and_then(Value::as_str).is_some_and(contains_helper)
-                    });
+                    cmds.retain(|entry| !is_our_claude_hook(entry));
                     changed |= cmds.len() != before;
                 }
             }
@@ -209,78 +240,67 @@ fn remove_hooks() -> std::io::Result<bool> {
             changed |= matchers.len() != before;
         }
     }
-    if changed {
-        write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
-    }
-    Ok(changed)
+    changed
 }
 
-/// `nebula setup-ai [--remove]` entrypoint (console attached in `main`).
+/// CLI 与设置菜单复用实际安装/移除和读回校验；卸载必须尽力处理所有接入。
 pub fn setup_ai_cli(remove: bool) -> i32 {
-    let Some(dir) = claude_config_dir() else {
-        eprintln!("找不到用户目录（USERPROFILE / CLAUDE_CONFIG_DIR）。");
-        return 1;
+    use nebula_settings::{AgentHook, RawSettings};
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let _lock = loop {
+        match settings::lock() {
+            Ok(lock) => break lock,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            },
+            Err(error) => {
+                eprintln!("无法取得 Hook 配置操作锁：{error}");
+                return 1;
+            },
+        }
     };
-    let path = dir.join("settings.json");
+    if !remove && helper_path().is_none() {
+        eprintln!("runtime/ 和 pebrel.exe 同目录中均未找到 pebrel-hook.exe，无法安装。");
+        return 1;
+    }
+    let updates = if remove { AgentHook::all_updates(false) } else { AgentHook::setup_updates() };
+    let mut failed = false;
+    // 持久选择先于文件操作；其他实例拿到锁后只会看到最新授权。
+    if let Err(error) = nebula_settings::persist_keys(&updates) {
+        eprintln!("无法保存 Hook 开关：{error}");
+        if !remove {
+            return 1;
+        }
+        failed = true;
+    }
+    let raw = RawSettings::load();
+    for agent in AgentHook::ALL {
+        if !remove && !agent.enabled(&raw) {
+            continue;
+        }
+        let name = agent.settings_key().trim_start_matches("ai_hooks_");
+        if !remove && !settings::configuration(agent).is_some_and(|(_, present)| present) {
+            println!("{name}: 未检测到配置目录，首次运行该 Agent 后可在设置中开启。");
+            continue;
+        }
+        match settings::apply_and_verify(agent, !remove) {
+            Ok(()) if remove => println!("{name}: Pebrel Hook 已清理，用户的其他配置已保留。"),
+            Ok(()) => println!("{name}: Hook 配置已写入并校验。"),
+            Err(error) => {
+                eprintln!("{name}: Hook 配置操作失败：{error}");
+                failed = true;
+            },
+        }
+    }
     if remove {
-        let mut failed = false;
-        match remove_hooks() {
-            Ok(true) => println!("claude: 已从 {} 移除 hooks。", path.display()),
-            Ok(false) => println!("claude: {} 中没有 Pebrel 的 hooks。", path.display()),
-            Err(err) => {
-                eprintln!("claude: 移除失败：{err}");
-                failed = true;
-            },
-        }
-        if let Err(error) = remove_codex_hooks() {
-            eprintln!("codex: 原生 hook 移除失败，已保留配置：{error}");
-            failed = true;
-        }
-        match remove_codex_notify() {
-            Ok(true) => println!("codex: 已还原 config.toml 的 notify。"),
-            Ok(false) => println!("codex: notify 不是 Pebrel 接管的，未改动。"),
-            Err(err) => {
-                eprintln!("codex: 还原失败：{err}");
-                failed = true;
-            },
-        }
-        match kimi::remove_kimi_hooks() {
-            Ok(true) => println!("kimi: 已从 config.toml 移除 hooks。"),
-            Ok(false) => println!("kimi: config.toml 中没有 Pebrel 的 hooks。"),
-            Err(err) => {
-                eprintln!("kimi: 移除失败：{err}");
-                failed = true;
-            },
-        }
-        match remove_opencode_plugin() {
-            Ok(true) => println!("opencode: 已删除 Pebrel 管理的插件。"),
-            Ok(false) => println!("opencode: 没有 Pebrel 的插件，未改动。"),
-            Err(err) => {
-                eprintln!("opencode: 删除失败：{err}");
-                failed = true;
-            },
-        }
-        match remove_pi_extension() {
-            Ok(true) => println!("pi: 已删除 Pebrel 管理的扩展。"),
-            Ok(false) => println!("pi: 没有 Pebrel 的扩展，未改动。"),
-            Err(err) => {
-                eprintln!("pi: 删除失败：{err}");
-                failed = true;
-            },
-        }
         for (agent, path) in runtime_skill_candidates() {
             match remove_runtime_skill(&path) {
                 Ok(ManagedSkillRemoval::Removed) => {
                     println!("{agent}: 已移除 Pebrel Runtime Skill（{}）。", path.display())
                 },
-                Ok(ManagedSkillRemoval::Absent) => {
-                    println!("{agent}: 没有 Pebrel 管理的 Runtime Skill，未改动。")
-                },
+                Ok(ManagedSkillRemoval::Absent) => {},
                 Ok(ManagedSkillRemoval::Conflict) => {
-                    eprintln!(
-                        "{agent}: {} 已被用户修改，保留该 Skill；如需删除请手动确认内容。",
-                        path.display()
-                    );
+                    eprintln!("{agent}: {} 已被用户修改，保留该 Skill。", path.display());
                     failed = true;
                 },
                 Err(error) => {
@@ -289,133 +309,31 @@ pub fn setup_ai_cli(remove: bool) -> i32 {
                 },
             }
         }
-        // 持久开关：不写它，下次 Nebula 启动（含开机自启）会把上面
-        // 刚清掉的四处原样装回——移除必须比自愈活得久（#8、#38）。
-        match nebula_settings::persist_keys(&[("ai_hooks", "0".to_owned())]) {
-            Ok(()) => println!(
-                "已写入 ai_hooks=0：Pebrel 启动时不再自动接线（重新启用：pebrel setup-ai）。"
-            ),
-            Err(err) => {
-                eprintln!("警告：无法写入 ai_hooks=0（{err}），下次启动仍会自动装回。");
-                failed = true;
-            },
-        }
-        // 卸载器必须尽最大努力清理所有集成，不能因一个损坏的用户配置
-        // 提前返回而让其他 Hook 永久指向即将被删除的程序目录。
-        return i32::from(failed);
-    }
-    match helper_command() {
-        Some(command) => {
-            println!("hook 命令：{command} {}（exec 形式，不经 shell 解析）", HELPER_ARGS[0])
-        },
-        None => {
-            eprintln!("runtime/ 和 pebrel.exe 同目录中均未找到 pebrel-hook.exe，无法安装。");
-            return 1;
-        },
-    }
-    let mut setup_failed = false;
-    // 显式安装即重新授权：清掉 --remove 落下的持久开关，守护线程下次
-    // 启动恢复自愈。
-    if let Err(err) = nebula_settings::persist_keys(&[("ai_hooks", "1".to_owned())]) {
-        eprintln!(
-            "警告：无法写入 ai_hooks=1（{err}）；若之前执行过 --remove，自动接线仍是关闭状态。"
-        );
-    }
-    if dir.exists() {
-        if ensure_claude_hooks() {
-            println!("claude: 已写入 {}（首次改动备份 *.pebrel-bak）。", path.display());
-        } else {
-            println!("claude: {} 已是最新。", path.display());
-        }
     } else {
-        println!("claude: 未检测到（{} 不存在），跳过。", dir.display());
-    }
-    match codex_config_dir().map(|d| d.join("config.toml")) {
-        Some(cfg) if cfg.exists() => {
-            if ensure_codex_hooks() {
-                println!(
-                    "codex: 已写入原生生命周期 hook；请在 Codex /hooks 中审阅后启用。旧 notify 保留兼容。"
-                );
+        for (agent, path, result) in ensure_runtime_skills() {
+            match result {
+                Ok(ManagedSkillInstall::Installed) => {
+                    println!("{agent}: 已安装 Pebrel Runtime Skill 到 {}。", path.display())
+                },
+                Ok(ManagedSkillInstall::Current) => {},
+                Ok(ManagedSkillInstall::Conflict) => {
+                    eprintln!(
+                        "{agent}: {} 存在非 Pebrel 管理或被编辑的 Skill，未覆盖。",
+                        path.display()
+                    );
+                    failed = true;
+                },
+                Err(error) => {
+                    eprintln!("{agent}: 安装 Runtime Skill 失败：{error}");
+                    failed = true;
+                },
             }
-            if ensure_codex_notify() {
-                println!("codex: 已接管 notify（原 notifier 经 --chain 保留）。");
-            } else {
-                println!("codex: {} 已是最新。", cfg.display());
-            }
-        },
-        _ => println!("codex: 未检测到 config.toml，跳过。"),
-    }
-    match kimi::kimi_config_dir() {
-        Some(cfg_dir) if cfg_dir.exists() => {
-            let cfg = cfg_dir.join("config.toml");
-            if kimi::ensure_kimi_hooks() {
-                println!("kimi: 已写入 {}（首次改动备份 *.pebrel-bak）。", cfg.display());
-            } else {
-                println!("kimi: {} 已是最新。", cfg.display());
-            }
-        },
-        _ => println!("kimi: 未检测到（~/.kimi-code 不存在），跳过。"),
-    }
-    match opencode_config_dir() {
-        Some(cfg) if cfg.exists() => {
-            let dir = cfg.join("plugins");
-            setup_failed |= report_cli_bridge_install("opencode", &dir, Bridge::Opencode);
-        },
-        _ => println!("opencode: 未检测到（~/.config/opencode 不存在），跳过。"),
-    }
-    match pi_agent_dir() {
-        Some(agent) if agent.exists() => {
-            let dir = agent.join("extensions");
-            setup_failed |= report_cli_bridge_install("pi", &dir, Bridge::Pi);
-        },
-        _ => println!("pi: 未检测到（~/.pi/agent 不存在），跳过。"),
-    }
-    for (agent, path, result) in ensure_runtime_skills() {
-        match result {
-            Ok(ManagedSkillInstall::Installed) => {
-                println!("{agent}: 已安装 Pebrel Runtime Skill 到 {}。", path.display())
-            },
-            Ok(ManagedSkillInstall::Current) => {
-                println!("{agent}: Pebrel Runtime Skill 已是最新。")
-            },
-            Ok(ManagedSkillInstall::Conflict) => {
-                eprintln!(
-                    "{agent}: {} 或旧目录存在非 Pebrel 管理或被编辑的 Skill，未覆盖。",
-                    path.display()
-                );
-                setup_failed = true;
-            },
-            Err(error) => {
-                eprintln!("{agent}: 安装 Runtime Skill 失败：{error}");
-                setup_failed = true;
-            },
         }
+        println!("默认接入 Claude Code 与 Codex；其他 Agent 由设置菜单控制。");
+        println!("Codex 原生 Hook 可能需要在 /hooks 中审阅启用；notify 兼容路径仍保留。");
+        println!("对新启动的会话生效；正在运行的会话保持原快照。");
     }
-    println!("对新启动的会话生效；正在运行的会话保持原快照。");
-    i32::from(setup_failed)
-}
-
-fn report_cli_bridge_install(agent: &str, directory: &Path, bridge: Bridge) -> bool {
-    let path = directory.join(bridge.files().0);
-    match install_bridge(directory, bridge) {
-        Ok(managed_files::Install::Installed) => {
-            println!("{agent}: 已安装 {}。", path.display());
-            announce();
-            false
-        },
-        Ok(managed_files::Install::Current) => {
-            println!("{agent}: {} 已是最新。", path.display());
-            false
-        },
-        Ok(managed_files::Install::Conflict) => {
-            eprintln!("{agent}: {} 或旧文件已被编辑或属于用户，未覆盖。", path.display());
-            true
-        },
-        Err(error) => {
-            eprintln!("{agent}: 安装 {} 失败：{error}", path.display());
-            true
-        },
-    }
+    i32::from(failed)
 }
 
 fn claude_config_dir() -> Option<PathBuf> {
@@ -626,6 +544,30 @@ mod generated_hook_tests {
     use super::{CLAUDE_EVENTS, OPENCODE_PLUGIN_JS, PI_EXTENSION_TS, install_into};
 
     const HELPER: &str = "C:/Program Files/Pebrel/runtime/pebrel-hook.exe";
+
+    #[test]
+    fn claude_install_and_remove_preserve_commands_that_only_mention_the_helper() {
+        let foreign = json!([
+            {"type":"command", "command":"echo pebrel-hook.exe"},
+            {"type":"command", "command":"echo C:/pebrel-hook.exe"},
+            {"type":"command", "command":"echo C:/pebrel-hook.exe claude"},
+            {"type":"command", "command":"C:/pebrel-hook.exe.backup", "args":["claude"]},
+            {"type":"command", "command":HELPER, "args":["custom"]},
+            {"type":"command", "command":"\"C:/pebrel-hook.exe\" claude && echo user"}
+        ]);
+        let mut root = json!({"hooks":{"Stop":[{"hooks":foreign}]}, "custom":true});
+        for _ in 0..12 {
+            assert_eq!(install_into(&mut root, HELPER), Some(true));
+            assert_eq!(root["hooks"]["Stop"][0]["hooks"], foreign);
+            let installed = root.clone();
+            assert_eq!(install_into(&mut root, HELPER), Some(false));
+            assert_eq!(root, installed);
+            assert!(super::remove_claude_hooks_from(&mut root));
+            assert_eq!(root["hooks"]["Stop"], json!([{"hooks":foreign}]));
+            assert!(!super::remove_claude_hooks_from(&mut root));
+            assert_eq!(root["custom"], true);
+        }
+    }
 
     #[test]
     fn claude_install_includes_permission_requests_and_remains_idempotent() {

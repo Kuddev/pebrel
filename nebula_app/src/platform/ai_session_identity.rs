@@ -12,6 +12,17 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+mod windows;
+
+/// A short-lived native probe must finish before GUI, hooks or CLI setup.
+pub(crate) fn run_helper_if_requested() -> Option<i32> {
+    #[cfg(windows)]
+    return windows::run_helper_if_requested();
+    #[cfg(not(windows))]
+    None
+}
+
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_PROBE_OUTPUT: usize = 64 * 1024;
 const MAX_PROBE_LINE: usize = 64 * 1024;
@@ -66,6 +77,7 @@ struct ProbeRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CodexSession {
     pub session_id: String,
+    pub session_file: String,
     pub cwd: Option<String>,
 }
 
@@ -73,11 +85,12 @@ pub(crate) struct CodexSession {
 ///
 /// WSL panes are inspected inside the guest because Windows Toolhelp cannot
 /// see Linux processes or their open session files. Linux hosts use the same
-/// process metadata directly. Native Windows and macOS sessions continue to
-/// use hook-reported identities; this fallback requires Linux procfs.
+/// process metadata directly. Windows inspects only the pane shell's verified
+/// descendants in a disposable helper, bounding potentially blocking file APIs.
 pub(crate) fn probe_codex_session(
     pane_id: u64,
     exec_context: Option<&crate::runtime_exec::PaneExecContext>,
+    shell_pid: Option<u32>,
 ) -> Option<CodexSession> {
     let pane_id = pane_id.to_string();
     let context = exec_context?;
@@ -88,12 +101,13 @@ pub(crate) fn probe_codex_session(
 
     #[cfg(unix)]
     {
+        let _ = shell_pid;
         return probe_local_proc(&pane_id, instance);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         let _ = (pane_id, instance);
-        None
+        windows::probe(shell_pid?)
     }
 }
 
@@ -127,10 +141,11 @@ fn parse_probe_context(output: &str) -> Option<CodexSession> {
         }
         let context = CodexSession {
             session_id: id.to_owned(),
+            session_file: record.link,
             cwd: payload
                 .get("cwd")
                 .and_then(serde_json::Value::as_str)
-                .filter(|cwd| cwd.starts_with('/') && !cwd.chars().any(char::is_control))
+                .filter(|cwd| valid_cwd(cwd))
                 .map(str::to_owned),
         };
         if candidate.as_ref().is_some_and(|existing| existing != &context) {
@@ -142,6 +157,15 @@ fn parse_probe_context(output: &str) -> Option<CodexSession> {
         candidate = Some(context);
     }
     candidate
+}
+
+fn valid_cwd(cwd: &str) -> bool {
+    !cwd.chars().any(char::is_control)
+        && (cwd.starts_with('/')
+            || cwd.starts_with(r"\\")
+            || (cwd.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                && cwd.as_bytes().get(1) == Some(&b':')
+                && matches!(cwd.as_bytes().get(2), Some(b'/' | b'\\'))))
 }
 
 #[cfg(test)]
@@ -179,10 +203,7 @@ fn valid_uuid(id: &str) -> bool {
 }
 
 fn rollout_id(path: &Path) -> Option<String> {
-    let stem = path.file_stem()?.to_str()?;
-    let start = stem.len().checked_sub(36)?;
-    let id = stem.get(start..)?;
-    valid_uuid(id).then(|| id.to_owned())
+    crate::session::codex_rollout_id(path.to_str()?).map(str::to_owned)
 }
 
 fn probe_wsl(
@@ -381,10 +402,13 @@ fn is_rollout_link(link: &Path, codex_home: &Path) -> bool {
     })
 }
 
-#[cfg(unix)]
 fn read_first_line(path: &Path) -> std::io::Result<String> {
-    use std::io::{BufRead as _, BufReader};
     let file = std::fs::File::open(path)?;
+    read_metadata_line(file)
+}
+
+fn read_metadata_line(file: impl Read) -> std::io::Result<String> {
+    use std::io::{BufRead as _, BufReader};
     let mut line = String::new();
     BufReader::new(file).take(MAX_PROBE_LINE as u64).read_line(&mut line)?;
     if !line.ends_with(['\r', '\n']) && line.len() >= MAX_PROBE_LINE {

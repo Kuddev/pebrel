@@ -29,7 +29,8 @@
       "interaction": "Interaction",
       "keymap": "Key Bindings",
       "advanced": "Advanced",
-      "backup": "Backup"
+      "backup": "Backup",
+      "agents": "Agents"
     },
     "notifications": {
       "duration": "Notification duration",
@@ -161,6 +162,29 @@
       "silent_start": "Start silently",
       "silent_start_help": "Start in the background without showing a window. Enables the system tray; click its icon to reopen. Applies while the tray is enabled, except when opening a directory explicitly.",
       "save_failed": "Could not change startup settings: {error}"
+    },
+    "agents": {
+      "title": "Coding agents",
+      "description": "Show agent activity, completion and approval requests in Pebrel. Claude Code and Codex are enabled by default.",
+      "refresh": "Refresh",
+      "platform_unsupported": "Automatic hook installation is currently available on Windows.",
+      "checking": "Checking installed agents and hooks…",
+      "applying": "Applying…",
+      "installed": "Notifications on",
+      "off": "Notifications off",
+      "not_detected": "Not installed",
+      "config_detected": "Agent configuration detected",
+      "unsupported": "Hook integration not available yet",
+      "unavailable": "Unavailable",
+      "needs_attention": "Needs attention",
+      "restart": "Changes apply when you restart the agent. These controls manage agents installed on this computer.",
+      "enabled": "Hooks installed. Restart the agent to apply.",
+      "disabled": "Hooks removed. Restart the agent to apply.",
+      "failed": "Could not update hooks: {error}",
+      "helper_missing": "The hook helper is missing. Repair the Pebrel installation to enable hooks.",
+      "needs_repair": "Installed · needs repair",
+      "initialize": "Run this agent once to create its configuration, then refresh.",
+      "config_path": "Configuration: {path}"
     }
   },
   "provider": {
@@ -311,6 +335,8 @@
     "action": "Action",
     "update_notice": "Pebrel v{latest} is available (current v{current})",
     "copied_lines": "Copied {lines} lines to clipboard",
+    "copy_working_directory": "Copy working directory",
+    "cwd_copied": "Working directory copied",
     "paste_lines": "Paste {lines} lines?",
     "drop_paths_invalid": "Could not paste these paths. Check for special characters or drop fewer files.",
     "drop_paths_busy": "The previous dropped paths are still being converted.",
@@ -399,6 +425,10 @@
     "preview_limited": "The rich preview is shortened for this large document. Switch to Edit to read the loaded source."
   },
   "commands": {
+    "add_command": "New command",
+    "root": "All commands",
+    "back_to_root": "Back to all commands",
+    "group_count": "{count} commands",
     "add_group": "New group",
     "group_name": "Group name",
     "builtin_group": "Built-in commands",
@@ -787,9 +817,14 @@
   "files.search_empty": "No matching files",
   "files.search_empty_reason": "No files or folders match this query in the current directory.",
   "session": {
+    "choose_conversation": "Choose a conversation…",
+    "exit_incomplete_title": "Close without identifying every AI session?",
+    "exit_incomplete_body": "The window layout and known conversation IDs will be saved before closing. Running commands will stop. Conversations whose IDs are still unavailable may need to be selected manually when you reopen the application.",
+    "exit_anyway": "Save available state and close",
     "save_failed": "Could not save the workspace. The application will stay open. Check free space and folder permissions, then retry.",
     "identity_pending": "Some running AI sessions have not reported a recovery identity. Try again after their startup finishes.",
     "restore_failed": "This AI conversation could not be restored. Its saved target is preserved. Use Retry recovery in the tab menu, or locate it in session history.",
+    "restore_choose_codex": "The saved Codex conversation is unavailable. Choose a conversation in Codex to continue.",
     "restore_ambiguous": "More than one native session file matches this conversation. The saved target is preserved; choose the exact conversation from session history.",
     "retry": "Retry session recovery"
   },
@@ -863,5 +898,10 @@
     "announced": "AI turn notifications connected (Claude / Codex / Kimi / Pi / opencode). To revoke: pebrel setup-ai --remove"
   },
   "notification.command_finished": "Command finished in {seconds}s",
-  "notification.command_failed": "Command failed (exit {code}) after {seconds}s"
+  "notification.command_failed": "Command failed (exit {code}) after {seconds}s",
+  "files.path_edit": "Edit directory path",
+  "files.path_placeholder": "Absolute or relative directory path",
+  "files.path_choose": "Choose a directory",
+  "files.path_open": "Open directory",
+  "files.path_failed": "Could not open this directory: {error}"
 }

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test, after } from 'node:test';
+import { spawnSync } from 'node:child_process';
 
 const root = new URL('../../', import.meta.url);
 const bridgeSource = new URL('nebula_app/src/ai_hook/bridges.rs', root);
@@ -14,7 +15,7 @@ const embedded = readFileSync(new URL(bridgePath, bridgeSource), 'utf8');
 const events = [];
 globalThis.__pebrelBridgeSpawn = (_hook, args) => {
   events.push(JSON.parse(args[1]));
-  return { unref() {} };
+  return { on() {}, unref() {} };
 };
 globalThis.__pebrelPiVersion = '0.85.1';
 globalThis.__pebrelLoadPiModule = async () => ({ VERSION: globalThis.__pebrelPiVersion });
@@ -29,6 +30,25 @@ const bridge = await import('data:text/javascript;base64,' + Buffer.from(executa
 mkdirSync(new URL('tmp/', root), { recursive: true });
 const directory = mkdtempSync(fileURLToPath(new URL('tmp/pi-bridge-', root)));
 after(() => rmSync(directory, { recursive: true }));
+
+test('a missing helper fails silently without terminating the agent process', () => {
+  const asset = join(directory, 'missing-helper-bridge.mjs');
+  writeFileSync(asset, stripTypeScriptTypes(embedded));
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    const bridge = await import(${JSON.stringify(pathToFileURL(asset).href)});
+    const callbacks = new Map();
+    await bridge.default({ on: (event, callback) => callbacks.set(event, callback) });
+    await callbacks.get('agent_start')({}, {});
+    await new Promise(resolve => setTimeout(resolve, 20));
+    console.log('agent-alive');
+  `], {
+    encoding: 'utf8', windowsHide: true,
+    env: { ...process.env, PEBREL_HOOK_EXE: join(directory, 'missing-helper.exe') },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.match(child.stdout, /agent-alive/);
+  assert.doesNotMatch(child.stderr, /Unhandled|ENOENT/);
+});
 const context = (id, file) => ({
   sessionManager: { getSessionId: () => id, getSessionFile: () => file },
 });

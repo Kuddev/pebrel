@@ -1477,33 +1477,6 @@ impl Render for TerminalView {
                 );
             }
         }
-        if let Some(answer) = self.answers.latest.clone() {
-            let provider = if answer.provider == "claude" { "Claude Code" } else { "Codex" };
-            return div()
-                .size_full()
-                .relative()
-                .child(root)
-                .child(
-                    crate::gpui_shell::prelude::h_flex()
-                        .absolute()
-                        .top_0()
-                        .right_2()
-                        .px_2()
-                        .gap_2()
-                        .items_center()
-                        .bg(cx.theme().background)
-                        .child(div().text_xs().child(format!("{provider} · 回答")))
-                        .child(
-                            crate::gpui_shell::prelude::Button::new("answer-open")
-                                .label("阅读")
-                                .small()
-                                .on_click(
-                                    cx.listener(|view, _, window, cx| view.open_answer(window, cx)),
-                                ),
-                        ),
-                )
-                .into_any_element();
-        }
         root.into_any_element()
     }
 }

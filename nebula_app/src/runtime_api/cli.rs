@@ -25,6 +25,15 @@ pub(super) fn request_once(
     let endpoint = read_endpoint()
         .ok_or_else(|| CliError::new("runtime_unavailable", "no resident Pebrel runtime found"))?;
     let request = ApiRequest::new(endpoint.token.clone(), method, params);
+    read_response(&endpoint, &request, timeout)
+        .map_err(|error| input_transport_error(method, error))
+}
+
+fn read_response(
+    endpoint: &Endpoint,
+    request: &ApiRequest,
+    timeout: Duration,
+) -> Result<ApiResponse, Box<dyn Error>> {
     let stream = client_stream(&endpoint, &request, Some(timeout))?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
@@ -36,6 +45,34 @@ pub(super) fn request_once(
         .into());
     }
     Ok(serde_json::from_str(&line)?)
+}
+
+fn input_transport_error(method: &str, error: Box<dyn Error>) -> Box<dyn Error> {
+    if matches!(
+        method,
+        "pane.prompt" | "pane.paste" | "agent.prompt" | "agent.paste" | "agent.delegate"
+    ) {
+        CliError::new(
+            "submission_outcome_unknown",
+            format!(
+                "{method} did not return a confirmed response: {error}. Input may already have \
+                 reached the target; read its state and output before retrying."
+            ),
+        )
+        .into()
+    } else {
+        error
+    }
+}
+
+pub(super) fn require_submission_baseline(baseline: Option<u64>) -> Result<u64, CliError> {
+    baseline.filter(|seq| *seq > 0).ok_or_else(|| {
+        CliError::new(
+            "runtime_no_response",
+            "input was accepted but the response has no valid state baseline; completion is \
+             unconfirmed. Read the target before retrying; do not resend automatically.",
+        )
+    })
 }
 
 pub(super) fn print_response(response: &ApiResponse, pretty: bool) -> Result<(), Box<dyn Error>> {
@@ -341,8 +378,16 @@ fn run_cli_inner(options: ControlOptions) -> Result<(), Box<dyn Error>> {
             // The prompt response carries the snapshot taken immediately after
             // submission. Using its counter as the baseline is what makes the
             // follow-up wait mean "settled again", not "already settled".
-            let baseline = pane_state_change_seq(&response, window, pane);
-            wait_cli(window, pane, wait.expect("checked above"), baseline, timeout, options.pretty)
+            let baseline =
+                require_submission_baseline(pane_state_change_seq(&response, window, pane))?;
+            wait_cli(
+                window,
+                pane,
+                wait.expect("checked above"),
+                Some(baseline),
+                timeout,
+                options.pretty,
+            )
         },
         CliCommand::Paste { window, pane, text, no_submit, wait } => {
             let response = request_once(
@@ -358,8 +403,16 @@ fn run_cli_inner(options: ControlOptions) -> Result<(), Box<dyn Error>> {
             if !response.ok || wait.is_none() {
                 return print_response(&response, options.pretty);
             }
-            let baseline = pane_state_change_seq(&response, window, pane);
-            wait_cli(window, pane, wait.expect("checked above"), baseline, timeout, options.pretty)
+            let baseline =
+                require_submission_baseline(pane_state_change_seq(&response, window, pane))?;
+            wait_cli(
+                window,
+                pane,
+                wait.expect("checked above"),
+                Some(baseline),
+                timeout,
+                options.pretty,
+            )
         },
         CliCommand::Read { window, pane, lines } => {
             let response = request_once(
@@ -538,6 +591,33 @@ impl Error for CliError {}
 #[cfg(test)]
 mod output_tests {
     use super::*;
+
+    #[test]
+    fn runtime_submission_missing_or_zero_baseline_cannot_wait_on_old_idle() {
+        for baseline in [None, Some(0)] {
+            let error = require_submission_baseline(baseline).unwrap_err();
+            assert_eq!(error.code(), "runtime_no_response");
+            assert!(error.to_string().contains("do not resend automatically"));
+        }
+        assert_eq!(require_submission_baseline(Some(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn runtime_submission_transport_failure_is_not_a_safe_retry_signal() {
+        for method in ["pane.prompt", "pane.paste", "agent.prompt", "agent.paste", "agent.delegate"]
+        {
+            let error =
+                input_transport_error(method, IoError::from(std::io::ErrorKind::TimedOut).into());
+            assert_eq!(
+                error.downcast_ref::<CliError>().unwrap().code(),
+                "submission_outcome_unknown"
+            );
+            assert!(error.to_string().contains("read its state and output before retrying"));
+        }
+        let error =
+            input_transport_error("pane.read", IoError::from(std::io::ErrorKind::TimedOut).into());
+        assert_eq!(error.downcast_ref::<IoError>().unwrap().kind(), std::io::ErrorKind::TimedOut);
+    }
 
     struct FailingOutput {
         error: Option<IoError>,

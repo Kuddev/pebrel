@@ -36,6 +36,7 @@ use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::widgets::NebulaButton;
 
 mod about;
+mod agents;
 mod app_icon;
 mod appearance;
 mod appearance_advanced;
@@ -102,6 +103,7 @@ pub struct SettingsPane {
     launch_at_login: bool,
     /// 当前分区（`SECTIONS` 下标）；默认落在应用主页。
     active_section: usize,
+    agents: agents::AgentSettingsState,
     appearance_picker: Option<appearance_picker::AppearancePicker>,
     appearance_picker_seq: u64,
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
@@ -1302,6 +1304,7 @@ impl SettingsPane {
             6 => self.section_interaction(cx),
             7 => self.section_keymap(cx),
             8 => self.section_advanced(cx),
+            10 => self.section_agents(cx),
             _ => self.section_backup(cx),
         }
         .into_any_element()

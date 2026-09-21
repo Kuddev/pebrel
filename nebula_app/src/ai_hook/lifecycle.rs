@@ -181,7 +181,7 @@ impl AgentActivity {
             }
             let same_process = owner.pid.is_some() && owner.pid == event.agent_pid
                 || owner.remote_process.is_some() && owner.remote_process == event.remote_process
-                || event.source == "pi"
+                || matches!(event.source.as_str(), "pi" | "omp")
                     && owner.bridge_instance.is_some()
                     && owner.bridge_instance == event.bridge_instance;
             match (owner.pid, event.agent_pid) {
@@ -285,7 +285,7 @@ impl AgentActivity {
                     super::AiTurnOutcome::Failed
                         | super::AiTurnOutcome::Incomplete
                         | super::AiTurnOutcome::Cancelled
-                ) || (event.source == "pi"
+                ) || (matches!(event.source.as_str(), "pi" | "omp" | "cursor" | "copilot")
                     && event.turn_outcome == super::AiTurnOutcome::Unknown)
                 {
                     AgentStatus::Idle

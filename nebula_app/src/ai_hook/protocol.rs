@@ -27,13 +27,14 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     if fields.next() != Some("nebula-hook/1") {
         return None;
     }
-    let (mut source, mut pane, mut codex_mode) = (None, None, None);
+    let (mut source, mut pane, mut codex_mode, mut native_event) = (None, None, None, None);
     for field in fields {
         match field.split_once('=') {
             Some(("source", v)) => source = Some(v.to_owned()),
             Some(("pane", v)) => pane = v.parse().ok(),
             Some(("codex_hooks", "full")) => codex_mode = Some(CodexHookMode::Full),
             Some(("codex_hooks", "turns")) => codex_mode = Some(CodexHookMode::Turns),
+            Some(("event", event)) => native_event = Some(event),
             _ => (),
         }
     }
@@ -64,16 +65,36 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         "claude" | "kimi" => &["session_id"],
         "codex" if native_codex => &["session_id"],
         "codex" => &["thread-id"],
+        "cursor" => &["conversation_id", "session_id"],
+        "copilot" | "grok" => &["sessionId"],
         // opencode/pi 由我们自己的 bridge 规范化成 snake_case；camelCase 是
         // provider SDK 原样透传时的兼容路径。
         _ => &["session_id", "sessionID", "sessionId"],
     };
-    let session_id = session_id_keys
+    let reported_session_id = session_id_keys
         .iter()
         .find_map(|key| payload.get(*key))
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
         .map(|id| truncate(id, ID_MAX_CHARS));
+    let native_transcript = matches!(source.as_str(), "claude" | "codex")
+        .then(|| payload.get("transcript_path"))
+        .flatten();
+    let session_file = native_transcript
+        .or_else(|| payload.get("session_file"))
+        .and_then(Value::as_str)
+        .filter(|path| crate::session::valid_native_session_file(path))
+        .map(str::to_owned);
+    // Native hooks can name the running session/group rather than the thread
+    // accepted by `codex resume`. The transcript belongs to the actual thread,
+    // including when a conversation was forked or loaded into another session.
+    // An explicit null/invalid transcript is not a durable resume target. Older
+    // hook payloads that omit the field retain their historical ID contract.
+    let session_id = if native_codex && native_transcript.is_some() {
+        session_file.as_deref().and_then(crate::session::codex_rollout_id).map(str::to_owned)
+    } else {
+        reported_session_id
+    };
     let mut event_id =
         context_string(&payload, &["event_id", "eventId"]).map(|id| truncate(&id, ID_MAX_CHARS));
     let turn_id =
@@ -174,7 +195,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         // `{"kind":"prompt|done|attention","message":?}` payload (see the
         // embedded plugin in `ensure_opencode_plugin`), so this side stays
         // decoupled from opencode's evolving SDK event schema.
-        "opencode" | "pi" => match payload.get("kind").and_then(Value::as_str) {
+        "opencode" | "pi" | "omp" => match payload.get("kind").and_then(Value::as_str) {
             Some("session-start") => (AiHookKind::SessionStart, None),
             Some("prompt") => (AiHookKind::PromptSubmit, None),
             Some("tool-complete") => (AiHookKind::ToolComplete, None),
@@ -182,6 +203,10 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             Some("session-end") => (AiHookKind::SessionEnd, None),
             Some("attention") => (AiHookKind::NeedsAttention, attention_message(&payload)),
             _ => return None,
+        },
+        "cursor" if payload.get("hookEventName").is_some() => return None,
+        "cursor" | "copilot" | "grok" => {
+            super::native_events::parse(&source, native_event?, &payload)?
         },
         _ => return None,
     };
@@ -201,7 +226,11 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         && payload.get("hook_event_name").and_then(Value::as_str) == Some("Interrupt")
     {
         AiTurnOutcome::Cancelled
-    } else if source == "pi" && kind == AiHookKind::TurnDone {
+    } else if matches!(source.as_str(), "cursor" | "copilot" | "grok")
+        && kind == AiHookKind::TurnDone
+    {
+        super::native_events::outcome(&source, native_event?, &payload)
+    } else if matches!(source.as_str(), "pi" | "omp") && kind == AiHookKind::TurnDone {
         match payload.get("stop_reason").and_then(Value::as_str) {
             Some("stop") => AiTurnOutcome::Succeeded,
             Some("error") => AiTurnOutcome::Failed,
@@ -277,11 +306,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         turn_outcome,
         message,
         session_id,
-        session_file: payload
-            .get("session_file")
-            .and_then(Value::as_str)
-            .filter(|path| crate::session::valid_native_session_file(path))
-            .map(str::to_owned),
+        session_file,
         bridge_instance: payload
             .get("bridge_instance")
             .and_then(Value::as_str)

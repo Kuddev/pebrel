@@ -123,6 +123,16 @@ impl SavedCommands {
         command: &str,
         append_enter: bool,
     ) -> io::Result<SavedCommand> {
+        self.insert_in_group(name, command, append_enter, None)
+    }
+
+    pub(crate) fn insert_in_group(
+        &mut self,
+        name: &str,
+        command: &str,
+        append_enter: bool,
+        group: Option<&str>,
+    ) -> io::Result<SavedCommand> {
         let path = self.path.clone();
         let (next, inserted) = mutate_store(&path, |store| {
             let commands = &mut store.commands;
@@ -139,6 +149,9 @@ impl SavedCommands {
                 saved.id = new_id(&saved.name, &saved.command);
             }
             commands.push(saved.clone());
+            if group.is_some() {
+                store.assign_group(&saved.id, group)?;
+            }
             Ok(saved)
         })?;
         *self = next;

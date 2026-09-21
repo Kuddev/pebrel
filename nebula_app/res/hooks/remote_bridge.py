@@ -147,7 +147,7 @@ def send(source, native, mode, payload, token):
         if len(envelope) > MAX_ENVELOPE:
             # Lifecycle must still arrive when a tool or answer is huge. Keep
             # protocol identities and drop content, without inventing a result.
-            keep = ("hook_event_name", "type", "kind", "session_id", "thread-id", "turn_id", "turn-id", "source", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
+            keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
             question_input = payload.get("tool_input") if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") else None
             tool_name = payload.get("tool_name")
             payload = {key: payload[key] for key in keep if key in payload}

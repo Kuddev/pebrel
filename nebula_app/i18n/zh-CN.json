@@ -29,7 +29,8 @@
       "interaction": "交互",
       "keymap": "按键映射",
       "advanced": "高级",
-      "backup": "备份"
+      "backup": "备份",
+      "agents": "Agents"
     },
     "notifications": {
       "duration": "通知显示时长",
@@ -161,6 +162,29 @@
       "silent_start": "静默启动",
       "silent_start_help": "启动后在后台运行，不显示窗口。开启时会同时启用系统托盘，点击托盘图标可重新打开窗口。托盘启用时生效，显式打开目录时除外。",
       "save_failed": "无法更改启动设置：{error}"
+    },
+    "agents": {
+      "title": "编程智能体",
+      "description": "在 Pebrel 中显示运行状态、完成通知和授权请求。Claude Code 与 Codex 默认开启。",
+      "refresh": "刷新",
+      "platform_unsupported": "目前仅 Windows 支持自动安装 hooks。",
+      "checking": "正在检测工具和 hooks…",
+      "applying": "处理中…",
+      "installed": "已开启通知",
+      "off": "未开启通知",
+      "not_detected": "未安装",
+      "config_detected": "已检测到工具配置",
+      "unsupported": "尚未提供 hook 接入",
+      "unavailable": "不可用",
+      "needs_attention": "需要检查",
+      "restart": "更改将在重启 Agent 后生效。这里管理安装在本机的 Agent。",
+      "enabled": "Hooks 已安装，请重启 agent 使其生效。",
+      "disabled": "Hooks 已移除，请重启 agent 使其生效。",
+      "failed": "无法更新 hooks：{error}",
+      "helper_missing": "缺少 hook 辅助程序，请修复 Pebrel 安装后再启用。",
+      "needs_repair": "已安装 · 需修复",
+      "initialize": "请先运行一次此工具以创建配置，然后刷新。",
+      "config_path": "配置：{path}"
     }
   },
   "provider": {
@@ -311,6 +335,8 @@
     "action": "操作",
     "update_notice": "Pebrel v{latest} 已发布（当前 v{current}）",
     "copied_lines": "已复制 {lines} 行到剪贴板",
+    "copy_working_directory": "复制工作目录",
+    "cwd_copied": "工作目录已复制",
     "paste_lines": "粘贴 {lines} 行文本？",
     "drop_paths_invalid": "无法粘贴这些路径，请检查特殊字符或减少拖入的文件数量。",
     "drop_paths_busy": "上一组拖入的路径仍在转换。",
@@ -399,6 +425,10 @@
     "preview_limited": "此文档较大，富文本预览已缩短。切换到编辑可查看已加载的源码。"
   },
   "commands": {
+    "add_command": "新增命令",
+    "root": "全部命令",
+    "back_to_root": "返回全部命令",
+    "group_count": "{count} 条命令",
     "add_group": "新建分组",
     "group_name": "分组名称",
     "builtin_group": "内置命令",
@@ -787,9 +817,14 @@
   "files.search_empty": "没有匹配的文件",
   "files.search_empty_reason": "当前目录中没有符合查询条件的文件或文件夹。",
   "session": {
+    "choose_conversation": "选择要继续的对话…",
+    "exit_incomplete_title": "仍有 AI 会话未能识别，继续关闭？",
+    "exit_incomplete_body": "关闭前会保存窗口布局和已知的对话 ID，并停止正在运行的命令。尚未取得 ID 的对话，重新打开后可能需要手动选择。",
+    "exit_anyway": "保存已知状态并关闭",
     "save_failed": "无法保存工作区，应用将保持打开。请检查剩余空间和目录权限后重试。",
     "identity_pending": "部分运行中的 AI 会话尚未提供恢复身份，请等待它们启动完成后重试。",
     "restore_failed": "此 AI 对话未能恢复，原恢复记录已保留。可在标签菜单中重试恢复，或到历史会话中定位。",
+    "restore_choose_codex": "保存的 Codex 对话已不可用。请在 Codex 的会话列表中选择要继续的对话。",
     "restore_ambiguous": "有多个原生会话文件匹配此对话，原恢复记录已保留。请在历史会话中选择准确的对话。",
     "retry": "重试会话恢复"
   },
@@ -863,5 +898,10 @@
     "announced": "已接入 AI 回合通知（Claude / Codex / Kimi / Pi / opencode）。撤销：pebrel setup-ai --remove"
   },
   "notification.command_finished": "命令结束，用时 {seconds} 秒",
-  "notification.command_failed": "命令失败（退出码 {code}），用时 {seconds} 秒"
+  "notification.command_failed": "命令失败（退出码 {code}），用时 {seconds} 秒",
+  "files.path_edit": "编辑目录路径",
+  "files.path_placeholder": "输入绝对路径或相对路径",
+  "files.path_choose": "选择目录",
+  "files.path_open": "打开目录",
+  "files.path_failed": "无法打开这个目录：{error}"
 }

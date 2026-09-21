@@ -162,6 +162,7 @@ impl TerminalView {
         exit_code: Option<i32>,
         cx: &mut Context<Self>,
     ) {
+        let choose_codex_session = self.codex_restore_target_missing(exit_code);
         self.notify_command_done(exit_code, cx);
         self.last_command_failed = exit_code.is_some_and(|code| code != 0);
         if self.clear_foreground_agent_state(cx) {
@@ -170,6 +171,9 @@ impl TerminalView {
         if let Some(run) = self.active_run.take() {
             self.last_run =
                 Some(crate::runtime_api::RuntimeRunOutcome::command_done(run, exit_code));
+        }
+        if choose_codex_session {
+            self.choose_codex_recovery_session(cx);
         }
         cx.notify();
     }
@@ -524,16 +528,20 @@ impl TerminalView {
                 "the pane is still committing previous runtime input",
             ));
         }
-        let recognized_agent = submit && self.runtime_agent().is_some();
+        let agent = self.runtime_agent();
+        let recognized_agent = submit && agent.is_some();
+        let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         if submit {
             self.capture_runtime_prompt();
         }
-        let mut bytes =
-            crate::input::terminal_input::build_runtime_text_sequence(&text, self.term_mode());
-        if submit {
-            // Codex/Claude 可启用 kitty 或 Win32 输入协议；裸 CR 只在 legacy VT
-            // 下等价于 Enter。Win32 模式下文本也已编码为 VK_PACKET 记录，
-            // 整个提交因此是一条同质协议流，不依赖 ConPTY 的读取边界。
+        let mut bytes = if codex_submit {
+            crate::input::terminal_input::build_runtime_codex_submission(&text, self.term_mode())
+        } else {
+            crate::input::terminal_input::build_runtime_text_sequence(&text, self.term_mode())
+        };
+        if submit && !codex_submit {
+            // Non-Codex input keeps the echo barrier. Enter must still follow
+            // the negotiated keyboard protocol; a bare CR is only legacy VT.
             let submit_bytes = self.runtime_key_sequence(
                 crate::runtime_api::RuntimeKey::Enter,
                 crate::runtime_api::RuntimeKeyModifiers::default(),
@@ -671,7 +679,9 @@ impl TerminalView {
             ));
         }
 
-        if submit {
+        let codex_submit =
+            submit && self.runtime_agent().is_some_and(|agent| agent.kind == "codex");
+        if submit && !codex_submit {
             let submit_bytes = self.runtime_key_sequence(
                 crate::runtime_api::RuntimeKey::Enter,
                 crate::runtime_api::RuntimeKeyModifiers::default(),
@@ -682,7 +692,15 @@ impl TerminalView {
                 submit_bytes,
             });
         }
-        self.paste_now_impl(&text, false, cx);
+        if codex_submit {
+            let bytes = crate::input::terminal_input::build_runtime_codex_submission(
+                &text,
+                self.term_mode(),
+            );
+            self.write_input(bytes, cx);
+        } else {
+            self.paste_now_impl(&text, false, cx);
+        }
         if submit {
             self.awaiting_input = false;
             self.mark_command_running();
@@ -709,21 +727,20 @@ impl TerminalView {
     pub(crate) fn ai_session_save_pending(&self) -> bool {
         // A failed refresh cannot erase an already durable identity. Pi/Codex
         // without any native target must finish identifying before safe exit.
-        self.session_agent().is_some_and(|agent| {
-            matches!(agent.source.as_str(), "pi" | "codex")
-                && agent.session_id.as_deref().is_none_or(str::is_empty)
-        })
+        self.ai_session_probe_pending
+            || self.session_agent().is_some_and(|agent| {
+                matches!(agent.source.as_str(), "pi" | "codex")
+                    && agent.session_id.as_deref().is_none_or(str::is_empty)
+            })
     }
 
     /// Read the active conversation metadata when its hook has not reported an ID.
     /// File and process operations run on the background executor. Only results
-    /// for the same foreground command are applied; hook identities take priority.
+    /// for the same foreground command and unchanged identity are applied.
     pub(super) fn probe_missing_codex_session(&mut self, cx: &mut Context<Self>) {
         if self.exited.is_some()
-            || (self.agent_activity.hook_seen()
-                && !self.ai_session_from_probe
-                && self.ai_session.is_some())
             || self.ai_session_probe_pending
+            || self.ssh_destination.is_some()
             || !self
                 .running_program
                 .as_deref()
@@ -741,10 +758,16 @@ impl TerminalView {
         let Some(exec_context) = self.exec_context.clone() else { return };
         let epoch = self.ai_session_probe_epoch;
         let pane_id = self.pane_id;
+        let shell_pid = self.session.as_ref().map(|session| session.shell_pid);
+        let previous_target = self.session_agent();
         self.ai_session_probe_pending = true;
         self.last_ai_session_probe = Some(std::time::Instant::now());
         let work = cx.background_executor().spawn(async move {
-            crate::platform::ai_session_identity::probe_codex_session(pane_id, Some(&exec_context))
+            crate::platform::ai_session_identity::probe_codex_session(
+                pane_id,
+                Some(&exec_context),
+                shell_pid,
+            )
         });
         cx.spawn(async move |this, cx| {
             let session_id = work.await;
@@ -755,9 +778,7 @@ impl TerminalView {
                 if !probe_result_is_current(
                     view.ai_session_probe_epoch,
                     epoch,
-                    view.agent_activity.hook_seen()
-                        && !view.ai_session_from_probe
-                        && view.ai_session.is_some(),
+                    view.session_agent() != previous_target,
                     view.running_program.as_deref(),
                 ) {
                     return;
@@ -767,7 +788,7 @@ impl TerminalView {
                     let target = crate::session::AgentSession {
                         source: "codex".to_owned(),
                         session_id: Some(session.session_id.clone()),
-                        session_file: None,
+                        session_file: Some(session.session_file),
                     };
                     let previous = view.recovery.target.clone();
                     if !view.recovery.confirm(target) {

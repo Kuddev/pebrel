@@ -15,6 +15,148 @@ fn shell_glyph_size() -> f32 {
 }
 
 impl NebulaWorkspace {
+    /// The catalog itself is owned by the old/shared command model. This
+    /// presentation advertises only actions whose execution path is already
+    /// wired in GPUI; unsupported rows remain in the shared catalog and appear
+    /// automatically when their host service is connected.
+    pub(super) fn palette_action_supported(
+        action: &crate::display::command_palette::PaletteAction,
+    ) -> bool {
+        use crate::display::command_palette::PaletteAction;
+        matches!(
+            action,
+            PaletteAction::NewTab
+                | PaletteAction::NewWindow
+                | PaletteAction::CopyCwd
+                | PaletteAction::RevealCwd
+                | PaletteAction::CloseTab
+                | PaletteAction::NextTab
+                | PaletteAction::PrevTab
+                | PaletteAction::ToggleSidebar
+                | PaletteAction::OpenSettings
+                | PaletteAction::ToggleGhost
+                | PaletteAction::CycleAccept
+                | PaletteAction::CycleCompletionStyle
+                | PaletteAction::ToggleFilesPanel
+                | PaletteAction::OpenAiSessionPicker
+                | PaletteAction::SelectTheme(_)
+                | PaletteAction::SplitRight
+                | PaletteAction::SplitDown
+                | PaletteAction::ToggleGitPanel
+                | PaletteAction::ExportWorkspace
+        )
+    }
+
+    pub(super) fn palette_action_available(
+        action: &crate::display::command_palette::PaletteAction,
+        has_local_cwd: bool,
+        has_cwd: bool,
+    ) -> bool {
+        use crate::display::command_palette::PaletteAction;
+
+        Self::palette_action_supported(action)
+            && (has_local_cwd || !matches!(action, PaletteAction::RevealCwd))
+            && (has_cwd || !matches!(action, PaletteAction::CopyCwd))
+    }
+
+    pub(super) fn filtered_palette_rows(&self, cx: &App) -> Vec<WorkspacePaletteRow> {
+        let query = self.command_palette_input.read(cx).value().to_ascii_lowercase();
+        let words: Vec<_> = query.split_whitespace().collect();
+        let has_local_cwd = self.active_local_cwd(cx).is_some();
+        let has_cwd = self
+            .tabs
+            .get(self.active)
+            .and_then(WorkspaceTab::focused_view)
+            .is_some_and(|view| view.read(cx).working_directory().is_some());
+        let language = workspace_ui_language();
+        let rows = self.palette_override.clone().unwrap_or_else(|| {
+            let mut rows: Vec<WorkspacePaletteRow> = crate::display::command_palette::catalog()
+                .iter()
+                .filter(|item| Self::palette_action_available(&item.action, has_local_cwd, has_cwd))
+                .map(|item| {
+                    let (group_order, group) =
+                        crate::display::command_palette::command_group_metadata(
+                            &item.action,
+                            language,
+                            has_local_cwd,
+                            false,
+                        );
+                    WorkspacePaletteRow {
+                        group_order,
+                        group,
+                        label: item.label.to_owned(),
+                        hint: item.hint.to_owned(),
+                        hint_style: WorkspacePaletteHintStyle::Shortcut,
+                        search: item.search.to_owned(),
+                        action: WorkspacePaletteAction::Shared(item.action.clone()),
+                        icon: None,
+                        icon_glyph: None,
+                        icon_path: None,
+                    }
+                })
+                .collect();
+            rows.push(recipes::palette_row(language));
+            // 启动器混排（旧壳 ⌘K 裁定）：SSH 主机与命令同列，置顶/隐藏
+            // 次序由共享 merge 权威裁定。
+            let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
+            rows.extend(
+                crate::gpui_shell::ssh_hosts::SshHostLists::load().merged().into_iter().map(
+                    |host| {
+                        let glyph = crate::display::ui::os_icons::resolve(
+                            ssh_icons.get(&host).map(String::as_str),
+                        )
+                        .glyph;
+                        WorkspacePaletteRow {
+                            group_order: usize::MAX,
+                            group: language.pick("SSH 主机", "SSH HOSTS").to_owned(),
+                            label: host.clone(),
+                            hint: "SSH".to_owned(),
+                            hint_style: WorkspacePaletteHintStyle::Metadata,
+                            search: format!("{host} ssh host remote lianjie 连接").to_lowercase(),
+                            action: WorkspacePaletteAction::LaunchSshHost(host),
+                            icon: None,
+                            icon_glyph: Some(glyph),
+                            icon_path: None,
+                        }
+                    },
+                ),
+            );
+            rows
+        });
+        let mut rows: Vec<_> = rows
+            .into_iter()
+            .filter(|row| {
+                if let Some(filter) = self.quick_jump_filter
+                    && !filter.matches(&row.action)
+                {
+                    return false;
+                }
+                if self.shell_picker_open {
+                    let keep = match self.launcher_filter {
+                        crate::display::command_palette::LauncherFilter::All => true,
+                        crate::display::command_palette::LauncherFilter::Ssh => {
+                            matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_))
+                        },
+                        crate::display::command_palette::LauncherFilter::Shell => {
+                            matches!(
+                                row.action,
+                                WorkspacePaletteAction::LaunchShell(_)
+                                    | WorkspacePaletteAction::LaunchProfile(_)
+                            )
+                        },
+                    };
+                    if !keep {
+                        return false;
+                    }
+                }
+                words.is_empty()
+                    || words.iter().all(|word| row.search.to_ascii_lowercase().contains(word))
+            })
+            .collect();
+        rows.sort_by_key(|row| row.group_order);
+        rows
+    }
+
     pub(super) fn render_command_palette(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         use crate::display::ui::tokens::{control, radius, space};
 

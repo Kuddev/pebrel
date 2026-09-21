@@ -758,10 +758,11 @@ pub struct NebulaWorkspace {
     /// 用户命令管理器贴在右侧覆盖显示，不占终端布局宽度，也不复用应用动作
     /// 命令面板的状态，避免两种“命令”语义互相污染。
     command_manager_open: bool,
+    command_manager_group: Option<String>,
     command_group_menu: Option<command_manager::GroupMenu>,
     command_manager_input: Entity<InputState>,
     command_manager_selected: usize,
-    command_manager_scroll: gpui::ScrollHandle,
+    command_manager_scroll: gpui::UniformListScrollHandle,
     saved_commands: crate::saved_commands::SavedCommands,
     _command_manager_subscription: Subscription,
     /// Git/SVN 提交信息输入（GPUI 输入组件）；提交动作直达共享模型
@@ -804,6 +805,7 @@ pub struct NebulaWorkspace {
     file_tree_scroll: gpui::UniformListScrollHandle,
     /// 文件树右键：画在 workspace 根上，不进抽屉子孙树。见 `file_tree.rs`。
     file_tree_menu: Option<file_tree::FileTreeContextMenu>,
+    file_tree_path: Option<file_tree::PathEditor>,
     /// 抽屉在 SSH pane 上的远端形态。与 `side_panel` 并存而不是替换它：
     /// 用户在远端 tab 和本地 tab 之间来回切时，两边的浏览位置都该留着。
     remote_browser: remote_files::RemoteBrowser,
@@ -975,27 +977,8 @@ impl NebulaWorkspace {
                 }
             },
         );
-        let command_manager_subscription = cx.subscribe_in(
-            &command_manager_input,
-            window,
-            |this: &mut Self,
-             _: &Entity<InputState>,
-             event: &InputEvent,
-             window: &mut Window,
-             cx: &mut Context<'_, Self>| {
-                match event {
-                    InputEvent::Change => {
-                        this.command_manager_selected = 0;
-                        this.command_manager_scroll.scroll_to_item(0);
-                        cx.notify();
-                    },
-                    InputEvent::PressEnter { .. } => {
-                        this.run_selected_saved_command(window, cx);
-                    },
-                    _ => {},
-                }
-            },
-        );
+        let command_manager_subscription =
+            cx.subscribe_in(&command_manager_input, window, Self::on_command_manager_input_event);
         let file_tree_search_subscription =
             cx.subscribe_in(&file_tree_search_input, window, Self::on_file_tree_search_event);
         let sidebar_logo_target_px =
@@ -1047,10 +1030,11 @@ impl NebulaWorkspace {
             command_palette_input,
             command_palette_selected: 0,
             command_manager_open: false,
+            command_manager_group: None,
             command_group_menu: None,
             command_manager_input,
             command_manager_selected: 0,
-            command_manager_scroll: gpui::ScrollHandle::new(),
+            command_manager_scroll: gpui::UniformListScrollHandle::new(),
             saved_commands: crate::saved_commands::SavedCommands::load().unwrap_or_default(),
             _command_manager_subscription: command_manager_subscription,
             git_commit_input,
@@ -1072,6 +1056,7 @@ impl NebulaWorkspace {
             _file_tree_search_subscription: file_tree_search_subscription,
             file_tree_scroll: gpui::UniformListScrollHandle::new(),
             file_tree_menu: None,
+            file_tree_path: None,
             remote_browser: remote_files::RemoteBrowser::default(),
             remote_files_scroll: gpui::UniformListScrollHandle::new(),
             tab_menu: None,
@@ -2081,140 +2066,6 @@ impl NebulaWorkspace {
         self.toggle_side_panel(crate::display::side_panel::PanelView::Git, cx);
     }
 
-    /// The catalog itself is owned by the old/shared command model. This
-    /// presentation advertises only actions whose execution path is already
-    /// wired in GPUI; unsupported rows remain in the shared catalog and appear
-    /// automatically when their host service is connected.
-    fn palette_action_supported(action: &crate::display::command_palette::PaletteAction) -> bool {
-        use crate::display::command_palette::PaletteAction;
-        matches!(
-            action,
-            PaletteAction::NewTab
-                | PaletteAction::NewWindow
-                | PaletteAction::CopyCwd
-                | PaletteAction::RevealCwd
-                | PaletteAction::CloseTab
-                | PaletteAction::NextTab
-                | PaletteAction::PrevTab
-                | PaletteAction::ToggleSidebar
-                | PaletteAction::OpenSettings
-                | PaletteAction::ToggleGhost
-                | PaletteAction::CycleAccept
-                | PaletteAction::CycleCompletionStyle
-                | PaletteAction::ToggleFilesPanel
-                | PaletteAction::OpenAiSessionPicker
-                | PaletteAction::SelectTheme(_)
-                | PaletteAction::SplitRight
-                | PaletteAction::SplitDown
-                | PaletteAction::ToggleGitPanel
-                | PaletteAction::ExportWorkspace
-        )
-    }
-
-    fn palette_action_available(
-        action: &crate::display::command_palette::PaletteAction,
-        has_local_cwd: bool,
-    ) -> bool {
-        use crate::display::command_palette::PaletteAction;
-
-        Self::palette_action_supported(action)
-            && (has_local_cwd
-                || !matches!(action, PaletteAction::CopyCwd | PaletteAction::RevealCwd))
-    }
-
-    fn filtered_palette_rows(&self, cx: &App) -> Vec<WorkspacePaletteRow> {
-        let query = self.command_palette_input.read(cx).value().to_ascii_lowercase();
-        let words: Vec<_> = query.split_whitespace().collect();
-        let has_local_cwd = self.active_local_cwd(cx).is_some();
-        let language = workspace_ui_language();
-        let rows = self.palette_override.clone().unwrap_or_else(|| {
-            let mut rows: Vec<WorkspacePaletteRow> = crate::display::command_palette::catalog()
-                .iter()
-                .filter(|item| Self::palette_action_available(&item.action, has_local_cwd))
-                .map(|item| {
-                    let (group_order, group) =
-                        crate::display::command_palette::command_group_metadata(
-                            &item.action,
-                            language,
-                            has_local_cwd,
-                            false,
-                        );
-                    WorkspacePaletteRow {
-                        group_order,
-                        group,
-                        label: item.label.to_owned(),
-                        hint: item.hint.to_owned(),
-                        hint_style: WorkspacePaletteHintStyle::Shortcut,
-                        search: item.search.to_owned(),
-                        action: WorkspacePaletteAction::Shared(item.action.clone()),
-                        icon: None,
-                        icon_glyph: None,
-                        icon_path: None,
-                    }
-                })
-                .collect();
-            rows.push(recipes::palette_row(language));
-            // 启动器混排（旧壳 ⌘K 裁定）：SSH 主机与命令同列，置顶/隐藏
-            // 次序由共享 merge 权威裁定。
-            let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
-            rows.extend(
-                crate::gpui_shell::ssh_hosts::SshHostLists::load().merged().into_iter().map(
-                    |host| {
-                        let glyph = crate::display::ui::os_icons::resolve(
-                            ssh_icons.get(&host).map(String::as_str),
-                        )
-                        .glyph;
-                        WorkspacePaletteRow {
-                            group_order: usize::MAX,
-                            group: language.pick("SSH 主机", "SSH HOSTS").to_owned(),
-                            label: host.clone(),
-                            hint: "SSH".to_owned(),
-                            hint_style: WorkspacePaletteHintStyle::Metadata,
-                            search: format!("{host} ssh host remote lianjie 连接").to_lowercase(),
-                            action: WorkspacePaletteAction::LaunchSshHost(host),
-                            icon: None,
-                            icon_glyph: Some(glyph),
-                            icon_path: None,
-                        }
-                    },
-                ),
-            );
-            rows
-        });
-        let mut rows: Vec<_> = rows
-            .into_iter()
-            .filter(|row| {
-                if let Some(filter) = self.quick_jump_filter
-                    && !filter.matches(&row.action)
-                {
-                    return false;
-                }
-                if self.shell_picker_open {
-                    let keep = match self.launcher_filter {
-                        crate::display::command_palette::LauncherFilter::All => true,
-                        crate::display::command_palette::LauncherFilter::Ssh => {
-                            matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_))
-                        },
-                        crate::display::command_palette::LauncherFilter::Shell => {
-                            matches!(
-                                row.action,
-                                WorkspacePaletteAction::LaunchShell(_)
-                                    | WorkspacePaletteAction::LaunchProfile(_)
-                            )
-                        },
-                    };
-                    if !keep {
-                        return false;
-                    }
-                }
-                words.is_empty()
-                    || words.iter().all(|word| row.search.to_ascii_lowercase().contains(word))
-            })
-            .collect();
-        rows.sort_by_key(|row| row.group_order);
-        rows
-    }
-
     fn reset_palette_query(
         &self,
         placeholder: &'static str,
@@ -2533,10 +2384,9 @@ impl NebulaWorkspace {
                 });
             },
             PaletteAction::CopyCwd => {
-                if let Some(path) = self.active_local_cwd(cx) {
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        path.to_string_lossy().into_owned(),
-                    ));
+                if let Some(view) = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)
+                {
+                    view.update(cx, |view, cx| view.copy_working_directory(window, cx));
                 }
                 self.focus_active(window, cx);
             },
@@ -3264,6 +3114,7 @@ impl Render for NebulaWorkspace {
             // 变化时重建，普通 render 不重复解码 PNG。
             self.sidebar_logo_images = sidebar_logo_images(sidebar_logo_target_px);
             self.sidebar_logo_target_px = sidebar_logo_target_px;
+            self.sync_settings_agent_logos(cx);
         }
         // Some tab-open/restore paths assign `active` directly. Clear a focus
         // record tied to a different entity before deriving layout booleans.

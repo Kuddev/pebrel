@@ -85,24 +85,54 @@ impl NebulaWorkspace {
     fn finish_close_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.window_close_pending = true;
         let panes = self.prepare_session_save(cx);
+        let approved_drafts: Vec<_> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.file_editor(cx))
+            .map(|file| {
+                let draft = file.read(cx).draft(cx);
+                (file, draft)
+            })
+            .collect();
         let handle = self.window_handle;
         cx.spawn(async move |this, cx| {
             let ready = wait_for_session_ids(&panes, cx).await;
+            if !ready && !confirm_incomplete_session(handle, cx).await {
+                let _ = this.update(cx, |workspace, cx| {
+                    workspace.window_close_pending = false;
+                    cx.notify();
+                });
+                return;
+            }
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |workspace, cx| {
-                    if !ready || workspace.save_clean_window_session(cx).is_err() {
+                    if workspace.tabs.iter().filter_map(|tab| tab.file_editor(cx)).any(|file| {
+                        let view = file.read(cx);
+                        view.is_saving()
+                            || (view.is_dirty()
+                                && !approved_drafts.iter().any(|(approved, draft)| {
+                                    approved == &file && *draft == view.draft(cx)
+                                }))
+                    }) {
                         workspace.window_close_pending = false;
                         let language = crate::gpui_shell::config::ui_language(cx);
-                        let message = if ready {
-                            crate::i18n::Message::SessionSaveFailed
-                        } else {
-                            crate::i18n::Message::SessionIdentityPending
-                        };
                         crate::gpui_shell::toast::banner(
                             window,
                             cx,
                             crate::display::ToastKind::Warning,
-                            language.text(message),
+                            language.text(crate::i18n::Message::UpdateDraftChanged),
+                        );
+                        cx.notify();
+                        return;
+                    }
+                    if workspace.save_clean_window_session(cx).is_err() {
+                        workspace.window_close_pending = false;
+                        let language = crate::gpui_shell::config::ui_language(cx);
+                        crate::gpui_shell::toast::banner(
+                            window,
+                            cx,
+                            crate::display::ToastKind::Warning,
+                            language.text(crate::i18n::Message::SessionSaveFailed),
                         );
                         cx.notify();
                         return;
@@ -135,6 +165,28 @@ impl NebulaWorkspace {
     }
 }
 
+/// Missing provider metadata must not make closing impossible. Consent covers
+/// missing identities only: draft approval and durable-save failures still block.
+pub(super) async fn confirm_incomplete_session(
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) -> bool {
+    let prompt = handle.update(cx, |_, window, cx| {
+        use crate::i18n::Message;
+        let language = crate::gpui_shell::config::ui_language(cx);
+        window.activate_window();
+        window.prompt(
+            gpui::PromptLevel::Warning,
+            language.text(Message::SessionExitIncompleteTitle),
+            Some(language.text(Message::SessionExitIncompleteBody)),
+            &[language.text(Message::EditorCancel), language.text(Message::SessionExitAnyway)],
+            cx,
+        )
+    });
+    let Ok(prompt) = prompt else { return false };
+    matches!(prompt.await, Ok(1))
+}
+
 pub(super) async fn wait_for_session_ids(
     panes: &[Entity<TerminalView>],
     cx: &mut gpui::AsyncApp,
@@ -150,5 +202,40 @@ pub(super) async fn wait_for_session_ids(
             return false;
         }
         cx.background_executor().timer(Duration::from_millis(25)).await;
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn missing_identity_prompt_supports_cancel_and_explicit_close(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::gpui_shell::config::Settings::load(
+                nebula_settings::ThemeName::Nord,
+            ));
+        });
+        let handle = cx.add_empty_window().update(|window, _| window.window_handle());
+        for (message, expected) in [
+            (crate::i18n::Message::EditorCancel, false),
+            (crate::i18n::Message::SessionExitAnyway, true),
+        ] {
+            let answer = cx.update(|cx| crate::gpui_shell::config::ui_language(cx).text(message));
+            let task =
+                cx.spawn(
+                    move |mut cx| async move { confirm_incomplete_session(handle, &mut cx).await },
+                );
+            cx.run_until_parked();
+            assert!(cx.has_pending_prompt());
+            cx.simulate_prompt_answer(answer);
+            assert_eq!(task.await, expected);
+            assert_eq!(
+                cx.windows(),
+                vec![handle],
+                "the prompt cannot stop a pane before durable saving"
+            );
+        }
     }
 }

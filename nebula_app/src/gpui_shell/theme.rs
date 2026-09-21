@@ -716,10 +716,18 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     // 焦点 / 选择 / 链接 / 拖拽。
     theme.ring = ink(sk.accent);
     theme.caret = ink(sk.accent);
-    // TextView paints selection over glyphs. Match gpui-component's 0.3 alpha
-    // cap instead of passing through the opaque selected surface from Skin.
-    let selection = wash(sk.accent_soft);
-    theme.selection = selection.alpha(selection.a.min(0.3));
+    // Use ink, not the already washed-out list surface: Input also desaturates
+    // this color for search matches. TextView paints it over glyphs, so keep
+    // the overlay translucent while retaining contrast against the document.
+    let [r, g, b] = chrome.terminal_background();
+    let selection = crate::display::terminal_color::ensure_contrast(
+        sk.accent,
+        Rgb::new(r, g, b),
+        sk.ink,
+        sk.ink_strong,
+        4.5,
+    );
+    theme.selection = ink(selection).opacity(0.3);
     theme.link = ink(sk.accent);
     theme.link_hover = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.10);
     theme.link_active = shift3(sk.accent.r, sk.accent.g, sk.accent.b, 0.18);
@@ -766,7 +774,7 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     // 1.16 的 Button、Slider、Switch 等背景统一读取 ThemeTokens。Nebula 的
     // Skin 是纯色权威来源，因此在所有 ThemeColor 覆写完成后一次性解析，避免
     // 新组件悄悄回落到 gpui-component 的默认主题色。
-    syntax::apply(theme, chrome.base_name().reviewed_palette());
+    syntax::apply(theme, chrome);
     theme.tokens = (&theme.colors).into();
 }
 

@@ -152,7 +152,8 @@ impl AgentKind {
         self.slug()
     }
 
-    fn aliases(self) -> &'static [&'static str] {
+    /// 进程识别与设置页可执行文件发现共用同一组官方/兼容名称。
+    pub(crate) fn aliases(self) -> &'static [&'static str] {
         match self {
             Self::Claude => &["claude", "claude-code"],
             Self::Codex => &["codex", "codex-cli"],
