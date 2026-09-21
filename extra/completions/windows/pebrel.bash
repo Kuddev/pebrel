@@ -3880,13 +3880,21 @@ _pebrel() {
             return 0
             ;;
         pebrel__setup__ai)
-            opts="-h --remove --ssh --help"
+            opts="-h --remove --ssh --wsl --wsl-user --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --ssh)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --wsl)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --wsl-user)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
