@@ -194,11 +194,13 @@ mod tests {
         let dirs = vec![grok_dir, cursor_dir];
         assert_eq!(find_executable(AgentKind::Cursor, &dirs), Some(cursor));
         assert_eq!(find_executable(AgentKind::Grok, &dirs), Some(grok));
-        executable(dir.path(), "agent");
-        executable(dir.path(), "cursor");
-        assert_eq!(find_executable(AgentKind::Cursor, &[dir.path().to_path_buf()]), None);
-        let cli = executable(dir.path(), "cursor-agent");
-        assert_eq!(find_executable(AgentKind::Cursor, &[dir.path().to_path_buf()]), Some(cli));
+        let generic_dir = dir.path().join("generic");
+        executable(&generic_dir, "agent");
+        executable(&generic_dir, "cursor");
+        assert_eq!(find_executable(AgentKind::Cursor, &[generic_dir]), None);
+        let cli_dir = dir.path().join("cli");
+        let cli = executable(&cli_dir, "cursor-agent");
+        assert_eq!(find_executable(AgentKind::Cursor, &[cli_dir]), Some(cli));
     }
 
     #[test]
