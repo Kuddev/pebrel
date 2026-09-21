@@ -75,6 +75,15 @@ def run(ctx: ConformanceContext) -> dict[str, object]:
     try:
         source_before = ctx.measure_columns(source)
         measurements["source_columns_before"] = source_before
+        # Creating a pane precedes shell startup. Use the same initial-output
+        # precondition as boot before sending the sibling's first command.
+        # Measurements after pane.resize remain immediate and strict.
+        ctx.poll(
+            lambda: ctx.read(sibling),
+            lambda value: bool(value.get("text", "").strip()),
+            "split shell did not render initial output",
+            timeout=ctx.startup_timeout,
+        )
         sibling_before = ctx.measure_columns(sibling)
         measurements["sibling_columns_before"] = sibling_before
         resized = ctx.api(

@@ -682,38 +682,24 @@ impl SettingsPane {
                     )
                 },
             ))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .when(hidden_count > 0, |row| {
-                        let show = self.ssh_show_hidden;
-                        row.child(
-                            NebulaButton::new("ssh-toggle-hidden")
-                                .label(if show {
-                                    SharedString::from(
-                                        language.pick("收起已隐藏", "Collapse hidden"),
-                                    )
-                                } else {
-                                    SharedString::from(format!(
-                                        "{} {hidden_count}",
-                                        language.pick("已隐藏", "Hidden")
-                                    ))
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.ssh_show_hidden = !this.ssh_show_hidden;
-                                    cx.notify();
-                                })),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(language.tr("settings.ssh.shared_data_hint")),
-                    ),
-            )
+            .when(hidden_count > 0, |group| {
+                let show = self.ssh_show_hidden;
+                group.child(
+                    NebulaButton::new("ssh-toggle-hidden")
+                        .label(if show {
+                            SharedString::from(language.pick("收起已隐藏", "Collapse hidden"))
+                        } else {
+                            SharedString::from(format!(
+                                "{} {hidden_count}",
+                                language.pick("已隐藏", "Hidden")
+                            ))
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.ssh_show_hidden = !this.ssh_show_hidden;
+                            cx.notify();
+                        })),
+                )
+            })
             .when_some(hidden_rows, |group, rows| {
                 group.child(div().h(px(8.0))).child(
                     v_flex()

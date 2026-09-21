@@ -11,6 +11,32 @@ fn ssh_label(destination: Option<&str>, directory: &std::path::Path) -> Option<S
 }
 
 impl TerminalView {
+    /// 目录来自 shell 上报；不要从带 Powerline 图标的提示符或选区反推路径。
+    pub fn working_directory(&self) -> Option<&str> {
+        let path = self.cwd.as_str();
+        ((path.starts_with('/') || std::path::Path::new(path).is_absolute())
+            && !path.chars().any(char::is_control))
+        .then_some(path)
+    }
+
+    pub fn copy_working_directory(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        use crate::i18n::Message;
+
+        let Some(path) = self.working_directory() else { return false };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.to_owned()));
+        crate::gpui_shell::toast::toast(
+            window,
+            cx,
+            crate::display::ToastKind::Info,
+            super::ui_language().text(Message::CommonCwdCopied),
+        );
+        true
+    }
+
     pub(super) fn refresh_ssh_label(&mut self) {
         self.ssh_label =
             ssh_label(self.ssh_destination.as_deref(), &crate::display::nebula_data_dir());

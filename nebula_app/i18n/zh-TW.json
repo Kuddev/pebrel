@@ -16,7 +16,8 @@
       "interaction": "互動",
       "keymap": "按鍵對應",
       "advanced": "進階",
-      "backup": "備份"
+      "backup": "備份",
+      "agents": "Agents"
     },
     "network": {
       "title": "網路代理",
@@ -42,6 +43,29 @@
     "font": {
       "loading": "正在列舉系統字型…",
       "no_matches": "沒有符合的字型"
+    },
+    "agents": {
+      "title": "程式設計智能體",
+      "description": "在 Pebrel 中顯示執行狀態、完成通知和授權請求。Claude Code 與 Codex 預設開啟。",
+      "refresh": "重新整理",
+      "platform_unsupported": "目前僅 Windows 支援自動安裝 hooks。",
+      "checking": "正在偵測工具與 hooks…",
+      "applying": "處理中…",
+      "installed": "已開啟通知",
+      "off": "未開啟通知",
+      "not_detected": "未安裝",
+      "config_detected": "已偵測到工具設定",
+      "unsupported": "尚未提供 hook 整合",
+      "unavailable": "無法使用",
+      "needs_attention": "需要檢查",
+      "restart": "變更將在重新啟動 Agent 後生效。這裡管理安裝在本機的 Agent。",
+      "enabled": "Hooks 已安裝，請重新啟動 agent 使其生效。",
+      "disabled": "Hooks 已移除，請重新啟動 agent 使其生效。",
+      "failed": "無法更新 hooks：{error}",
+      "helper_missing": "缺少 hook 輔助程式，請修復 Pebrel 安裝後再啟用。",
+      "needs_repair": "已安裝 · 需修復",
+      "initialize": "請先執行一次此工具以建立設定，然後重新整理。",
+      "config_path": "設定：{path}"
     }
   },
   "common": {
@@ -171,6 +195,8 @@
     "action": "動作",
     "update_notice": "Pebrel v{latest} 已發布（目前 v{current}）",
     "copied_lines": "已複製 {lines} 行到剪貼簿",
+    "copy_working_directory": "複製工作目錄",
+    "cwd_copied": "工作目錄已複製",
     "paste_lines": "貼上 {lines} 行文字？",
     "sent_to": "已傳送至 {target}"
   },
@@ -178,5 +204,19 @@
     "announced": "已接入 AI 回合通知（Claude / Codex / Kimi / Pi / opencode）。撤銷：pebrel setup-ai --remove"
   },
   "notification.command_finished": "命令結束，耗時 {seconds} 秒",
-  "notification.command_failed": "命令失敗（結束代碼 {code}），耗時 {seconds} 秒"
+  "notification.command_failed": "命令失敗（結束代碼 {code}），耗時 {seconds} 秒",
+  "commands.add_command": "新增命令",
+  "commands.root": "全部命令",
+  "commands.back_to_root": "返回全部命令",
+  "commands.group_count": "{count} 條命令",
+  "files.path_edit": "編輯目錄路徑",
+  "files.path_placeholder": "輸入絕對路徑或相對路徑",
+  "files.path_choose": "選擇目錄",
+  "files.path_open": "開啟目錄",
+  "files.path_failed": "無法開啟這個目錄：{error}",
+  "session.restore_choose_codex": "儲存的 Codex 對話已無法使用。請在 Codex 的工作階段清單中選擇要繼續的對話。",
+  "session.choose_conversation": "選擇要繼續的對話…",
+  "session.exit_incomplete_title": "仍有 AI 工作階段無法識別，繼續關閉？",
+  "session.exit_incomplete_body": "關閉前會儲存視窗配置及已知的對話 ID，並停止正在執行的命令。尚未取得 ID 的對話，重新開啟後可能需要手動選擇。",
+  "session.exit_anyway": "儲存已知狀態並關閉"
 }

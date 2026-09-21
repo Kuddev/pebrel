@@ -42,6 +42,28 @@ fn is_owned(path: &Path, content: &[u8], expected: &[u8], legacy_hashes: &[&str]
             .is_ok_and(|marker| marker.trim() == fingerprint)
 }
 
+/// 复用安装/卸载的归属判断；设置页不能把同名的用户文件显示成已接入。
+pub(super) fn installed(
+    path: &Path,
+    legacy: &Path,
+    content: &str,
+    legacy_hashes: &[&str],
+) -> io::Result<bool> {
+    let mut installed = false;
+    for file in [path, legacy] {
+        if let Some(bytes) = read_if_present(file)? {
+            if !is_owned(file, &bytes, content.as_bytes(), legacy_hashes) {
+                return Err(io::Error::other(format!(
+                    "Preserving edited or unmanaged integration: {}",
+                    file.display()
+                )));
+            }
+            installed = true;
+        }
+    }
+    Ok(installed)
+}
+
 /// Rename the old bridge before updating it so the loader never sees two copies.
 /// Older releases had no ownership marker, so only their exact verified payloads
 /// may migrate; an edited or unknown file stays untouched.

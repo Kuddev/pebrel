@@ -27,7 +27,7 @@ async function bridge() {
     loadPiModule: async () => ({ VERSION: "0.85.1" }),
     spawn: (_exe, args) => {
       sent.push(JSON.parse(args[1]));
-      return { unref() {} };
+      return { on() {}, unref() {} };
     },
   });
   return {

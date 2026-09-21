@@ -7,15 +7,15 @@
 //! 空格的安装路径会被 shell 切开（#80 的同源教训）。事件 JSON 经 stdin
 //! 传给 helper；kimi 侧 fail-open，helper 任何路径都 exit 0。
 //!
-//! 与 claude/codex 同一套纪律：幂等合并、只认 `command` 里含 helper 标记
-//! 的条目（`contains_helper`）、过期路径就地自愈、首次改动留
+//! 与 claude/codex 同一套纪律：幂等合并、只认完整 helper 调用
+//! 的条目、过期路径就地自愈、首次改动留
 //! `*.pebrel-bak`、解析失败或形状意外拒写、目录不存在不 scaffold。
 
 use std::path::{Path, PathBuf};
 
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
-use crate::ai_hook::contains_helper;
+use crate::ai_hook::is_helper_shell_command;
 
 /// 订阅的 kimi 事件，每个一条 `[[hooks]]`。其余事件（SessionHeartbeat、
 /// Notification、PreToolUse 等）不订阅。
@@ -47,11 +47,12 @@ fn hook_command(helper: &Path) -> String {
     format!("\"{}\" kimi", helper.display().to_string().replace('\\', "/"))
 }
 
-/// 「自己的条目」= 订阅事件 ∩ command 含 helper 标记。用户把 pebrel-hook
+/// 「自己的条目」= 订阅事件 ∩ 完整 helper 调用。用户把 pebrel-hook
 /// 手工挂到未订阅事件上的条目不在移除范围内（与 claude remove_hooks
 /// 只遍历 CLAUDE_EVENTS 同理）。
 fn is_our_entry(event: Option<&str>, command: Option<&str>) -> bool {
-    event.is_some_and(|event| KIMI_EVENTS.contains(&event)) && command.is_some_and(contains_helper)
+    event.is_some_and(|event| KIMI_EVENTS.contains(&event))
+        && command.is_some_and(|command| is_helper_shell_command(command, "kimi"))
 }
 
 /// 把文档的 `hooks` 键归一化成数组表。`hooks = []`（空内联数组）与空的
@@ -81,7 +82,7 @@ fn install_into_doc(doc: &mut DocumentMut, command: &str) -> Option<bool> {
         let mut found = false;
         for entry in hooks.iter_mut() {
             let ours = entry.get("event").and_then(Item::as_str) == Some(event)
-                && entry.get("command").and_then(Item::as_str).is_some_and(contains_helper);
+                && is_our_entry(Some(event), entry.get("command").and_then(Item::as_str));
             if !ours {
                 continue;
             }
@@ -144,9 +145,25 @@ fn remove_from_doc(doc: &mut DocumentMut) -> bool {
     }
 }
 
+/// 设置页只读复用同一 TOML 规则，区分部分安装和完整配置。
+pub(super) fn inspect(raw: &str, helper: &Path) -> std::io::Result<(bool, bool)> {
+    let mut doc = raw.parse::<DocumentMut>().map_err(std::io::Error::other)?;
+    let installed = remove_from_doc(&mut doc.clone());
+    let current = install_into_doc(&mut doc, &hook_command(helper)) == Some(false);
+    Ok((installed, current))
+}
+
 /// 在 `path`（config.toml）上执行安装/自愈。返回是否写了文件。
 fn ensure_kimi_hooks_in(path: &Path, helper: &Path) -> bool {
-    let raw = std::fs::read_to_string(path).unwrap_or_default(); // 文件不存在 → 空文档
+    let Ok(Some(_lock)) = crate::atomic_file::try_lock(path) else { return false };
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            log::warn!("ai_hook: cannot read {} ({error}); left alone", path.display());
+            return false;
+        },
+    };
     let Ok(mut doc) = raw.parse::<DocumentMut>() else {
         log::warn!("ai_hook: {} is not valid TOML; left alone", path.display());
         return false;
@@ -201,9 +218,15 @@ pub(super) fn ensure_kimi_hooks() -> bool {
 }
 
 fn remove_kimi_hooks_in(path: &Path) -> std::io::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let _lock = crate::atomic_file::try_lock(path)?
+        .ok_or_else(|| std::io::Error::other("Kimi hook configuration is busy"))?;
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
-        Err(_) => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
     };
     let mut doc =
         raw.parse::<DocumentMut>().map_err(|err| std::io::Error::other(err.to_string()))?;
@@ -324,6 +347,14 @@ command = "notify-send done"
 [[hooks]]
 event = "PreToolUse"
 command = "\"D:/tools/pebrel-hook.exe\" kimi"
+
+[[hooks]]
+event = "Stop"
+command = "echo pebrel-hook.exe"
+
+[[hooks]]
+event = "Stop"
+command = "\"D:/tools/pebrel-hook.exe\" kimi && echo user"
 "#,
         )
         .unwrap();
@@ -342,6 +373,8 @@ command = "\"D:/tools/pebrel-hook.exe\" kimi"
             [
                 ("Notification", "notify-send done"),
                 ("PreToolUse", "\"D:/tools/pebrel-hook.exe\" kimi"),
+                ("Stop", "echo pebrel-hook.exe"),
+                ("Stop", "\"D:/tools/pebrel-hook.exe\" kimi && echo user"),
             ],
             "别人的条目与手工挂在未订阅事件上的 helper 条目都要留下"
         );

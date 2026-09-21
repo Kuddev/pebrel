@@ -1,6 +1,6 @@
 //! Compact backup dashboard and configuration card based on the approved layout.
 use super::*;
-use crate::gpui_shell::widgets::{NebulaSwitch, device_icon_anchor};
+use crate::gpui_shell::widgets::NebulaSwitch;
 use gpui_component::menu::PopupMenuItem;
 
 fn card(cx: &App) -> gpui::Div {
@@ -8,11 +8,10 @@ fn card(cx: &App) -> gpui::Div {
         .w_full()
         .min_w_0()
         .gap_4()
-        .p_5()
+        .p_4()
         .rounded_lg()
         .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().secondary.opacity(0.3))
+        .border_color(crate::gpui_shell::theme::settings_hairline(cx))
 }
 
 fn provider(config: &remote::BackupRemoteConfig) -> Message {
@@ -36,13 +35,8 @@ impl SettingsPane {
         self.initialize_backup(cx);
         let language = crate::gpui_shell::config::ui_language(cx);
         let configuration = self.backup_ui.configuration;
-        let tabs = h_flex()
-            .gap_1()
-            .p_1()
-            .rounded_md()
-            .border_1()
-            .border_color(cx.theme().border)
-            .children(
+        let tabs =
+            gpui_component::button::ButtonGroup::new("cloud-tabs").small().outline().children(
                 [(false, Message::CloudSnapshots), (true, Message::CloudSettings)].into_iter().map(
                     |(selected, title)| {
                         Button::new(if selected {
@@ -56,7 +50,8 @@ impl SettingsPane {
                         })
                         .label(language.text(title))
                         .small()
-                        .ghost()
+                        .h(px(28.0))
+                        .rounded(px(14.0))
                         .selected(configuration == selected)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.backup_ui.configuration = selected;
@@ -72,7 +67,8 @@ impl SettingsPane {
             if configuration { self.backup_configuration(cx) } else { self.backup_dashboard(cx) };
         v_flex()
             .w_full()
-            .gap_5()
+            .max_w(px(720.0))
+            .gap_4()
             .child(
                 h_flex()
                     .gap_3()
@@ -143,6 +139,7 @@ impl SettingsPane {
                 .child(
                     Button::new("cloud-refresh")
                         .ghost()
+                        .size(px(28.0))
                         .icon(Icon::default().path(crate::gpui_shell::assets::nav::REFRESH))
                         .tooltip(language.text(Message::CloudRefresh))
                         .disabled(off || self.backup_ui.listing || busy)
@@ -151,13 +148,20 @@ impl SettingsPane {
         );
         if self.backup_ui.snapshots.is_empty() {
             history = history.child(
-                div().py_5().text_sm().text_color(cx.theme().muted_foreground).child(
-                    language.text(if self.backup_ui.checked {
+                v_flex()
+                    .w_full()
+                    .py_6()
+                    .gap_2()
+                    .items_center()
+                    .text_center()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Icon::new(IconName::FolderOpen).size(px(24.0)))
+                    .child(language.text(if self.backup_ui.checked {
                         Message::CloudEmpty
                     } else {
                         Message::CloudLoadHistory
-                    }),
-                ),
+                    })),
             );
         }
         for (index, name) in self.backup_ui.snapshots.iter().enumerate() {
@@ -218,12 +222,12 @@ impl SettingsPane {
                             .gap_4()
                             .items_center()
                             .flex_wrap()
-                            .child(device_icon_anchor(IconName::Globe, cx))
+                            .child(Icon::new(IconName::Globe).size(px(20.0)))
                             .child(
                                 v_flex()
                                     .flex_1()
-                                    .min_w(px(220.0))
-                                    .gap_2()
+                                    .min_w(px(160.0))
+                                    .gap_1()
                                     .child(
                                         h_flex()
                                             .gap_2()
@@ -315,6 +319,12 @@ impl SettingsPane {
         let busy = self.backup_busy || self.backup_ui.secret_busy;
         let owner = cx.entity().downgrade();
         let provider_menu = Button::new("cloud-provider")
+            .debug_selector(|| "cloud-provider".into())
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .max_w_full()
+            .small()
+            .h(px(32.0))
+            .dropdown_caret(true)
             .label(language.text(provider(&self.backup_remote)))
             .disabled(busy)
             .dropdown_menu(move |mut menu, _, _| {
@@ -343,7 +353,7 @@ impl SettingsPane {
                     .gap_3()
                     .items_center()
                     .flex_wrap()
-                    .child(device_icon_anchor(IconName::Globe, cx))
+                    .child(Icon::new(IconName::Globe).size(px(18.0)))
                     .child(
                         div()
                             .flex_1()
@@ -355,6 +365,12 @@ impl SettingsPane {
                             .debug_selector(|| "cloud-scope-toggle".into())
                             .label(language.text(Message::CloudScope))
                             .small()
+                            .ghost()
+                            .icon(if self.backup_ui.scope_open {
+                                IconName::ChevronUp
+                            } else {
+                                IconName::ChevronDown
+                            })
                             .selected(self.backup_ui.scope_open)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.backup_ui.scope_open = !this.backup_ui.scope_open;
@@ -364,7 +380,8 @@ impl SettingsPane {
             )
             .child(
                 v_flex()
-                    .gap_1()
+                    .items_start()
+                    .gap_2()
                     .child(
                         div()
                             .text_xs()
@@ -389,20 +406,25 @@ impl SettingsPane {
             storage = storage.child(
                 v_flex()
                     .w_full()
-                    .gap_1()
+                    .max_w(px(420.0))
+                    .gap_2()
                     .child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(language.text(*label)),
                     )
-                    .child(Input::new(&self.backup_remote_inputs[index]).disabled(busy)),
+                    .child(
+                        Input::new(&self.backup_remote_inputs[index]).h(px(32.0)).disabled(busy),
+                    ),
             );
         }
         if matches!(self.backup_remote.protocol, BackupProtocol::WebDav | BackupProtocol::S3) {
             storage = storage.child(
                 v_flex()
-                    .gap_1()
+                    .w_full()
+                    .max_w(px(420.0))
+                    .gap_2()
                     .child(
                         h_flex()
                             .gap_2()
@@ -420,12 +442,9 @@ impl SettingsPane {
                             .gap_2()
                             .items_center()
                             .flex_wrap()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(180.0))
-                                    .child(Input::new(&self.backup_secret_input).disabled(busy)),
-                            )
+                            .child(div().flex_1().min_w(px(180.0)).child(
+                                Input::new(&self.backup_secret_input).h(px(32.0)).disabled(busy),
+                            ))
                             .child(
                                 Button::new("cloud-store-secret")
                                     .label(language.text(Message::CloudStoreCredential))
@@ -517,7 +536,12 @@ impl SettingsPane {
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(language.text(Message::CloudPassphrase)),
                     )
-                    .child(Input::new(&self.backup_pass_input).disabled(busy))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(420.0))
+                            .child(Input::new(&self.backup_pass_input).h(px(32.0)).disabled(busy)),
+                    )
                     .child(
                         div()
                             .text_xs()

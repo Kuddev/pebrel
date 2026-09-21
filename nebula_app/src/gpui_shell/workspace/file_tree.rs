@@ -20,6 +20,9 @@ use crate::gpui_shell::prelude::*;
 
 use super::NebulaWorkspace;
 
+mod path_bar;
+pub(super) use path_bar::PathEditor;
+
 /// 行距（旧壳 `PanelLayout::row_h`）。
 pub(super) const ROW_PITCH: f32 = 34.0;
 /// 行水洗高度（旧壳 `row_h - 4`）。行与行之间那条缝来自水洗比行距矮，
@@ -309,6 +312,8 @@ impl NebulaWorkspace {
         // 滚动只由 uniform_list 承担。旧壳那套行粒度 `scroll` 不再参与，否则
         // `click_row` 的 `scroll + index` 会把点击算到别的行上。
         self.side_panel.scroll = 0;
+        let path_bar = self.render_file_tree_path(cx);
+        let editing_path = self.file_tree_path.is_some();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let language = super::workspace_ui_language();
@@ -422,10 +427,6 @@ impl NebulaWorkspace {
                 )
             });
         let root_dir = self.side_panel.root().map(std::path::Path::to_path_buf);
-        let root = root_dir
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "等待终端上报工作目录…".to_owned());
         let row_count = self.side_panel.file_rows().len();
         let empty = self.file_tree_empty_state();
         let scroll_handle = self.file_tree_scroll.clone();
@@ -445,16 +446,9 @@ impl NebulaWorkspace {
                     .items_center()
                     .gap_1()
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(muted)
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .child(root),
+                        div().flex_1().min_w_0().child(path_bar),
                     )
-                    .child(
+                    .when(!editing_path, |bar| bar.child(
                         Button::new("file-tree-terminal-here")
                             .icon(IconName::SquareTerminal)
                             .ghost()
@@ -524,8 +518,11 @@ impl NebulaWorkspace {
                                 this.sync_side_panel_to_active(true, cx);
                                 cx.notify();
                             })),
-                    ),
+                    )),
             )
+            .when_some(self.file_tree_path_error(), |panel, error| {
+                panel.child(div().text_xs().text_color(theme.danger).child(error.clone()))
+            })
             .when_some(self.side_panel.localized_root_notice(crate::gpui_shell::config::ui_language(cx)), |panel, notice| {
                 panel.child(div().text_xs().text_color(theme.warning).child(notice.to_owned()))
             })
@@ -535,7 +532,8 @@ impl NebulaWorkspace {
                 // 再套 `overflow_y_scrollbar` 滚剩下的，两套模型打架：滚动条滑块
                 // 按剩余行算长度，滚轮又同时动两边。改成 uniform_list 虚拟化
                 // ——它自己就是滚动容器，滑块交给组件库 Scrollbar 读同一个 handle。
-                div()
+                v_flex()
+                    .debug_selector(|| "file-tree-content".into())
                     .flex_1()
                     .min_h_0()
                     .relative()
@@ -553,11 +551,11 @@ impl NebulaWorkspace {
                             }),
                         )
                         .w_full()
-                        .flex_grow_1()
-                        // 空态时让列表收缩到内容高度（通常只剩 `..` 一行），空态
-                        // 文案接在它下面——旧壳也是把文案画在 `..` 行之后。
+                        // 返回上级仍保留一行；空态使用剩余高度居中，不挤到左上角。
                         .when(empty.is_some(), |list| {
-                            list.with_sizing_behavior(gpui::ListSizingBehavior::Infer)
+                            list.h(px(row_count as f32 * ROW_PITCH))
+                                .flex_shrink_0()
+                                .with_sizing_behavior(gpui::ListSizingBehavior::Infer)
                         })
                         .when(empty.is_none(), |list| {
                             list.size_full()
@@ -582,13 +580,27 @@ impl NebulaWorkspace {
                     .when_some(empty, |list, empty| {
                         list.child(
                             v_flex()
+                                .debug_selector(|| "file-tree-empty".into())
+                                .flex_1()
+                                .min_h_0()
                                 .w_full()
-                                .px(px(DRAWER_TEXT_INSET + ROW_WASH_INSET))
-                                .py_2()
-                                .gap_1()
-                                .child(div().text_xs().text_color(theme.foreground).child(empty.title))
-                                .child(div().text_xs().text_color(muted).child(empty.reason))
-                                .child(div().text_xs().text_color(muted).child(empty.action)),
+                                .px_4()
+                                .py_3()
+                                .items_center()
+                                .justify_center()
+                                .text_center()
+                                .child(
+                                    v_flex()
+                                        .debug_selector(|| "file-tree-empty-message".into())
+                                        .w_full()
+                                        .max_w(px(240.0))
+                                        .gap_2()
+                                        .items_center()
+                                        .child(Icon::new(IconName::FolderOpen).size(px(24.0)).text_color(muted))
+                                        .child(div().w_full().text_sm().font_semibold().text_color(theme.foreground).child(empty.title))
+                                        .child(div().w_full().text_xs().text_color(muted).child(empty.reason))
+                                        .child(div().w_full().text_xs().text_color(muted).child(empty.action)),
+                                ),
                         )
                     }),
             )

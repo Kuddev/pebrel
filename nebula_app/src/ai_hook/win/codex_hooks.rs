@@ -110,6 +110,69 @@ pub(super) fn ensure_codex_hooks() -> bool {
     }
 }
 
+fn groups(helper: &str, mode: CodexHookMode) -> Value {
+    // Codex 的 Windows runner 使用 COMSPEC /C；可执行文件路径自身仍需引号。
+    let command = format!("\"{}\" codex {}", helper.replace('"', "\\\""), mode.argument());
+    installation::codex_groups(&command, Some(&command), mode)
+}
+
+pub(super) fn installed_at(directory: &Path) -> io::Result<bool> {
+    let Some(marker) = read(&directory.join(MARKER))? else { return Ok(false) };
+    let marker: Value = serde_json::from_str(&marker)?;
+    let previous =
+        marker.get("groups").ok_or_else(|| io::Error::other("invalid hook ownership marker"))?;
+    let raw = read(&directory.join("hooks.json"))?;
+    // 先复用卸载的归属校验，编辑过的自有条目必须在菜单中暴露冲突。
+    installation::merge_groups(raw.as_deref(), Some(&previous.to_string()), &json!({}))
+        .map_err(io::Error::other)?;
+    let current: Value =
+        raw.map(|raw| serde_json::from_str(&raw)).transpose()?.unwrap_or_else(|| json!({}));
+    Ok(previous.as_object().is_some_and(|events| {
+        events.iter().any(|(event, groups)| {
+            groups.as_array().is_some_and(|groups| {
+                groups.iter().any(|group| {
+                    current["hooks"][event]
+                        .as_array()
+                        .is_some_and(|entries| entries.contains(group))
+                })
+            })
+        })
+    }))
+}
+
+pub(super) fn current_at(directory: &Path, helper: &str) -> io::Result<bool> {
+    current_for_mode(directory, helper, supported_mode())
+}
+
+fn current_for_mode(
+    directory: &Path,
+    helper: &str,
+    mode: Option<CodexHookMode>,
+) -> io::Result<bool> {
+    let Some(mode) = mode else { return Ok(true) };
+    let Some(config) = read(&directory.join("config.toml"))? else { return Ok(false) };
+    let Some((_, introduced)) =
+        installation::enable_codex_feature(&config).map_err(io::Error::other)?
+    else {
+        // Provider 的显式 opt-out 保持有效，此时 legacy notify 仍可独立工作。
+        return Ok(true);
+    };
+    if introduced {
+        return Ok(false);
+    }
+    let marker: Value = read(&directory.join(MARKER))?
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()?
+        .unwrap_or_else(|| json!({}));
+    let desired = groups(helper, mode);
+    let previous = marker.get("groups").map(Value::to_string);
+    let raw = read(&directory.join("hooks.json"))?;
+    let (updated, _) = installation::merge_groups(raw.as_deref(), previous.as_deref(), &desired)
+        .map_err(io::Error::other)?;
+    let current: Option<Value> = raw.map(|raw| serde_json::from_str(&raw)).transpose()?;
+    Ok(marker.get("groups") == Some(&desired) && current == Some(serde_json::from_str(&updated)?))
+}
+
 fn install(directory: &Path, helper: &str, mode: CodexHookMode) -> io::Result<bool> {
     let config_path = directory.join("config.toml");
     let Some(_config_lock) = crate::atomic_file::try_lock(&config_path)? else { return Ok(false) };
@@ -127,11 +190,7 @@ fn install(directory: &Path, helper: &str, mode: CodexHookMode) -> io::Result<bo
         .transpose()
         .map_err(io::Error::other)?
         .unwrap_or_else(|| json!({}));
-    let command = format!("\"{}\" codex {}", helper.replace('"', "\\\""), mode.argument());
-    // Codex 0.154 executes Windows hooks with COMSPEC /C, not PowerShell.
-    // Its runner supplies the enclosing /C quotes; the executable still needs
-    // its own quotes when the install directory contains spaces.
-    let groups = installation::codex_groups(&command, Some(&command), mode);
+    let groups = groups(helper, mode);
     let previous_groups = previous.get("groups").map(Value::to_string);
     let current_hooks = read(&hooks_path)?;
     let (hooks, _) =
@@ -227,6 +286,40 @@ mod tests {
         let config = read(&config).unwrap().unwrap();
         assert!(config.contains("# user") && config.contains("notify = ['notifier', 'argument']"));
         assert!(config.contains("hooks = true"), "another hook still needs the feature");
+    }
+
+    #[test]
+    fn repeated_toggle_cycles_keep_one_owned_group_and_preserve_the_original_notifier() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.toml");
+        std::fs::write(&config, "# keep\nnotify = ['user-notifier', 'argument']\n").unwrap();
+        let foreign = json!({"hooks":[{"type":"command","command":"user-hook"}]});
+        std::fs::write(
+            root.path().join("hooks.json"),
+            json!({"hooks":{"Stop":[foreign]}}).to_string(),
+        )
+        .unwrap();
+        let helper = "C:/Program Files/Pebrel/pebrel-hook.exe";
+        for _ in 0..20 {
+            assert!(install(root.path(), helper, CodexHookMode::Full).unwrap());
+            assert!(installed_at(root.path()).unwrap());
+            assert!(current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
+            assert!(!install(root.path(), helper, CodexHookMode::Full).unwrap());
+            let hooks: Value =
+                serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap())
+                    .unwrap();
+            assert_eq!(hooks["hooks"]["Stop"].as_array().unwrap().len(), 2);
+            assert!(remove(root.path()).unwrap());
+            assert!(!remove(root.path()).unwrap());
+            assert!(!installed_at(root.path()).unwrap());
+            let hooks: Value =
+                serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap())
+                    .unwrap();
+            assert_eq!(hooks, json!({"hooks":{"Stop":[foreign]}}));
+            assert!(
+                read(&config).unwrap().unwrap().contains("notify = ['user-notifier', 'argument']")
+            );
+        }
     }
 
     #[test]

@@ -14,6 +14,7 @@ const DEFAULT_WIDTH: f32 = 320.0;
 const MIN_WIDTH: f32 = 240.0;
 const MAX_WIDTH: f32 = 560.0;
 const RESIZE_HIT_WIDTH: f32 = 8.0;
+const HEADER_CONTROL_SIZE: f32 = 32.0;
 
 pub(super) struct DetailsPanelState {
     pub(super) section: Option<DocumentSection>,
@@ -177,12 +178,15 @@ impl NebulaWorkspace {
             IconName::FolderClosed,
         ));
         tabs.push((3, "side-panel-git", vcs_name, IconName::Github));
-        let label_limit =
-            (width - 16.0 - (tabs.len() + 1) as f32 * 36.0 - tabs.len() as f32 * 2.0).max(0.0);
+        let label_limit = (width
+            - 16.0
+            - (tabs.len() + 1) as f32 * HEADER_CONTROL_SIZE
+            - tabs.len() as f32 * 2.0)
+            .max(0.0);
         let selected = self.details_tab(cx);
         let previous = self.details_panel.previous_tab;
         let serial = self.details_panel.transition;
-        let background = cx.theme().list_active;
+        let background = cx.theme().secondary;
         let mut header = h_flex()
             .id("workspace-details-header")
             .debug_selector(|| "workspace-details-header".to_owned())
@@ -218,8 +222,8 @@ impl NebulaWorkspace {
                 );
             let button = Button::new(id)
                 .ghost()
-                .h(px(36.0))
-                .min_w(px(36.0))
+                .h(px(HEADER_CONTROL_SIZE))
+                .min_w(px(HEADER_CONTROL_SIZE))
                 .px_0()
                 .flex_shrink_0()
                 .overflow_hidden()
@@ -231,8 +235,8 @@ impl NebulaWorkspace {
                         .gap_0()
                         .child(
                             div()
-                                .w(px(36.0))
-                                .h(px(36.0))
+                                .w(px(HEADER_CONTROL_SIZE))
+                                .h(px(HEADER_CONTROL_SIZE))
                                 .flex_shrink_0()
                                 .flex()
                                 .items_center()
@@ -263,7 +267,9 @@ impl NebulaWorkspace {
                     Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
                     move |button, t| {
                         let progress = from + (to - from) * t;
-                        button.w(px(36.0 + extra * progress)).bg(background.opacity(progress))
+                        button
+                            .w(px(HEADER_CONTROL_SIZE + extra * progress))
+                            .bg(background.opacity(progress))
                     },
                 );
             header = header.child(button);
@@ -272,8 +278,9 @@ impl NebulaWorkspace {
             .child(div().flex_1())
             .child(
                 Button::new("workspace-details-close")
+                    .debug_selector(|| "workspace-details-close".to_owned())
                     .ghost()
-                    .size(px(36.0))
+                    .size(px(HEADER_CONTROL_SIZE))
                     .flex_shrink_0()
                     .icon(Icon::new(IconName::PanelRightClose).size(px(16.0)))
                     .tooltip(language.text(Message::EditorDetailsClose))

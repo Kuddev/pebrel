@@ -23,10 +23,20 @@ impl TerminalView {
             log::debug!("ai_hook: pane={} ignored hook outside the active lifecycle", self.pane_id);
             return true;
         }
-        let target = event.session_id.as_ref().map(|id| crate::session::AgentSession {
-            source: event.source.clone(),
-            session_id: Some(id.clone()),
-            session_file: event.session_file.clone(),
+        if !self.recovery.accepts_choice_event(event) {
+            return false;
+        }
+        // A lifecycle-only Hook ID cannot downgrade the independently verified
+        // open rollout. Keep consuming lifecycle events; the next process probe
+        // can discover a new conversation selected inside the same CLI process.
+        let keep_native_identity =
+            event.source == "codex" && event.session_file.is_none() && self.ai_session_from_probe;
+        let target = event.session_id.as_ref().filter(|_| !keep_native_identity).map(|id| {
+            crate::session::AgentSession {
+                source: event.source.clone(),
+                session_id: Some(id.clone()),
+                session_file: event.session_file.clone(),
+            }
         });
         if target.as_ref().is_some_and(|target| !self.recovery.accepts(target)) {
             return false;
@@ -88,7 +98,7 @@ impl TerminalView {
             self.clear_foreground_agent_state(cx);
         } else {
             self.running_program = Some(event.source.clone());
-            if let Some(id) = event.session_id.as_deref() {
+            if let Some(id) = event.session_id.as_deref().filter(|_| !keep_native_identity) {
                 self.ai_session_from_probe = false;
                 self.ai_session = Some(crate::display::AiSessionIdentity {
                     source: event.source.clone(),

@@ -4,7 +4,11 @@ import { openSync, readSync, closeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+const SOURCE: string = "pi";
+
 async function supportsSettled(): Promise<boolean> {
+  // OMP 的版本号不对应 Pi 的事件合同，不能据此等待不存在的 settled。
+  if (SOURCE !== "pi") return false;
   // Pi's loader supplies either package alias (or a bundled virtual module).
   // A static runtime import of the renamed package prevents old Pi from loading
   // this extension at all, before any agent_end fallback can be registered.
@@ -63,7 +67,7 @@ export default async function (pi: ExtensionAPI) {
       const identity = sessionFor(ctx);
       const bridge_sequence = (sequenceEpoch + BigInt(++sequence)).toString();
       const event_id = `${bridge_instance}:${bridge_sequence}`;
-      spawn(hook, ["pi", JSON.stringify({
+      const child = spawn(hook, [SOURCE, JSON.stringify({
         kind,
         ...identity,
         bridge_instance,
@@ -72,10 +76,14 @@ export default async function (pi: ExtensionAPI) {
         cwd: ctx?.cwd || "",
         ...result,
       })], {
-        detached: true,
+        // POSIX 脱离会话会丢失 /dev/tty，使 SSH 的 OSC 传输静默失效。
+        detached: process.platform === "win32",
         stdio: "ignore",
         windowsHide: true,
-      }).unref();
+      });
+      // spawn 的 ENOENT 通过异步事件报告，不能让缺失 helper 终止 Agent。
+      child.on("error", () => {});
+      child.unref();
     } catch (_) {}
   };
 
