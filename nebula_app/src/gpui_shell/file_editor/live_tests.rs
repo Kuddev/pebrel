@@ -217,3 +217,85 @@ fn clicking_near_the_start_places_the_caret_near_the_start(cx: &mut TestAppConte
         file.read_with(&cx, |view, cx| view.live_edit.as_ref().unwrap().input.read(cx).cursor());
     assert!(caret <= 1, "click at {point:?}, block {bounds:?}, actual caret {caret}");
 }
+
+#[gpui::test]
+fn first_click_uses_painted_glyphs_after_the_frame_callback(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("first-click.md");
+    let source = "中文🌿 mixed text with a long tail for positioning.";
+    std::fs::write(&path, source).unwrap();
+    let (file, mut cx) = tests::open(path, cx);
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let bounds = cx.debug_bounds("markdown-preview-block-0").unwrap();
+    let point = gpui::point(bounds.left() + px(108.0), bounds.top() + px(14.0));
+    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+    cx.update(|window, cx| {
+        // 真实刷新先执行下一帧回调，再绘制刚刚挂载的 Input。
+        window.simulate_next_frame(cx);
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    file.read_with(&cx, |view, cx| {
+        let input = view.live_edit.as_ref().unwrap().input.read(cx);
+        let caret = input.cursor();
+        assert!(caret > 0 && caret < source.len(), "unexpected caret: {caret}");
+        assert!(source.is_char_boundary(caret));
+        let caret_bounds = input.range_to_bounds(&(caret..caret)).unwrap();
+        assert!(
+            f32::from(caret_bounds.left() - point.x).abs() <= 12.0,
+            "click {point:?}, caret {caret_bounds:?}"
+        );
+    });
+}
+
+#[gpui::test]
+fn activating_heading_preserves_following_paragraph_position(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut positions = Vec::new();
+    for (scale, level) in
+        [1.0, 1.25, 1.5, 2.0].into_iter().flat_map(|scale| (1..=6).map(move |level| (scale, level)))
+    {
+        let path = directory.path().join(format!("heading-{scale}-{level}.md"));
+        std::fs::write(&path, format!("{} A heading\n\nFollowing paragraph", "#".repeat(level)))
+            .unwrap();
+        let (file, mut visual) = tests::open(path, cx);
+        visual.update(|window, cx| {
+            window.set_scale_factor(scale);
+            file.update(cx, |_, cx| cx.notify());
+            let _ = window.draw(cx);
+        });
+        let before = visual.debug_bounds("markdown-preview-block-1").unwrap().top();
+        visual.update(|window, cx| {
+            file.update(cx, |view, cx| view.begin_live_edit(0, window, cx));
+            let _ = window.draw(cx);
+        });
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let during = visual.debug_bounds("markdown-preview-block-1").unwrap().top();
+        let live = visual.debug_bounds("markdown-live-block").unwrap();
+        let line_height = file.read_with(&visual, |view, cx| {
+            view.live_edit.as_ref().unwrap().input.read(cx).line_height()
+        });
+        visual.update(|window, cx| {
+            file.update(cx, |view, cx| view.finish_live_edit(cx));
+            let _ = window.draw(cx);
+        });
+        let after = visual.debug_bounds("markdown-preview-block-1").unwrap().top();
+        positions.push((scale, level, before, during, after, live, line_height));
+    }
+    assert!(
+        positions
+            .iter()
+            .all(|(_, _, before, during, after, _, _)| f32::from(*before - *during).abs() <= 0.1
+                && f32::from(*before - *after).abs() <= 0.1),
+        "heading activation changed document geometry: {positions:#?}"
+    );
+}

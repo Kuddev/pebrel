@@ -42,3 +42,12 @@ pub(super) fn heading_size(level: Option<u8>) -> f32 {
             _ => 1.0,
         }
 }
+
+pub(super) fn heading_weight(level: Option<u8>) -> gpui::FontWeight {
+    match level {
+        Some(1) => gpui::FontWeight::BOLD,
+        Some(2..=5) => gpui::FontWeight::SEMIBOLD,
+        Some(6) => gpui::FontWeight::MEDIUM,
+        _ => gpui::FontWeight::NORMAL,
+    }
+}

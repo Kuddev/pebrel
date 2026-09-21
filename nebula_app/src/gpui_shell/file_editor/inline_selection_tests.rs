@@ -85,3 +85,63 @@ fn dragging_across_inline_fragments_selects_reading_text_without_entering_live_e
     cx.run_until_parked();
     assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "Before bold $x$ italic after");
 }
+
+#[gpui::test]
+fn missing_mouse_up_does_not_extend_selection_on_hover(cx: &mut TestAppContext) {
+    let (_directory, file, mut cx) = open("First paragraph with text\n\nSecond paragraph", cx);
+    draw(&mut cx);
+    let first = cx.debug_bounds("markdown-preview-block-0").unwrap();
+    let second = cx.debug_bounds("markdown-preview-block-1").unwrap();
+    let start = gpui::point(first.left() + px(1.0), first.top() + px(12.0));
+    let end = gpui::point(first.left() + px(65.0), start.y);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    draw(&mut cx);
+    let selected = cx.update(|window, cx| window.selected_text(cx).to_string());
+    assert!(!selected.is_empty());
+    assert!(file.read_with(&cx, |view, _| view.preview_selection_scroll_active));
+    cx.simulate_mouse_move(second.center(), None, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(cx.update(|window, cx| window.selected_text(cx).to_string()), selected);
+    assert!(!file.read_with(&cx, |view, _| view.preview_selection_scroll_active));
+}
+
+#[gpui::test]
+fn reader_edge_scroll_stops_after_a_missing_release(cx: &mut TestAppContext) {
+    let source =
+        (0..80).map(|i| format!("Paragraph {i} has selectable text.\n\n")).collect::<String>();
+    let (_directory, file, mut cx) = open(&source, cx);
+    draw(&mut cx);
+    let first = cx.debug_bounds("markdown-preview-block-0").unwrap();
+    let viewport = cx.debug_bounds("markdown-preview-viewport").unwrap();
+    let start = gpui::point(first.left() + px(1.0), first.top() + px(12.0));
+    let edge = gpui::point(start.x + px(80.0), viewport.bottom() - px(2.0));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_mouse_move(edge, Some(MouseButton::Left), Modifiers::default());
+    draw(&mut cx);
+    assert!(file.read_with(&cx, |view, _| view.preview_selection_scroll_active));
+    cx.update(|window, cx| {
+        assert!(window.has_text_selection(cx), "the edge drag must select rendered text");
+        assert_eq!(window.mouse_position(), edge);
+    });
+    let before = file.read_with(&cx, |view, _| view.scroll.scroll_px_offset_for_scrollbar());
+    cx.executor().advance_clock(std::time::Duration::from_millis(50));
+    cx.run_until_parked();
+    draw(&mut cx);
+    let during = file.read_with(&cx, |view, _| view.scroll.scroll_px_offset_for_scrollbar());
+    assert_ne!(before, during, "a held drag at {edge:?} must scroll the viewport {viewport:?}");
+
+    cx.simulate_mouse_move(edge, None, Modifiers::default());
+    draw(&mut cx);
+    let stopped = file.read_with(&cx, |view, _| view.scroll.scroll_px_offset_for_scrollbar());
+    cx.executor().advance_clock(std::time::Duration::from_millis(200));
+    cx.run_until_parked();
+    draw(&mut cx);
+    assert_eq!(
+        file.read_with(&cx, |view, _| view.scroll.scroll_px_offset_for_scrollbar()),
+        stopped
+    );
+    assert!(!file.read_with(&cx, |view, _| view.preview_selection_scroll_active));
+}
