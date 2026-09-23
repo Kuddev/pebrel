@@ -48,9 +48,11 @@ modifier as `Win+`, so the settings page and the lines the app wrote into
 ⌘ set. `init()` derives the static gpui bindings from it, and
 `default_shortcuts()` adds it to the unbind/restore vocabulary on macOS, deduped
 against entries the config table already provides for the same action and key.
-Entries are spelled exactly as they are written into `keybind=` lines (`cmd+…`,
-modifier order as in `canonical_combo`) because the reload path matches a
-restored default by string.
+The alias table writes `cmd+…` into `keybind=` lines. Existing files and shortcut
+capture can still use `win+…`, and manually edited files can use `super+…` or a
+different modifier order. The GPUI adapter parses and canonicalizes its binding
+strings before comparing overrides and restored defaults. Display spelling must
+not determine a shortcut's runtime identity.
 
 `Action::Quit` maps to a `QuitApp` action whose handler defers
 `windowing::quit_all`, the same path as tray quit, so ⌘Q saves the session and
@@ -66,9 +68,9 @@ platform, which also corrects the spelling of lines the app writes.
 - Moving the ⌘ set into the config macOS platform table would feed the legacy
   terminal shell UI-only actions and keep the ⌘K collision, which the table
   already resolves differently (`Esc("\x0c")` plus `ClearHistory`).
-- Storing `Win+…` spellings or normalizing entries through
-  `display_stored_combo` breaks the string equality the reload path needs, and
-  `Ctrl++`-style display spellings do not parse back at all.
+- Comparing raw display/storage spellings fails for equivalent `Win+…`,
+  `Cmd+…` and `super+…` keys. Display text is not a canonical identity;
+  `Ctrl++`-style display spellings also do not parse back as storage strings.
 - Mapping the removed static ⌘ bindings to `ReceiveChar` from `init()` was not
   needed: the user keybind table already injects the no-action binding.
 
@@ -94,6 +96,11 @@ the `display::keymap` / `keyboard_bindings` unit suites pass; the two new
 released-key tests fail without the change. Manual acceptance is listed under
 Evidence. Linux/Windows only compile the alias table as test data; the runtime
 path stays behind `cfg(target_os = "macos")`.
+
+The 2026-09-23 review reproduced two restore failures through GPUI keyboard
+dispatch: recording Cmd+K then resetting the row, and resetting the old
+`Ctrl+Win+F:ReceiveChar` override from #238. Both failed before canonicalization.
+Regression coverage includes those paths and equivalent modifier spellings/order.
 
 ## Supersedes
 

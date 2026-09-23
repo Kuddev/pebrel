@@ -95,10 +95,9 @@ pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
 /// 就成了影子绑定——`clear_action` 不知道它，于是出现「⌘K 解绑后仍然弹出
 /// Shell 选择器」（#238）。
 ///
-/// 表里的写法就是写进设置文件的写法，因此：修饰键顺序与 `canonical_combo`
-/// 一致（ctrl、shift、alt、超级键），超级键写 `cmd`（macOS 的读法，`win` /
-/// `super` / `cmd` 同等解析）。逐字相等是必需的——撤销自定义键时
-/// `update_keybinds` 靠字符串相等把默认键还回来。
+/// 表里的写法会写进设置文件，超级键写 `cmd`（macOS 的读法）。历史配置和
+/// 录制结果仍可使用 `win` / `super`；GPUI 适配层按解析后的按键规范化，
+/// 覆盖与恢复默认不依赖这些别名或修饰键顺序的逐字相等。
 ///
 /// 这张表只进 [`default_shortcuts`]（解绑/恢复口径），不进 `effective_combo`
 /// 的键帽反查：设置页仍按配置表的 Ctrl 键显示。
@@ -845,8 +844,7 @@ mod tests {
         assert_eq!(effective_combo(&action, &[]), Some(("Ctrl+K".to_owned(), false)));
         let mut raw = Vec::new();
         clear_action(&mut raw, &action);
-        // 表里的写法逐字落盘：撤销这条自定义键时，gpui 侧靠字符串相等把
-        // 默认绑定还回来，换成别的写法（Cmd+K / win+k）就找不回了。
+        // 解绑使用表里的写法；旧配置和录制结果的等价拼写由 GPUI 层规范化。
         assert!(
             raw.iter().any(|(combo, _)| combo == "cmd+k"),
             "⌘K 必须按表里的写法逐字写回，实际 {raw:?}"

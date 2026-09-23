@@ -1,4 +1,15 @@
 use super::*;
+
+#[test]
+fn command_aliases_and_modifier_order_share_one_runtime_identity() {
+    let expected = gpui_binding_combo("shift+cmd+k");
+    for combo in ["Shift+Win+K", "cmd+shift+k", "super+shift+k"] {
+        assert_eq!(gpui_binding_combo(combo), expected, "{combo}");
+    }
+    assert_ne!(gpui_binding_combo("cmd+k"), expected);
+    assert_ne!(gpui_binding_combo("ctrl+shift+k"), expected);
+}
+
 mod macos_command_keys {
     use super::*;
 
@@ -168,6 +179,54 @@ mod dispatch {
             };
             assert!(view.read(cx).focus_handle(cx).is_focused(window));
         });
+    }
+
+    #[gpui::test]
+    #[cfg(target_os = "macos")]
+    fn recorded_command_key_can_restore_default(cx: &mut TestAppContext) {
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        press("cmd-k", &mut cx);
+        assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        press("escape", &mut cx);
+        let keymap::CaptureOutcome::Bind(combo) =
+            keymap::capture_gpui(&Keystroke::parse("cmd-k").unwrap())
+        else {
+            panic!("expected captured shortcut")
+        };
+        assert_eq!(combo, "win+k");
+        let mut raw = vec![(combo, "ToggleShellPicker".into())];
+        workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw.clone(), cx));
+        press("cmd-k", &mut cx);
+        assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        press("escape", &mut cx);
+        keymap::reset_action(&mut raw, &crate::config::Action::ToggleShellPicker);
+        workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
+        press("cmd-k", &mut cx);
+        assert!(
+            workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open),
+            "Reset after recording Cmd+K must restore its default action"
+        );
+    }
+
+    #[gpui::test]
+    #[cfg(target_os = "macos")]
+    fn old_fullscreen_unbind_can_restore_default(cx: &mut TestAppContext) {
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        for combo in ["Ctrl+Cmd+F", "Ctrl+Win+F", "super+ctrl+f"] {
+            let mut raw = vec![(combo.into(), "ReceiveChar".into())];
+            workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw.clone(), cx));
+            press("ctrl-cmd-f", &mut cx);
+            assert!(!cx.update(|window, _| window.is_fullscreen()));
+            keymap::reset_action(&mut raw, &crate::config::Action::ToggleFullscreen);
+            assert!(raw.is_empty());
+            workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
+            press("ctrl-cmd-f", &mut cx);
+            assert!(cx.update(|window, _| window.is_fullscreen()), "reset failed for {combo}");
+            press("ctrl-cmd-f", &mut cx);
+            assert!(!cx.update(|window, _| window.is_fullscreen()));
+        }
     }
 
     #[gpui::test]

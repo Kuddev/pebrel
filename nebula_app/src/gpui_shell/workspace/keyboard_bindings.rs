@@ -44,15 +44,18 @@ pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
 /// 存储格式 combo（`ctrl+shift+t`）→ gpui 绑定串（`ctrl-shift-t`）。键名
 /// 两套体系同构（小写命名键 + 单字符）；digitN 折回数字，plus/minus 折回
 /// `+`/`-`（`+` 是存储分隔符，必须先占位再替换）。
+/// 最后由 GPUI 解析并规范化修饰键别名和顺序，保证旧 Win+、新 Cmd+ 和
+/// 录制结果在覆盖/恢复默认时具有同一个运行时身份。
 pub(super) fn gpui_binding_combo(combo: &str) -> String {
-    combo
+    let combo = combo
         .to_ascii_lowercase()
         .replace("plus", "\u{1}")
         .replace("minus", "\u{2}")
         .replace('+', "-")
         .replace("digit", "")
         .replace('\u{1}', "+")
-        .replace('\u{2}', "-")
+        .replace('\u{2}', "-");
+    gpui::Keystroke::parse(&combo).map(|key| key.unparse()).unwrap_or(combo)
 }
 
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
