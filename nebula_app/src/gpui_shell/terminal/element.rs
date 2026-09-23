@@ -9,8 +9,6 @@
 //! 共同塑形，再由 `ligatures` 把字形簇映射回固定列号。其余字符逐格
 //! 绘制，组合字符跟随基字；编辑、光标和选区不能改变无关格的原点。
 
-use std::collections::HashSet;
-
 use gpui::{
     App, Bounds, ContentMask, Corners, CursorStyle, DispatchPhase, Element, ElementId,
     GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseButton,
@@ -27,6 +25,10 @@ use nebula_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
 use super::colors::Palette;
 use super::view::TerminalView;
+
+#[cfg(test)]
+#[path = "element/color_tests.rs"]
+mod color_tests;
 
 pub struct TerminalElement {
     view: gpui::Entity<TerminalView>,
@@ -84,7 +86,8 @@ impl TerminalElement {
         rows: usize,
         cols: usize,
         cx: &App,
-    ) -> Option<(RenderSnapshot, Option<String>, usize, HashSet<(u16, u16)>, usize, i64)> {
+    ) -> Option<(RenderSnapshot, Option<String>, usize, super::osc_links::LinkCells, usize, i64)>
+    {
         let view = self.view.read(cx);
         let session = view.session.as_ref()?;
         let hint_config = view.hint_config.clone();
@@ -139,12 +142,23 @@ impl TerminalElement {
     fn resolve_app_colors(
         &self,
         snap: &mut RenderSnapshot,
+        links: &mut super::osc_links::LinkCells,
         theme: &Palette,
         overrides: &Colors,
         cx: &mut App,
     ) {
         self.view.update(cx, |view, _| {
             resolve_app_colors_into(snap, theme, overrides, &mut view.color_resolver);
+            for cell in links.values_mut() {
+                cell.fg = resolve_text_foreground(
+                    cell.fg,
+                    cell.bg,
+                    cell.bold,
+                    theme,
+                    overrides,
+                    &mut view.color_resolver,
+                );
+            }
         });
     }
 }
@@ -281,7 +295,7 @@ impl Element for TerminalElement {
         let focused = focus_handle.is_focused(window);
         // 旧壳只让光标本身参与闪烁；ghost、弹窗补齐和 IME 仍复用同一个坐标锚点。
         let cursor_visible = self.view.read(cx).cursor_visible();
-        let Some((mut snap, prompt_line, history, dashed, scrollback_floor, viewport_top_abs)) =
+        let Some((mut snap, prompt_line, history, mut dashed, scrollback_floor, viewport_top_abs)) =
             self.snapshot(layout.rows, layout.cols, cx)
         else {
             return;
@@ -295,7 +309,7 @@ impl Element for TerminalElement {
             view.drive_pending_remote_dir(cx);
         });
         let overrides = snap.color_overrides;
-        self.resolve_app_colors(&mut snap, &theme, &overrides, cx);
+        self.resolve_app_colors(&mut snap, &mut dashed, &theme, &overrides, cx);
         let (theme_anchor, theme_is_light) = themed_anchor(&theme, cx);
         let host_cursor_follows_theme = is_default_host_cursor(&theme);
         let app_cursor = snap.cursor.as_ref().filter(|cursor| {
@@ -606,7 +620,7 @@ impl Element for TerminalElement {
                 } else {
                     theme.resolve(cell.fg, &overrides, cell.bold).into()
                 };
-                let dashed_link = dashed.contains(&(seg.row, cell.col));
+                let dashed_link = dashed.contains_key(&(seg.row, cell.col));
                 let underline = (cell.underline && !dashed_link).then(|| UnderlineStyle {
                     thickness: px(1.0),
                     color: Some(fg),
@@ -639,7 +653,7 @@ impl Element for TerminalElement {
                                 == cursor_inverts(seg.row, cell.col)
                             && selected_foreground(seg.row, next.col)
                                 == selected_foreground(seg.row, cell.col)
-                            && !dashed.contains(&(seg.row, next.col))
+                            && !dashed.contains_key(&(seg.row, next.col))
                     })
                 } else {
                     1
@@ -674,16 +688,33 @@ impl Element for TerminalElement {
                         layout.line_height,
                     );
                 }
-                if dashed_link {
-                    paint_dashed_underline(
-                        window,
-                        origin,
-                        layout.cell_width,
-                        layout.line_height,
-                        fg,
-                    );
-                }
             }
+        }
+
+        // Link decoration follows grid columns, including wide-character spacer
+        // cells and spaces omitted by text shaping. Every cell shares one dash
+        // phase, so font fallback and ASCII/CJK boundaries cannot restart it.
+        for (&(row, col), cell) in &dashed {
+            if math_frame.covers(row as usize, col as usize) {
+                continue;
+            }
+            let Some(visual_col) = math_frame.project_cell(row as usize, col as usize, layout.cols)
+            else {
+                continue;
+            };
+            let color = if cursor_inverts(row, col) {
+                theme.cursor_text.unwrap_or(theme.background)
+            } else if let Some(foreground) = selected_foreground(row, col) {
+                foreground
+            } else {
+                theme.resolve(cell.fg, &overrides, cell.bold)
+            };
+            super::link_underline::paint(
+                window,
+                cell_rect(row as usize, visual_col, 1),
+                bounds.origin.x,
+                color.into(),
+            );
         }
 
         // 公式位图画在格子文本之后、装饰（ghost/光标/滚动条）之前，
@@ -942,27 +973,6 @@ impl Element for TerminalElement {
                 font_size,
             );
         }
-    }
-}
-
-fn paint_dashed_underline(
-    window: &mut Window,
-    origin: gpui::Point<Pixels>,
-    cell_width: Pixels,
-    line_height: Pixels,
-    color: Hsla,
-) {
-    let y = origin.y + line_height - px(1.0);
-    let end: f32 = origin.x.as_f32() + cell_width.as_f32();
-    let mut x: f32 = origin.x.as_f32();
-    let dash: f32 = 3.0;
-    let gap: f32 = 2.0;
-    while x < end {
-        let width = f32::min(dash, end - x);
-        if width > 0.0 {
-            window.paint_quad(fill(Bounds::new(point(px(x), y), size(px(width), px(1.0))), color));
-        }
-        x += dash + gap;
     }
 }
 
@@ -1642,9 +1652,6 @@ fn resolve_app_colors_into(
     use crate::display::content::is_terminal_graphic;
     use crate::display::terminal_color::is_fixed_color;
 
-    let theme_fg = rgb_from_rgba(theme.foreground);
-    let theme_bg = rgb_from_rgba(theme.background);
-
     for run in &mut snap.bg_runs {
         let base = rgb_from_rgba(theme.resolve(run.color, overrides, false));
         let resolved = resolver.resolve_background(base, is_fixed_color(run.color, overrides));
@@ -1662,16 +1669,31 @@ fn resolve_app_colors_into(
         // 对比度是一对颜色的属性：这个前景可不可读，取决于它**这一格**底下是
         // 什么，而不是主题底色。默认底色的格子没有 bg run，所以 `SnapCell::bg`
         // 单独带着这个值。
-        let bg_base = rgb_from_rgba(theme.resolve(cell.bg, overrides, false));
-        let bg = resolver.resolve_background(bg_base, is_fixed_color(cell.bg, overrides));
-        // bold 提亮（0-7 → 8-15）必须发生在矫正**之前**，否则写回的 `Spec` 会把
-        // 提亮吃掉。
-        let base = rgb_from_rgba(theme.resolve(cell.fg, overrides, cell.bold));
-        let resolved = resolver.resolve_foreground(base, bg, true, theme_fg, theme_bg);
-        if resolved != base {
-            cell.fg = Color::Spec(resolved.0);
-        }
+        cell.fg = resolve_text_foreground(cell.fg, cell.bg, cell.bold, theme, overrides, resolver);
     }
+}
+
+fn resolve_text_foreground(
+    fg: Color,
+    bg: Color,
+    bold: bool,
+    theme: &Palette,
+    overrides: &Colors,
+    resolver: &mut crate::display::terminal_color::TerminalColorResolver,
+) -> Color {
+    use crate::display::terminal_color::is_fixed_color;
+    let bg_base = rgb_from_rgba(theme.resolve(bg, overrides, false));
+    let bg = resolver.resolve_background(bg_base, is_fixed_color(bg, overrides));
+    // Resolve bold before contrast adjustment; Spec must retain that brightening.
+    let base = rgb_from_rgba(theme.resolve(fg, overrides, bold));
+    let resolved = resolver.resolve_foreground(
+        base,
+        bg,
+        true,
+        rgb_from_rgba(theme.foreground),
+        rgb_from_rgba(theme.background),
+    );
+    if resolved != base { Color::Spec(resolved.0) } else { fg }
 }
 
 pub(super) fn rgba_rgb(color: crate::display::color::Rgb, alpha: f32) -> Rgba {
