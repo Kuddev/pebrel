@@ -63,6 +63,7 @@ mod notifications;
 mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
+mod sponsor;
 mod status;
 mod theme_advanced;
 mod theme_editor;
@@ -115,6 +116,8 @@ pub struct SettingsPane {
     about_update: AboutUpdateState,
     about_update_seq: u64,
     about_last_checked: Option<String>,
+    /// 首页「项目与支持」→ 赞助商：独立页面，不是外链行。切换分区时清掉。
+    about_sponsor_open: bool,
     settings_search_input: Entity<InputState>,
     search_origin_section: Option<usize>,
     /// 每项还带着自己的 `values` 表：`SelectState` 只认索引，而从代码侧
@@ -1295,6 +1298,7 @@ impl SettingsPane {
                 .into_any_element();
         }
         match self.active_section {
+            0 if self.about_sponsor_open => self.section_sponsor(cx),
             0 => self.section_home(window, cx),
             1 => self.section_appearance(window, cx),
             2 => self.section_profiles(window, cx),
@@ -1379,6 +1383,7 @@ impl SettingsPane {
                     .when(!active, |item| item.text_color(muted).hover(|s| s.bg(hover_bg)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.active_section = ix;
+                        this.about_sponsor_open = false;
                         cx.notify();
                     }))
                     .child(
@@ -1536,7 +1541,15 @@ impl Render for SettingsPane {
                                     .w_full()
                                     .flex()
                                     .justify_center()
-                                    .child(v_flex().w_full().when(application_page, |content| content.max_w(px(960.0))).child(content)),
+                                    .child(
+                                        v_flex()
+                                            .w_full()
+                                            .when(matches!(self.active_section, 9 | 10), |content| {
+                                                content.items_center()
+                                            })
+                                            .when(application_page, |content| content.max_w(px(960.0)))
+                                            .child(content),
+                                    ),
                             ),
                     ),
             )

@@ -10,7 +10,6 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.recovery_boot_attempts = session.boot_attempts.saturating_add(1);
         let mut restored = false;
         for tab in &session.tabs {
             restored |= self.restore_tab(tab, resume_ai, window, cx);
@@ -50,7 +49,6 @@ impl NebulaWorkspace {
         }
         let crashed = crate::session::was_crash(&session);
         crate::session::mark_boot_attempt(&mut session);
-        self.recovery_boot_attempts = session.boot_attempts;
         let mut restored = 0usize;
         for tab in &session.tabs {
             if self.restore_tab(tab, resume_ai, window, cx) {
@@ -154,18 +152,23 @@ impl NebulaWorkspace {
     /// 当前工作区 → 共享 v4 快照。设置/文档/图片 tab 不进会话（旧壳同
     /// 合同）；AI 会话身份优先取 hook 直报的精确 id，退而取可解析的前台
     /// 程序名（claude 无 id 恢复成 `--continue`，安全判定在 schema 层）。
+    ///
+    /// 快照一律带 `boot_attempts = 0`：断路器只回答「这次启动活到了第一次
+    /// 自动保存没有」（session.rs 模块合同）。agent 恢复目标尚未被 hook /
+    /// 探针确认是另一回事——codex 停在 hooks 信任、目录选择或「已在别处
+    /// 打开」的提示上可以是几小时，正常退出照样算一次失败的话，三次就把
+    /// 整个工作区（含所有普通 tab）隔离掉了。未确认的目标本身仍随
+    /// `session_agent()` 落盘，下次启动照旧接续。
     pub(crate) fn snapshot_session(&self, cx: &App) -> crate::session::Session {
         use crate::session::{AgentSession, LaunchSession, Session, TabSession};
 
         let mut tabs = Vec::new();
-        let mut recovery_pending = false;
         let mut active_out = 0usize;
         for (ix, tab) in self.tabs.iter().enumerate() {
             let WorkspaceTab::Terminal { panes, tree, focused, .. } = tab else { continue };
             if ix == self.active {
                 active_out = tabs.len();
             }
-            recovery_pending |= panes.iter().any(|pane| pane.view.read(cx).recovery_pending());
             let leaf_data = |id: u64| -> (String, Option<AgentSession>, Option<LaunchSession>) {
                 let Some(pane) = panes.iter().find(|pane| pane.id == id) else {
                     return (String::new(), None, None);
@@ -202,10 +205,6 @@ impl NebulaWorkspace {
                 active_pane,
             });
         }
-        let mut session = Session::new(active_out, tabs);
-        if recovery_pending {
-            session.boot_attempts = self.recovery_boot_attempts;
-        }
-        session
+        Session::new(active_out, tabs)
     }
 }

@@ -186,9 +186,9 @@ mod tests {
         assert_eq!(matching_sections(" FONT ", en), vec![1]);
         assert_eq!(matching_sections("字体", zh), vec![1]);
         assert_eq!(matching_sections("quick terminal", en), vec![7]);
-        assert_eq!(matching_sections("clod backup", en), vec![9]);
-        assert_eq!(matching_sections("webdav", en), vec![9]);
-        assert_eq!(matching_sections("123", zh), vec![9]);
+        assert!(matching_sections("clod backup", en).is_empty());
+        assert!(matching_sections("webdav", en).is_empty());
+        assert!(matching_sections("123", zh).is_empty());
         assert_eq!(matching_sections("透度", zh).first(), Some(&1));
         assert!(matching_sections("no such setting", en).is_empty());
         assert_eq!(matching_sections("", en), visible_nav_sections().collect::<Vec<_>>());

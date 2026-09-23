@@ -32,6 +32,8 @@ fn pairing_design_backup_groups_scope_and_save_feedback_with_storage(
         let card = cx.debug_bounds("cloud-storage-card").expect("storage configuration");
         assert!(card.right() <= px(width));
         assert!(card.size.width <= px(720.0));
+        let center = px((width + SETTINGS_NAV_WIDTH) / 2.0);
+        assert!((f32::from(card.center().x - center)).abs() <= 2.0);
         let provider = cx.debug_bounds("cloud-provider").expect("bounded provider dropdown");
         assert!(provider.size.width <= px(220.0));
         assert!(provider.left() >= card.left() && provider.right() <= card.right());

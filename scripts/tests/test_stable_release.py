@@ -68,22 +68,33 @@ def notes(checksum_placeholder: bool = True) -> str:
 
 
 class StableReleaseTests(unittest.TestCase):
-    def test_stable_workflow_requires_full_native_tests_before_aggregation(self) -> None:
+    def test_stable_workflow_packages_without_repeating_native_tests(self) -> None:
+        # The Full native tests workflow already covers every PR, merge group
+        # and main push; the release run only packages and verifies the runtime
+        # conformance evidence of each package, so its wall time is bounded by
+        # the slowest build rather than by test scheduling.
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        native = workflow.split("  native-tests:\n", 1)[1].split("\n  linux:\n", 1)[0]
-        self.assertIn("uses: ./.github/workflows/linux-lua.yml", native)
+        self.assertNotIn("  native-tests:\n", workflow)
+        self.assertNotIn("uses: ./.github/workflows/linux-lua.yml", workflow)
         shared = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
         for platform in ("ubuntu-24.04", "windows-2022", "windows-11-arm", "macos-26", "macos-26-intel"):
             self.assertIn(platform, shared)
-        self.assertIn("workflow_call:", shared)
+        for trigger in ("pull_request:", "merge_group:", "branches: [main]"):
+            self.assertIn(trigger, shared)
         self.assertIn("run: python scripts/ci_native_tests.py", shared)
         self.assertIn("cargo check --locked --workspace --release", shared)
         self.assertIn("tools/i18n-contract/Cargo.toml", shared)
         self.assertNotIn("continue-on-error", shared)
-        self.assertNotIn("continue-on-error", native)
         aggregate = workflow.split("\n  aggregate:\n", 1)[1].split("\n  publish:\n", 1)[0]
-        self.assertIn("needs: [prepare, native-tests, linux, macos, windows]", aggregate)
+        self.assertIn("needs: [prepare, linux, macos, windows, windows-arm64]", aggregate)
+        self.assertIn("windows_arm64=True", aggregate)
+        arm = workflow.split("\n  windows-arm64:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
+        for required in ("runs-on: windows-11-arm", "host: aarch64-pc-windows-msvc",
+                         "-Architecture arm64", "windows-arm64-report.json",
+                         "scripts/build-windows-product.ps1", "--platform windows-aarch64"):
+            self.assertIn(required, arm)
+        self.assertNotIn("continue-on-error", arm)
         self.assertNotIn("always()", aggregate)
 
     def test_native_packagers_expose_stable_channel_without_preview_id(self) -> None:
@@ -115,9 +126,21 @@ class StableReleaseTests(unittest.TestCase):
         for version in ("1.7.0", "1.7.1", "1.10.0", "2.0.0"):
             with self.subTest(version=version):
                 names = expected_asset_names(version)
-                self.assertEqual(len(names), 7)
+                self.assertEqual(len(names), 8 if tuple(map(int, version.split('.'))) >= (1, 9, 0) else 7)
                 self.assertIn(f"Pebrel-v{version}-windows-x64-setup.exe", names)
                 self.assertNotIn(f"NebulaTerminal-{version}-windows-x64-setup.exe", names)
+
+    def test_19_requires_native_windows_arm64_without_changing_historical_assets(self) -> None:
+        self.assertNotIn("Pebrel-v1.8.2-windows-arm64.zip", expected_asset_names("1.8.2"))
+        version = "1.9.0"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in expected_asset_names(version):
+                write_fake_asset(root / name)
+            self.assertEqual(len(validate_assets(root, version)), 8)
+            (root / "Pebrel-v1.9.0-windows-arm64.zip").unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing: Pebrel-v1.9.0-windows-arm64.zip"):
+                validate_assets(root, version)
 
     def test_17_assets_reject_retired_alias_and_missing_installer(self) -> None:
         version = "1.7.0"

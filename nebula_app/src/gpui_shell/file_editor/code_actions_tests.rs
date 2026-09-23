@@ -17,6 +17,7 @@ fn open(path: PathBuf, cx: &mut TestAppContext) -> (Entity<TextFileView>, Visual
     let mut file = None;
     let (_, window) = cx.add_window_view(|window, cx| {
         let view = cx.new(|cx| TextFileView::new(path, window, cx));
+        view.update(cx, |view, _| view.live_mode = true);
         file = Some(view.clone());
         Root::new(view, window, cx)
     });
@@ -34,6 +35,68 @@ fn press(key: &str, cx: &mut VisualTestContext) {
     // Div's keyboard click is committed on release. simulate_keystrokes only
     // sends KeyDown, which cannot exercise the real click lifecycle.
     cx.simulate_event(gpui::KeyUpEvent { keystroke });
+}
+
+#[gpui::test]
+fn read_only_language_picker_changes_highlighting_without_editing_source(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reader-language.md");
+    let source = format!("```text\nfn main() {{}}\n```\n\n{}", "Trailing paragraph\n\n".repeat(80));
+    std::fs::write(&path, &source).unwrap();
+    let (file, mut cx) = super::tests::open(path.clone(), cx);
+    let draw = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        cx.run_until_parked();
+    };
+    for choice in ["rust", "plaintext"] {
+        draw(&mut cx);
+        let picker = cx.debug_bounds("markdown-language-picker").unwrap();
+        cx.simulate_click(picker.center(), Modifiers::default());
+        cx.run_until_parked();
+        cx.simulate_keystrokes(match crate::platform::Platform::current() {
+            crate::platform::Platform::MacOS => "cmd-a",
+            _ => "ctrl-a",
+        });
+        cx.simulate_input(choice);
+        cx.run_until_parked();
+        press("enter", &mut cx);
+        cx.run_until_parked();
+        draw(&mut cx);
+        file.read_with(&cx, |view, cx| {
+            assert!(view.preview && !view.live_mode && view.live_edit.is_none());
+            assert_eq!(view.draft(cx).as_ref(), source);
+            assert!(!view.dirty);
+            assert_eq!(
+                view.preview_code_languages.get(&(0, 0)).map(|value| value.as_ref()),
+                Some(if choice == "plaintext" { "" } else { choice }),
+            );
+        });
+        if choice == "rust" {
+            assert!(cx.debug_bounds("markdown-language-current-rust").is_some());
+            // Virtualizing the code block must not discard this document's display choice.
+            file.update(&mut cx, |view, cx| {
+                view.scroll.scroll_to_reveal_item(70);
+                cx.notify();
+            });
+            draw(&mut cx);
+            file.update(&mut cx, |view, cx| {
+                view.scroll.scroll_to_reveal_item(0);
+                cx.notify();
+            });
+            draw(&mut cx);
+            assert!(cx.debug_bounds("markdown-language-current-rust").is_some());
+        }
+        let code = cx.debug_bounds("pebrel-code-block").unwrap();
+        cx.simulate_mouse_move(code.center(), None, Modifiers::default());
+        draw(&mut cx);
+        let copy = cx.debug_bounds("markdown-copy-code").unwrap();
+        cx.simulate_click(copy.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap().trim_end(), "fn main() {}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    }
 }
 
 #[gpui::test]

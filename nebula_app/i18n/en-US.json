@@ -170,8 +170,8 @@
       "platform_unsupported": "Automatic hook installation is currently available on Windows.",
       "checking": "Checking installed agents and hooks…",
       "applying": "Applying…",
-      "installed": "Notifications on",
-      "off": "Notifications off",
+      "installed": "Hook installed",
+      "off": "Hook not installed",
       "not_detected": "Not installed",
       "config_detected": "Agent configuration detected",
       "unsupported": "Hook integration not available yet",
@@ -182,7 +182,7 @@
       "disabled": "Hooks removed. Restart the agent to apply.",
       "failed": "Could not update hooks: {error}",
       "helper_missing": "The hook helper is missing. Repair the Pebrel installation to enable hooks.",
-      "needs_repair": "Installed · needs repair",
+      "needs_repair": "Hook installed · needs repair",
       "initialize": "Run this agent once to create its configuration, then refresh.",
       "config_path": "Configuration: {path}"
     }

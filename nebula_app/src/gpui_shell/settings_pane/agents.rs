@@ -2,9 +2,6 @@ use super::*;
 use crate::ai_agents::AgentKind;
 use crate::ai_hook::integrations::{self, AgentIntegration};
 use crate::i18n::Message;
-use std::collections::HashMap;
-
-type AgentLogos = HashMap<(crate::display::AiLogo, bool), Arc<RenderImage>>;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
@@ -27,7 +24,6 @@ pub(super) struct AgentSettingsState {
     sequence: u64,
     feedback: Option<(AgentKind, Result<bool, String>)>,
     focus: Vec<FocusHandle>,
-    logos: AgentLogos,
     #[cfg(all(test, feature = "gpui-test-support"))]
     test_operation: Option<TestOperation>,
 }
@@ -41,7 +37,6 @@ impl AgentSettingsState {
             sequence: 0,
             feedback: None,
             focus: integrations::AGENTS.iter().map(|_| cx.focus_handle().tab_stop(true)).collect(),
-            logos: HashMap::new(),
             #[cfg(all(test, feature = "gpui-test-support"))]
             test_operation: None,
         }
@@ -49,11 +44,6 @@ impl AgentSettingsState {
 }
 
 impl SettingsPane {
-    pub(in crate::gpui_shell) fn set_agent_logos(&mut self, logos: &AgentLogos) {
-        // 直接共享侧边栏已经缩放好的纹理，打开设置不再解码原图或另建图片缓存。
-        self.agents.logos.clone_from(logos);
-    }
-
     fn refresh_agents(&mut self, cx: &mut Context<Self>) {
         if self.agents.loading || self.agents.busy.is_some() {
             return;
@@ -237,6 +227,12 @@ impl SettingsPane {
         let hover = crate::gpui_shell::theme::settings_hover_bg(cx, false);
         let border = crate::gpui_shell::theme::settings_hairline(cx);
         let ring = cx.theme().ring;
+        let executable = row
+            .executable
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| language.text(Message::SettingsAgentsNotDetected).to_owned());
+        let path_tooltip = executable.clone();
         let text = v_flex()
             .flex_1()
             .min_w_0()
@@ -244,24 +240,49 @@ impl SettingsPane {
             .child(
                 div().text_sm().font_weight(gpui::FontWeight::MEDIUM).child(agent.display_name()),
             )
-            .child(div().text_xs().text_color(muted).child(language.text(status)))
+            .child(
+                div()
+                    .id(("agent-cli-path", index))
+                    .debug_selector(move || format!("agent-cli-path-{index}"))
+                    .w_full()
+                    .truncate()
+                    .text_xs()
+                    .text_color(muted)
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(path_tooltip.clone())
+                            .build(window, cx)
+                    })
+                    .child(executable),
+            )
             .when_some(note, |view, note| {
                 view.child(div().text_xs().text_color(muted).child(note))
             });
+        use crate::gpui_shell::assets::nav;
         let icon = if let Some(path) = match agent {
-            AgentKind::Cursor => Some(crate::gpui_shell::assets::nav::AGENT_CURSOR),
-            AgentKind::Copilot => Some(crate::gpui_shell::assets::nav::AGENT_COPILOT),
+            AgentKind::Claude => Some(nav::AGENT_CLAUDE),
+            AgentKind::Codex => Some(nav::AGENT_OPENAI),
+            AgentKind::OpenCode => Some(nav::AGENT_OPENCODE),
+            AgentKind::Cursor => Some(nav::AGENT_CURSOR),
+            AgentKind::Kimi => Some(nav::AGENT_KIMI),
+            AgentKind::Pi => Some(nav::AGENT_PI),
+            AgentKind::OhMyPi => Some(nav::AGENT_OMP),
+            AgentKind::Copilot => Some(nav::AGENT_COPILOT),
+            AgentKind::Grok => Some(nav::AGENT_GROK),
             _ => None,
         } {
-            Icon::default().path(path).size(px(16.0)).into_any_element()
-        } else if let Some(image) = crate::display::ai_logo_for_program(agent.slug())
-            .and_then(|logo| self.agents.logos.get(&(logo, cx.theme().is_dark())))
-        {
-            img(image.clone()).size(px(16.0)).into_any_element()
+            Icon::default()
+                .path(path)
+                .size(px(24.0))
+                .text_color(match agent {
+                    AgentKind::Claude => rgb_hsla(217, 119, 87),
+                    AgentKind::OhMyPi => rgb_hsla(147, 98, 239),
+                    _ => cx.theme().foreground,
+                })
+                .into_any_element()
         } else {
             div()
                 .font_family(crate::font_install::REQUIRED_FONT_FAMILY)
-                .text_size(px(16.0))
+                .text_size(px(24.0))
                 .child(crate::display::program_icon(agent.slug()))
                 .into_any_element()
         };
@@ -307,7 +328,7 @@ impl SettingsPane {
             }))
             .child(
                 div()
-                    .size(px(28.0))
+                    .size(px(32.0))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
@@ -316,17 +337,34 @@ impl SettingsPane {
             )
             .child(text)
             .child(
-                div().min_w(px(40.0)).min_h(px(32.0)).flex().items_center().justify_center().child(
-                    crate::gpui_shell::widgets::NebulaSwitch::new(format!(
-                        "agent-{}",
-                        agent.slug()
-                    ))
-                    .checked(checked)
-                    .disabled(disabled)
-                    .on_click(cx.listener(move |this, enabled, _, cx| {
-                        this.toggle_agent_hook(agent, *enabled, cx)
-                    })),
-                ),
+                div()
+                    .id(("agent-hook-status", index))
+                    .debug_selector(move || format!("agent-hook-status-{index}"))
+                    .flex_shrink_0()
+                    .max_w(px(160.0))
+                    .text_xs()
+                    .text_color(muted)
+                    .child(language.text(status)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .min_w(px(40.0))
+                    .min_h(px(32.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        crate::gpui_shell::widgets::NebulaSwitch::new(format!(
+                            "agent-{}",
+                            agent.slug()
+                        ))
+                        .checked(checked)
+                        .disabled(disabled)
+                        .on_click(cx.listener(
+                            move |this, enabled, _, cx| this.toggle_agent_hook(agent, *enabled, cx),
+                        )),
+                    ),
             )
     }
 }
@@ -344,8 +382,6 @@ fn agent_status(row: &AgentIntegration, busy: bool) -> Message {
     let state = &row.inspection;
     if busy {
         Message::SettingsAgentsApplying
-    } else if row.executable.is_none() {
-        Message::SettingsAgentsNotDetected
     } else if state.installed && state.needs_repair {
         Message::SettingsAgentsNeedsRepair
     } else if state.installed {

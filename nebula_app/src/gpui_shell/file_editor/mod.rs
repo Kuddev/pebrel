@@ -128,6 +128,8 @@ pub struct TextFileView {
     inline_views:
         Rc<RefCell<std::collections::BTreeMap<(usize, usize), gpui::WeakEntity<TextViewState>>>>,
     preview_extensions: gpui_component::text::MarkdownExtensions,
+    /// Reading-only syntax choices survive virtual row eviction, but never change source.
+    preview_code_languages: std::collections::HashMap<(usize, usize), SharedString>,
     preview_images: Entity<image_cache::DocumentImageCache>,
     scroll: ListState,
     preview_selection_scroll_epoch: u64,
@@ -229,6 +231,7 @@ impl TextFileView {
         let mut this = Self {
             preview_images: image_cache::DocumentImageCache::new(cx.entity_id(), cx),
             preview_extensions,
+            preview_code_languages: Default::default(),
             path,
             title,
             input,
@@ -243,7 +246,8 @@ impl TextFileView {
             notice: None,
             markdown,
             preview: markdown,
-            live_mode: markdown,
+            // Rendered Markdown opens as a selectable reader. Editing is explicit via source mode.
+            live_mode: false,
             live_edit: None,
             render_active: true,
             preview_stale: false,
@@ -550,6 +554,7 @@ impl TextFileView {
 
     fn apply_outline(&mut self, outline: Outline, cx: &mut Context<Self>) {
         self.preview_stale = false;
+        self.preview_code_languages.clear();
         self.inline_views.borrow_mut().clear();
         let top = self.scroll.logical_scroll_top();
         self.blocks = Rc::new(RefCell::new(vec![None; outline.blocks.len()]));

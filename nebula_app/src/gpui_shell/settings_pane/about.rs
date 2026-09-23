@@ -8,6 +8,31 @@ impl SettingsPane {
         url: String,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
+        Self::about_row(id, icon, title, IconName::ExternalLink, cx)
+            .on_click(move |_, _, cx| cx.open_url(&url))
+            .into_any_element()
+    }
+
+    /// 与外链行同一条骨架，尾标是「进入页面」而不是「离开应用」。
+    pub(super) fn about_page_row(
+        id: &'static str,
+        icon: IconName,
+        title: &'static str,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
+        Self::about_row(id, icon, title, IconName::ChevronRight, cx)
+            .on_click(on_click)
+            .into_any_element()
+    }
+
+    fn about_row(
+        id: &'static str,
+        icon: IconName,
+        title: &'static str,
+        trailing: IconName,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let muted = cx.theme().muted_foreground;
         let hover = cx.theme().list_hover;
         h_flex()
@@ -21,11 +46,9 @@ impl SettingsPane {
             .rounded_md()
             .cursor_pointer()
             .hover(move |row| row.bg(hover))
-            .on_click(move |_, _, cx| cx.open_url(&url))
             .child(Icon::new(icon).small().text_color(muted))
             .child(div().flex_1().min_w_0().child(title))
-            .child(Icon::new(IconName::ExternalLink).xsmall().text_color(muted))
-            .into_any_element()
+            .child(Icon::new(trailing).xsmall().text_color(muted))
     }
 
     pub(super) fn about_value_row(
@@ -251,6 +274,13 @@ impl SettingsPane {
                 IconName::BookOpen,
                 language.pick("更新内容", "Release notes"),
                 crate::update_check::RELEASES_PAGE.to_owned(),
+                cx,
+            ))
+            .child(Self::about_page_row(
+                "about-sponsors",
+                IconName::Heart,
+                language.pick("赞助商", "Sponsors"),
+                cx.listener(|this, _, _, cx| this.open_sponsor_page(cx)),
                 cx,
             ));
 

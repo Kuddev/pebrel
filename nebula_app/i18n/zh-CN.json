@@ -170,8 +170,8 @@
       "platform_unsupported": "目前仅 Windows 支持自动安装 hooks。",
       "checking": "正在检测工具和 hooks…",
       "applying": "处理中…",
-      "installed": "已开启通知",
-      "off": "未开启通知",
+      "installed": "Hook 已安装",
+      "off": "Hook 未安装",
       "not_detected": "未安装",
       "config_detected": "已检测到工具配置",
       "unsupported": "尚未提供 hook 接入",
@@ -182,7 +182,7 @@
       "disabled": "Hooks 已移除，请重启 agent 使其生效。",
       "failed": "无法更新 hooks：{error}",
       "helper_missing": "缺少 hook 辅助程序，请修复 Pebrel 安装后再启用。",
-      "needs_repair": "已安装 · 需修复",
+      "needs_repair": "Hook 已安装 · 需修复",
       "initialize": "请先运行一次此工具以创建配置，然后刷新。",
       "config_path": "配置：{path}"
     }

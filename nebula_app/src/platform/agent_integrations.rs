@@ -189,18 +189,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let grok_dir = dir.path().join(".grok/bin");
         let grok = executable(&grok_dir, "agent");
-        let cursor_dir = dir.path().join("cursor-agent/versions/current");
+        // Keep the installation directory distinct from the extensionless PATH command on Unix.
+        let cursor_dir = dir.path().join("installed/cursor-agent/versions/current");
         let cursor = executable(&cursor_dir, "agent");
         let dirs = vec![grok_dir, cursor_dir];
         assert_eq!(find_executable(AgentKind::Cursor, &dirs), Some(cursor));
         assert_eq!(find_executable(AgentKind::Grok, &dirs), Some(grok));
-        let generic_dir = dir.path().join("generic");
-        executable(&generic_dir, "agent");
-        executable(&generic_dir, "cursor");
-        assert_eq!(find_executable(AgentKind::Cursor, &[generic_dir]), None);
-        let cli_dir = dir.path().join("cli");
-        let cli = executable(&cli_dir, "cursor-agent");
-        assert_eq!(find_executable(AgentKind::Cursor, &[cli_dir]), Some(cli));
+        executable(dir.path(), "agent");
+        executable(dir.path(), "cursor");
+        assert_eq!(find_executable(AgentKind::Cursor, &[dir.path().to_path_buf()]), None);
+        let cli = executable(dir.path(), "cursor-agent");
+        assert_eq!(find_executable(AgentKind::Cursor, &[dir.path().to_path_buf()]), Some(cli));
     }
 
     #[test]

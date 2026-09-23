@@ -47,7 +47,7 @@ def verify_binary_freshness(binary: Path, repo: Path) -> None:
         raise ManifestError(f"binary is older than {stale.relative_to(repo)}; rebuild GPUI before packaging")
 
 
-def validate_evidence(directory: Path, commit: str) -> None:
+def validate_evidence(directory: Path, commit: str, *, windows_arm64: bool = False) -> None:
     root = str(Path(__file__).resolve().parents[1])
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -55,7 +55,10 @@ def validate_evidence(directory: Path, commit: str) -> None:
 
     golden = Path(__file__).resolve().parent / "conformance/golden"
     reports = []
-    for name, platform in RUNTIME_REPORTS.items():
+    required_reports = dict(RUNTIME_REPORTS)
+    if windows_arm64:
+        required_reports["windows-arm64-report.json"] = "windows-aarch64"
+    for name, platform in required_reports.items():
         report = json.loads((directory / name).read_text(encoding="utf-8"))
         if report.get("platform") != platform or report.get("build", {}).get("commit") != commit:
             raise ManifestError(f"wrong platform or source commit in {name}")
