@@ -36,7 +36,7 @@ function Write-Json([string]$Path, $Value) {
 }
 
 $results = @()
-foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'installer-failure', 'other-process', 'late-process', 'reinstall', 'reinstall-noop')) {
+foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'installer-failure', 'other-process', 'late-process', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held')) {
     $directory = Join-Path $OutputRoot $scenario
     $installation = Join-Path $directory 'installed app'
     $transaction = Join-Path $directory 'transaction'
@@ -44,17 +44,25 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
     $null = New-Item -ItemType Directory -Path $installation, $transaction, $config -Force
     $executable = Join-Path $installation 'pebrel.exe'
     Copy-Item -LiteralPath $old -Destination $executable
-    $payload = if ($scenario -eq 'reinstall') { $reinstall } else { $candidate }
+    $payload = if ($scenario -eq 'reinstall') { $reinstall } elseif ($scenario -eq 'repair-identical') { $old } else { $candidate }
     Copy-Item -LiteralPath $payload -Destination (Join-Path $directory 'candidate.exe')
     [System.IO.File]::WriteAllText((Join-Path $installation 'unins000.exe'), 'fixture marker')
     $env:PEBREL_HANDOFF_FIXTURE = $directory
     $env:PEBREL_HANDOFF_FAIL_INSTALL = if ($scenario -eq 'installer-failure') { '1' } else { '0' }
-    $env:PEBREL_HANDOFF_NOOP_INSTALL = if ($scenario -eq 'reinstall-noop') { '1' } else { '0' }
+    $env:PEBREL_HANDOFF_NOOP_INSTALL = if ($scenario -eq 'upgrade-noop') { '1' } else { '0' }
     $parent = Start-Process -FilePath $executable -ArgumentList 'wait' -PassThru
     $null = $parent.Handle
     $runner = $null
     $other = $null
+    $helperLock = $null
     try {
+        if ($scenario -in @('helper-unlocked', 'helper-held')) {
+            $null = New-Item -ItemType Directory -Path (Join-Path $installation 'runtime') -Force
+            $helperPath = Join-Path $installation 'runtime\pebrel-hook.exe'
+            [System.IO.File]::WriteAllText($helperPath, 'old helper fixture')
+            $helperLock = [System.IO.FileStream]::new($helperPath, [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+        }
         $plan = @{
             schema = 1; transaction = $scenario; executable = $executable; installation = $installation
             config_directory = $config; installer = $installer
@@ -64,7 +72,7 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
             participants = @(@{ pid = $parent.Id; created = $parent.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() })
         }
         if ($scenario -eq 'checksum') { $plan.sha256 = '0' * 64 }
-        if ($scenario -in @('reinstall', 'reinstall-noop')) { $plan.version = '1.8.0' }
+        if ($scenario -in @('reinstall', 'repair-identical')) { $plan.version = '1.8.0' }
         if ($scenario -eq 'creation-time') { $plan.participants[0].created = '1' }
         if ($scenario -eq 'other-process') {
             $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -PassThru
@@ -104,8 +112,14 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
                 Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Setup ran while the old process was alive'
                 [System.IO.File]::WriteAllText((Join-Path $directory 'exit-parent'), 'exit')
                 Assert ($parent.WaitForExit(5000)) 'Fixture parent did not exit'
+                if ($scenario -eq 'helper-unlocked') {
+                    Start-Sleep -Milliseconds 350
+                    Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Setup started with the helper still locked'
+                    $helperLock.Dispose()
+                    $helperLock = $null
+                }
                 Wait-File $resultPath
-                if ($scenario -in @('success', 'installer-failure', 'reinstall', 'reinstall-noop')) {
+                if ($scenario -in @('success', 'installer-failure', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held')) {
                     Wait-File (Join-Path $directory 'new-launch')
                     $launch = [System.IO.File]::ReadAllLines((Join-Path $directory 'new-launch'))
                     Assert ($launch[0] -eq $executable) 'Relaunch selected another installation'
@@ -117,17 +131,23 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
         }
         Assert ($runner.WaitForExit(5000)) 'Helper did not finish'
         $result = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        Assert ($result.success -eq ($scenario -in @('success', 'reinstall'))) 'Unexpected helper outcome'
+        Assert ($result.success -eq ($scenario -in @('success', 'reinstall', 'repair-identical', 'helper-unlocked'))) 'Unexpected helper outcome'
         if ($result.success) {
             $expected = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash
             Assert ($result.executable_sha256 -eq $expected) 'Installed binary differs from candidate'
+            Assert (Test-Path -LiteralPath (Join-Path $installation 'runtime\pebrel-hook.exe')) 'Successful setup did not repair the helper'
+            Assert ([System.IO.File]::ReadAllText((Join-Path $installation 'runtime\pebrel-hook.exe')) -eq 'repaired helper fixture') 'Helper still contains the original payload'
         }
         if ($scenario -in @('other-process', 'late-process')) {
             Assert (-not $other.HasExited) 'Update stopped an unprepared process'
             Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Setup ran with an unprepared process'
         }
-        if ($scenario -in @('installer-failure', 'reinstall-noop')) {
+        if ($scenario -in @('installer-failure', 'upgrade-noop', 'helper-held')) {
             Assert $result.recovered_original 'Untouched old executable was not recovered'
+        }
+        if ($scenario -eq 'helper-held') {
+            Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'A blocked helper allowed a partial installation'
+            Assert ($result.error -match 'pebrel-hook.exe') 'The blocked file is missing from the failure details'
         }
         $probe = [System.IO.FileStream]::new($plan.guard_path, [System.IO.FileMode]::OpenOrCreate,
             [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
@@ -135,6 +155,7 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
         $results += @{ scenario = $scenario; passed = $true }
         Write-Output "$scenario : passed"
     } finally {
+        if ($helperLock) { $helperLock.Dispose() }
         if ($runner -and -not $runner.HasExited) { $runner.Kill(); $runner.WaitForExit() }
         if (-not $parent.HasExited) {
             [System.IO.File]::WriteAllText((Join-Path $directory 'exit-parent'), 'exit')
