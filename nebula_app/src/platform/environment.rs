@@ -9,7 +9,7 @@ pub(crate) fn prepare_local_pty(options: &mut nebula_terminal::tty::Options) {
         }
         let inherited_override =
             !options.env_is_complete && std::env::var_os(GROK_LEGACY_CONSOLE).is_some();
-        apply_windows_terminal_defaults(options, inherited_override);
+        apply_local_console_defaults(options, inherited_override);
     }
     #[cfg(not(windows))]
     let _ = options;
@@ -19,10 +19,20 @@ pub(crate) fn prepare_local_pty(options: &mut nebula_terminal::tty::Options) {
 const GROK_LEGACY_CONSOLE: &str = "GROK_FORCE_LEGACY_CONSOLE";
 
 #[cfg(windows)]
-fn apply_windows_terminal_defaults(
+fn apply_local_console_defaults(
     options: &mut nebula_terminal::tty::Options,
     inherited_override: bool,
 ) {
+    // The refreshed, complete environment is captured before the GPUI spawn
+    // calls tty::setup_env(). Updating the parent later cannot change that
+    // snapshot. Advertise our actual capabilities in the child environment,
+    // including Explorer launches with no parent terminal. Keep explicit values.
+    for (name, value) in [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")] {
+        if !options.env.keys().any(|key| key.eq_ignore_ascii_case(name)) {
+            let inherited = if options.env_is_complete { None } else { std::env::var(name).ok() };
+            options.env.insert(name.to_owned(), inherited.unwrap_or_else(|| value.to_owned()));
+        }
+    }
     // Grok 1.0.25 treats unknown Windows terminal names as legacy consoles and
     // omits its Braille logo. Keep our real identity and use its capability override.
     // Remove this default when Grok recognizes Pebrel's terminal capabilities.
@@ -94,13 +104,13 @@ mod tests {
             env_is_complete: true,
             ..Default::default()
         };
-        super::apply_windows_terminal_defaults(&mut options, false);
+        super::apply_local_console_defaults(&mut options, false);
         assert_eq!(options.env[super::GROK_LEGACY_CONSOLE], "0");
         assert_eq!(options.env["TERM_PROGRAM"], "pebrel");
         assert_eq!(options.env["WSLENV"], "KEEP/p");
         assert!(!options.env.contains_key("WT_SESSION"));
         let once = options.clone();
-        super::apply_windows_terminal_defaults(&mut options, false);
+        super::apply_local_console_defaults(&mut options, false);
         assert_eq!(options, once);
     }
 
@@ -110,12 +120,18 @@ mod tests {
         for name in [super::GROK_LEGACY_CONSOLE, "grok_force_legacy_console"] {
             for value in ["1", "true", "0", "false", ""] {
                 let mut options = nebula_terminal::tty::Options {
-                    env: [(name.to_owned(), value.to_owned())].into_iter().collect(),
+                    env: [
+                        (name.to_owned(), value.to_owned()),
+                        ("TERM".to_owned(), "xterm-256color".to_owned()),
+                        ("COLORTERM".to_owned(), "truecolor".to_owned()),
+                    ]
+                    .into_iter()
+                    .collect(),
                     env_is_complete: true,
                     ..Default::default()
                 };
                 let original = options.clone();
-                super::apply_windows_terminal_defaults(&mut options, false);
+                super::apply_local_console_defaults(&mut options, false);
                 assert_eq!(options, original);
             }
         }
@@ -125,19 +141,90 @@ mod tests {
     #[test]
     fn inherited_grok_override_only_applies_to_incomplete_environments() {
         let mut options = nebula_terminal::tty::Options::default();
-        super::apply_windows_terminal_defaults(&mut options, true);
+        super::apply_local_console_defaults(&mut options, true);
         assert!(!options.env.contains_key(super::GROK_LEGACY_CONSOLE));
 
         // A successful refresh can remove a stale value from the parent's registry
         // snapshot. Do not resurrect it when the new complete environment omits it.
         options.env_is_complete = true;
-        super::apply_windows_terminal_defaults(&mut options, true);
+        super::apply_local_console_defaults(&mut options, true);
         assert_eq!(options.env[super::GROK_LEGACY_CONSOLE], "0");
 
         let mut fallback = nebula_terminal::tty::Options::default();
-        super::apply_windows_terminal_defaults(&mut fallback, false);
+        super::apply_local_console_defaults(&mut fallback, false);
         assert_eq!(fallback.env[super::GROK_LEGACY_CONSOLE], "0");
         assert!(!fallback.env_is_complete);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn complete_explorer_environment_advertises_truecolor_to_the_child_process() {
+        let mut options = nebula_terminal::tty::Options {
+            env: std::env::vars()
+                .filter(|(name, _)| {
+                    !["TERM", "COLORTERM", "WT_SESSION", "TERM_PROGRAM"]
+                        .iter()
+                        .any(|key| name.eq_ignore_ascii_case(key))
+                })
+                .collect(),
+            env_is_complete: true,
+            ..Default::default()
+        };
+        options.env.insert("TERM_PROGRAM".into(), "pebrel".into());
+        super::apply_local_console_defaults(&mut options, false);
+        assert_eq!(options.env["TERM"], "xterm-256color");
+        assert_eq!(options.env["COLORTERM"], "truecolor");
+        assert!(!options.env.contains_key("WT_SESSION"));
+        // Match the complete-environment child launch, independent of the test
+        // runner's terminal. Read the variables from the actual child.
+        let system = std::env::var_os("SystemRoot").unwrap();
+        let command =
+            std::path::Path::new(&system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let output = std::process::Command::new(command)
+            .args([
+                "-NoProfile",
+                "-Command",
+                "[Console]::WriteLine(\"$env:TERM $env:COLORTERM $env:TERM_PROGRAM\")",
+            ])
+            .env_clear()
+            .env("SystemRoot", system)
+            .envs(&options.env)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "status={}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "xterm-256color truecolor pebrel"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn color_capability_defaults_preserve_explicit_overrides() {
+        let mut options = nebula_terminal::tty::Options {
+            env: [
+                ("term", "dumb"),
+                ("ColorTerm", "24bit"),
+                ("NO_COLOR", "1"),
+                ("FORCE_COLOR", "0"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect(),
+            env_is_complete: true,
+            ..Default::default()
+        };
+        super::apply_local_console_defaults(&mut options, false);
+        assert_eq!(options.env["term"], "dumb");
+        assert_eq!(options.env["ColorTerm"], "24bit");
+        assert_eq!(options.env["NO_COLOR"], "1");
+        assert_eq!(options.env["FORCE_COLOR"], "0");
+        assert!(!options.env.contains_key("TERM") && !options.env.contains_key("COLORTERM"));
     }
 
     #[cfg(windows)]

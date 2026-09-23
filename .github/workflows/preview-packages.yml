@@ -4,26 +4,7 @@ run-name: >-
   Cross-platform Preview (${{ inputs.preview_id || format('run-{0}', github.run_number) }})
 
 on:
-  pull_request:
-    # Native tests cover every PR; package only when package inputs change.
-    paths:
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "nebula_app/build.rs"
-      - "nebula_app/build/**"
-      - "nebula_app/res/**"
-      - "nebula_app/windows/**"
-      - "assets/**"
-      - "packaging/**"
-      - "scripts/package*"
-      - "scripts/build-*"
-      - "scripts/installer*"
-      - "scripts/prepare-windows-runtime.ps1"
-      - "scripts/preview_release.py"
-      - "scripts/conformance/**"
-      - "scripts/tests/test_preview_release.py"
-      - ".github/workflows/preview-packages.yml"
+  # Pull requests use Full native tests; packages are built after merge or on request.
   push:
     branches: [main]
     # Native tests cover every PR; package only when package inputs change.

@@ -17,7 +17,11 @@ class UpdateProcess {
         if (!File.Exists(Path.Combine(directory, "parent-exited"))) return 3;
         if (Environment.GetEnvironmentVariable("PEBREL_HANDOFF_FAIL_INSTALL") == "1") return 17;
         if (Environment.GetEnvironmentVariable("PEBREL_HANDOFF_NOOP_INSTALL") == "1") return 0;
-        File.Copy(Path.Combine(directory, "candidate.exe"), Path.Combine(target, "pebrel.exe"), true);
+        try {
+            File.Copy(Path.Combine(directory, "candidate.exe"), Path.Combine(target, "pebrel.exe"), true);
+            Directory.CreateDirectory(Path.Combine(target, "runtime"));
+            File.WriteAllText(Path.Combine(target, "runtime", "pebrel-hook.exe"), "repaired helper fixture");
+        } catch (IOException) { return 5; }
         return 0;
 #else
         if (args.Length > 0 && args[0] == "--version") {

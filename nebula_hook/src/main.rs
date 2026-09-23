@@ -12,14 +12,15 @@
 //!    surfaces an error banner, 2 even blocks the turn), and kimi's `Stop` is
 //!    likewise a blockable event. Every path — including panic — must exit 0,
 //!    fast. Claude and kimi also write the payload to our stdin, so those modes
-//!    always drain stdin even when the message goes nowhere: an unread pipe
-//!    could surface as a hook write error.
+//!    drain stdin within a bounded invocation even when the message goes nowhere.
+//!    A caller retaining stdin or a stalled receiver must not leave this helper
+//!    running indefinitely and holding the installed executable open.
 //! 2. SCOPED: the hook config is global (settings.json / kimi's config.toml),
 //!    but the effect must be Nebula-only. The scope guard is the environment:
 //!    NEBULA_NOTIFY_PIPE only exists for processes spawned inside Nebula.
-//!    Anywhere else this is an invisible ~10 ms no-op.
-//! 3. FAST: pure std, no JSON handling (Nebula parses), one pipe write.
-//!    Keeps the whole claude→toast chain under ~50 ms.
+//!    Anywhere else it forwards nothing and exits without affecting the caller.
+//! 3. BOUNDED: pure std, no JSON handling (Pebrel parses), one pipe write.
+//!    Forwarding has a deadline; startup and notification latency depend on the host.
 //!
 //! Usage (installed by `nebula setup-ai` / Nebula's boot self-heal):
 //! ```text
@@ -42,6 +43,7 @@
 use std::io::{Read, Write};
 
 const MAX_PAYLOAD_BYTES: usize = 1 << 20;
+const FORWARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// 其他 agent 的 hook runner 独有的环境变量。
 ///
@@ -167,7 +169,25 @@ fn log_outcome(source: &str, pane: &str, bytes: usize, outcome: &Outcome) {
 fn main() {
     // Constraint 1: never leak a failure to the calling CLI.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let _ = std::panic::catch_unwind(|| run(&args));
+    let forwarding_args = args.clone();
+    let (done, finished) = std::sync::mpsc::sync_channel(1);
+    // Bound the entire forwarding operation, including stdin drain and pipe
+    // writes. A read-only timeout would still leave a blocked writer alive.
+    // This one-shot process never joins a stuck worker: returning from main
+    // retires all of its threads and handles. The provider sees exit code 0.
+    if std::thread::Builder::new()
+        .name("hook-forward".into())
+        .spawn(move || {
+            let _ = std::panic::catch_unwind(|| run(&forwarding_args));
+            let _ = done.send(());
+        })
+        .is_ok()
+    {
+        let _ = finished.recv_timeout(FORWARD_TIMEOUT);
+    }
+    // A user-owned notifier is independent of our best-effort transport. Never
+    // wait for it and do not suppress it when the Pebrel pipe is unavailable.
+    chain_notifier(&args);
     // Cursor 的提交前 Hook 有响应合同；传输失败也不能阻止用户提交。
     if args.first().is_some_and(|source| source == "cursor")
         && native_event(&args) == Some("prompt")
@@ -307,7 +327,9 @@ fn run(args: &[String]) {
         }
     }
     log_outcome(source, &pane, payload.len(), &outcome);
+}
 
+fn chain_notifier(args: &[String]) {
     // Chain mode: keep a pre-existing codex notifier working. Runs even
     // outside Nebula — the original program must keep firing everywhere.
     let strs: Vec<&str> = args.iter().map(String::as_str).collect();

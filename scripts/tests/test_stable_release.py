@@ -16,6 +16,7 @@ from scripts.stable_release import (
 )
 from scripts.preview_release import sha256
 from scripts.preview_release import MIN_ASSET_SIZE
+from scripts.ci_plan import plan_matrices
 
 
 VERSION = "1.6.0"
@@ -78,8 +79,21 @@ class StableReleaseTests(unittest.TestCase):
         self.assertNotIn("  native-tests:\n", workflow)
         self.assertNotIn("uses: ./.github/workflows/linux-lua.yml", workflow)
         shared = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
-        for platform in ("ubuntu-24.04", "windows-2022", "windows-11-arm", "macos-26", "macos-26-intel"):
-            self.assertIn(platform, shared)
+        # Platform coverage comes from the event plan, not literal runner names
+        # in YAML. Verify both the consumer wiring and the full caller matrices.
+        for output in ("native_matrix", "release_matrix"):
+            self.assertIn(f"fromJSON(needs.lint.outputs.{output})", shared)
+        self.assertIn("runs-on: ${{ matrix.os }}", shared)
+        for event in ("push", "merge_group", "workflow_call", "workflow_dispatch"):
+            with self.subTest(event=event):
+                native, release = plan_matrices(event, {})
+                self.assertCountEqual(
+                    [row["os"] for row in native],
+                    ["ubuntu-24.04", "windows-2022", "windows-11-arm", "macos-26", "macos-26-intel"],
+                )
+                self.assertCountEqual(
+                    [row["os"] for row in release], ["macos-26", "macos-26-intel"],
+                )
         for trigger in ("pull_request:", "merge_group:", "branches: [main]"):
             self.assertIn(trigger, shared)
         self.assertIn("run: python scripts/ci_native_tests.py", shared)

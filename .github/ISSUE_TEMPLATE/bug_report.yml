@@ -1,114 +1,215 @@
-name: Bug Report
-description: Report a reproducible problem in Nebula
+name: Bug Report / 问题反馈
+description: Report a reproducible problem in Pebrel / 反馈一个可复现的问题
 title: "[Bug] "
 labels: ["bug", "triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report a bug. Please search existing issues first and include enough detail for someone else to reproduce the problem.
+        Thanks for taking the time to report a bug. A report we can reproduce gets fixed in the next release; one we cannot reproduce is asked for details and waits.
+        感谢反馈。**能复现的问题会进下个版本；说不清的问题只能先挂起等补充。** 下拉选项会自动转成标签。
 
   - type: dropdown
     id: platform
     attributes:
-      label: Operating system
+      label: Operating system / 操作系统
       options:
         - Windows
+        - Windows (WSL)
         - macOS
         - Linux
-        - Other
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version and display / 系统版本与显示
+      description: Windows 11 23H2 / macOS 26.0 / Ubuntu 24.04; DPI scaling and monitor count if display-related. / 系统版本；渲染问题请附缩放比例与显示器数量。
+      placeholder: "Windows 11 23H2, 150% scaling, 2 monitors"
     validations:
       required: true
 
   - type: input
     id: version
     attributes:
-      label: Nebula version
-      description: Find it in Settings > Home, or on the latest release page.
-      placeholder: "e.g. 1.0.0"
+      label: Pebrel version / 版本号
+      description: Settings > Home, or the release page. / 设置 > 主页，或发布页。
+      placeholder: "e.g. 1.9.0"
     validations:
       required: true
 
   - type: dropdown
     id: install_source
     attributes:
-      label: How did you install Nebula?
+      label: How did you install Pebrel? / 安装方式
       options:
-        - GitHub Release (.msi / .exe / portable archive)
-        - Built from source (cargo build / cargo run)
-        - Other
+        - GitHub Release (.exe / .zip / .dmg / .AppImage / .deb)
+        - Built from source / 源码构建 (cargo build)
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: shell
+    attributes:
+      label: Shell in the affected pane / 出问题的面板用的 Shell
+      multiple: true
+      options:
+        - PowerShell 7 (pwsh)
+        - Windows PowerShell 5.1
+        - cmd
+        - WSL (bash / zsh inside WSL)
+        - Git Bash / MSYS2
+        - zsh
+        - bash
+        - fish
+        - nushell
+        - Not sure / 不确定
+    validations:
+      required: true
+
+  - type: dropdown
+    id: program
+    attributes:
+      label: Program running in the pane / 面板里正在跑的程序
+      description: What was running when it happened? / 出问题时面板里跑着什么？
+      multiple: true
+      options:
+        - Nothing, plain shell prompt / 什么都没跑
+        - Claude Code
+        - Codex CLI
+        - Pi
+        - Gemini CLI / other AI agent — 其他 AI agent
+        - Terminal multiplexer (screen etc.) — 终端复用器
+        - vim / nvim / other full-screen TUI — 全屏 TUI
+        - ssh client / remote shell — 远程 shell
+        - A long-running command (build, ping, adb…) — 长时间运行的命令
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection type / 连接方式
+      options:
+        - Local terminal / 本地终端
+        - SSH via Pebrel host list / Pebrel 内 SSH 主机
+        - SSH via command line (ssh user@host) / 手动 ssh 命令
+        - WSL
+        - Other / 其他
     validations:
       required: true
 
   - type: dropdown
     id: area
     attributes:
-      label: Affected area
+      label: Affected area / 影响范围
+      description: Pick every area that applies. / 可多选。
       multiple: true
       options:
-        - Local terminal / shell
-        - SSH connection / authentication
-        - SFTP / file tree
-        - Tabs / splits / sessions
-        - AI assistant / providers
-        - Settings / backup / sync
-        - UI / layout / rendering
-        - Startup / crash
-        - Other
+        - Terminal rendering / scrolling / selection / garbled text — 终端渲染、滚动、选区、乱码
+        - Shell startup / PATH / start directory / context menu — Shell 启动、环境变量、起始目录、右键菜单
+        - SSH / proxy / jump host — SSH、代理、跳板
+        - File tree / drag-and-drop upload — 文件树、拖拽上传
+        - Tabs / splits / session restore / window size — 标签页、分屏、会话恢复、窗口尺寸
+        - AI agent (Claude Code / Codex / Pi / OMP) — AI Agent 集成与状态
+        - Markdown / LaTeX / image reader — 阅读页与内联渲染
+        - Settings / theme / layout / blur — 设置页、主题、布局、模糊背景
+        - Keyboard / IME / mouse / shortcuts / clipboard — 键盘、输入法、鼠标、快捷键、剪贴板
+        - Git / SVN
+        - Startup crash / hang / cannot exit — 启动崩溃、卡死、无法退出
+        - Performance / lag — 性能、卡顿
+        - Installer / update / packaging — 安装包、更新、打包
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Did it work in a previous version? / 旧版本是否正常？
+      options:
+        - Not sure / 不确定
+        - Yes, it worked before / 旧版本正常，新版本坏了
+        - No, it never worked / 一直如此
     validations:
       required: true
 
   - type: dropdown
     id: reproducibility
     attributes:
-      label: Can you reproduce it?
+      label: Can you reproduce it? / 复现概率
       options:
-        - Always (100%)
-        - Often (>50%)
-        - Sometimes
-        - Once / not sure
+        - Always (100%) / 必现
+        - Often (>50%) / 经常
+        - Sometimes / 偶尔
+        - Once / not sure / 仅一次
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: Steps to reproduce
-      description: Use numbered steps and include the shell or connection type when relevant.
+      label: Steps to reproduce / 复现步骤
+      description: |
+        Numbered, from a fresh launch, ending at the exact moment it goes wrong. "It's laggy" or "it doesn't work" cannot be acted on.
+        从启动开始按序编号，写到出错的那一步为止。"很卡"、"不好用"这种一句话我们没法处理。
       placeholder: |
-        1. Open Nebula
-        2. Create or connect to ...
-        3. ...
+        1. Launch Pebrel, open a new PowerShell 7 tab
+        2. Run `codex` and ask it to ...
+        3. Split the pane with Ctrl+Shift+D
+        4. Output overlaps the input box at the bottom (see screenshot)
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
+      label: Expected behavior / 期望结果
     validations:
       required: true
 
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior
+      label: Actual behavior / 实际结果
+      description: What you see instead, including any error text verbatim. / 实际看到什么，错误文字原样贴。
     validations:
       required: true
 
   - type: textarea
     id: logs
     attributes:
-      label: Logs / screenshots
-      description: Include relevant lines or screenshots. Remove passwords, private keys, tokens, host addresses, and other secrets.
+      label: Logs / screenshots / 日志或截图
+      description: |
+        Required. Screenshot or short recording for anything visual; log lines for crashes, hangs and connection problems. Remove passwords, keys, tokens and host addresses first.
+        必填。显示类问题贴截图或短录屏；崩溃、卡死、连接类问题贴日志。请先删掉密码、私钥、token、主机地址。
+        Logs / 日志位置：
+        - Windows: `%APPDATA%\Pebrel\pebrel_debug.log` and `%TEMP%\Pebrel-<pid>.log`
+        - macOS: `~/Library/Application Support/Pebrel/pebrel_debug.log` and `$TMPDIR/Pebrel-<pid>.log`
+        - Linux: `~/.config/pebrel/pebrel_debug.log` and `/tmp/Pebrel-<pid>.log`
       placeholder: Paste redacted logs or drag screenshots here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Non-default settings / 改过的设置
+      description: Theme, font, transparency/blur, GPU, shell profile, hooks — anything changed from defaults. Attach settings.txt if unsure. / 改过的主题、字体、透明/模糊、GPU、Shell 配置、hooks；不确定就贴 settings.txt。
+      placeholder: "Acrylic blur on, opacity 85%, font JetBrains Mono 13"
 
   - type: checkboxes
     id: checklist
     attributes:
-      label: Before submitting
+      label: Before submitting / 提交前确认
       options:
-        - label: I searched existing issues and did not find a duplicate
+        - label: I searched existing issues and did not find a duplicate / 已搜索，无重复
           required: true
-        - label: I removed passwords, private keys, tokens, and other secrets from this report
+        - label: I tested with the latest release / 已用最新版本试过
+          required: true
+        - label: I removed passwords, private keys, tokens and other secrets / 已删除敏感信息
           required: true

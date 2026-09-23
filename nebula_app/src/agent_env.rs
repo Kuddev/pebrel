@@ -170,6 +170,9 @@ const WSLENV_ENTRIES: &[&str] = &[
     crate::ai_hook::LEGACY_PANE_ENV,
     TERM_PROGRAM_ENV,
     TERM_PROGRAM_VERSION_ENV,
+    // WSL otherwise falls back to a 256-color TERM despite the host supporting
+    // truecolor. Keep the capability declaration; do not spoof another terminal.
+    "COLORTERM",
     "PEBREL_CLI/p",
     "PEBREL_BIN_DIR/p",
     PROCESS_ENV,
@@ -311,6 +314,27 @@ mod tests {
         assert!(names.contains(&BIN_DIR_ENV), "{BIN_DIR_ENV} missing: {names:?}");
         assert!(names.contains(&PROCESS_ENV), "{PROCESS_ENV} missing: {names:?}");
         assert!(names.contains(&crate::runtime_api::ENDPOINT_ENV));
+        assert!(names.contains(&"COLORTERM"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_receives_truecolor_without_replacing_an_explicit_forwarding_rule() {
+        let mut env = HashMap::from([
+            ("COLORTERM".to_owned(), "truecolor".to_owned()),
+            ("WSLENV".to_owned(), "KEEP/p".to_owned()),
+        ]);
+        apply(&mut env, 8);
+        assert_eq!(env["COLORTERM"], "truecolor");
+        assert!(env["WSLENV"].split(':').any(|entry| entry == "COLORTERM"));
+        assert!(env["WSLENV"].split(':').any(|entry| entry == "KEEP/p"));
+        env.insert("WSLENV".into(), "KEEP/p:COLORTERM/u".into());
+        env.insert("COLORTERM".into(), "24bit".into());
+        apply(&mut env, 8);
+        assert_eq!(env["COLORTERM"], "24bit");
+        let entries: Vec<_> =
+            env["WSLENV"].split(':').filter(|entry| variable_name(entry) == "COLORTERM").collect();
+        assert_eq!(entries, ["COLORTERM/u"]);
     }
 
     #[cfg(windows)]

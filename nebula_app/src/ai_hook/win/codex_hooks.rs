@@ -111,8 +111,10 @@ pub(super) fn ensure_codex_hooks() -> bool {
 }
 
 fn groups(helper: &str, mode: CodexHookMode) -> Value {
-    // Codex 的 Windows runner 使用 COMSPEC /C；可执行文件路径自身仍需引号。
-    let command = format!("\"{}\" codex {}", helper.replace('"', "\\\""), mode.argument());
+    // Codex runs Windows hooks through PowerShell -Command. A quoted path is
+    // a string expression until invoked with &, and single quotes keep $, `
+    // and other path characters literal. PowerShell escapes ' by doubling it.
+    let command = format!("& '{}' codex {}", helper.replace('\'', "''"), mode.argument());
     installation::codex_groups(&command, Some(&command), mode)
 }
 
@@ -259,6 +261,78 @@ fn remove(directory: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrades_cmd_style_owned_hooks_without_changing_user_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let helper = "C:/Program Files/Pebrel/runtime/pebrel-hook.exe";
+        let old_command = format!("\"{helper}\" codex --hooks=full");
+        let previous =
+            installation::codex_groups(&old_command, Some(&old_command), CodexHookMode::Full);
+        let foreign = json!({"hooks":[{"type":"command","command":"user-hook"}]});
+        let mut hooks = json!({"hooks": previous});
+        hooks["hooks"]["Stop"].as_array_mut().unwrap().push(foreign.clone());
+        std::fs::write(root.path().join("hooks.json"), hooks.to_string()).unwrap();
+        std::fs::write(
+            root.path().join(MARKER),
+            json!({"groups": previous, "enabled_feature": true}).to_string(),
+        )
+        .unwrap();
+        let config = "notify = ['user-notifier']\n[features]\nhooks = true\n";
+        std::fs::write(root.path().join("config.toml"), config).unwrap();
+
+        assert!(!current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
+        assert!(install(root.path(), helper, CodexHookMode::Full).unwrap());
+        assert!(current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
+        assert!(!install(root.path(), helper, CodexHookMode::Full).unwrap());
+        let hooks: Value =
+            serde_json::from_str(&read(&root.path().join("hooks.json")).unwrap().unwrap()).unwrap();
+        let mut expected = json!({"hooks": groups(helper, CodexHookMode::Full)});
+        expected["hooks"]["Stop"].as_array_mut().unwrap().insert(0, foreign);
+        assert_eq!(hooks, expected);
+        assert_eq!(read(&root.path().join("config.toml")).unwrap().unwrap(), config);
+    }
+
+    #[test]
+    fn powershell_executes_generated_hooks_with_literal_paths_and_stdin() {
+        use std::io::Write as _;
+        use std::os::windows::process::CommandExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let helper = root.path().join("Pebrel's $data `hook.ps1");
+        std::fs::write(
+            &helper,
+            "Write-Output ($args -join '|')\r\nWrite-Output ([Console]::In.ReadLine())\r\n",
+        )
+        .unwrap();
+        let powershell = Path::new(&std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        for mode in [CodexHookMode::Turns, CodexHookMode::Full] {
+            let groups = groups(&helper.to_string_lossy().replace('\\', "/"), mode);
+            let command = groups["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+            let mut child = Command::new(&powershell)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    command,
+                ])
+                .creation_flags(0x0800_0000)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(b"{\"session_id\":\"fixture\"}\n").unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(stdout.contains(&format!("codex|{}", mode.argument())), "{stdout}");
+            assert!(stdout.contains(r#"{"session_id":"fixture"}"#), "{stdout}");
+        }
+    }
 
     #[test]
     fn install_upgrade_remove_preserves_notify_and_user_hooks() {

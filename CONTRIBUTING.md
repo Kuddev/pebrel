@@ -74,6 +74,8 @@ raise any existing tracked private artifact for an explicit maintainer decision.
    `architecture/notes/`; ordinary fixes do not create a note.
 2. Keep one conceptual change per PR. A necessary extraction and its behavior
    tests may accompany the feature; unrelated rewrites and formatting may not.
+   The `pr-size` check fails above 1500 changed source lines (docs, lockfiles
+   and assets excluded); split instead of asking for an exemption.
 3. Put shared rules in their existing authority. UI modules adapt those rules;
    they must not fork persistence, state transitions or domain behavior.
 4. Add regression tests that fail for the defect, and test error/cancellation
@@ -105,9 +107,11 @@ cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked
 
 `Full native tests` runs on every PR and merge-group update, and on `main` pushes.
 It tests the full workspace on Linux, Windows x64 / ARM64 and both macOS
-architectures. New commits cancel obsolete PR runs. Package validation has its own
-input filters and can also be dispatched manually; a package job does not replace
-the native test suite. These triggers do not configure required status checks.
+architectures. New commits cancel obsolete PR runs. Pull requests run tests and
+compile checks without building distribution packages. Package validation runs
+after matching changes reach `main`, or by explicit manual dispatch; a package
+job does not replace the native test suite. These triggers do not configure
+required status checks.
 
 GitHub may show **Waiting for approval** for a first-time fork contributor. A
 maintainer must inspect the submitted changes and approve that workflow run from
@@ -122,9 +126,17 @@ compile check into a claim that UI tests or a packaged application were run.
 
 ## Review and enforcement
 
-`architecture-contracts` is the stable PR job name. Maintainers must enable it as
-a required check and require Code Owner approval in the target branch ruleset;
-see the [activation checklist](docs/project-constraints.md#server-side-activation).
+`architecture-contracts`, `lint`, `pr-size`, the five
+`Tests (<os>)` jobs and both `Release workspace (<os>)` jobs are required checks
+on `main`, together with Code Owner approval; see the
+[activation checklist](docs/project-constraints.md#server-side-activation).
+Open pull requests as drafts while iterating: drafts run Linux, Windows x64 and
+Apple Silicon tests plus the Apple Silicon release-profile compile check. The
+required lint job validates the event and selects the matrix before requesting
+platform runners. Drafts omit Intel Mac and Windows ARM64 jobs entirely, so their
+required contexts may be missing until the PR is marked ready. Ready PRs run the
+full matrix; every required check must succeed before merging. The ready event
+still reruns core validation rather than reusing an earlier check conclusion.
 Local hooks are convenient, but bypassable; they are not the enforcement boundary.
 Submitting a workflow or `CODEOWNERS` file does not configure server-side rules.
 
@@ -137,6 +149,8 @@ feature work; there is no routine `--skip-architecture` option.
 ## 中文摘要
 
 - 先读架构图、工程合同和决策记录；按职责拆分，不按行号切片。
+- 一个 PR 只做一件事；改动超过 1500 行源码（不计文档、lockfile、资源）`pr-size` 会失败，请拆分。
+- Draft PR 先运行必需的格式检查和矩阵规划，再创建 Linux / Windows x64 / Apple Silicon 测试及 Apple Silicon release 编译检查；不创建 Intel Mac / Windows ARM64 任务。Ready 后运行完整矩阵，十项必需检查全绿才能合并。
 - 2000 行是现有仓库的防灾上限，800 行只提示审查，不是“大厂标准”。
 - 普通功能 PR 不得增加存量债务；有问题的规则可以修订，但要有反例、测试和维护者审批。
 - 新增核心抽象、依赖方向、持久化或线程模型改变要先说明设计，不强迫每个小修复写 ADR。
