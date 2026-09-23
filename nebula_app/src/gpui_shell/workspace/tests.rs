@@ -805,3 +805,91 @@ fn sidebar_resize_hot_zone_follows_the_theme_boundary() {
     // 热区宽度足以盖住线：线心两侧各 3px。
     assert!(SIDEBAR_RESIZE_HANDLE_WIDTH * 0.5 > nord.divider);
 }
+
+/// 回归：冷恢复的 codex 目标停在 hooks 信任 / 目录选择 / 「已在别处打开」
+/// 提示上时，hook 报不了、探针拿不到 rollout，pane 一直是「未确认」。此前
+/// 快照把 `boot_attempts` 钉在启动时的 +1 值，1 Hz 自动保存永不归零——
+/// 三次正常退出后整个工作区被挪去 `session.crashed.json`。断路器只回答
+/// 「这次启动活到了第一次自动保存没有」，未确认的目标只随快照落盘、不计数。
+#[cfg(feature = "gpui-test-support")]
+mod boot_breaker_tests {
+    use super::*;
+    use crate::session::{AgentSession, LaunchSession, LayoutSession, TabSession};
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn unconfirmed_agent_target_does_not_pin_the_boot_breaker(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::math_view::register(cx);
+            crate::gpui_shell::file_editor::init(cx);
+            super::super::init(cx);
+            cx.set_reduce_motion(true);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, mut window) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                )
+            });
+            workspace = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let workspace = workspace.unwrap();
+
+        let saved = AgentSession {
+            source: "codex".into(),
+            session_id: Some("saved-42".into()),
+            session_file: None,
+        };
+        let launch = LaunchSession::Shell {
+            name: "missing".into(),
+            program: "pebrel-test-missing-shell-executable".into(),
+            args: vec![],
+        };
+        let tab = TabSession {
+            cwd: String::new(),
+            custom_name: None,
+            color: None,
+            launch: Some(launch.clone()),
+            layout: Some(LayoutSession::Pane {
+                cwd: String::new(),
+                agent: Some(saved.clone()),
+                launch: Some(launch),
+            }),
+            active_pane: 0,
+        };
+        // 第三次启动：磁盘上的计数已被 `mark_boot_attempt` 抬到 2。
+        let mut session = crate::session::Session::new(0, vec![tab]);
+        session.boot_attempts = 2;
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.restore_update_session(&session, true, window, cx));
+                let pane = workspace.tabs.last().and_then(|tab| tab.focused_view()).unwrap();
+                assert!(pane.read(cx).recovery_pending(), "codex 目标尚未被 hook / 探针确认");
+
+                let snapshot = workspace.snapshot_session(cx);
+                assert_eq!(snapshot.boot_attempts, 0, "未确认的恢复目标不得钉住断路器计数");
+                assert!(
+                    crate::session::should_restore(&snapshot),
+                    "首次自动保存即让下次启动照常恢复"
+                );
+                let Some(LayoutSession::Pane { agent, .. }) =
+                    snapshot.tabs.last().and_then(|tab| tab.layout.as_ref())
+                else {
+                    panic!("restored tab must snapshot as a single pane");
+                };
+                assert_eq!(agent.as_ref(), Some(&saved), "恢复目标本身仍随快照落盘，下次照旧接续");
+            })
+        });
+    }
+}

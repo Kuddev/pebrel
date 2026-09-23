@@ -69,7 +69,7 @@ mod tests {
         let path = directory.path().join("activity.md");
         let original = format!("# 中文标题\n\n正文\n\n{}", "后面的段落\n\n".repeat(60));
         std::fs::write(&path, &original).unwrap();
-        let (file, mut cx) = super::super::tests::open(path.clone(), cx);
+        let (file, mut cx) = super::super::tests::open_live(path.clone(), cx);
         cx.update(|window, cx| file.update(cx, |view, cx| view.begin_live_edit(1, window, cx)));
         cx.simulate_input("未保存🌿");
         cx.run_until_parked();

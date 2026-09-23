@@ -36,7 +36,10 @@ impl TextFileView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loading || self.document.as_ref().is_none_or(|doc| doc.read_only) {
+        if (self.preview && !self.preview_editable())
+            || self.loading
+            || self.document.as_ref().is_none_or(|doc| doc.read_only)
+        {
             return;
         }
         self.history.record(&self.input.read(cx).value());

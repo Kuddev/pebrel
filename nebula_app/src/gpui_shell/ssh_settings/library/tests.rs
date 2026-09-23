@@ -46,7 +46,10 @@ fn pairing_design_ssh_cards_keep_icon_anchors_and_compact_filter(cx: &mut gpui::
         let icon = cx.debug_bounds("ssh-host-icon-0").expect("card anchor");
         assert_eq!(icon.size, gpui::size(px(36.0), px(36.0)));
         let first = cx.debug_bounds("ssh-host-row-0").unwrap();
+        assert_eq!(icon.center().y, first.center().y);
         let next = cx.debug_bounds("ssh-host-row-1").unwrap();
+        let next_icon = cx.debug_bounds("ssh-host-icon-1").unwrap();
+        assert_eq!(icon.center().x, next_icon.center().x);
         assert!(next.origin.y - first.bottom() >= px(8.0));
         let filter = cx.debug_bounds("ssh-inline-filter").unwrap();
         assert!(filter.size.width <= px(210.0));

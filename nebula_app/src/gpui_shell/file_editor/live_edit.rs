@@ -60,6 +60,15 @@ pub(super) fn decorations(projection: &Projection, cx: &App) -> Vec<TextDecorati
 }
 
 impl TextFileView {
+    pub(super) fn preview_editable(&self) -> bool {
+        self.live_mode
+            && self.render_active
+            && self.preview
+            && !self.loading
+            && !self.outline.limited
+            && self.document.as_ref().is_some_and(|document| !document.read_only)
+    }
+
     pub(super) fn document_input_focused(&self, window: &Window, cx: &App) -> bool {
         self.focus.is_focused(window)
             || (!self.preview && self.input.read(cx).focus_handle(cx).is_focused(window))
@@ -111,13 +120,7 @@ impl TextFileView {
                 return;
             }
         }
-        if !self.live_mode
-            || !self.render_active
-            || !self.preview
-            || self.loading
-            || self.outline.limited
-            || self.document.as_ref().is_none_or(|document| document.read_only)
-        {
+        if !self.preview_editable() {
             return;
         }
         if self.live_edit.as_ref().is_some_and(|edit| edit.block == block && edit.part == part) {

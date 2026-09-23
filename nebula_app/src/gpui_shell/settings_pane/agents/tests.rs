@@ -63,6 +63,36 @@ fn fixture(
 }
 
 #[gpui::test]
+fn agents_content_is_centered_and_paths_leave_room_for_hook_status(cx: &mut TestAppContext) {
+    let (pane, window, reply, _) = fixture(cx);
+    drop(reply);
+    pane.update(window, |pane, cx| {
+        pane.agents.rows.as_mut().unwrap()[0].executable = Some(
+            "C:/Users/example/AppData/Local/a-very-long-installation-directory/bin/claude.exe"
+                .into(),
+        );
+        cx.notify();
+    });
+    for width in [1440.0, 800.0] {
+        window.simulate_resize(size(px(width), px(900.0)));
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let row = window.debug_bounds("agent-hook-row-0").unwrap();
+        let path = window.debug_bounds("agent-cli-path-0").unwrap();
+        let status = window.debug_bounds("agent-hook-status-0").unwrap();
+        let center = px((width + SETTINGS_NAV_WIDTH) / 2.0);
+        assert!((f32::from(row.center().x - center)).abs() <= 2.0);
+        assert!(row.size.width <= px(720.0));
+        assert!(path.size.width > px(0.0));
+        assert!(path.right() <= status.left());
+        assert!(status.right() + px(40.0) <= row.right());
+    }
+}
+
+#[gpui::test]
 fn installed_hook_row_accepts_padding_clicks_and_reports_write_failure(cx: &mut TestAppContext) {
     if !crate::platform::CAPABILITIES.ai_hook_server {
         return;
@@ -118,8 +148,14 @@ fn configuration_without_an_executable_is_not_an_installed_agent(cx: &mut TestAp
         let mut rows = rows(false);
         rows[0].executable = None;
         assert!(rows[0].inspection.available);
-        assert!(matches!(agent_status(&rows[0], false), Message::SettingsAgentsNotDetected));
+        assert!(matches!(
+            agent_status(&rows[0], false),
+            Message::SettingsAgentsOff | Message::SettingsAgentsUnavailable
+        ));
         assert!(!can_toggle(&rows[0]));
+        rows[0].inspection.installed = true;
+        assert!(matches!(agent_status(&rows[0], false), Message::SettingsAgentsInstalled));
+        rows[0].inspection.installed = false;
         pane.agents.rows = Some(rows);
         cx.notify();
     });

@@ -426,12 +426,22 @@ where
                 Ok(got) => {
                     // Startup profiling: the process-wide first PTY output ≈
                     // the console host finished its bring-up handshake and
-                    // the shell started talking.
+                    // the shell started talking. The first chunks are dumped
+                    // escaped so a silent boot can be aligned with the host's
+                    // handshake byte for byte.
                     {
-                        use std::sync::atomic::{AtomicBool, Ordering};
-                        static FIRST_BYTES: AtomicBool = AtomicBool::new(false);
-                        if !FIRST_BYTES.swap(true, Ordering::Relaxed) {
+                        use std::sync::atomic::{AtomicUsize, Ordering};
+                        static CHUNKS: AtomicUsize = AtomicUsize::new(0);
+                        let index = CHUNKS.fetch_add(1, Ordering::Relaxed);
+                        if index == 0 {
                             crate::pty_trace("first conout bytes");
+                        }
+                        if index < 12 {
+                            let shown = &buf[unprocessed..unprocessed + got.min(200)];
+                            crate::pty_trace(&format!(
+                                "conout chunk {index} ({got} bytes): {}",
+                                shown.escape_ascii()
+                            ));
                         }
                     }
                     unprocessed += got;
@@ -480,6 +490,16 @@ where
             self.event_proxy.send_event(Event::Wakeup);
         }
 
+        // Boot profiling: a readable wake that carried no bytes is the
+        // signature of a lost or spurious wakeup; report only the first few.
+        if processed == 0 {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static EMPTY_READS: AtomicUsize = AtomicUsize::new(0);
+            if EMPTY_READS.fetch_add(1, Ordering::Relaxed) < 8 {
+                crate::pty_trace("pty_read: readable wake with no bytes");
+            }
+        }
+
         Ok(processed)
     }
 
@@ -495,6 +515,18 @@ where
                         break 'write_many;
                     },
                     Ok(n) => {
+                        {
+                            use std::sync::atomic::{AtomicUsize, Ordering};
+                            static WRITES: AtomicUsize = AtomicUsize::new(0);
+                            let index = WRITES.fetch_add(1, Ordering::Relaxed);
+                            if index < 12 {
+                                let shown = &current.remaining_bytes()[..n.min(200)];
+                                crate::pty_trace(&format!(
+                                    "conin write {index} ({n} bytes): {}",
+                                    shown.escape_ascii()
+                                ));
+                            }
+                        }
                         current.advance(n);
                         if current.finished() {
                             state.goto_next();

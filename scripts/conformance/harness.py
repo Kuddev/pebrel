@@ -936,7 +936,10 @@ def load_rules(golden_dir: Path) -> dict[str, Any]:
 
 def stable_flat(report: dict[str, Any], golden_dir: Path) -> dict[str, Any]:
     rules = load_rules(golden_dir)
-    return filter_flat(flatten(report), list(rules.get("volatile", {})))
+    flat = filter_flat(flatten(report), list(rules.get("volatile", {})))
+    # One golden per family serves every architecture of that platform.
+    flat["platform"] = platform_family(str(report["platform"]))
+    return flat
 
 
 def compare_platform_golden(report: dict[str, Any], golden_dir: Path) -> list[str]:

@@ -15,7 +15,7 @@ fn open(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("inline-live.md");
     std::fs::write(&path, source).unwrap();
-    let (file, window) = tests::open(path, cx);
+    let (file, window) = tests::open_live(path, cx);
     (directory, file, window)
 }
 

@@ -70,6 +70,7 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
                     Poll::Ready(Ok(0)) => {
                         // Either the pipe is closed or the reader is at its EOF.
                         // In any case, we are done.
+                        crate::pty_trace("conout reader thread: EOF");
                         return;
                     },
 
@@ -84,10 +85,14 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
                     },
 
                     // Windows reports normal anonymous-pipe EOF this way.
-                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => return,
+                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => {
+                        crate::pty_trace("conout reader thread: broken pipe");
+                        return;
+                    },
 
                     Poll::Ready(Err(e)) => {
                         log::error!("error writing to pipe: {}", e);
+                        crate::pty_trace("conout reader thread: read error");
                         return;
                     },
 

@@ -10,7 +10,7 @@ fn unchanged_activation_skips_parse_without_losing_an_earlier_pending_edit(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("activation.md");
     std::fs::write(&path, "# Heading\n\n中文段落\n").unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     cx.update(|_, cx| file.update(cx, |view, cx| view.finish_live_edit(cx)));
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -55,7 +55,7 @@ fn formatted_edit_saves_source_without_rewriting_other_blocks(cx: &mut TestAppCo
     let path = directory.path().join("inline.md");
     let original = "## 中文 **标题** ##\n\n[link](https://example.test \"title\")\n\n~~~rust\nlet n = 1;\n~~~\n";
     std::fs::write(&path, original).unwrap();
-    let (file, mut cx) = tests::open(path.clone(), cx);
+    let (file, mut cx) = tests::open_live(path.clone(), cx);
     let input = cx.update(|window, cx| {
         file.update(cx, |view, cx| {
             view.live_mode = true;
@@ -83,7 +83,7 @@ fn undo_redo_crosses_formatted_source_and_finished_blocks(cx: &mut TestAppContex
     let path = directory.path().join("history.md");
     let original = "# Title\n\n**Body**\n";
     std::fs::write(&path, original).unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     cx.update(|window, cx| {
         file.update(cx, |view, cx| {
             view.live_mode = true;
@@ -113,7 +113,7 @@ fn composition_keeps_native_input_identity_and_marked_selection(cx: &mut TestApp
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("ime.md");
     std::fs::write(&path, "**你好**\n").unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     let input = cx.update(|window, cx| {
         file.update(cx, |view, cx| {
             view.live_mode = true;
@@ -140,7 +140,7 @@ fn composition_before_the_first_layout_keeps_its_caret(cx: &mut TestAppContext) 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("first-frame.md");
     std::fs::write(&path, "你好").unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     let input = cx.update(|window, cx| {
         let input = file.update(cx, |view, cx| {
             let click = gpui::ClickEvent::Mouse(gpui::MouseClickEvent {
@@ -167,7 +167,7 @@ fn enter_creates_an_editable_paragraph_and_undo_restores_the_heading(cx: &mut Te
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("paragraph.md");
     std::fs::write(&path, "# Title").unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     cx.update(|window, cx| {
         file.update(cx, |view, cx| {
             view.live_mode = true;
@@ -195,7 +195,7 @@ fn clicking_near_the_start_places_the_caret_near_the_start(cx: &mut TestAppConte
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("caret.md");
     std::fs::write(&path, "A paragraph with a long tail.").unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     cx.update(|window, cx| {
         file.update(cx, |view, cx| {
             view.live_mode = true;
@@ -224,7 +224,7 @@ fn first_click_uses_painted_glyphs_after_the_frame_callback(cx: &mut TestAppCont
     let path = directory.path().join("first-click.md");
     let source = "中文🌿 mixed text with a long tail for positioning.";
     std::fs::write(&path, source).unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });
@@ -264,7 +264,7 @@ fn activating_heading_preserves_following_paragraph_position(cx: &mut TestAppCon
         let path = directory.path().join(format!("heading-{scale}-{level}.md"));
         std::fs::write(&path, format!("{} A heading\n\nFollowing paragraph", "#".repeat(level)))
             .unwrap();
-        let (file, mut visual) = tests::open(path, cx);
+        let (file, mut visual) = tests::open_live(path, cx);
         visual.update(|window, cx| {
             window.set_scale_factor(scale);
             file.update(cx, |_, cx| cx.notify());

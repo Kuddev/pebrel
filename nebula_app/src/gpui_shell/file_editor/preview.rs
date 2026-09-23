@@ -515,9 +515,17 @@ impl TextFileView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let key = (block, start);
         let Some((start, end)) = self.outline.source_span(block, start, end) else { return };
         let Some(source) = self.outline.blocks.get(block) else { return };
         let Some(next) = fence_language(source, start, end, language) else { return };
+        if !self.preview_editable() {
+            if self.preview && self.render_active && !self.loading {
+                self.preview_code_languages.insert(key, language.to_owned().into());
+                cx.notify();
+            }
+            return;
+        }
         let Some(range) = self.outline.source_ranges.get(block).cloned() else { return };
         self.commit_structure_edit(range, &next, None, window, cx);
     }
