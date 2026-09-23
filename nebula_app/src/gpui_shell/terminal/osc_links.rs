@@ -3,13 +3,15 @@
 //! 匹配与动作全部复用旧壳 `display::hint` + `file_uri` + `daemon`，这里只做
 //! 视口坐标、GPUI 修饰键和打开入口。
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{App, ClipboardItem, Window};
 use nebula_terminal::event::EventListener;
 use nebula_terminal::index::Point;
+use nebula_terminal::term::cell::Flags;
 use nebula_terminal::term::{Term, point_to_viewport_from};
+use nebula_terminal::vte::ansi::Color;
 use unicode_width::UnicodeWidthChar;
 use winit::keyboard::ModifiersState;
 
@@ -48,25 +50,42 @@ pub(super) fn winit_mouse_mods(mods: &gpui::Modifiers) -> ModifiersState {
 }
 
 /// 可见可点范围（OSC 8 + 正则 URL）映射到当前视口格子，供虚线下划线使用。
+pub(super) struct LinkCell {
+    pub fg: Color,
+    pub bg: Color,
+    pub bold: bool,
+}
+
+pub(super) type LinkCells = HashMap<(u16, u16), LinkCell>;
+
 pub(super) fn dashed_cells<T: EventListener>(
     term: &Term<T>,
     config: &UiConfig,
     rows: usize,
     cols: usize,
-) -> HashSet<(u16, u16)> {
+) -> LinkCells {
     let matches = hint::visible_clickable_matches(term, config);
     if matches.is_empty() {
-        return HashSet::new();
+        return HashMap::new();
     }
     let origin = term.viewport_origin_for(rows);
-    let mut cells = HashSet::new();
+    let mut cells = HashMap::new();
     for indexed in term.grid().display_iter() {
-        if !matches.iter().any(|bounds| bounds.contains(&indexed.point)) {
+        if indexed.flags.intersects(Flags::HIDDEN | Flags::LEADING_WIDE_CHAR_SPACER)
+            || !matches.iter().any(|bounds| bounds.contains(&indexed.point))
+        {
             continue;
         }
         let Some(vp) = point_to_viewport_from(origin, indexed.point) else { continue };
         if vp.line < rows && vp.column.0 < cols {
-            cells.insert((vp.line as u16, vp.column.0 as u16));
+            let (mut fg, mut bg) = (indexed.fg, indexed.bg);
+            if indexed.flags.contains(Flags::INVERSE) {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            cells.insert(
+                (vp.line as u16, vp.column.0 as u16),
+                LinkCell { fg, bg, bold: indexed.flags.contains(Flags::BOLD) },
+            );
         }
     }
     cells
@@ -110,10 +129,59 @@ pub(super) fn open_hint_match(
     hint: &HintMatch,
     text: &str,
     cwd: Option<&std::path::Path>,
+    launch: &crate::session::LaunchSession,
     window: &mut Window,
     cx: &mut App,
 ) {
+    let target = (hint.hyperlink().is_none()
+        && hint.action() == &HintAction::Command(default_hint_command()))
+        .then(|| wsl_absolute_target(text, launch))
+        .flatten();
+    let text = target.as_deref().unwrap_or(text);
     dispatch_hint_action(hint.action(), hint.hyperlink().is_some(), text, cwd, window, cx);
+}
+
+fn wsl_absolute_target(text: &str, launch: &crate::session::LaunchSession) -> Option<String> {
+    if !text.starts_with('/') || text.starts_with("//") {
+        return None;
+    }
+    let (program, args) = match launch {
+        crate::session::LaunchSession::Shell { program, args, .. } => (program, args),
+        crate::session::LaunchSession::Profile { command, args, .. } => (command, args),
+        _ => return None,
+    };
+    let distro = crate::shell_detect::wsl_launch_distro(program, args)?;
+    Some(crate::shell_detect::wsl_unc_path(distro, text).to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn absolute_prompt_paths_use_the_owning_wsl_distribution() {
+        let launch = crate::session::LaunchSession::Shell {
+            name: "Debian".into(),
+            program: "wsl.exe".into(),
+            args: vec!["-d".into(), "Debian".into()],
+        };
+        assert_eq!(
+            wsl_absolute_target("/mnt/d/project", &launch).as_deref(),
+            Some(r"\\wsl.localhost\Debian\mnt\d\project")
+        );
+        assert!(wsl_absolute_target("//example.com/file", &launch).is_none());
+        assert!(wsl_absolute_target("https://example.com", &launch).is_none());
+        assert!(
+            wsl_absolute_target(
+                "/home/user",
+                &crate::session::LaunchSession::Ssh { host: "remote".into() }
+            )
+            .is_none()
+        );
+        assert!(
+            wsl_absolute_target("/home/user", &crate::session::LaunchSession::Default).is_none()
+        );
+    }
 }
 
 fn dispatch_hint_action(

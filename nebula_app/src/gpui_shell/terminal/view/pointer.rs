@@ -178,7 +178,14 @@ impl TerminalView {
         };
         let Some(text) = text else { return };
         let cwd = self.local_cwd();
-        super::super::osc_links::open_hint_match(&hover.hint, &text, cwd.as_deref(), window, cx);
+        super::super::osc_links::open_hint_match(
+            &hover.hint,
+            &text,
+            cwd.as_deref(),
+            &self.session_launch,
+            window,
+            cx,
+        );
     }
 
     /// 应用是否接管了鼠标（vim/htop 等）。Shift 按住时强制旁路——这是
