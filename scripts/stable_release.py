@@ -43,6 +43,8 @@ def expected_asset_names(version: str) -> tuple[str, ...]:
         f"Pebrel-v{version}-windows-x64.zip",
         f"Pebrel-v{version}-windows-x64-setup.exe",
     )
+    if tuple(map(int, version.split("."))) >= (1, 9, 0):
+        names += (f"Pebrel-v{version}-windows-arm64.zip",)
     # The old-name installer was retired from 1.7.0; retain historical manifests.
     if tuple(map(int, version.split("."))) < (1, 7, 0):
         names += (f"NebulaTerminal-{version}-windows-x64-setup.exe",)

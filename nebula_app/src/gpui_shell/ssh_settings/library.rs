@@ -13,6 +13,54 @@ mod tests;
 const HOST_CARD_HEIGHT: f32 = 68.0;
 const HOST_CARD_EXTENT: f32 = HOST_CARD_HEIGHT + 8.0;
 
+/// Center the glyph's ink, not its monospace advance or the surrounding text line.
+fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> impl IntoElement {
+    gpui::canvas(
+        move |bounds, window, _| {
+            let font = gpui::font(family);
+            let text_system = window.text_system();
+            let font_id = text_system.resolve_font(&font);
+            let base_size = px(18.0);
+            let ink = text_system.typographic_bounds(font_id, base_size, glyph).ok();
+            let scale = ink
+                .filter(|ink| ink.size.width > px(0.0) && ink.size.height > px(0.0))
+                .map(|ink| 18.0 / f32::from(ink.size.width.max(ink.size.height)))
+                .unwrap_or(1.0);
+            let font_size = base_size * scale;
+            let text: SharedString = glyph.to_string().into();
+            let line = text_system.shape_line(
+                text.clone(),
+                font_size,
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font,
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let height = line.ascent + line.descent;
+            let origin = if let Some(ink) = ink {
+                // Font coordinates are relative to the baseline with positive Y upwards.
+                let center = ink.center() * scale;
+                bounds.center() - gpui::point(center.x, line.ascent - center.y)
+            } else {
+                bounds.center() - gpui::point(line.width / 2.0, height / 2.0)
+            };
+            (line, origin, height)
+        },
+        |_, (line, origin, height), window, cx| {
+            if let Err(error) = line.paint(origin, height, gpui::TextAlign::Left, None, window, cx)
+            {
+                log::warn!("Unable to paint SSH host icon: {error}");
+            }
+        },
+    )
+    .size(px(22.0))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::gpui_shell) enum HostScope {
     All,
@@ -399,11 +447,7 @@ impl SettingsPane {
                         crate::gpui_shell::widgets::device_icon_container(cx)
                             .id(SharedString::from(format!("ssh-host-icon-{ix}")))
                             .debug_selector(move || format!("ssh-host-icon-{ix}"))
-                            .font_family(symbol_family.clone())
-                            .text_size(px(18.0))
-                            .text_color(muted)
-                            .text_center()
-                            .child(os_icon.glyph.to_string()),
+                            .child(host_icon(os_icon.glyph, symbol_family, muted)),
                     )
                     .child(
                         v_flex()

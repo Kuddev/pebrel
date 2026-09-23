@@ -26,7 +26,7 @@ on:
         type: string
         default: ""
       validated_run:
-        description: Existing stable run whose Windows native tests passed for source_commit
+        description: Existing stable or Full native tests run whose Windows tests passed for source_commit
         type: string
         default: ""
       macos_signing:
@@ -118,15 +118,6 @@ jobs:
             scripts.tests.test_xplat
           bash -n scripts/package-linux.sh scripts/package-macos.sh
           python3 -m py_compile scripts/stable_release.py scripts/preview_release.py
-
-  native-tests:
-    name: Native tests
-    permissions:
-      contents: read
-      actions: read
-    if: ${{ !inputs.windows_only }}
-    needs: prepare
-    uses: ./.github/workflows/linux-lua.yml
 
   linux:
     name: Linux x86_64 stable package
@@ -543,10 +534,89 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  windows-arm64:
+    name: Windows ARM64 stable portable package
+    if: ${{ !inputs.windows_only }}
+    needs: prepare
+    runs-on: windows-11-arm
+    timeout-minutes: 120
+    env:
+      PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Require native Windows ARM64
+        shell: pwsh
+        run: |
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
+            throw 'ARM64 packaging requires an ARM64 host.'
+          }
+          $compiler = rustc -vV
+          if ($LASTEXITCODE -ne 0 -or $compiler -notcontains 'host: aarch64-pc-windows-msvc') {
+            throw 'ARM64 packaging requires a native ARM64 compiler.'
+          }
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: release
+          target: target/release
+      - name: Prepare and verify pinned ARM64 console runtime
+        shell: pwsh
+        run: |
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture arm64
+          ./scripts/tests/windows-runtime.tests.ps1 -Architecture arm64
+          ./scripts/tests/windows-package-architecture.tests.ps1
+      - name: Build native ARM64 application and hook
+        shell: pwsh
+        run: ./scripts/build-windows-product.ps1 -Configuration release -TargetDirectory target
+      - name: Save compiled workload
+        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
+      - name: Package native ARM64 ZIP
+        shell: pwsh
+        run: ./scripts/package-release.ps1 -Version $env:PACKAGE_VERSION -Architecture arm64 -OutputDirectory dist -TargetDirectory target
+      - name: Keep Windows PowerShell alive on the ARM64 runner image
+        shell: pwsh
+        run: ./scripts/conformance/windows_arm64_module_path.ps1
+      - name: Run ARM64 Windows conformance
+        shell: pwsh
+        env:
+          NEBULA_RESIZE_TRACE: "1"
+          NEBULA_BOOT_TRACE: "1"
+        run: |
+          python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app target/release/pebrel.exe --platform windows-aarch64 --output dist/conformance/windows-arm64-report.json
+          exit $LASTEXITCODE
+      - name: Upload Windows ARM64 stable asset
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          compression-level: 0
+          name: stable-package-windows-arm64
+          path: dist/Pebrel-v${{ needs.prepare.outputs.version }}-windows-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Windows ARM64 conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          compression-level: 0
+          name: stable-evidence-windows-arm64
+          path: dist/conformance
+          if-no-files-found: warn
+          retention-days: 14
+
   aggregate:
     name: Verify stable assets and upload complete set
     if: ${{ !inputs.windows_only }}
-    needs: [prepare, native-tests, linux, macos, windows]
+    needs: [prepare, linux, macos, windows, windows-arm64]
     runs-on: ubuntu-22.04
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -573,7 +643,7 @@ jobs:
           import os
           from pathlib import Path
           from scripts.preview_release import validate_evidence
-          validate_evidence(Path("stable-evidence"), os.environ["SOURCE_COMMIT"])
+          validate_evidence(Path("stable-evidence"), os.environ["SOURCE_COMMIT"], windows_arm64=True)
           PY
           python3 scripts/stable_release.py release-dist \
             --version "$PACKAGE_VERSION" \

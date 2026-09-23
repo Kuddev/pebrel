@@ -6,6 +6,22 @@ pub(super) fn open(
     path: PathBuf,
     cx: &mut TestAppContext,
 ) -> (Entity<TextFileView>, VisualTestContext) {
+    open_with_mode(path, false, cx)
+}
+
+/// Existing live-editor regressions opt in explicitly; the product opens in reader mode.
+pub(super) fn open_live(
+    path: PathBuf,
+    cx: &mut TestAppContext,
+) -> (Entity<TextFileView>, VisualTestContext) {
+    open_with_mode(path, true, cx)
+}
+
+fn open_with_mode(
+    path: PathBuf,
+    live_mode: bool,
+    cx: &mut TestAppContext,
+) -> (Entity<TextFileView>, VisualTestContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
         super::super::math_view::register(cx);
@@ -13,12 +29,97 @@ pub(super) fn open(
     });
     let mut file = None;
     let (_, window) = cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| TextFileView::new(path, window, cx));
+        let view = cx.new(|cx| {
+            let mut view = TextFileView::new(path, window, cx);
+            if live_mode {
+                view.live_mode = true;
+            }
+            view
+        });
         file = Some(view.clone());
         Root::new(view, window, cx)
     });
     window.run_until_parked();
     (file.unwrap(), window.clone())
+}
+
+#[gpui::test]
+fn default_reader_blocks_edits_but_keeps_selection_and_code_copy(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reader.md");
+    let source = "# Title\n\nText to select\n\n- [ ] Task\n\n```rust\nlet x = 42;\n```\n";
+    std::fs::write(&path, source).unwrap();
+    let (file, mut cx) = open(path.clone(), cx);
+    cx.simulate_resize(gpui::size(px(1100.0), px(1000.0)));
+    for selector in ["markdown-preview-block-1", "markdown-task-box-2", "pebrel-code-text"] {
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let bounds = cx.debug_bounds(selector).expect(selector);
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.simulate_input("must not edit");
+        cx.simulate_keystrokes("backspace");
+        cx.run_until_parked();
+        file.read_with(&cx, |view, cx| {
+            assert!(view.preview && !view.live_mode && view.live_edit.is_none());
+            assert_eq!(view.draft(cx), source);
+            assert!(!view.dirty);
+        });
+    }
+    assert!(cx.debug_bounds("markdown-language-picker").is_some());
+    // Read-only applies to commands too, not just the visible controls.
+    cx.update(|window, cx| {
+        file.update(cx, |view, cx| {
+            view.commit_structure_edit(0..1, "changed", None, window, cx);
+            view.focus.focus(window, cx);
+        })
+    });
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    cx.run_until_parked();
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), source);
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let code = cx.debug_bounds("pebrel-code-block").unwrap();
+    cx.simulate_mouse_move(code.center(), None, gpui::Modifiers::default());
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let copy = cx.debug_bounds("markdown-copy-code").unwrap();
+    cx.simulate_click(copy.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap().trim_end(), "let x = 42;");
+    assert!(!file.read_with(&cx, |view, _| view.dirty));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+}
+
+#[gpui::test]
+fn returning_to_reader_keeps_source_edits_and_blocks_undo_until_source_is_open(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source-edit.md");
+    let source = "Original";
+    std::fs::write(&path, source).unwrap();
+    let (file, mut cx) = open(path, cx);
+    cx.update(|window, cx| file.read(cx).focus.clone().focus(window, cx));
+    let modifier = match crate::platform::Platform::current() {
+        crate::platform::Platform::MacOS => "cmd",
+        _ => "ctrl",
+    };
+    cx.simulate_keystrokes(&format!("{modifier}-/ {modifier}-a"));
+    cx.simulate_input("Updated");
+    cx.run_until_parked();
+    cx.simulate_keystrokes(&format!("{modifier}-/ {modifier}-z"));
+    cx.run_until_parked();
+    file.read_with(&cx, |view, cx| {
+        assert!(view.preview && !view.live_mode);
+        assert_eq!(view.draft(cx), "Updated");
+        assert!(view.dirty);
+    });
+    cx.simulate_keystrokes(&format!("{modifier}-/ {modifier}-z"));
+    cx.run_until_parked();
+    assert_eq!(file.read_with(&cx, |view, cx| view.draft(cx)), source);
 }
 
 #[gpui::test]
@@ -110,7 +211,7 @@ fn outline_arrow_folds_without_navigating_or_rewriting_the_document(cx: &mut Tes
 }
 
 #[gpui::test]
-fn document_opens_editable_and_source_shortcut_preserves_draft_and_details(
+fn document_opens_read_only_and_source_shortcut_preserves_draft_and_details(
     cx: &mut TestAppContext,
 ) {
     let directory = tempfile::tempdir().unwrap();
@@ -118,7 +219,7 @@ fn document_opens_editable_and_source_shortcut_preserves_draft_and_details(
     let source = "# Title\n\nOriginal text\n";
     std::fs::write(&path, source).unwrap();
     let (file, mut cx) = open(path, cx);
-    assert!(file.read_with(&cx, |view, _| view.preview && view.live_mode));
+    assert!(file.read_with(&cx, |view, _| view.preview && !view.live_mode));
     cx.update(|window, cx| file.read(cx).focus.clone().focus(window, cx));
     for preview in [false, true, false, true] {
         cx.update(|window, cx| {
@@ -166,7 +267,7 @@ fn code_actions_copy_raw_source_and_search_languages(cx: &mut TestAppContext) {
     let path = directory.path().join("code.md");
     let source = "```text\nlet x = 42;\n```\n";
     std::fs::write(&path, source).unwrap();
-    let (file, mut cx) = open(path, cx);
+    let (file, mut cx) = open_live(path, cx);
     cx.update(|window, cx| {
         let _ = window.draw(cx);
     });

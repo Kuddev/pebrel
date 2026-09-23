@@ -260,6 +260,7 @@ fn render_language_picker(
     cx: &mut App,
 ) -> impl IntoElement {
     let colors = code_ui_colors(cx);
+    let current_selector = current.clone();
     let picker = div()
         .id("markdown-language-picker")
         .debug_selector(|| "markdown-language-picker".to_owned())
@@ -287,7 +288,12 @@ fn render_language_picker(
                 // the latter remains discoverable through focus-visible.
                 .focus_visible(|trigger| trigger.border_1().border_color(colors.accent))
                 .hover(move |trigger| trigger.bg(colors.hover))
-                .child(div().flex_none().child(current))
+                .child(
+                    div()
+                        .debug_selector(move || format!("markdown-language-current-{current_selector}"))
+                        .flex_none()
+                        .child(current),
+                )
                 .child(
                     div()
                         .w(px(16.0))
@@ -392,11 +398,18 @@ pub(super) fn extensions(
 pub(super) fn render(
     owner: gpui::WeakEntity<TextFileView>,
     block: usize,
-    code: CodeSpec,
+    mut code: CodeSpec,
     hover_group: SharedString,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
+    if let Some((start, _)) = code.span
+        && let Some(language) = owner
+            .upgrade()
+            .and_then(|view| view.read(cx).preview_code_languages.get(&(block, start)).cloned())
+    {
+        code.language = Some(language);
+    }
     render_with_input(owner, block, code, hover_group, None, window, cx)
 }
 
@@ -415,7 +428,7 @@ pub(super) fn render_with_input(
     let current = code
         .language
         .clone()
-        .filter(|value| !matches!(value.as_ref(), "text" | "plaintext"))
+        .filter(|value| !matches!(value.as_ref(), "" | "text" | "plaintext"))
         .unwrap_or_else(|| plain.clone());
     let current_for_state = current.clone();
     let span = code.span;
@@ -450,8 +463,13 @@ pub(super) fn render_with_input(
                             .map(|item| item.name.clone());
                         if let Some(choice) = choice {
                             if let Some((start, end)) = state.span {
-                                let choice =
-                                    if choice == state.plain { "" } else { choice.as_ref() };
+                                let choice = if choice == state.plain
+                                    || matches!(choice.as_ref(), "text" | "plaintext")
+                                {
+                                    ""
+                                } else {
+                                    choice.as_ref()
+                                };
                                 let _ = owner.update(cx, |view, cx| {
                                     view.set_preview_language(block, start, end, choice, window, cx)
                                 });
