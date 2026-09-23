@@ -27,6 +27,7 @@
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
   <img src="https://img.shields.io/github/forks/Kuddev/pebrel?style=flat-square&color=8957e5&logo=github" alt="Forks" />
   <img src="https://img.shields.io/github/last-commit/Kuddev/pebrel?style=flat-square&color=3fb950" alt="Last commit" />
+  <a href="https://discord.gg/VFn4rcxmhn"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://linux.do"><img src="https://img.shields.io/badge/%E5%8F%8B%E9%93%BE-linux.do-ffb003?style=flat-square&logo=discourse&logoColor=white" alt="linux.do" /></a>
 </p>
 
@@ -47,6 +48,20 @@
 <p align="center">
   <img src="docs/screenshots/split-ai-workflows.png" alt="OpenCode, Claude Code, and Codex in split panes" width="1040" />
 </p>
+
+## 💖 Sponsors
+
+<table>
+  <tr>
+    <td align="center" width="240">
+      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_fluxionai.png" alt="Fluxion AI" width="200" /></a><br />
+      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><strong>Fluxion AI</strong></a>
+    </td>
+    <td>
+      Thanks to Fluxion AI for sponsoring this project! Fluxion AI is one entry point for accessing and managing the world's leading AI models. It serves individual developers, technical teams and enterprises with a unified API; dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices. <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel">Sign up via this link</a> to receive $3 in API credit.
+    </td>
+  </tr>
+</table>
 
 ## One Workspace
 
@@ -175,6 +190,8 @@ through the explicit `legacy-shell` feature.
 ## Contact
 
 Email: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+
+Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
 ## Acknowledgements
 

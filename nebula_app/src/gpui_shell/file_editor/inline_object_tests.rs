@@ -47,7 +47,7 @@ fn second_identical_formula_edits_only_its_source_and_keeps_other_objects(cx: &m
     let path = dir.path().join("objects.md");
     let source = "**Before** $x^2$ between $x^2$ **After**";
     std::fs::write(&path, source).unwrap();
-    let (file, mut cx) = tests::open(path.clone(), cx);
+    let (file, mut cx) = tests::open_live(path.clone(), cx);
     let first = part_for(&file, "$x^2$", 0, &cx);
     let second = part_for(&file, "$x^2$", 1, &cx);
     draw(&mut cx);
@@ -95,7 +95,7 @@ fn image_source_is_local_and_surrounding_formula_stays_rendered(cx: &mut TestApp
     let path = dir.path().join("image.md");
     let source = "Before ![alt](image.png) $y^2$ **After**";
     std::fs::write(&path, source).unwrap();
-    let (file, mut cx) = tests::open(path, cx);
+    let (file, mut cx) = tests::open_live(path, cx);
     let image_part = part_for(&file, "![alt](image.png)", 0, &cx);
     click_part(image_part, &mut cx);
     file.read_with(&cx, |view, cx| {

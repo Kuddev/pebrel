@@ -202,6 +202,16 @@ class PreviewReleaseTests(unittest.TestCase):
                     "screenshot": "captured", "rendered_text": True,
                 }), encoding="utf-8")
             validate_evidence(root, "a" * 40)
+            with self.assertRaises(FileNotFoundError):
+                validate_evidence(root, "a" * 40, windows_arm64=True)
+            arm_report = root / "windows-arm64-report.json"
+            report["platform"] = "windows-aarch64"
+            arm_report.write_text(json.dumps(report), encoding="utf-8")
+            validate_evidence(root, "a" * 40, windows_arm64=True)
+            report["platform"] = "windows-x86_64"
+            arm_report.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ManifestError, "wrong platform"):
+                validate_evidence(root, "a" * 40, windows_arm64=True)
             with self.assertRaisesRegex(ManifestError, "source commit"):
                 validate_evidence(root, "b" * 40)
             launch_path = root / "macos-aarch64-launch.json"
