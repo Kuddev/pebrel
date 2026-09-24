@@ -1213,8 +1213,9 @@ impl NebulaWorkspace {
     /// follow_system 折算）、逐终端刷新、重建 chrome 令牌。
     fn apply_runtime_settings(&mut self, cx: &mut Context<Self>) {
         let (runtime, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
-        let language_changed =
-            cx.global::<crate::gpui_shell::config::Settings>().ui_language != settings.ui_language;
+        let language_changed = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .is_none_or(|previous| previous.ui_language != settings.ui_language);
         cx.set_global(settings);
         if crate::platform::CAPABILITIES.native_application_menu && language_changed {
             cx.defer(|cx| macos_menu::init(cx));
