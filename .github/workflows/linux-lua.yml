@@ -54,6 +54,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - name: Test CI contracts before matrix planning
+        run: |
+          python3 -m unittest \
+            scripts.tests.test_ci_plan \
+            scripts.tests.test_ci_native_tests \
+            scripts.tests.test_stable_release \
+            scripts.tests.test_ci_cache \
+            scripts.tests.test_platform_cfg \
+            scripts.tests.test_pr_size_workflow -v
+      - name: Check platform cfg budget before native jobs
+        run: python3 scripts/check_platform_cfg.py
       - name: Plan native validation
         id: matrix
         shell: bash

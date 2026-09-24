@@ -470,6 +470,18 @@ pub fn highlighted_at<T>(
     point: Point,
     mouse_mods: ModifiersState,
 ) -> Option<HintMatch> {
+    highlighted_at_with_mouse_override(term, config, point, mouse_mods, false)
+}
+
+/// Allow a shell's explicit link gesture to override application mouse reporting.
+/// Configured hint modifiers and the mouse-enabled flag are still respected.
+pub fn highlighted_at_with_mouse_override<T>(
+    term: &Term<T>,
+    config: &UiConfig,
+    point: Point,
+    mouse_mods: ModifiersState,
+    override_mouse_mode: bool,
+) -> Option<HintMatch> {
     let mouse_mode = term.mode().intersects(TermMode::MOUSE_MODE);
 
     config.hints.enabled.iter().find_map(|hint| {
@@ -477,7 +489,9 @@ pub fn highlighted_at<T>(
         let highlight = hint.mouse.is_some_and(|mouse| {
             mouse.enabled
                 && mouse_mods.contains(mouse.mods.0)
-                && (!mouse_mode || mouse_mods.contains(ModifiersState::SHIFT))
+                && (!mouse_mode
+                    || override_mouse_mode
+                    || mouse_mods.contains(ModifiersState::SHIFT))
         });
         if !highlight {
             return None;

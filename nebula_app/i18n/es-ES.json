@@ -45,6 +45,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+clic izquierdo para abrir",
+    "link_ctrl_click": "Ctrl+clic izquierdo para abrir",
     "settings": "Configuración",
     "language": "Idioma",
     "about": "Acerca de",
@@ -73,6 +75,7 @@
     "delete": "Eliminar",
     "edit": "Editar",
     "rename": "Cambiar nombre",
+    "rename_tab": "Renombrar pestaña",
     "copy": "Copiar",
     "paste": "Pegar",
     "cut": "Cortar",
@@ -104,6 +107,7 @@
     "new_window": "Nueva ventana",
     "close_tab": "Cerrar pestaña",
     "duplicate_tab": "Duplicar pestaña",
+    "copy_working_directory": "Copiar directorio de trabajo",
     "terminal": "Terminal",
     "connect": "Conectar",
     "disconnect": "Desconectar",
@@ -173,5 +177,15 @@
     "copied_lines": "Se copiaron {lines} líneas al portapapeles",
     "paste_lines": "¿Pegar {lines} líneas?",
     "sent_to": "Enviado a {target}"
+  },
+  "tab_menu": {
+    "fork_ai_session": "Bifurcar sesión de IA",
+    "move_to_new_window": "Mover a una ventana nueva",
+    "export_as_workspace": "Exportar como espacio de trabajo…",
+    "split_left_right": "Dividir a izquierda y derecha",
+    "split_top_bottom": "Dividir arriba y abajo",
+    "move_left": "Mover a la izquierda",
+    "move_right": "Mover a la derecha",
+    "tab_color": "Color de la pestaña"
   }
 }

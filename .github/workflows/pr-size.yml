@@ -49,6 +49,20 @@ jobs:
             const size = counted <= 100 ? "S" : counted <= 500 ? "M" : counted <= LIMIT ? "L" : "XL";
             const labels = new Set(pr.labels.map((l) => l.name));
             const wanted = `size/${size}`;
+            const oversized = size === "XL" && !labels.has("size-exempt");
+            core.info(`counted ${counted} lines (${ignored} ignored) in ${files.length} files -> ${wanted}`);
+            await core.summary
+              .addRaw(`PR size: **${size}**, ${counted} counted lines (${ignored} ignored), limit ${LIMIT}.`)
+              .write();
+            if (oversized) {
+              core.setFailed(`${counted} changed source lines exceed the ${LIMIT}-line limit; split the pull request or add size-exempt.`);
+            }
+            // Fork tokens are read-only. The size decision above is still enforced;
+            // optional labels and comments must not turn a valid PR into a 403 failure.
+            if (pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.info("Fork PR: size is reported in the summary; no label/comment writes.");
+              return;
+            }
             for (const l of labels) {
               if (l.startsWith("size/") && l !== wanted) {
                 await github.rest.issues.removeLabel({ ...context.repo, issue_number: pr.number, name: l }).catch(() => {});
@@ -58,8 +72,7 @@ jobs:
               await github.rest.issues.addLabels({ ...context.repo, issue_number: pr.number, labels: [wanted] });
             }
 
-            core.info(`counted ${counted} lines (${ignored} ignored) in ${files.length} files -> ${wanted}`);
-            if (size !== "XL" || labels.has("size-exempt")) return;
+            if (!oversized) return;
 
             const marker = "<!-- pr-size-guard -->";
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -78,4 +91,3 @@ jobs:
                 ].join("\n"),
               });
             }
-            core.setFailed(`${counted} changed source lines exceed the ${LIMIT}-line limit; split the pull request or add size-exempt.`);

@@ -69,6 +69,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+左鍵開啟",
+    "link_ctrl_click": "Ctrl+左鍵開啟",
     "settings": "設定",
     "language": "語言",
     "about": "關於",
@@ -97,6 +99,7 @@
     "delete": "刪除",
     "edit": "編輯",
     "rename": "重新命名",
+    "rename_tab": "重新命名分頁",
     "copy": "複製",
     "paste": "貼上",
     "cut": "剪下",
@@ -218,5 +221,15 @@
   "session.choose_conversation": "選擇要繼續的對話…",
   "session.exit_incomplete_title": "仍有 AI 工作階段無法識別，繼續關閉？",
   "session.exit_incomplete_body": "關閉前會儲存視窗配置及已知的對話 ID，並停止正在執行的命令。尚未取得 ID 的對話，重新開啟後可能需要手動選擇。",
-  "session.exit_anyway": "儲存已知狀態並關閉"
+  "session.exit_anyway": "儲存已知狀態並關閉",
+  "tab_menu": {
+    "fork_ai_session": "分叉 AI 工作階段",
+    "move_to_new_window": "移到新視窗",
+    "export_as_workspace": "匯出為工作區…",
+    "split_left_right": "左右分割",
+    "split_top_bottom": "上下分割",
+    "move_left": "向左移動",
+    "move_right": "向右移動",
+    "tab_color": "分頁顏色"
+  }
 }

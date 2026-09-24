@@ -45,6 +45,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+左クリックで開く",
+    "link_ctrl_click": "Ctrl+左クリックで開く",
     "settings": "設定",
     "language": "言語",
     "about": "このアプリについて",
@@ -73,6 +75,7 @@
     "delete": "削除",
     "edit": "編集",
     "rename": "名前を変更",
+    "rename_tab": "タブの名前を変更",
     "copy": "コピー",
     "paste": "貼り付け",
     "cut": "切り取り",
@@ -104,6 +107,7 @@
     "new_window": "新しいウィンドウ",
     "close_tab": "タブを閉じる",
     "duplicate_tab": "タブを複製",
+    "copy_working_directory": "作業ディレクトリをコピー",
     "terminal": "ターミナル",
     "connect": "接続",
     "disconnect": "切断",
@@ -173,5 +177,15 @@
     "copied_lines": "{lines} 行をクリップボードにコピーしました",
     "paste_lines": "{lines} 行を貼り付けますか？",
     "sent_to": "{target} に送信しました"
+  },
+  "tab_menu": {
+    "fork_ai_session": "AI セッションを分岐",
+    "move_to_new_window": "新しいウィンドウに移動",
+    "export_as_workspace": "ワークスペースとしてエクスポート…",
+    "split_left_right": "左右に分割",
+    "split_top_bottom": "上下に分割",
+    "move_left": "左に移動",
+    "move_right": "右に移動",
+    "tab_color": "タブの色"
   }
 }

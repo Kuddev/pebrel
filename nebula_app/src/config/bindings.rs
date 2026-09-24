@@ -226,6 +226,9 @@ pub enum Action {
     /// Close the focused tab (or pane, when the tab is split).
     CloseTab,
 
+    /// Rename the active tab.
+    RenameTab,
+
     /// Toggle a left/right split in the focused tab.
     SplitRight,
 

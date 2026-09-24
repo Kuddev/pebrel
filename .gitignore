@@ -159,6 +159,8 @@ scripts/drawer_repro.ps1
 scripts/ghost_repro/
 scripts/icon-build/
 scripts/render_shell_icon.html
+# The competitor-name policy is a maintained CI and hook contract, not a local probe.
+!/scripts/check_prohibited_names.py
 # Only the maintained Markdown stress runner is public; its scratch variants stay local.
 /scripts/markdown-memory-*
 !/scripts/markdown-memory-stress.ps1

@@ -16,9 +16,33 @@ class NativeSuiteTests(unittest.TestCase):
         workflow = (root / ".github/workflows/linux-lua.yml").read_text()
         lint = workflow.split("\n  lint:\n", 1)[1].split("\n  native-tests:\n", 1)[0]
         self.assertIn("name: lint", lint)
+        self.assertIn("Test CI contracts before matrix planning", lint)
+        for contract in (
+            "scripts.tests.test_ci_plan",
+            "scripts.tests.test_ci_native_tests",
+            "scripts.tests.test_stable_release",
+            "scripts.tests.test_ci_cache",
+            "scripts.tests.test_platform_cfg",
+            "scripts.tests.test_pr_size_workflow",
+        ):
+            self.assertIn(contract, lint)
         self.assertIn("python scripts/ci_plan.py", lint)
         self.assertIn('--event-path "$GITHUB_EVENT_PATH"', lint)
-        self.assertLess(lint.index("cargo fmt"), lint.index("python scripts/ci_plan.py"))
+        self.assertLess(
+            lint.index("cargo fmt"),
+            lint.index("Test CI contracts before matrix planning"),
+        )
+        self.assertLess(
+            lint.index("Test CI contracts before matrix planning"),
+            lint.index("python scripts/ci_plan.py"),
+        )
+        self.assertLess(
+            lint.index("python3 scripts/check_platform_cfg.py"),
+            lint.index("python scripts/ci_plan.py"),
+        )
+        platform_step = lint.split("Check platform cfg budget before native jobs", 1)[1].split("      - name:", 1)[0]
+        self.assertNotIn("continue-on-error", platform_step)
+        self.assertNotIn("--update", platform_step)
         for job, output in (("native-tests", "native_matrix"),
                             ("macos-release-check", "release_matrix")):
             body = workflow.split(f"\n  {job}:\n", 1)[1]

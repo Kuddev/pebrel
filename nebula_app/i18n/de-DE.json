@@ -45,6 +45,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+Linksklick zum Öffnen",
+    "link_ctrl_click": "Strg+Linksklick zum Öffnen",
     "settings": "Einstellungen",
     "language": "Sprache",
     "about": "Über",
@@ -73,6 +75,7 @@
     "delete": "Löschen",
     "edit": "Bearbeiten",
     "rename": "Umbenennen",
+    "rename_tab": "Tab umbenennen",
     "copy": "Kopieren",
     "paste": "Einfügen",
     "cut": "Ausschneiden",
@@ -104,6 +107,7 @@
     "new_window": "Neues Fenster",
     "close_tab": "Tab schließen",
     "duplicate_tab": "Tab duplizieren",
+    "copy_working_directory": "Arbeitsverzeichnis kopieren",
     "terminal": "Terminal",
     "connect": "Verbinden",
     "disconnect": "Trennen",
@@ -173,5 +177,15 @@
     "copied_lines": "{lines} Zeilen in die Zwischenablage kopiert",
     "paste_lines": "{lines} Zeilen einfügen?",
     "sent_to": "An {target} gesendet"
+  },
+  "tab_menu": {
+    "fork_ai_session": "KI-Sitzung verzweigen",
+    "move_to_new_window": "In neues Fenster verschieben",
+    "export_as_workspace": "Als Arbeitsbereich exportieren…",
+    "split_left_right": "Links und rechts teilen",
+    "split_top_bottom": "Oben und unten teilen",
+    "move_left": "Nach links verschieben",
+    "move_right": "Nach rechts verschieben",
+    "tab_color": "Tab-Farbe"
   }
 }

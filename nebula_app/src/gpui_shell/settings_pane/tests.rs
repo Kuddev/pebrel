@@ -2,6 +2,50 @@ use super::*;
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
+fn rename_keymap_row_is_searchable_and_enters_capture(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, cx| {
+            pane.keymap_binds.clear();
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("Rename tab", window, cx));
+        });
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let row = crate::display::keymap::EDITABLE_ACTIONS
+        .iter()
+        .position(|(action, ..)| *action == crate::config::Action::RenameTab)
+        .unwrap()
+        + 1;
+    let bounds = cx
+        .debug_bounds(Box::leak(format!("settings-keymap-row-{row}").into_boxed_str()))
+        .expect("rename row is rendered");
+    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_capture), Some(row));
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke::parse("escape").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.run_until_parked();
+    assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_capture), None);
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
 fn settings_search_replaces_keymap_search_and_keeps_section_queries(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);

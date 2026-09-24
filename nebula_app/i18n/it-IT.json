@@ -45,6 +45,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+clic sinistro per aprire",
+    "link_ctrl_click": "Ctrl+clic sinistro per aprire",
     "settings": "Impostazioni",
     "language": "Lingua",
     "about": "Informazioni",
@@ -73,6 +75,7 @@
     "delete": "Elimina",
     "edit": "Modifica",
     "rename": "Rinomina",
+    "rename_tab": "Rinomina scheda",
     "copy": "Copia",
     "paste": "Incolla",
     "cut": "Taglia",
@@ -104,6 +107,7 @@
     "new_window": "Nuova finestra",
     "close_tab": "Chiudi scheda",
     "duplicate_tab": "Duplica scheda",
+    "copy_working_directory": "Copia la directory di lavoro",
     "terminal": "Terminale",
     "connect": "Connetti",
     "disconnect": "Disconnetti",
@@ -173,5 +177,15 @@
     "copied_lines": "{lines} righe copiate negli appunti",
     "paste_lines": "Incollare {lines} righe?",
     "sent_to": "Inviato a {target}"
+  },
+  "tab_menu": {
+    "fork_ai_session": "Dirama sessione IA",
+    "move_to_new_window": "Sposta in una nuova finestra",
+    "export_as_workspace": "Esporta come area di lavoro…",
+    "split_left_right": "Dividi a sinistra e a destra",
+    "split_top_bottom": "Dividi in alto e in basso",
+    "move_left": "Sposta a sinistra",
+    "move_right": "Sposta a destra",
+    "tab_color": "Colore della scheda"
   }
 }
