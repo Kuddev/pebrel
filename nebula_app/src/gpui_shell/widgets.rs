@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, ElementId, IntoElement, ParentElement as _, RenderImage, RenderOnce,
-    SharedString, Styled as _, Window, div, px,
+    App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
+    RenderImage, RenderOnce, SharedString, Styled as _, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::switch::Switch;
@@ -50,6 +50,20 @@ pub fn shell_brand_image(
     let rgba = image::RgbaImage::from_raw(width, height, rgba)?;
     Some(Arc::new(RenderImage::new([Frame::new(rgba)])))
 }
+
+/// Desktop form controls keep their padding even with a small UI font.
+pub(crate) fn settings_control_height(cx: &App) -> gpui::Pixels {
+    px(f32::from(cx.theme().font_size).max(16.0) * 2.0)
+}
+
+/// Toolbar glyphs and their hover/hit surfaces have independent logical sizes.
+pub(crate) fn toolbar_button(id: impl Into<ElementId>, icon: impl Into<Icon>) -> Button {
+    Button::new(id).icon(Icon::new(icon).size(px(18.0))).ghost().size(px(32.0))
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+#[path = "widgets_tests.rs"]
+mod tests;
 
 /// 设置行开关。组件库 `Switch` 的转发壳——`on_click` 与它同签名
 /// （`Fn(&bool, &mut Window, &mut App)`，参数是**点击后**的目标值）。
@@ -187,8 +201,12 @@ impl NebulaButton {
 }
 
 impl RenderOnce for NebulaButton {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let key = self.key.clone();
         let button = Button::new(ElementId::Name(format!("nebula-btn-{}", self.key).into()))
+            .debug_selector(move || format!("nebula-btn-{key}"))
+            .h(settings_control_height(cx))
+            .px(px(12.0))
             .label(self.label)
             .disabled(self.disabled);
         // Default 走 outline：设置行里的动作按钮需要一条边把自己从行底分出来，

@@ -3,6 +3,7 @@
 //! 这里只负责同一组 workspace tab 的第二种呈现；激活、关闭、重命名、排序
 //! 与 dock 都调用 `NebulaWorkspace` 既有动作，不维护平行状态。
 
+use crate::gpui_shell::widgets::toolbar_button;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
@@ -683,13 +684,9 @@ impl NebulaWorkspace {
             .child(
                 title_bar_panel_controls()
                     .child(
-                        Button::new("top-toggle-command-manager")
-                            .icon(
-                                Icon::new(Icon::empty()).path(
+                        toolbar_button("top-toggle-command-manager", Icon::new(Icon::empty()).path(
                                     crate::gpui_shell::assets::nav::COMMAND_MANAGER,
-                                ),
-                            )
-                            .ghost()
+                                ),)
                             .selected(self.command_manager_open)
                             .tooltip("命令列表")
                             .on_click(cx.listener(|this, _, window, cx| {

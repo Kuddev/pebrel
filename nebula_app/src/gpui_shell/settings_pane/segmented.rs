@@ -31,7 +31,6 @@ impl SettingsPane {
             )))
             .w(px(SETTINGS_SELECT_WIDTH))
             .max_w_full()
-            .small()
             .outline()
             .children(values.iter().copied().zip(labels).enumerate().map(
                 |(index, (value, label))| {
@@ -39,9 +38,8 @@ impl SettingsPane {
                         .debug_selector(move || format!("settings-choice-{key}-{value}"))
                         .flex_1()
                         .min_w_0()
-                        .small()
-                        .h(px(28.0))
-                        .rounded(px(14.0))
+                        .h(settings_control_height(cx))
+                        .rounded(px(6.0))
                         .selected(index == selected)
                         .label(label)
                         .on_click(cx.listener(move |this, _, window, cx| {

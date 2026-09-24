@@ -4,6 +4,7 @@
 use super::*;
 use crate::display::side_panel::PanelView;
 use crate::gpui_shell::file_editor::{DocumentDetails, DocumentSection, TextFileView};
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -103,9 +104,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> Button {
         let visible = self.side_panel.open && !self.reader_focus_active(cx);
-        Button::new("toggle-right-sidebar")
-            .icon(IconName::PanelRight)
-            .ghost()
+        toolbar_button("toggle-right-sidebar", IconName::PanelRight)
             .disabled(disabled)
             .selected(visible)
             .when(visible, |button| button.bg(cx.theme().secondary))

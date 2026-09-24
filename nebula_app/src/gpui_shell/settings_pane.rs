@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use crate::gpui_shell::config::{DEFAULT_CURSOR_BLINK, effective_cursor_blink};
 use crate::gpui_shell::prelude::*;
-use crate::gpui_shell::widgets::NebulaButton;
+use crate::gpui_shell::widgets::{NebulaButton, settings_control_height};
 
 mod about;
 mod agents;
@@ -683,7 +683,7 @@ impl SettingsPane {
                 .debug_selector(move || format!("settings-select-{key}"))
                 .w(px(SETTINGS_SELECT_WIDTH))
                 .text_color(cx.theme().link)
-                .children(select.map(|state| Select::new(&state)))
+                .children(select.map(|state| Select::new(&state).h(settings_control_height(cx))))
                 .into_any_element()
         });
         self.maybe_marked(key, label, desc, control, cx)
@@ -698,7 +698,7 @@ impl SettingsPane {
                 .w(px(SETTINGS_SELECT_WIDTH))
                 .font_family(cx.theme().mono_font_family.clone())
                 .text_color(cx.theme().link)
-                .child(Select::new(&self.shell_select)),
+                .child(Select::new(&self.shell_select).h(settings_control_height(cx))),
             cx,
         )
     }
