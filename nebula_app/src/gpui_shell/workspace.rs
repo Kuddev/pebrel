@@ -50,7 +50,6 @@ mod agents;
 mod closing;
 mod command_manager;
 mod keyboard_bindings;
-#[cfg(target_os = "macos")]
 mod macos_menu;
 #[cfg(test)]
 use keyboard_bindings::{
@@ -138,8 +137,9 @@ fn title_bar_panel_controls() -> gpui::Div {
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
     keyboard_bindings::init(cx);
-    #[cfg(target_os = "macos")]
-    macos_menu::init(cx);
+    if crate::platform::CAPABILITIES.native_application_menu {
+        macos_menu::init(cx);
+    }
 }
 
 /// 一个终端 pane：视图实体 + 宿主订阅。id 即 `TerminalView::pane_id`
@@ -1213,12 +1213,10 @@ impl NebulaWorkspace {
     /// follow_system 折算）、逐终端刷新、重建 chrome 令牌。
     fn apply_runtime_settings(&mut self, cx: &mut Context<Self>) {
         let (runtime, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
-        #[cfg(target_os = "macos")]
         let language_changed =
             cx.global::<crate::gpui_shell::config::Settings>().ui_language != settings.ui_language;
         cx.set_global(settings);
-        #[cfg(target_os = "macos")]
-        if language_changed {
+        if crate::platform::CAPABILITIES.native_application_menu && language_changed {
             cx.defer(|cx| macos_menu::init(cx));
         }
         for tab in &self.tabs {
