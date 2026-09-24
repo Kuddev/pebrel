@@ -200,9 +200,78 @@ mod dispatch {
         assert_active(&workspace, 0, &mut cx);
     }
 
+    #[gpui::test]
+    fn rename_shortcut_remaps_clears_and_restores_in_both_tab_layouts(cx: &mut TestAppContext) {
+        use crate::config::Action;
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(3, cx);
+        for position in
+            [nebula_settings::TabsPositionName::Sidebar, nebula_settings::TabsPositionName::Top]
+        {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.tabs_position = position;
+                workspace.update_keybinds(Vec::new(), cx);
+            });
+            press("ctrl-3", &mut cx);
+            press("f2", &mut cx);
+            assert_eq!(
+                workspace.read_with(&cx, |w, _| w.tab_rename.as_ref().map(|r| r.ix)),
+                Some(2)
+            );
+            cx.update(|window, cx| workspace.update(cx, |w, cx| w.cancel_rename(window, cx)));
+            cx.run_until_parked();
+
+            let mut raw = Vec::new();
+            keymap::rebind_action(&mut raw, &Action::RenameTab, "ctrl+alt+r".into());
+            let saved = nebula_settings::apply_keybinds("", &raw);
+            let mut raw = nebula_settings::keybind_pairs_from_text(&saved);
+            workspace.update(&mut cx, |w, cx| w.update_keybinds(raw.clone(), cx));
+            press("f2", &mut cx);
+            assert!(workspace.read_with(&cx, |w, _| w.tab_rename.is_none()));
+            press("ctrl-alt-r", &mut cx);
+            assert_eq!(
+                workspace.read_with(&cx, |w, _| w.tab_rename.as_ref().map(|r| r.ix)),
+                Some(2)
+            );
+            cx.update(|window, cx| workspace.update(cx, |w, cx| w.cancel_rename(window, cx)));
+            cx.run_until_parked();
+            cx.update(|window, _| {
+                let bindings = window.bindings_for_action(&RenameActiveTab);
+                assert!(
+                    bindings
+                        .iter()
+                        .any(|b| b.match_keystrokes(&[Keystroke::parse("ctrl-alt-r").unwrap()])
+                            == Some(false))
+                );
+                assert!(
+                    !bindings
+                        .iter()
+                        .any(|b| b.match_keystrokes(&[Keystroke::parse("f2").unwrap()])
+                            == Some(false))
+                );
+            });
+
+            keymap::clear_action(&mut raw, &Action::RenameTab);
+            workspace.update(&mut cx, |w, cx| w.update_keybinds(raw.clone(), cx));
+            press("ctrl-alt-r", &mut cx);
+            press("f2", &mut cx);
+            assert!(workspace.read_with(&cx, |w, _| w.tab_rename.is_none()));
+            keymap::reset_action(&mut raw, &Action::RenameTab);
+            workspace.update(&mut cx, |w, cx| w.update_keybinds(raw, cx));
+            press("f2", &mut cx);
+            assert_eq!(
+                workspace.read_with(&cx, |w, _| w.tab_rename.as_ref().map(|r| r.ix)),
+                Some(2)
+            );
+            cx.update(|window, cx| workspace.update(cx, |w, cx| w.cancel_rename(window, cx)));
+            cx.run_until_parked();
+        }
+    }
+
     struct TerminalKeyProbe {
         focus: FocusHandle,
         selected: Option<usize>,
+        renamed: usize,
         mode: TermMode,
         input: Vec<Keystroke>,
         encoded: Vec<u8>,
@@ -215,6 +284,7 @@ mod dispatch {
                 .on_action(cx.listener(|this, action: &SelectTab, _, _| {
                     this.selected = action.index_for(10);
                 }))
+                .on_action(cx.listener(|this, _: &RenameActiveTab, _, _| this.renamed += 1))
                 .child(
                     div()
                         .size_full()
@@ -247,6 +317,7 @@ mod dispatch {
             let probe = cx.new(|cx| TerminalKeyProbe {
                 focus: cx.focus_handle(),
                 selected: None,
+                renamed: 0,
                 mode: TermMode::empty(),
                 input: Vec::new(),
                 encoded: Vec::new(),
@@ -297,5 +368,68 @@ mod dispatch {
             assert_eq!(probe.input.last(), Some(&Keystroke::parse("alt-2").unwrap()));
             assert!(!probe.encoded.is_empty());
         });
+    }
+
+    #[gpui::test]
+    fn remapped_rename_releases_f2_to_negotiated_terminal_input(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            init(cx);
+            let mut raw = Vec::new();
+            crate::display::keymap::rebind_action(
+                &mut raw,
+                &crate::config::Action::RenameTab,
+                "ctrl+alt+r".into(),
+            );
+            for (combo, name) in raw {
+                let action = crate::display::keymap::parse_action(&name).unwrap();
+                for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
+                    cx.bind_keys([workspace_binding_in_context(&combo, &action, scope).unwrap()]);
+                }
+            }
+        });
+        let mut probe_out = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let probe = cx.new(|cx| TerminalKeyProbe {
+                focus: cx.focus_handle(),
+                selected: None,
+                renamed: 0,
+                mode: TermMode::empty(),
+                input: Vec::new(),
+                encoded: Vec::new(),
+            });
+            let focus = probe.read(cx).focus.clone();
+            focus.focus(window, cx);
+            probe_out = Some(probe.clone());
+            Root::new(probe, window, cx)
+        });
+        let probe = probe_out.unwrap();
+        for mode in [
+            TermMode::empty(),
+            TermMode::WIN32_INPUT_MODE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            TermMode::REPORT_ALL_KEYS_AS_ESC,
+        ] {
+            probe.update(cx, |p, _| {
+                p.mode = mode;
+                p.input.clear();
+                p.encoded.clear();
+                p.renamed = 0;
+            });
+            press("ctrl-alt-r", cx);
+            probe.read_with(cx, |p, _| {
+                assert_eq!(p.renamed, 1);
+                assert!(p.input.is_empty());
+            });
+            press("f2", cx);
+            probe.read_with(cx, |p, _| {
+                assert_eq!(p.renamed, 1);
+                assert_eq!(p.input.last(), Some(&Keystroke::parse("f2").unwrap()));
+                assert!(!p.encoded.is_empty(), "F2 must reach the CLI");
+                if mode.is_empty() {
+                    assert_eq!(p.encoded, b"\x1bOQ");
+                }
+            });
+        }
     }
 }

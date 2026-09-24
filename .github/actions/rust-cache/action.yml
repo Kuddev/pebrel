@@ -22,6 +22,15 @@ outputs:
   cache-hit:
     description: Whether the compiled target cache matched exactly
     value: ${{ steps.target.outputs.cache-hit }}
+  cache-matched-key:
+    description: The compiled target cache key actually restored by actions/cache
+    value: ${{ steps.target.outputs.cache-matched-key }}
+  legacy-fallback-invoked:
+    description: Whether the optional legacy cache fallback action was invoked
+    value: ${{ steps.cache-summary.outputs.legacy-fallback-invoked }}
+  legacy-fallback-outcome:
+    description: Outcome of the optional legacy cache fallback action
+    value: ${{ steps.cache-summary.outputs.legacy-fallback-outcome }}
 
 runs:
   using: composite
@@ -96,6 +105,7 @@ runs:
           ${{ steps.identity.outputs.restore-key }}
           ${{ steps.identity.outputs.migration-key }}
     - name: Recover an existing combined cache during migration
+      id: legacy-fallback
       if: steps.target.outputs.cache-matched-key == '' && inputs.legacy-key != ''
       uses: Swatinem/rust-cache@v2
       with:
@@ -104,6 +114,50 @@ runs:
         cache-bin: false
         cache-on-failure: true
         save-if: false
+    - name: Summarize compiled target cache
+      id: cache-summary
+      if: always()
+      shell: bash
+      env:
+        TARGET_CACHE_HIT: ${{ steps.target.outputs.cache-hit }}
+        TARGET_CACHE_MATCHED_KEY: ${{ steps.target.outputs.cache-matched-key }}
+        SAVE_KEY: ${{ steps.identity.outputs.key }}
+        LEGACY_CONFIGURED: ${{ inputs.legacy-key != '' && 'true' || 'false' }}
+        LEGACY_OUTCOME: ${{ steps.legacy-fallback.outcome }}
+        CACHE_WORKLOAD: ${{ inputs.key }}
+        RUNNER_OS_VALUE: ${{ runner.os }}
+        RUNNER_ARCH_VALUE: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+
+        target_cache_hit="${TARGET_CACHE_HIT:-false}"
+        target_cache_matched_key="${TARGET_CACHE_MATCHED_KEY:-<none>}"
+        save_key="${SAVE_KEY:-<none>}"
+        legacy_configured="${LEGACY_CONFIGURED:-false}"
+        legacy_outcome="${LEGACY_OUTCOME:-skipped}"
+        legacy_invoked=false
+        if [[ "$legacy_configured" == 'true' && "$legacy_outcome" != 'skipped' && -n "$legacy_outcome" ]]; then
+          legacy_invoked=true
+        fi
+
+        {
+          echo '### Rust compiled target cache'
+          echo
+          echo "- Workload: \`$CACHE_WORKLOAD\`"
+          echo "- Runner: \`$RUNNER_OS_VALUE / $RUNNER_ARCH_VALUE\`"
+          echo "- Target cache exact hit: \`$target_cache_hit\`"
+          echo "- Target cache matched key: \`$target_cache_matched_key\`"
+          echo "- Save key: \`$save_key\`"
+          echo "- Legacy fallback configured: \`$legacy_configured\`"
+          echo "- Legacy fallback invoked: \`$legacy_invoked\`"
+          echo "- Legacy fallback outcome: \`$legacy_outcome\`"
+          echo '- Legacy fallback status is separate and is not counted as target exact hit'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        {
+          echo "legacy-fallback-invoked=$legacy_invoked"
+          echo "legacy-fallback-outcome=$legacy_outcome"
+        } >> "$GITHUB_OUTPUT"
     - name: Populate complete downloads before sharing the cache
       if: steps.downloads.outputs.cache-hit != 'true'
       shell: bash

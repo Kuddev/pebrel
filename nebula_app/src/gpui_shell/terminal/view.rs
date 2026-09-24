@@ -402,7 +402,7 @@ pub struct TerminalView {
     selection_scroll_epoch: u64,
     /// 是否已有一条自动回滚定时器链在跑——每次 move 都开一条会叠出 N 倍速。
     selection_scroll_active: bool,
-    /// OSC 8 / 正则 URL：虚线下划线、悬停预览、Ctrl+点击打开。
+    /// OSC 8 / 正则 URL：虚线下划线、悬停预览、平台修饰键+点击打开。
     pub(super) hint_config: Arc<UiConfig>,
     pub(super) link_hover: Option<super::osc_links::LinkHover>,
     pending_link_open: bool,

@@ -99,6 +99,10 @@ struct Row {
     danger: bool,
 }
 
+fn row_shortcut<'a>(row: &Row, rename: &'a str) -> &'a str {
+    if matches!(row.action, ContextMenuAction::RenameTab(_)) { rename } else { row.hint }
+}
+
 #[derive(Debug, Clone)]
 struct MenuLayout {
     panel: (f32, f32, f32, f32),
@@ -225,7 +229,7 @@ fn layout(menu: &ContextMenu, size: SizeInfo, scale: f32, animated_y_offset: f32
                 ContextMenuAction::RenameTab(index),
                 ICON_EDIT,
                 "重命名",
-                "F2",
+                "",
                 cursor_y,
                 false,
             ));
@@ -520,10 +524,14 @@ pub(super) fn draw(display: &mut Display) {
     }
     // 右键菜单和命令面板共用同一颗键帽组件；快捷键不再是贴在右缘的一串
     // 灰字，独立小键帽给出清晰的可按暗示，也让两类浮层形成同一套视觉语法。
+    let rename = keymap::effective_combo(&crate::config::Action::RenameTab, &display.nebula_keymap)
+        .map(|(combo, _)| combo)
+        .unwrap_or_default();
     for row in &layout.rows {
-        if !row.hint.is_empty() {
+        let hint = row_shortcut(row, &rename);
+        if !hint.is_empty() {
             let combo = keycap::layout_combo(
-                row.hint,
+                hint,
                 row.rect.0 + row.rect.2 - s(10.0),
                 row.rect.1 + row.rect.3 * 0.5,
                 size.cell_width(),
@@ -558,9 +566,10 @@ pub(super) fn draw(display: &mut Display) {
             row.label,
             &mut display.glyph_cache,
         );
-        if !row.hint.is_empty() {
+        let hint = row_shortcut(row, &rename);
+        if !hint.is_empty() {
             let combo = keycap::layout_combo(
-                row.hint,
+                hint,
                 row.rect.0 + row.rect.2 - s(10.0),
                 row.rect.1 + row.rect.3 * 0.5,
                 size.cell_width(),

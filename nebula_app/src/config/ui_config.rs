@@ -37,6 +37,9 @@ use crate::config::window::WindowConfig;
 /// Regex used for default terminal hints (Markdown links, URLs, and local paths).
 #[rustfmt::skip]
 pub const DEFAULT_HINT_REGEX: &str = "(?:\
+    (?m:^[a-z0-9_.-]+@[a-z0-9_.-]+:/[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s`]*[$#])|\
+    \"(?:[a-z]:[/\\\\]|\\\\\\\\|~[/\\\\])[^\u{0000}-\u{001F}\u{007F}-\u{009F}\"\\r\\n]+\"|\
+    '(?:[a-z]:[/\\\\]|\\\\\\\\|~[/\\\\])[^\u{0000}-\u{001F}\u{007F}-\u{009F}'\\r\\n]+'|\
     \\[[^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n\\]]+\\]\\((?:[^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n()]|\\([^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n()]*\\))+\\)|\
     (ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`\\\\]+|\
     (?:(?-u:\\b)[a-z]:[/\\\\]|\\\\\\\\)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`*?:，。；：！？、]+|\

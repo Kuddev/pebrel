@@ -1,12 +1,12 @@
 //! GPUI 更新安装包的下载、校验与启动。
 //!
 //! 更新检查只负责提供 release 元数据；本模块再次收紧资产合同，并把大文件
-//! 流式写入同目录 `.part` 文件。只有长度、PE 文件头与 SHA-256 全部通过后，
+//! 流式写入同目录 `.part` 文件。只有长度、PE 文件头或 DMG 尾标记与 SHA-256 全部通过后，
 //! 才原子替换为可启动的安装包，避免中断下载或错误响应变成可执行文件。
 
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write as _};
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -299,6 +299,7 @@ fn download_with_job(
     output.sync_all().map_err(|error| format!("同步更新临时文件失败：{error}"))?;
 
     verify_download(downloaded, &pe_header, hasher.finalize(), asset)?;
+    verify_package_trailer(&mut File::open(partial_path).map_err(|e| e.to_string())?, asset)?;
     Ok(downloaded)
 }
 
@@ -365,6 +366,7 @@ fn verify_file(path: &Path, asset: &UpdateAsset) -> Result<u64, String> {
         hasher.update(&buffer[..read]);
     }
     verify_download(bytes, &pe_header, hasher.finalize(), asset)?;
+    verify_package_trailer(&mut file, asset)?;
     Ok(bytes)
 }
 
@@ -377,7 +379,7 @@ fn verify_download(
     if bytes == 0 || asset.size.is_some_and(|expected| expected != bytes) {
         return Err(format!("安装包长度校验失败（实际 {bytes} 字节）"));
     }
-    if pe_header != b"MZ" {
+    if !asset.name.ends_with(".dmg") && pe_header != b"MZ" {
         return Err("下载内容不是 Windows PE 安装包".to_owned());
     }
     let expected = asset.sha256.as_deref().ok_or_else(|| "release 未提供 SHA-256".to_owned())?;
@@ -410,14 +412,32 @@ fn download_paths(asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
     Ok((partial_path, final_path))
 }
 
-fn validate_asset(asset: &UpdateAsset) -> Result<(), String> {
-    if !cfg!(all(windows, target_arch = "x86_64")) {
-        return Err("当前平台没有可用的自动更新安装包".to_owned());
+fn verify_package_trailer(file: &mut File, asset: &UpdateAsset) -> Result<(), String> {
+    if asset.name.ends_with(".dmg") {
+        let mut signature = [0; 4];
+        file.seek(SeekFrom::End(-512))
+            .and_then(|_| file.read_exact(&mut signature))
+            .map_err(|_| "Invalid macOS disk image trailer".to_owned())?;
+        if &signature != b"koly" {
+            return Err("Invalid macOS disk image trailer".into());
+        }
     }
-    validate_windows_asset_contract(asset)
+    Ok(())
 }
 
+fn validate_asset(asset: &UpdateAsset) -> Result<(), String> {
+    validate_asset_contract(asset, &crate::update_check::assets::native_names(&asset.version))
+}
+
+#[cfg(test)]
 fn validate_windows_asset_contract(asset: &UpdateAsset) -> Result<(), String> {
+    validate_asset_contract(
+        asset,
+        &crate::update_check::windows_x64_installer_names(&asset.version),
+    )
+}
+
+fn validate_asset_contract(asset: &UpdateAsset, names: &[String]) -> Result<(), String> {
     if asset.version.is_empty()
         || !asset
             .version
@@ -426,7 +446,7 @@ fn validate_windows_asset_contract(asset: &UpdateAsset) -> Result<(), String> {
     {
         return Err("release 版本号不符合安装包命名规则".to_owned());
     }
-    if !crate::update_check::windows_x64_installer_names(&asset.version).contains(&asset.name) {
+    if !names.contains(&asset.name) {
         return Err("release 资产不是当前平台的精确安装包".to_owned());
     }
     let trusted_url = [RELEASE_DOWNLOAD_PREFIX, LEGACY_RELEASE_DOWNLOAD_PREFIX]
@@ -735,5 +755,43 @@ mod tests {
                     .is_err()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod macos_package_tests {
+    use super::*;
+    #[test]
+    fn dmg_contract_checks_architecture_hash_and_udif_trailer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image.part");
+        let mut bytes = vec![0; 1024];
+        bytes[512..516].copy_from_slice(b"koly");
+        std::fs::write(&path, &bytes).unwrap();
+        let names = crate::update_check::assets::macos_names("1.9.1", "aarch64");
+        let mut asset = UpdateAsset {
+            version: "1.9.1".into(),
+            name: names[0].clone(),
+            download_url: format!("{RELEASE_DOWNLOAD_PREFIX}v1.9.1/{}", names[0]),
+            size: Some(bytes.len() as u64),
+            sha256: Some(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect()),
+        };
+        validate_asset_contract(&asset, &names).unwrap();
+        verify_file(&path, &asset).unwrap();
+        assert!(
+            validate_asset_contract(
+                &asset,
+                &crate::update_check::assets::macos_names("1.9.1", "x86_64")
+            )
+            .is_err()
+        );
+        bytes[512] = b'x';
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(verify_file(&path, &asset).is_err());
+        asset.sha256 =
+            Some(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect());
+        assert!(verify_file(&path, &asset).unwrap_err().contains("trailer"));
+        asset.download_url = "https://example.invalid/image.dmg".into();
+        assert!(validate_asset_contract(&asset, &names).is_err());
     }
 }

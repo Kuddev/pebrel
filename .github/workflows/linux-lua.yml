@@ -11,7 +11,9 @@ on:
   push:
     branches: [main]
   # Include docs, catalogs, assets and workflow edits: every PR gets test results.
+  # ready_for_review starts the scarce-runner jobs that draft pushes skip.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
 
 concurrency:
@@ -29,13 +31,61 @@ jobs:
     with:
       runtime_run: ${{ inputs.windows_diagnostics_run }}
 
+  # rustfmt only for now. clippy joins once the existing warning backlog is
+  # cleared; several crates deny lints, so it cannot run advisory.
+  lint:
+    if: ${{ inputs.windows_diagnostics_run == '' }}
+    name: lint
+    outputs:
+      native_matrix: ${{ steps.matrix.outputs.native_matrix }}
+      release_matrix: ${{ steps.matrix.outputs.release_matrix }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Test CI contracts before matrix planning
+        run: |
+          python3 -m unittest \
+            scripts.tests.test_ci_plan \
+            scripts.tests.test_ci_native_tests \
+            scripts.tests.test_stable_release \
+            scripts.tests.test_ci_cache \
+            scripts.tests.test_platform_cfg \
+            scripts.tests.test_pr_size_workflow -v
+      - name: Check platform cfg budget before native jobs
+        run: python3 scripts/check_platform_cfg.py
+      - name: Plan native validation
+        id: matrix
+        shell: bash
+        run: |
+          python scripts/ci_plan.py \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --output "$GITHUB_OUTPUT"
+
+  # The required lint job validates the matrix before heavy runners are
+  # requested. Draft PRs omit deferred platforms entirely; ready PRs and
+  # release callers require the full matrix. Deferred checks remain missing
+  # on drafts instead of being reported as successful tests.
   native-tests:
+    needs: lint
     if: ${{ inputs.windows_diagnostics_run == '' }}
     name: Tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, windows-11-arm, macos-26, macos-26-intel]
+        include: ${{ fromJSON(needs.lint.outputs.native_matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -46,12 +96,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Install native dependencies
-        if: runner.os == 'Linux'
+        if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -62,7 +113,7 @@ jobs:
             libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xinput-dev libxcb-xkb-dev libxi-dev
       - name: Require the AppKit SDK used by this PR
-        if: runner.os == 'macOS'
+        if: ${{ runner.os == 'macOS' }}
         run: |
           sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
           test "${sdk_version%%.*}" -ge 26
@@ -70,7 +121,7 @@ jobs:
         with:
           toolchain: "1.97.1"
       - name: Require a native Windows ARM64 compiler
-        if: matrix.os == 'windows-11-arm'
+        if: ${{ matrix.os == 'windows-11-arm' }}
         shell: pwsh
         run: |
           if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
@@ -90,7 +141,7 @@ jobs:
             ${{ runner.os != 'macOS' && 'target/release' || '' }}
           legacy-key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'Linux' && 'linux' || 'macos' }}
       - name: Prepare pinned Windows console runtime
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
           $architecture = if ('${{ runner.arch }}' -eq 'ARM64') { 'arm64' } else { 'x64' }
@@ -116,7 +167,7 @@ jobs:
             ${{ runner.os != 'macOS' && 'target/release' || '' }}
           key: ${{ steps.rust-cache.outputs.cache-key }}
       - name: Upload native compilation timings
-        if: always()
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: native-timings-${{ matrix.os }}
@@ -130,12 +181,13 @@ jobs:
   # 34856491552. Both jobs remain part of this reusable workflow's result, so
   # the stable release aggregation still requires every check to succeed.
   macos-release-check:
+    needs: lint
     if: ${{ inputs.windows_diagnostics_run == '' }}
     name: Release workspace (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, macos-26-intel]
+        include: ${{ fromJSON(needs.lint.outputs.release_matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -145,6 +197,8 @@ jobs:
       RUST_TOOLCHAIN: "1.97.1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -170,7 +224,7 @@ jobs:
           path: target/release
           key: ${{ steps.rust-cache.outputs.cache-key }}
       - name: Upload release check compilation timings
-        if: always()
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: release-check-timings-${{ matrix.os }}

@@ -1,5 +1,5 @@
-name: Feature Request
-description: Suggest an improvement or new capability for Nebula
+name: Feature Request / 功能建议
+description: Suggest an improvement or new capability for Pebrel / 提出改进或新功能
 title: "[Feature] "
 labels: ["enhancement", "triage"]
 body:
@@ -7,12 +7,13 @@ body:
     attributes:
       value: |
         Describe the workflow problem first, then the change you want. Concrete examples make the request easier to evaluate.
+        先说现在哪里不顺手，再说希望怎么改。具体的使用场景最有说服力。
 
   - type: textarea
     id: problem
     attributes:
-      label: Problem / pain point
-      description: What is hard, missing, or repetitive today?
+      label: Problem / pain point — 现在的痛点
+      description: What is hard, missing, or repetitive today? / 什么事难做、缺失、或者每天重复？
       placeholder: When I work with multiple terminals or hosts, I cannot ...
     validations:
       required: true
@@ -20,50 +21,66 @@ body:
   - type: textarea
     id: solution
     attributes:
-      label: Proposed solution
-      description: What would you like Nebula to do?
+      label: Proposed solution — 希望的做法
+      description: What would you like Pebrel to do? / 希望 Pebrel 怎么做？
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
-      description: List workarounds, other tools, or designs you considered.
-    validations:
-      required: true
+      label: Alternatives considered — 现在的替代办法
+      description: Workarounds, other tools, or designs you considered. / 目前怎么绕过去的，别的终端怎么做的。
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform / 平台
+      description: Leave empty if it applies everywhere. / 全平台通用可不选。
+      multiple: true
+      options:
+        - Windows
+        - Windows (WSL)
+        - macOS
+        - Linux
 
   - type: dropdown
     id: area
     attributes:
-      label: Related area
+      label: Related area / 相关范围
       multiple: true
       options:
-        - Local terminal / shell
-        - SSH / SFTP
-        - Tabs / splits / sessions
-        - AI assistant / providers
-        - Settings / backup / sync
-        - UI / UX
-        - Other
+        - Terminal rendering / scrolling / selection — 终端渲染、滚动、选区
+        - Shell startup / PATH / start directory / context menu — Shell 启动、环境变量、起始目录、右键菜单
+        - SSH / proxy / jump host — SSH、代理、跳板
+        - File tree / drag-and-drop upload — 文件树、拖拽上传
+        - Tabs / splits / session restore / window size — 标签页、分屏、会话恢复、窗口尺寸
+        - AI agent (Claude Code / Codex / Pi / OMP) — AI Agent 集成与状态
+        - Markdown / LaTeX / image reader — 阅读页与内联渲染
+        - Settings / theme / layout / blur — 设置页、主题、布局、模糊背景
+        - Keyboard / IME / mouse / shortcuts / clipboard — 键盘、输入法、鼠标、快捷键、剪贴板
+        - Git / SVN
+        - Performance / lag — 性能、卡顿
+        - Installer / update / packaging — 安装包、更新、打包
+        - Other / 其他
     validations:
       required: true
 
   - type: dropdown
     id: priority
     attributes:
-      label: How important is this to you?
+      label: How important is this to you? / 对你有多重要
       options:
-        - Nice to have
-        - Would improve my daily workflow
-        - Blocking / critical for my use case
+        - Nice to have / 有更好
+        - Would improve my daily workflow / 每天都会用到
+        - Blocking / critical for my use case / 没有就没法用
     validations:
       required: true
 
   - type: checkboxes
     id: checklist
     attributes:
-      label: Before submitting
+      label: Before submitting / 提交前确认
       options:
-        - label: I searched existing issues for similar requests
+        - label: I searched existing issues for similar requests / 已搜索，无重复
           required: true

@@ -1,9 +1,9 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "1.9.0"
+  #define AppVersion "1.9.1"
 #endif
 
 #ifndef NumericVersion
-  #define NumericVersion "1.9.0.0"
+  #define NumericVersion "1.9.1.0"
 #endif
 
 #ifndef Configuration
@@ -77,7 +77,9 @@ english.AutoStart=Start Pebrel when I sign in to Windows
 english.InstallFont=Install Maple Mono font for the current user
 english.AddToPath=Add Pebrel to the user PATH
 english.OpenInPebrel=Open in Pebrel
-english.OpenInPebrelWsl=Open in Pebrel
+english.OpenInPebrelWsl=Open in Pebrel (WSL)
+english.WslMenuConflict=An existing WSL submenu belongs to another installation or was edited, so it was preserved: %1.
+english.WslMenuRegistrationFailed=Unable to register the WSL context submenu.
 english.LaunchProgram=Launch Pebrel
 english.UninstallProgram=Uninstall Pebrel
 english.CloseLegacyProgram=Close the application at %1, then retry the installation.
@@ -89,7 +91,9 @@ chinesesimplified.AutoStart=登录 Windows 后启动 Pebrel
 chinesesimplified.InstallFont=为当前用户安装 Maple Mono 字体
 chinesesimplified.AddToPath=将 Pebrel 添加到当前用户 PATH
 chinesesimplified.OpenInPebrel=在 Pebrel 中打开
-chinesesimplified.OpenInPebrelWsl=在 Pebrel 中打开
+chinesesimplified.OpenInPebrelWsl=在 Pebrel 中打开（WSL）
+chinesesimplified.WslMenuConflict=现有 WSL 子菜单属于其他安装或已被修改，因此已保留：%1。
+chinesesimplified.WslMenuRegistrationFailed=无法注册 WSL 右键子菜单。
 chinesesimplified.LaunchProgram=启动 Pebrel
 chinesesimplified.UninstallProgram=卸载 Pebrel
 chinesesimplified.CloseLegacyProgram=请关闭 %1 中运行的程序，然后重试安装。

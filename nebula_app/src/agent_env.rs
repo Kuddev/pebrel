@@ -170,6 +170,9 @@ const WSLENV_ENTRIES: &[&str] = &[
     crate::ai_hook::LEGACY_PANE_ENV,
     TERM_PROGRAM_ENV,
     TERM_PROGRAM_VERSION_ENV,
+    // WSL otherwise falls back to a 256-color TERM despite the host supporting
+    // truecolor. Keep the capability declaration; do not spoof another terminal.
+    "COLORTERM",
     "PEBREL_CLI/p",
     "PEBREL_BIN_DIR/p",
     PROCESS_ENV,
@@ -301,56 +304,83 @@ mod tests {
         assert_eq!(entries.iter().filter(|entry| same_directory(entry, directory)).count(), 1);
     }
 
+    // WSL forwarding has one Windows compilation boundary for its whole contract.
     #[cfg(windows)]
-    #[test]
-    fn wslenv_entries_match_variables() {
-        // 透传表里的路径条目是字面量。变量改名而这里忘记跟着改，就会静默丢掉
-        // WSL 侧的可达性——用一个断言把它变成编译期之后立刻可见的失败。
-        let names: Vec<&str> = WSLENV_ENTRIES.iter().copied().map(variable_name).collect();
-        assert!(names.contains(&CLI_ENV), "{CLI_ENV} missing from WSLENV passthrough: {names:?}");
-        assert!(names.contains(&BIN_DIR_ENV), "{BIN_DIR_ENV} missing: {names:?}");
-        assert!(names.contains(&PROCESS_ENV), "{PROCESS_ENV} missing: {names:?}");
-        assert!(names.contains(&crate::runtime_api::ENDPOINT_ENV));
-    }
+    mod wsl {
+        use super::*;
 
-    #[cfg(windows)]
-    #[test]
-    fn wslenv_keeps_foreign_entries() {
-        let mut env = HashMap::new();
-        // `shell_detect::wsl_cwd_report_env` 先写过 cwd 上报的透传条目。
-        env.insert("WSLENV".to_owned(), "PROMPT_COMMAND".to_owned());
-        apply(&mut env, 3);
+        #[test]
+        fn wslenv_entries_match_variables() {
+            // 透传表里的路径条目是字面量。变量改名而这里忘记跟着改，就会静默丢掉
+            // WSL 侧的可达性——用一个断言把它变成编译期之后立刻可见的失败。
+            let names: Vec<&str> = WSLENV_ENTRIES.iter().copied().map(variable_name).collect();
+            assert!(
+                names.contains(&CLI_ENV),
+                "{CLI_ENV} missing from WSLENV passthrough: {names:?}"
+            );
+            assert!(names.contains(&BIN_DIR_ENV), "{BIN_DIR_ENV} missing: {names:?}");
+            assert!(names.contains(&PROCESS_ENV), "{PROCESS_ENV} missing: {names:?}");
+            assert!(names.contains(&crate::runtime_api::ENDPOINT_ENV));
+            assert!(names.contains(&"COLORTERM"));
+        }
 
-        let wslenv = env.get("WSLENV").expect("WSLENV");
-        let entries: Vec<&str> = wslenv.split(':').collect();
-        assert!(entries.contains(&"PROMPT_COMMAND"), "cwd reporting must survive: {wslenv}");
-        assert!(entries.contains(&PANE_ENV), "pane identity must cross into WSL: {wslenv}");
-        // 路径必须带 `/p`，否则来宾拿到无法执行的 `D:\…` 字面量。
-        assert!(entries.contains(&"NEBULA_CLI/p"), "cli path needs translation: {wslenv}");
-    }
+        #[test]
+        fn wsl_receives_truecolor_without_replacing_an_explicit_forwarding_rule() {
+            let mut env = HashMap::from([
+                ("COLORTERM".to_owned(), "truecolor".to_owned()),
+                ("WSLENV".to_owned(), "KEEP/p".to_owned()),
+            ]);
+            apply(&mut env, 8);
+            assert_eq!(env["COLORTERM"], "truecolor");
+            assert!(env["WSLENV"].split(':').any(|entry| entry == "COLORTERM"));
+            assert!(env["WSLENV"].split(':').any(|entry| entry == "KEEP/p"));
+            env.insert("WSLENV".into(), "KEEP/p:COLORTERM/u".into());
+            env.insert("COLORTERM".into(), "24bit".into());
+            apply(&mut env, 8);
+            assert_eq!(env["COLORTERM"], "24bit");
+            let entries: Vec<_> = env["WSLENV"]
+                .split(':')
+                .filter(|entry| variable_name(entry) == "COLORTERM")
+                .collect();
+            assert_eq!(entries, ["COLORTERM/u"]);
+        }
 
-    #[cfg(windows)]
-    #[test]
-    fn wslenv_merge_is_idempotent() {
-        let mut env = HashMap::new();
-        apply(&mut env, 4);
-        let once = env.get("WSLENV").cloned().expect("WSLENV");
-        apply(&mut env, 4);
-        assert_eq!(env.get("WSLENV"), Some(&once));
-    }
+        #[test]
+        fn wslenv_keeps_foreign_entries() {
+            let mut env = HashMap::new();
+            // `shell_detect::wsl_cwd_report_env` 先写过 cwd 上报的透传条目。
+            env.insert("WSLENV".to_owned(), "PROMPT_COMMAND".to_owned());
+            apply(&mut env, 3);
 
-    #[cfg(windows)]
-    #[test]
-    fn wslenv_respects_foreign_flags_for_same_variable() {
-        let mut env = HashMap::new();
-        // 宿主已用 `/l`（列表）传同名变量：尊重它，不改成我们的 `/p`，
-        // 否则会破坏那个工具原有的转换语义。
-        env.insert("WSLENV".to_owned(), "NEBULA_CLI/l".to_owned());
-        apply(&mut env, 5);
+            let wslenv = env.get("WSLENV").expect("WSLENV");
+            let entries: Vec<&str> = wslenv.split(':').collect();
+            assert!(entries.contains(&"PROMPT_COMMAND"), "cwd reporting must survive: {wslenv}");
+            assert!(entries.contains(&PANE_ENV), "pane identity must cross into WSL: {wslenv}");
+            // 路径必须带 `/p`，否则来宾拿到无法执行的 `D:\…` 字面量。
+            assert!(entries.contains(&"NEBULA_CLI/p"), "cli path needs translation: {wslenv}");
+        }
 
-        let wslenv = env.get("WSLENV").expect("WSLENV");
-        let entries: Vec<&str> = wslenv.split(':').collect();
-        assert!(entries.contains(&"NEBULA_CLI/l"));
-        assert!(!entries.contains(&"NEBULA_CLI/p"));
+        #[test]
+        fn wslenv_merge_is_idempotent() {
+            let mut env = HashMap::new();
+            apply(&mut env, 4);
+            let once = env.get("WSLENV").cloned().expect("WSLENV");
+            apply(&mut env, 4);
+            assert_eq!(env.get("WSLENV"), Some(&once));
+        }
+
+        #[test]
+        fn wslenv_respects_foreign_flags_for_same_variable() {
+            let mut env = HashMap::new();
+            // 宿主已用 `/l`（列表）传同名变量：尊重它，不改成我们的 `/p`，
+            // 否则会破坏那个工具原有的转换语义。
+            env.insert("WSLENV".to_owned(), "NEBULA_CLI/l".to_owned());
+            apply(&mut env, 5);
+
+            let wslenv = env.get("WSLENV").expect("WSLENV");
+            let entries: Vec<&str> = wslenv.split(':').collect();
+            assert!(entries.contains(&"NEBULA_CLI/l"));
+            assert!(!entries.contains(&"NEBULA_CLI/p"));
+        }
     }
 }

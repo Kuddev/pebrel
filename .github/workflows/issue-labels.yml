@@ -1,0 +1,154 @@
+name: Issue labels
+
+# Turns the dropdown answers of the issue forms (.github/ISSUE_TEMPLATE/*.yml)
+# into labels and flags bug reports that are too thin to act on. Labels are
+# only added; maintainers' manual labels are never removed.
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+concurrency:
+  group: issue-labels-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  label-from-form:
+    name: label-from-form
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Map form answers to labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || "";
+
+            // Issue forms render every field as "### <label>\n\n<value>";
+            // multi-select dropdowns join their values with ", ".
+            const fields = {};
+            const re = /^### (.+?)\s*\n+([\s\S]*?)(?=^### |\s*$(?![\s\S]))/gm;
+            for (const m of body.matchAll(re)) {
+              const value = m[2].trim();
+              if (value && value !== "_No response_") fields[m[1].trim()] = value;
+            }
+            const field = (prefix) => {
+              const key = Object.keys(fields).find((k) => k.startsWith(prefix));
+              return key ? fields[key] : "";
+            };
+            const answers = (prefix) => {
+              const value = field(prefix);
+              return value ? value.split(", ").map((s) => s.trim()) : [];
+            };
+
+            // Match on the English lead of each option so wording tweaks in
+            // the Chinese half never silently break the mapping.
+            const OS = [
+              ["Windows (WSL)", ["os: windows", "os: wsl"]],
+              ["Windows", ["os: windows"]],
+              ["macOS", ["os: macos"]],
+              ["Linux", ["os: linux"]],
+            ];
+            const AREA = [
+              ["Terminal rendering", ["area: terminal"]],
+              ["Shell startup", ["area: shell"]],
+              ["SSH", ["area: ssh"]],
+              ["File tree", ["area: files"]],
+              ["Tabs / splits", ["area: session"]],
+              ["AI agent", ["area: agents"]],
+              ["Markdown", ["area: reader"]],
+              ["Settings", ["area: ui"]],
+              ["Keyboard", ["area: input"]],
+              ["Git", ["area: git"]],
+              ["Startup crash", ["crash"]],
+              ["Performance", ["performance"]],
+              ["Installer", ["area: ci-release"]],
+            ];
+            const PROGRAM = [
+              ["Claude Code", ["area: agents"]],
+              ["Codex", ["area: agents"]],
+              ["Pi", ["area: agents"]],
+              ["Gemini", ["area: agents"]],
+            ];
+            const CONNECTION = [
+              ["SSH", ["area: ssh"]],
+              ["WSL", ["os: wsl"]],
+            ];
+            const SHELL = [["WSL", ["os: wsl"]]];
+            const pick = (values, table) => {
+              const out = [];
+              for (const v of values) {
+                const hit = table.find(([lead]) => v.startsWith(lead));
+                if (hit) out.push(...hit[1]);
+              }
+              return out;
+            };
+
+            const labels = new Set([
+              ...pick([...answers("Operating system"), ...answers("Platform")], OS),
+              ...pick([...answers("Affected area"), ...answers("Related area")], AREA),
+              ...pick(answers("Program running in the pane"), PROGRAM),
+              ...pick(answers("Connection type"), CONNECTION),
+              ...pick(answers("Shell in the affected pane"), SHELL),
+            ]);
+            if (answers("Did it work in a previous version").some((v) => v.startsWith("Yes"))) {
+              labels.add("regression");
+            }
+
+            // Thin bug reports: no usable steps or no evidence. Ask once, on
+            // open; an edit that fills the gaps clears the label.
+            const existing = new Set(issue.labels.map((l) => l.name));
+            const isBug = existing.has("bug");
+            const steps = field("Steps to reproduce");
+            const logs = field("Logs / screenshots");
+            const missing = [];
+            // CJK carries more per character; weigh it double. Numbered
+            // multi-line steps count as an attempt regardless of length.
+            const compact = steps.replace(/\s+/g, "");
+            const weight = compact.length + (compact.match(/[　-鿿豈-﫿]/g) || []).length;
+            const numbered = (steps.match(/^\s*\d+[.、)]/gm) || []).length >= 2;
+            if (isBug && weight < 60 && !numbered) {
+              missing.push("**Steps to reproduce / 复现步骤**: numbered steps from launch to the failing moment / 从启动开始按序写到出错那一步");
+            }
+            if (isBug && !logs) {
+              missing.push("**Logs / screenshots / 日志或截图**: a screenshot for visual issues, `pebrel_debug.log` for crashes, hangs and connection problems / 显示类问题贴截图，崩溃卡死连接类贴日志");
+            }
+            if (isBug && !/\d+\.\d+/.test(field("Pebrel version"))) {
+              missing.push("**Pebrel version / 版本号**: e.g. `1.9.0` (Settings > Home)");
+            }
+
+            const toAdd = [...labels].filter((l) => !existing.has(l));
+            if (missing.length) {
+              if (!existing.has("needs-info")) toAdd.push("needs-info");
+              if (context.payload.action === "opened") {
+                await github.rest.issues.createComment({
+                  ...context.repo,
+                  issue_number: issue.number,
+                  body: [
+                    "Thanks for the report. It is missing details we need before anyone can reproduce it, so it is parked as `needs-info`. Please edit the issue and fill in:",
+                    "感谢反馈。目前缺少复现所需的信息，已标记 `needs-info`。请**编辑 issue** 补齐以下内容，补齐后标签会自动移除：",
+                    "",
+                    ...missing.map((m) => `- ${m}`),
+                    "",
+                    "Reports without these are closed after 14 days of silence. / 14 天无补充将关闭。",
+                  ].join("\n"),
+                });
+              }
+            } else if (isBug && existing.has("needs-info") && context.payload.action === "edited") {
+              await github.rest.issues.removeLabel({
+                ...context.repo, issue_number: issue.number, name: "needs-info",
+              }).catch(() => {});
+            }
+
+            core.info(`form labels: ${[...labels].join(", ") || "(none)"}; adding: ${toAdd.join(", ") || "(none)"}; missing: ${missing.length}`);
+            if (toAdd.length) {
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: issue.number,
+                labels: toAdd,
+              });
+            }

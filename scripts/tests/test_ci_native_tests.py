@@ -11,6 +11,72 @@ from scripts.ci_native_tests import main, native_commands
 
 
 class NativeSuiteTests(unittest.TestCase):
+    def test_required_lint_plans_runners_before_native_jobs(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/linux-lua.yml").read_text()
+        lint = workflow.split("\n  lint:\n", 1)[1].split("\n  native-tests:\n", 1)[0]
+        self.assertIn("name: lint", lint)
+        self.assertIn("Test CI contracts before matrix planning", lint)
+        for contract in (
+            "scripts.tests.test_ci_plan",
+            "scripts.tests.test_ci_native_tests",
+            "scripts.tests.test_stable_release",
+            "scripts.tests.test_ci_cache",
+            "scripts.tests.test_platform_cfg",
+            "scripts.tests.test_pr_size_workflow",
+        ):
+            self.assertIn(contract, lint)
+        self.assertIn("python scripts/ci_plan.py", lint)
+        self.assertIn('--event-path "$GITHUB_EVENT_PATH"', lint)
+        self.assertLess(
+            lint.index("cargo fmt"),
+            lint.index("Test CI contracts before matrix planning"),
+        )
+        self.assertLess(
+            lint.index("Test CI contracts before matrix planning"),
+            lint.index("python scripts/ci_plan.py"),
+        )
+        self.assertLess(
+            lint.index("python3 scripts/check_platform_cfg.py"),
+            lint.index("python scripts/ci_plan.py"),
+        )
+        platform_step = lint.split("Check platform cfg budget before native jobs", 1)[1].split("      - name:", 1)[0]
+        self.assertNotIn("continue-on-error", platform_step)
+        self.assertNotIn("--update", platform_step)
+        for job, output in (("native-tests", "native_matrix"),
+                            ("macos-release-check", "release_matrix")):
+            body = workflow.split(f"\n  {job}:\n", 1)[1]
+            body = re.split(r"\n  [a-z][a-z-]*:\n", body, maxsplit=1)[0]
+            self.assertIn("needs: lint", body)
+            self.assertIn(f"fromJSON(needs.lint.outputs.{output})", body)
+            self.assertNotIn("pull_request.draft", body)
+            self.assertNotIn("matrix.tier", body)
+        self.assertIn("cargo check --locked --workspace --release", workflow)
+        # Native validation never needs to retain checkout credentials.
+        checkouts = re.findall(r"- uses: actions/checkout@[^\n]+\n(.*?)(?=      - |\Z)",
+                               workflow, re.S)
+        self.assertTrue(checkouts)
+        for checkout in checkouts:
+            self.assertIn("persist-credentials: false", checkout)
+
+    def test_packages_run_after_merge_or_manual_dispatch_not_for_prs(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/preview-packages.yml").read_text()
+        events = workflow.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
+        triggers = set(re.findall(r"^  ([a-z_]+):", events, re.M))
+        self.assertEqual(triggers, {"push", "workflow_dispatch"})
+        push = re.search(r"^  push:(.*?)(?=^  [a-z_]+:|\Z)", events, re.M | re.S)
+        self.assertIsNotNone(push)
+        self.assertIn("branches: [main]", push.group(1))
+        self.assertIn("paths:", push.group(1))
+        # Packaging still needs explicit dispatch to create a public release.
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.publish == true", workflow)
+        stable = (root / ".github/workflows/release.yml").read_text()
+        stable_events = stable.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
+        self.assertEqual(set(re.findall(r"^  ([a-z_]+):", stable_events, re.M)),
+                         {"push", "workflow_dispatch"})
+        self.assertIn('tags: ["v*.*.*"]', stable_events)
+
     def test_every_pr_and_merge_group_runs_without_path_exclusions(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/linux-lua.yml").read_text()
@@ -20,7 +86,12 @@ class NativeSuiteTests(unittest.TestCase):
             self.assertIsNotNone(declaration)
             self.assertNotIn("paths", declaration.group(1))
             self.assertNotIn("branches", declaration.group(1))
-            self.assertNotIn("types", declaration.group(1))
+            if event == "pull_request":
+                # ready_for_review starts the scarce-runner jobs that draft
+                # pushes skip; the default activity types must stay listed.
+                self.assertIn("types: [opened, synchronize, reopened, ready_for_review]", declaration.group(1))
+            else:
+                self.assertNotIn("types", declaration.group(1))
         self.assertIn("branches: [main]", events)
         self.assertNotIn("branches-ignore", events)
         self.assertNotIn("pull_request_target", workflow)
