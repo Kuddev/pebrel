@@ -46,9 +46,12 @@ use gpui_component::notification::Notification;
 use nebula_split::{DIVIDER_GAP, HIT_SLOP, RemoveOutcome, SplitDirection, SplitNav, SplitTree};
 
 mod agents;
+mod actions;
 mod closing;
 mod command_manager;
 mod keyboard_bindings;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 #[cfg(test)]
 use keyboard_bindings::{
     STATIC_DEFAULT_COMBOS, custom_workspace_binding, default_workspace_bindings, gpui_binding_combo,
@@ -93,47 +96,11 @@ pub(crate) mod windowing;
 pub(crate) use update_dialog::{open_update_dialog, show_update_notification};
 
 use tab_drag::{DockTarget, TabDrag, TabDragAxis};
+use actions::*;
 
 #[cfg(test)]
 use agents::ai_hook_target_pane;
 use agents::{ai_session_palette_rows, restored_agent_command};
-
-gpui::actions!(
-    nebula_workspace,
-    [
-        NewTerminal,
-        NewWindow,
-        CloseActiveTerminal,
-        ToggleSidebar,
-        OpenSettings,
-        ToggleCommandPalette,
-        CloseCommandPalette,
-        ToggleShellPicker,
-        CommandPaletteUp,
-        CommandPaletteDown,
-        ToggleFileTree,
-        ToggleGitPanel,
-        SplitRight,
-        SplitDown,
-        RenameActiveTab,
-        ToggleZoom,
-        FocusPaneLeft,
-        FocusPaneRight,
-        FocusPaneUp,
-        FocusPaneDown,
-        SelectNextTab,
-        SelectPreviousTab,
-        MoveTabLeft,
-        MoveTabRight,
-        IncreaseFontSize,
-        DecreaseFontSize,
-        ResetFontSize,
-        CopySelection,
-        PasteClipboard,
-        ToggleFullscreen,
-        OpenQuickJump
-    ]
-);
 
 /// 命令面板 / Shell 选择器罩层的 keymap context。Esc 必须挂在这里，
 /// 不能挂全局：否则 CC/Codex 的终止对话键到不了 PTY。
@@ -171,6 +138,8 @@ fn title_bar_panel_controls() -> gpui::Div {
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
     keyboard_bindings::init(cx);
+    #[cfg(target_os = "macos")]
+    macos_menu::init(cx);
 }
 
 /// 一个终端 pane：视图实体 + 宿主订阅。id 即 `TerminalView::pane_id`
@@ -1244,7 +1213,14 @@ impl NebulaWorkspace {
     /// follow_system 折算）、逐终端刷新、重建 chrome 令牌。
     fn apply_runtime_settings(&mut self, cx: &mut Context<Self>) {
         let (runtime, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
+        #[cfg(target_os = "macos")]
+        let language_changed =
+            cx.global::<crate::gpui_shell::config::Settings>().ui_language != settings.ui_language;
         cx.set_global(settings);
+        #[cfg(target_os = "macos")]
+        if language_changed {
+            cx.defer(|cx| macos_menu::init(cx));
+        }
         for tab in &self.tabs {
             if let WorkspaceTab::Terminal { panes, .. } = tab {
                 for pane in panes {
@@ -3237,6 +3213,20 @@ impl Render for NebulaWorkspace {
                     }
                 });
             }))
+            .on_action(cx.listener(|this, _: &OpenAbout, window, cx| {
+                this.open_settings(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
+                if this.should_close_window(window, cx) {
+                    window.remove_window();
+                }
+            }))
+            .on_action(cx.listener(|_, _: &QuitApplication, _, cx| {
+                windowing::quit_all(cx);
+            }))
+            .on_action(cx.listener(|_, _: &HideApplication, _, cx| cx.hide()))
+            .on_action(cx.listener(|_, _: &HideOtherApplications, _, cx| cx.hide_other_apps()))
+            .on_action(cx.listener(|_, _: &MinimizeWindow, window, _| window.minimize_window()))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
                 this.close_active(window, cx);
             }))
@@ -3328,6 +3318,12 @@ impl Render for NebulaWorkspace {
                     // 让 Ctrl+C 等自定义组合键按终端原义进入 PTY。
                     cx.propagate();
                 }
+            }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Copy, window, cx| {
+                this.copy_focused_terminal(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Paste, window, cx| {
+                this.paste_focused_terminal(window, cx);
             }))
             .on_action(cx.listener(|this, _: &PasteClipboard, window, cx| {
                 this.paste_focused_terminal(window, cx);
