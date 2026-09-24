@@ -330,37 +330,39 @@ impl NebulaWorkspace {
         div()
             .id("workspace-details-slot")
             .debug_selector(|| "workspace-details-slot".to_owned())
-            .relative()
-            .h_full()
-            .flex_shrink_0()
+            // 浮层而不是三列之一：绝对定位在右边缘、不参与 flex 排布，所以打开时
+            // 终端内容区的宽度与网格列数都不变。挤压式会触发终端重排，正在读的
+            // AI CLI 输出跟着换行错位（issue #275）。
+            // 宽度不再做动画——那正是挤压的来源，只保留向右滑出的位移。
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(width))
+            // 浮层压住终端，必须吸收指针，否则点面板空白处会落到下面的终端上。
+            .occlude()
             .child(
-                div().size_full().overflow_hidden().bg(cx.theme().background).child(
-                    v_flex()
-                        .relative()
-                        .w(px(width))
-                        .h_full()
-                        .pb(px(crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom))
-                        .child(self.render_details_header(width, window, cx))
-                        .child(
-                            div().flex_1().min_h_0().w_full().child(panel).with_animation(
-                                ("details-content", self.details_panel.transition),
-                                Animation::new(Duration::from_millis(140))
-                                    .with_easing(ease_out_quint()),
-                                |content, t| content.opacity(t),
-                            ),
-                        )
-                        .with_animation(
-                            ("side-panel-push", open as usize),
-                            Animation::new(Duration::from_millis(240))
+                v_flex()
+                    .size_full()
+                    .overflow_hidden()
+                    .bg(cx.theme().background)
+                    .shadow(vec![crate::gpui_shell::theme::card_shadow(cx)])
+                    .pb(px(crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom))
+                    .child(self.render_details_header(width, window, cx))
+                    .child(
+                        div().flex_1().min_h_0().w_full().child(panel).with_animation(
+                            ("details-content", self.details_panel.transition),
+                            Animation::new(Duration::from_millis(140))
                                 .with_easing(ease_out_quint()),
-                            move |band, t| band.left(px(width * if open { 1.0 - t } else { t })),
+                            |content, t| content.opacity(t),
                         ),
-                ),
-            )
-            .with_animation(
-                ("side-panel-slide", open as usize),
-                Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
-                move |slot, t| slot.w(px(width * if open { t } else { 1.0 - t })),
+                    )
+                    .with_animation(
+                        ("side-panel-slide", open as usize),
+                        Animation::new(Duration::from_millis(240))
+                            .with_easing(ease_out_quint()),
+                        move |band, t| band.left(px(width * if open { 1.0 - t } else { t })),
+                    ),
             )
             .into_any_element()
     }
