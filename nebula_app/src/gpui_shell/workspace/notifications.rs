@@ -23,8 +23,8 @@ fn delivery_channels(
 ) -> DeliveryChannels {
     DeliveryChannels {
         in_app: (!visible || notification.is_attention()) && (ai_toasts || !notification.is_ai()),
-        // Keep native notification routing independent of the in-app preference.
-        system: !visible,
+        // macOS also sends foreground notices to Notification Center.
+        system: !visible || cfg!(target_os = "macos"),
     }
 }
 
@@ -190,11 +190,11 @@ mod tests {
             );
             assert_eq!(
                 delivery_channels(&notification, true, false),
-                DeliveryChannels { in_app: false, system: false }
+                DeliveryChannels { in_app: false, system: cfg!(target_os = "macos") }
             );
             assert_eq!(
                 delivery_channels(&notification, true, true),
-                DeliveryChannels { in_app: attention, system: false }
+                DeliveryChannels { in_app: attention, system: cfg!(target_os = "macos") }
             );
         }
     }
