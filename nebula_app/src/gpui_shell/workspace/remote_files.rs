@@ -909,7 +909,7 @@ fn format_transfer_bytes(bytes: u64) -> String {
 ///
 /// 返回 `None` 表示网络 runtime 起不来或任务被丢弃——调用方据此报"连接不
 /// 可用"，而不是把它和"远端答了个错误"混为一谈。
-async fn remote_call<T, F, Fut>(work: F) -> Option<T>
+pub(super) async fn remote_call<T, F, Fut>(work: F) -> Option<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Fut + Send + 'static,

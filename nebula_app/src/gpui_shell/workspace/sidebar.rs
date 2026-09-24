@@ -865,6 +865,7 @@ impl NebulaWorkspace {
         let settings_active_bg = cx.theme().sidebar_accent;
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
+        let port_forward_button = self.render_port_forward_button(cx);
         h_flex()
             .size_full()
             .items_center()
@@ -929,6 +930,7 @@ impl NebulaWorkspace {
                                 this.toggle_command_manager(window, cx);
                             })),
                     )
+                    .when_some(port_forward_button, |controls, button| controls.child(button))
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()

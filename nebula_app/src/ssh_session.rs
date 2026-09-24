@@ -28,9 +28,11 @@ use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, Pro
 mod agent;
 mod config;
 mod exec;
+mod forward;
 mod integration;
 mod lifecycle;
 mod route;
+pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
 
