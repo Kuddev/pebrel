@@ -60,6 +60,15 @@ The existing Windows diagnostic dispatch continues to use its separate workflow.
 
 ## Validation
 
+The required `lint` job now runs the lightweight planner/native-workflow/
+stable-release and cache contract tests after `cargo fmt --all -- --check` and before
+`ci_plan.py` writes either matrix. The count is 7 planner tests, 10 native
+workflow tests, 17 stable-release tests and 8 cache contract tests. A final local run of the exact
+command completed 42 tests (41 passed, one Windows-only case skipped) in 3.341 seconds on 2026-09-23; this is a local
+measurement, not a general speed guarantee. The workflow contract test checks
+that this step precedes planning and that both dynamic matrices depend on the
+required lint job.
+
 Planner tests cover draft and ready PRs, all full-validation caller events,
 malformed input and real command-line output. Workflow contract tests require the
 existing lint check to own planning, both matrices to depend on it, draft step

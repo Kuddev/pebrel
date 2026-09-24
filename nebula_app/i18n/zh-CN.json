@@ -209,6 +209,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+左键跳转",
+    "link_ctrl_click": "Ctrl+左键跳转",
     "settings": "设置",
     "language": "语言",
     "about": "关于",
@@ -237,6 +239,7 @@
     "delete": "删除",
     "edit": "编辑",
     "rename": "重命名",
+    "rename_tab": "重命名标签页",
     "copy": "复制",
     "paste": "粘贴",
     "cut": "剪切",
@@ -780,6 +783,10 @@
     "too_large": "背景图超出内存限制，请选择尺寸更小的图片。"
   },
   "update": {
+    "downloading_hint": "正在后台下载并校验适用于此设备的更新安装包。",
+    "no_verified_package": "此版本没有适用于此设备的可验证安装包，请打开发布页手动下载。",
+    "check_fallback_failed": "GitHub API 访问受限（HTTP {status}），备用发布页查询也失败了：{error}。请稍后重试或打开发布页。",
+    "check_unrecognized_release": "官方发布页未返回可识别的稳定版本，请稍后重试或打开发布页。",
     "installation_failed": "更新安装失败",
     "installation_failed_hint": "更新未完成，原会话快照仍保留。检查错误后可重新校验安装包，再确认安装。",
     "recheck_package": "重新校验安装包",
@@ -796,9 +803,10 @@
     },
     "auto_download": "在后台预下载更新",
     "stop_download": "停止下载",
+    "skip_version": "跳过此版本",
     "restart_install": "重启并安装",
     "install_next_launch": "下次启动时安装",
-    "ready_hint": "更新已就绪。Pebrel 将先保存工作区并退出，再安装更新并重新打开。",
+    "ready_hint": "更新已就绪，将保存工作区、安装更新并重启。",
     "later": "稍后",
     "prepare_failed": "更新准备失败：{error}。Pebrel 将保持打开。",
     "draft_changed": "准备退出期间文档发生了变化。请保存或放弃最新修改后重试。",
@@ -903,5 +911,15 @@
   "files.path_placeholder": "输入绝对路径或相对路径",
   "files.path_choose": "选择目录",
   "files.path_open": "打开目录",
-  "files.path_failed": "无法打开这个目录：{error}"
+  "files.path_failed": "无法打开这个目录：{error}",
+  "tab_menu": {
+    "fork_ai_session": "分叉 AI 会话",
+    "move_to_new_window": "移到新窗口",
+    "export_as_workspace": "导出为工作区…",
+    "split_left_right": "左右分屏",
+    "split_top_bottom": "上下分屏",
+    "move_left": "向左移动",
+    "move_right": "向右移动",
+    "tab_color": "标签颜色"
+  }
 }

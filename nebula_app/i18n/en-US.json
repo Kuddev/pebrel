@@ -209,6 +209,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+left click to open",
+    "link_ctrl_click": "Ctrl+left click to open",
     "settings": "Settings",
     "language": "Language",
     "about": "About",
@@ -237,6 +239,7 @@
     "delete": "Delete",
     "edit": "Edit",
     "rename": "Rename",
+    "rename_tab": "Rename tab",
     "copy": "Copy",
     "paste": "Paste",
     "cut": "Cut",
@@ -780,6 +783,10 @@
     "too_large": "The background image exceeds the memory limit. Choose a smaller image."
   },
   "update": {
+    "downloading_hint": "Downloading and verifying the update package for this device.",
+    "no_verified_package": "This release has no verified update package for this device. Open the Releases page to download it manually.",
+    "check_fallback_failed": "GitHub API access is restricted (HTTP {status}), and the official Releases page could not be reached: {error}. Retry later or open the Releases page.",
+    "check_unrecognized_release": "The official Releases page did not identify a supported stable version. Retry later or open the Releases page.",
     "installation_failed": "Update installation failed",
     "installation_failed_hint": "The update did not complete. Your original session snapshot is retained. Review the error, recheck the package, then confirm installation again.",
     "recheck_package": "Recheck package",
@@ -796,8 +803,9 @@
     },
     "auto_download": "Download updates in the background",
     "stop_download": "Stop download",
+    "skip_version": "Skip version",
     "restart_install": "Restart and install",
-    "install_next_launch": "Install on next launch",
+    "install_next_launch": "Install on launch",
     "ready_hint": "The update is ready. Pebrel will save your workspace and exit before installation, then reopen it.",
     "later": "Later",
     "prepare_failed": "Could not prepare the update: {error}. Pebrel will stay open.",
@@ -903,5 +911,15 @@
   "files.path_placeholder": "Absolute or relative directory path",
   "files.path_choose": "Choose a directory",
   "files.path_open": "Open directory",
-  "files.path_failed": "Could not open this directory: {error}"
+  "files.path_failed": "Could not open this directory: {error}",
+  "tab_menu": {
+    "fork_ai_session": "Fork AI session",
+    "move_to_new_window": "Move to new window",
+    "export_as_workspace": "Export as workspace…",
+    "split_left_right": "Split left and right",
+    "split_top_bottom": "Split top and bottom",
+    "move_left": "Move left",
+    "move_right": "Move right",
+    "tab_color": "Tab color"
+  }
 }

@@ -37,7 +37,7 @@ fn open(cx: &mut TestAppContext) -> (Entity<NebulaWorkspace>, VisualTestContext)
             workspace.palette_override = Some(shell_palette_rows(
                 vec![shell("cmd"), shell("pwsh")],
                 vec![],
-                ["test-host".into()],
+                [("test-host".into(), String::new())],
                 "cmd",
                 workspace_ui_language(),
                 1.0,

@@ -7338,15 +7338,14 @@ pub(super) fn draw_text(
                 }
                 let i = flat;
                 let ty = rect.1 + (kh - cell_h) / 2.0;
-                let (zh_label, en_label) = if i == keymap::QUICK_TERMINAL_ROW {
+                let label = if i == keymap::QUICK_TERMINAL_ROW {
                     if view.quick_hotkey_error.is_some() {
-                        ("快速终端（注册失败）", "Quick terminal (failed)")
+                        language.pick("快速终端（注册失败）", "Quick terminal (failed)")
                     } else {
-                        ("快速终端", "Quick terminal")
+                        language.pick("快速终端", "Quick terminal")
                     }
                 } else {
-                    let (_, zh, en) = keymap::EDITABLE_ACTIONS[i - 1];
-                    (zh, en)
+                    keymap::action_label(&keymap::EDITABLE_ACTIONS[i - 1], language)
                 };
                 r.draw_chrome_text(
                     size,
@@ -7357,7 +7356,7 @@ pub(super) fn draw_text(
                     } else {
                         sk.ink
                     },
-                    language.pick(zh_label, en_label),
+                    label,
                     gc,
                 );
                 let hovered = view.hover == SettingsHit::KeymapRow(slot);

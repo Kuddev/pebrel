@@ -1,4 +1,4 @@
-//! GPUI 壳的 OSC 8 / 正则 hint 接线：虚线下划线、悬停预览、Ctrl+点击打开。
+//! GPUI 壳的 OSC 8 / 正则 hint 接线：虚线下划线、悬停预览、平台修饰键+点击打开。
 //!
 //! 匹配与动作全部复用旧壳 `display::hint` + `file_uri` + `daemon`，这里只做
 //! 视口坐标、GPUI 修饰键和打开入口。
@@ -18,6 +18,15 @@ use winit::keyboard::ModifiersState;
 use crate::config::UiConfig;
 use crate::config::ui_config::{HintAction, HintInternalAction, default_hint_command};
 use crate::display::hint::{self, HintMatch};
+use crate::i18n::{Message, UiLanguage};
+use crate::platform::Platform;
+
+pub(super) fn link_modifier(mods: &gpui::Modifiers) -> bool {
+    match Platform::current() {
+        Platform::MacOS => mods.platform,
+        Platform::Windows | Platform::Linux => mods.control,
+    }
+}
 
 /// 悬停目标：旧壳 `highlighted_hint` + 已经解码好的预览文案。
 #[derive(Clone)]
@@ -97,7 +106,13 @@ pub(super) fn highlighted_at<T: EventListener>(
     point: Point,
     mods: &gpui::Modifiers,
 ) -> Option<HintMatch> {
-    hint::highlighted_at(term, config, point, winit_mouse_mods(mods))
+    hint::highlighted_at_with_mouse_override(
+        term,
+        config,
+        point,
+        winit_mouse_mods(mods),
+        link_modifier(mods),
+    )
 }
 
 pub(super) fn hover_from_hint<T: EventListener>(
@@ -105,6 +120,7 @@ pub(super) fn hover_from_hint<T: EventListener>(
     hint: HintMatch,
     rows: usize,
     cols: usize,
+    language: UiLanguage,
 ) -> Option<LinkHover> {
     let raw = hint
         .hyperlink()
@@ -117,12 +133,15 @@ pub(super) fn hover_from_hint<T: EventListener>(
         point_to_viewport_from(origin, start).filter(|vp| vp.line < rows && vp.column.0 < cols);
     let (anchor_row, anchor_col) =
         vp.map(|vp| (vp.line as u16, vp.column.0 as u16)).unwrap_or((0, 0));
-    const HINT: &str = " · Ctrl+点击";
+    let gesture = language.text(match Platform::current() {
+        Platform::MacOS => Message::CommonLinkCommandClick,
+        Platform::Windows | Platform::Linux => Message::CommonLinkCtrlClick,
+    });
     let width = |s: &str| -> usize { s.chars().map(|c| c.width().unwrap_or(0)).sum() };
     let target = crate::display::strip_file_scheme(uri);
-    let budget = cols.saturating_sub(width(HINT) + 1);
+    let budget = cols.saturating_sub(width(gesture) + width(" · ") + 1);
     let target = crate::display::fit_tail(&target, budget);
-    Some(LinkHover { hint, preview: format!("{target}{HINT}"), anchor_row, anchor_col })
+    Some(LinkHover { hint, preview: format!("{target} · {gesture}"), anchor_row, anchor_col })
 }
 
 pub(super) fn open_hint_match(

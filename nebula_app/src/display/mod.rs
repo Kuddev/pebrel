@@ -5670,7 +5670,7 @@ impl Display {
             } else {
                 keymap::EDITABLE_ACTIONS
                     .get(flat - 1)
-                    .map(|(_, zh, en)| self.nebula_language.pick(zh, en).to_owned())
+                    .map(|row| keymap::action_label(row, self.nebula_language).to_owned())
                     .unwrap_or_default()
             }
         };
@@ -7202,8 +7202,7 @@ impl Display {
         }
     }
 
-    /// 捕获完成：`combo` 归属该行动作。同 combo 的旧自定义行被移除（键随
-    /// 最后写入者），该动作旧的自定义行也移除（一动作一自定义键）。
+    /// Apply the shared rebinding policy, then refresh the editor.
     pub fn keymap_assign(&mut self, row: usize, combo: String) {
         if row == keymap::QUICK_TERMINAL_ROW {
             self.nebula_keymap_capture = None;
@@ -7215,12 +7214,13 @@ impl Display {
             self.pending_update.dirty = true;
             return;
         }
-        let action_row = row.saturating_sub(1);
-        let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(action_row) else { return };
-        let name = keymap::action_storage_name(action);
-        self.nebula_keybinds.retain(|(c, a)| c != &combo && !a.eq_ignore_ascii_case(&name));
-        self.nebula_keybinds.push((combo, name));
+        let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(row - 1) else { return };
+        keymap::rebind_action(&mut self.nebula_keybinds, action, combo);
         self.keymap_commit();
+    }
+
+    pub fn active_tab_index(&self) -> usize {
+        self.nebula_active_tab
     }
 
     /// Bare Backspace disables the action, preserving pass-through on reload.
