@@ -34,6 +34,39 @@ fn typed_and_compatibility_lookups_agree() {
 }
 
 #[test]
+fn tab_context_menu_has_translations_for_every_supported_language() {
+    let items = [
+        Message::CommonCopyWorkingDirectory,
+        Message::CommonDuplicateTab,
+        Message::TabMenuForkAiSession,
+        Message::TabMenuMoveToNewWindow,
+        Message::TabMenuExportAsWorkspace,
+        Message::TabMenuSplitLeftRight,
+        Message::TabMenuSplitTopBottom,
+        Message::TabMenuMoveLeft,
+        Message::TabMenuMoveRight,
+        Message::CommonRename,
+        Message::CommonClose,
+        Message::TabMenuTabColor,
+    ];
+    for language in UiLanguage::ALL {
+        for item in items {
+            assert!(!language.text(item).is_empty(), "{}: {item:?}", language.code());
+            if *language != UiLanguage::EnUs {
+                assert_ne!(
+                    language.text(item),
+                    UiLanguage::EnUs.text(item),
+                    "{}: {item:?}",
+                    language.code()
+                );
+            }
+        }
+    }
+    assert_eq!(UiLanguage::KoKr.text(Message::CommonCopyWorkingDirectory), "작업 디렉터리 복사");
+    assert_eq!(UiLanguage::KoKr.text(Message::TabMenuTabColor), "탭 색상");
+}
+
+#[test]
 fn inline_migration_preserves_bilingual_text_and_english_fallback() {
     assert_eq!(UiLanguage::ZhCn.pick("网络", "Network"), "网络");
     assert_eq!(UiLanguage::EnUs.pick("网络", "Network"), "Network");

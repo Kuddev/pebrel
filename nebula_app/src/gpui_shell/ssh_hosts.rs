@@ -64,6 +64,21 @@ impl SshHostLists {
         )
     }
 
+    /// 与 [`Self::merged`] 同一顺序权威，同时带出用户在 SSH 设置里起的
+    /// 主机名称（地址 → 别名；没起名的是空串，展示端回落地址本身）。
+    /// profiles 在 [`Self::load`] 时已经读盘，这里不重复读 JSON；launcher /
+    /// Quick Jump / 命令面板三处 SSH 行共用，避免各自再解析一次。
+    pub fn merged_with_labels(&self) -> Vec<(String, String)> {
+        let labels = self.profiles.labels();
+        self.merged()
+            .into_iter()
+            .map(|host| {
+                let label = labels.get(&host).cloned().unwrap_or_default();
+                (host, label)
+            })
+            .collect()
+    }
+
     /// 隐藏区（设置页"已隐藏"折叠列表的数据源）。
     pub fn hidden_hosts(&self) -> Vec<String> {
         self.hidden.iter().filter(|host| self.configured.contains(host)).cloned().collect()

@@ -81,8 +81,6 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         // ctrl+shift+s 上下、ctrl+shift+enter 缩放、ctrl+alt+方向切聚焦。
         KeyBinding::new("ctrl-shift-d", SplitRight, None),
         KeyBinding::new("ctrl-shift-s", SplitDown, None),
-        // F2 重命名活动标签（旧壳同键位）；右键菜单的键帽读的就是这条。
-        KeyBinding::new("f2", RenameActiveTab, None),
         KeyBinding::new("ctrl-shift-enter", ToggleZoom, None),
         KeyBinding::new("ctrl-alt-left", FocusPaneLeft, None),
         KeyBinding::new("ctrl-alt-right", FocusPaneRight, None),
@@ -117,10 +115,12 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-enter", ToggleFullscreen, None),
         KeyBinding::new("ctrl-shift-o", OpenQuickJump, None),
     ];
-    // Numeric shortcuts come from the same defaults shown by Settings and
-    // used by the legacy shell, including each platform's existing modifiers.
+    // Tab selection and rename use the same defaults displayed by Settings.
     bindings.extend(crate::display::keymap::default_shortcuts().into_iter().filter_map(
         |(combo, action)| {
+            if action == crate::config::Action::RenameTab {
+                return custom_workspace_binding(&combo, &action);
+            }
             let action = SelectTab::from_config(&action)?;
             Some(KeyBinding::new(&gpui_binding_combo(&combo), action, None))
         },
@@ -223,6 +223,7 @@ fn workspace_binding_in_context(
         Action::CreateNewTab => Some(KeyBinding::new(&combo, NewTerminal, scope)),
         Action::CreateNewWindow => Some(KeyBinding::new(&combo, NewWindow, scope)),
         Action::CloseTab => Some(KeyBinding::new(&combo, CloseActiveTerminal, scope)),
+        Action::RenameTab => Some(KeyBinding::new(&combo, RenameActiveTab, scope)),
         Action::ToggleFilesPanel => Some(KeyBinding::new(&combo, ToggleFileTree, scope)),
         Action::ToggleGitPanel => Some(KeyBinding::new(&combo, ToggleGitPanel, scope)),
         Action::SplitRight => Some(KeyBinding::new(&combo, SplitRight, scope)),
@@ -249,8 +250,8 @@ fn workspace_binding_in_context(
         )),
         Action::ToggleFullscreen => Some(KeyBinding::new(&combo, ToggleFullscreen, scope)),
         Action::OpenQuickJump => Some(KeyBinding::new(&combo, OpenQuickJump, scope)),
-        // `none` 禁用键：gpui 的 NoAction 绑定在最高优先级命中时吞掉按键，
-        // 与旧壳 keybind=combo:none 的语义一致。
+        // Mask the app action. ReceiveChar entries from the editor allow
+        // the terminal input handler to encode the released key.
         Action::None | Action::ReceiveChar => Some(KeyBinding::new(&combo, gpui::NoAction, scope)),
         _ => None,
     }

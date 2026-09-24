@@ -85,7 +85,15 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertIn('format!("Pebrel-v{version}-windows-x64-setup.exe")', check)
         self.assertIn('format!("NebulaTerminal-{version}-windows-x64-setup.exe")', check)
         self.assertIn("windows_x64_installer_names(version)", check)
-        self.assertIn("windows_x64_installer_names(&asset.version).contains(&asset.name)", download)
+        # Discovery and validation now route through the shared native selector.
+        # Retain the Windows brand contract while also checking the macOS path;
+        # executable Rust regressions cover accepted brands and rejected URLs.
+        assets = self.source("nebula_app/src/update_check/assets.rs")
+        self.assertIn("assets::native_names(&version)", check)
+        self.assertIn("assets::native_names(&asset.version)", download)
+        self.assertIn("super::windows_x64_installer_names(version).to_vec()", assets)
+        self.assertIn("Platform::MacOS => macos_names(version, std::env::consts::ARCH)", assets)
+        self.assertIn("if !names.contains(&asset.name)", download)
 
     def test_notification_identity_uses_pebrel(self):
         source = self.source("nebula_app/src/platform/notifications.rs")

@@ -1,8 +1,11 @@
-//! Native paths and process identity for the Windows installer handoff.
+//! Native paths and process identity for the platform installer handoff.
 //! Transaction persistence and commit authority remain in `update_download`.
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 
 pub(crate) fn canonical(path: &Path) -> io::Result<PathBuf> {
     let path = std::fs::canonicalize(path)?;
@@ -19,7 +22,7 @@ pub(crate) fn canonical(path: &Path) -> io::Result<PathBuf> {
     Ok(path)
 }
 
-/// FILETIME identity is compared with the exact process handle by the helper.
+/// Native creation identity prevents a recycled PID from authorizing a handoff.
 pub(crate) fn current_process_created() -> io::Result<u64> {
     #[cfg(windows)]
     {
@@ -38,7 +41,10 @@ pub(crate) fn current_process_created() -> io::Result<u64> {
         }
         Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    return macos::process_created(std::process::id())?
+        .ok_or_else(|| io::Error::other("Process identity unavailable"));
+    #[cfg(not(any(windows, target_os = "macos")))]
     Err(io::Error::new(io::ErrorKind::Unsupported, "Windows process identity is unavailable"))
 }
 
@@ -68,5 +74,47 @@ pub(crate) fn spawn_helper(helper: &Path, plan: &Path) -> io::Result<Child> {
     {
         let _ = (helper, plan);
         Err(io::Error::new(io::ErrorKind::Unsupported, "Windows installation is unavailable"))
+    }
+}
+
+pub(crate) fn installation_directory(executable: &Path) -> Result<PathBuf, String> {
+    #[cfg(target_os = "macos")]
+    return macos::bundle(executable);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let directory = executable.parent().ok_or("Missing application directory")?;
+        if !directory.join("unins000.exe").is_file() {
+            return Err(
+                "This copy is portable. Use the download page to replace its package.".into()
+            );
+        }
+        Ok(directory.to_owned())
+    }
+}
+
+pub(crate) fn guard_base(executable: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Ok(bundle) = macos::bundle(executable) {
+        if let (Some(parent), Some(name)) = (bundle.parent(), bundle.file_name()) {
+            use sha2::{Digest as _, Sha256};
+            use std::os::unix::ffi::OsStrExt as _;
+            let identity: String =
+                Sha256::digest(name.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+            return parent.join(format!(".pebrel-update-{identity}"));
+        }
+    }
+    executable.parent().expect("canonical executable parent").join(".pebrel-update")
+}
+
+/// Select and materialize the native helper; transaction authority stays with the caller.
+pub(crate) fn spawn_prepared_helper(directory: &Path, plan: &Path) -> Result<Child, String> {
+    #[cfg(target_os = "macos")]
+    return macos::spawn(directory, plan);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let helper = directory.join("handoff.ps1");
+        crate::atomic_file::write(&helper, include_bytes!("../update_download/handoff.ps1"))
+            .map_err(|error| error.to_string())?;
+        spawn_helper(&helper, plan).map_err(|error| error.to_string())
     }
 }

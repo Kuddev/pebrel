@@ -36,6 +36,27 @@ jobs:
           scripts.tests.test_architecture_budgets
           scripts.tests.test_architecture_dependencies
           scripts.tests.test_architecture_governance
+          scripts.tests.test_prohibited_names
+      - name: Check prohibited product names in the new range
+        env:
+          PROHIBITED_NAMES_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          PROHIBITED_NAMES_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="$PROHIBITED_NAMES_BASE"
+          head="$PROHIBITED_NAMES_HEAD"
+          # The first push has no before SHA. Derive its known parent when one
+          # exists; an unresolved/zero base must still fail closed in the checker.
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="$(git rev-parse "${head}^" 2>/dev/null || true)"
+          fi
+          if [[ -z "$base" || "$base" =~ ^0+$ || -z "$head" || "$head" =~ ^0+$ ]]; then
+            echo "::error::Cannot determine a non-zero base/head for prohibited-name range" >&2
+            exit 1
+          fi
+          python3 scripts/check_prohibited_names.py range \
+            --base "$base" \
+            --head "$head"
       - name: Check source size and dependency direction
         env:
           ARCHITECTURE_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
