@@ -1,0 +1,12 @@
+{
+  "version": "1.9.1",
+  "source_commit": "9dc058d12765893553d5fc7a2c37c870c96168b0",
+  "groups": [
+    {"title": "开始使用", "pages": [
+      {"slug": "index", "title": "概览", "description": "从一个终端开始，把本地、远程与 AI 工作流连成一体。", "sources": ["README.md", "nebula_app/src/platform/capabilities.rs"]},
+      {"slug": "quickstart", "title": "快速开始", "description": "安装 Pebrel，打开第一个终端，建立顺手的工作空间。", "sources": ["INSTALL.md", "nebula_app/src/gpui_shell/workspace/keyboard_bindings.rs"]},
+      {"slug": "installation", "title": "安装与平台支持", "description": "为 Windows、macOS 或 Linux 选择合适的安装包。", "sources": ["INSTALL.md", "nebula_app/src/platform/capabilities.rs", "nebula_app/src/platform/update_installation.rs"]}
+    ]}
+  ],
+  "images": ["nebula-top-tabs.png", "split-ai-workflows.png", "nebula-claude-session.png", "native-math-rendering.png", "themes.png", "ai-sidebar.png", "notification-duration.png", "reader-selection-opacity.png", "hero.png"]
+}

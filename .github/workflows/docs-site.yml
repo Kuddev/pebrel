@@ -1,0 +1,58 @@
+name: User documentation
+on:
+  pull_request:
+    paths: ['docs/site/**', 'docs/screenshots/**', '.github/workflows/docs-site.yml']
+  push:
+    branches: [main, 'docs/**']
+    paths: ['docs/site/**', 'docs/screenshots/**', '.github/workflows/docs-site.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install documentation build tools
+        run: pip install -r docs/site/requirements.txt playwright==1.57.0
+      - name: Check links, page structure and search coverage
+        run: python -m unittest discover -s docs/site -p test_site.py
+      - name: Build portable static site
+        env:
+          DOCS_BASE_URL: ${{ vars.PEBREL_DOCS_BASE_URL }}
+        run: python docs/site/build.py --base-url "$DOCS_BASE_URL"
+      - name: Install browser
+        run: python -m playwright install --with-deps chromium
+      - name: Check desktop, mobile, keyboard and reduced-motion behavior
+        run: python docs/site/check_browser.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docs-browser-results
+          path: docs-browser-results/
+          if-no-files-found: ignore
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/site/dist
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.PEBREL_DOCS_PAGES_ENABLED == 'true'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

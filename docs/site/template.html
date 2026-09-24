@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="$description">
+  <meta name="theme-color" content="#fafbf9">
+  <title>$title · Pebrel 文档</title>
+  $canonical
+  <link rel="icon" type="image/png" href="${root}assets/pebrel.png">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem('pebrel-docs-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')}catch{}</script>
+  <link rel="stylesheet" href="${root}assets/site.css">
+  <link rel="stylesheet" href="${root}assets/highlight.css">
+  <script src="${root}assets/site.js" defer></script>
+</head>
+<body data-root="$root" data-page="$slug">
+<a class="skip" href="#main">跳到正文</a>
+<div class="reading-progress" aria-hidden="true"></div>
+<header class="header">
+  <a class="brand" href="${root}index.html" aria-label="Pebrel 文档首页"><img src="${root}assets/pebrel.png" width="30" height="30" alt=""><span>Pebrel</span><span class="brand-divider"></span><span class="brand-docs">文档</span></a>
+  <nav class="header-links" aria-label="站点导航"><a class="selected" href="${root}index.html">指南</a><a href="${root}installation/index.html">下载</a><a href="https://github.com/Kuddev/pebrel" target="_blank" rel="noopener">GitHub <span aria-hidden="true">↗</span></a></nav>
+  <div class="header-actions">
+    <button class="search-trigger" data-search aria-label="搜索文档"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索文档</span><kbd data-shortcut>⌘ K</kbd></button>
+    <button class="icon-button" id="theme-toggle" aria-label="切换深浅主题" title="切换深浅主题"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button>
+    <button class="icon-button menu-toggle" id="menu-toggle" aria-label="打开文档导航" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+  </div>
+</header>
+<div class="drawer-backdrop" hidden></div>
+<aside id="sidebar" class="sidebar" aria-label="文档导航">
+  <a href="${root}index.html" class="sidebar-home">用户手册 <span class="version">$version</span></a>
+  <nav>$navigation</nav>
+  <div class="sidebar-bottom"><span class="status-dot"></span>本地 · 远程 · 从容工作<a href="https://github.com/Kuddev/pebrel/releases/latest" target="_blank" rel="noopener">查看发行版 ↗</a></div>
+</aside>
+<div class="workspace">
+  <main id="main" class="$main_class" tabindex="-1">
+    <div class="breadcrumb"><a href="${root}index.html">文档</a><span aria-hidden="true">/</span><span>$group</span></div>
+    $page_header
+    <div class="prose" id="article-content">$content</div>
+    $source_details
+    <nav class="page-pagination" aria-label="前后篇">$pagination</nav>
+    <footer class="article-footer"><span>Pebrel $version 用户手册</span><a href="$edit_url" target="_blank" rel="noopener">编辑此页 ↗</a><a href="https://github.com/Kuddev/pebrel/issues/new/choose" target="_blank" rel="noopener">反馈问题 ↗</a></footer>
+  </main>
+  <aside class="toc" aria-label="本页目录"><span>本页内容</span><nav>$toc</nav><button class="back-top" type="button">返回顶部 ↑</button></aside>
+</div>
+<dialog class="search-dialog" id="search-dialog" aria-labelledby="search-title">
+  <div class="search-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><label class="sr-only" id="search-title" for="search-input">搜索 Pebrel 文档</label><input id="search-input" type="search" autocomplete="off" placeholder="想用 Pebrel 做什么？" role="combobox" aria-controls="search-results" aria-expanded="true" aria-autocomplete="list"><button class="small-button" data-close-search>Esc</button></div>
+  <p class="search-status" aria-live="polite">搜索功能、设置或操作步骤。</p>
+  <div class="search-results" id="search-results" role="listbox" aria-label="搜索结果"></div>
+  <div class="search-footer"><span><kbd>↑</kbd><kbd>↓</kbd> 选择 <kbd>Enter</kbd> 打开</span><span>全文搜索 · 无需登录</span></div>
+</dialog>
+<dialog class="image-dialog" id="image-dialog" aria-label="放大查看界面截图"><button class="small-button" id="close-image">关闭 ×</button><img alt=""><p></p></dialog>
+<div class="toast" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">正文与导航无需 JavaScript 即可阅读；搜索、主题切换和复制按钮需要启用 JavaScript。</p></noscript>
+</body>
+</html>

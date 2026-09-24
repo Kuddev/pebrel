@@ -213,3 +213,20 @@ NebulaTerminal-*/
 
 # Local agent instructions and persistent workspace memory.
 /.agents/
+
+# Published static user guide: exact reviewed source allowlist.
+!/docs/site/
+!/docs/site/assets/
+!/docs/site/content/
+!/docs/site/README.md
+!/docs/site/assets/site.css
+!/docs/site/assets/site.js
+!/docs/site/build.py
+!/docs/site/check_browser.py
+!/docs/site/content/index.md
+!/docs/site/content/installation.md
+!/docs/site/content/quickstart.md
+!/docs/site/requirements.txt
+!/docs/site/site.json
+!/docs/site/template.html
+!/docs/site/test_site.py
