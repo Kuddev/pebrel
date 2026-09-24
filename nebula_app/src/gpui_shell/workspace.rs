@@ -45,8 +45,8 @@ use gpui_component::input::InputEvent;
 use gpui_component::notification::Notification;
 use nebula_split::{DIVIDER_GAP, HIT_SLOP, RemoveOutcome, SplitDirection, SplitNav, SplitTree};
 
-mod agents;
 mod actions;
+mod agents;
 mod closing;
 mod command_manager;
 mod keyboard_bindings;
@@ -95,8 +95,8 @@ pub(crate) mod windowing;
 // 调用点分散在设置页与窗口层，原样再导出以免拆分波及它们。
 pub(crate) use update_dialog::{open_update_dialog, show_update_notification};
 
-use tab_drag::{DockTarget, TabDrag, TabDragAxis};
 use actions::*;
+use tab_drag::{DockTarget, TabDrag, TabDragAxis};
 
 #[cfg(test)]
 use agents::ai_hook_target_pane;

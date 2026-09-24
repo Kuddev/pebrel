@@ -47,11 +47,9 @@ pub(super) fn init(cx: &mut App) {
                 OsAction::SelectAll,
             ),
         ]),
-        Menu::new(text(Message::CommonMenuView)).items([
-            MenuItem::action(text(Message::CommonFullscreen), ToggleFullscreen),
-        ]),
-        Menu::new(text(Message::CommonMenuWindow)).items([
-            MenuItem::action(text(Message::CommonMenuMinimize), MinimizeWindow),
-        ]),
+        Menu::new(text(Message::CommonMenuView))
+            .items([MenuItem::action(text(Message::CommonFullscreen), ToggleFullscreen)]),
+        Menu::new(text(Message::CommonMenuWindow))
+            .items([MenuItem::action(text(Message::CommonMenuMinimize), MinimizeWindow)]),
     ]);
 }
