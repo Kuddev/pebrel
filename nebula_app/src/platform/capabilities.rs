@@ -19,6 +19,8 @@ pub struct Capabilities {
     pub launch_at_login: bool,
     /// 系统通知后端已实现；实际投递仍受系统通知权限控制。
     pub system_notifications: bool,
+    /// Foreground notices also go to the native notification center.
+    pub foreground_system_notifications: bool,
     /// 系统提示音（`platform::beep`）。
     pub system_bell: bool,
     /// Verified Windows installer or macOS bundle replacement is implemented.
@@ -43,6 +45,7 @@ pub const CAPABILITIES: Capabilities = {
             system_tray: true,
             launch_at_login: true,
             system_notifications: true,
+            foreground_system_notifications: false,
             system_bell: true,
             self_update_install: true,
             ai_hook_server: true,
@@ -59,6 +62,7 @@ pub const CAPABILITIES: Capabilities = {
             system_tray: false,
             launch_at_login: false,
             system_notifications: true,
+            foreground_system_notifications: cfg!(target_os = "macos"),
             system_bell: false,
             self_update_install: cfg!(target_os = "macos"),
             ai_hook_server: false,
@@ -91,8 +95,10 @@ mod tests {
         ];
         if cfg!(windows) {
             assert!(all.iter().all(|flag| *flag));
+            assert!(!CAPABILITIES.foreground_system_notifications);
         } else {
             assert!(CAPABILITIES.system_notifications);
+            assert_eq!(CAPABILITIES.foreground_system_notifications, cfg!(target_os = "macos"));
             assert!(CAPABILITIES.system_font_enumeration);
             assert!(CAPABILITIES.credential_store);
             assert!(!CAPABILITIES.hide_window_on_close);
