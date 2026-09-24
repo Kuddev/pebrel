@@ -48,7 +48,7 @@ pub(super) fn init(cx: &mut App) {
             ),
         ]),
         Menu::new(text(Message::CommonMenuView))
-            .items([MenuItem::action(text(Message::CommonFullscreen), ToggleFullscreen)]),
+            .items([MenuItem::action(text(Message::EditorFullscreen), ToggleFullscreen)]),
         Menu::new(text(Message::CommonMenuWindow))
             .items([MenuItem::action(text(Message::CommonMenuMinimize), MinimizeWindow)]),
     ]);
