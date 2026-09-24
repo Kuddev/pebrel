@@ -1046,8 +1046,23 @@ mod tests {
         });
     }
 
+    /// 应答文案经 `UiLanguage::current()` 取词，而它是进程级全局状态；串行
+    /// 钉住语言，避免并行测试线程互相覆盖。
+    fn pin_language(language: crate::i18n::UiLanguage) -> std::sync::MutexGuard<'static, ()> {
+        static LANGUAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = LANGUAGE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        language.activate();
+        guard
+    }
+
     #[test]
     fn socks5_failure_reply_maps_to_readable_error() {
+        let _language = pin_language(crate::i18n::UiLanguage::ZhCn);
+        let err = socks5_reply_message(0x05);
+        assert!(err.contains("拒绝连接"), "{err}");
+        crate::i18n::UiLanguage::EnUs.activate();
+        let err = socks5_reply_message(0x05);
+        assert!(err.contains("refused the connection"), "{err}");
         block_on(async {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
@@ -1068,7 +1083,7 @@ mod tests {
                 password: None,
             };
             let err = connect(&proxy, "vps.example.com", 22).await.unwrap_err();
-            assert!(err.to_string().contains("拒绝连接"), "{err}");
+            assert!(err.to_string().contains("refused the connection"), "{err}");
         });
     }
 

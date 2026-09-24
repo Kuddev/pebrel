@@ -9,6 +9,15 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use zeroize::Zeroizing;
 
+/// 判词经 `UiLanguage::current()` 取词，而它是进程级全局状态；串行钉住语言，
+/// 避免并行测试线程互相覆盖。
+fn pin_language(language: crate::i18n::UiLanguage) -> std::sync::MutexGuard<'static, ()> {
+    static LANGUAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = LANGUAGE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    language.activate();
+    guard
+}
+
 #[test]
 fn parses_saved_destinations() {
     let plain = SshDestination::parse("root@example.com").unwrap();
@@ -228,6 +237,7 @@ fn unparseable_key_is_not_classified_as_needing_passphrase() {
 
 #[test]
 fn all_keys_failing_locally_is_not_reported_as_server_rejection() {
+    let _language = pin_language(crate::i18n::UiLanguage::ZhCn);
     let errors = vec!["C:\\keys\\a.pem: 无法解析（unsupported）".to_owned()];
     let message = super::auth_failure(SshAuthMode::PublicKey, 1, &errors);
     assert!(message.starts_with("私钥无法使用"), "实际文案: {message}");
@@ -237,4 +247,12 @@ fn all_keys_failing_locally_is_not_reported_as_server_rejection() {
     let partial = super::auth_failure(SshAuthMode::PublicKey, 2, &errors);
     assert!(partial.contains("服务器拒绝"), "实际文案: {partial}");
     assert!(partial.contains("本地密钥问题"), "实际文案: {partial}");
+
+    crate::i18n::UiLanguage::EnUs.activate();
+    let message = super::auth_failure(SshAuthMode::PublicKey, 1, &errors);
+    assert!(message.starts_with("Private keys cannot be used"), "actual message: {message}");
+    assert!(!message.contains("server rejected"), "actual message: {message}");
+    let partial = super::auth_failure(SshAuthMode::PublicKey, 2, &errors);
+    assert!(partial.contains("server rejected"), "actual message: {partial}");
+    assert!(partial.contains("local key issues"), "actual message: {partial}");
 }
