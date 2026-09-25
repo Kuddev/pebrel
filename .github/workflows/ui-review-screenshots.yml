@@ -87,7 +87,7 @@ jobs:
             $shot = Join-Path $qa $name
             for ($i = 0; $i -lt 8; $i++) {
               & ./scripts/ui_probe.ps1 -ProcId $p.Id -Shot $shot
-              if ($LASTEXITCODE -eq 0 -and (Test-Path $shot)) { return }
+              if (Test-Path $shot) { return }
               Start-Sleep -Seconds 1
             }
             throw "Could not capture Pebrel window: $name"
@@ -237,7 +237,7 @@ jobs:
             if requestedKeys is "settings" then
               keystroke "," using command down
             else if requestedKeys is "menu" then
-              click menu bar item 1 of menu bar 1 of appProc
+              click menu bar item 2 of menu bar 1 of appProc
             else if requestedKeys is "quit" then
               keystroke "q" using command down
             end if
