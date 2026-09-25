@@ -19,6 +19,7 @@ const RESET_KEYS: &[&str] = &[
     "ligatures",
     "cursor_shape",
     "cursor_blink",
+    "cursor_motion",
     "copy_on_select",
     "focus_follows_mouse",
     "dim_inactive_panes",
@@ -176,6 +177,15 @@ mod tests {
         assert_eq!(runtime.notification_duration, crate::NotificationDuration::Default);
         assert!(restored.contains("custom_data=keep"));
         assert!(!restored.contains("notification_duration="));
+    }
+
+    #[test]
+    fn resetting_preferences_disables_cursor_motion_and_preserves_unrelated_data() {
+        let restored = default_settings_text("cursor_motion=smooth\ncustom_data=keep\n");
+        let runtime = crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(&restored));
+        assert_eq!(runtime.cursor_motion, crate::CursorMotion::Off);
+        assert!(!restored.contains("cursor_motion="));
+        assert!(restored.contains("custom_data=keep"));
     }
 
     #[test]
