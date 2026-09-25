@@ -1,81 +1,68 @@
-## 安装并打开
+## 安装并打开 Pebrel
 
-1. 前往 [Pebrel 官方发布页](https://github.com/Kuddev/pebrel/releases/latest)，选择适合系统与处理器的安装包。
-2. Windows 运行安装程序，或完整解压便携包；macOS 打开 DMG，将 Pebrel 拖入“应用程序”；Linux 使用 DEB、AppImage 或完整便携包。
-3. 启动 Pebrel，先保留默认设置。在终端中输入下面的命令并回车。
+从[安装与平台支持](installation.md)选择与你的系统和处理器匹配的安装包。首次打开后，Pebrel 会启动一个终端。看到提示符和闪烁的光标后，就可以输入命令。
+
+在终端中输入下面这行内容，再按 **Enter**：
 
 ```sh
 echo Hello, Pebrel
 ```
 
-看到 `Hello, Pebrel` 后，你的第一个终端已经可以使用。[安装说明](installation.md)列出了各个平台的要求与首次启动注意事项。
+如果下一行显示 `Hello, Pebrel`，随后出现新的提示符，终端已经可以正常使用。
 
-> [!TIP]
-> Pebrel 是运行命令的窗口，不会自动安装你的开发环境。某个命令提示“找不到”时，先确认相应工具已安装，并且能在系统原有终端中运行。
+## 打开项目目录
 
-## 建立顺手的工作区
+输入 `cd`，后面跟项目的路径。路径包含空格时，用引号包起来。下面两行任选一行，并把路径改成自己的项目位置。
 
-### 新建标签页
+**Windows PowerShell：**
 
-Windows / Linux 按 <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd>；macOS 按 <kbd>⌘</kbd> + <kbd>T</kbd>。新标签页适合另一个项目，或一项不希望打断当前任务的工作。
-
-在终端里用 `cd` 进入你的项目目录。例如，先把下面的路径替换为真实存在的文件夹，再运行：
-
-```sh
-cd "你的项目目录"
+```powershell
+cd "C:\Projects\my-project"
 ```
 
-### 并排打开窗格
-
-Windows / Linux 按 <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd>，macOS 按 <kbd>⌘</kbd> + <kbd>D</kbd>，向右分屏。左边运行开发工具，右边执行测试或查看文件。
-
-拖动两个窗格之间的分隔线调整宽度。需要专心看一个窗格时，按 <kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>Enter</kbd> 切换放大，再按一次回到分屏布局。
-
-<figure><img src="@ROOT@assets/screenshots/split-ai-workflows.png" alt="多个命令行工具在 Pebrel 的独立分屏中运行" width="1040" loading="lazy"><figcaption>分屏让各个任务保持独立。项目公开截图；其中的命令行工具需另行安装。</figcaption></figure>
-
-### 找不到某个操作
-
-按 <kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> 打开命令面板。要更换 Shell，使用 <kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>K</kbd> 打开 Shell 选择器。
-
-这里是 **Pebrel 应用内的快捷键**。文档网站中的同一组合键用于搜索文档，不会控制桌面应用。
-
-## 连接远程主机
-
-打开 Pebrel 设置，进入 **SSH**。创建一个主机，填写服务器地址、用户名与端口，按服务器要求选择密码或私钥认证，然后连接。
-
-第一次连接前，把显示的主机密钥指纹与服务器管理员提供的指纹核对一致。不要仅为了跳过提示而接受不认识的指纹；已有主机的指纹突然改变时，先确认服务器是否重装或换钥。
-
-连接后，你输入的命令在远程机器上执行。远程文件浏览与传输使用 SFTP；远端需允许相应服务。
-
-## 使用 AI 命令行工具
-
-先按照工具自身的说明安装并登录 Claude Code 或 Codex。在 Pebrel 中进入项目目录，再运行你已安装的工具，例如：
+**macOS、Linux 或 WSL：**
 
 ```sh
-claude
+cd ~/Projects/my-project
 ```
 
-或者：
+输入 `pwd` 可以查看当前目录。在 Windows 命令提示符（cmd）中，使用不带参数的 `cd` 查看目录。
 
-```sh
-codex
-```
+需要切换终端程序时，按 **Ctrl+K**（macOS 为 **⌘K**）打开 Shell 选择器，再选择已安装的 Shell。默认 Shell 和启动目录可以在 **设置 → 终端** 中调整。
 
-Pebrel 可以为识别到的 AI CLI 显示活动状态。更精确的状态与回答捕获需要对应的 hook 集成；自动本地 hook 设置目前是 Windows 平台能力。macOS 与 Linux 仍可以正常运行已安装的 CLI，但不要把“能运行”理解为“所有集成都已自动配置”。
+## 再开一个终端
 
-AI 服务的登录、额度与费用由对应工具和服务提供方管理。关闭或隐藏通知不会代替你批准终端中的请求。
+运行开发服务时，原终端可能一直显示日志。另开一个标签页，就能继续输入其他命令。
 
-## 做两个舒适度调整
+| 操作 | Windows / Linux | macOS |
+| --- | --- | --- |
+| 新建标签页 | Ctrl+Shift+T | ⌘T |
+| 向右分屏 | Ctrl+Shift+D | ⌘D |
+| 向下分屏 | Ctrl+Shift+S | ⌘⇧D |
+| 放大当前窗格，再按一次还原 | Ctrl+Shift+Enter | ⌘⇧Enter |
 
-打开设置：Windows / Linux 使用 <kbd>Ctrl</kbd> + <kbd>,</kbd>，macOS 使用 <kbd>⌘</kbd> + <kbd>,</kbd>。
+点击要使用的窗格后再输入。新建分屏会启动另一个 Shell，你可以在里面切换到其他目录或运行不同程序。
 
-在 **外观** 中选择主题和字体。临时调整终端字号可以使用 <kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>+</kbd> 或 <kbd>−</kbd>；按 <kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>0</kbd> 恢复。
+<figure><img src="@ROOT@assets/screenshots/nebula-top-tabs.png" alt="Pebrel 中的终端标签页" loading="lazy"><figcaption>通过标签页切换终端；需要同时查看时，可在一个标签页内分屏。</figcaption></figure>
 
-再按 <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd>（macOS 为 <kbd>⌘</kbd> + <kbd>B</kbd>）收起或展开侧边栏，选择适合屏幕的工作空间。
+## 连接服务器
 
-## 结束这次工作
+打开 **设置 → SSH**，选择 **添加 SSH 主机**，填写地址、用户名和认证信息。保存后，从主机列表打开连接。
 
-先保存正在编辑的文件，确认长时间运行的任务是否已完成，再关闭窗格或窗口。
+首次连接会要求确认服务器指纹。与服务器管理员提供的指纹核对一致后，再继续登录。完整示例见[连接第一台 SSH 主机](ssh.md)。
 
-> [!IMPORTANT]
-> **恢复布局、恢复 AI 对话、保持进程运行是三件不同的事。** Windows 的可选后台驻留可以在关闭窗口后保留运行中的会话；完整退出应用后，普通进程不会因为开启布局恢复而继续运行。其他平台不要依赖关闭窗口后的进程保活。
+## 启动 AI 命令行工具
+
+已经安装并登录 Claude Code 或 Codex 时，可以直接在项目终端中运行 `claude` 或 `codex`。先试一个范围明确的任务，例如“介绍这个项目的目录结构，先不要修改文件”。
+
+Pebrel 会为识别出的工具显示图标和活动状态。如何查看回答、找回历史对话，见[使用 AI 命令行工具](ai-start.md)。
+
+## 调整字体和外观
+
+点击窗口中的设置按钮，打开 **外观**。文字太小时，先调整 **终端字号**；侧栏、菜单和按钮的文字则由 **界面字号** 控制。主题、字体和行高的详细设置见[外观](appearance.md)。
+
+## 结束工作
+
+运行中的命令通常可以按 **Ctrl+C** 停止；在 Windows / Linux 中有文字选中时，先点击终端空白处清除选区，再按 Ctrl+C。出现提示符后，输入 `exit` 退出 Shell。
+
+希望下次打开时恢复标签页和目录，可以在 **设置 → 高级 → 会话生命周期** 开启 **启动时恢复上次标签**。需要在 Windows 关窗后继续运行任务，请另行开启[后台会话保留](sessions.md)。

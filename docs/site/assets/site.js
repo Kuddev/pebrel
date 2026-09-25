@@ -93,6 +93,7 @@
   let selected = 0;
   let searchOpener;
   function loadIndex() {
+    if (Array.isArray(window.PEBREL_DOCS_SEARCH)) return Promise.resolve(window.PEBREL_DOCS_SEARCH);
     if (!indexPromise) indexPromise = new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = root + 'search-index.js';
@@ -168,6 +169,7 @@
   searchDialog.addEventListener('click', event => { if (event.target === searchDialog) searchDialog.close(); });
   input.addEventListener('input', renderResults);
   input.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); searchDialog.close(); return; }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault(); selectResult(selected + (event.key === 'ArrowDown' ? 1 : -1));
     }

@@ -2,11 +2,573 @@
   "version": "1.9.1",
   "source_commit": "9dc058d12765893553d5fc7a2c37c870c96168b0",
   "groups": [
-    {"title": "开始使用", "pages": [
-      {"slug": "index", "title": "概览", "description": "从一个终端开始，把本地、远程与 AI 工作流连成一体。", "sources": ["README.md", "nebula_app/src/platform/capabilities.rs"]},
-      {"slug": "quickstart", "title": "快速开始", "description": "安装 Pebrel，打开第一个终端，建立顺手的工作空间。", "sources": ["INSTALL.md", "nebula_app/src/gpui_shell/workspace/keyboard_bindings.rs"]},
-      {"slug": "installation", "title": "安装与平台支持", "description": "为 Windows、macOS 或 Linux 选择合适的安装包。", "sources": ["INSTALL.md", "nebula_app/src/platform/capabilities.rs", "nebula_app/src/platform/update_installation.rs"]}
-    ]}
+    {
+      "title": "开始使用",
+      "pages": [
+        {
+          "slug": "index",
+          "title": "概览",
+          "description": "安装 Pebrel，运行命令，连接服务器并管理项目文件。",
+          "sources": [
+            "README.md",
+            "nebula_app/src/platform/capabilities.rs"
+          ]
+        },
+        {
+          "slug": "quickstart",
+          "title": "快速开始",
+          "description": "运行第一条命令，再创建标签页、分屏和 SSH 连接。",
+          "sources": [
+            "INSTALL.md",
+            "nebula_app/src/gpui_shell/workspace/keyboard_bindings.rs"
+          ]
+        },
+        {
+          "slug": "installation",
+          "title": "安装与平台支持",
+          "description": "选择适合电脑的安装包，完成安装和首次启动。",
+          "sources": [
+            "INSTALL.md",
+            "nebula_app/src/platform/capabilities.rs",
+            "nebula_app/src/platform/update_installation.rs"
+          ]
+        },
+        {
+          "slug": "workspace",
+          "title": "标签页与分屏",
+          "description": "新建、移动和关闭标签页，调整分屏大小与焦点。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/tab_menu.rs",
+            "nebula_app/src/gpui_shell/workspace/pane_header.rs",
+            "nebula_app/src/gpui_shell/workspace/keyboard_bindings.rs"
+          ]
+        },
+        {
+          "slug": "terminal-basics",
+          "sources": [
+            "nebula_app/src/gpui_shell/terminal/view.rs",
+            "nebula_app/src/gpui_shell/workspace/keyboard_bindings.rs",
+            "nebula_app/src/gpui_shell/settings_pane/appearance_advanced.rs"
+          ],
+          "title": "运行命令与切换目录",
+          "description": "查看当前目录、执行命令、停止程序和查找历史输出。"
+        }
+      ]
+    },
+    {
+      "title": "日常终端",
+      "pages": [
+        {
+          "slug": "shells",
+          "title": "Shell 与启动目录",
+          "description": "选择默认 Shell，设定启动目录，添加带参数的启动入口。",
+          "sources": [
+            "nebula_app/src/terminal_profiles.rs",
+            "nebula_app/src/gpui_shell/settings_pane/shell_picker.rs",
+            "docs/lua-configuration.md",
+            "nebula_app/src/gpui_shell/settings_pane.rs"
+          ]
+        },
+        {
+          "slug": "wsl",
+          "sources": [
+            "nebula_app/src/shell_detect.rs",
+            "nebula_app/src/agent_env.rs",
+            "nebula_app/src/gpui_shell/settings_pane/shell_picker.rs"
+          ],
+          "title": "使用 WSL",
+          "description": "打开已安装的 Linux 发行版，访问项目并运行 Linux 工具。"
+        },
+        {
+          "slug": "clipboard",
+          "title": "选择、复制与粘贴",
+          "description": "复制终端输出，粘贴命令和图片，设置选中即复制。",
+          "sources": [
+            "nebula_app/src/gpui_shell/terminal/view/image_paste.rs",
+            "nebula_app/src/gpui_shell/settings_pane/setting_help.rs",
+            "nebula_app/src/gpui_shell/workspace/send_to_chat.rs"
+          ]
+        },
+        {
+          "slug": "completions",
+          "title": "历史与路径补全",
+          "description": "开启补全，选择建议样式，并设置接受建议的按键。",
+          "sources": [
+            "nebula_app/src/completion_context.rs",
+            "nebula_app/src/gpui_shell/terminal/completion_viewport.rs",
+            "nebula_app/src/gpui_shell/settings_pane/setting_help.rs"
+          ]
+        },
+        {
+          "slug": "palette",
+          "title": "命令面板",
+          "description": "搜索并执行应用操作，快速打开设置或调整工作区。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/palette.rs",
+            "nebula_app/src/gpui_shell/workspace/keyboard_bindings.rs"
+          ]
+        },
+        {
+          "slug": "commands",
+          "title": "保存常用命令",
+          "description": "保存、搜索和分组命令，选择插入文字或立即执行。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/command_manager.rs",
+            "nebula_app/src/gpui_shell/workspace/command_manager/groups.rs",
+            "nebula_app/src/saved_commands.rs"
+          ]
+        },
+        {
+          "slug": "navigation",
+          "title": "查找与快速跳转",
+          "description": "切换已打开的标签，跳转目录、主机和 AI 会话。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/quick_jump.rs",
+            "nebula_app/src/ai_sessions.rs"
+          ]
+        },
+        {
+          "slug": "keyboard",
+          "title": "快捷键速查",
+          "description": "查找 Windows、macOS 和 Linux 常用快捷键，修改按键映射。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/keyboard_bindings.rs",
+            "nebula_app/src/gpui_shell/settings_pane/keymap.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "工作空间",
+      "pages": [
+        {
+          "slug": "broadcast",
+          "title": "广播输入",
+          "description": "选择同一标签中的多个窗格，同时输入命令并退出广播。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/pane_header.rs",
+            "nebula_app/src/gpui_shell/terminal/view/image_paste.rs"
+          ]
+        },
+        {
+          "slug": "sessions",
+          "title": "保存与恢复会话",
+          "description": "设置启动时恢复标签和目录，在 Windows 中保留后台会话。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/session_persistence.rs",
+            "nebula_app/src/gpui_shell/workspace/session_recovery.rs",
+            "nebula_app/src/gpui_shell/session_restore.rs",
+            "nebula_app/src/platform/capabilities.rs",
+            "nebula_app/src/gpui_shell/settings_pane.rs"
+          ]
+        },
+        {
+          "slug": "layouts",
+          "title": "保存与打开布局",
+          "description": "把常用标签和分屏保存为布局配方，在新窗口中打开。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/recipes/mod.rs"
+          ]
+        },
+        {
+          "slug": "quick-terminal",
+          "title": "快速终端与托盘",
+          "description": "设置 Windows 全局热键，通过托盘召回终端或退出程序。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/quick_terminal.rs",
+            "nebula_app/src/gpui_shell/settings_pane/keymap.rs",
+            "nebula_app/src/platform/capabilities.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "远程连接",
+      "pages": [
+        {
+          "slug": "ssh",
+          "title": "连接 SSH 服务器",
+          "description": "填写连接信息、测试认证并核对服务器指纹。",
+          "sources": [
+            "nebula_app/src/gpui_shell/ssh_settings.rs",
+            "nebula_app/src/gpui_shell/ssh_settings/editor.rs",
+            "nebula_app/src/gpui_shell/workspace/ssh_dialog.rs"
+          ]
+        },
+        {
+          "slug": "ssh-library",
+          "title": "管理 SSH 主机",
+          "description": "编辑连接，整理分组与标签，导入或导出主机列表。",
+          "sources": [
+            "nebula_app/src/gpui_shell/ssh_settings/library.rs",
+            "nebula_app/src/gpui_shell/ssh_settings/library/exchange.rs",
+            "nebula_app/src/ssh_profiles/exchange.rs",
+            "nebula_app/src/ssh_profiles/organization.rs"
+          ]
+        },
+        {
+          "slug": "ssh-auth",
+          "title": "密码、密钥与认证",
+          "description": "选择认证方式，使用私钥，并管理保存的登录凭据。",
+          "sources": [
+            "nebula_app/src/ssh_session/lifecycle.rs",
+            "nebula_app/src/ssh_session/agent.rs",
+            "nebula_app/src/ssh_credentials.rs",
+            "nebula_app/src/platform/credentials.rs"
+          ]
+        },
+        {
+          "slug": "ssh-config",
+          "sources": [
+            "nebula_app/src/ssh.rs",
+            "nebula_app/src/ssh_session.rs",
+            "nebula_app/src/gpui_shell/ssh_settings/library.rs",
+            "nebula_app/src/ssh_proxy.rs"
+          ],
+          "title": "使用 SSH config",
+          "description": "通过别名连接服务器，读取配置中的用户名、密钥和跳板。"
+        },
+        {
+          "slug": "ssh-routing",
+          "title": "代理与跳板机",
+          "description": "配置直连、代理或单级跳板，检查连接路线。",
+          "sources": [
+            "nebula_app/src/gpui_shell/ssh_settings/advanced.rs",
+            "nebula_app/src/ssh_profiles/connection.rs",
+            "nebula_app/src/ssh_session/route.rs",
+            "nebula_app/src/ssh_proxy.rs"
+          ]
+        },
+        {
+          "slug": "sftp",
+          "title": "SFTP 文件传输",
+          "description": "上传和下载文件夹，复制远端文件，处理同名文件并查看进度。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/remote_files.rs",
+            "nebula_app/src/gpui_shell/workspace/remote_files/transfers.rs",
+            "nebula_app/src/ssh_sftp/transfer.rs",
+            "nebula_app/src/ssh_sftp/transaction.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "文件与阅读",
+      "pages": [
+        {
+          "slug": "files",
+          "title": "浏览与查找文件",
+          "description": "打开项目目录，筛选文件，在指定目录新建终端。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/file_tree.rs",
+            "nebula_app/src/gpui_shell/file_preview.rs",
+            "nebula_app/src/platform/file_preview.rs"
+          ]
+        },
+        {
+          "slug": "vcs",
+          "title": "查看与提交 Git 改动",
+          "description": "查看差异、暂存文件、提交改动并与远端同步。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/vcs_panel.rs",
+            "nebula_app/src/gpui_shell/workspace/vcs_panel/rows.rs",
+            "nebula_app/src/gpui_shell/workspace/vcs_panel/list_model.rs"
+          ]
+        },
+        {
+          "slug": "git-conflicts",
+          "sources": [
+            "nebula_app/src/gpui_shell/code_tab.rs",
+            "nebula_app/src/gpui_shell/workspace/vcs_panel/rows.rs"
+          ],
+          "title": "解决 Git 冲突",
+          "description": "使用三栏冲突视图整理结果，保存并暂存已解决的文件。"
+        },
+        {
+          "slug": "svn",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/vcs_panel.rs",
+            "nebula_app/src/display/side_panel/vcs.rs"
+          ],
+          "title": "使用 SVN",
+          "description": "查看 SVN 工作副本的改动，执行更新和提交。"
+        },
+        {
+          "slug": "documents",
+          "title": "阅读文档",
+          "description": "打开 Markdown，使用目录、代码复制和公式预览。",
+          "sources": [
+            "nebula_app/src/gpui_shell/file_editor/mod.rs",
+            "nebula_app/src/gpui_shell/file_editor/chrome.rs",
+            "nebula_app/src/gpui_shell/file_editor/code_actions.rs",
+            "nebula_app/src/gpui_shell/file_editor/tests.rs"
+          ]
+        },
+        {
+          "slug": "markdown-editing",
+          "sources": [
+            "nebula_app/src/gpui_shell/file_editor/mod.rs",
+            "nebula_app/src/gpui_shell/file_editor/chrome.rs",
+            "nebula_app/src/gpui_shell/file_editor/tests.rs"
+          ],
+          "title": "编辑 Markdown",
+          "description": "切换到源码，编写标题、列表、表格和公式，保存后预览。"
+        },
+        {
+          "slug": "images",
+          "title": "查看与粘贴图片",
+          "description": "预览本地图片和附件，把剪贴板图片传给终端中的工具。",
+          "sources": [
+            "nebula_app/src/platform/file_preview.rs",
+            "nebula_app/src/gpui_shell/file_preview.rs",
+            "nebula_app/src/gpui_shell/terminal/view/image_paste.rs",
+            "README.md"
+          ]
+        },
+        {
+          "slug": "remote-edit",
+          "title": "编辑服务器上的文件",
+          "description": "从 SFTP 面板打开文本文件，保存修改并处理冲突。",
+          "sources": [
+            "nebula_app/src/ssh_sftp/document.rs",
+            "nebula_app/src/gpui_shell/file_editor/mod.rs",
+            "nebula_app/src/gpui_shell/workspace/remote_files.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "AI 工作流",
+      "pages": [
+        {
+          "slug": "ai-start",
+          "title": "使用 AI 命令行工具",
+          "description": "启动 Claude Code 或 Codex，用标签、分屏和状态提示管理任务。",
+          "sources": [
+            "README.md",
+            "nebula_app/src/ai_agents.rs",
+            "nebula_app/src/gpui_shell/workspace/agents.rs",
+            "nebula_app/src/platform/agent_integrations.rs",
+            "nebula_app/src/gpui_shell/terminal/view.rs",
+            "nebula_app/src/gpui_shell/terminal/view/agent_activity.rs"
+          ]
+        },
+        {
+          "slug": "hooks",
+          "title": "配置 Agent 集成",
+          "description": "检测已安装的工具，配置可用集成并检查状态提示。",
+          "sources": [
+            "nebula_app/src/platform/agent_integrations.rs",
+            "nebula_app/src/gpui_shell/settings_pane/agents.rs",
+            "nebula_app/src/ai_hook/win/settings.rs"
+          ]
+        },
+        {
+          "slug": "ai-history",
+          "title": "恢复与分叉 AI 对话",
+          "description": "查找历史会话，恢复先前对话，或从已有上下文继续新任务。",
+          "sources": [
+            "nebula_app/src/ai_sessions.rs",
+            "nebula_app/src/gpui_shell/workspace/session_recovery.rs",
+            "nebula_app/src/gpui_shell/workspace/tab_menu.rs"
+          ]
+        },
+        {
+          "slug": "send-to-chat",
+          "title": "把输出发送给 AI",
+          "description": "选中终端文字，补充问题，再选择接收内容的 Agent。",
+          "sources": [
+            "nebula_app/src/gpui_shell/workspace/send_to_chat.rs"
+          ]
+        },
+        {
+          "slug": "agent-worktrees",
+          "sources": [
+            "docs/runtime-control-api.md",
+            "nebula_app/src/git_worktree.rs",
+            "nebula_app/src/gpui_shell/workspace/residency.rs"
+          ],
+          "title": "隔离 AI 工作目录",
+          "description": "为并行任务创建独立 Git worktree，核对目录后分配任务。"
+        }
+      ]
+    },
+    {
+      "title": "个性化",
+      "pages": [
+        {
+          "slug": "appearance",
+          "title": "调整应用外观",
+          "description": "更换主题和图标，选择界面密度、语言与光标样式。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/appearance.rs",
+            "nebula_app/src/gpui_shell/settings_pane/appearance_advanced.rs",
+            "nebula_app/src/gpui_shell/settings_pane/appearance_picker.rs"
+          ]
+        },
+        {
+          "slug": "themes",
+          "title": "创建和导入主题",
+          "description": "从模板创建配色，调整颜色，导入或导出主题文件。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/theme_editor.rs",
+            "nebula_app/src/gpui_shell/settings_pane/theme_transfer.rs",
+            "nebula_app/src/theme_library/formats.rs",
+            "nebula_app/src/gpui_shell/settings_pane/theme_advanced.rs"
+          ]
+        },
+        {
+          "slug": "backgrounds",
+          "title": "背景图片与透明度",
+          "description": "选择壁纸、设置铺放方式，并调整图片和终端的不透明度。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/appearance_advanced.rs",
+            "nebula_app/src/gpui_shell/settings_pane/setting_help.rs",
+            "nebula_app/src/gpui_shell/settings_pane.rs"
+          ]
+        },
+        {
+          "slug": "fonts",
+          "title": "字体、字号与间距",
+          "description": "设置中英文字体、调整字号和间距，解决对齐与缺字问题。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/font_picker.rs",
+            "nebula_app/src/gpui_shell/settings_pane/appearance.rs",
+            "nebula_app/src/gpui_shell/settings_pane/appearance_advanced.rs",
+            "nebula_app/src/gpui_shell/settings_pane/scrolling.rs"
+          ]
+        },
+        {
+          "slug": "notifications",
+          "title": "通知与提醒",
+          "description": "设置 AI 消息、卡片显示时长和终端铃声。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/notifications.rs",
+            "nebula_app/src/gpui_shell/settings_pane/setting_help.rs",
+            "README.md",
+            "nebula_app/src/platform/capabilities.rs"
+          ]
+        },
+        {
+          "slug": "interaction",
+          "title": "鼠标与窗口行为",
+          "description": "调整复制粘贴、鼠标焦点、标签位置和新实例行为。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane.rs",
+            "nebula_app/src/gpui_shell/settings_pane/setting_help.rs",
+            "nebula_app/src/gpui_shell/settings_pane/navigation.rs"
+          ]
+        },
+        {
+          "slug": "configuration",
+          "title": "使用 Lua 配置",
+          "description": "创建配置文件，检查语法和字段，修改并重载设置。",
+          "sources": [
+            "docs/lua-configuration.md",
+            "nebula_app/src/config/mod.rs"
+          ]
+        },
+        {
+          "slug": "config-examples",
+          "sources": [
+            "docs/lua-configuration.md",
+            "nebula_app/src/config/mod.rs"
+          ],
+          "title": "常用配置示例",
+          "description": "复制并调整字体、Shell、环境变量和模块化配色示例。"
+        },
+        {
+          "slug": "network",
+          "title": "网络与系统代理",
+          "description": "设置连接代理、测试网络，并让新终端使用系统代理环境。",
+          "sources": [
+            "nebula_app/src/gpui_shell/network_settings.rs",
+            "nebula_app/src/update_proxy.rs",
+            "nebula_app/src/ssh_proxy.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "参考与帮助",
+      "pages": [
+        {
+          "slug": "runtime",
+          "title": "命令行控制与自动化",
+          "description": "列出窗格、发送文本、读取输出，向指定 Agent 分配任务。",
+          "sources": [
+            "docs/runtime-control-api.md",
+            "nebula_app/src/runtime_api/cli.rs",
+            "nebula_app/src/agent_env.rs"
+          ]
+        },
+        {
+          "slug": "settings",
+          "title": "设置索引",
+          "description": "按需要完成的操作查找设置位置，了解何时需要新建会话。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/navigation.rs",
+            "nebula_app/src/gpui_shell/settings_pane.rs",
+            "nebula_app/src/platform/capabilities.rs"
+          ]
+        },
+        {
+          "slug": "updates",
+          "title": "更新 Pebrel",
+          "description": "检查新版本，按照当前平台和安装方式完成升级。",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/about.rs",
+            "nebula_app/src/platform/update_installation.rs",
+            "nebula_app/src/platform/update_installation/macos.rs",
+            "nebula_app/src/update_download.rs"
+          ]
+        },
+        {
+          "slug": "migration",
+          "title": "备份与迁移",
+          "description": "备份偏好、主机和命令，将工作环境迁移到另一台电脑。",
+          "sources": [
+            "nebula_app/src/brand.rs",
+            "docs/lua-configuration.md",
+            "nebula_app/src/ssh_profiles/exchange.rs",
+            "nebula_app/src/platform/credentials.rs"
+          ]
+        },
+        {
+          "slug": "privacy",
+          "title": "数据与凭据",
+          "description": "查看本地数据的用途，管理凭据，检查分享或发送的内容。",
+          "sources": [
+            "nebula_app/src/platform/credentials.rs",
+            "nebula_app/src/gpui_shell/workspace/send_to_chat.rs",
+            "nebula_app/src/runtime_api.rs",
+            "nebula_app/src/ssh_profiles/exchange.rs"
+          ]
+        },
+        {
+          "slug": "troubleshooting",
+          "title": "故障排查",
+          "description": "处理启动、字体、SSH、文件保存和会话恢复中的常见问题。",
+          "sources": [
+            "INSTALL.md",
+            "nebula_app/src/gpui_shell/settings_pane/navigation.rs",
+            "nebula_app/src/platform/capabilities.rs",
+            "docs/runtime-control-api.md"
+          ]
+        }
+      ]
+    }
   ],
-  "images": ["nebula-top-tabs.png", "split-ai-workflows.png", "nebula-claude-session.png", "native-math-rendering.png", "themes.png", "ai-sidebar.png", "notification-duration.png", "reader-selection-opacity.png", "hero.png"]
+  "images": [
+    "nebula-top-tabs.png",
+    "split-ai-workflows.png",
+    "nebula-claude-session.png",
+    "native-math-rendering.png",
+    "themes.png",
+    "ai-sidebar.png",
+    "notification-duration.png",
+    "reader-selection-opacity.png",
+    "hero.png",
+    "pebrel-1.9.1-macos-arm64-ci.png"
+  ]
 }

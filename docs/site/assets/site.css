@@ -696,8 +696,8 @@ main:focus {
 }
 
 .prose {
-  font-size:14px;
-  line-height:1.95;
+  font-size:16px;
+  line-height:1.9;
 }
 
 .prose h2 {
@@ -768,7 +768,7 @@ main:focus {
 }
 
 .prose :not(pre)>code {
-  font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;
+  font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;
   color:var(--text);
   background:var(--code);
   padding:3px 6px;
@@ -782,7 +782,7 @@ main:focus {
   padding:21px 22px;
   overflow:auto;
   line-height:1.75;
-  font-size:12px;
+  font-size:13px;
   tab-size:2;
   scrollbar-width:thin;
 }
@@ -842,7 +842,7 @@ main:focus {
 .prose table {
   border-collapse:collapse;
   width:100%;
-  font-size:12px;
+  font-size:13px;
   line-height:1.75;
   text-align:left;
 }
@@ -1524,13 +1524,13 @@ dialog::backdrop {
     font-size:11px!important;
   }
   .prose {
-    font-size:13px;
+    font-size:15px;
   }
   .prose h2 {
     font-size:21px;
   }
   .prose pre {
-    font-size:11px;
+    font-size:12px;
     padding:17px;
   }
   .page-tools {
@@ -1585,6 +1585,22 @@ dialog::backdrop {
 }
 
 @media print {
+  html[data-theme] {
+    --bg:#fff;
+    --soft:#f7f7f7;
+    --panel:#fff;
+    --text:#000;
+    --muted:#444;
+    --line:#bbb;
+    --accent:#111;
+    --tint:#f7f7f7;
+    --code:#f5f5f5;
+    color-scheme:light;
+  }
+  .code-block,.code-block code,.code-block code span {
+    color:#000!important;
+    background:transparent!important;
+  }
   .header,.sidebar,.toc,.page-tools,.page-pagination,.article-footer,.reading-progress,.heading-anchor,dialog,.toast,.back-top,.copy-code,.hero-art {
     display:none!important;
   }

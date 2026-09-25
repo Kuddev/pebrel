@@ -101,10 +101,9 @@ def navigation(groups: list[dict], active: str, root: str) -> str:
 
 
 def home_header() -> str:
-    return '''<section class="hero"><span class="eyebrow">PEBREL / USER GUIDE</span>
+    return '''<section class="hero">
 <div class="hero-art" aria-hidden="true"><i></i><i></i><i></i></div>
 <h1>从一个终端开始。<br><span>把工作连成一体。</span></h1>
-<p>本地命令、远程主机与 AI 工作流，在一个从容的空间里。<br>从第一次打开，到找到属于你的工作方式。</p>
 <div class="hero-actions"><a class="button-primary" href="quickstart/index.html">开始使用 <span aria-hidden="true">→</span></a><a class="text-link" href="installation/index.html">下载 Pebrel ↗</a></div></section>
 <div class="platform-strip"><span>为你的桌面而来</span><span>Windows</span><span>macOS <small>Preview</small></span><span>Linux <small>Preview</small></span></div>'''
 
@@ -112,8 +111,8 @@ def home_header() -> str:
 def source_details(page: dict, commit: str) -> str:
     sources = page.get("sources", [])
     links = "".join(f'<li><a href="{UPSTREAM}/blob/{commit}/{quote(path, safe="/#")}" target="_blank" rel="noopener">{html.escape(path)}</a></li>' for path in sources)
-    return (f'<details class="source-details"><summary>内容核对来源 · {commit[:7]}</summary>'
-            f'<p>此页依据 Pebrel {html.escape(page.get("version", "1.9.1"))} 的代码与已公开指南编写。不同平台的界面可能略有差异。</p><ul>{links}</ul></details>')
+    return (f'<details class="source-details"><summary>版本与参考 · {commit[:7]}</summary>'
+            f'<p>适用版本：Pebrel {html.escape(page.get("version", "1.9.1"))}。以下链接提供相关设置与功能的参考。</p><ul>{links}</ul></details>')
 
 
 def build(destination: Path, base_url: str) -> dict:
@@ -124,20 +123,19 @@ def build(destination: Path, base_url: str) -> dict:
         raise ValueError("Duplicate page slug")
     template = Template((HERE / "template.html").read_text())
     destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO / "LICENSE", destination / "LICENSE")
+    shutil.copy2(HERE / "third-party-notices.txt", destination / "third-party-notices.txt")
     assets = destination / "assets"
     shutil.copytree(HERE / "assets", assets, dirs_exist_ok=True)
     shutil.copy2(REPO / "extra/logo/nebula.png", assets / "pebrel.png")
     screenshot_dir = assets / "screenshots"
     screenshot_dir.mkdir(exist_ok=True)
+    shutil.copy2(HERE / "screenshots.json", screenshot_dir / "sources.json")
     for filename in config["images"]:
         shutil.copy2(REPO / "docs/screenshots" / filename, screenshot_dir / filename)
-    formatter = HtmlFormatter()
-    (assets / "highlight.css").write_text(
-        formatter.get_style_defs(".code-block") + '\n'
-        '[data-theme=dark] .code-block .c,[data-theme=dark] .code-block .c1{color:#a1b4a4}\n'
-        '[data-theme=dark] .code-block .s,[data-theme=dark] .code-block .s1,[data-theme=dark] .code-block .s2{color:#abdab9}\n'
-        '[data-theme=dark] .code-block .k,[data-theme=dark] .code-block .nb{color:#94bbee}\n'
-        '[data-theme=dark] .code-block .nf,[data-theme=dark] .code-block .nv,[data-theme=dark] .code-block .o{color:#dadbbd}\n', encoding="utf-8")
+    light_css = HtmlFormatter(style="default", nobackground=True).get_style_defs("[data-theme=light] .code-block")
+    dark_css = HtmlFormatter(style="github-dark", nobackground=True).get_style_defs("[data-theme=dark] .code-block")
+    (assets / "highlight.css").write_text(light_css + "\n" + dark_css, encoding="utf-8")
     search = []
     total_characters = 0
     all_markdown = []

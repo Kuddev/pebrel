@@ -13,6 +13,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
+    permissions:
+      contents: read
+      pages: read
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -26,9 +29,13 @@ jobs:
         run: pip install -r docs/site/requirements.txt playwright==1.57.0
       - name: Check links, page structure and search coverage
         run: python -m unittest discover -s docs/site -p test_site.py
+      - name: Resolve the configured Pages URL
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.PEBREL_DOCS_PAGES_ENABLED == 'true'
+        id: pages
+        uses: actions/configure-pages@v5
       - name: Build portable static site
         env:
-          DOCS_BASE_URL: ${{ vars.PEBREL_DOCS_BASE_URL }}
+          DOCS_BASE_URL: ${{ vars.PEBREL_DOCS_BASE_URL || steps.pages.outputs.base_url }}
         run: python docs/site/build.py --base-url "$DOCS_BASE_URL"
       - name: Install browser
         run: python -m playwright install --with-deps chromium
