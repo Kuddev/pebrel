@@ -128,7 +128,8 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
     bindings
 }
 
-/// macOS 的原生修饰键是 ⌘：在 Ctrl 绑定之外**追加**一套 ⌘ 绑定，不替换。
+/// macOS 的原生修饰键是 ⌘：在 Ctrl 绑定之外追加一套 ⌘ 绑定。⌘W 关闭窗口，
+/// 活动终端改用 ⌘⇧W，避免与系统关闭窗口命令冲突。
 /// 追加而非替换有两个原因：Ctrl+Shift 组合在 Mac 终端里没有别的含义，留着
 /// 不碍事；而 ⌘C/⌘V 必须存在，否则 Mac 用户第一反应就是「复制粘贴坏了」。
 /// 终端里的 Ctrl+C 仍然是 SIGINT——这里只绑 ⌘，不碰 Ctrl 的语义。
@@ -137,7 +138,12 @@ fn bind_macos_command_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-t", NewTerminal, None),
         KeyBinding::new("cmd-n", NewWindow, None),
-        KeyBinding::new("cmd-w", CloseActiveTerminal, None),
+        KeyBinding::new("cmd-q", QuitApplication, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-shift-w", CloseActiveTerminal, None),
+        KeyBinding::new("cmd-h", HideApplication, None),
+        KeyBinding::new("cmd-alt-h", HideOtherApplications, None),
+        KeyBinding::new("cmd-m", MinimizeWindow, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-shift-p", ToggleCommandPalette, None),
