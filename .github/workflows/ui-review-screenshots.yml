@@ -101,19 +101,30 @@ jobs:
           switch ($env:UI_REVIEW_SCENARIO) {
             'settings' {
               & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
-              Capture '01-settings-controls.png'
+              Start-Sleep -Seconds 1
+              Capture '01-appearance-control-sizing.png'
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -Click '90,246'
+              Capture '02-terminal-control-sizing.png'
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -Click '90,76'
+              Capture '03-workspace-toolbar-sizing.png'
             }
             'shortcuts' {
               & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
-              Capture '01-shortcut-labels.png'
+              Start-Sleep -Seconds 1
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -Click '90,360'
+              Capture '01-key-bindings-platform-labels.png'
             }
             'dialog' {
               & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
-              Capture '01-settings-shortcuts.png'
+              Start-Sleep -Seconds 1
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -Click '120,705'
+              Capture '01-confirm-dialog-shortcuts.png'
             }
             'sidebar' {
               & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
-              Capture '01-sidebar-settings.png'
+              Start-Sleep -Seconds 1
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -Click '90,323'
+              Capture '01-interaction-panel-resize.png'
             }
             'ssh-copy' {
               & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
@@ -248,29 +259,72 @@ jobs:
           APPLESCRIPT
           }
 
+          click_offset() {
+            local x="$1"
+            local y="$2"
+            PID="$pid" X="$x" Y="$y" osascript <<'APPLESCRIPT' || true
+          set targetPid to (system attribute "PID") as integer
+          set clickX to (system attribute "X") as integer
+          set clickY to (system attribute "Y") as integer
+          tell application "System Events"
+            set appProc to first application process whose unix id is targetPid
+            set frontmost of appProc to true
+            tell window 1 of appProc
+              set {wx, wy} to position
+            end tell
+            click at {wx + clickX, wy + clickY}
+          end tell
+          APPLESCRIPT
+            sleep 1
+          }
+
+          click_bottom() {
+            local x="$1"
+            local offset="$2"
+            PID="$pid" X="$x" OFFSET="$offset" osascript <<'APPLESCRIPT' || true
+          set targetPid to (system attribute "PID") as integer
+          set clickX to (system attribute "X") as integer
+          set bottomOffset to (system attribute "OFFSET") as integer
+          tell application "System Events"
+            set appProc to first application process whose unix id is targetPid
+            set frontmost of appProc to true
+            tell window 1 of appProc
+              set {wx, wy} to position
+              set {ww, wh} to size
+            end tell
+            click at {wx + clickX, wy + wh - bottomOffset}
+          end tell
+          APPLESCRIPT
+            sleep 1
+          }
+
           case "$UI_REVIEW_SCENARIO" in
             settings)
               focus_and_keys settings
               sleep 2
-              screencapture -x "$qa/01-settings-controls.png"
+              screencapture -x "$qa/01-appearance-control-sizing.png"
+              click_offset 90 249
+              screencapture -x "$qa/02-terminal-control-sizing.png"
+              click_offset 90 81
+              screencapture -x "$qa/03-workspace-toolbar-sizing.png"
               ;;
             shortcuts)
               focus_and_keys settings
               sleep 2
-              screencapture -x "$qa/01-shortcut-labels.png"
+              click_offset 90 363
+              screencapture -x "$qa/01-key-bindings-platform-labels.png"
               ;;
             dialog)
               focus_and_keys settings
               sleep 2
-              screencapture -x "$qa/01-settings-shortcuts.png"
-              focus_and_keys quit
-              sleep 1
-              screencapture -x "$qa/02-dialog-state.png" || true
+              click_bottom 120 24
+              screencapture -x "$qa/01-confirm-dialog-shortcuts.png"
               ;;
             sidebar)
               focus_and_keys settings
               sleep 2
-              screencapture -x "$qa/01-sidebar-settings.png"
+              click_offset 90 326
+              screencapture -x "$qa/01-interaction-panel-resize.png"
               ;;
             menu)
               focus_and_keys menu
