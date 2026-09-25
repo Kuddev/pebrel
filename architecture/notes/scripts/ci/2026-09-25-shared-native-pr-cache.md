@@ -32,6 +32,13 @@ macOS binary. Its CLI supports the current Cargo profile and timing options.
 [Nextest](https://nexte.st/docs/running/) runs unit/integration tests separately
 but does not replace Cargo's doctest execution.
 
+The first hosted nextest run, [Linux job 108135574634](https://github.com/Kuddev/pebrel/actions/runs/36154433909/job/108135574634),
+ran 2,245 tests and exposed six theme-studio fixture conflicts. Those tests already
+share `lock_theme_studio` because they read and restore the same settings file.
+An in-process mutex does not protect separate nextest processes. Nextest's
+[test groups](https://nexte.st/docs/configuration/test-groups/) provide the
+corresponding cross-process scheduling boundary.
+
 ## Decision
 
 - The existing validated platform catalog selects all five native platforms and
@@ -43,6 +50,9 @@ but does not replace Cargo's doctest execution.
   filters or automatic retries, and explicitly runs `cargo test --doc` with the
   same profile/features. Keep the independent production-feature check. The
   script's default remains Cargo for existing local and release callers.
+- Give the entire existing theme-studio fixture module one nextest group with
+  `max-threads = 1`, including readers and writers. This restores its previous
+  mutual exclusion without serializing other tests or changing assertions.
 - Native jobs restore caches on PRs but publish only on the default branch.
   Use a fixed `dependencies-v1` snapshot suffix together with the existing
   compiler, OS, architecture, workload, SDK, flags and manifest identity. Source
@@ -87,7 +97,7 @@ target snapshots; this PR does not change their build or publication semantics.
 ## Validation
 
 The existing planner, native-workflow, cache, stable-release, platform-cfg and
-PR-size contract suites ran 57 tests locally: 56 passed, one POSIX-only summary
+PR-size contract suites ran 58 tests locally: 57 passed, one POSIX-only summary
 execution test was skipped on Windows. Tests cover full draft/ready matrices,
 read-only PR cache behavior, cross-architecture download completeness, retained
 doctests/features and failure propagation at each command.

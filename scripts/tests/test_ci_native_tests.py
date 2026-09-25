@@ -169,6 +169,17 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
+    def test_nextest_preserves_only_the_existing_shared_theme_fixture_mutex(self):
+        root = Path(__file__).resolve().parents[2]
+        config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
+        self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
+        self.assertEqual(config["profile"]["default"], {
+            "overrides": [{
+                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)",
+                "test-group": "theme-studio",
+            }],
+        })
+
     def test_native_caches_are_default_branch_snapshots_not_per_pr_uploads(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
