@@ -356,7 +356,7 @@ jobs:
 
   publish-evidence:
     name: Publish UI evidence
-    if: github.repository == 'WilliamWang1721/pebrel' && github.event_name == 'push'
+    if: always() && github.repository == 'WilliamWang1721/pebrel' && github.event_name == 'push'
     needs: native-ui
     runs-on: ubuntu-22.04
     concurrency:
@@ -370,14 +370,97 @@ jobs:
           persist-credentials: true
 
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: ui-review-windows
           path: ${{ runner.temp }}/ui-review-evidence/windows
 
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: ui-review-macos
           path: ${{ runner.temp }}/ui-review-evidence/macos
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Polish screenshots for PR presentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet "Pillow==11.3.0"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from PIL import Image, ImageDraw, ImageFilter, ImageStat
+
+          source = Path(os.environ["RUNNER_TEMP"]) / "ui-review-evidence"
+          output = Path(os.environ["RUNNER_TEMP"]) / "ui-review-polished"
+          scale = 2
+          radius = 24 * scale
+          padding = 36 * scale
+          shadow_pad = 18 * scale
+
+          for platform in ("windows", "macos"):
+              src_dir = source / platform
+              dst_dir = output / platform
+              dst_dir.mkdir(parents=True, exist_ok=True)
+              if not src_dir.exists():
+                  continue
+
+              for path in sorted(src_dir.glob("*.png")):
+                  image = Image.open(path).convert("RGB")
+                  image = image.resize(
+                      (image.width * scale, image.height * scale),
+                      Image.Resampling.LANCZOS,
+                  )
+                  image = image.filter(ImageFilter.UnsharpMask(radius=0.7, percent=115, threshold=2))
+
+                  stat = ImageStat.Stat(image.resize((1, 1)))
+                  luminance = sum(stat.mean) / 3
+                  background = (243, 245, 248) if luminance > 120 else (18, 20, 24)
+                  border = (205, 209, 216) if luminance > 120 else (65, 69, 78)
+
+                  frame_w = image.width + padding * 2
+                  frame_h = image.height + padding * 2
+                  canvas = Image.new("RGBA", (frame_w + shadow_pad * 2, frame_h + shadow_pad * 2), background + (255,))
+
+                  shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+                  shadow_draw = ImageDraw.Draw(shadow)
+                  x0 = shadow_pad + padding
+                  y0 = shadow_pad + padding
+                  x1 = x0 + image.width
+                  y1 = y0 + image.height
+                  shadow_draw.rounded_rectangle(
+                      (x0 + 4 * scale, y0 + 7 * scale, x1 + 4 * scale, y1 + 7 * scale),
+                      radius=radius,
+                      fill=(0, 0, 0, 92),
+                  )
+                  shadow = shadow.filter(ImageFilter.GaussianBlur(12 * scale))
+                  canvas.alpha_composite(shadow)
+
+                  mask = Image.new("L", image.size, 0)
+                  ImageDraw.Draw(mask).rounded_rectangle(
+                      (0, 0, image.width - 1, image.height - 1),
+                      radius=radius,
+                      fill=255,
+                  )
+                  framed = Image.new("RGBA", image.size, (0, 0, 0, 0))
+                  framed.paste(image, (0, 0), mask)
+                  canvas.alpha_composite(framed, (x0, y0))
+
+                  draw = ImageDraw.Draw(canvas)
+                  draw.rounded_rectangle(
+                      (x0, y0, x1 - 1, y1 - 1),
+                      radius=radius,
+                      outline=border + (255,),
+                      width=2 * scale,
+                  )
+
+                  out = dst_dir / f"{path.stem}-review.png"
+                  canvas.convert("RGB").save(out, "PNG", optimize=True)
+          PY
 
       - name: Publish screenshots outside the PR diff
         shell: bash
@@ -394,11 +477,14 @@ jobs:
             git rm -rf . >/dev/null 2>&1 || true
           fi
 
+          polished_dir="$RUNNER_TEMP/ui-review-polished"
           root="ui-review/pr-$UI_REVIEW_PR"
           rm -rf "$root"
-          mkdir -p "$root/windows" "$root/macos"
-          find "$source_dir/windows" -maxdepth 1 -type f -name '*.png' -exec cp {} "$root/windows/" \;
-          find "$source_dir/macos" -maxdepth 1 -type f -name '*.png' -exec cp {} "$root/macos/" \;
+          mkdir -p "$root/windows" "$root/macos" "$root/raw/windows" "$root/raw/macos"
+          find "$polished_dir/windows" -maxdepth 1 -type f -name '*-review.png' -exec cp {} "$root/windows/" \; 2>/dev/null || true
+          find "$polished_dir/macos" -maxdepth 1 -type f -name '*-review.png' -exec cp {} "$root/macos/" \; 2>/dev/null || true
+          find "$source_dir/windows" -maxdepth 1 -type f -name '*.png' -exec cp {} "$root/raw/windows/" \; 2>/dev/null || true
+          find "$source_dir/macos" -maxdepth 1 -type f -name '*.png' -exec cp {} "$root/raw/macos/" \; 2>/dev/null || true
           printf '%s\n' "$GITHUB_SHA" >"$root/head-sha.txt"
           printf '%s\n' "$UI_REVIEW_TARGET" >"$root/target.txt"
 
