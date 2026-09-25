@@ -13,6 +13,13 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_motion": {
+      "title": "平滑光标",
+      "description": "让终端光标平滑移动，大范围跳转仍立即定位。",
+      "off": "关闭",
+      "smooth": "平滑（90 ms）",
+      "save_failed": "无法保存光标动画设置：{error}"
+    },
     "scrolling": {
       "history": "回滚行数",
       "history_description": "每个窗格保留的历史行数。仅适用于新窗格。",

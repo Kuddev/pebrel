@@ -47,6 +47,12 @@ impl SettingsPane {
         let cursor = self
             .group(language.pick("光标", "Cursor"), cx)
             .child(self.select_row(
+                "cursor_motion",
+                language.text(crate::i18n::Message::SettingsCursorMotionTitle),
+                language.text(crate::i18n::Message::SettingsCursorMotionDescription),
+                cx,
+            ))
+            .child(self.select_row(
                 "cursor_shape",
                 language.pick("光标形状", "Cursor shape"),
                 help("cursor_shape", language),

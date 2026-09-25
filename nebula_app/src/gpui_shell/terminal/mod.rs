@@ -8,6 +8,7 @@ pub mod colors;
 mod completion_viewport;
 pub(super) mod confirmation;
 mod cursor_motion;
+mod cursor_painter;
 pub mod element;
 mod event_mailbox;
 mod inline_image;

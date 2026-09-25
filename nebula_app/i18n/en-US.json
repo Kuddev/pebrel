@@ -13,6 +13,13 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_motion": {
+      "title": "Smooth cursor",
+      "description": "Animate terminal cursor movement; large jumps remain instant.",
+      "off": "Off",
+      "smooth": "Smooth (90 ms)",
+      "save_failed": "Could not save cursor motion: {error}"
+    },
     "scrolling": {
       "history": "Scrollback lines",
       "history_description": "History lines retained per terminal. Applies to new terminals only.",

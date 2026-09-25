@@ -6,6 +6,7 @@ mod agent_activity;
 mod broadcast;
 mod completion;
 mod confirmation;
+pub(super) mod cursor;
 mod cwd_report;
 mod image_paste;
 mod layout;
@@ -413,6 +414,7 @@ pub struct TerminalView {
     /// GPUI 没有旧壳 scheduler 的 `BlinkCursor` 事件，视图自己只维护可见相位；
     /// 光标是否允许闪烁仍由共享 `Term::cursor_style()` 裁定。
     cursor_visible: bool,
+    cursor_animation: cursor::CursorAnimation,
     cursor_blink_epoch: u64,
     /// OS 窗口前台状态与 pane 内焦点是两层独立条件。缓存它们是因为 blink
     /// timer 回调没有 `Window`，状态变化由 GPUI observer 立即重启相位。
@@ -500,6 +502,9 @@ impl TerminalView {
         visible: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.output_visible != visible {
+            self.cursor_animation.reset();
+        }
         if std::mem::replace(&mut self.output_visible, visible) != visible && visible {
             // Hidden output deliberately did not invalidate the cached view.
             // The workspace declares visibility during render, where GPUI can
@@ -725,6 +730,7 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        self.cursor_animation.note_input(&bytes);
         self.prompt_input_epoch = self.prompt_input_epoch.wrapping_add(1);
         self.path_drop.invalidate();
         self.image_paste.observe_input(&bytes);
@@ -868,6 +874,7 @@ impl TerminalView {
     /// 热应用运行时设置（设置页改动后由宿主调用）。默认光标样式只更新
     /// `Term` 的 fallback；程序通过 DECSCUSR 设置的临时样式仍保持权威。
     pub fn apply_settings(&mut self, cx: &mut Context<Self>) {
+        self.cursor_animation.reset();
         self.refresh_ssh_label();
         let Some(settings) = cx.try_global::<Settings>() else { return };
         let families = [

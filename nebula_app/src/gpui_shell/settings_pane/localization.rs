@@ -45,6 +45,10 @@ pub(super) fn localized_select_labels(
             language.pick("实心框（█）", "Filled box (█)"),
             language.pick("空心框（□）", "Empty box (□)"),
         ],
+        "cursor_motion" => vec![
+            language.text(crate::i18n::Message::SettingsCursorMotionOff),
+            language.text(crate::i18n::Message::SettingsCursorMotionSmooth),
+        ],
         "tabs_position" => {
             vec![language.pick("左侧边栏", "Left sidebar"), language.pick("顶部", "Top")]
         },

@@ -41,6 +41,7 @@ impl TerminalView {
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) {
+        self.cursor_animation.note_encoded_key(&keystroke, &bytes);
         cx.emit(TerminalViewEvent::UserInput(TerminalInput::Key(keystroke)));
         self.write_input(bytes, cx);
     }
@@ -70,6 +71,7 @@ impl TerminalView {
         let mode = self.term_mode();
         self.track_encoded_key(keystroke, &mode, cx);
         if let Some(bytes) = keymap::encode(keystroke, &mode) {
+            self.cursor_animation.note_encoded_key(keystroke, &bytes);
             self.write_input(bytes, cx);
         }
     }
