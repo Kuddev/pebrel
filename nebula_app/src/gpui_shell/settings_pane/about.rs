@@ -74,6 +74,7 @@ impl SettingsPane {
                 self.update_release_input
                     .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
                 if value != self.runtime.update_release_url {
+                    self.about_update_seq = self.about_update_seq.wrapping_add(1);
                     self.persist(&[("update_release_url", value)], cx);
                     if let Some(asset) = crate::update_download::cached_asset() {
                         crate::update_download::cancel(&asset);
@@ -242,7 +243,7 @@ impl SettingsPane {
         let update_source = h_flex()
             .items_center()
             .gap_2()
-            .child(div().w(px(300.0)).child(Input::new(&self.update_release_input).h(px(32.0))))
+            .child(div().w(px(240.0)).child(Input::new(&self.update_release_input).h(px(32.0))))
             .child(
                 NebulaButton::new("save-update-release-source")
                     .label(language.text(crate::i18n::Message::CommonSave))
