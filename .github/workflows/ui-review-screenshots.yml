@@ -59,7 +59,7 @@ jobs:
         run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
 
       - name: Build complete Pebrel application
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
+        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell,gpui-test-support
 
       - name: Capture Windows application and changed UI
         if: matrix.platform == 'windows'
@@ -209,6 +209,24 @@ jobs:
 
           export PEBREL_CONFIG_DIR="$config"
           app="$PWD/target/ui-review/release/pebrel"
+          if [[ "$UI_REVIEW_SCENARIO" == "notification" ]]; then
+            bundle="$RUNNER_TEMP/Pebrel UI Review.app"
+            mkdir -p "$bundle/Contents/MacOS"
+            cp "$app" "$bundle/Contents/MacOS/pebrel"
+            chmod +x "$bundle/Contents/MacOS/pebrel"
+            cat >"$bundle/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>pebrel</string>
+            <key>CFBundleIdentifier</key><string>io.github.kuddev.pebrel.ui-review</string>
+            <key>CFBundleName</key><string>Pebrel UI Review</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+          </dict></plist>
+          PLIST
+            export PEBREL_UI_REVIEW_FOREGROUND_NOTIFICATION=1
+            app="$bundle/Contents/MacOS/pebrel"
+          fi
           "$app" --working-directory "$PWD" >"$qa/pebrel.stdout.log" 2>"$qa/pebrel.stderr.log" &
           pid=$!
 
@@ -311,7 +329,8 @@ jobs:
               screencapture -x "$qa/01-ssh-ports-regression.png"
               ;;
             notification)
-              screencapture -x "$qa/01-foreground-notification-regression.png"
+              sleep 3
+              screencapture -x "$qa/01-foreground-system-notification.png"
               ;;
             *)
               screencapture -x "$qa/01-platform-regression.png"
