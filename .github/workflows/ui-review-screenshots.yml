@@ -1,0 +1,351 @@
+name: UI review screenshots
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-review-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  RUST_TOOLCHAIN: "1.97.1"
+  CARGO_TARGET_DIR: target/ui-review
+  UI_REVIEW_SCENARIO: "shortcuts"
+  UI_REVIEW_TARGET: "Platform-specific shortcut labels in Settings"
+
+jobs:
+  native-ui:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows UI review
+            runner: windows-2022
+            platform: windows
+          - name: macOS UI review
+            runner: macos-26
+            platform: macos
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: ". -> target/ui-review"
+
+      - name: Prepare Windows console runtime
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost
+
+      - name: Build complete Pebrel application
+        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
+
+      - name: Capture Windows application and changed UI
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $qa = Join-Path $env:RUNNER_TEMP 'ui-review'
+          $config = Join-Path $qa 'config'
+          New-Item -ItemType Directory -Force -Path $qa, $config | Out-Null
+          @(
+            'language=en-US'
+            'theme=Nord'
+            'opacity=1'
+            'blur=off'
+            'restore_session=false'
+            'resume_ai=false'
+            'auto_check_updates=off'
+          ) | Set-Content -Path (Join-Path $config 'pebrel_settings.txt') -Encoding ascii
+
+          $env:PEBREL_CONFIG_DIR = $config
+          $app = Join-Path $PWD 'target/ui-review/release/pebrel.exe'
+          $stdout = Join-Path $qa 'pebrel.stdout.log'
+          $stderr = Join-Path $qa 'pebrel.stderr.log'
+          $p = Start-Process $app -ArgumentList '--working-directory', $PWD -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Start-Sleep -Seconds 7
+
+          function Capture([string]$name) {
+            $shot = Join-Path $qa $name
+            for ($i = 0; $i -lt 8; $i++) {
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -Shot $shot
+              if ($LASTEXITCODE -eq 0 -and (Test-Path $shot)) { return }
+              Start-Sleep -Seconds 1
+            }
+            throw "Could not capture Pebrel window: $name"
+          }
+
+          Capture '00-full-app.png'
+
+          switch ($env:UI_REVIEW_SCENARIO) {
+            'settings' {
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
+              Capture '01-settings-controls.png'
+            }
+            'shortcuts' {
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
+              Capture '01-shortcut-labels.png'
+            }
+            'dialog' {
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
+              Capture '01-settings-shortcuts.png'
+            }
+            'sidebar' {
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
+              Capture '01-sidebar-settings.png'
+            }
+            'ssh-copy' {
+              & ./scripts/ui_probe.ps1 -ProcId $p.Id -TypeText '^,'
+              Capture '01-ssh-settings-entry.png'
+            }
+            'ssh-ports' {
+              Capture '01-ssh-ports-regression.png'
+            }
+            default {
+              Capture '01-platform-regression.png'
+            }
+          }
+
+          @(
+            "scenario=$env:UI_REVIEW_SCENARIO"
+            "target=$env:UI_REVIEW_TARGET"
+            "platform=windows"
+            "pid=$($p.Id)"
+          ) | Set-Content -Path (Join-Path $qa 'review-target.txt') -Encoding utf8
+
+          if (Get-Process -Id $p.Id -ErrorAction SilentlyContinue) {
+            & ./scripts/ui_probe.ps1 -ProcId $p.Id -Kill
+          }
+
+      - name: Capture SSH copy menu on Windows
+        if: matrix.platform == 'windows' && env.UI_REVIEW_SCENARIO == 'ssh-copy'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $qa = Join-Path $env:RUNNER_TEMP 'ui-review'
+          $probe = Join-Path $qa 'ssh-copy-probe'
+          $config = Join-Path $probe 'config'
+          New-Item -ItemType Directory -Force -Path $probe, $config | Out-Null
+          @(
+            'language=en-US'
+            'theme=Nord'
+            'opacity=1'
+            'blur=off'
+            'restore_session=false'
+            'resume_ai=false'
+            'auto_check_updates=off'
+          ) | Set-Content -Path (Join-Path $config 'pebrel_settings.txt') -Encoding ascii
+
+          $env:PEBREL_CONFIG_DIR = $config
+          $env:PEBREL_SSH_COPY_QA_DIR = $probe
+          $stdout = Join-Path $probe 'probe.stdout.log'
+          $stderr = Join-Path $probe 'probe.stderr.log'
+          $args = @('test', '--locked', '-p', 'nebula', '--bin', 'pebrel', '--features', 'gpui-test-support', 'native_ssh_copy_context_menu_preview', '--', '--ignored', '--nocapture')
+          $cargo = Start-Process cargo -ArgumentList $args -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+
+          $ready = Join-Path $probe 'menu-ready.json'
+          $deadline = (Get-Date).AddMinutes(20)
+          while (-not (Test-Path $ready)) {
+            if ($cargo.HasExited) {
+              Get-Content $stdout -ErrorAction SilentlyContinue
+              Get-Content $stderr -ErrorAction SilentlyContinue
+              throw 'SSH screenshot probe exited before opening its native window.'
+            }
+            if ((Get-Date) -gt $deadline) { throw 'Timed out waiting for SSH screenshot probe.' }
+            Start-Sleep -Milliseconds 500
+          }
+
+          $probePid = (Get-Content $ready -Raw | ConvertFrom-Json).pid
+          ./scripts/ui_probe.ps1 -ProcId $probePid -RightClick '520,220' -Shot (Join-Path $qa '02-ssh-context-menu.png')
+          ./scripts/ui_probe.ps1 -ProcId $probePid -Click '550,294'
+          Start-Sleep -Milliseconds 700
+          ./scripts/ui_probe.ps1 -ProcId $probePid -Shot (Join-Path $qa '03-ssh-copy-editor.png')
+          New-Item -ItemType File -Force -Path (Join-Path $probe 'capture-complete') | Out-Null
+          $cargo.WaitForExit()
+          if ($cargo.ExitCode -ne 0) {
+            Get-Content $stdout -ErrorAction SilentlyContinue
+            Get-Content $stderr -ErrorAction SilentlyContinue
+            throw "SSH screenshot probe failed with exit code $($cargo.ExitCode)."
+          }
+
+      - name: Capture macOS application and changed UI
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          qa="$RUNNER_TEMP/ui-review"
+          config="$qa/config"
+          mkdir -p "$qa" "$config"
+          cat >"$config/pebrel_settings.txt" <<'EOF'
+          language=en-US
+          theme=Nord
+          opacity=1
+          blur=off
+          restore_session=false
+          resume_ai=false
+          auto_check_updates=off
+          EOF
+
+          export PEBREL_CONFIG_DIR="$config"
+          app="$PWD/target/ui-review/release/pebrel"
+          "$app" --working-directory "$PWD" >"$qa/pebrel.stdout.log" 2>"$qa/pebrel.stderr.log" &
+          pid=$!
+
+          cleanup() {
+            kill "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 20); do
+            if ! kill -0 "$pid" >/dev/null 2>&1; then
+              cat "$qa/pebrel.stderr.log" >&2 || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+          screencapture -x "$qa/00-full-app.png"
+
+          focus_and_keys() {
+            local keys="$1"
+            PID="$pid" KEYS="$keys" osascript <<'APPLESCRIPT' || true
+          set targetPid to (system attribute "PID") as integer
+          set requestedKeys to system attribute "KEYS"
+          tell application "System Events"
+            set appProc to first application process whose unix id is targetPid
+            set frontmost of appProc to true
+            delay 0.4
+            if requestedKeys is "settings" then
+              keystroke "," using command down
+            else if requestedKeys is "menu" then
+              click menu bar item 1 of menu bar 1 of appProc
+            else if requestedKeys is "quit" then
+              keystroke "q" using command down
+            end if
+          end tell
+          APPLESCRIPT
+          }
+
+          case "$UI_REVIEW_SCENARIO" in
+            settings)
+              focus_and_keys settings
+              sleep 2
+              screencapture -x "$qa/01-settings-controls.png"
+              ;;
+            shortcuts)
+              focus_and_keys settings
+              sleep 2
+              screencapture -x "$qa/01-shortcut-labels.png"
+              ;;
+            dialog)
+              focus_and_keys settings
+              sleep 2
+              screencapture -x "$qa/01-settings-shortcuts.png"
+              focus_and_keys quit
+              sleep 1
+              screencapture -x "$qa/02-dialog-state.png" || true
+              ;;
+            sidebar)
+              focus_and_keys settings
+              sleep 2
+              screencapture -x "$qa/01-sidebar-settings.png"
+              ;;
+            menu)
+              focus_and_keys menu
+              sleep 1
+              screencapture -x "$qa/01-native-menu.png"
+              ;;
+            portable)
+              cleanup
+              trap - EXIT
+              bundle="$RUNNER_TEMP/Pebrel UI Review.app"
+              mkdir -p "$bundle/Contents/MacOS"
+              cp "$app" "$bundle/Contents/MacOS/pebrel"
+              chmod +x "$bundle/Contents/MacOS/pebrel"
+              cat >"$bundle/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>pebrel</string>
+            <key>CFBundleIdentifier</key><string>io.github.kuddev.pebrel.ui-review</string>
+            <key>CFBundleName</key><string>Pebrel UI Review</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+          </dict></plist>
+          PLIST
+              unset PEBREL_CONFIG_DIR NEBULA_CONFIG_DIR PEBREL_CONFIG_FILE NEBULA_CONFIG_FILE PEBREL_GPUI_CONFIG NEBULA_GPUI_CONFIG
+              export HOME="$qa/home"
+              mkdir -p "$HOME"
+              open -n "$bundle"
+              sleep 4
+              screencapture -x "$qa/01-portable-startup-dialog.png"
+              pkill -f "$bundle/Contents/MacOS/pebrel" || true
+              ;;
+            ssh-copy)
+              focus_and_keys settings
+              sleep 2
+              screencapture -x "$qa/01-ssh-settings-entry.png"
+              ;;
+            ssh-ports)
+              screencapture -x "$qa/01-ssh-ports-regression.png"
+              ;;
+            notification)
+              screencapture -x "$qa/01-foreground-notification-regression.png"
+              ;;
+            *)
+              screencapture -x "$qa/01-platform-regression.png"
+              ;;
+          esac
+
+          {
+            echo "scenario=$UI_REVIEW_SCENARIO"
+            echo "target=$UI_REVIEW_TARGET"
+            echo "platform=macos"
+            sw_vers
+          } >"$qa/review-target.txt"
+
+      - name: Upload reviewer screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-review-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/ui-review/*.png
+            ${{ runner.temp }}/ui-review/*.txt
+            ${{ runner.temp }}/ui-review/*.log
+            ${{ runner.temp }}/ui-review/ssh-copy-probe/*.json
+            ${{ runner.temp }}/ui-review/ssh-copy-probe/*.log
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Add screenshot pointers to job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Native UI review"
+            echo
+            echo "- Platform: ${{ matrix.platform }}"
+            echo "- Scenario: $UI_REVIEW_SCENARIO"
+            echo "- Changed UI target: $UI_REVIEW_TARGET"
+            echo "- Download the ui-review-${{ matrix.platform }} artifact to inspect the PNG evidence."
+          } >>"$GITHUB_STEP_SUMMARY"
