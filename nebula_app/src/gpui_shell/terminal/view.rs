@@ -966,6 +966,10 @@ impl TerminalView {
     /// 通道，撞上一个还没建立的传输——用户看到的是文件面板先报一个错，然后
     /// 终端才连上。
     pub fn ready_ssh_destination(&self) -> Option<&str> {
+        #[cfg(feature = "gpui-test-support")]
+        if std::env::var_os("PEBREL_UI_REVIEW_READY_SSH").is_some() {
+            return Some("review@localhost");
+        }
         let destination = self.ssh_destination.as_deref()?;
         matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Ready)).then_some(destination)
     }
