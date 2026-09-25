@@ -1028,6 +1028,9 @@ pub struct RuntimeSettings {
     pub auto_check_updates: bool,
     /// Optional background package download; never grants install permission.
     pub auto_download_updates: bool,
+    /// Optional GitHub Releases page used instead of the official stable source.
+    /// Empty keeps the built-in Kuddev/pebrel update source.
+    pub update_release_url: String,
     pub keep_session: bool,
     /// Start the first window hidden when a system tray is available and enabled.
     pub silent_start: bool,
@@ -1206,6 +1209,7 @@ impl RuntimeSettings {
             fetch: raw.bool_on("fetch").unwrap_or(false),
             auto_check_updates: raw.bool_on("auto_check_updates").unwrap_or(true),
             auto_download_updates: raw.bool_on("auto_download_updates").unwrap_or(false),
+            update_release_url: raw.value("update_release_url").unwrap_or_default().to_owned(),
             keep_session: raw.bool_on("keep_session").unwrap_or(false),
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
@@ -1336,6 +1340,19 @@ mod tests {
         assert_eq!(
             RuntimeSettings::from_raw(&RawSettings::from_text(&text)).focus_follows_mouse,
             None
+        );
+    }
+
+    #[test]
+    fn update_release_url_round_trips_and_defaults_to_empty() {
+        let defaults = RuntimeSettings::from_raw(&RawSettings::default());
+        assert!(defaults.update_release_url.is_empty());
+        let settings = RuntimeSettings::from_raw(&RawSettings::from_text(
+            "update_release_url=https://github.com/acme/pebrel/releases/tag/v2.0.0-beta.1\n",
+        ));
+        assert_eq!(
+            settings.update_release_url,
+            "https://github.com/acme/pebrel/releases/tag/v2.0.0-beta.1"
         );
     }
 

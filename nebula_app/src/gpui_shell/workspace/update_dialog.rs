@@ -68,7 +68,7 @@ fn start_update_download(
     cx: &mut App,
 ) {
     let Some(asset) = result.asset.clone() else {
-        cx.open_url(crate::update_check::RELEASES_PAGE);
+        cx.open_url(&crate::update_check::release_page());
         return;
     };
     let job = match crate::update_download::begin(&asset) {
@@ -403,7 +403,7 @@ pub(crate) fn open_update_dialog(
             .child(body)
             .on_ok(move |_, window, cx| {
                 let Some(asset) = action_result.asset.as_ref() else {
-                    cx.open_url(crate::update_check::RELEASES_PAGE);
+                    cx.open_url(&crate::update_check::release_page());
                     return true;
                 };
                 match crate::update_download::status(asset) {
@@ -422,7 +422,7 @@ pub(crate) fn open_update_dialog(
                         false
                     },
                     _ => {
-                        cx.open_url(crate::update_check::RELEASES_PAGE);
+                        cx.open_url(&crate::update_check::release_page());
                         true
                     },
                 }

@@ -802,6 +802,8 @@
       "network": "无法下载更新。请检查网络和代理设置，或从发布页手动下载。"
     },
     "auto_download": "在后台预下载更新",
+    "source_label": "自定义更新地址",
+    "source_placeholder": "留空 = 官方源 · https://github.com/owner/repo/releases",
     "stop_download": "停止下载",
     "skip_version": "跳过此版本",
     "restart_install": "重启并安装",

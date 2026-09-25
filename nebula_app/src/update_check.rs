@@ -17,13 +17,17 @@ use crate::event::{Event, EventType};
 #[cfg(feature = "legacy-shell")]
 use crate::message_bar::{Message, MessageType};
 
-const RELEASES_API: &str = "https://api.github.com/repos/Kuddev/pebrel/releases/latest";
 pub const RELEASES_PAGE: &str = "https://github.com/Kuddev/pebrel/releases";
 const UPDATE_STATE_FILE: &str = "update_state.json";
 const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
 
 pub(crate) mod assets;
 mod fallback;
+mod source;
+
+pub(crate) use source::{normalize_setting, release_page, validate_asset_url};
+#[cfg(test)]
+pub(crate) use source::validate_official_asset_url;
 
 #[cfg(feature = "update-test-source")]
 pub(crate) mod test_source;
@@ -142,7 +146,7 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
             log::debug!("update-check: v{current} is current (latest v{latest})");
             return;
         }
-        let text = format!("Pebrel v{latest} 已发布（当前 v{current}），下载：{RELEASES_PAGE}");
+        let text = format!("Pebrel v{latest} 已发布（当前 v{current}），下载：{}", release_page());
         let _ = proxy.send_event(Event::new(
             EventType::Message(Message::new(text, MessageType::Warning)),
             None,
@@ -293,8 +297,14 @@ fn fetch_latest_release() -> Result<LatestRelease, String> {
         let agent = test_source::agent(Duration::from_secs(10));
         return fetch_release_with_agent(&agent, &url);
     }
-    let agent = crate::update_proxy::agent(RELEASES_API, Duration::from_secs(10));
-    fetch_release_with_fallback(&agent, RELEASES_API, fallback::fetch_latest)
+    let source = source::configured()?;
+    let api = source.api_url();
+    let agent = crate::update_proxy::agent(&api, Duration::from_secs(10));
+    if source.is_default() {
+        fetch_release_with_fallback(&agent, &api, fallback::fetch_latest)
+    } else {
+        fetch_release_with_fallback(&agent, &api, |status| Err(format!("GitHub HTTP {status}")))
+    }
 }
 
 #[cfg(any(test, feature = "update-test-source"))]
@@ -329,9 +339,15 @@ fn fetch_release_with_fallback(
 fn parse_latest_release(bytes: &[u8]) -> Result<LatestRelease, String> {
     let release: GitHubRelease =
         serde_json::from_slice(bytes).map_err(|error| format!("GitHub 返回了无效数据：{error}"))?;
-    let version = release.tag_name.trim().trim_start_matches(['v', 'V']);
-    if version.is_empty() {
-        return Err("GitHub release 的版本号为空".to_owned());
+    let tag = release.tag_name.trim();
+    let version = tag.strip_prefix('v').or_else(|| tag.strip_prefix('V')).unwrap_or(tag);
+    if version.is_empty()
+        || !version.as_bytes().first().is_some_and(|byte| byte.is_ascii_digit())
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        return Err("GitHub release 的版本号无效".to_owned());
     }
     let version = version.to_owned();
     let asset = assets::select(
@@ -447,6 +463,13 @@ mod tests {
         }
         assert!(!super::version_is_installable("1.8.0", "1.8.0", false));
         assert!(super::version_is_installable("1.8.0", "1.8.0", true));
+    }
+
+    #[test]
+    fn release_parser_accepts_semver_style_prerelease_tags() {
+        let release = parse_latest_release(br#"{"tag_name":"v2.0.0-beta.1","assets":[]}"#).unwrap();
+        assert_eq!(release.version, "2.0.0-beta.1");
+        assert!(parse_latest_release(br#"{"tag_name":"preview-v2.0.0","assets":[]}"#).is_err());
     }
 
     #[test]

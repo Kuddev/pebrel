@@ -544,6 +544,11 @@ impl SettingsPane {
         let appearance_interceptor = cx.listener(Self::intercept_appearance_picker);
         subscriptions.push(cx.intercept_keystrokes(appearance_interceptor));
 
+        let update_release_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(language.text(crate::i18n::Message::UpdateSourcePlaceholder))
+                .default_value(runtime.update_release_url.clone())
+        });
         let settings_search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(language.pick(
                 "搜索全部设置，例如「字号」「透明度」「更新」",
@@ -584,6 +589,7 @@ impl SettingsPane {
             about_update: AboutUpdateState::Idle,
             about_update_seq: 0,
             about_last_checked: None,
+            update_release_input,
             about_sponsor_open: false,
             settings_search_input,
             search_origin_section: None,

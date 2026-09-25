@@ -46,6 +46,7 @@ const RESET_KEYS: &[&str] = &[
     "fetch",
     "auto_check_updates",
     "auto_download_updates",
+    "update_release_url",
     "keep_session",
     "restore_session",
     "resume_ai",
