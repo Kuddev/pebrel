@@ -101,11 +101,12 @@ def navigation(groups: list[dict], active: str, root: str) -> str:
 
 
 def home_header() -> str:
-    return '''<section class="hero">
+    release = f"{UPSTREAM}/releases/latest"
+    return f'''<section class="hero">
 <div class="hero-art" aria-hidden="true"><i></i><i></i><i></i></div>
 <h1>从一个终端开始。<br><span>把工作连成一体。</span></h1>
 <div class="hero-actions"><a class="button-primary" href="quickstart/index.html">开始使用 <span aria-hidden="true">→</span></a><a class="text-link" href="installation/index.html">下载 Pebrel ↗</a></div></section>
-<div class="platform-strip"><span>为你的桌面而来</span><span>Windows</span><span>macOS <small>Preview</small></span><span>Linux <small>Preview</small></span></div>'''
+<div class="platform-strip"><span>为你的桌面而来</span><a href="{release}" target="_blank" rel="noopener">Windows</a><a href="{release}" target="_blank" rel="noopener">macOS <small>Preview</small></a><a href="{release}" target="_blank" rel="noopener">Linux <small>Preview</small></a></div>'''
 
 
 def source_details(page: dict, commit: str) -> str:
@@ -148,12 +149,18 @@ def build(destination: Path, base_url: str) -> dict:
                 raise ValueError(f"{slug}: unknown evidence source {path}")
         content, renderer = render_markdown(source, root)
         total_characters += len(plain(content))
-        header = home_header() if slug == "index" else (
-            f'<header class="page-heading"><span class="eyebrow">{html.escape(page["group"])}</span>'
-            f'<h1>{html.escape(page["title"])}</h1><p class="page-description">{html.escape(page["description"])}</p>'
-            f'<div class="page-tools"><span>约 {max(1, len(plain(content)) // 450)} 分钟阅读</span>'
-            f'<button class="small-button" id="copy-page">复制本页</button>'
-            f'<a href="{root}markdown/{slug}.md" download>Markdown ↓</a></div></header>')
+        if slug == "index":
+            header = home_header()
+            breadcrumb_tools = ""
+        else:
+            reading_minutes = max(1, len(plain(content)) // 450)
+            header = (
+                f'<header class="page-heading"><h1>{html.escape(page["title"])}</h1>'
+                f'<p class="page-description">{html.escape(page["description"])}</p></header>')
+            breadcrumb_tools = (
+                f'<div class="page-tools"><span>约 {reading_minutes} 分钟阅读</span>'
+                f'<button class="small-button" id="copy-page">复制本页</button>'
+                f'<a href="{root}markdown/{slug}.md" download>Markdown ↓</a></div>')
         header += '<script id="page-source" type="application/json">' + json.dumps(source, ensure_ascii=False).replace("<", "\\u003c") + '</script>'
         toc = "".join(f'<a class="level-{level}" href="#{quote(identity)}">{html.escape(label)}</a>' for level, identity, label in renderer.headings if level in (2, 3))
         pagination = []
@@ -169,7 +176,7 @@ def build(destination: Path, base_url: str) -> dict:
             description=html.escape(page["description"]), title=html.escape(page["title"]), canonical=canonical,
             root=root, slug=slug, version=config["version"], group=html.escape(page["group"]),
             navigation=navigation(config["groups"], slug, root), main_class="home" if slug == "index" else "document",
-            page_header=header, content=content, source_details=source_details(page, config["source_commit"]),
+            breadcrumb_tools=breadcrumb_tools, page_header=header, content=content, source_details=source_details(page, config["source_commit"]),
             pagination="".join(pagination), toc=toc, edit_url=f'{UPSTREAM}/edit/main/docs/site/content/{slug}.md')
         target = destination / page_url(slug)
         target.parent.mkdir(parents=True, exist_ok=True)

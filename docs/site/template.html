@@ -30,11 +30,11 @@
 <aside id="sidebar" class="sidebar" aria-label="文档导航">
   <a href="${root}index.html" class="sidebar-home">用户手册 <span class="version">$version</span></a>
   <nav>$navigation</nav>
-  <div class="sidebar-bottom"><span class="status-dot"></span>本地 · 远程 · 从容工作<a href="https://github.com/Kuddev/pebrel/releases/latest" target="_blank" rel="noopener">查看发行版 ↗</a></div>
+  <div class="sidebar-bottom"><a href="https://github.com/Kuddev/pebrel/releases/latest" target="_blank" rel="noopener">查看发行版 ↗</a></div>
 </aside>
 <div class="workspace">
   <main id="main" class="$main_class" tabindex="-1">
-    <div class="breadcrumb"><a href="${root}index.html">文档</a><span aria-hidden="true">/</span><span>$group</span></div>
+    <div class="breadcrumb"><div class="breadcrumb-path"><a href="${root}index.html">文档</a><span aria-hidden="true">/</span><span>$group</span></div>$breadcrumb_tools</div>
     $page_header
     <div class="prose" id="article-content">$content</div>
     $source_details

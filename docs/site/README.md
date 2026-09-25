@@ -19,7 +19,7 @@ For the browser smoke check, install `playwright==1.57.0`, run
 The check serves the site under `/pebrel/`, exercising project-site path handling.
 `CHROMIUM_PATH` optionally selects an existing Chromium executable.
 
-The manifest currently contains 51 user-facing guides, organized by tasks rather
+The manifest currently contains 53 user-facing guides, organized by tasks rather
 than implementation modules. Source links are pinned to the documented commit.
 
 The generated `dist/` is disposable and ignored. Publish that directory's contents,

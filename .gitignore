@@ -281,3 +281,6 @@ NebulaTerminal-*/
 !/docs/site/content/markdown-editing.md
 !/docs/site/content/config-examples.md
 !/docs/site/content/agent-worktrees.md
+
+!/docs/site/content/readme.md
+!/docs/site/content/contributing.md

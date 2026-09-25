@@ -71,13 +71,15 @@ class SiteTests(unittest.TestCase):
                         self.assertIn(unquote(url.fragment), self.documents[target].ids)
 
     def test_homepage_hero_has_no_eyebrow_or_description(self):
-        hero = home_header().split('</section>', 1)[0]
+        header = home_header()
+        hero = header.split('</section>', 1)[0]
         self.assertNotIn('eyebrow', hero)
         self.assertNotIn('<p', hero)
         self.assertNotIn('USER GUIDE', hero)
         self.assertIn('从一个终端开始', hero)
         self.assertIn('quickstart/index.html', hero)
         self.assertIn('installation/index.html', hero)
+        self.assertEqual(header.count('https://github.com/Kuddev/pebrel/releases/latest'), 3)
 
     def test_page_structure(self):
         for path, document in self.documents.items():

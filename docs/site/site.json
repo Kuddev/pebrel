@@ -15,6 +15,16 @@
           ]
         },
         {
+          "slug": "readme",
+          "title": "项目概览",
+          "description": "用图文方式浏览 README 中的定位、核心能力、平台下载、配置与社区信息。",
+          "sources": [
+            "README.md",
+            "README.zh-CN.md",
+            "INSTALL.md"
+          ]
+        },
+        {
           "slug": "quickstart",
           "title": "快速开始",
           "description": "运行第一条命令，再创建标签页、分屏和 SSH 连接。",
@@ -554,6 +564,17 @@
             "nebula_app/src/gpui_shell/settings_pane/navigation.rs",
             "nebula_app/src/platform/capabilities.rs",
             "docs/runtime-control-api.md"
+          ]
+        },
+        {
+          "slug": "contributing",
+          "title": "贡献与开发",
+          "description": "准备开发环境，完成本地检查，并按仓库规则提交便于审查的改动。",
+          "sources": [
+            "CONTRIBUTING.md",
+            "docs/project-constraints.md",
+            "docs/architecture.md",
+            "INSTALL.md"
           ]
         }
       ]
