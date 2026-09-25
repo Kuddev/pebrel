@@ -2,6 +2,8 @@ name: UI review screenshots
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["codex/macos-system-notifications"]
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -17,6 +19,7 @@ env:
   RUST_BACKTRACE: "1"
   RUST_TOOLCHAIN: "1.97.1"
   CARGO_TARGET_DIR: target/ui-review
+  UI_REVIEW_PR: "289"
   UI_REVIEW_SCENARIO: "notification"
   UI_REVIEW_TARGET: "Foreground macOS system-notification delivery and full-app regression state"
 
@@ -349,3 +352,59 @@ jobs:
             echo "- Changed UI target: $UI_REVIEW_TARGET"
             echo "- Download the ui-review-${{ matrix.platform }} artifact to inspect the PNG evidence."
           } >>"$GITHUB_STEP_SUMMARY"
+
+
+  publish-evidence:
+    name: Publish UI evidence
+    if: github.repository == 'WilliamWang1721/pebrel' && github.event_name == 'push'
+    needs: native-ui
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: ui-review-evidence-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-review-windows
+          path: ${{ runner.temp }}/ui-review-evidence/windows
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-review-macos
+          path: ${{ runner.temp }}/ui-review-evidence/macos
+
+      - name: Publish screenshots outside the PR diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/ui-review-evidence"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin ui-review-evidence || true
+          if git show-ref --verify --quiet refs/remotes/origin/ui-review-evidence; then
+            git switch -C ui-review-evidence origin/ui-review-evidence
+          else
+            git switch --orphan ui-review-evidence
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          root="ui-review/pr-$UI_REVIEW_PR"
+          rm -rf "$root"
+          mkdir -p "$root/windows" "$root/macos"
+          find "$source_dir/windows" -maxdepth 1 -type f -name '*.png' -exec cp {} "$root/windows/" \;
+          find "$source_dir/macos" -maxdepth 1 -type f -name '*.png' -exec cp {} "$root/macos/" \;
+          printf '%s\n' "$GITHUB_SHA" >"$root/head-sha.txt"
+          printf '%s\n' "$UI_REVIEW_TARGET" >"$root/target.txt"
+
+          git add "$root"
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "docs(ui): publish PR #$UI_REVIEW_PR screenshots"
+          git push origin HEAD:ui-review-evidence
