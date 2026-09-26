@@ -1130,22 +1130,6 @@ impl NebulaWorkspace {
                 .update(cx, |workspace, cx| workspace.should_close_window(window, cx))
                 .unwrap_or(true)
         });
-        #[cfg(feature = "gpui-test-support")]
-        if std::env::var_os("PEBREL_UI_REVIEW_FOREGROUND_NOTIFICATION").is_some() {
-            cx.spawn_in(window, async move |_, cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(2))
-                    .await;
-                crate::notify::deliver_gpui(
-                    &crate::notify::Notification::Text {
-                        program: Some("Pebrel".into()),
-                        body: "Foreground system notification review".into(),
-                    },
-                    0,
-                );
-            })
-            .detach();
-        }
         this
     }
 

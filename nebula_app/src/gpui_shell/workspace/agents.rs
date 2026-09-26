@@ -195,6 +195,17 @@ impl NebulaWorkspace {
     pub(super) fn start_agent_screen_watchdog(cx: &mut Context<Self>) {
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
+            #[cfg(feature = "gpui-test-support")]
+            if std::env::var_os("PEBREL_UI_REVIEW_FOREGROUND_NOTIFICATION").is_some() {
+                executor.timer(Duration::from_secs(2)).await;
+                crate::notify::deliver_gpui(
+                    &crate::notify::Notification::Text {
+                        program: Some("Pebrel".into()),
+                        body: "Foreground system notification review".into(),
+                    },
+                    0,
+                );
+            }
             loop {
                 let Ok(views) = this.update(cx, |workspace, _| {
                     workspace.tabs.iter().filter_map(|tab| match tab {
