@@ -125,6 +125,89 @@ fn ai_toast_setting_is_searchable_and_has_a_visible_switch(cx: &mut gpui::TestAp
     );
 }
 
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn command_output_controls_are_searchable_and_visible(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    for query in ["命令输出", "command output"] {
+        cx.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.settings_search_input
+                    .update(cx, |input, cx| input.replace_all(query, window, cx));
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 8);
+        for id in ["nebula-switch-save_command_output", "clear-command-output"] {
+            let bounds = cx.debug_bounds(id).expect("command output control is rendered");
+            assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+            assert!(bounds.origin.y >= px(0.0) && bounds.bottom() <= px(1600.0));
+        }
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn command_output_clear_click_reports_failure_and_allows_retry(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::workspace::windowing;
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("output.json");
+    // A directory at the file path makes removal fail without touching user data.
+    std::fs::create_dir(&output).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+        windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        windowing::set_command_output_test_path(cx, output.clone());
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, _| pane.active_section = 8);
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    for retry in [false, true] {
+        if retry {
+            std::fs::remove_dir(&output).unwrap();
+            std::fs::write(&output, b"synthetic output").unwrap();
+        }
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let bounds = cx.debug_bounds("clear-command-output").unwrap();
+        cx.simulate_mouse_down(
+            bounds.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(bounds.center(), gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert!(pane.read_with(cx, |pane, _| if retry {
+            matches!(pane.command_output_clear, command_output::ClearState::Done)
+        } else {
+            matches!(pane.command_output_clear, command_output::ClearState::Failed)
+        }));
+        assert_eq!(output.exists(), !retry);
+    }
+}
+
 #[test]
 fn settings_nav_visibility_keeps_stable_routes_and_hides_backup() {
     let visibility: Vec<_> = (0..SECTION_IDS.len()).map(is_nav_section_visible).collect();
