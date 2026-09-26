@@ -106,7 +106,8 @@ class StableReleaseTests(unittest.TestCase):
         arm = workflow.split("\n  windows-arm64:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
         for required in ("runs-on: windows-11-arm", "host: aarch64-pc-windows-msvc",
                          "-Architecture arm64", "windows-arm64-report.json",
-                         "scripts/build-windows-product.ps1", "--platform windows-aarch64"):
+                         "scripts/build-windows-product.ps1", "scripts/build-installer.ps1",
+                         "windows-arm64-setup.exe", "--platform windows-aarch64"):
             self.assertIn(required, arm)
         self.assertNotIn("continue-on-error", arm)
         self.assertNotIn("always()", aggregate)
@@ -137,10 +138,11 @@ class StableReleaseTests(unittest.TestCase):
             expected_asset_names("1.6.0-rc.1")
 
     def test_17_and_later_assets_use_only_pebrel_installer(self) -> None:
-        for version in ("1.7.0", "1.7.1", "1.10.0", "2.0.0"):
+        for version in ("1.7.0", "1.7.1", "1.9.0", "1.9.1", "1.9.2", "1.10.0", "2.0.0"):
             with self.subTest(version=version):
                 names = expected_asset_names(version)
-                self.assertEqual(len(names), 8 if tuple(map(int, version.split('.'))) >= (1, 9, 0) else 7)
+                parsed = tuple(map(int, version.split('.')))
+                self.assertEqual(len(names), 9 if parsed >= (1, 9, 2) else 8 if parsed >= (1, 9, 0) else 7)
                 self.assertIn(f"Pebrel-v{version}-windows-x64-setup.exe", names)
                 self.assertNotIn(f"NebulaTerminal-{version}-windows-x64-setup.exe", names)
 
@@ -154,6 +156,29 @@ class StableReleaseTests(unittest.TestCase):
             self.assertEqual(len(validate_assets(root, version)), 8)
             (root / "Pebrel-v1.9.0-windows-arm64.zip").unlink()
             with self.assertRaisesRegex(StableReleaseError, "missing: Pebrel-v1.9.0-windows-arm64.zip"):
+                validate_assets(root, version)
+
+    def test_post_191_requires_native_windows_arm64_installer(self) -> None:
+        for version in ("1.9.0", "1.9.1"):
+            with self.subTest(historical_version=version):
+                self.assertNotIn(
+                    f"Pebrel-v{version}-windows-arm64-setup.exe",
+                    expected_asset_names(version),
+                )
+        for version in ("1.9.2", "1.10.0", "2.0.0"):
+            with self.subTest(version=version):
+                self.assertIn(
+                    f"Pebrel-v{version}-windows-arm64-setup.exe",
+                    expected_asset_names(version),
+                )
+        version = "1.9.2"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in expected_asset_names(version):
+                write_fake_asset(root / name)
+            self.assertEqual(len(validate_assets(root, version)), 9)
+            (root / f"Pebrel-v{version}-windows-arm64-setup.exe").unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing: Pebrel-v1.9.2-windows-arm64-setup.exe"):
                 validate_assets(root, version)
 
     def test_17_assets_reject_retired_alias_and_missing_installer(self) -> None:

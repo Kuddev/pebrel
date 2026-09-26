@@ -195,7 +195,7 @@ pub(crate) fn open_update_dialog(
 
     let dialog_result = result.clone();
     window.open_dialog(cx, move |dialog, window, cx| {
-        let language = workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let title: SharedString = language.pick("Pebrel 更新", "Pebrel Update").into();
         let current_label: SharedString = language.pick("当前版本", "Current").into();
         let latest_label: SharedString = language.pick("最新版本", "Latest").into();

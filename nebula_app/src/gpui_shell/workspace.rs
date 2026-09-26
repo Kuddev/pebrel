@@ -1656,66 +1656,6 @@ impl NebulaWorkspace {
         )
     }
 
-    fn request_close_pane(
-        &mut self,
-        tab_ix: usize,
-        pane_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(process) = self.busy_process_in_tab(tab_ix, Some(pane_id), cx) else {
-            self.close_pane(tab_ix, pane_id, window, cx);
-            return;
-        };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
-        let workspace = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, window, _cx| {
-            let workspace = workspace.clone();
-            confirm_dialog(
-                dialog,
-                window,
-                "关闭此分栏？",
-                body.clone(),
-                "关闭",
-                "取消",
-                ButtonVariant::Danger,
-            )
-            .on_ok(move |_, window, cx| {
-                let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_pane(tab_ix, pane_id, window, cx);
-                });
-                true
-            })
-        });
-    }
-
-    fn request_close_tab(&mut self, tab_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(process) = self.busy_process_in_tab(tab_ix, None, cx) else {
-            self.close_tab(tab_ix, window, cx);
-            return;
-        };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
-        let workspace = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, window, _cx| {
-            let workspace = workspace.clone();
-            confirm_dialog(
-                dialog,
-                window,
-                "关闭此标签页？",
-                body.clone(),
-                "关闭",
-                "取消",
-                ButtonVariant::Danger,
-            )
-            .on_ok(move |_, window, cx| {
-                let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_tab(tab_ix, window, cx);
-                });
-                true
-            })
-        });
-    }
-
     /// 聚焦另一个 pane（点击上报或方向导航落点）。
     fn focus_pane(
         &mut self,
