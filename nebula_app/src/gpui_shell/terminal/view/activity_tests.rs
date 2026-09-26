@@ -14,6 +14,46 @@ fn hook(session: &str, name: &str, sequence: u64) -> AiHookEvent {
     crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(42)).unwrap()
 }
 
+#[gpui::test]
+fn pi_redraw_anchor_follows_accepted_hook_and_command_lifecycle(cx: &mut TestAppContext) {
+    use nebula_terminal::term::test::TermSize;
+    use nebula_terminal::vte::ansi::Processor;
+
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        let event = |kind: &str, seq: u64| {
+            crate::ai_hook::parse_remote_envelope(
+                format!("nebula-hook/1 source=pi pane=42\n{{\"kind\":\"{kind}\",\"session_id\":\"redraw-policy\",\"bridge_sequence\":{seq}}}").as_bytes(),
+                Some(42),
+            ).unwrap()
+        };
+        let check = |view: &mut TerminalView, expected: usize| {
+            let mut term = view.session.as_ref().unwrap().term.lock();
+            term.resize(TermSize::new(60, 5));
+            let mut stream = Processor::<nebula_terminal::vte::ansi::StdSyncHandler>::default();
+            let text = (0..12).map(|n| format!("ROW_{n:03}")).collect::<Vec<_>>().join("\r\n");
+            let frame = format!("\x1b[?2026h\x1b[2J\x1b[H\x1b[3J{text}\x1b[?2026l");
+            term.scroll_display(Scroll::Bottom);
+            stream.advance(&mut *term, frame.as_bytes());
+            term.scroll_display(Scroll::Top);
+            term.scroll_display(Scroll::Delta(-2));
+            stream.advance(&mut *term, frame.as_bytes());
+            assert_eq!(term.grid().display_offset(), expected);
+        };
+        check(view, 0);
+        assert!(view.handle_ai_hook(&event("session-start", 1), cx));
+        check(view, 5);
+        assert!(view.handle_ai_hook(&event("done", 2), cx));
+        check(view, 5); // 回合结束不是 Pi 进程退出。
+        assert!(view.handle_ai_hook(&event("session-end", 3), cx));
+        check(view, 0);
+        assert!(view.handle_ai_hook(&event("session-start", 4), cx));
+        check(view, 5);
+        view.finish_foreground_command(Some(0), cx);
+        check(view, 0);
+    });
+}
+
 fn screen(view: &mut TerminalView, text: &str) {
     feed(view, format!("\x1b[2J\x1b[H{}", text.replace('\n', "\r\n")).as_bytes());
 }
