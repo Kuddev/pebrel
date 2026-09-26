@@ -711,6 +711,59 @@ fn shell_palette_includes_imported_terminal_profiles() {
     ));
 }
 
+/// 「开在哪儿」那一列：WSL 入口要给来宾目录，不是 `wsl.exe`。
+///
+/// WSL 入口的 `Profile::cwd` 是空的（目录随 `--cd` 直接带给来宾，宿主侧没有对应
+/// 目录），只看 `cwd` 的回落会显示成 `C:\Windows\System32\wsl.exe`——用户报的
+/// 「项目地址不对、进去之后才对」就是这个。侧栏与 Ctrl+K 共用 `profile_location`。
+#[test]
+fn palette_row_shows_the_wsl_guest_directory() {
+    let rows = shell_palette_rows(
+        Vec::new(),
+        vec![crate::config::ui_config::Profile {
+            name: "stylekit（Ubuntu）".to_owned(),
+            command: r"C:\Windows\System32\wsl.exe".to_owned(),
+            args: ["-d", "Ubuntu", "--cd", "/home/anx4758/stylekit"].map(str::to_owned).to_vec(),
+            cwd: None,
+            shell_id: Some("wsl:Ubuntu".to_owned()),
+            terminal_profile_id: Some("pebrel-wsl-stylekit".to_owned()),
+        }],
+        None::<(String, String)>,
+        "",
+        crate::display::UiLanguage::ZhCn,
+        1.0,
+    );
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].hint, "Ubuntu:/home/anx4758/stylekit");
+
+    // 对照一：有 `cwd` 的宿主入口仍然显示目录本身。
+    assert_eq!(
+        super::shell_picker::profile_location(&crate::config::ui_config::Profile {
+            name: "活字格工作台".to_owned(),
+            command: r"C:\Program Files\PowerShell\7\pwsh.exe".to_owned(),
+            args: vec!["-NoLogo".to_owned()],
+            cwd: Some(std::path::PathBuf::from(r"D:\huozigemima")),
+            shell_id: Some("pwsh".to_owned()),
+            terminal_profile_id: Some("pebrel-pwsh-7-store".to_owned()),
+        }),
+        r"D:\huozigemima"
+    );
+
+    // 对照二：两条都取不到才回落到命令路径（`scan_directory` 导入的 profile）。
+    assert_eq!(
+        super::shell_picker::profile_location(&crate::config::ui_config::Profile {
+            name: "Portable PowerShell".to_owned(),
+            command: r"D:\Tools\pwsh.exe".to_owned(),
+            args: Vec::new(),
+            cwd: None,
+            shell_id: Some("pwsh".to_owned()),
+            terminal_profile_id: Some("pwsh-deadbeef".to_owned()),
+        }),
+        r"D:\Tools\pwsh.exe"
+    );
+}
+
 #[test]
 fn wsl_file_tree_terminal_changes_directory_without_forcing_bash() {
     let launch = super::file_tree::wsl_terminal_launch_at(

@@ -143,11 +143,10 @@ impl NebulaWorkspace {
                             matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_))
                         },
                         crate::display::command_palette::LauncherFilter::Shell => {
-                            matches!(
-                                row.action,
-                                WorkspacePaletteAction::LaunchShell(_)
-                                    | WorkspacePaletteAction::LaunchProfile(_)
-                            )
+                            matches!(row.action, WorkspacePaletteAction::LaunchShell(_))
+                        },
+                        crate::display::command_palette::LauncherFilter::Profiles => {
+                            matches!(row.action, WorkspacePaletteAction::LaunchProfile(_))
                         },
                     };
                     if !keep {
