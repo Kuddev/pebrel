@@ -1,10 +1,16 @@
 //! Native character data discarded by the GPUI keyboard adapter.
 
-/// Recover Return's native character without changing keyboard composition state.
-/// GPUI filters control text out of `key_char`, including Ctrl+Enter's LF.
-pub(crate) fn enter_character(scan_code: u32, shift: bool, control: bool, alt: bool) -> u16 {
+/// Recover native character data without changing keyboard composition state.
+/// GPUI filters control text out of `key_char`, including Ctrl+C's ETX.
+pub(crate) fn native_character(
+    virtual_key: u16,
+    scan_code: u32,
+    shift: bool,
+    control: bool,
+    alt: bool,
+) -> u16 {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        ToUnicode, VK_CONTROL, VK_MENU, VK_RETURN, VK_SHIFT,
+        ToUnicode, VK_CONTROL, VK_MENU, VK_SHIFT,
     };
 
     let mut state = [0_u8; 256];
@@ -16,7 +22,7 @@ pub(crate) fn enter_character(scan_code: u32, shift: bool, control: bool, alt: b
     // prevents dead-key state mutation; 0x1 selects menu translation semantics.
     let count = unsafe {
         ToUnicode(
-            u32::from(VK_RETURN),
+            u32::from(virtual_key),
             scan_code,
             state.as_ptr(),
             text.as_mut_ptr(),
