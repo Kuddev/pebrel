@@ -11,6 +11,12 @@ use crate::update_download::DownloadStatus;
 const UPDATE_DIALOG_IDLE_HEIGHT: f32 = 250.0;
 const UPDATE_DIALOG_STATUS_HEIGHT: f32 = 280.0;
 
+fn update_dialog_frame(dialog: Dialog, window: &Window, estimated_height: f32, cx: &App) -> Dialog {
+    // 默认 Dialog 继承终端壳的透明背景；更新内容需像设置页一样遮住底层文字。
+    center_modal_dialog(dialog, window, estimated_height)
+        .bg(crate::gpui_shell::theme::settings_panel_bg(cx))
+}
+
 struct UpdateNotification;
 
 /// 自动检查只在右下角提示，不抢终端焦点；默认常驻，也遵循通知时长设置。
@@ -394,7 +400,7 @@ pub(crate) fn open_update_dialog(
         let primary = Button::new("ok").label(primary_text).primary();
         footer = footer.child(DialogAction::new().child(primary));
 
-        center_modal_dialog(dialog, window, estimated_height)
+        update_dialog_frame(dialog, window, estimated_height, cx)
             .close_button(true)
             // 保留新 Dialog 的遮罩点击取消；它与 Esc、取消按钮共用 on_cancel。
             .overlay_closable(true)
@@ -450,5 +456,85 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KiB", bytes as f64 / KIB)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use gpui_component::{Theme, ThemeMode};
+
+    struct DialogProbe;
+
+    impl Render for DialogProbe {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // 滚动组件依赖当前视图；沿用真实模态层，避免裸绘制 Dialog 缺失实体上下文。
+            div().size_full().children(Root::render_dialog_layer(window, cx))
+        }
+    }
+
+    #[gpui::test]
+    fn update_dialog_stays_opaque_without_changing_terminal_opacity(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| DialogProbe);
+            Root::new(view, window, cx)
+        });
+        cx.simulate_resize(size(px(800.0), px(600.0)));
+        for name in [nebula_settings::ThemeName::LinenLight, nebula_settings::ThemeName::Nord] {
+            cx.update(|window, cx| {
+                let mut runtime = nebula_settings::RuntimeSettings::from_raw(
+                    &nebula_settings::RawSettings::default(),
+                );
+                runtime.theme = name;
+                runtime.follow_system_theme = false;
+                cx.set_global(crate::gpui_shell::config::Settings::load_with_runtime(
+                    name, runtime,
+                ));
+                let mode = if crate::gpui_shell::theme::resolved_skin(cx).is_light {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                Theme::change(mode, Some(window), cx);
+            });
+            for alpha in [0.0, 0.2, 0.75, 1.0] {
+                for height in [UPDATE_DIALOG_IDLE_HEIGHT, UPDATE_DIALOG_STATUS_HEIGHT] {
+                    let shell = cx.update(|window, cx| {
+                        let panel = crate::gpui_shell::theme::settings_panel_bg(cx);
+                        let shell = panel.opacity(alpha);
+                        let theme = Theme::global_mut(cx);
+                        theme.background = shell;
+                        theme.tokens.background = shell.into();
+                        window.open_dialog(cx, move |dialog, window, cx| {
+                            let mut dialog = update_dialog_frame(dialog, window, height, cx);
+                            assert_eq!(panel.a, 1.0);
+                            assert_eq!(dialog.style().background, Some(panel.into()));
+                            assert_eq!(cx.theme().background, shell);
+                            assert_eq!(cx.theme().tokens.background, shell.into());
+                            dialog.title("Update").child(
+                                div()
+                                    .debug_selector(|| "update-dialog-body".to_owned())
+                                    .child("Version details"),
+                            )
+                        });
+                        shell
+                    });
+                    cx.run_until_parked();
+                    cx.update(|window, cx| {
+                        let _ = window.draw(cx);
+                        assert_eq!(cx.theme().background, shell);
+                        assert_eq!(cx.theme().tokens.background, shell.into());
+                    });
+                    let bounds = cx.debug_bounds("update-dialog-body").expect("rendered dialog");
+                    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+                    cx.update(|window, cx| window.close_dialog(cx));
+                }
+            }
+        }
     }
 }
