@@ -35,7 +35,7 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 11] = [
     "network 网络 proxy 代理 connectivity 连接",
     "interaction 交互 copy 复制 paste 粘贴 tab 标签 panel 面板 focus follows mouse 焦点跟随鼠标 自动聚焦",
     "keymap key binding shortcut quick terminal 快速终端 独立窗口 已有窗口 按键映射 快捷键",
-    "advanced 高级 session 会话 tray 托盘 restore 恢复 startup autostart login silent 自启动 静默启动 开机 登录",
+    "advanced 高级 session 会话 tray 托盘 restore 恢复 startup autostart login silent 自启动 静默启动 开机 登录 command output 命令输出 最近命令 清除输出",
     "backup cloud sync 云备份 云同步 云存储 备份 export 导出 restore 恢复 webdav s3 sftp 坚果云 123 123云盘 nextcloud synology 群晖 nas r2 minio snapshots 快照",
     "agents agent hook hooks 智能体 钩子 接入 claude codex opencode cursor kimi pi omp copilot grok",
 ];
