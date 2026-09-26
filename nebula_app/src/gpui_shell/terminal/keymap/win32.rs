@@ -13,7 +13,7 @@ pub(super) fn win32_encodes_keystroke(ks: &Keystroke) -> bool {
         return true;
     }
     let key = ks.key.as_str();
-    if key == "space" {
+    if key == "space" || key == "/" {
         return false;
     }
     let mut chars = key.chars();

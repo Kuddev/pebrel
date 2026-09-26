@@ -595,6 +595,7 @@ mod tests {
         assert_eq!(encode(&keystroke("a"), &mode), None);
         assert_eq!(encode(&keystroke("1"), &mode), None);
         assert_eq!(encode(&keystroke("space"), &mode), None);
+        assert_eq!(encode(&keystroke("/"), &mode), None);
         // Ctrl+C 仍走记录，不能为了 IME 把快捷键也放掉。
         let mut ctrl_c = keystroke("c");
         ctrl_c.modifiers.control = true;
