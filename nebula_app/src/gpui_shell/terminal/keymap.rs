@@ -589,17 +589,45 @@ mod tests {
     /// 当按键已处理、不再 TranslateMessage，中文组字起不来。
     #[cfg(windows)]
     #[test]
-    fn unmodified_letters_stay_on_the_ime_path_in_win32_mode() {
+    fn win32_mode_preserves_text_input_and_modified_slash() {
         let mode = TermMode::WIN32_INPUT_MODE;
         assert_eq!(encode(&keystroke("n"), &mode), None);
         assert_eq!(encode(&keystroke("a"), &mode), None);
         assert_eq!(encode(&keystroke("1"), &mode), None);
         assert_eq!(encode(&keystroke("space"), &mode), None);
+        assert_eq!(encode(&keystroke("/"), &mode), None);
+        assert_eq!(encode(&keystroke("?"), &mode), None);
+        assert_eq!(encode(&Keystroke::parse("shift-/").unwrap(), &mode), None);
         // Ctrl+C 仍走记录，不能为了 IME 把快捷键也放掉。
         let mut ctrl_c = keystroke("c");
         ctrl_c.modifiers.control = true;
         assert!(encode(&ctrl_c, &mode).is_some());
         assert!(encode(&keystroke("escape"), &mode).is_some());
+
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            MAPVK_VK_TO_VSC, MapVirtualKeyW, VkKeyScanW,
+        };
+
+        let key = Keystroke::parse("ctrl-/").unwrap();
+        let mapping = unsafe { VkKeyScanW(b'/' as u16) } as u16;
+        let vk = mapping & 0xff;
+        let scan = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC) };
+        let modifiers = 8 | ((mapping >> 8 & 1) << 4) | ((mapping >> 8 & 4) >> 1);
+        assert_eq!(
+            encode(&key, &TermMode::WIN32_INPUT_MODE),
+            Some(
+                format!("\x1b[{vk};{scan};0;1;{modifiers};1_\x1b[{vk};{scan};0;0;{modifiers};1_")
+                    .into_bytes()
+            )
+        );
+    }
+
+    #[test]
+    fn ctrl_slash_keeps_legacy_and_kitty_encodings() {
+        let key = Keystroke::parse("ctrl-/").unwrap();
+        assert_eq!(encode(&key, &TermMode::default()), Some(b"\x1f".to_vec()));
+        let mode = TermMode::WIN32_INPUT_MODE | TermMode::DISAMBIGUATE_ESC_CODES;
+        assert_eq!(encode(&key, &mode), Some(b"\x1b[47;5u".to_vec()));
     }
 
     /// 普通空格与字母使用同一文本输入路径：英语布局最终提交 `" "`，IME
