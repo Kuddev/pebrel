@@ -41,7 +41,7 @@ mod structure_inline_view;
 mod structure_tests;
 mod structure_view;
 #[cfg(all(test, feature = "gpui-test-support"))]
-pub(in crate::gpui_shell) mod tests;
+mod tests;
 
 use std::cell::RefCell;
 use std::path::PathBuf;

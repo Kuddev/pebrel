@@ -1647,64 +1647,13 @@ impl NebulaWorkspace {
         (0..self.tabs.len()).find_map(|tab_ix| self.busy_process_in_tab(tab_ix, None, cx))
     }
 
-    fn request_close_pane(
-        &mut self,
-        tab_ix: usize,
-        pane_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(process) = self.busy_process_in_tab(tab_ix, Some(pane_id), cx) else {
-            self.close_pane(tab_ix, pane_id, window, cx);
-            return;
-        };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
-        let workspace = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, window, _cx| {
-            let workspace = workspace.clone();
-            confirm_dialog(
-                dialog,
-                window,
-                "关闭此分栏？",
-                body.clone(),
-                "关闭",
-                "取消",
-                ButtonVariant::Danger,
-            )
-            .on_ok(move |_, window, cx| {
-                let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_pane(tab_ix, pane_id, window, cx);
-                });
-                true
-            })
-        });
-    }
-
-    fn request_close_tab(&mut self, tab_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(process) = self.busy_process_in_tab(tab_ix, None, cx) else {
-            self.close_tab(tab_ix, window, cx);
-            return;
-        };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
-        let workspace = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, window, _cx| {
-            let workspace = workspace.clone();
-            confirm_dialog(
-                dialog,
-                window,
-                "关闭此标签页？",
-                body.clone(),
-                "关闭",
-                "取消",
-                ButtonVariant::Danger,
-            )
-            .on_ok(move |_, window, cx| {
-                let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_tab(tab_ix, window, cx);
-                });
-                true
-            })
-        });
+    fn save_clean_window_session(&mut self, cx: &mut App) -> std::io::Result<()> {
+        windowing::save_current_window_session(
+            self.runtime_window_id,
+            self.snapshot_session(cx),
+            session_persistence::SaveReason::WindowClose,
+            cx,
+        )
     }
 
     /// 聚焦另一个 pane（点击上报或方向导航落点）。
@@ -1847,17 +1796,14 @@ impl NebulaWorkspace {
             self.active -= 1;
         }
         self.active = self.active.min(self.tabs.len().saturating_sub(1));
-        let save = windowing::output_persistence::save(
-            Some(self.snapshot_local_session(cx)),
+        if let Err(error) = windowing::save_current_window_session(
+            self.runtime_window_id,
+            self.snapshot_session(cx),
             session_persistence::SaveReason::TabsClosed,
             cx,
-        );
-        cx.spawn(async move |_, _| {
-            if !matches!(save.await, Ok(true)) {
-                log::warn!("Could not save closed tabs");
-            }
-        })
-        .detach();
+        ) {
+            log::warn!("Could not save closed tabs: {error}");
+        }
         self.reveal_active_tab();
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);

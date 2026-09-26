@@ -20,17 +20,14 @@ impl NebulaWorkspace {
     ) {
         match event {
             TerminalViewEvent::SessionIdentityChanged => {
-                let save = windowing::output_persistence::save(
-                    Some(self.snapshot_local_session(cx)),
+                if let Err(error) = windowing::save_current_window_session(
+                    self.runtime_window_id,
+                    self.snapshot_session(cx),
                     session_persistence::SaveReason::Checkpoint,
                     cx,
-                );
-                cx.spawn(async move |_, _| {
-                    if !matches!(save.await, Ok(true)) {
-                        log::warn!("Could not checkpoint native recovery identity");
-                    }
-                })
-                .detach();
+                ) {
+                    log::warn!("Could not checkpoint native recovery identity: {error}");
+                }
             },
             // OSC 7 cwd 与标题共用这条事件。只有当前聚焦 pane 能驱动共享文件树；
             // 后台 pane 的提示符更新不能把前台目录覆盖掉。

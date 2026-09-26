@@ -15,33 +15,6 @@ impl WorkspaceTab {
 }
 
 impl NebulaWorkspace {
-    pub(super) fn close_document_snapshot(
-        &self,
-        cx: &App,
-    ) -> Vec<(Entity<TextFileView>, SharedString)> {
-        self.tabs
-            .iter()
-            .filter_map(|tab| tab.file_editor(cx))
-            .map(|file| {
-                let draft = file.read(cx).draft(cx);
-                (file, draft)
-            })
-            .collect()
-    }
-
-    pub(super) fn close_documents_unchanged(
-        &self,
-        approved: &[(Entity<TextFileView>, SharedString)],
-        cx: &App,
-    ) -> bool {
-        self.tabs.iter().filter_map(|tab| tab.file_editor(cx)).all(|file| {
-            let view = file.read(cx);
-            !view.is_saving()
-                && (!view.is_dirty()
-                    || approved.iter().any(|(old, draft)| *old == file && *draft == view.draft(cx)))
-        })
-    }
-
     pub(super) fn sync_document_activity(&self, window: &mut Window, cx: &mut Context<Self>) {
         for (index, tab) in self.tabs.iter().enumerate() {
             let Some(file) = tab.file_editor(cx) else { continue };
