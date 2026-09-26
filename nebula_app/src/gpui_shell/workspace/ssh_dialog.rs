@@ -321,12 +321,13 @@ fn show_port_forward_dialog(
     window: &mut Window,
     cx: &mut App,
 ) -> [Entity<InputState>; 2] {
-    let forwards = view
-        .read(cx)
-        .port_forwards
-        .iter()
-        .map(|forward| (forward.local_port(), forward.remote_port()))
-        .collect::<Vec<_>>();
+    let forwards = Rc::new(
+        view.read(cx)
+            .port_forwards
+            .iter()
+            .map(|forward| (forward.local_port(), forward.remote_port()))
+            .collect::<Vec<_>>(),
+    );
     let remote_input = cx.new(|cx| InputState::new(window, cx).placeholder("3000"));
     let local_input = cx.new(|cx| InputState::new(window, cx).placeholder("3000"));
     let focus_input = remote_input.clone();
@@ -335,78 +336,15 @@ fn show_port_forward_dialog(
     let language = workspace_ui_language();
 
     window.open_dialog(cx, move |dialog, window, _cx| {
-        let mut body = v_flex().w_full().gap_3();
-        if forwards.is_empty() {
-            body = body.child(
-                div()
-                    .text_sm()
-                    .text_color(_cx.theme().muted_foreground)
-                    .child(language.text(Message::SshPortsEmpty)),
-            );
-        } else {
-            for (index, (local_port, remote_port)) in forwards.iter().copied().enumerate() {
-                let stop_target = target.clone();
-                body = body.child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .justify_between()
-                        .child(format!("127.0.0.1:{local_port} → 127.0.0.1:{remote_port}"))
-                        .child(
-                            Button::new(("ssh-port-stop", index))
-                                .icon(IconName::Close)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(language.text(Message::SshPortsStop))
-                                .on_click(move |_, window, cx| {
-                                    if let Some(view) = stop_target.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            if let Some(position) =
-                                                view.port_forwards.iter().position(|forward| {
-                                                    forward.local_port() == local_port
-                                                })
-                                            {
-                                                view.port_forwards.remove(position);
-                                                cx.notify();
-                                            }
-                                        });
-                                    }
-                                    window.close_dialog(cx);
-                                }),
-                        ),
-                );
-            }
-        }
-        body = body.child(
-            h_flex()
-                .w_full()
-                .gap_3()
-                .child(
-                    v_flex().flex_1().gap_1().child(language.text(Message::SshPortsRemote)).child(
-                        div()
-                            .debug_selector(|| "ssh-forward-remote".to_owned())
-                            .w_full()
-                            .h_8()
-                            .flex_shrink_0()
-                            .child(Input::new(&remote_input).w_full()),
-                    ),
-                )
-                .child(
-                    v_flex().flex_1().gap_1().child(language.text(Message::SshPortsLocal)).child(
-                        div()
-                            .debug_selector(|| "ssh-forward-local".to_owned())
-                            .w_full()
-                            .h_8()
-                            .flex_shrink_0()
-                            .child(Input::new(&local_input).w_full()),
-                    ),
-                ),
-        );
-
         let submit_target = target.clone();
         let submit_remote = remote_input.clone();
         let submit_local = local_input.clone();
         let submit_destination = destination.clone();
+        let content_target = target.clone();
+        let content_forwards = forwards.clone();
+        let content_remote = remote_input.clone();
+        let content_local = local_input.clone();
+        let content_destination = destination.clone();
         confirm_dialog(
             dialog,
             window,
@@ -416,7 +354,91 @@ fn show_port_forward_dialog(
             language.text(Message::CommonCancel),
             ButtonVariant::Primary,
         )
-        .child(body)
+        .content(move |content, _, _cx| {
+            let mut body = v_flex().w_full().gap_3();
+            if content_forwards.is_empty() {
+                body = body.child(
+                    div()
+                        .text_sm()
+                        .text_color(_cx.theme().muted_foreground)
+                        .child(language.text(Message::SshPortsEmpty)),
+                );
+            } else {
+                for (index, (local_port, remote_port)) in
+                    content_forwards.iter().copied().enumerate()
+                {
+                    let stop_target = content_target.clone();
+                    body = body.child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .justify_between()
+                            .child(format!("127.0.0.1:{local_port} → 127.0.0.1:{remote_port}"))
+                            .child(
+                                Button::new(("ssh-port-stop", index))
+                                    .icon(IconName::Close)
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip(language.text(Message::SshPortsStop))
+                                    .on_click(move |_, window, cx| {
+                                        if let Some(view) = stop_target.upgrade() {
+                                            view.update(cx, |view, cx| {
+                                                if let Some(position) =
+                                                    view.port_forwards.iter().position(|forward| {
+                                                        forward.local_port() == local_port
+                                                    })
+                                                {
+                                                    view.port_forwards.remove(position);
+                                                    cx.notify();
+                                                }
+                                            });
+                                        }
+                                        window.close_dialog(cx);
+                                    }),
+                            ),
+                    );
+                }
+            }
+            body = body.child(
+                h_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_1()
+                            .child(language.text(Message::SshPortsRemote))
+                            .child(
+                                div()
+                                    .debug_selector(|| "ssh-forward-remote".to_owned())
+                                    .w_full()
+                                    .h_8()
+                                    .flex_shrink_0()
+                                    .child(Input::new(&content_remote).w_full()),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_1()
+                            .child(language.text(Message::SshPortsLocal))
+                            .child(
+                                div()
+                                    .debug_selector(|| "ssh-forward-local".to_owned())
+                                    .w_full()
+                                    .h_8()
+                                    .flex_shrink_0()
+                                    .child(Input::new(&content_local).w_full()),
+                            ),
+                    ),
+            );
+            content
+                .child(
+                    gpui_component::dialog::DialogDescription::new()
+                        .child(content_destination.clone()),
+                )
+                .child(body)
+        })
         .on_ok(move |_, window, cx| {
             let remote_port =
                 submit_remote.read(cx).value().trim().parse::<u16>().ok().filter(|port| *port != 0);

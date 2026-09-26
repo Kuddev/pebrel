@@ -19,6 +19,9 @@ creation must not finish after the owner has closed.
   exit; its detached creation task outlived the pane.
 - An unrestricted accept loop could create arbitrary numbers of channel tasks
   and bidirectional copy buffers from local clients.
+- The legacy dialog child scroller clipped the port controls: the real-click
+  regression left the port value unchanged after typing. The form now uses
+  `DialogContent`, with explicit input geometry and read-back assertions.
 - The original screenshot-only readiness override read the process environment
   from a render-time query and bypassed real SSH readiness in test builds.
 
