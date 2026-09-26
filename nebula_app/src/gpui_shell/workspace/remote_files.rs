@@ -458,6 +458,7 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let foreground = theme.foreground;
         let drop_highlight = theme.accent.opacity(0.18);
+        let language = crate::gpui_shell::config::ui_language(cx);
         let rows = self.remote_rows();
         let row_count = rows.len();
         let destination = self.remote_browser.destination.clone();
@@ -467,7 +468,7 @@ impl NebulaWorkspace {
             self.remote_browser.path.clone()
         };
         let at_root = self.remote_browser.path == "/" || self.remote_browser.path.is_empty();
-        let notice = self.remote_notice();
+        let notice = self.remote_notice(language);
 
         v_flex()
             .h_full()
@@ -488,7 +489,7 @@ impl NebulaWorkspace {
                 this.drop_upload_paths(vec![file.local_path.clone()], None, window, cx);
             }))
             .child(div().px(px(TEXT_INSET)).text_xs().text_color(muted)
-                .child(workspace_ui_language().text(if crate::platform::file_drag::supported() {
+                .child(language.text(if crate::platform::file_drag::supported() {
                     crate::i18n::Message::TransferDragHint
                 } else { crate::i18n::Message::TransferUploadHint })))
             // 主机名单独一行：远端浏览器最危险的误操作是"以为在另一台机器上"，
@@ -849,14 +850,12 @@ impl NebulaWorkspace {
     ///
     /// 三种情况必须分开说。"读不到"和"是空的"混为一谈，用户就不知道该重试
     /// 还是该换目录——这是空态里最常见也最误导人的一处偷懒。
-    fn remote_notice(&self) -> Option<String> {
+    fn remote_notice(&self, language: crate::display::UiLanguage) -> Option<String> {
         if let Some(error) = self.remote_browser.error.as_deref() {
             return Some(format!("{error}（点右上角重新读取）"));
         }
         if self.remote_browser.preflighting {
-            return Some(
-                workspace_ui_language().text(crate::i18n::Message::TransferChecking).to_owned(),
-            );
+            return Some(language.text(crate::i18n::Message::TransferChecking).to_owned());
         }
         if let Some(snapshot) = self.remote_transfer_snapshot()
             && snapshot.phase == SftpPhase::Working
@@ -868,7 +867,7 @@ impl NebulaWorkspace {
             return Some("正在读取远端目录…".to_owned());
         }
         if let Some(outcome) = self.remote_browser.last_outcome {
-            return Some(workspace_ui_language().text(outcome).to_owned());
+            return Some(language.text(outcome).to_owned());
         }
         self.remote_browser.entries.is_empty().then(|| "此目录为空。".to_owned())
     }
