@@ -83,6 +83,7 @@ pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
 
 /// 只读展示行（无法在图形页编辑，TOML/settings 行仍可覆盖其中的表驱动键）。
 pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
+    ("确认对话框：确定 / 取消", "Confirmation dialogs: confirm / cancel", "Enter / Esc"),
     ("切换到第 N 个标签页", "Select tab N", "Alt+1..9 / Ctrl+1..9"),
     ("启动 Profile N", "Launch Profile N", "Ctrl+Shift+1..9"),
     ("贴入 AI 修复建议", "Paste AI fix suggestion", "Ctrl+."),
