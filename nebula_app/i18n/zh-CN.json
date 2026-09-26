@@ -503,7 +503,34 @@
     "ignore_failed": "修改 Git 忽略规则失败：{error}",
     "preview_loading": "正在生成预览…",
     "preview_unavailable": "此文件暂时无法预览",
-    "preview_pages": "第 1 页 · 共 {pages} 页"
+    "preview_pages": "第 1 页 · 共 {pages} 页",
+    "open_terminal_here": "在此处打开终端",
+    "tree": {
+      "open_in_explorer": "在资源管理器中打开",
+      "follow_refresh": "跟随当前终端并刷新 (Alt+R)"
+    },
+    "copy_linux_path": "复制 Linux 路径",
+    "reveal_in_explorer": "在资源管理器中显示",
+    "copy_path": "复制路径",
+    "empty": {
+      "reading_title": "正在读取目录",
+      "reading_body": "还在枚举当前工作目录的内容。",
+      "reading_hint": "稍等一下，或点右上角重新跟随。",
+      "read_failed_title": "读取目录失败",
+      "read_failed_body": "未能完整读取此目录，请检查访问权限或重试。",
+      "read_failed_hint": "点右上角重新跟随重试，或换一个目录。",
+      "no_directory_title": "没有可浏览的目录",
+      "no_directory_body": "当前终端尚未报告工作目录。",
+      "no_directory_hint": "在终端中进入一个目录后点击右上角跟随。",
+      "directory_empty_title": "此目录为空",
+      "directory_empty_body": "当前工作目录中没有可显示的文件。",
+      "directory_empty_hint": "在终端创建文件，或选择其他目录。"
+    },
+    "delete": {
+      "title": "删除 {name}？",
+      "folder_body": "文件夹及其全部内容会移入回收站。",
+      "file_body": "文件会移入回收站。"
+    }
   },
   "recipe": {
     "title": "布局配方",
@@ -921,5 +948,57 @@
     "move_left": "向左移动",
     "move_right": "向右移动",
     "tab_color": "标签颜色"
+  },
+  "chrome": {
+    "new_terminal_ctrl_shift_t": "新建终端 (Ctrl+Shift+T)",
+    "more": "更多",
+    "scroll_tabs_left": "向左翻标签",
+    "scroll_tabs_right": "向右翻标签",
+    "select_terminal": "选择终端",
+    "command_list": "命令列表",
+    "toggle_sidebar": "折叠/展开侧边栏 (Ctrl+Shift+B)",
+    "settings_shortcut": "设置 (Ctrl+,)"
+  },
+  "workspace": {
+    "pane": {
+      "stop_broadcast_input": "关闭广播输入",
+      "broadcast_input_tooltip": "广播输入到本标签全部分栏",
+      "close": "关闭此分栏",
+      "extract_release": "松手：拉出为独立标签",
+      "extract_drag_hint": "拖到终端区外可拉出",
+      "broadcast_enabled": "广播输入已开启：键入将同步到本标签的 {count} 个分栏",
+      "restore_layout": "还原分栏布局 (Ctrl+Shift+Enter)",
+      "zoom": "独占放大此分栏 (Ctrl+Shift+Enter)"
+    },
+    "close": {
+      "running_process": "{process} 仍在运行，关闭会中止它。",
+      "running_window_process": "{process} 仍在运行，关闭窗口会中止它。"
+    },
+    "close_window": {
+      "title": "关闭窗口？"
+    },
+    "close_pane": {
+      "title": "关闭此分栏？"
+    },
+    "close_tab": {
+      "title": "关闭此标签页？"
+    }
+  },
+  "remote": {
+    "locating": "正在定位远端目录…",
+    "parent": "上一级",
+    "reread": "重新读取",
+    "upload_files": "上传文件",
+    "upload_folder": "上传文件夹",
+    "download": "下载到本地",
+    "copy_item": "复制远端项目",
+    "paste_here": "粘贴到当前远端目录",
+    "skip_unchanged": "跳过未变",
+    "cancel": "取消传输",
+    "preparing": "正在准备传输…",
+    "reading": "正在读取远端目录…",
+    "empty": "此目录为空。",
+    "error_retry": "{error}（点右上角重新读取）",
+    "busy_other": "另一主机正在传输：{destination}"
   }
 }
