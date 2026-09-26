@@ -164,6 +164,7 @@ pub fn run_shell(
         }
     }
     let _runtime_server = runtime_server;
+    let _acrylic = crate::platform::acrylic::RunGuard::default();
     // GPUI 默认只有 macOS 在最后一扇窗关掉后仍驻留（Dock 里留个没有窗口的
     // 进程）。Nebula 没有 Dock 重开入口，也没法在 Mac 上验证那个无窗状态，
     // 首版三端统一：最后一扇窗关闭即退出（驻留另有 keep_session 能力位管）。
@@ -189,6 +190,7 @@ pub fn run_shell(
 
 /// 组件库/主题/快捷键/用户配置的一次性初始化。
 fn init(cx: &mut App) {
+    crate::platform::acrylic::init(cx);
     // 三端都注册内嵌 Maple：Linux/macOS 的系统等宽字体没有 NF 图标码点，
     // 侧栏与提示符会出方框；字形同源也是跨平台截图能互相比对的前提。
     register_bundled_fonts(cx);
