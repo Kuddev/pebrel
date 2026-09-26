@@ -1,3 +1,6 @@
+mod local_snapshot;
+pub(super) use local_snapshot::{LocalSnapshot, prepare_windows};
+
 use crate::session::Session;
 pub(super) use crate::session::combine_sessions;
 
@@ -9,7 +12,15 @@ pub(super) enum SaveReason {
     Quit,
 }
 
+pub(super) struct PendingSave {
+    pub(super) session: Session,
+    generation: u64,
+    quitting: bool,
+}
+
 pub(super) struct SessionPersistence {
+    generation: u64,
+    write_pending: bool,
     latest: Option<Session>,
     saved: Option<Session>,
     quitting: bool,
@@ -19,6 +30,8 @@ pub(super) struct SessionPersistence {
 impl Default for SessionPersistence {
     fn default() -> Self {
         Self {
+            generation: 0,
+            write_pending: false,
             latest: None,
             saved: None,
             quitting: false,
@@ -35,7 +48,33 @@ impl SessionPersistence {
             .into_update_windows()
     }
 
+    pub(super) fn disable_output_references(&mut self) {
+        self.generation += 1;
+        if self.latest.is_none() {
+            self.latest = self.saved.clone();
+        }
+        if let Some(session) = &mut self.latest {
+            for tab in &mut session.tabs {
+                tab.output_refs.clear();
+            }
+        }
+        // The old saved snapshot no longer describes the durable target. Keep
+        // latest for a retry even when the checkpoint has no live windows.
+        self.saved = None;
+        self.write_pending = true;
+    }
+
+    pub(super) fn clear_output_references(&mut self) {
+        self.generation += 1;
+        for session in self.latest.iter_mut().chain(self.saved.iter_mut()) {
+            for tab in &mut session.tabs {
+                tab.output_refs.clear();
+            }
+        }
+    }
+
     pub(super) fn cancel_quit(&mut self) {
+        self.generation += 1;
         self.quitting = false;
     }
 
@@ -53,16 +92,27 @@ impl SessionPersistence {
         reason: SaveReason,
         write: impl FnOnce(&Session) -> std::io::Result<()>,
     ) -> std::io::Result<()> {
+        let Some(pending) = self.prepare(current, reason) else { return Ok(()) };
+        write(&pending.session)?;
+        self.complete(pending);
+        Ok(())
+    }
+
+    pub(super) fn prepare(
+        &mut self,
+        current: Option<Session>,
+        reason: SaveReason,
+    ) -> Option<PendingSave> {
         // An administrator window must not overwrite the ordinary workspace or
         // cause its privileged shell command to be restored in a later session.
         if self.isolated {
-            return Ok(());
+            return None;
         }
         let retry_checkpoint = reason == SaveReason::Checkpoint
             && current.as_ref().is_none_or(|session| session.tabs.is_empty());
         let candidate = if self.quitting {
             if reason != SaveReason::Quit {
-                return Ok(());
+                return None;
             }
             self.latest.clone()
         } else {
@@ -81,26 +131,38 @@ impl SessionPersistence {
                     .or_else(|| self.latest.clone()),
             }
         };
-        let Some(mut session) = candidate else { return Ok(()) };
+        let mut session = candidate?;
         if !retry_checkpoint {
             session.clean_exit = matches!(reason, SaveReason::WindowClose | SaveReason::Quit);
         }
+        self.generation += 1;
         self.latest = Some(session.clone());
-        if self.saved.as_ref() == Some(&session) {
+        if !self.write_pending && self.saved.as_ref() == Some(&session) {
             self.quitting |= reason == SaveReason::Quit;
-            return Ok(());
+            return None;
         }
-        // A failed final write is cancellable: windows stay live and subsequent
-        // checkpoints must still be able to save newly confirmed identities.
-        write(&session)?;
-        self.saved = Some(session);
-        self.quitting |= reason == SaveReason::Quit;
-        Ok(())
+        self.write_pending = true;
+        Some(PendingSave {
+            session,
+            generation: self.generation,
+            quitting: reason == SaveReason::Quit,
+        })
+    }
+
+    // 只在后台写入成功后确认；失败不冻结退出，迟到的确认不覆盖新状态。
+    pub(super) fn complete(&mut self, pending: PendingSave) -> bool {
+        if pending.generation != self.generation {
+            return false;
+        }
+        self.saved = Some(pending.session);
+        self.write_pending = false;
+        self.quitting |= pending.quitting;
+        true
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
@@ -120,7 +182,7 @@ mod tests {
     }
     use crate::session::{AgentSession, LayoutSession, TabSession};
 
-    fn ordinary_window() -> SessionPersistence {
+    pub(in crate::gpui_shell::workspace) fn ordinary_window() -> SessionPersistence {
         // Hosted Windows runners can be elevated. These tests exercise ordinary
         // window persistence; privileged isolation has its own negative test.
         SessionPersistence { isolated: false, ..SessionPersistence::default() }
@@ -217,6 +279,21 @@ mod tests {
     }
 
     #[test]
+    fn disabling_output_does_not_acknowledge_unsaved_references_and_can_retry() {
+        let mut state = ordinary_window();
+        let mut old = sample_session();
+        old.tabs[0].output_refs = vec!["old".into()];
+        state.save_with(Some(old), SaveReason::Checkpoint, |_| Ok(())).unwrap();
+        state.disable_output_references();
+        assert!(state.saved.is_none(), "disk state is unconfirmed until the checkpoint completes");
+        let failed = state.prepare(None, SaveReason::Checkpoint).unwrap();
+        assert!(failed.session.tabs[0].output_refs.is_empty());
+        let retry = state.prepare(None, SaveReason::Checkpoint).unwrap();
+        assert!(state.complete(retry));
+        assert!(state.saved.as_ref().unwrap().tabs[0].output_refs.is_empty());
+    }
+
+    #[test]
     fn failed_checkpoint_and_final_writes_are_retried() {
         let mut state = ordinary_window();
         let session = sample_session();
@@ -288,6 +365,73 @@ mod tests {
             Ok(())
         });
         assert!(state.saved.unwrap().tabs.is_empty());
+    }
+
+    #[test]
+    fn preparing_background_save_does_not_acknowledge_or_freeze_quit() {
+        let mut state = ordinary_window();
+        let pending = state.prepare(Some(sample_session()), SaveReason::Quit).unwrap();
+        assert!(state.saved.is_none());
+        assert!(!state.quitting);
+        assert!(pending.session.clean_exit);
+        assert!(state.complete(pending));
+        assert!(state.saved.as_ref().unwrap().clean_exit);
+        assert!(state.quitting);
+    }
+
+    #[test]
+    fn cancelling_quit_invalidates_its_pending_completion() {
+        let mut state = ordinary_window();
+        let pending = state.prepare(Some(sample_session()), SaveReason::Quit).unwrap();
+        state.cancel_quit();
+        assert!(!state.complete(pending));
+        assert!(!state.quitting);
+        assert!(state.saved.is_none());
+        let checkpoint = state.prepare(Some(sample_session()), SaveReason::Checkpoint).unwrap();
+        assert!(!checkpoint.session.clean_exit);
+        assert!(state.complete(checkpoint));
+    }
+
+    #[test]
+    fn stale_background_completion_cannot_acknowledge_newer_session() {
+        let mut state = ordinary_window();
+        let first = state.prepare(Some(sample_session()), SaveReason::Quit).unwrap();
+        let mut changed = sample_session();
+        changed.tabs[0].cwd = "D:/new-command".into();
+        let second = state.prepare(Some(changed.clone()), SaveReason::Checkpoint).unwrap();
+        assert!(!state.complete(first));
+        assert!(state.saved.is_none());
+        assert!(!state.quitting);
+        assert!(state.complete(second));
+        assert_eq!(state.saved.as_ref(), Some(&changed));
+    }
+
+    #[test]
+    fn failed_background_write_is_retryable_without_remaining_windows() {
+        let mut state = ordinary_window();
+        let _failed = state.prepare(Some(sample_session()), SaveReason::WindowClose).unwrap();
+        let retry = state.prepare(None, SaveReason::Checkpoint).unwrap();
+        assert!(retry.session.clean_exit);
+        assert!(state.complete(retry));
+        assert_eq!(state.saved.as_ref().unwrap().tabs, sample_session().tabs);
+    }
+
+    #[test]
+    fn reverting_to_saved_state_rewrites_disk_after_an_outstanding_write() {
+        let mut state = ordinary_window();
+        let original = sample_session();
+        state.save_with(Some(original.clone()), SaveReason::Checkpoint, |_| Ok(())).unwrap();
+        let mut changed = original.clone();
+        changed.tabs[0].cwd = "D:/discarded".into();
+        let obsolete = state.prepare(Some(changed), SaveReason::Checkpoint).unwrap();
+        // 旧后台任务可能已写入磁盘，但尚未回到 UI 确认；不能因为内存里的
+        // saved 恰好等于新状态，就跳过修复磁盘所需的写入。
+        let repair = state
+            .prepare(Some(original.clone()), SaveReason::Checkpoint)
+            .expect("an outstanding write may have changed disk");
+        assert!(!state.complete(obsolete));
+        assert!(state.complete(repair));
+        assert_eq!(state.saved.as_ref(), Some(&original));
     }
 
     #[test]

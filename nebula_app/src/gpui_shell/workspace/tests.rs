@@ -914,6 +914,7 @@ mod boot_breaker_tests {
                 launch: Some(launch),
             }),
             active_pane: 0,
+            output_refs: Vec::new(),
         };
         // 第三次启动：磁盘上的计数已被 `mark_boot_attempt` 抬到 2。
         let mut session = crate::session::Session::new(0, vec![tab]);
