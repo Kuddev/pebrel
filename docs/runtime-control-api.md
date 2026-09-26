@@ -45,7 +45,7 @@ CLI 路径由环境给出，调用方无需根据展示名称猜测文件名。
    还会绕开远端 pane 不得取用本地上下文的护栏。
 2. **幂等。** 在 Pebrel 的 pane 里再开一个 Pebrel 是常规操作（嵌套 shell、`wsl.exe`、隔离实例）。
    `PATH` 前置与 `WSLENV` 追加都按值判重，套多少层环境块都不增长。
-3. **WSL 透传。** `WSLENV` 里带 `PEBREL_CLI/p`、`PEBREL_BIN_DIR/p`——`/p` 让 WSL 把 Windows
+3. **WSL 透传。** `WSLENV` 里带 `PEBREL_CLI/p`、`PEBREL_BIN_DIR/p`、`PEBREL_HOOK_EXE/p`——`/p` 让 WSL 把 Windows
    路径翻成 `/mnt/...`，否则来宾 shell 拿到的是一个执行不了的 `D:\…` 字面量。合并以环境表里的
    现值为基准，因此与 `shell_detect::wsl_cwd_report_env` 的 cwd 上报条目互不覆盖。
 
