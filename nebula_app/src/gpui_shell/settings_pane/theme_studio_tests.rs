@@ -483,6 +483,28 @@ fn editor_template(pane: &Entity<SettingsPane>, cx: &mut VisualTestContext) -> T
     pane.read_with(cx, |pane, _| pane.theme_editor.as_ref().expect("theme editor state").template)
 }
 
+fn emit_advanced_picker_color(
+    pane: &Entity<SettingsPane>,
+    field: super::theme_advanced::ThemeAdvancedField,
+    color: [u8; 3],
+    cx: &mut VisualTestContext,
+) {
+    let picker = pane
+        .read_with(cx, |pane, _| pane.theme_advanced_picker(field).expect("advanced color picker"));
+    picker.update(cx, |_, cx| {
+        let [r, g, b] = color;
+        let hsla: gpui::Hsla = gpui::Rgba {
+            r: f32::from(r) / 255.0,
+            g: f32::from(g) / 255.0,
+            b: f32::from(b) / 255.0,
+            a: 1.0,
+        }
+        .into();
+        cx.emit(gpui_component::color_picker::ColorPickerEvent::Change(Some(hsla)));
+    });
+    draw(cx);
+}
+
 #[gpui::test]
 fn theme_editor_opens_from_the_picker_with_common_fields_and_collapsed_advanced(
     cx: &mut TestAppContext,
@@ -726,6 +748,92 @@ fn theme_editor_save_and_apply_persists_copy_and_reloads_its_foreground(cx: &mut
     assert_eq!(reloaded_runtime.custom_theme.as_deref(), Some(applied_id));
     assert_eq!(reloaded_palette_snapshot(&mut window, &reloaded_runtime), after_palette);
     assert_eq!(palette_foreground(&mut window), applied.color("terminal", "foreground").unwrap());
+}
+
+#[gpui::test]
+fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_reopen(
+    cx: &mut TestAppContext,
+) {
+    use super::theme_advanced::ThemeAdvancedField;
+
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS)
+        .expect("write isolated advanced color settings");
+    let mut theme_cleanup = CustomThemeCleanup::default();
+    let (pane, mut window) = open_settings(cx);
+    let before_library_ids = custom_theme_ids();
+    let saved_name = format!("Advanced colors native test {}", std::process::id());
+    let selection_background = [0x1b, 0x2c, 0x3d];
+    let selection_foreground = [0xe1, 0xd2, 0xc3];
+    let cursor_text = [0x12, 0xeb, 0x77];
+
+    open_theme_editor(&mut window);
+    edit_input("theme-editor-name", &saved_name, &mut window);
+    click("theme-editor-advanced-toggle", &mut window);
+    assert!(window.debug_bounds("theme-editor-preview-cursor").is_some());
+
+    emit_advanced_picker_color(
+        &pane,
+        ThemeAdvancedField::SelectionBackground,
+        selection_background,
+        &mut window,
+    );
+    emit_advanced_picker_color(
+        &pane,
+        ThemeAdvancedField::SelectionForeground,
+        selection_foreground,
+        &mut window,
+    );
+    emit_advanced_picker_color(&pane, ThemeAdvancedField::CursorText, cursor_text, &mut window);
+
+    let draft = editor_draft(&pane, &mut window);
+    assert_eq!(draft.terminal.selection_background, Some(selection_background));
+    assert_eq!(draft.terminal.selection_foreground, Some(selection_foreground));
+    assert_eq!(draft.terminal.cursor_text, Some(cursor_text));
+
+    click("theme-editor-save-apply", &mut window);
+    assert!(window.debug_bounds("theme-editor-dialog").is_none());
+
+    let after_documents = custom_theme_documents();
+    for document in &after_documents {
+        if document.id().is_some_and(|id| !before_library_ids.iter().any(|before| before == id))
+            && document.name().starts_with(&saved_name)
+        {
+            theme_cleanup.track(document);
+        }
+    }
+    let applied_id = RuntimeSettings::load().custom_theme.expect("advanced color theme is active");
+    let applied = after_documents
+        .iter()
+        .find(|document| document.id() == Some(applied_id.as_str()))
+        .expect("advanced color theme remains in the library");
+    let applied_definition = applied.definition().expect("saved advanced color definition");
+    assert_eq!(applied_definition.terminal.selection_background, Some(selection_background));
+    assert_eq!(applied_definition.terminal.selection_foreground, Some(selection_foreground));
+    assert_eq!(applied_definition.terminal.cursor_text, Some(cursor_text));
+
+    window.read(|cx| {
+        let palette = &cx.global::<crate::gpui_shell::config::Settings>().palette;
+        let bytes = |color: gpui::Rgba| {
+            [
+                (color.r * 255.0).round() as u8,
+                (color.g * 255.0).round() as u8,
+                (color.b * 255.0).round() as u8,
+            ]
+        };
+        assert_eq!(bytes(palette.selection), selection_background);
+        assert_eq!(palette.selection_foreground.map(bytes), Some(selection_foreground));
+        assert_eq!(palette.cursor_text.map(bytes), Some(cursor_text));
+    });
+
+    click("open-theme-picker", &mut window);
+    assert!(window.debug_bounds("appearance-picker-dialog").is_some());
+    click("customize-theme", &mut window);
+    let reopened = editor_draft(&pane, &mut window);
+    assert_eq!(reopened.terminal.selection_background, Some(selection_background));
+    assert_eq!(reopened.terminal.selection_foreground, Some(selection_foreground));
+    assert_eq!(reopened.terminal.cursor_text, Some(cursor_text));
 }
 
 #[gpui::test]
