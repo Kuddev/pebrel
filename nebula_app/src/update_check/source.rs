@@ -87,16 +87,16 @@ impl ReleaseSource {
 
 fn component(value: &str) -> bool {
     !matches!(value, "" | "." | "..")
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 fn tag_name(value: &str) -> bool {
     !matches!(value, "" | "." | "..")
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+'))
 }
 
 pub(super) fn configured() -> Result<ReleaseSource, String> {

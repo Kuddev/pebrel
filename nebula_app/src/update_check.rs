@@ -25,9 +25,9 @@ pub(crate) mod assets;
 mod fallback;
 mod source;
 
-pub(crate) use source::{normalize_setting, release_page, validate_asset_url};
 #[cfg(test)]
 pub(crate) use source::validate_official_asset_url;
+pub(crate) use source::{normalize_setting, release_page, validate_asset_url};
 
 #[cfg(feature = "update-test-source")]
 pub(crate) mod test_source;
