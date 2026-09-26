@@ -961,6 +961,30 @@ mod tests {
     use crate::term::test::TermSize;
 
     #[test]
+    fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
+        use crate::render::{RenderSnapshot, SnapshotConfig};
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let cfg = SnapshotConfig { rows: 2, cols: 20 };
+        stream.feed(&mut term, &VoidListener, b"old");
+        let before = RenderSnapshot::capture(&term, &cfg);
+        for bytes in [b"\x1b[?20".as_slice(), b"26h\r", b"new", b"\x1b[10G", b"\x1b[?2026"] {
+            stream.feed(&mut term, &VoidListener, bytes);
+            // Animation frames read the grid even without a Wakeup.
+            let frame = RenderSnapshot::capture(&term, &cfg);
+            assert_eq!(frame.cursor.as_ref().unwrap().col, before.cursor.as_ref().unwrap().col);
+            assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        }
+        stream.feed(&mut term, &VoidListener, b"l");
+        assert_eq!(RenderSnapshot::capture(&term, &cfg).cursor.unwrap().col, 9);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h\rtimeout");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.stop_sync(&mut term);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 't');
+    }
+
+    #[test]
     fn authenticated_hook_frames_survive_every_chunk_boundary_and_reject_other_panes() {
         #[derive(Clone, Default)]
         struct Listener(std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>);
