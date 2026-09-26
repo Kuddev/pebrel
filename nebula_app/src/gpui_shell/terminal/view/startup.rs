@@ -284,6 +284,8 @@ impl TerminalView {
             image_paste: image_paste::ImagePasteState::default(),
             path_drop: path_drop::PathDropState::default(),
             ssh_destination,
+            port_forwards: Vec::new(),
+            port_forward_task: None,
             ssh_label: None,
             exec_context,
             ssh_stage: None,

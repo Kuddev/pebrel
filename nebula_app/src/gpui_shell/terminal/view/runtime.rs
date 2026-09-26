@@ -111,6 +111,8 @@ impl TerminalView {
         );
         self.ssh_connect_last_step = std::time::Instant::now();
         if matches!(stage, crate::ssh_session::SshStage::Failed(_)) {
+            self.port_forward_task = None;
+            self.port_forwards.clear();
             self.pending_runtime_submit = None;
             self.pending_shell_command = None;
             self.command_running = false;
