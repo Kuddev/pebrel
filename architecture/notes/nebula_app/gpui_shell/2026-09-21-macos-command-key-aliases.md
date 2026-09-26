@@ -94,8 +94,12 @@ platform, which also corrects the spelling of lines the app writes.
 f7ca0ec`, `python3 scripts/check_platform_cfg.py` (budget unchanged at 484) and
 the `display::keymap` / `keyboard_bindings` unit suites pass; the two new
 released-key tests fail without the change. Manual acceptance is listed under
-Evidence. Linux/Windows only compile the alias table as test data; the runtime
-path stays behind `cfg(target_os = "macos")`.
+Evidence. The alias table is shared data; runtime registration uses the existing
+`Platform::current()` entry and remains macOS-only. The two macOS restore
+regressions remain platform-gated. This avoids duplicating platform compile
+branches in the UI adapter without increasing the current cfg budget.
+A cross-platform GPUI dispatch regression confirms that sharing the table does
+not register Command shortcuts on Windows/Linux.
 
 The 2026-09-23 review reproduced two restore failures through GPUI keyboard
 dispatch: recording Cmd+K then resetting the row, and resetting the old

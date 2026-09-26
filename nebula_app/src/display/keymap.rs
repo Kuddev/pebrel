@@ -103,9 +103,7 @@ pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
 /// 这张表只进 [`default_shortcuts`]（解绑/恢复口径），不进 `effective_combo`
 /// 的键帽反查：设置页仍按配置表的 Ctrl 键显示。
 ///
-/// `test` 也在条件里：shell 侧的守卫要在所有平台上遍历这张表（表是数据，
-/// 只有注册按平台闸门）。
-#[cfg(any(target_os = "macos", test))]
+/// 别名表是共享数据；实际注册由平台层入口限定为 macOS，便于跨平台核验分派。
 pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
     ("cmd+t", Action::CreateNewTab),
     ("cmd+n", Action::CreateNewWindow),

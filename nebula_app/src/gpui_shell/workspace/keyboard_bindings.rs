@@ -61,8 +61,10 @@ pub(super) fn gpui_binding_combo(combo: &str) -> String {
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub(super) fn init(cx: &mut App) {
     cx.bind_keys(default_workspace_bindings());
-    #[cfg(target_os = "macos")]
-    bind_macos_command_keys(cx);
+    // 平台判定复用已有入口；共享表不意味着给其他平台注册 ⌘ 快捷键。
+    if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
+        bind_macos_command_keys(cx);
+    }
     // 退出不属于任何视图，挂全局兜底：⌘Q 与用户自定义的 `keybind=…:Quit`
     // 都落到与托盘退出同一条「先落盘会话与草稿，再停 PTY」的路径。
     cx.on_action(|_: &QuitApp, cx: &mut App| cx.defer(super::windowing::quit_all));
@@ -142,7 +144,6 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
 /// 键位来自 `display::keymap::MACOS_COMMAND_ALIASES`：设置页的反查、解绑与
 /// 恢复读的是同一张表，两处不会再各自漂移。注册必须留在这里、且早于用户
 /// 自定义键，这样 `clear_action` 注入的 NoAction 才压得住静态默认绑定。
-#[cfg(target_os = "macos")]
 fn bind_macos_command_keys(cx: &mut App) {
     let mut bindings: Vec<KeyBinding> = crate::display::keymap::MACOS_COMMAND_ALIASES
         .iter()

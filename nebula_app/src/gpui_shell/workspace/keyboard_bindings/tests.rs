@@ -207,6 +207,17 @@ mod dispatch {
     }
 
     #[gpui::test]
+    fn command_shortcut_registration_follows_runtime_platform(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        press("cmd-k", &mut cx);
+        assert_eq!(
+            workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open),
+            crate::platform::Platform::current() == crate::platform::Platform::MacOS,
+            "共享别名表只应在 macOS 注册原生命令键"
+        );
+    }
+
+    #[gpui::test]
     #[cfg(target_os = "macos")]
     fn recorded_command_key_can_restore_default(cx: &mut TestAppContext) {
         use crate::display::keymap;
