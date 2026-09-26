@@ -921,5 +921,16 @@
     "move_left": "向左移动",
     "move_right": "向右移动",
     "tab_color": "标签颜色"
-  }
+  },
+  "ssh.ports.button": "端口",
+  "ssh.ports.title": "SSH 端口转发",
+  "ssh.ports.empty": "暂无端口转发",
+  "ssh.ports.stop": "停止转发",
+  "ssh.ports.remote": "服务器端口",
+  "ssh.ports.local": "本地端口",
+  "ssh.ports.forward": "转发",
+  "ssh.ports.invalid": "请输入 1–65535 的端口",
+  "ssh.ports.pending": "正在启动端口转发…",
+  "ssh.ports.unavailable": "SSH 网络运行时不可用",
+  "ssh.ports.started": "正在将 127.0.0.1:{local} 转发至 {host} 的 {remote} 端口"
 }

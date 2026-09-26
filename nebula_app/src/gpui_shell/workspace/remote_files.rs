@@ -915,9 +915,13 @@ where
     Fut: std::future::Future<Output = T> + Send,
 {
     let runtime = crate::ssh_session::runtime().ok()?;
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (mut tx, rx) = tokio::sync::oneshot::channel();
     runtime.spawn(async move {
-        let _ = tx.send(work().await);
+        tokio::select! {
+            biased;
+            _ = tx.closed() => {},
+            result = work() => { let _ = tx.send(result); },
+        }
     });
     rx.await.ok()
 }
@@ -936,6 +940,37 @@ mod tests {
             permissions: "rw-r--r--".to_owned(),
             is_parent: false,
         }
+    }
+
+    #[test]
+    fn dropped_remote_call_cancels_its_network_work() {
+        struct SignalDrop(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for SignalDrop {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        crate::ssh_session::runtime().unwrap().block_on(async {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+            let caller = tokio::spawn(super::remote_call(move || async move {
+                let _signal = SignalDrop(Some(dropped_tx));
+                let _ = started_tx.send(());
+                std::future::pending::<()>().await;
+            }));
+            tokio::time::timeout(std::time::Duration::from_secs(5), started_rx)
+                .await
+                .unwrap()
+                .unwrap();
+            caller.abort();
+            let _ = caller.await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), dropped_rx)
+                .await
+                .unwrap()
+                .unwrap();
+        });
     }
 
     #[test]

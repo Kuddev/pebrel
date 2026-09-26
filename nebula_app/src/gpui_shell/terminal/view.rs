@@ -338,6 +338,7 @@ pub struct TerminalView {
     pub ssh_destination: Option<String>,
     /// 本 pane 拥有的本地端口转发；pane 销毁即停止监听。
     pub(crate) port_forwards: Vec<crate::ssh_session::LocalForward>,
+    pub(crate) port_forward_task: Option<gpui::Task<()>>,
     ssh_label: Option<String>,
     /// 创建本地 PTY 时冻结的受控环境，供独立 `pane.exec` child 复用。
     pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
@@ -701,6 +702,8 @@ impl TerminalView {
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
+        self.port_forward_task = None;
+        self.port_forwards.clear();
         self.confirmation.invalidate();
         self.pending_runtime_submit = None;
         self.pending_shell_command = None;
@@ -966,9 +969,8 @@ impl TerminalView {
     /// 通道，撞上一个还没建立的传输——用户看到的是文件面板先报一个错，然后
     /// 终端才连上。
     pub fn ready_ssh_destination(&self) -> Option<&str> {
-        #[cfg(feature = "gpui-test-support")]
-        if std::env::var_os("PEBREL_UI_REVIEW_READY_SSH").is_some() {
-            return Some("review@localhost");
+        if self.exited.is_some() {
+            return None;
         }
         let destination = self.ssh_destination.as_deref()?;
         matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Ready)).then_some(destination)

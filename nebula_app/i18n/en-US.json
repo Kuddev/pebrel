@@ -921,5 +921,16 @@
     "move_left": "Move left",
     "move_right": "Move right",
     "tab_color": "Tab color"
-  }
+  },
+  "ssh.ports.button": "Ports",
+  "ssh.ports.title": "SSH port forwarding",
+  "ssh.ports.empty": "No forwarded ports",
+  "ssh.ports.stop": "Stop forwarding",
+  "ssh.ports.remote": "Remote port",
+  "ssh.ports.local": "Local port",
+  "ssh.ports.forward": "Forward",
+  "ssh.ports.invalid": "Enter ports from 1–65535",
+  "ssh.ports.pending": "Starting port forwarding…",
+  "ssh.ports.unavailable": "SSH network runtime unavailable",
+  "ssh.ports.started": "Forwarding 127.0.0.1:{local} to {host} port {remote}"
 }
