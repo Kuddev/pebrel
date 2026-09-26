@@ -938,7 +938,7 @@ impl SettingsPane {
         cx.notify();
     }
 
-    fn on_theme_advanced_input(
+    pub(super) fn on_theme_advanced_input(
         &mut self,
         field: ThemeAdvancedField,
         window: &mut Window,
@@ -962,6 +962,19 @@ impl SettingsPane {
             editor.error = advanced.error().map(str::to_owned);
         }
         cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(super) fn theme_advanced_picker(
+        &self,
+        field: ThemeAdvancedField,
+    ) -> Option<Entity<gpui_component::color_picker::ColorPickerState>> {
+        self.theme_editor
+            .as_ref()?
+            .advanced_editor
+            .as_ref()?
+            .picker(field)
+            .cloned()
     }
 
     fn request_close_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {

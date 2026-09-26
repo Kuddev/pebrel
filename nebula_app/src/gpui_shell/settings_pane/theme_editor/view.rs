@@ -21,6 +21,10 @@ impl SettingsPane {
         let foreground = theme_color(draft.terminal.foreground, 1.0);
         let accent = theme_color(resolved_ui.accent, 1.0);
         let cursor = theme_color(draft.terminal.cursor.unwrap_or(draft.terminal.foreground), 1.0);
+        let cursor_text = theme_color(
+            draft.terminal.cursor_text.unwrap_or(draft.terminal.background),
+            1.0,
+        );
         let selection_background = theme_color(
             draft
                 .terminal
@@ -233,7 +237,18 @@ impl SettingsPane {
                         .gap(px(7.0))
                         .items_center()
                         .child(div().text_color(accent).child("❯"))
-                        .child(div().w(px(8.0)).h(px(font_size * line_height)).bg(cursor)),
+                        .child(
+                            div()
+                                .debug_selector(|| "theme-editor-preview-cursor".to_owned())
+                                .w(px(font_size * 0.78))
+                                .h(px(font_size * line_height))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(cursor)
+                                .text_color(cursor_text)
+                                .child("A"),
+                        ),
                 )
                 .into_any_element(),
         };
