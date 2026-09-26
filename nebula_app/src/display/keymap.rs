@@ -83,7 +83,15 @@ pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
 
 /// 只读展示行（无法在图形页编辑，TOML/settings 行仍可覆盖其中的表驱动键）。
 pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
-    ("切换到第 N 个标签页", "Select tab N", "Alt+1..9 / Ctrl+1..9"),
+    (
+        "切换到第 N 个标签页",
+        "Select tab N",
+        if cfg!(target_os = "macos") {
+            "Option+1..9 / Ctrl+1..9 / Command+1..9"
+        } else {
+            "Alt+1..9 / Ctrl+1..9"
+        },
+    ),
     ("启动 Profile N", "Launch Profile N", "Ctrl+Shift+1..9"),
     ("贴入 AI 修复建议", "Paste AI fix suggestion", "Ctrl+."),
 ];
@@ -167,7 +175,7 @@ pub(crate) fn default_shortcuts() -> Vec<(String, Action)> {
     let mut shortcuts: Vec<(String, Action)> = cached_defaults()
         .iter()
         .filter_map(|binding| {
-            display_combo(binding.mods, &binding.trigger)
+            canonical_combo(binding.mods, &binding.trigger)
                 .map(|combo| (combo, binding.action.clone()))
         })
         .collect();
@@ -386,9 +394,7 @@ fn key_storage_name(key: &BindingKey) -> Option<String> {
     }
 }
 
-/// 展示格式：`Ctrl+Shift+T`、`Ctrl+Alt+Left`、`Ctrl+Shift+1`。
-/// 修饰键前缀（"Ctrl+Shift+" 风格）。捕获态的实时回显也用它，保证与
-/// 最终存储/展示的组合一字不差。
+/// 设置页和快捷键提示的修饰键名称，按运行平台显示。
 pub(crate) fn mods_prefix(mods: ModifiersState) -> String {
     let mut out = String::new();
     if mods.control_key() {
@@ -398,13 +404,16 @@ pub(crate) fn mods_prefix(mods: ModifiersState) -> String {
         out.push_str("Shift+");
     }
     if mods.alt_key() {
-        out.push_str("Alt+");
+        out.push_str(if cfg!(target_os = "macos") { "Option+" } else { "Alt+" });
     }
     if mods.super_key() {
-        // macOS 的超级键是 ⌘。键帽必须写 Cmd+，否则设置页会出现
-        // `Ctrl+Win+F`（全屏）、`Win+F`（搜索）这类用户认不出的组合（#238）。
-        // 存储侧不受影响：`win+` / `super+` / `cmd+` 同等解析。
-        out.push_str(if cfg!(target_os = "macos") { "Cmd+" } else { "Win+" });
+        out.push_str(if cfg!(target_os = "macos") {
+            "Command+"
+        } else if cfg!(windows) {
+            "Win+"
+        } else {
+            "Super+"
+        });
     }
     out
 }
@@ -672,7 +681,13 @@ mod tests {
         let saved = nebula_settings::apply_keybinds("theme=nord\n", &raw);
         let mut restored = nebula_settings::keybind_pairs_from_text(&saved);
         let bindings = build_bindings(&restored);
-        assert_eq!(effective_combo(&action, &bindings), Some(("Ctrl+Alt+R".into(), true)));
+        assert_eq!(
+            effective_combo(&action, &bindings),
+            Some((
+                if cfg!(target_os = "macos") { "Ctrl+Option+R" } else { "Ctrl+Alt+R" }.into(),
+                true
+            ))
+        );
         let (mods, trigger) = parse_combo("f2").unwrap();
         let f2 = bindings.iter().find(|b| b.mods == mods && b.trigger == trigger).unwrap();
         assert_eq!(f2.action, Action::ReceiveChar, "the old default must reach the CLI");
@@ -769,6 +784,30 @@ mod tests {
         assert_eq!(parsed.key, global_hotkey::hotkey::Code::Backquote);
         assert!(parsed.mods.contains(global_hotkey::hotkey::Modifiers::CONTROL));
         assert_eq!(display_stored_combo(DEFAULT_QUICK_TERMINAL_HOTKEY), "Ctrl+`");
+    }
+
+    #[test]
+    fn modifier_labels_follow_the_running_platform_without_changing_bindings() {
+        let (mods, key) = parse_combo("ctrl+alt+win+k").unwrap();
+        assert_eq!(
+            display_combo(mods, &key).as_deref(),
+            Some(if cfg!(target_os = "macos") {
+                "Ctrl+Option+Command+K"
+            } else if cfg!(windows) {
+                "Ctrl+Alt+Win+K"
+            } else {
+                "Ctrl+Alt+Super+K"
+            })
+        );
+        assert_eq!(canonical_combo(mods, &key).as_deref(), Some("ctrl+alt+win+k"));
+        assert_eq!(
+            READONLY_ROWS[0].2,
+            if cfg!(target_os = "macos") {
+                "Option+1..9 / Ctrl+1..9 / Command+1..9"
+            } else {
+                "Alt+1..9 / Ctrl+1..9"
+            }
+        );
     }
 
     #[test]
@@ -878,7 +917,13 @@ mod tests {
     /// 超级键键帽随平台渲染：macOS 是 ⌘，其它平台是 Win。
     #[test]
     fn super_modifier_renders_per_platform() {
-        let expected = if cfg!(target_os = "macos") { "Cmd+" } else { "Win+" };
+        let expected = if cfg!(target_os = "macos") {
+            "Command+"
+        } else if cfg!(windows) {
+            "Win+"
+        } else {
+            "Super+"
+        };
         assert_eq!(mods_prefix(ModifiersState::SUPER), expected);
         assert_eq!(
             mods_prefix(ModifiersState::CONTROL | ModifiersState::SUPER),
