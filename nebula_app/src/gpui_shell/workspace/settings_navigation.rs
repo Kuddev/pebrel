@@ -129,6 +129,7 @@ impl NebulaWorkspace {
             is_settings: true,
             activity: SidebarActivity::Idle,
             logo_image: None,
+            logo_pending: false,
             program_glyph: None,
             shell_tag: None,
             color: None,

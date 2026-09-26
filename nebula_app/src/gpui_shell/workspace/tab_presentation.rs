@@ -10,6 +10,7 @@ pub(super) struct TabPresentation {
     pub(super) is_settings: bool,
     pub(super) activity: SidebarActivity,
     pub(super) logo_image: Option<Arc<RenderImage>>,
+    pub(super) logo_pending: bool,
     pub(super) program_glyph: Option<&'static str>,
     pub(super) shell_tag: Option<SharedString>,
     pub(super) color: Option<Rgb>,
@@ -71,10 +72,10 @@ impl NebulaWorkspace {
         // 事件 vs 状态的唯一裁定处（侧栏与顶栏共用这份 presentation），规则与
         // 理由见 [`sidebar::resting_activity`]。
         let activity = sidebar::resting_activity(activity, active, self.meta(ix).has_bell);
-        let logo_image = program
-            .as_deref()
-            .and_then(crate::display::ai_logo_for_program)
-            .and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
+        let brand_logo = program.as_deref().and_then(crate::display::ai_logo_for_program);
+        let logo_image =
+            brand_logo.and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
+        let logo_pending = brand_logo.is_some() && logo_image.is_none();
         let program_glyph = program
             .as_deref()
             .filter(|_| logo_image.is_none())
@@ -111,6 +112,7 @@ impl NebulaWorkspace {
             is_settings,
             activity,
             logo_image,
+            logo_pending,
             program_glyph,
             shell_tag,
             color: meta.color,

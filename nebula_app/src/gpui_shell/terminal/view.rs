@@ -495,6 +495,13 @@ impl TerminalView {
         typography::startup_cell_metrics(window, cx)
     }
 
+    pub(in crate::gpui_shell) fn startup_cell_metrics_at_scale(
+        scale: f32,
+        cx: &App,
+    ) -> (Pixels, Pixels) {
+        typography::startup_cell_metrics_at_scale(scale, cx)
+    }
+
     pub(in crate::gpui_shell) fn set_output_visible(
         &mut self,
         visible: bool,

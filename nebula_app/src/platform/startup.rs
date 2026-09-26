@@ -8,6 +8,35 @@ pub(crate) fn report_error(error: &dyn std::fmt::Display, gui_launch: bool) {
 
 #[cfg(windows)]
 mod console;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod first_frame;
+
+/// Match GPUI's primary-monitor DPI query before a native window is created.
+/// Other platforms retain post-creation sizing until their display API exposes scale.
+pub(crate) fn primary_display_scale() -> Option<f32> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
+        use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+
+        // SAFETY: the monitor is borrowed and both DPI outputs are valid local pointers.
+        unsafe {
+            let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+            let (mut x, mut y) = (0, 0);
+            if monitor.is_null()
+                || GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) < 0
+                || x == 0
+                || x != y
+            {
+                return None;
+            }
+            Some(x as f32 / 96.0)
+        }
+    }
+    #[cfg(not(windows))]
+    None
+}
 
 /// Prepare process-wide GUI state before worker threads or terminal children exist.
 pub(crate) fn prepare_gui_process() -> std::io::Result<()> {

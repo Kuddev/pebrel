@@ -32,7 +32,6 @@ use gpui::{
     SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
     Window, canvas, div, ease_out_quint, fill, img, px, relative, size,
 };
-use image::Frame;
 
 use crate::display::color::Rgb;
 use crate::gpui_shell::code_tab::CodeTabViewEvent;
@@ -58,6 +57,7 @@ mod documents;
 mod file_tree;
 mod key_actions;
 mod launcher_menu;
+mod logos;
 mod notifications;
 mod palette;
 mod pane_header;
@@ -263,46 +263,6 @@ struct SplitDrag {
 type SplitBoundsStore = Rc<RefCell<HashMap<(usize, Vec<bool>), Bounds<Pixels>>>>;
 /// 键：pane id（方向导航要拿所有叶子的屏幕矩形算最近邻）。
 type PaneBoundsStore = Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>;
-
-fn decode_sidebar_logo(
-    logo: crate::display::AiLogo,
-    dark: bool,
-    target_size: u32,
-) -> Option<Arc<RenderImage>> {
-    let mut rgba = image::load_from_memory(logo.png(dark)).ok()?.into_rgba8();
-    logo.tint_pixels(&mut rgba, if dark { [236, 239, 245] } else { [35, 40, 50] });
-    // 直接复用旧壳的 Lanczos3 物理像素预缩放与 alpha 质量中心校正。
-    // 先 tint 再缩放，避免 1024px 原图在 GPUI paint 阶段临时压到十几个
-    // 逻辑像素时产生灰边、锯齿与非整数 DPI 采样。
-    let (prepared, width, height) = crate::display::prepare_ai_logo_texture(
-        rgba.as_raw(),
-        rgba.width(),
-        rgba.height(),
-        target_size,
-    );
-    let mut rgba = image::RgbaImage::from_raw(width, height, prepared)?;
-    // GPUI 的原始帧使用 BGRA；与壁纸解码走同一通道转换。
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-    Some(Arc::new(RenderImage::new([Frame::new(rgba)])))
-}
-
-fn sidebar_logo_images(
-    target_size: u32,
-) -> HashMap<(crate::display::AiLogo, bool), Arc<RenderImage>> {
-    use crate::display::AiLogo;
-
-    let mut images = HashMap::new();
-    for logo in AiLogo::ALL {
-        for dark in [false, true] {
-            if let Some(image) = decode_sidebar_logo(logo, dark, target_size) {
-                images.insert((logo, dark), image);
-            }
-        }
-    }
-    images
-}
 
 /// GPUI `Bounds` → `nebula_split::Rect`（同为窗口逻辑像素坐标系）。
 fn to_split_rect(bounds: &Bounds<Pixels>) -> nebula_split::Rect {
@@ -822,6 +782,7 @@ pub struct NebulaWorkspace {
     sidebar_logo_images: HashMap<(crate::display::AiLogo, bool), Arc<RenderImage>>,
     /// 品牌图缓存对应的整数物理像素边长；窗口跨 DPI 显示器时据此重建。
     sidebar_logo_target_px: u32,
+    sidebar_logo_load: logos::LogoLoad,
     /// 跟随系统深浅：OS 外观切换的监听（旧壳 ThemeChanged 的对应物）。
     _appearance_sub: Subscription,
     /// spinner 在窗口失焦时冻结为静态状态；重新聚焦后由一次 render 恢复按需帧循环。
@@ -919,7 +880,7 @@ impl NebulaWorkspace {
             })
             .detach();
         }
-        let initial_grid = Self::prepare_initial_grid(
+        let initial_grid = windowing::prepare_initial_grid(
             window,
             cx,
             sidebar_width,
@@ -980,8 +941,6 @@ impl NebulaWorkspace {
             cx.subscribe_in(&command_manager_input, window, Self::on_command_manager_input_event);
         let file_tree_search_subscription =
             cx.subscribe_in(&file_tree_search_input, window, Self::on_file_tree_search_event);
-        let sidebar_logo_target_px =
-            (TAB_LABEL_ICON_SIZE * window.scale_factor()).round().max(1.0) as u32;
         let mut this = Self {
             tabs: Vec::new(),
             tab_meta: Vec::new(),
@@ -1060,8 +1019,9 @@ impl NebulaWorkspace {
             remote_files_scroll: gpui::UniformListScrollHandle::new(),
             tab_menu: None,
             selection_context_menu: None,
-            sidebar_logo_images: sidebar_logo_images(sidebar_logo_target_px),
-            sidebar_logo_target_px,
+            sidebar_logo_images: HashMap::new(),
+            sidebar_logo_target_px: 0,
+            sidebar_logo_load: logos::LogoLoad::default(),
             _appearance_sub: appearance_sub,
             spinner_window_active,
             _spinner_activation_sub: spinner_activation_sub,
@@ -1131,53 +1091,6 @@ impl NebulaWorkspace {
                 .unwrap_or(true)
         });
         this
-    }
-
-    /// 默认窗口尺寸 = 旧壳默认画布 116×30 的反推（`display` 的
-    /// `Dimensions` 默认值）。画布按配置基准字号定形；持久化缩放只参与
-    /// 随后的实际行列反推，不能把缩放后的 116 列全加到启动窗宽上。
-    /// 布局链横向：网格 + 侧栏 + 卡缝 p_2×2(16) +
-    /// 终端水平内边距 24；纵向：网格 + 标题栏 34（gpui-component
-    /// TITLE_BAR_HEIGHT）+ 卡缝 16 + 终端垂直内边距 16。各加 2px 余量让
-    /// 浮点 floor 不缩行列；放不下的屏幕按 95% 工作区收拢（网格随之变小，
-    /// 与旧壳"开不下就小"同义）。
-    fn prepare_initial_grid(
-        window: &mut Window,
-        cx: &mut App,
-        sidebar_width: f32,
-        fit_window_to_default_grid: bool,
-    ) -> (u16, u16) {
-        let (cell_w, line_h) = TerminalView::cell_metrics(window, cx);
-        let (startup_cell_w, startup_line_h) = TerminalView::startup_cell_metrics(window, cx);
-        // 标签栏位置只改变 chrome 内部布局，不能改变产品的默认外窗几何。
-        // 顶栏模式仍保留与侧栏模式相同的横向预算，让两种模式启动时宽高一致。
-        let chrome_w = sidebar_width + 16.0 + 24.0 + 2.0;
-        let chrome_h = 34.0 + 16.0 + 16.0 + 2.0;
-        let (w, h) = if fit_window_to_default_grid {
-            let mut w = f32::from(TerminalView::DEFAULT_GRID_COLUMNS) * f32::from(startup_cell_w)
-                + chrome_w;
-            let mut h =
-                f32::from(TerminalView::DEFAULT_GRID_LINES) * f32::from(startup_line_h) + chrome_h;
-            if let Some(display) = cx.primary_display() {
-                let bounds = display.bounds().size;
-                w = w.min(f32::from(bounds.width) * 0.95);
-                h = h.min(f32::from(bounds.height) * 0.95);
-            }
-            window.resize(size(px(w), px(h)));
-            (w, h)
-        } else {
-            // 快速终端的 WindowOptions 已经给出目标显示器全宽和 40% 高度。
-            // 再排队一次普通网格 resize 会与原生滑入竞争，首帧 DComp 表面只
-            // 覆盖旧宽度，右侧因此变黑。
-            let bounds = window.bounds().size;
-            (f32::from(bounds.width), f32::from(bounds.height))
-        };
-        // 反推收拢后的目标网格：终端 spawn 直接用它，出生即最终几何，
-        // 启动路径零 ConPTY resize（resize 竞态会打乱 shell 首屏输出的
-        // 坐标缓存，参见 set_layout 的启动稳定闸）。
-        let cols = ((w - chrome_w) / f32::from(cell_w) + 0.001).floor().max(2.0) as u16;
-        let rows = ((h - chrome_h) / f32::from(line_h) + 0.001).floor().max(2.0) as u16;
-        (cols, rows)
     }
 
     /// `LaunchSession::Default` 的口语短标。
@@ -3047,10 +2960,10 @@ impl Render for NebulaWorkspace {
         let draw_file_divider = self.side_panel.open;
         let sidebar_logo_target_px =
             (TAB_LABEL_ICON_SIZE * window.scale_factor()).round().max(1.0) as u32;
-        if sidebar_logo_target_px != self.sidebar_logo_target_px {
+        if let Some(images) = logos::poll_sidebar_logo_images(self, sidebar_logo_target_px, cx) {
             // GPUI 窗口可跨不同 DPI 的显示器；原纹理只在整数物理像素尺寸
             // 变化时重建，普通 render 不重复解码 PNG。
-            self.sidebar_logo_images = sidebar_logo_images(sidebar_logo_target_px);
+            self.sidebar_logo_images = images;
             self.sidebar_logo_target_px = sidebar_logo_target_px;
         }
         // Some tab-open/restore paths assign `active` directly. Clear a focus
