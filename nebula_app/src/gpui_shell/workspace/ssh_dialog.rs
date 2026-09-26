@@ -2,7 +2,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{App, AppContext as _, Context, Entity, ParentElement as _, Styled as _, Window, div};
+use gpui::{
+    App, AppContext as _, Context, Entity, InteractiveElement as _, ParentElement as _,
+    Styled as _, Window, div,
+};
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::TerminalView;
