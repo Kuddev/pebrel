@@ -600,17 +600,11 @@ mod tests {
         ctrl_c.modifiers.control = true;
         assert!(encode(&ctrl_c, &mode).is_some());
         assert!(encode(&keystroke("escape"), &mode).is_some());
-    }
 
-    #[cfg(windows)]
-    #[test]
-    fn ctrl_slash_uses_its_windows_virtual_key() {
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::VkKeyScanW;
-
-        let key = Keystroke::parse("ctrl-/").unwrap();
+        let slash = Keystroke::parse("ctrl-/").unwrap();
         let vk = unsafe { VkKeyScanW(b'/' as u16) } as u16 & 0xff;
-        let encoded = encode(&key, &TermMode::WIN32_INPUT_MODE).unwrap();
-        assert!(encoded.starts_with(format!("\x1b[{vk};").as_bytes()));
+        assert!(encode(&slash, &mode).unwrap().starts_with(format!("\x1b[{vk};").as_bytes()));
     }
 
     /// 普通空格与字母使用同一文本输入路径：英语布局最终提交 `" "`，IME
