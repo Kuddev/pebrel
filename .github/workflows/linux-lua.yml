@@ -11,14 +11,15 @@ on:
   push:
     branches: [main]
   # Include docs, catalogs, assets and workflow edits: every PR gets test results.
-  # ready_for_review starts the scarce-runner jobs that draft pushes skip.
+  # 草稿已跑完整矩阵，转为 Ready 而没有新提交时不重复申请七个原生 runner。
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   merge_group:
 
 concurrency:
   group: native-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+  # main 的过期验证也应释放 runner；手动诊断和发布调用不互相取消。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 permissions:
   contents: read
@@ -75,9 +76,7 @@ jobs:
             --output "$GITHUB_OUTPUT"
 
   # The required lint job validates the matrix before heavy runners are
-  # requested. Draft PRs omit deferred platforms entirely; ready PRs and
-  # release callers require the full matrix. Deferred checks remain missing
-  # on drafts instead of being reported as successful tests.
+  # requested. Every PR, including a draft, requires the complete matrix.
   native-tests:
     needs: lint
     if: ${{ inputs.windows_diagnostics_run == '' }}
@@ -131,6 +130,10 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $compiler -notcontains 'host: aarch64-pc-windows-msvc') {
             throw 'The Windows ARM job must compile and run ARM64 tests.'
           }
+      - name: Install the pinned native test runner
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
       - uses: ./.github/actions/rust-cache
         id: rust-cache
         with:
@@ -139,7 +142,9 @@ jobs:
           target: |
             target/ci
             ${{ runner.os != 'macOS' && 'target/release' || '' }}
-          legacy-key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'Linux' && 'linux' || 'macos' }}
+          # PR merge-ref 缓存不与其他 PR 共享；只由默认分支维护可复用的依赖快照。
+          revision: dependencies-v1
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - name: Prepare pinned Windows console runtime
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -148,7 +153,7 @@ jobs:
           ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture $architecture
           ./scripts/tests/windows-runtime.tests.ps1 -Architecture $architecture
       - name: Test complete workspace and native harness
-        run: python scripts/ci_native_tests.py
+        run: python scripts/ci_native_tests.py --runner nextest
       - name: Check source architecture
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: python scripts/check_architecture.py
@@ -159,7 +164,7 @@ jobs:
         if: ${{ !cancelled() && runner.os != 'macOS' }}
         run: cargo check --locked --workspace --release
       - name: Save compiled workload
-        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        if: ${{ success() && steps.rust-cache.outputs.save-enabled == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -214,11 +219,12 @@ jobs:
         with:
           key: native-release-check
           target: target/release
-          legacy-key: macos
+          revision: dependencies-v1
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - name: Check the release workspace
         run: cargo check --locked --workspace --release --timings
       - name: Save compiled workload
-        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        if: ${{ success() && steps.rust-cache.outputs.save-enabled == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: target/release

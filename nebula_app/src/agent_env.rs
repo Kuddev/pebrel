@@ -175,10 +175,12 @@ const WSLENV_ENTRIES: &[&str] = &[
     "COLORTERM",
     "PEBREL_CLI/p",
     "PEBREL_BIN_DIR/p",
+    "PEBREL_HOOK_EXE/p",
     PROCESS_ENV,
     crate::runtime_api::ENDPOINT_ENV,
     "NEBULA_CLI/p",
     "NEBULA_BIN_DIR/p",
+    "NEBULA_HOOK_EXE/p",
 ];
 
 /// 把 [`WSLENV_ENTRIES`] 合并进 `WSLENV`，保留已有条目。
@@ -319,6 +321,13 @@ mod tests {
                 "{CLI_ENV} missing from WSLENV passthrough: {names:?}"
             );
             assert!(names.contains(&BIN_DIR_ENV), "{BIN_DIR_ENV} missing: {names:?}");
+            // Hook 的绝对路径同样是 `D:\…` 字面量，漏掉它 WSL 侧只能照抄出一个
+            // 跑不起来的命令（Issue: hook 接线在 WSL pane 里永远 ENOENT）。
+            let hook_exe = crate::ai_hook::HOOK_EXE_ENV;
+            assert!(
+                names.contains(&hook_exe),
+                "{hook_exe} missing from WSLENV passthrough: {names:?}"
+            );
             assert!(names.contains(&PROCESS_ENV), "{PROCESS_ENV} missing: {names:?}");
             assert!(names.contains(&crate::runtime_api::ENDPOINT_ENV));
             assert!(names.contains(&"COLORTERM"));

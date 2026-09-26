@@ -108,6 +108,7 @@ class CacheIdentityTests(unittest.TestCase):
             "Target cache exact hit",
             "Target cache matched key",
             "Save key",
+            "Cache publishing enabled",
             "Legacy fallback invoked",
             "Legacy fallback outcome",
         ):
@@ -149,20 +150,50 @@ class CacheIdentityTests(unittest.TestCase):
                     "GITHUB_OUTPUT": str(root / "outputs"),
                     "TARGET_CACHE_HIT": hit, "TARGET_CACHE_MATCHED_KEY": matched,
                     "SAVE_KEY": "new-save-key", "LEGACY_CONFIGURED": configured,
+                    "CACHE_SAVE_ENABLED": "false",
                     "LEGACY_OUTCOME": outcome, "CACHE_WORKLOAD": workload,
                     "RUNNER_OS_VALUE": "Linux", "RUNNER_ARCH_VALUE": "X64",
                 }
                 result = subprocess.run([shutil.which("bash"), "-c", script], env=environment,
                                         text=True, capture_output=True, check=False)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                summary = (root / "summary").read_text()
-                outputs = (root / "outputs").read_text()
+                summary = (root / "summary").read_text(encoding="utf-8")
+                outputs = (root / "outputs").read_text(encoding="utf-8")
                 self.assertIn(f"Target cache exact hit: `{hit or 'false'}`", summary)
                 self.assertIn(f"Target cache matched key: `{matched or '<none>'}`", summary)
+                self.assertIn("Cache publishing enabled: `false`", summary)
                 self.assertIn(f"legacy-fallback-invoked={invoked}\n", outputs)
                 self.assertIn(f"legacy-fallback-outcome={outcome}\n", outputs)
                 self.assertIn(workload, summary)
                 self.assertFalse(marker.exists(), "summary values must never execute as shell code")
+
+    def test_dependency_snapshot_revision_preserves_compatibility_boundaries(self):
+        source = self.action_text()
+        self.assertIn("CACHE_REVISION: ${{ inputs.revision || github.sha }}", source)
+        snapshot = self.identity(CACHE_REVISION="dependencies-v1")
+        changed = self.identity(CACHE_REVISION="dependencies-v1", CACHE_MANIFESTS="new-dependencies")
+        self.assertNotEqual(snapshot["key"], changed["key"])
+        self.assertEqual(snapshot["restore-key"], changed["restore-key"])
+
+    def test_source_downloads_share_architectures_but_targets_do_not(self):
+        source = self.action_text()
+        self.assertIn("key: cargo-downloads-v3-${{ runner.os }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}", source)
+        self.assertIn("cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-", source)
+        fetch = source.split("- name: Populate complete downloads before sharing the cache", 1)[1]
+        for targets in (
+            "--target x86_64-pc-windows-msvc --target aarch64-pc-windows-msvc",
+            "--target x86_64-apple-darwin --target aarch64-apple-darwin",
+        ):
+            self.assertIn(f"cargo fetch --locked {targets}", fetch)
+        self.assertNotEqual(self.identity(CACHE_ARCH="X64")["restore-key"],
+                            self.identity(CACHE_ARCH="ARM64")["restore-key"])
+
+    def test_read_only_consumers_neither_prefetch_other_architectures_nor_save(self):
+        source = self.action_text()
+        self.assertIn("value: ${{ inputs.save-if }}", source)
+        for step in ("Populate complete downloads before sharing the cache", "Save complete shared Cargo downloads"):
+            body = source.split(f"- name: {step}", 1)[1].split("\n    - name:", 1)[0]
+            self.assertIn("if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true'", body)
 
     @unittest.skipUnless(os.name == "nt", "Windows cache migration")
     def test_windows_migration_preserves_compiler_and_workload_boundaries(self):

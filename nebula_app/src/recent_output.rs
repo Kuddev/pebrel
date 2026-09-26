@@ -139,7 +139,7 @@ mod tests {
     use nebula_terminal::term::{Config, Term};
     use nebula_terminal::vte::ansi;
 
-    struct Size;
+    pub(super) struct Size;
     impl Dimensions for Size {
         fn total_lines(&self) -> usize {
             4

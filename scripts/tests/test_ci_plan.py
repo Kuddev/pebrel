@@ -36,7 +36,7 @@ class CiPlanCliTests(unittest.TestCase):
         lines = path.read_text(encoding="utf-8").splitlines()
         return {name: json.loads(value) for name, value in (line.split("=", 1) for line in lines)}
 
-    def test_draft_pr_does_not_materialize_scarce_runner_rows(self) -> None:
+    def test_draft_pr_has_the_same_full_native_coverage_as_ready_pr(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "github-output"
             result = self.run_cli("pull_request", {"pull_request": {"draft": True}}, output)
@@ -44,12 +44,15 @@ class CiPlanCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
-                'native_matrix=[{"os":"ubuntu-24.04"},{"os":"windows-2022"},{"os":"macos-26"}]\n'
-                'release_matrix=[{"os":"macos-26"}]\n',
+                'native_matrix=[{"os":"ubuntu-24.04"},{"os":"windows-2022"},{"os":"macos-26"},'
+                '{"os":"windows-11-arm"},{"os":"macos-26-intel"}]\n'
+                'release_matrix=[{"os":"macos-26"},{"os":"macos-26-intel"}]\n',
             )
             plan = self.outputs(output)
-            self.assertNotIn({"os": "windows-11-arm"}, plan["native_matrix"])
-            self.assertNotIn({"os": "macos-26-intel"}, plan["native_matrix"])
+            ready_output = Path(directory) / "ready-output"
+            ready = self.run_cli("pull_request", {"pull_request": {"draft": False}}, ready_output)
+            self.assertEqual(ready.returncode, 0, ready.stderr)
+            self.assertEqual(plan, self.outputs(ready_output))
 
     def test_ready_pr_has_all_native_and_release_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -96,6 +96,21 @@ mod tests {
     use crate::vte::ansi;
 
     #[test]
+    fn captures_primary_screen_while_alternate_screen_is_active() {
+        let mut term = Term::new(Config::default(), &TermSize::new(8, 2), VoidListener);
+        let mut parser: ansi::Processor = ansi::Processor::new();
+        parser.advance(&mut term, b"main");
+        parser.advance(&mut term, b"\x1b[?1049halt");
+        assert_eq!(term.grid()[Line(0)][Column(4)].c, 'a');
+
+        let snapshot = DisplaySnapshot::capture(term.primary_grid(), Line(0)..Line(1), 8);
+        let mut target = Grid::<Cell>::new(2, 8, 10);
+        snapshot.restore_scrollback(&mut target).unwrap();
+        assert_eq!(target[Line(-1)][Column(0)].c, 'm');
+        assert_eq!(target[Line(-1)][Column(1)].c, 'a');
+    }
+
+    #[test]
     fn restores_reflowed_unicode_before_existing_history_without_touching_prompt() {
         let mut source = Term::new(Config::default(), &TermSize::new(8, 3), VoidListener);
         let mut parser: ansi::Processor = ansi::Processor::new();

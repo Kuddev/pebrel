@@ -33,6 +33,7 @@ use nebula_split::{SplitDirection, SplitTree};
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::{TerminalInput, TerminalView};
+use crate::i18n::Message;
 
 use super::{NebulaWorkspace, WorkspaceTab};
 
@@ -247,6 +248,7 @@ impl NebulaWorkspace {
         corners: HeaderCorners,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
         let dark = theme.is_dark();
         let muted = theme.muted_foreground;
@@ -360,9 +362,9 @@ impl NebulaWorkspace {
                             .xsmall()
                             .selected(broadcast)
                             .tooltip(if broadcast {
-                                "关闭广播输入"
+                                language.text(Message::WorkspacePaneStopBroadcastInput)
                             } else {
-                                "广播输入到本标签全部分栏"
+                                language.text(Message::WorkspacePaneBroadcastInputTooltip)
                             })
                             .child(broadcast_mark(
                                 title_px,
@@ -387,9 +389,9 @@ impl NebulaWorkspace {
                             .xsmall()
                             .selected(zoomed)
                             .tooltip(if zoomed {
-                                "退出独占 (Ctrl+Shift+Enter)"
+                                language.text(Message::WorkspacePaneRestoreLayout)
                             } else {
-                                "独占放大 (Ctrl+Shift+Enter)"
+                                language.text(Message::WorkspacePaneZoom)
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -402,7 +404,7 @@ impl NebulaWorkspace {
                             .icon(Icon::new(IconName::Close).text_color(icon_ink))
                             .ghost()
                             .xsmall()
-                            .tooltip("关闭此分栏")
+                            .tooltip(language.text(Message::WorkspacePaneClose))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.request_close_pane(tab_ix, pane_id, window, cx);
@@ -434,11 +436,15 @@ impl NebulaWorkspace {
         // toast 而不是消息栏：开关本身没有待办动作，只需要在开启的一刻说清
         // 影响面。关闭时不打扰。
         if on {
+            let language = crate::gpui_shell::config::ui_language(cx);
             crate::gpui_shell::toast::toast(
                 window,
                 cx,
                 crate::display::ToastKind::Info,
-                format!("广播输入已开启：键入将同步到本标签的 {count} 个分栏"),
+                language.format(
+                    Message::WorkspacePaneBroadcastEnabled,
+                    &[("count", &count.to_string())],
+                ),
             );
         }
         cx.notify();
@@ -665,6 +671,7 @@ impl NebulaWorkspace {
     pub(super) fn pane_drag_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let drag = self.pane_drag.as_ref().filter(|drag| drag.active)?;
         let (x, y, detach) = (drag.x, drag.y, drag.detach);
+        let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
         let hint_bg = if detach { theme.primary } else { theme.muted };
         let hint_fg = if detach { theme.primary_foreground } else { theme.muted_foreground };
@@ -695,9 +702,9 @@ impl NebulaWorkspace {
                         .text_size(px(11.0))
                         .text_color(hint_fg)
                         .child(if detach {
-                            "松手：拉出为独立标签"
+                            language.text(Message::WorkspacePaneExtractRelease)
                         } else {
-                            "拖到终端区外可拉出"
+                            language.text(Message::WorkspacePaneExtractDragHint)
                         }),
                 )
                 .into_any_element(),

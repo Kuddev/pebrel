@@ -99,12 +99,11 @@ impl TerminalView {
     }
 
     /// 把回滚位置落到 `target`（滚动条拖拽的落点提交）。
-    pub(super) fn scroll_to_offset(&mut self, target: usize, current: usize) {
+    pub(super) fn scroll_to_offset(&self, target: usize, current: usize) {
         if target == current {
             return;
         }
         if let Some(session) = &self.session {
-            self.restored_viewport_offset = None;
             session.term.lock().scroll_display(Scroll::Delta(target as i32 - current as i32));
         }
     }
@@ -725,7 +724,6 @@ impl TerminalView {
             return true;
         }
         if let Some(session) = &self.session {
-            self.restored_viewport_offset = None;
             session.term.lock().scroll_display(Scroll::Delta(lines));
         }
         // 滚动换了视口到绝对行的映射，选区末端必须按滚动后的网格重算——
@@ -855,6 +853,9 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session) = &self.session {
+            session.term.lock().cancel_redraw_anchor();
+        }
         let delta_y = event.delta.pixel_delta(self.line_height).y.as_f32();
         // 旧壳 `mouse_wheel_input`：Ctrl+滚轮先于一切滚动消费者，一步 1
         // 逻辑像素，钳在 4–64。设置页步进会写盘；这里同样写 `font_size=`，
@@ -912,7 +913,6 @@ impl TerminalView {
             }
             session.notifier.notify(bytes);
         } else {
-            self.restored_viewport_offset = None;
             session.term.lock().scroll_display(Scroll::Delta(lines));
         }
         cx.notify();

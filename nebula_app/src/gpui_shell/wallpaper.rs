@@ -400,17 +400,22 @@ fn apply_window_effects(cx: &mut App) {
             .into_iter()
             .filter(|handle| !already_applied.contains(&handle.window_id()))
             .collect::<Vec<_>>();
-        cx.set_global(AppliedBlur { blur, windows: window_ids });
+        let mut applied =
+            already_applied.intersection(&window_ids).copied().collect::<HashSet<_>>();
         for handle in pending {
             if let Err(err) = handle.update(cx, |_, window, _| {
+                crate::platform::acrylic::remove(window.window_handle().window_id());
                 window.set_background_appearance(appearance);
                 #[cfg(windows)]
                 apply_windows_accent_policy(window, blur, appearance);
                 window.refresh();
             }) {
                 log::warn!("failed to apply window visual effects: {err}");
+            } else {
+                applied.insert(handle.window_id());
             }
         }
+        cx.set_global(AppliedBlur { blur, windows: applied });
     });
 }
 
@@ -424,11 +429,14 @@ fn apply_window_effects(cx: &mut App) {
 /// | `Aero` | state 3 + 玻璃色调 | `DWMSBT_NONE` | 整窗实时玻璃模糊 |
 /// | `Mica` | 全零 | `DWMSBT_MAINWINDOW` | 系统壁纸 backdrop |
 /// | `Mica Alt` | 全零 | `DWMSBT_TABBEDWINDOW` | 强色调系统壁纸 backdrop |
-/// | `Acrylic` | state 4 + 非零 alpha | `DWMSBT_NONE` | 实时模糊 + tint/噪点/饱和 |
+/// | `Acrylic` | controller 成功时清零，否则 state 4 | `DWMSBT_NONE` | 实时 Acrylic |
 ///
 /// `Mica` / `Mica Alt` 使用公开 DWM 属性。Nebula 不读取
 /// `SPI_GETDESKWALLPAPER` 或 `TranscodedWallpaper`；显示器选择、壁纸排布、模糊和
 /// 色调全部交给系统合成器。Windows 不支持该属性时退回 Acrylic，避免透明空洞。
+/// Acrylic 在 Windows 11 22H2+ 优先使用可用的 DesktopAcrylicController；缺少
+/// Windows App Runtime 或绑定失败时保留 AccentPolicy 回退。控制器只随窗口和
+/// 材质档位变化创建/释放，不跟随透明度滑块或焦点重建。
 ///
 /// 两条通道**必须互斥**：同时开 Acrylic 与 system backdrop 时 DWM 的行为未
 /// 定义（实测表现为 backdrop 赢，Acrylic 被吞）。所以每档都要把另一条显式
@@ -494,7 +502,7 @@ fn apply_windows_accent_policy(
     }
 
     let apply_accent = |mut accent: AccentPolicy, phase: &str| {
-        let Some(set_attribute) = set_attribute else { return };
+        let Some(set_attribute) = set_attribute else { return false };
         let mut data = WindowCompositionAttributeData {
             attribute: 19, // WCA_ACCENT_POLICY
             data: &mut accent as *mut _ as *mut core::ffi::c_void,
@@ -503,7 +511,9 @@ fn apply_windows_accent_policy(
         // SAFETY: hwnd 来自当前存活的 GPUI 窗口，数据在调用期间保持有效。
         if unsafe { set_attribute(hwnd, &mut data) } == 0 {
             log::warn!("SetWindowCompositionAttribute({phase}) failed");
+            return false;
         }
+        true
     };
 
     let disabled_accent = AccentPolicy {
@@ -520,9 +530,11 @@ fn apply_windows_accent_policy(
 
     // 必须先移除旧 WCA 层。反过来先写 DWMSBT 时，Aero/Acrylic 的
     // AccentPolicy 会阻止 DWM 接纳新材质，事后再清也不会自动重算 frame。
-    if system_material_requested {
-        apply_accent(disabled_accent, "clear-before-system-backdrop");
-    }
+    let accent_cleared = if system_material_requested || blur == BlurModeName::Acrylic {
+        apply_accent(disabled_accent, "clear-before-system-backdrop")
+    } else {
+        false
+    };
 
     let blur_behind = DWM_BLURBEHIND {
         dwFlags: DWM_BB_ENABLE,
@@ -550,6 +562,17 @@ fn apply_windows_accent_policy(
     let system_material_available =
         system_material_requested && backdrop_result.is_some_and(|result| result >= 0);
 
+    let acrylic_requested = blur == BlurModeName::Acrylic
+        || (matches!(blur, BlurModeName::Mica | BlurModeName::MicaAlt)
+            && !system_material_available
+            && appearance != WindowBackgroundAppearance::Transparent);
+    let controller_available = acrylic_requested
+        && windows_build_number() >= 22_621
+        && accent_cleared
+        && backdrop_result.is_some_and(|result| result >= 0)
+        && blur_behind_result >= 0
+        && crate::platform::acrylic::apply(window.window_handle().window_id(), hwnd as isize);
+
     let accent = match blur {
         BlurModeName::Acrylic => AccentPolicy {
             state: 4, // ACCENT_ENABLE_ACRYLICBLURBEHIND
@@ -576,7 +599,7 @@ fn apply_windows_accent_policy(
         BlurModeName::Mica | BlurModeName::MicaAlt | BlurModeName::None => disabled_accent,
     };
 
-    if !(system_material_requested && system_material_available) {
+    if !controller_available && !(system_material_requested && system_material_available) {
         apply_accent(accent, "final");
     }
 
@@ -812,4 +835,21 @@ fn image_corners(bounds: Bounds<Pixels>, image: Bounds<Pixels>, radius: Pixels) 
         bottom_left: if left && bottom { radius } else { px(0.0) },
         bottom_right: if right && bottom { radius } else { px(0.0) },
     }
+}
+
+/// Initialize only the visual state needed by native material acceptance tests.
+#[cfg(test)]
+pub(crate) fn test_install_visual_effects(cx: &mut App, opacity: f32, blur: BlurModeName) {
+    cx.set_global(VisualEffects {
+        opacity,
+        blur,
+        wallpaper: None,
+        generation: Arc::new(AtomicU64::new(0)),
+        loading: false,
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_apply_window_effects(cx: &mut App) {
+    apply_window_effects(cx);
 }

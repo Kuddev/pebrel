@@ -185,7 +185,19 @@ impl StreamProcessor {
     }
 
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
+        terminal.cancel_redraw_anchor();
         self.parser.stop_sync(terminal);
+    }
+
+    fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
+        // VTE 0.15 在约 2 MiB 时强制提交同步缓冲；提前取消兼容锚点，
+        // 但不强制结束/截断输出。分块保证单次大输入也不会绕过检查。
+        for chunk in bytes.chunks(4096) {
+            if self.parser.sync_bytes_count() >= 1024 * 1024 {
+                terminal.cancel_redraw_anchor();
+            }
+            self.parser.advance(terminal, chunk);
+        }
     }
 
     pub fn feed<U: EventListener>(
@@ -200,7 +212,7 @@ impl StreamProcessor {
             // Titles and shell identity/cwd reports must retain wire order:
             // coalescing a remote cwd past a parent prompt would attribute that
             // directory to the parent shell's completion history.
-            self.parser.advance(terminal, &bytes[advanced..offset]);
+            self.advance(terminal, &bytes[advanced..offset]);
             advanced = offset;
             match event {
                 OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
@@ -239,7 +251,7 @@ impl StreamProcessor {
                     let rows = (disp_h / cell_h).ceil().max(1.0) as usize;
                     let abs_line = terminal.nebula_cursor_abs_line();
                     for _ in 0..=rows {
-                        self.parser.advance(terminal, b"\r\n");
+                        self.advance(terminal, b"\r\n");
                     }
                     event_proxy.send_event(Event::InlineImage {
                         data: std::sync::Arc::new(data),
@@ -250,7 +262,7 @@ impl StreamProcessor {
                 },
             }
         }
-        self.parser.advance(terminal, &bytes[advanced..]);
+        self.advance(terminal, &bytes[advanced..]);
     }
 }
 
@@ -959,6 +971,30 @@ mod tests {
     use crate::event::VoidListener;
     use crate::term::Config;
     use crate::term::test::TermSize;
+
+    #[test]
+    fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
+        use crate::render::{RenderSnapshot, SnapshotConfig};
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let cfg = SnapshotConfig { rows: 2, cols: 20 };
+        stream.feed(&mut term, &VoidListener, b"old");
+        let before = RenderSnapshot::capture(&term, &cfg);
+        for bytes in [b"\x1b[?20".as_slice(), b"26h\r", b"new", b"\x1b[10G", b"\x1b[?2026"] {
+            stream.feed(&mut term, &VoidListener, bytes);
+            // Animation frames read the grid even without a Wakeup.
+            let frame = RenderSnapshot::capture(&term, &cfg);
+            assert_eq!(frame.cursor.as_ref().unwrap().col, before.cursor.as_ref().unwrap().col);
+            assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        }
+        stream.feed(&mut term, &VoidListener, b"l");
+        assert_eq!(RenderSnapshot::capture(&term, &cfg).cursor.unwrap().col, 9);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h\rtimeout");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.stop_sync(&mut term);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 't');
+    }
 
     #[test]
     fn authenticated_hook_frames_survive_every_chunk_boundary_and_reject_other_panes() {

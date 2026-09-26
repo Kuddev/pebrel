@@ -121,6 +121,34 @@ impl SettingsPane {
         self.ssh_library.reset_scroll();
     }
 
+    fn duplicate_ssh_host(&mut self, host: String, window: &mut Window, cx: &mut Context<Self>) {
+        let label = self
+            .ssh_hosts
+            .profiles
+            .for_destination(&host)
+            .label
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| host.clone());
+        let copy_label = self.ssh_hosts.profiles.next_default_label(label.trim());
+
+        self.open_ssh_editor(Some(host.clone()), window, cx);
+        if let Some(editor) = self.ssh_editor.as_mut() {
+            editor.original_destination = None;
+            // 复制不会重命名原主机，编辑路径排除的原地址仍应可用作新主机的跳板。
+            editor.jump_choices.push((host, label));
+        }
+        self.ssh_destination_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.ssh_label_input.update(cx, |input, cx| input.set_value(copy_label, window, cx));
+        self.ssh_password_input.update(cx, |input, cx| {
+            input.set_placeholder(
+                crate::gpui_shell::config::ui_language(cx)
+                    .pick("留空则连接时询问", "Leave empty to ask when connecting"),
+                window,
+                cx,
+            );
+        });
+    }
+
     fn filtered_library_hosts(&self, cx: &gpui::App) -> Vec<String> {
         let query = self.ssh_library.search.read(cx).value();
         let mut hosts = if self.ssh_library.scope == HostScope::Recent {
@@ -421,6 +449,8 @@ impl SettingsPane {
         // 行首 OS 图标（旧壳裁定 2026-08-09）：id 取自 ssh_profiles 存储，
         // 未认出回落通用终端形状；mono 字体渲染 Nerd Font 字位。
         let os_icon = crate::display::ui::os_icons::resolve(icons.get(&host).map(String::as_str));
+        let context_owner = cx.entity().downgrade();
+        let context_host = host.clone();
         let connect_host = host.clone();
         let edit_host = host.clone();
         let pin_host = host.clone();
@@ -443,6 +473,52 @@ impl SettingsPane {
                     .border_color(theme.border)
                     .bg(theme.secondary.opacity(0.25))
                     .hover(move |row| row.bg(hover_bg))
+                    .context_menu(move |menu, _, _| {
+                        let connect_owner = context_owner.clone();
+                        let edit_owner = context_owner.clone();
+                        let duplicate_owner = context_owner.clone();
+                        let delete_owner = context_owner.clone();
+                        let connect_host = context_host.clone();
+                        let edit_host = context_host.clone();
+                        let duplicate_host = context_host.clone();
+                        let delete_host = context_host.clone();
+                        menu.item(
+                            PopupMenuItem::new(language.text(Message::LauncherConnect)).on_click(
+                                move |_, _, cx| {
+                                    let _ = connect_owner.update(cx, |this, cx| {
+                                        cx.emit(SettingsPaneEvent::LaunchSsh(connect_host.clone()));
+                                        this.ssh_status =
+                                            Some(SshStatus::Opening(connect_host.clone()));
+                                        cx.notify();
+                                    });
+                                },
+                            ),
+                        )
+                        .item(PopupMenuItem::new(language.text(Message::LauncherEdit)).on_click(
+                            move |_, window, cx| {
+                                let _ = edit_owner.update(cx, |this, cx| {
+                                    this.open_ssh_editor(Some(edit_host.clone()), window, cx);
+                                });
+                            },
+                        ))
+                        .item(PopupMenuItem::new(language.text(Message::CommonCopy)).on_click(
+                            move |_, window, cx| {
+                                let _ = duplicate_owner.update(cx, |this, cx| {
+                                    this.duplicate_ssh_host(duplicate_host.clone(), window, cx);
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new(language.text(Message::LauncherDelete)).on_click(
+                                move |_, _, cx| {
+                                    let _ = delete_owner.update(cx, |this, cx| {
+                                        this.ssh_delete_confirm = Some(delete_host.clone());
+                                        cx.notify();
+                                    });
+                                },
+                            ),
+                        )
+                    })
                     .child(
                         crate::gpui_shell::widgets::device_icon_container(cx)
                             .id(SharedString::from(format!("ssh-host-icon-{ix}")))

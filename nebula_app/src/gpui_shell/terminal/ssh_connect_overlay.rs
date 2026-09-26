@@ -72,12 +72,6 @@ mod connection_state_tests {
     }
 }
 
-/// UiLanguage 由设置折算（两壳同源）。
-pub(super) fn language() -> crate::display::UiLanguage {
-    let runtime = nebula_settings::RuntimeSettings::load();
-    crate::display::LanguagePreference::from(runtime.language).resolved()
-}
-
 fn hsla_from_rgba(r: u8, g: u8, b: u8) -> Hsla {
     let (rf, gf, bf) = (f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
     let max = rf.max(gf).max(bf);
@@ -288,7 +282,7 @@ pub(super) fn overlay(
     use gpui::prelude::FluentBuilder as _;
 
     let theme = cx.theme();
-    let lang = language();
+    let lang = crate::gpui_shell::config::ui_language(cx);
     // chrome 文本锚定配置字号（旧壳 ui_font 合同），不跟终端缩放。
     let ui_px = cx
         .try_global::<crate::gpui_shell::config::Settings>()

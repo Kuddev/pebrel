@@ -535,7 +535,7 @@ jobs:
           retention-days: 14
 
   windows-arm64:
-    name: Windows ARM64 stable portable package
+    name: Windows ARM64 stable package
     if: ${{ !inputs.windows_only }}
     needs: prepare
     runs-on: windows-11-arm
@@ -580,9 +580,11 @@ jobs:
         with:
           path: target/release
           key: ${{ steps.rust-cache.outputs.cache-key }}
-      - name: Package native ARM64 ZIP
+      - name: Package native ARM64 assets
         shell: pwsh
-        run: ./scripts/package-release.ps1 -Version $env:PACKAGE_VERSION -Architecture arm64 -OutputDirectory dist -TargetDirectory target
+        run: |
+          ./scripts/package-release.ps1 -Version $env:PACKAGE_VERSION -Architecture arm64 -OutputDirectory dist -TargetDirectory target
+          ./scripts/build-installer.ps1 -Version $env:PACKAGE_VERSION -Architecture arm64 -OutputDirectory dist -TargetDirectory target -SkipBuild -Force
       - name: Keep Windows PowerShell alive on the ARM64 runner image
         shell: pwsh
         run: ./scripts/conformance/windows_arm64_module_path.ps1
@@ -600,7 +602,9 @@ jobs:
         with:
           compression-level: 0
           name: stable-package-windows-arm64
-          path: dist/Pebrel-v${{ needs.prepare.outputs.version }}-windows-arm64.zip
+          path: |
+            dist/Pebrel-v${{ needs.prepare.outputs.version }}-windows-arm64.zip
+            dist/Pebrel-v${{ needs.prepare.outputs.version }}-windows-arm64-setup.exe
           if-no-files-found: error
           retention-days: 14
       - name: Upload Windows ARM64 conformance evidence

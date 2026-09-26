@@ -130,24 +130,10 @@ pub(crate) use lifecycle::OutputStore;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recent_output::RecentOutput;
+    use crate::recent_output::{RecentOutput, tests::Size};
     use nebula_terminal::event::VoidListener;
-    use nebula_terminal::grid::Dimensions;
     use nebula_terminal::term::{Config, Term};
     use nebula_terminal::vte::ansi;
-
-    struct Size;
-    impl Dimensions for Size {
-        fn total_lines(&self) -> usize {
-            4
-        }
-        fn screen_lines(&self) -> usize {
-            4
-        }
-        fn columns(&self) -> usize {
-            32
-        }
-    }
 
     pub(super) fn records(command: &str) -> Vec<CommandRecord> {
         let mut term = Term::new(Config::default(), &Size, VoidListener);

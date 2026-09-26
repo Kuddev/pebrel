@@ -14,6 +14,12 @@ inputs:
   extra-key:
     description: Additional inputs for native build tools stored with this target
     default: ""
+  revision:
+    description: Snapshot suffix; empty uses the source SHA, dependency snapshots use a fixed generation
+    default: ""
+  save-if:
+    description: Allow publishing caches; PR consumers can restore without competing with the default branch
+    default: "true"
 
 outputs:
   cache-key:
@@ -25,6 +31,9 @@ outputs:
   cache-matched-key:
     description: The compiled target cache key actually restored by actions/cache
     value: ${{ steps.target.outputs.cache-matched-key }}
+  save-enabled:
+    description: Whether the caller permits publishing cache snapshots
+    value: ${{ inputs.save-if }}
   legacy-fallback-invoked:
     description: Whether the optional legacy cache fallback action was invoked
     value: ${{ steps.cache-summary.outputs.legacy-fallback-invoked }}
@@ -42,7 +51,7 @@ runs:
         CACHE_OS: ${{ runner.os }}
         CACHE_ARCH: ${{ runner.arch }}
         CACHE_WORKLOAD: ${{ inputs.key }}
-        CACHE_REVISION: ${{ github.sha }}
+        CACHE_REVISION: ${{ inputs.revision || github.sha }}
         CACHE_MANIFESTS: ${{ hashFiles('Cargo.lock', '**/Cargo.toml', 'rust-toolchain.toml', '**/.cargo/config.toml', '.github/ci-profile.toml') }}${{ inputs.extra-key }}
       run: |
         python - <<'PY'
@@ -66,8 +75,8 @@ runs:
                                               ("CACHE_OS", "CACHE_ARCH", "CACHE_WORKLOAD"))
         prefix += "-" + fingerprint + "-"
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-            # Immutable caches need a new entry after a source change, including
-            # when the prior revision failed before it compiled every profile.
+            # 发布任务按源码刷新；原生 CI 可固定代次，只在依赖或工具链变化后新建快照。
+            # 缓存命中只复用编译输入，调用方仍须执行当前提交的全部检查。
             output.write("key=" + prefix + os.environ["CACHE_MANIFESTS"] + "-" + os.environ["CACHE_REVISION"] + "\n")
             output.write("manifest-key=" + prefix + os.environ["CACHE_MANIFESTS"] + "\n")
             output.write("restore-key=" + prefix + "\n")
@@ -92,8 +101,11 @@ runs:
           ${{ steps.identity.outputs.cargo-home }}/registry/cache
           ${{ steps.identity.outputs.cargo-home }}/git/db
           ${{ steps.identity.outputs.cargo-home }}/git/checkouts
-        key: cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
-        restore-keys: cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-
+        # 同一 OS 的两种架构共享源码，编译产物仍按架构隔离。
+        key: cargo-downloads-v3-${{ runner.os }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+        restore-keys: |
+          cargo-downloads-v3-${{ runner.os }}-
+          cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-
     - name: Restore compiled targets
       id: target
       uses: actions/cache/restore@v4
@@ -127,6 +139,7 @@ runs:
         CACHE_WORKLOAD: ${{ inputs.key }}
         RUNNER_OS_VALUE: ${{ runner.os }}
         RUNNER_ARCH_VALUE: ${{ runner.arch }}
+        CACHE_SAVE_ENABLED: ${{ inputs.save-if }}
       run: |
         set -euo pipefail
 
@@ -148,6 +161,7 @@ runs:
           echo "- Target cache exact hit: \`$target_cache_hit\`"
           echo "- Target cache matched key: \`$target_cache_matched_key\`"
           echo "- Save key: \`$save_key\`"
+          echo "- Cache publishing enabled: \`$CACHE_SAVE_ENABLED\`"
           echo "- Legacy fallback configured: \`$legacy_configured\`"
           echo "- Legacy fallback invoked: \`$legacy_invoked\`"
           echo "- Legacy fallback outcome: \`$legacy_outcome\`"
@@ -159,14 +173,27 @@ runs:
           echo "legacy-fallback-outcome=$legacy_outcome"
         } >> "$GITHUB_OUTPUT"
     - name: Populate complete downloads before sharing the cache
-      if: steps.downloads.outputs.cache-hit != 'true'
+      if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        CACHE_OS: ${{ runner.os }}
       run: |
-        host_target="$(rustc -vV | sed -n 's/^host: //p')"
-        test -n "$host_target"
-        cargo fetch --locked --target "$host_target"
+        # 缓存由先完成的架构写入，必须预取两者的源码，不能把半份下载标成精确命中。
+        case "$CACHE_OS" in
+          Windows)
+            cargo fetch --locked --target x86_64-pc-windows-msvc --target aarch64-pc-windows-msvc
+            ;;
+          macOS)
+            cargo fetch --locked --target x86_64-apple-darwin --target aarch64-apple-darwin
+            ;;
+          *)
+            host_target="$(rustc -vV | sed -n 's/^host: //p')"
+            test -n "$host_target"
+            cargo fetch --locked --target "$host_target"
+            ;;
+        esac
     - name: Save complete shared Cargo downloads
-      if: steps.downloads.outputs.cache-hit != 'true'
+      if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: |

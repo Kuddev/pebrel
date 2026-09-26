@@ -127,6 +127,9 @@ impl TerminalView {
     /// the primary edge; the cached-prompt path calls the same reset so the two
     /// lifecycle routes cannot drift apart.
     pub(super) fn clear_foreground_agent_state(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(session) = &self.session {
+            session.term.lock().set_redraw_anchor_enabled(false);
+        }
         self.confirmation.observe_waiting(false);
         self.recovery.command_ended();
         self.answers.close();
@@ -159,7 +162,6 @@ impl TerminalView {
         exit_code: Option<i32>,
         cx: &mut Context<Self>,
     ) {
-        self.finish_recent_output();
         let choose_codex_session = self.codex_restore_target_missing(exit_code);
         self.notify_command_done(exit_code, cx);
         self.last_command_failed = exit_code.is_some_and(|code| code != 0);
@@ -1073,10 +1075,6 @@ impl TerminalView {
             return;
         }
         let pending = self.pending_runtime_submit.take().expect("checked above");
-        // 运行徽章在 echo 前已置位；只有启动前捕获的 shell 提示符允许记录。
-        if self.suggest.pending_command_prompt.is_some() && self.runtime_agent().is_none() {
-            self.begin_recent_output();
-        }
         self.write_input(pending.submit_bytes, cx);
     }
 }

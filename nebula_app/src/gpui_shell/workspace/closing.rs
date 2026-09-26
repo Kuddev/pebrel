@@ -1,19 +1,78 @@
 use super::*;
+use crate::i18n::Message;
 
 impl NebulaWorkspace {
-    pub(super) fn save_clean_window_session(
+    pub(super) fn request_close_pane(
         &mut self,
-        cx: &mut App,
-    ) -> gpui::Task<std::io::Result<bool>> {
-        windowing::output_persistence::save(
-            Some(self.snapshot_local_session(cx)),
-            session_persistence::SaveReason::WindowClose,
-            cx,
-        )
+        tab_ix: usize,
+        pane_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(process) = self.busy_process_in_tab(tab_ix, Some(pane_id), cx) else {
+            self.close_pane(tab_ix, pane_id, window, cx);
+            return;
+        };
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let body: SharedString =
+            language.format(Message::WorkspaceCloseRunningProcess, &[("process", &process)]).into();
+        let workspace = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, window, _cx| {
+            let workspace = workspace.clone();
+            confirm_dialog(
+                dialog,
+                window,
+                language.text(Message::WorkspaceClosePaneTitle),
+                body.clone(),
+                language.text(Message::CommonClose),
+                language.text(Message::CommonCancel),
+                ButtonVariant::Danger,
+            )
+            .on_ok(move |_, window, cx| {
+                let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.close_pane(tab_ix, pane_id, window, cx);
+                });
+                true
+            })
+        });
     }
 
-    /// GPUI 关闭回调必须同步返回；普通窗口先等待保存，繁忙窗口还须确认。
-    /// 返回 false 后，由异步保存成功路径显式移除窗口。
+    pub(super) fn request_close_tab(
+        &mut self,
+        tab_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(process) = self.busy_process_in_tab(tab_ix, None, cx) else {
+            self.close_tab(tab_ix, window, cx);
+            return;
+        };
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let body: SharedString =
+            language.format(Message::WorkspaceCloseRunningProcess, &[("process", &process)]).into();
+        let workspace = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, window, _cx| {
+            let workspace = workspace.clone();
+            confirm_dialog(
+                dialog,
+                window,
+                language.text(Message::WorkspaceCloseTabTitle),
+                body.clone(),
+                language.text(Message::CommonClose),
+                language.text(Message::CommonCancel),
+                ButtonVariant::Danger,
+            )
+            .on_ok(move |_, window, cx| {
+                let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.close_tab(tab_ix, window, cx);
+                });
+                true
+            })
+        });
+    }
+
+    /// GPUI 的 should-close 回调必须同步返回：无繁忙进程时直接允许系统关闭；
+    /// 有繁忙进程时先返回 false，再由对话框确认回调显式移除窗口。
     pub(super) fn should_close_window(
         &mut self,
         window: &mut Window,
@@ -54,7 +113,10 @@ impl NebulaWorkspace {
         }
         self.window_close_confirm_open = true;
 
-        let body: SharedString = format!("{process} 仍在运行，关闭窗口会中止它。").into();
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let body: SharedString = language
+            .format(Message::WorkspaceCloseRunningWindowProcess, &[("process", &process)])
+            .into();
         let confirm_workspace = cx.entity().downgrade();
         let close_workspace = confirm_workspace.clone();
         window.open_dialog(cx, move |dialog, window, _cx| {
@@ -63,10 +125,10 @@ impl NebulaWorkspace {
             confirm_dialog(
                 dialog,
                 window,
-                "关闭窗口？",
+                language.text(Message::WorkspaceCloseWindowTitle),
                 body.clone(),
-                "关闭",
-                "取消",
+                language.text(Message::CommonClose),
+                language.text(Message::CommonCancel),
                 ButtonVariant::Danger,
             )
             .on_ok(move |_, window, cx| {
@@ -95,8 +157,16 @@ impl NebulaWorkspace {
 
     fn finish_close_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.window_close_pending = true;
-        let documents = self.close_document_snapshot(cx);
         let panes = self.prepare_session_save(cx);
+        let approved_drafts: Vec<_> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.file_editor(cx))
+            .map(|file| {
+                let draft = file.read(cx).draft(cx);
+                (file, draft)
+            })
+            .collect();
         let handle = self.window_handle;
         cx.spawn(async move |this, cx| {
             let ready = wait_for_session_ids(&panes, cx).await;
@@ -107,9 +177,16 @@ impl NebulaWorkspace {
                 });
                 return;
             }
-            let save = handle.update(cx, |_, window, cx| {
-                this.update(cx, |workspace, cx| {
-                    if !workspace.close_documents_unchanged(&documents, cx) {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |workspace, cx| {
+                    if workspace.tabs.iter().filter_map(|tab| tab.file_editor(cx)).any(|file| {
+                        let view = file.read(cx);
+                        view.is_saving()
+                            || (view.is_dirty()
+                                && !approved_drafts.iter().any(|(approved, draft)| {
+                                    approved == &file && *draft == view.draft(cx)
+                                }))
+                    }) {
                         workspace.window_close_pending = false;
                         let language = crate::gpui_shell::config::ui_language(cx);
                         crate::gpui_shell::toast::banner(
@@ -119,22 +196,9 @@ impl NebulaWorkspace {
                             language.text(crate::i18n::Message::UpdateDraftChanged),
                         );
                         cx.notify();
-                        return None;
+                        return;
                     }
-                    Some(workspace.save_clean_window_session(cx))
-                })
-            });
-            let Ok(Ok(Some(save))) = save else { return };
-            let saved = match save.await {
-                Ok(saved) => saved,
-                Err(error) => {
-                    log::warn!("Window close cancelled because session save failed: {error}");
-                    false
-                },
-            };
-            let _ = handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, |workspace, cx| {
-                    if !saved {
+                    if workspace.save_clean_window_session(cx).is_err() {
                         workspace.window_close_pending = false;
                         let language = crate::gpui_shell::config::ui_language(cx);
                         crate::gpui_shell::toast::banner(
@@ -143,12 +207,6 @@ impl NebulaWorkspace {
                             crate::display::ToastKind::Warning,
                             language.text(crate::i18n::Message::SessionSaveFailed),
                         );
-                        cx.notify();
-                        return;
-                    }
-                    workspace.window_close_pending = false;
-                    if !workspace.close_documents_unchanged(&documents, cx) {
-                        workspace.guard_file_window_close(window, cx);
                         cx.notify();
                         return;
                     }

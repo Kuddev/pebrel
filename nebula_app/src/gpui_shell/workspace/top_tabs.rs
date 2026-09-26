@@ -16,6 +16,7 @@ use gpui_component::menu::PopupMenuItem;
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::SidebarActivity;
+use crate::i18n::{Message, UiLanguage};
 
 use super::{
     NebulaWorkspace, NewWindow, OpenSettings, TAB_LABEL_ICON_SIZE, TAB_LABEL_ICON_W, TabDrag,
@@ -88,24 +89,25 @@ fn horizontal_wheel_delta(x: f32, y: f32) -> f32 {
 /// 顶部加号的生产调用点与鼠标测试共用同一个元素构造，避免测试只证明
 /// `title_bar_panel_controls` 本身，却漏掉真实按钮没有接入它。
 pub(super) fn top_new_tab_control(
+    language: UiLanguage,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Div {
     title_bar_panel_controls().h_auto().child(
         Button::new("top-new-tab")
             .icon(IconName::Plus)
             .ghost()
-            .tooltip("新建终端 (Ctrl+Shift+T)")
+            .tooltip(language.text(Message::ChromeNewTerminalCtrlShiftT))
             .on_click(on_click),
     )
 }
 
 /// “更多”入口的生产按钮与几何探针共用同一个构造，避免测试用近似尺寸替代。
-pub(super) fn top_tabs_menu_button(settings_active: bool) -> Button {
+pub(super) fn top_tabs_menu_button(settings_active: bool, language: UiLanguage) -> Button {
     Button::new("top-tabs-menu")
         .icon(IconName::EllipsisVertical)
         .ghost()
         .selected(settings_active)
-        .tooltip("更多")
+        .tooltip(language.text(Message::ChromeMore))
 }
 
 /// 紧邻 TabView 的操作按钮占满同一条 34px 行，再在槽内居中 32px 按钮。
@@ -128,6 +130,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
@@ -555,7 +558,7 @@ impl NebulaWorkspace {
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_start(scroll_x))
-                                        .tooltip("向左翻标签")
+                                        .tooltip(language.text(Message::ChromeScrollTabsLeft))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 -1.0,
@@ -603,7 +606,7 @@ impl NebulaWorkspace {
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_end(scroll_x, strip_w, tab_viewport_w))
-                                        .tooltip("向右翻标签")
+                                        .tooltip(language.text(Message::ChromeScrollTabsRight))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 1.0,
@@ -618,7 +621,7 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        top_tab_action_slot(top_new_tab_control(cx.listener(
+                        top_tab_action_slot(top_new_tab_control(language, cx.listener(
                             |this, _, window, cx| {
                                 this.add_terminal(window, cx);
                             },
@@ -626,7 +629,7 @@ impl NebulaWorkspace {
                     )
                     .child(
                         top_tab_action_slot(
-                            top_tabs_menu_button(settings_active).dropdown_menu_with_anchor(
+                            top_tabs_menu_button(settings_active, language).dropdown_menu_with_anchor(
                                 gpui::Anchor::TopRight,
                                 move |menu, _, _| {
                                     let shell_picker = menu_workspace.clone();
@@ -634,7 +637,7 @@ impl NebulaWorkspace {
                                     let settings = menu_workspace.clone();
                                     menu.external_link_icon(false)
                                         .item(
-                                            PopupMenuItem::new("新建窗口")
+                                            PopupMenuItem::new(language.text(Message::CommonNewWindow))
                                                 .icon(IconName::Plus)
                                                 .action(Box::new(NewWindow))
                                                 .on_click(move |_, _, cx| {
@@ -648,7 +651,7 @@ impl NebulaWorkspace {
                                                 }),
                                         )
                                         .item(
-                                            PopupMenuItem::new("选择终端")
+                                            PopupMenuItem::new(language.text(Message::ChromeSelectTerminal))
                                                 .icon(IconName::SquareTerminal)
                                                 .action(Box::new(ToggleShellPicker))
                                                 .on_click(move |_, window, cx| {
@@ -661,7 +664,7 @@ impl NebulaWorkspace {
                                         )
                                         .separator()
                                         .item(
-                                            PopupMenuItem::new("设置")
+                                            PopupMenuItem::new(language.text(Message::CommonSettings))
                                                 .icon(IconName::Settings)
                                                 .action(Box::new(OpenSettings))
                                                 .on_click(move |_, window, cx| {
@@ -691,7 +694,7 @@ impl NebulaWorkspace {
                             )
                             .ghost()
                             .selected(self.command_manager_open)
-                            .tooltip("命令列表")
+                            .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),
