@@ -1,4 +1,5 @@
 use super::*;
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
 
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
@@ -873,15 +874,12 @@ impl NebulaWorkspace {
             .justify_between()
             .child(
                 h_flex()
-                    // 旧壳两枚 32px 命中块之间固定留 8px；默认 Button 正好是
-                    // 32px，`.small()` 会把热区缩成 24px。
-                    .gap_2()
+                    // Keep toolbar gaps independent of the UI font/rem size.
+                    .gap(px(8.0))
                     .items_center()
                     .occlude()
                     .child(
-                        Button::new("toggle-sidebar")
-                            .icon(IconName::PanelLeft)
-                            .ghost()
+                        toolbar_button("toggle-sidebar", IconName::PanelLeft)
                             .disabled(settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
@@ -901,9 +899,7 @@ impl NebulaWorkspace {
                             })),
                     )
                     .child(
-                        Button::new("open-settings")
-                            .icon(IconName::Settings)
-                            .ghost()
+                        toolbar_button("open-settings", IconName::Settings)
                             .selected(settings_active)
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
@@ -917,19 +913,18 @@ impl NebulaWorkspace {
             .child(self.render_collapsed_tab_title(cx))
             .child(
                 title_bar_panel_controls()
-                    .gap_2()
+                    .gap(px(8.0))
                     .child(
-                        Button::new("toggle-command-manager")
-                            .icon(
-                                Icon::new(Icon::empty())
-                                    .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
-                            )
-                            .ghost()
-                            .selected(self.command_manager_open)
-                            .tooltip(language.text(Message::ChromeCommandList))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_command_manager(window, cx);
-                            })),
+                        toolbar_button(
+                            "toggle-command-manager",
+                            Icon::new(Icon::empty())
+                                .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                        )
+                        .selected(self.command_manager_open)
+                        .tooltip(language.text(Message::ChromeCommandList))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_command_manager(window, cx);
+                        })),
                     )
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
