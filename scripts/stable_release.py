@@ -34,6 +34,7 @@ def validate_version(version: str) -> None:
 
 def expected_asset_names(version: str) -> tuple[str, ...]:
     validate_version(version)
+    version_parts = tuple(map(int, version.split(".")))
     names = (
         f"Pebrel-v{version}-linux-x64-preview.AppImage",
         f"Pebrel-v{version}-linux-x64-preview.deb",
@@ -43,10 +44,13 @@ def expected_asset_names(version: str) -> tuple[str, ...]:
         f"Pebrel-v{version}-windows-x64.zip",
         f"Pebrel-v{version}-windows-x64-setup.exe",
     )
-    if tuple(map(int, version.split("."))) >= (1, 9, 0):
+    if version_parts >= (1, 9, 0):
         names += (f"Pebrel-v{version}-windows-arm64.zip",)
+    # 1.9.0 和 1.9.1 已公开发布且仅含 ARM64 ZIP，不能追溯要求不存在的安装器。
+    if version_parts >= (1, 9, 2):
+        names += (f"Pebrel-v{version}-windows-arm64-setup.exe",)
     # The old-name installer was retired from 1.7.0; retain historical manifests.
-    if tuple(map(int, version.split("."))) < (1, 7, 0):
+    if version_parts < (1, 7, 0):
         names += (f"NebulaTerminal-{version}-windows-x64-setup.exe",)
     return names
 
