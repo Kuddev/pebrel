@@ -316,7 +316,7 @@ impl NebulaWorkspace {
         let editing_path = self.file_tree_path.is_some();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let language = super::workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let search_options = self.side_panel.file_search_options();
         let search_active = !self.side_panel.search.trim().is_empty();
         let search_pending = self.side_panel.file_search_pending();
@@ -428,7 +428,7 @@ impl NebulaWorkspace {
             });
         let root_dir = self.side_panel.root().map(std::path::Path::to_path_buf);
         let row_count = self.side_panel.file_rows().len();
-        let empty = self.file_tree_empty_state();
+        let empty = self.file_tree_empty_state(cx);
         let scroll_handle = self.file_tree_scroll.clone();
 
         v_flex()
@@ -611,13 +611,13 @@ impl NebulaWorkspace {
     /// side_panel.rs:3112-3131 同源。判据也照旧壳：`..` 不算内容，只剩它时这个
     /// 目录仍然是空的；"读不到"和"确实是空的"必须分开说，否则用户没法判断该
     /// 重试还是该换目录。
-    fn file_tree_empty_state(&self) -> Option<crate::ux::EmptyState> {
+    fn file_tree_empty_state(&self, cx: &gpui::App) -> Option<crate::ux::EmptyState> {
         if self.side_panel.file_rows().iter().any(|row| !row.is_parent) {
             return None;
         }
         if !self.side_panel.search.trim().is_empty() {
             use crate::i18n::Message;
-            let language = super::workspace_ui_language();
+            let language = crate::gpui_shell::config::ui_language(cx);
             return Some(if let Some(error) = self.side_panel.file_search_error() {
                 crate::ux::EmptyState::new(
                     language.text(Message::FilesSearchFailed),
