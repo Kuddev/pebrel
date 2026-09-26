@@ -873,7 +873,7 @@
     "snapshots": "備份紀錄",
     "settings": "雲端儲存",
     "configure": "設定雲端儲存",
-    "scope": "同步內容",
+    "scope": "備份內容",
     "provider": "儲存服務",
     "off": "未設定",
     "folder": "本機 / 網路目錄",
