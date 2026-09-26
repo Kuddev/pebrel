@@ -155,6 +155,28 @@ pub(super) fn local_options(
             options.env.insert(name, value);
         }
     }
+    // PowerShell can launch WSL as a child with `wsl`/`wsl.exe`. Carry the same
+    // guest prompt integration into that child environment, since the direct
+    // WSL-shell branch above does not run for a PowerShell pane.
+    let powershell_parent = match options.shell.as_ref() {
+        None => true, // The Windows default shell is PowerShell.
+        Some(shell) => matches!(
+            crate::display::extract_program(shell.program()).as_deref(),
+            Some("powershell" | "pwsh")
+        ),
+    };
+    if powershell_parent {
+        let current_wslenv = options
+            .env
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("WSLENV"))
+            .map(|(_, value)| value.as_str());
+        let additions = crate::shell_detect::wsl_cwd_report_env("wsl.exe", &[], current_wslenv);
+        for (name, value) in additions {
+            options.env.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
+            options.env.insert(name, value);
+        }
+    }
     // 身份契约必须最后写：它以环境表里 `WSLENV` 的现值为基准合并，才能同时
     // 保住上面那段的 cwd 上报条目。见 [`crate::agent_env`]。
     crate::agent_env::apply(&mut options.env, pane_id);

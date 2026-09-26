@@ -205,6 +205,9 @@ pub enum SuggestEnv {
     /// A shell reached through a typed command. History has its own route;
     /// there is no verified local WSL/SFTP channel for filesystem queries.
     Shell { scope: crate::nebula_history::HistoryScope },
+    /// A WSL shell reached through a typed command. Keep that command's history
+    /// identity while using the reported distro for guest path queries.
+    WslCommand { distro: String, scope: crate::nebula_history::HistoryScope },
 }
 
 impl SuggestEnv {
@@ -216,6 +219,7 @@ impl SuggestEnv {
     pub(crate) fn can_query_remote_paths(&self) -> bool {
         matches!(self, Self::Ssh { .. })
             || matches!(self, Self::Wsl { distro } if !distro.is_empty())
+            || matches!(self, Self::WslCommand { distro, .. } if !distro.is_empty())
     }
 
     pub(crate) fn history_scope(&self) -> crate::nebula_history::HistoryScope {
@@ -232,6 +236,7 @@ impl SuggestEnv {
                 crate::nebula_history::HistoryScope::Ssh(destination.clone())
             },
             Self::Shell { scope } => scope.clone(),
+            Self::WslCommand { scope, .. } => scope.clone(),
         }
     }
 }
