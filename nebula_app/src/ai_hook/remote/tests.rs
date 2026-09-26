@@ -142,6 +142,38 @@ fn transport_requests_are_framed_and_bootstrap_keeps_token_out_of_assets() {
     assert!(response("PEBREL_INTEGRATION={\"version\":1,\"error\":\"ValueError\"}\n").is_err());
 }
 
+#[test]
+fn terminal_action_installs_shell_prompt_only_and_is_idempotent() {
+    let mut snapshot = snapshot();
+    let edits = snapshot.plan(Action::Terminal).unwrap().unwrap();
+    let names: Vec<_> = edits.iter().map(|edit| edit.name.as_str()).collect();
+    for name in ["shell.py", "bashrc", ".zshenv", ".zprofile", ".zshrc", "manifest"] {
+        assert!(names.contains(&name), "missing terminal asset {name}");
+    }
+    for name in ["claude", "codex", "opencode", "pi", "codex_config", "disabled"] {
+        assert!(!names.contains(&name), "terminal-only action changed agent config {name}");
+    }
+
+    apply(&mut snapshot, edits);
+    assert!(snapshot.raw("claude").unwrap().is_none());
+    assert!(snapshot.raw("codex").unwrap().is_none());
+    assert!(snapshot.raw("disabled").unwrap().is_none());
+    assert!(snapshot.plan(Action::Terminal).unwrap().unwrap().is_empty());
+}
+
+#[test]
+fn terminal_action_respects_opt_out_and_rejects_edited_owned_assets() {
+    let mut disabled = snapshot();
+    put(&mut disabled, "disabled", "user opted out\n");
+    assert!(disabled.plan(Action::Terminal).unwrap().is_none());
+
+    let mut edited = snapshot();
+    put(&mut edited, "bashrc", "# user's custom prompt\n");
+    assert!(edited.plan(Action::Terminal).is_err());
+    assert_eq!(edited.raw("bashrc").unwrap(), Some("# user's custom prompt\n"));
+    assert!(edited.raw(".zshrc").unwrap().is_none(), "planning must not partially mutate files");
+}
+
 /// Cross-language acceptance driver: the supplied snapshot must come from an
 /// isolated SSH test account. It exports production plans, not a second policy.
 #[test]

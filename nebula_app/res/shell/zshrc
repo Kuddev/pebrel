@@ -10,6 +10,22 @@ unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
 
 __pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}zsh:${HOST:-localhost}:$$:$RANDOM" | base64 | tr -d '\r\n')
 
+# Only alter the temporary SSH shell's default prompt. Existing themes and
+# hand-written prompts keep control of the visual prompt.
+if [[ ${PEBREL_REMOTE_SESSION:-0} == 1 && ${PEBREL_REMOTE_POWERLINE:-1} == 1 \
+    && ${PROMPT-} == *'%n@%m'*':'*'%~'* ]]; then
+    __pebrel_ssh_prompt_enabled=1
+    __pebrel_ssh_prompt_last=$PROMPT
+    if (( ! $+functions[clear] && ! $+aliases[clear] )); then
+        clear() {
+            command clear "$@"
+            local clear_status=$?
+            __pebrel_ssh_prompt_count=0
+            return "$clear_status"
+        }
+    fi
+fi
+
 _nebula_cwd() {
     emulate -L zsh
     local LC_ALL=C cwd_value=$PWD encoded='' character ordinal index
@@ -37,6 +53,23 @@ _nebula_precmd() {
     _nebula_command_running=0
     _nebula_cwd
     printf '\e]133;A\a'
+    if [[ ${__pebrel_ssh_prompt_enabled:-0} == 1 ]]; then
+        if [[ ${PROMPT-} != "$__pebrel_ssh_prompt_last" ]]; then
+            __pebrel_ssh_prompt_enabled=0
+        else
+            local branch='' git_segment='' leading_newline='' newlines=$'\n\n'
+            branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
+            if [[ -n $branch ]]; then
+                git_segment=" %F{6} $branch  %f"
+            fi
+            if (( ${__pebrel_ssh_prompt_count:-0} > 0 )); then
+                leading_newline=$'\n'
+            fi
+            __pebrel_ssh_prompt_count=$(( ${__pebrel_ssh_prompt_count:-0} + 1 ))
+            PROMPT="${leading_newline}%F{4}%K{4}%F{0}  %f%k%F{4}%f  %~  ${git_segment} %F{6} %D{%H:%M:%S}  %f${newlines}%F{5}❯%f "
+            __pebrel_ssh_prompt_last=$PROMPT
+        fi
+    fi
     return "$status_code"
 }
 

@@ -73,6 +73,9 @@ struct Notify {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {
     Automatic,
+    /// Install only the per-session shell bootstrap used by SSH terminals.
+    /// This deliberately does not install or enable any agent hooks.
+    Terminal,
     Install,
     Remove,
 }
@@ -159,7 +162,8 @@ impl Snapshot {
         if self.version != 1 || !self.root.starts_with('/') || !self.python.starts_with('/') {
             return Err("unsupported remote integration environment".into());
         }
-        if action == Action::Automatic && self.raw("disabled")?.is_some() {
+        if matches!(action, Action::Automatic | Action::Terminal) && self.raw("disabled")?.is_some()
+        {
             return Ok(None);
         }
         let mut manifest: Manifest = self
@@ -174,6 +178,8 @@ impl Snapshot {
         let mut edits = Vec::new();
         if action == Action::Remove {
             self.remove(&mut manifest, &mut edits)?;
+        } else if action == Action::Terminal {
+            self.install_terminal(&mut manifest, &mut edits)?;
         } else {
             self.install(&mut manifest, &mut edits)?;
             self.edit(&mut edits, "disabled", None)?;
@@ -185,6 +191,33 @@ impl Snapshot {
             )?;
         }
         Ok(Some(edits))
+    }
+
+    fn install_terminal(
+        &self,
+        manifest: &mut Manifest,
+        edits: &mut Vec<Edit>,
+    ) -> Result<(), String> {
+        let assets = [
+            ("shell.py", SHELL),
+            ("bashrc", include_str!("../../res/shell/bashrc")),
+            (".zshenv", include_str!("../../res/shell/zshenv")),
+            (".zprofile", include_str!("../../res/shell/zprofile")),
+            (".zshrc", include_str!("../../res/shell/zshrc")),
+        ];
+        for (name, content) in assets {
+            let file = self.file(name)?;
+            if file.content.as_deref().is_some_and(|raw| raw != content)
+                && file.sha256.as_ref() != manifest.assets.get(name)
+            {
+                return Err(format!("edited remote {name} preserved"));
+            }
+            self.edit(edits, name, Some(content.into()))?;
+            manifest.assets.insert(name.into(), digest(content));
+        }
+        manifest.version = 1;
+        self.edit(edits, "manifest", Some(serde_json::to_string_pretty(manifest).unwrap() + "\n"))?;
+        Ok(())
     }
 
     fn merge_provider(

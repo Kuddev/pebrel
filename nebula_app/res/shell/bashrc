@@ -32,6 +32,23 @@ if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) =~ ^declare\ -[^[:space:]]*r ]]; 
     return
 fi
 
+# Keep this visual prompt scoped to Pebrel's temporary SSH shell, and only
+# replace Bash's default prompt. User prompt frameworks remain in control.
+if [[ ${PEBREL_REMOTE_SESSION:-0} == 1 && ${PEBREL_REMOTE_POWERLINE:-1} == 1 \
+    && -z ${STARSHIP_SHELL:-} && -z ${POSH_SHELL:-} \
+    && ${PS1-} == *'\u@\h'*':'*'\w'* ]]; then
+    __pebrel_ssh_prompt_enabled=1
+    __pebrel_ssh_prompt_last_ps1=$PS1
+    if ! declare -F clear >/dev/null && ! alias clear >/dev/null 2>&1; then
+        clear() {
+            command clear "$@"
+            local clear_status=$?
+            __pebrel_ssh_prompt_count=0
+            return "$clear_status"
+        }
+    fi
+fi
+
 __pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}bash:${HOSTNAME:-localhost}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n')
 
 _nebula_cwd() {
@@ -71,6 +88,23 @@ _nebula_precmd() {
     _nebula_command_running=0
     _nebula_cwd
     printf '\e]133;A\a'
+    if [[ ${__pebrel_ssh_prompt_enabled:-0} == 1 ]]; then
+        if [[ ${PS1-} != "$__pebrel_ssh_prompt_last_ps1" ]]; then
+            __pebrel_ssh_prompt_enabled=0
+        else
+            local branch='' git_segment='' leading_newline=''
+            branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
+            if [[ -n $branch ]]; then
+                git_segment=" \\[\\e[38;5;6m\\] $branch  \\[\\e[0m\\]"
+            fi
+            if [[ ${__pebrel_ssh_prompt_count:-0} -gt 0 ]]; then
+                leading_newline='\n'
+            fi
+            __pebrel_ssh_prompt_count=$(( ${__pebrel_ssh_prompt_count:-0} + 1 ))
+            PS1="$leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\]  \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  $git_segment \\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
+            __pebrel_ssh_prompt_last_ps1=$PS1
+        fi
+    fi
     _nebula_at_prompt=1
     return "$_nebula_last_status"
 }
