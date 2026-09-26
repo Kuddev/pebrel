@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::Message;
 
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
 const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
@@ -865,6 +866,7 @@ impl NebulaWorkspace {
         let settings_active_bg = cx.theme().sidebar_accent;
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
+        let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
         h_flex()
             .size_full()
@@ -888,7 +890,7 @@ impl NebulaWorkspace {
                             // Ghost 的全局 selected 使用 hover_strong，静态底比
                             // 旧壳亮一档；仅此按钮覆写回旧壳 surface。
                             .when(sidebar_visible, |button| button.bg(secondary))
-                            .tooltip("折叠/展开侧边栏 (Ctrl+Shift+B)")
+                            .tooltip(language.text(Message::ChromeToggleSidebar))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.reader_focus_active(cx) {
                                     this.clear_reader_focus(cx);
@@ -907,7 +909,7 @@ impl NebulaWorkspace {
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
                             })
-                            .tooltip("设置 (Ctrl+,)")
+                            .tooltip(language.text(Message::ChromeSettingsShortcut))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_settings(window, cx);
                             })),
@@ -925,7 +927,7 @@ impl NebulaWorkspace {
                             )
                             .ghost()
                             .selected(self.command_manager_open)
-                            .tooltip("命令列表")
+                            .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),

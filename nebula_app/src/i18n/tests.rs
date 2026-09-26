@@ -72,6 +72,33 @@ fn inline_migration_preserves_bilingual_text_and_english_fallback() {
     assert_eq!(UiLanguage::EnUs.pick("网络", "Network"), "Network");
     assert_eq!(UiLanguage::FrFr.pick("网络", "Network"), "Réseau");
     assert_eq!(UiLanguage::FrFr.pick("未迁移文案", "Unmigrated text"), "Unmigrated text");
+    // File menus reuse CommonOpen instead of adding an en/zh-only "Open"
+    // alias which would disable the existing translations in the bridge.
+    for language in UiLanguage::ALL {
+        assert_eq!(language.pick("打开", "Open"), language.text(Message::CommonOpen));
+    }
+}
+
+#[test]
+fn workspace_confirmations_preserve_names_and_resolve_each_language_independently() {
+    let process = "worker {process} 世界";
+    let message = Message::WorkspaceCloseRunningProcess;
+    assert_eq!(
+        UiLanguage::EnUs.format(message, &[("process", process)]),
+        "worker {process} 世界 is still running. Closing will stop it."
+    );
+    assert_eq!(
+        UiLanguage::ZhCn.format(message, &[("process", process)]),
+        "worker {process} 世界 仍在运行，关闭会中止它。"
+    );
+    assert_eq!(
+        UiLanguage::EnUs.format(Message::FilesDeleteTitle, &[("name", "{name}.txt")]),
+        "Delete {name}.txt?"
+    );
+    assert_eq!(
+        UiLanguage::FrFr.format(message, &[("process", process)]),
+        UiLanguage::EnUs.format(message, &[("process", process)])
+    );
 }
 
 #[test]
