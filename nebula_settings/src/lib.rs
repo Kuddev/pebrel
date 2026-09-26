@@ -1237,7 +1237,7 @@ impl RuntimeSettings {
             background_image_cover_chrome: raw
                 .bool_on("background_image_cover_chrome")
                 .unwrap_or(false),
-            panel_resize: raw.bool_on("panel_resize").unwrap_or(false),
+            panel_resize: raw.bool_on("panel_resize").unwrap_or(true),
             sidebar_width: raw
                 .f32("sidebar_w")
                 .map(|width| width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH))
@@ -1569,7 +1569,10 @@ mod tests {
         assert_eq!(settings.background, None);
         assert_eq!(settings.theme_foreground, None);
         assert_eq!(settings.custom_theme, None);
-        assert!(!settings.panel_resize);
+        assert!(settings.panel_resize);
+        assert!(
+            !RuntimeSettings::from_raw(&RawSettings::from_text("panel_resize=0\n")).panel_resize
+        );
         assert_eq!(settings.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
         assert_eq!(settings.ssh_proxy_mode, ProxyModeName::Off);
         assert_eq!(settings.quick_terminal_hotkey, DEFAULT_QUICK_TERMINAL_HOTKEY);
