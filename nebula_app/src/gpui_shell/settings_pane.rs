@@ -116,6 +116,7 @@ pub struct SettingsPane {
     about_update: AboutUpdateState,
     about_update_seq: u64,
     about_last_checked: Option<String>,
+    update_release_input: Entity<InputState>,
     /// 首页「项目与支持」→ 赞助商：独立页面，不是外链行。切换分区时清掉。
     about_sponsor_open: bool,
     settings_search_input: Entity<InputState>,
@@ -325,6 +326,13 @@ impl SettingsPane {
             let placeholder = localized_input_placeholder(key, language);
             input.update(cx, |state, cx| state.set_placeholder(placeholder, window, cx));
         }
+        self.update_release_input.update(cx, |state, cx| {
+            state.set_placeholder(
+                language.text(crate::i18n::Message::UpdateSourcePlaceholder),
+                window,
+                cx,
+            )
+        });
         self.settings_search_input.update(cx, |state, cx| {
             state.set_placeholder(
                 language.pick(

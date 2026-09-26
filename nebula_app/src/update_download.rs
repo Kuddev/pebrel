@@ -20,7 +20,9 @@ use sha2::{Digest as _, Sha256};
 use crate::i18n::{Message, UiLanguage};
 use crate::update_check::UpdateAsset;
 
+#[cfg(test)]
 const RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/Kuddev/pebrel/releases/download/";
+#[cfg(test)]
 const LEGACY_RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/Kuddev/nebula/releases/download/";
 const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
@@ -431,13 +433,24 @@ fn validate_asset(asset: &UpdateAsset) -> Result<(), String> {
 
 #[cfg(test)]
 fn validate_windows_asset_contract(asset: &UpdateAsset) -> Result<(), String> {
-    validate_asset_contract(
+    validate_asset_contract_official(
         asset,
         &crate::update_check::windows_x64_installer_names(&asset.version),
     )
 }
 
+#[cfg(test)]
+fn validate_asset_contract_official(asset: &UpdateAsset, names: &[String]) -> Result<(), String> {
+    validate_asset_metadata(asset, names)?;
+    crate::update_check::validate_official_asset_url(asset)
+}
+
 fn validate_asset_contract(asset: &UpdateAsset, names: &[String]) -> Result<(), String> {
+    validate_asset_metadata(asset, names)?;
+    crate::update_check::validate_asset_url(asset)
+}
+
+fn validate_asset_metadata(asset: &UpdateAsset, names: &[String]) -> Result<(), String> {
     if asset.version.is_empty()
         || !asset
             .version
@@ -448,12 +461,6 @@ fn validate_asset_contract(asset: &UpdateAsset, names: &[String]) -> Result<(), 
     }
     if !names.contains(&asset.name) {
         return Err("release 资产不是当前平台的精确安装包".to_owned());
-    }
-    let trusted_url = [RELEASE_DOWNLOAD_PREFIX, LEGACY_RELEASE_DOWNLOAD_PREFIX]
-        .iter()
-        .any(|prefix| asset.download_url == format!("{prefix}v{}/{}", asset.version, asset.name));
-    if !trusted_url {
-        return Err("release 安装包 URL 不属于 Pebrel 官方仓库".to_owned());
     }
     if asset.size.is_some_and(|bytes| bytes == 0 || bytes > MAX_INSTALLER_BYTES) {
         return Err("release 安装包大小无效".to_owned());
@@ -776,10 +783,10 @@ mod macos_package_tests {
             size: Some(bytes.len() as u64),
             sha256: Some(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect()),
         };
-        validate_asset_contract(&asset, &names).unwrap();
+        validate_asset_contract_official(&asset, &names).unwrap();
         verify_file(&path, &asset).unwrap();
         assert!(
-            validate_asset_contract(
+            validate_asset_contract_official(
                 &asset,
                 &crate::update_check::assets::macos_names("1.9.1", "x86_64")
             )
@@ -792,6 +799,6 @@ mod macos_package_tests {
             Some(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect());
         assert!(verify_file(&path, &asset).unwrap_err().contains("trailer"));
         asset.download_url = "https://example.invalid/image.dmg".into();
-        assert!(validate_asset_contract(&asset, &names).is_err());
+        assert!(validate_asset_contract_official(&asset, &names).is_err());
     }
 }
