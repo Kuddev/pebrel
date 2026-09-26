@@ -23,8 +23,8 @@ fn delivery_channels(
 ) -> DeliveryChannels {
     DeliveryChannels {
         in_app: (!visible || notification.is_attention()) && (ai_toasts || !notification.is_ai()),
-        // Keep native notification routing independent of the in-app preference.
-        system: !visible,
+        // macOS also sends foreground notices to Notification Center.
+        system: !visible || crate::platform::CAPABILITIES.foreground_system_notifications,
     }
 }
 
@@ -177,6 +177,7 @@ mod tests {
 
     #[test]
     fn disabling_in_app_ai_toasts_keeps_background_system_notifications() {
+        let foreground_system = crate::platform::CAPABILITIES.foreground_system_notifications;
         for attention in [false, true] {
             let notification =
                 Notification::AiTurn { program: "codex".into(), message: None, attention };
@@ -190,11 +191,11 @@ mod tests {
             );
             assert_eq!(
                 delivery_channels(&notification, true, false),
-                DeliveryChannels { in_app: false, system: false }
+                DeliveryChannels { in_app: false, system: foreground_system }
             );
             assert_eq!(
                 delivery_channels(&notification, true, true),
-                DeliveryChannels { in_app: attention, system: false }
+                DeliveryChannels { in_app: attention, system: foreground_system }
             );
         }
     }
