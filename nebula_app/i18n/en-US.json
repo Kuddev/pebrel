@@ -517,7 +517,7 @@
       "reading_body": "Still enumerating the current working directory.",
       "reading_hint": "Wait a moment, or click Follow again in the top-right.",
       "read_failed_title": "Could not read directory",
-      "read_failed_body": "The system refused to enumerate this directory, or it exceeded the per-pass budget.",
+      "read_failed_body": "The directory could not be read completely. Check access permissions or try again.",
       "read_failed_hint": "Click Follow again in the top-right, or choose another directory.",
       "no_directory_title": "No directory to browse",
       "no_directory_body": "The current terminal has not reported a working directory yet.",

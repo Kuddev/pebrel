@@ -517,7 +517,7 @@
       "reading_body": "还在枚举当前工作目录的内容。",
       "reading_hint": "稍等一下，或点右上角重新跟随。",
       "read_failed_title": "读取目录失败",
-      "read_failed_body": "枚举这个目录时被系统拒绝，或超出了单次预算。",
+      "read_failed_body": "未能完整读取此目录，请检查访问权限或重试。",
       "read_failed_hint": "点右上角重新跟随重试，或换一个目录。",
       "no_directory_title": "没有可浏览的目录",
       "no_directory_body": "当前终端尚未报告工作目录。",
