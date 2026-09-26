@@ -13,6 +13,15 @@
     "en_us": "English"
   },
   "settings": {
+    "command_output": {
+      "save": "保存最近命令与输出",
+      "help": "开启会话恢复时，在本机为每个终端保留最近五条命令及输出。输出可能包含敏感信息；不采集全屏程序画面。",
+      "clear": "清除已保存的命令输出",
+      "clear_help": "移除本机所有终端已保存的输出，不清空当前屏幕。上方开关开启时，后续新命令仍会保存。",
+      "clearing": "正在清除…",
+      "cleared": "已清除保存的输出",
+      "clear_failed": "清除失败，点击重试"
+    },
     "scrolling": {
       "history": "回滚行数",
       "history_description": "每个窗格保留的历史行数。仅适用于新窗格。",
