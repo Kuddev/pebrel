@@ -621,6 +621,19 @@
     "auth_key": "Private key",
     "auth_interactive": "Interactive sign-in"
   },
+  "startup": {
+    "portable": {
+      "title": "Run Pebrel in portable mode?",
+      "description": "Pebrel is outside the Applications folder. Portable mode stores Pebrel settings, sessions, history, imported fonts and temporary files here:\n{path}\n\nMove Pebrel.app and Pebrel Data together after quitting Pebrel. The first launch uses separate settings; use Backup to import existing settings. Shells, external tools, SSH keys and system credentials still belong to this Mac.",
+      "enable": "Portable mode",
+      "normal": "Normal mode",
+      "quit": "Quit",
+      "error_title": "Pebrel could not start",
+      "translocated": "macOS is running Pebrel from a temporary security location. Quit Pebrel, move Pebrel.app to your intended writable folder using Finder, and open it again.",
+      "linked_directory": "Portable data and temporary folders cannot be symbolic links.",
+      "write_failed": "Cannot use the portable data folder:\n{path}\n\n{error}\n\nMove Pebrel.app and Pebrel Data to a writable folder and try again. Pebrel has not switched to this Mac’s settings."
+    }
+  },
   "vcs": {
     "changes": "Changes",
     "staged": "Staged",

@@ -6,6 +6,38 @@
 > accepted rationale; a replacement creates a new note with `Supersedes` rather than
 > rewriting the old conclusion.
 
+## ADR-0010 — macOS portable startup storage
+
+- **Status:** Requested by the user on 2026-09-13; working-tree implementation,
+  pending normal review. This is not a release or cross-machine validation claim.
+- **Context:** Moving Pebrel.app alone keeps using the host's settings. Storage
+  must be selected before migration, logging, cached paths and application workers.
+- **Decision:** A macOS bundle outside `/Applications`, `/System/Applications`
+  and `~/Applications` prompts for portable, normal or quit. Explicit configuration
+  overrides and unbundled CLI/development executables retain their existing behavior.
+  Portable mode uses the sibling `Pebrel Data` directory; a `.pebrel-portable`
+  marker remembers acceptance without persisting a volume name or absolute path.
+  Existing portable stores also resolve for CLI helpers without showing a dialog.
+- **Persistence:** Keep existing file formats and the shared settings directory
+  authority. Set both configuration-directory aliases and `TMPDIR` (to `Pebrel Data/tmp`)
+  before workers start. Portable startup skips host legacy migration and starts
+  with separate preferences; existing settings can be imported using Backup.
+  Confirm writability before activating the store. Failure stops startup with a
+  native localized error; never silently fall back to host data. Reject linked data
+  roots and macOS App Translocation rather than recording a temporary location.
+- **Alternatives:** A single database/container would require changing every
+  persistence consumer; data inside the signed bundle would couple mutable state
+  to application replacement. The sibling folder reuses existing storage contracts.
+- **Boundaries:** Move the app and data together after quitting. System credentials,
+  SSH keys, external CLI profiles, project files and OS-managed caches are outside
+  this feature. This does not migrate live processes or rewrite absolute paths
+  inside user configurations. Windows/Linux startup remains unchanged.
+- **Validation:** Focused tests cover installed versus portable locations,
+  localized choices/cancellation, relaunch, folder relocation and unavailable or
+  redirected storage. Native compilation and dialog checks are reported separately.
+- **Revisit condition:** Extend to other platforms or automatic profile migration
+  only with an explicit compatibility contract and native verification.
+
 ## Process
 
 Record decisions that change dependency direction, core ownership, persistent
