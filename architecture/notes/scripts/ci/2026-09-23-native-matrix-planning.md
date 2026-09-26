@@ -1,5 +1,7 @@
 # Plan the native matrix before requesting runners
 
+Draft coverage policy superseded by [shared native PR caches](2026-09-25-shared-native-pr-cache.md).
+
 ## Status
 
 Implemented for review. Preserves the existing ten required check names and

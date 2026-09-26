@@ -54,6 +54,7 @@ mod title_bar_panel_control_tests {
                 )
                 .child(div().w(px(64.0)).h(px(48.0)).flex().items_end().child(
                     super::top_tabs::top_new_tab_control(
+                        crate::i18n::UiLanguage::EnUs,
                         cx.listener(|this, _, _, _| this.tab_count += 1),
                     ),
                 ))
@@ -91,13 +92,16 @@ mod title_bar_panel_control_tests {
                         .h(px(super::top_tabs::TOP_TAB_H)),
                 )
                 .child(super::top_tabs::top_tab_action_slot(
-                    super::top_tabs::top_new_tab_control(|_, _, _| {})
-                        .debug_selector(|| "top-new-tab-geometry-probe".to_owned()),
+                    super::top_tabs::top_new_tab_control(
+                        crate::i18n::UiLanguage::EnUs,
+                        |_, _, _| {},
+                    )
+                    .debug_selector(|| "top-new-tab-geometry-probe".to_owned()),
                 ))
                 .child(super::top_tabs::top_tab_action_slot(
-                    h_flex()
-                        .debug_selector(|| "top-tabs-menu-geometry-probe".to_owned())
-                        .child(super::top_tabs::top_tabs_menu_button(false)),
+                    h_flex().debug_selector(|| "top-tabs-menu-geometry-probe".to_owned()).child(
+                        super::top_tabs::top_tabs_menu_button(false, crate::i18n::UiLanguage::EnUs),
+                    ),
                 ))
         }
     }

@@ -853,6 +853,9 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session) = &self.session {
+            session.term.lock().cancel_redraw_anchor();
+        }
         let delta_y = event.delta.pixel_delta(self.line_height).y.as_f32();
         // 旧壳 `mouse_wheel_input`：Ctrl+滚轮先于一切滚动消费者，一步 1
         // 逻辑像素，钳在 4–64。设置页步进会写盘；这里同样写 `font_size=`，
