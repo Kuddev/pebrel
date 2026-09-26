@@ -367,9 +367,7 @@ fn likely_prompt(prompt: &str, marker: char, env: &SuggestEnv) -> bool {
         SuggestEnv::Wsl { .. }
         | SuggestEnv::WslCommand { .. }
         | SuggestEnv::Ssh { .. }
-        | SuggestEnv::Shell { .. } => {
-            head.contains(['@', ':', '/', '~', ']', ')'])
-        },
+        | SuggestEnv::Shell { .. } => head.contains(['@', ':', '/', '~', ']', ')']),
     }
 }
 

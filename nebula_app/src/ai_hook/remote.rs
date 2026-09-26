@@ -162,8 +162,7 @@ impl Snapshot {
         if self.version != 1 || !self.root.starts_with('/') || !self.python.starts_with('/') {
             return Err("unsupported remote integration environment".into());
         }
-        if matches!(action, Action::Automatic | Action::Terminal)
-            && self.raw("disabled")?.is_some()
+        if matches!(action, Action::Automatic | Action::Terminal) && self.raw("disabled")?.is_some()
         {
             return Ok(None);
         }
@@ -217,11 +216,7 @@ impl Snapshot {
             manifest.assets.insert(name.into(), digest(content));
         }
         manifest.version = 1;
-        self.edit(
-            edits,
-            "manifest",
-            Some(serde_json::to_string_pretty(manifest).unwrap() + "\n"),
-        )?;
+        self.edit(edits, "manifest", Some(serde_json::to_string_pretty(manifest).unwrap() + "\n"))?;
         Ok(())
     }
 

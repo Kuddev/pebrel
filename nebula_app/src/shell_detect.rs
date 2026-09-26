@@ -731,11 +731,8 @@ fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007\033]133;D;%s\007\033]7;file
         .map(str::to_owned)
         .or_else(|| std::env::var("WSLENV").ok())
         .unwrap_or_default();
-    let mut entries: Vec<String> = wslenv
-        .split(':')
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let mut entries: Vec<String> =
+        wslenv.split(':').filter(|entry| !entry.is_empty()).map(str::to_owned).collect();
     for (name, path_flag) in
         [("PROMPT_COMMAND", false), ("APPDATA", true), ("PEBREL_CONFIG_DIR", true)]
     {
@@ -1169,6 +1166,83 @@ test "$token" = "$__pebrel_shell_token" || exit 96
                 );
             }
         }
+    }
+
+    #[test]
+    fn wsl_prompt_styles_the_default_shell_only_and_spaces_later_prompts() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let environment = wsl_cwd_report_env("wsl.exe", &[], None);
+        let prompt = &environment[0].1;
+        let bash = std::env::var_os("NEBULA_BASH").unwrap_or_else(|| {
+            [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
+                .into_iter()
+                .find(|path| std::path::Path::new(path).is_file())
+                .unwrap_or("bash")
+                .into()
+        });
+        let run = |ps1: &str, starship: bool, checks: &str| {
+            let mut child = Command::new(&bash)
+                .args(["--noprofile", "--norc", "-s"])
+                .env("BASH_ENV", "/dev/null")
+                .env("PROMPT_COMMAND", prompt)
+                .env_remove("APPDATA")
+                .env_remove("PEBREL_CONFIG_DIR")
+                .env_remove("STARSHIP_SHELL")
+                .env_remove("POSH_SHELL")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("Bash is required for the WSL prompt regression");
+            let starship_setup = if starship { "STARSHIP_SHELL=bash\n" } else { "" };
+            let script = format!(
+                "PS1='{ps1}'\n{starship_setup}eval \"$PROMPT_COMMAND\" || exit 90\n{checks}\n"
+            );
+            child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+            child.wait_with_output().unwrap()
+        };
+
+        let default_prompt = run(
+            r"\u@\h:\w\$ ",
+            false,
+            r#"[[ "$PS1" == '\[\e[38;5;4m\]'* ]] || exit 91
+[[ "$PS1" != '\n'* ]] || exit 92
+[[ "$PS1" == *''* ]] || exit 93
+eval "$PROMPT_COMMAND" || exit 94
+[[ "$PS1" == '\n\[\e[38;5;4m\]'* ]] || exit 95
+[[ "$PS1" == *''* ]] || exit 96"#,
+        );
+        assert!(
+            default_prompt.status.success(),
+            "default WSL prompt failed: {}",
+            String::from_utf8_lossy(&default_prompt.stderr)
+        );
+
+        let custom_prompt = run(
+            "custom> ",
+            false,
+            r#"[[ "$PS1" == 'custom> ' ]] || exit 97
+[[ ${__pebrel_wsl_prompt_managed:-0} != 1 ]] || exit 98"#,
+        );
+        assert!(
+            custom_prompt.status.success(),
+            "custom prompt was changed: {}",
+            String::from_utf8_lossy(&custom_prompt.stderr)
+        );
+
+        let starship_prompt = run(
+            r"\u@\h:\w\$ ",
+            true,
+            r#"[[ "$PS1" == '\u@\h:\w\$ ' ]] || exit 99
+[[ ${__pebrel_wsl_prompt_managed:-0} != 1 ]] || exit 100"#,
+        );
+        assert!(
+            starship_prompt.status.success(),
+            "Starship-managed prompt was changed: {}",
+            String::from_utf8_lossy(&starship_prompt.stderr)
+        );
     }
 
     #[test]
