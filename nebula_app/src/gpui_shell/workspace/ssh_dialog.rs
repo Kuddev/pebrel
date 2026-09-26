@@ -209,16 +209,19 @@ mod tests {
                 )
             })
         });
-        cx.update(|window, cx| {
+        let inputs = cx.update(|window, cx| {
             show_port_forward_dialog(owner.clone(), "fixture@localhost".into(), window, cx)
         });
         cx.update(|window, cx| {
-            let _ = window.draw(cx);
+            window.refresh();
+            window.draw(cx).clear(cx);
         });
         cx.simulate_input("65536");
+        assert_eq!(inputs[0].read_with(cx, |input, _| input.value()).as_ref(), "65536");
         click(cx, "confirm-dialog-ok");
         cx.update(|window, cx| {
-            let _ = window.draw(cx);
+            window.refresh();
+            window.draw(cx).clear(cx);
         });
         assert!(
             cx.debug_bounds("confirm-dialog-ok").is_some(),
@@ -232,17 +235,24 @@ mod tests {
             crate::platform::Platform::MacOS => "cmd-a",
             _ => "ctrl-a",
         };
-        for selector in ["ssh-forward-remote", "ssh-forward-local"] {
+        for (index, selector) in ["ssh-forward-remote", "ssh-forward-local"].into_iter().enumerate()
+        {
             let bounds = cx.debug_bounds(selector).unwrap();
             assert!(f32::from(bounds.size.height) >= 28.0);
             assert!(f32::from(bounds.size.width) >= 100.0);
             click(cx, selector);
             cx.simulate_keystrokes(select_all);
             cx.simulate_input("3000");
+            assert_eq!(
+                inputs[index].read_with(cx, |input, _| input.value()).as_ref(),
+                "3000",
+                "clicking {selector} must focus and edit that field"
+            );
         }
         click(cx, "confirm-dialog-ok");
         cx.update(|window, cx| {
-            let _ = window.draw(cx);
+            window.refresh();
+            window.draw(cx).clear(cx);
         });
         assert!(
             cx.debug_bounds("confirm-dialog-ok").is_none(),
@@ -253,11 +263,13 @@ mod tests {
             show_port_forward_dialog(owner.clone(), "fixture@localhost".into(), window, cx)
         });
         cx.update(|window, cx| {
-            let _ = window.draw(cx);
+            window.refresh();
+            window.draw(cx).clear(cx);
         });
         click(cx, "confirm-dialog-cancel");
         cx.update(|window, cx| {
-            let _ = window.draw(cx);
+            window.refresh();
+            window.draw(cx).clear(cx);
         });
         assert!(cx.debug_bounds("confirm-dialog-ok").is_none());
     }
@@ -308,7 +320,7 @@ fn show_port_forward_dialog(
     destination: String,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> [Entity<InputState>; 2] {
     let forwards = view
         .read(cx)
         .port_forwards
@@ -318,6 +330,7 @@ fn show_port_forward_dialog(
     let remote_input = cx.new(|cx| InputState::new(window, cx).placeholder("3000"));
     let local_input = cx.new(|cx| InputState::new(window, cx).placeholder("3000"));
     let focus_input = remote_input.clone();
+    let inputs = [remote_input.clone(), local_input.clone()];
     let target = view.downgrade();
     let language = workspace_ui_language();
 
@@ -502,4 +515,5 @@ fn show_port_forward_dialog(
         })
     });
     focus_input.update(cx, |input, cx| input.focus(window, cx));
+    inputs
 }
