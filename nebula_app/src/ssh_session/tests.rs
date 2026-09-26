@@ -1,3 +1,4 @@
+use super::config::resolve_from_ssh_config_text;
 use super::{
     AuthMethod, SshDestination, authentication_plan, initial_remote_cd_command, is_password_prompt,
     parse_resolved_config, resolve_network_proxy, ssh_config_probe_target,
@@ -8,15 +9,6 @@ use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding as RsaLineEnding};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use zeroize::Zeroizing;
-
-/// 判词经 `UiLanguage::current()` 取词，而它是进程级全局状态；串行钉住语言，
-/// 避免并行测试线程互相覆盖。
-fn pin_language(language: crate::i18n::UiLanguage) -> std::sync::MutexGuard<'static, ()> {
-    static LANGUAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let guard = LANGUAGE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    language.activate();
-    guard
-}
 
 #[test]
 fn parses_saved_destinations() {
@@ -39,6 +31,117 @@ fn parses_resolved_ssh_config() {
     assert_eq!(destination.host, "server.internal");
     assert_eq!(destination.port, 2200);
     assert_eq!(destination.identity_files.len(), 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn system_openssh_expands_alias_and_windows_identity_from_the_selected_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config");
+    std::fs::write(
+        &config,
+        "Host rain\n HostName 192.0.2.30\n User root\n IdentityFile \"D:\\keys\\key one.pem\"\n",
+    )
+    .unwrap();
+    let output = super::ssh_config_command("rain", Some(&config)).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let target = parse_resolved_config("rain", &String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(target.host, "192.0.2.30");
+    assert_eq!(target.user, "root");
+    assert_eq!(target.identity_files, vec![PathBuf::from(r"D:\keys\key one.pem")]);
+}
+
+#[test]
+fn unknown_host_needs_explicit_trust_and_changed_keys_remain_rejected() {
+    use russh::client::Handler as _;
+    use russh::keys::ssh_key::{Algorithm, PrivateKey};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let changed = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let mut handler = super::ClientHandler {
+        host: "fixture.example".into(),
+        port: 2200,
+        allow_prompt: false,
+        handshake: super::lifecycle::Handshake::default(),
+        known_hosts_path: Some(path.clone()),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        assert!(!handler.verify_host_key(key.public_key()).unwrap());
+        assert!(
+            !handler
+                .confirm_unknown_key(key.public_key(), async {
+                    panic!("unattended probes must not prompt")
+                })
+                .await
+        );
+        handler.allow_prompt = true;
+        assert!(!handler.confirm_unknown_key(key.public_key(), async { false }).await);
+        assert!(!path.exists(), "Cancel must not record trust");
+        assert!(handler.confirm_unknown_key(key.public_key(), async { true }).await);
+        assert!(handler.check_server_key(key.public_key()).await.unwrap());
+        let trusted = std::fs::read(&path).unwrap();
+        assert!(handler.verify_host_key(changed.public_key()).is_err());
+        handler.allow_prompt = false;
+        assert!(handler.check_server_key(changed.public_key()).await.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), trusted);
+    });
+}
+
+#[test]
+fn fallback_ssh_config_resolves_aliases_when_openssh_probe_cannot_run() {
+    let config = concat!(
+        "\u{feff}\r\n",
+        "Host *\r\n",
+        "    IdentityFile ~/.ssh/default_key\r\n",
+        "Host rain staging !blocked\r\n",
+        "    HostName 192.168.100.3\r\n",
+        "    User root\r\n",
+        "    Port 2200\r\n",
+        "    IdentityFile \"D:\\keys\\key one.pem\"\r\n",
+        "    ProxyJump bastion\r\n",
+    );
+    let destination = resolve_from_ssh_config_text("rain", config).unwrap().unwrap();
+    assert_eq!(destination.original, "rain");
+    assert_eq!(destination.user, "root");
+    assert_eq!(destination.host, "192.168.100.3");
+    assert_eq!(destination.port, 2200);
+    let default_key = crate::platform::dirs::home_dir()
+        .expect("test environment must expose a home directory")
+        .join(".ssh")
+        .join("default_key");
+    assert_eq!(
+        destination.identity_files,
+        vec![default_key, PathBuf::from(r"D:\keys\key one.pem"),]
+    );
+    assert_eq!(destination.proxy_jump.as_deref(), Some("bastion"));
+
+    let explicit = resolve_from_ssh_config_text("deploy@rain:2222", config).unwrap().unwrap();
+    assert_eq!(explicit.user, "deploy");
+    assert_eq!(explicit.port, 2222);
+}
+
+#[test]
+fn fallback_refuses_incomplete_routes_instead_of_connecting_directly() {
+    for directive in [
+        "Include other.conf",
+        "Match host rain",
+        "ProxyCommand nc proxy 22",
+        "HostName %h.example",
+        "Port broken",
+        "HostName \"unterminated",
+    ] {
+        let config = format!("Host rain\n User root\n {directive}\n");
+        assert!(resolve_from_ssh_config_text("rain", &config).is_err(), "{directive}");
+    }
+    let config = "Host rain\n User=root\n HostName = 192.0.2.1\n ProxyJump none\nHost *\n ProxyJump bastion\n";
+    let target = resolve_from_ssh_config_text("rain", config).unwrap().unwrap();
+    assert_eq!(target.host, "192.0.2.1");
+    assert!(target.proxy_jump.is_none());
+    let config = "Host prod* !prod-test\n User deploy\n HostName actual.example\n";
+    assert!(resolve_from_ssh_config_text("prod-test", config).unwrap().is_none());
+    assert_eq!(resolve_from_ssh_config_text("PROD-1", config).unwrap().unwrap().user, "deploy");
 }
 
 #[test]
@@ -109,12 +212,13 @@ fn ssh_runtime_uses_global_network_proxy_and_keeps_openssh_proxy_jump() {
 #[test]
 fn auto_auth_plan_keeps_key_order_and_deduplicates_keys() {
     let explicit = vec![PathBuf::from(r"C:\Keys\chosen"), PathBuf::from(r"c:\keys\CHOSEN")];
-    let resolved = vec![PathBuf::from(r"C:\Keys\config")];
+    let resolved = vec![PathBuf::from(r"c:\keys\Chosen"), PathBuf::from(r"C:\Keys\config")];
 
     assert_eq!(
         authentication_plan(SshAuthMode::Auto, &explicit, &resolved),
         vec![
             AuthMethod::PrivateKey(PathBuf::from(r"C:\Keys\chosen")),
+            AuthMethod::Agent,
             AuthMethod::PrivateKey(PathBuf::from(r"C:\Keys\config")),
             AuthMethod::StoredPassword,
             AuthMethod::KeyboardInteractive,
@@ -237,7 +341,6 @@ fn unparseable_key_is_not_classified_as_needing_passphrase() {
 
 #[test]
 fn all_keys_failing_locally_is_not_reported_as_server_rejection() {
-    let _language = pin_language(crate::i18n::UiLanguage::ZhCn);
     let errors = vec!["C:\\keys\\a.pem: 无法解析（unsupported）".to_owned()];
     let message = super::auth_failure(SshAuthMode::PublicKey, 1, &errors);
     assert!(message.starts_with("私钥无法使用"), "实际文案: {message}");
@@ -247,12 +350,4 @@ fn all_keys_failing_locally_is_not_reported_as_server_rejection() {
     let partial = super::auth_failure(SshAuthMode::PublicKey, 2, &errors);
     assert!(partial.contains("服务器拒绝"), "实际文案: {partial}");
     assert!(partial.contains("本地密钥问题"), "实际文案: {partial}");
-
-    crate::i18n::UiLanguage::EnUs.activate();
-    let message = super::auth_failure(SshAuthMode::PublicKey, 1, &errors);
-    assert!(message.starts_with("Private keys cannot be used"), "actual message: {message}");
-    assert!(!message.contains("server rejected"), "actual message: {message}");
-    let partial = super::auth_failure(SshAuthMode::PublicKey, 2, &errors);
-    assert!(partial.contains("server rejected"), "actual message: {partial}");
-    assert!(partial.contains("local key issues"), "actual message: {partial}");
 }

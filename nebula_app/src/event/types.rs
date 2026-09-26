@@ -54,6 +54,8 @@ pub enum EventType {
     /// window configs without waiting for a process restart.
     TerminalProfilesChanged,
     Message(Message),
+    /// A user-requested local link finished with an error in the opener worker.
+    LinkOpenFailed(String),
     Scroll(Scroll),
     CreateWindow(WindowOptions),
     #[cfg(unix)]

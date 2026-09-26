@@ -17,9 +17,10 @@
 //! - 配置热重载（主应用用 notify 监视；本壳目前启动读一次）
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui::{App, Global};
-use nebula_settings::{CursorShapeName, RuntimeSettings};
+use nebula_settings::{BlurModeName, CursorShapeName, RuntimeSettings};
 use nebula_terminal::vte::ansi::CursorShape;
 use serde::Deserialize;
 
@@ -41,26 +42,49 @@ pub(crate) const fn effective_cursor_blink(configured: Option<bool>) -> bool {
 pub struct Settings {
     /// 已解析的界面语言。GPUI 组件只读这个内存全局，渲染路径不得重复读盘。
     pub ui_language: UiLanguage,
+    pub panel_resize: bool,
     pub font_family: String,
+    pub font_cjk: Option<[gpui::Font; 4]>,
     pub font_bold_family: String,
     pub font_italic_family: String,
     pub font_bold_italic_family: String,
     /// GPUI 逻辑像素（配置里是 pt，1pt = 4/3 px @96dpi）。
     pub font_size_px: f32,
+    pub ligatures: bool,
     /// 配置文件的基准字号，不含设置页/Ctrl+滚轮持久化的终端缩放。
     /// 启动窗口按它定形，和旧壳的 `window_size` 契约一致。
     pub base_font_size_px: f32,
+    pub ui_font_size_px: f32,
+    pub(crate) ui_font_family: Option<String>,
+    pub(crate) ui_font_size_override: Option<f32>,
     /// 字体 cell 的物理像素偏移；旧壳 Windows 默认 y=4，必须在设备像素
     /// 域参与取整，才能在 125%/150% DPI 下保持同一行数。
     pub font_offset_x: f32,
     pub font_offset_y: f32,
+    /// Optional theme line-height multiplier. `None` keeps the shaped font
+    /// metrics, while `Some(multiplier)` is resolved as multiplier * font size.
+    pub(crate) theme_line_height: Option<f32>,
+    /// Effective window material values after user settings and theme defaults
+    /// have been merged once during settings loading.
+    pub(crate) visual_opacity: f32,
+    pub(crate) visual_blur: BlurModeName,
     pub palette: Palette,
+    /// Fully resolved theme snapshot. Renderers use the derived palette above;
+    /// chrome helpers use this cache so they never reload theme files per frame.
+    pub(crate) resolved_theme: Arc<crate::gpui_shell::theme::ResolvedTheme>,
     pub cursor_shape: Option<CursorShape>,
     pub cursor_blink: Option<bool>,
     /// 选区完成即复制（旧壳 `copy_on_select` 设置）。
     pub copy_on_select: bool,
+    pub scrollback_lines: usize,
+    pub scroll_speed: f32,
+    /// Pointer handlers and split rendering only read these cached preferences.
+    pub focus_follows_mouse: bool,
+    pub dim_inactive_panes: bool,
     /// Cached in-app toast preference, independent of native system notifications.
     pub ai_toasts: bool,
+    /// Cached display lifetime; toast delivery and native notifications are independent.
+    pub notification_duration: nebula_settings::NotificationDuration,
     /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
     pub tab_close_visible: bool,
     pub tab_reveal: nebula_settings::TabRevealName,
@@ -94,6 +118,10 @@ pub(crate) fn ui_language(cx: &App) -> UiLanguage {
     cx.try_global::<Settings>().map(|settings| settings.ui_language).unwrap_or(UiLanguage::EnUs)
 }
 
+pub(crate) fn panel_resize(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_some_and(|settings| settings.panel_resize)
+}
+
 pub(crate) fn ai_toasts_enabled(cx: &App) -> bool {
     cx.try_global::<Settings>().is_none_or(|settings| settings.ai_toasts)
 }
@@ -103,16 +131,64 @@ fn resolve_ui_language(preference: nebula_settings::LanguagePref) -> UiLanguage 
     LanguagePreference::from(preference).resolved()
 }
 
+fn effective_font_sizes(
+    runtime_font_size_px: Option<f32>,
+    theme_font_size_px: Option<f32>,
+    toml_font_size_pt: Option<f32>,
+) -> (f32, f32) {
+    let theme_font_size_px = theme_font_size_px.map(|size| size.clamp(4.0, 96.0));
+    let base_font_size_px = theme_font_size_px
+        .unwrap_or_else(|| toml_font_size_pt.unwrap_or(11.25).clamp(4.0, 96.0) * 4.0 / 3.0);
+    let font_size_px = runtime_font_size_px.or(theme_font_size_px).unwrap_or(base_font_size_px);
+    (font_size_px, base_font_size_px)
+}
+
+fn effective_theme_line_height(
+    resolved_theme: &crate::gpui_shell::theme::ResolvedTheme,
+) -> Option<f32> {
+    resolved_theme
+        .typography()
+        .and_then(|typography| typography.line_height)
+        .map(|line_height| line_height.clamp(0.5, 3.0))
+}
+
 impl Settings {
+    /// Load the latest persisted runtime snapshot and derive the effective
+    /// theme from that same snapshot.
+    pub(crate) fn load_current(cx: &App) -> Self {
+        Self::load_current_snapshot(cx).1
+    }
+
+    /// Variant for callers that also keep a runtime mirror. Returning both
+    /// values prevents the mirror and global settings from being split by two
+    /// adjacent disk reads.
+    pub(crate) fn load_current_snapshot(cx: &App) -> (RuntimeSettings, Self) {
+        let runtime = RuntimeSettings::load();
+        let theme = crate::gpui_shell::theme::resolve_theme_name(
+            runtime.theme,
+            runtime.follow_system_theme,
+            crate::gpui_shell::theme::system_is_light(cx),
+        );
+        let settings = Self::load_with_runtime(theme, runtime.clone());
+        (runtime, settings)
+    }
+
     /// `theme`：**生效**主题（follow_system 折算后，见
     /// `theme::effective_theme_name`）。不在这里自行读 RuntimeSettings 的
     /// 原始主题，否则 chrome 层与终端 palette 会在跟随系统时分家。
     pub fn load(theme: nebula_settings::ThemeName) -> Self {
-        let runtime = RuntimeSettings::load();
+        Self::load_with_runtime(theme, RuntimeSettings::load())
+    }
+
+    /// Load from the exact runtime snapshot that was just persisted.  Settings
+    /// panes use this entry point to avoid resolving the old theme between the
+    /// write and the global cache update.
+    pub fn load_with_runtime(theme: nebula_settings::ThemeName, runtime: RuntimeSettings) -> Self {
+        let resolved_theme =
+            Arc::new(crate::gpui_shell::theme::ResolvedTheme::from_runtime(&runtime, theme));
         let ui_language = resolve_ui_language(runtime.language);
-        ui_language.activate();
         let path = find_config_file();
-        let mut load_notice = None;
+        let mut load_notice = resolved_theme.notice.clone();
         let raw = path
             .as_deref()
             .map(|p| load_merged_toml(p, &mut load_notice, ui_language))
@@ -134,9 +210,12 @@ impl Settings {
         };
 
         // 字体：settings.txt（设置界面）覆盖 toml，最后落内置默认。
+        let themed_font_family =
+            resolved_theme.typography().and_then(|typography| typography.font_family.clone());
         let normal_family = runtime
             .font_family
             .clone()
+            .or(themed_font_family)
             .or_else(|| raw.font.normal.family.clone())
             .unwrap_or_else(|| default_font_family().to_string());
         let secondary = |desc: &RawFontDesc| -> String {
@@ -145,31 +224,55 @@ impl Settings {
         // 字号语义（对齐旧壳写盘）：settings.txt 的 font_size 是**逻辑像素**
         // （设置 spinner/Ctrl+滚轮持久化时已除 scale）；toml 的 font.size
         // 才是 pt（1pt = 4/3 px @96dpi）。
-        let base_font_size_px = raw.font.size.unwrap_or(11.25).clamp(4.0, 96.0) * 4.0 / 3.0;
-        let font_size_px = runtime.font_size_px.unwrap_or(base_font_size_px);
+        let theme_font_size_px =
+            resolved_theme.typography().and_then(|typography| typography.font_size);
+        let (font_size_px, base_font_size_px) =
+            effective_font_sizes(runtime.font_size_px, theme_font_size_px, raw.font.size);
         let offset = raw.font.offset.unwrap_or_else(default_font_offset);
+        let theme_line_height = effective_theme_line_height(&resolved_theme);
+        let visual_opacity = resolved_theme.effective_opacity(&runtime);
+        let visual_blur = resolved_theme.effective_blur(&runtime);
 
         // 配色：toml 覆盖内置默认，主题裁定背景/浅色替换/Powerline 槽位。
         // 跟随系统时由当前亮/暗主题全权决定终端底色；否则用户取色器压轴。
         let mut palette = build_palette(&raw.colors);
-        apply_theme(&mut palette, theme);
+        apply_resolved_theme(&mut palette, &resolved_theme);
         if let Some(background) =
             runtime_background(runtime.follow_system_theme, runtime.background)
         {
             palette.background = rgba8(background);
         }
 
+        let cursor_shape = runtime
+            .cursor_shape
+            .or_else(|| resolved_theme.effects().and_then(|effects| effects.cursor_shape));
+        let card = crate::gpui_shell::theme::PaneCardStyle::resolve_for_resolved_theme(
+            &resolved_theme,
+            &runtime,
+        );
+
         Settings {
             ui_language,
+            panel_resize: runtime.panel_resize,
             font_bold_family: secondary(&raw.font.bold),
             font_italic_family: secondary(&raw.font.italic),
             font_bold_italic_family: secondary(&raw.font.bold_italic),
             font_size_px,
+            ligatures: runtime
+                .ligatures
+                .enabled(resolved_theme.typography().map(|typography| typography.ligatures)),
             base_font_size_px,
+            ui_font_size_px: runtime.ui_font_size_px.unwrap_or(base_font_size_px),
+            ui_font_family: runtime.ui_font_family.clone(),
+            ui_font_size_override: runtime.ui_font_size_px,
             font_offset_x: f32::from(offset.x),
             font_offset_y: f32::from(offset.y),
+            theme_line_height,
+            visual_opacity,
+            visual_blur,
             palette,
-            cursor_shape: runtime.cursor_shape.map(|shape| match shape {
+            resolved_theme,
+            cursor_shape: cursor_shape.map(|shape| match shape {
                 CursorShapeName::Block => CursorShape::Block,
                 CursorShapeName::Beam => CursorShape::Beam,
                 CursorShapeName::Underline => CursorShape::Underline,
@@ -177,7 +280,14 @@ impl Settings {
             }),
             cursor_blink: runtime.cursor_blink,
             copy_on_select: runtime.copy_on_select,
+            scrollback_lines: runtime.scrollback_lines,
+            scroll_speed: runtime.scroll_speed,
+            focus_follows_mouse: runtime
+                .focus_follows_mouse
+                .unwrap_or(raw.mouse.focus_follows_mouse),
+            dim_inactive_panes: runtime.dim_inactive_panes,
             ai_toasts: runtime.ai_toasts,
+            notification_duration: runtime.notification_duration,
             tab_close_visible: runtime.tab_close_visible,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,
@@ -194,17 +304,36 @@ impl Settings {
             cjk_bold_regular: runtime.cjk_bold_regular,
             shell_id: runtime.shell.clone(),
             font_family: normal_family,
+            font_cjk: Some({
+                let family = runtime
+                    .font_family_cjk
+                    .as_deref()
+                    .unwrap_or(crate::font_install::REQUIRED_FONT_FAMILY);
+                use gpui::{FontStyle, FontWeight};
+                [
+                    (FontWeight::NORMAL, FontStyle::Normal),
+                    (FontWeight::BOLD, FontStyle::Normal),
+                    (FontWeight::NORMAL, FontStyle::Italic),
+                    (FontWeight::BOLD, FontStyle::Italic),
+                ]
+                .map(|(weight, style)| gpui::Font {
+                    weight,
+                    style,
+                    ..crate::font_install::gpui_font_with_fallbacks(family)
+                })
+            }),
             load_notice,
             // 这里是唯一能正确合并「主题自带几何」与「用户显式覆盖」的地方：
             // `theme` 已是 follow_system 折算后的**生效**主题，runtime 是同一次
             // 装载读到的设置。别处再读一遍就会在跟随系统时和 chrome 分家。
-            card: crate::gpui_shell::theme::PaneCardStyle::resolve(theme, &runtime),
+            card,
         }
     }
 
     /// 引擎 Term 的启动配置（默认光标形状/闪烁来自运行时设置）。
     pub fn term_config(&self) -> nebula_terminal::term::Config {
         let mut config = nebula_terminal::term::Config::default();
+        config.scrolling_history = self.scrollback_lines;
         if let Some(shape) = self.cursor_shape {
             config.default_cursor_style.shape = shape;
         }
@@ -245,16 +374,45 @@ fn runtime_background(
 }
 
 /// 主题叠加在 toml 配色之上（镜像旧壳 `apply_term_colors` 的范围与次序）：
-/// 背景永远替换；Powerline 槽位 16..=23 替换。原有主题保持旧合同：仅浅色
+/// 背景永远替换；保留应用使用的扩展色槽。原有主题保持旧合同：仅浅色
 /// 主题替换前景与 ANSI-16；自带完整 palette 的主题（Nord/Paper）应用其明确色表。
 fn apply_theme(palette: &mut Palette, theme: nebula_settings::ThemeName) {
-    let term = theme.term_theme();
-    palette.background = rgba8(term.background);
-    for (i, color) in term.powerline.into_iter().enumerate() {
-        set_indexed(palette, nebula_settings::POWERLINE_SLOT0 + i as u8, rgba8(color));
+    let resolved = crate::gpui_shell::theme::ResolvedTheme::builtin(theme, None);
+    apply_resolved_theme(palette, &resolved);
+}
+
+fn apply_resolved_theme(palette: &mut Palette, resolved: &crate::gpui_shell::theme::ResolvedTheme) {
+    let term = resolved.base_name().term_theme();
+    if resolved.is_custom() {
+        palette.background = rgba8(resolved.terminal_background());
+        palette.foreground = rgba8(resolved.terminal_foreground());
+        palette.bright_foreground = palette.foreground;
+        palette.dim_foreground = Palette::dim_of(palette.foreground);
+        for (index, color) in resolved.ansi().into_iter().enumerate() {
+            palette.ansi[index] = rgba8(color);
+            if index < 8 {
+                palette.dim[index] = Palette::dim_of(palette.ansi[index]);
+            }
+        }
+        palette.cursor = resolved.terminal_cursor().map(rgba8).unwrap_or(palette.cursor);
+        palette.cursor_text = resolved.terminal_cursor_text().map(rgba8);
+        palette.cursor_stroke = resolved.terminal_cursor_stroke().map(rgba8);
+        let (selection_background, selection_foreground) = resolved.terminal_selection();
+        if let Some(selection) = selection_background {
+            palette.selection = rgba8(selection);
+        }
+        palette.selection_foreground = selection_foreground.map(rgba8);
+        palette.indexed.retain(|(index, _)| *index < 16);
+        palette.indexed.extend(
+            (16..=255).filter_map(|index| {
+                resolved.indexed(index).map(|color| (index as u8, rgba8(color)))
+            }),
+        );
+        return;
     }
+    palette.background = rgba8(term.background);
     if let Some(exact) = term.exact {
-        let foreground = rgba8(exact.foreground);
+        let foreground = rgba8(resolved.foreground_override().unwrap_or(exact.foreground));
         palette.foreground = foreground;
         palette.bright_foreground = foreground;
         palette.dim_foreground = Palette::dim_of(foreground);
@@ -267,6 +425,7 @@ fn apply_theme(palette: &mut Palette, theme: nebula_settings::ThemeName) {
         if let Some(cursor) = exact.cursor {
             palette.cursor = rgba8(cursor);
         }
+        palette.cursor_text = exact.cursor_text.map(rgba8);
         palette.cursor_stroke = exact.cursor_stroke.map(rgba8);
         if let Some(selection) = exact.selection_background {
             palette.selection = rgba8(selection);
@@ -277,16 +436,18 @@ fn apply_theme(palette: &mut Palette, theme: nebula_settings::ThemeName) {
         return;
     }
     if term.is_light {
-        palette.foreground = rgba8(nebula_settings::LIGHT_FOREGROUND);
+        let foreground =
+            rgba8(resolved.foreground_override().unwrap_or(nebula_settings::LIGHT_FOREGROUND));
+        palette.foreground = foreground;
+        palette.bright_foreground = foreground;
+        palette.dim_foreground = Palette::dim_of(foreground);
         for (i, color) in nebula_settings::LIGHT_ANSI.into_iter().enumerate() {
             palette.ansi[i] = rgba8(color);
+            if i < 8 {
+                palette.dim[i] = Palette::dim_of(palette.ansi[i]);
+            }
         }
     }
-}
-
-fn set_indexed(palette: &mut Palette, index: u8, color: gpui::Rgba) {
-    palette.indexed.retain(|(existing, _)| *existing != index);
-    palette.indexed.push((index, color));
 }
 
 fn rgba8(color: nebula_settings::Rgb8) -> gpui::Rgba {
@@ -432,6 +593,13 @@ fn merge_values(base: toml::Value, other: toml::Value) -> toml::Value {
 struct RawConfig {
     font: RawFont,
     colors: RawColors,
+    mouse: RawMouse,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawMouse {
+    focus_follows_mouse: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -609,12 +777,15 @@ fn build_palette(raw: &RawColors) -> Palette {
 #[cfg(test)]
 mod tests {
     use super::{
-        RawColors, Settings, apply_theme, build_palette, resolve_ui_language, rgba8,
+        RawColors, Settings, apply_resolved_theme, apply_theme, build_palette,
+        effective_font_sizes, effective_theme_line_height, resolve_ui_language, rgba8,
         runtime_background,
     };
     use crate::display::UiLanguage;
     use crate::gpui_shell::terminal::colors::Palette;
-    use nebula_settings::{LanguagePref, ThemeName};
+    use nebula_settings::{
+        BlurModeName, LanguagePref, RawSettings, RuntimeSettings, ThemeDefinition, ThemeName,
+    };
 
     #[test]
     fn default_terminal_font_is_bundled_on_every_platform() {
@@ -625,6 +796,25 @@ mod tests {
     fn explicit_runtime_languages_resolve_without_reading_system_locale() {
         assert_eq!(resolve_ui_language(LanguagePref::ZhCn), UiLanguage::ZhCn);
         assert_eq!(resolve_ui_language(LanguagePref::EnUs), UiLanguage::EnUs);
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn render_preferences_read_current_settings(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            for (theme, language, panel_resize) in [
+                (ThemeName::Nord, UiLanguage::ZhCn, false),
+                (ThemeName::Paper, UiLanguage::EnUs, true),
+            ] {
+                let mut runtime = RuntimeSettings::from_raw(&RawSettings::default());
+                runtime.panel_resize = panel_resize;
+                let mut settings = Settings::load_with_runtime(theme, runtime);
+                settings.ui_language = language;
+                cx.set_global(settings);
+                assert_eq!(super::ui_language(cx), language);
+                assert_eq!(super::panel_resize(cx), panel_resize);
+            }
+        });
     }
 
     #[test]
@@ -642,6 +832,65 @@ mod tests {
 
         settings.cursor_blink = Some(false);
         assert!(!settings.term_config().default_cursor_style.blinking);
+    }
+
+    #[test]
+    fn builtin_themes_preserve_application_extended_colors() {
+        use nebula_terminal::term::color::Colors;
+        use nebula_terminal::vte::ansi::{Color, Rgb};
+
+        for theme in ThemeName::BUILTIN {
+            let mut palette = Palette::default();
+            apply_theme(&mut palette, theme);
+            let overrides = Colors::default();
+            for (index, expected) in [
+                (16, [0, 0, 0]),
+                (17, [0, 0, 95]),
+                (18, [0, 0, 135]),
+                (19, [0, 0, 175]),
+                (20, [0, 0, 215]),
+                (21, [0, 0, 255]),
+                (22, [0, 95, 0]),
+                (23, [0, 95, 95]),
+                (231, [255, 255, 255]),
+                (255, [238, 238, 238]),
+            ] {
+                assert_eq!(
+                    palette.resolve(Color::Indexed(index), &overrides, false),
+                    rgba8(expected),
+                    "{} index {index}",
+                    theme.prompt_name()
+                );
+                assert_eq!(
+                    palette.query_reply(index as usize, &overrides),
+                    Rgb { r: expected[0], g: expected[1], b: expected[2] }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn theme_switches_preserve_user_extended_colors_and_osc_overrides() {
+        use nebula_terminal::term::color::Colors;
+        use nebula_terminal::vte::ansi::{Color, Rgb};
+
+        let configured = [12, 34, 56];
+        let osc = Rgb { r: 78, g: 90, b: 123 };
+        let mut palette = Palette::default();
+        palette.indexed.push((16, rgba8(configured)));
+        for theme in ThemeName::BUILTIN {
+            apply_theme(&mut palette, theme);
+            let mut overrides = Colors::default();
+            assert_eq!(palette.resolve(Color::Indexed(16), &overrides, false), rgba8(configured));
+            overrides[16] = Some(osc);
+            assert_eq!(
+                palette.resolve(Color::Indexed(16), &overrides, false),
+                rgba8([78, 90, 123])
+            );
+            assert_eq!(palette.query_reply(16, &overrides), osc);
+            overrides[16] = None;
+            assert_eq!(palette.query_reply(16, &overrides), Rgb { r: 12, g: 34, b: 56 });
+        }
     }
 
     #[test]
@@ -728,6 +977,7 @@ mod tests {
         assert_eq!(nord.foreground, rgba8([0xf1, 0xf6, 0xff]));
         assert_eq!(nord.ansi[15], rgba8([0xec, 0xef, 0xf4]));
         assert_eq!(nord.cursor, rgba8([0xe5, 0xe9, 0xf0]));
+        assert_eq!(nord.cursor_text, Some(rgba8([0x2e, 0x34, 0x40])));
         assert_eq!(nord.cursor_stroke, Some(rgba8([0x88, 0xc0, 0xd0])));
         assert_eq!(nord.selection, rgba8([0xe5, 0xe9, 0xf0]));
         assert_eq!(nord.selection_foreground, Some(rgba8([0x2e, 0x34, 0x40])));
@@ -739,7 +989,64 @@ mod tests {
         assert_eq!(paper.foreground, rgba8([0x1a, 0x1a, 0x1a]));
         assert_eq!(paper.ansi[15], rgba8([0x2f, 0x2e, 0x2e]));
         assert_eq!(paper.cursor, original_cursor);
+        assert_eq!(paper.cursor_text, None);
         assert_eq!(paper.selection, original_selection);
         assert_eq!(paper.selection_foreground, None);
+    }
+
+    #[test]
+    fn theme_foreground_override_updates_all_foreground_slots() {
+        let mut palette = Palette::default();
+        let resolved =
+            crate::gpui_shell::theme::ResolvedTheme::builtin(ThemeName::Nord, Some([1, 2, 3]));
+
+        apply_resolved_theme(&mut palette, &resolved);
+
+        let foreground = rgba8([1, 2, 3]);
+        assert_eq!(palette.foreground, foreground);
+        assert_eq!(palette.bright_foreground, foreground);
+        assert_eq!(palette.dim_foreground, Palette::dim_of(foreground));
+    }
+
+    #[test]
+    fn theme_font_size_is_used_until_runtime_font_size_is_explicit() {
+        assert_eq!(effective_font_sizes(None, Some(18.0), Some(12.0)), (18.0, 18.0));
+        assert_eq!(effective_font_sizes(Some(20.0), Some(18.0), Some(12.0)), (20.0, 18.0));
+        assert_eq!(effective_font_sizes(None, None, Some(12.0)), (16.0, 16.0));
+    }
+
+    #[test]
+    fn custom_theme_line_height_is_clamped_once_for_runtime_consumers() {
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.typography.line_height = Some(1.5);
+        let resolved = crate::gpui_shell::theme::ResolvedTheme::custom(definition, None, None);
+
+        assert_eq!(effective_theme_line_height(&resolved), Some(1.5));
+    }
+
+    #[test]
+    fn theme_material_defaults_yield_to_explicit_runtime_values() {
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.effects.opacity = Some(0.72);
+        definition.effects.blur = Some(BlurModeName::Mica);
+        let resolved = crate::gpui_shell::theme::ResolvedTheme::custom(definition, None, None);
+
+        let absent = RuntimeSettings::from_raw(&RawSettings::default());
+        assert!((resolved.effective_opacity(&absent) - 0.72).abs() < f32::EPSILON);
+        assert_eq!(resolved.effective_blur(&absent), BlurModeName::Mica);
+
+        let explicit =
+            RuntimeSettings::from_raw(&RawSettings::from_text("opacity=1.0\nblur=none\n"));
+        assert!((resolved.effective_opacity(&explicit) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.effective_blur(&explicit), BlurModeName::None);
+    }
+
+    #[test]
+    fn missing_theme_materials_fall_back_to_runtime_defaults() {
+        let resolved = crate::gpui_shell::theme::ResolvedTheme::builtin(ThemeName::Nord, None);
+        let runtime = RuntimeSettings::from_raw(&RawSettings::default());
+
+        assert!((resolved.effective_opacity(&runtime) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(resolved.effective_blur(&runtime), BlurModeName::None);
     }
 }

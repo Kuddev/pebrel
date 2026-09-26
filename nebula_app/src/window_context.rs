@@ -1,6 +1,5 @@
 //! Terminal window context.
 
-use crate::i18n::t;
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
@@ -48,10 +47,12 @@ use crate::message_bar::MessageBuffer;
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::{input, renderer, session};
 
+mod agent_activity;
 mod agents;
 mod model;
 mod nebula_fetch_art;
 mod runtime;
+mod session_snapshot;
 mod ssh_panes;
 mod tab_duplication;
 /// New-tab welcome page (Windows logo + fastfetch intro). Stateless helpers.
@@ -556,8 +557,7 @@ impl WindowContext {
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
 
-        let mut nebula_state = NebulaPaneState::default();
-        nebula_state.cwd = initial_cwd;
+        let nebula_state = crate::completion_context::initial_state(&pty_config, initial_cwd);
 
         Ok(Pane {
             terminal,
@@ -1082,9 +1082,9 @@ impl WindowContext {
                 Err(err) => {
                     error!("创建直连 SSH Pane 失败: {err}");
                     let user_error = crate::ux::UserFacingError::new(
-                        t!("ssh.connect.create_failed", host = &host),
-                        t!("ssh.connect.create_cause"),
-                        t!("ssh.connect.create_suggestion"),
+                        format!("SSH {host} 连接创建失败"),
+                        "无法创建 SSH 会话，地址、认证方式或本机 SSH 配置可能无效。",
+                        "检查主机地址和认证配置，右键编辑该主机后重试。",
                     )
                     .retry(crate::ux::RetryAction::Retry)
                     .details(err.to_string());
@@ -1177,7 +1177,7 @@ impl WindowContext {
                     self.display.ssh_connect_stage(
                         old_id,
                         destination,
-                        crate::ssh_session::SshStage::Failed(t!("ssh.connect.retry_failed", error = &error.to_string()).to_string()),
+                        crate::ssh_session::SshStage::Failed(format!("无法重试 SSH 连接: {error}")),
                     );
                     self.dirty = true;
                     self.display.window.request_redraw();
@@ -1301,7 +1301,7 @@ impl WindowContext {
                 layout: Layout::Leaf(DOC_PANE_ID),
                 active_pane: DOC_PANE_ID,
                 has_bell: false,
-                custom_name: Some(format!("\u{eb51} {}", t!("common.settings"))),
+                custom_name: Some("\u{eb51} 设置".to_owned()),
                 custom_color: None,
                 launch: TabLaunch::Settings,
                 doc: None,
@@ -1354,7 +1354,7 @@ impl WindowContext {
                 layout: Layout::Leaf(pane_id),
                 active_pane: pane_id,
                 has_bell: false,
-                custom_name: Some(t!("workspace.agent.fork_tab_name", agent = agent.display_name()).to_string()),
+                custom_name: Some(format!("{} 分叉", agent.display_name())),
                 custom_color: color,
                 launch,
                 doc: None,
@@ -1423,9 +1423,9 @@ impl WindowContext {
         let session = session::Session::new(0, tabs);
         if let Err(err) = session::save_to(&path, &session) {
             let user_error = crate::ux::UserFacingError::new(
-                t!("workspace.export.title"),
-                t!("workspace.export.cause"),
-                t!("workspace.export.suggestion"),
+                "工作区导出失败",
+                "无法写入所选的工作区文件。",
+                "确认该位置可写(或换一个目录)后重试。",
             )
             .details(err.to_string());
             self.message_buffer.push(crate::message_bar::Message::user_error(&user_error));
@@ -1439,9 +1439,9 @@ impl WindowContext {
         let Some(path) = self.display.pick_workspace_dialog() else { return };
         let Some(session) = session::load_from(&path) else {
             let user_error = crate::ux::UserFacingError::new(
-                t!("workspace.import.title"),
-                t!("workspace.import.unrecognized_cause"),
-                t!("workspace.import.unrecognized_suggestion"),
+                "工作区导入失败",
+                "所选文件不是可识别的 Pebrel 工作区。",
+                "确认选择的是导出生成的 .pebrel-workspace.json 或旧版 .nebula-workspace.json 文件。",
             );
             self.message_buffer.push(crate::message_bar::Message::user_error(&user_error));
             self.dirty = true;
@@ -1461,9 +1461,9 @@ impl WindowContext {
             self.mark_session_dirty();
         } else {
             let user_error = crate::ux::UserFacingError::new(
-                t!("workspace.import.title"),
-                t!("workspace.import.empty_cause"),
-                t!("workspace.import.empty_suggestion"),
+                "工作区导入失败",
+                "工作区文件里没有可恢复的标签页。",
+                "该文件可能为空,或其中的会话都无法启动。",
             );
             self.message_buffer.push(crate::message_bar::Message::user_error(&user_error));
             self.dirty = true;
@@ -1754,130 +1754,6 @@ impl WindowContext {
         self.dirty = true;
     }
 
-    /// Current tab list + per-tab cwd as a persistable session.
-    fn session_snapshot(&self) -> session::Session {
-        let active_tab = self
-            .tabs
-            .iter()
-            .take(self.active_tab)
-            .filter(|tab| tab.doc.is_none() && tab.image.is_none() && !tab.settings)
-            .count();
-        let tabs: Vec<_> = self
-            .tabs
-            .iter()
-            .filter(|tab| tab.doc.is_none() && tab.image.is_none() && !tab.settings)
-            .map(|tab| self.tab_session(tab))
-            .collect();
-        let mut session = session::Session::new(active_tab.min(tabs.len().saturating_sub(1)), tabs);
-        let maximized = self.display.window.is_maximized();
-        session.window = Some(if maximized {
-            // Maximized: the live inner size is the whole monitor — remember
-            // the last known NORMAL size instead.
-            session::WindowState {
-                width: self.windowed_size.width,
-                height: self.windowed_size.height,
-                maximized,
-            }
-        } else {
-            // Normal state: take the current size straight from the window.
-            // The cached bookkeeping once picked up a physical-domain value,
-            // and a restored window then ballooned by the DPI factor on
-            // every relaunch.
-            let logical: LogicalSize<u32> =
-                self.display.window.inner_size().to_logical(self.display.window.scale_factor);
-            session::WindowState { width: logical.width, height: logical.height, maximized }
-        });
-        session
-    }
-
-    /// One tab as a persistable record: focused-pane cwd, launch identity and
-    /// the full split tree. Shared by the session autosave and the workspace
-    /// export so both always describe tabs identically.
-    fn tab_session(&self, tab: &TabEntry) -> session::TabSession {
-        let pane_cwd = |id: PaneId| {
-            self.pane(id).map(|p| p.nebula_state.cwd.trim().to_owned()).unwrap_or_default()
-        };
-        // 每个叶子除 cwd 外还记录「此刻前台的 AI 对话」：running_program 由
-        // hook/OSC 设置、133;D 收尾清除，是「快照瞬间它还开着」的存活判据；
-        // 会话 id 必须与它同源（id 记录后前台可能换了别的程序）。只有 hook
-        // 能报 id 的 claude/codex 走精确 resume，OSC 认出的裸 claude 退化
-        // `--continue`，其余来源不接续。
-        let pane_agent = |id: PaneId| -> Option<session::AgentSession> {
-            let state = &self.pane(id)?.nebula_state;
-            let program = state.running_program.as_deref()?;
-            match &state.ai_session {
-                Some(identity) if identity.source == program => Some(session::AgentSession {
-                    source: identity.source.clone(),
-                    session_id: Some(identity.session_id.clone()),
-                }),
-                _ if matches!(program, "claude" | "codex") => {
-                    Some(session::AgentSession { source: program.to_owned(), session_id: None })
-                },
-                _ => None,
-            }
-        };
-        let mut leaves = Vec::new();
-        tab.layout.leaves(&mut leaves);
-        session::TabSession {
-            cwd: pane_cwd(tab.active_pane),
-            custom_name: tab.custom_name.clone(),
-            color: tab.custom_color,
-            launch: Some(Self::launch_session(&tab.launch)),
-            layout: Some(Self::layout_session(&tab.layout, &pane_cwd, &pane_agent)),
-            active_pane: leaves.iter().position(|id| *id == tab.active_pane).unwrap_or(0),
-        }
-    }
-
-    /// The persistable subset of a tab's launch identity. Document/settings
-    /// tabs are filtered out before this is called; mapping them to `Default`
-    /// keeps the function total without giving them a session meaning.
-    fn launch_session(launch: &TabLaunch) -> session::LaunchSession {
-        match launch {
-            TabLaunch::Default
-            | TabLaunch::Document(_)
-            | TabLaunch::Image(_)
-            | TabLaunch::Settings => session::LaunchSession::Default,
-            TabLaunch::Shell { name, shell } => session::LaunchSession::Shell {
-                name: name.clone(),
-                program: shell.program().to_owned(),
-                args: shell.args().to_vec(),
-            },
-            TabLaunch::Profile(profile) => session::LaunchSession::Profile {
-                name: profile.name.clone(),
-                command: profile.command.clone(),
-                args: profile.args.clone(),
-                cwd: profile.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
-                shell_id: profile.shell_id.clone(),
-            },
-            TabLaunch::Ssh(host) => session::LaunchSession::Ssh { host: host.clone() },
-        }
-    }
-
-    /// Serialize a layout tree, resolving each leaf to its pane's cwd plus the
-    /// AI conversation running in it (if any).
-    fn layout_session(
-        layout: &Layout,
-        pane_cwd: &impl Fn(PaneId) -> String,
-        pane_agent: &impl Fn(PaneId) -> Option<session::AgentSession>,
-    ) -> session::LayoutSession {
-        match layout {
-            Layout::Leaf(id) => {
-                session::LayoutSession::Pane { cwd: pane_cwd(*id), agent: pane_agent(*id) }
-            },
-            Layout::Split { direction, ratio, first, second, .. } => {
-                session::LayoutSession::Split {
-                    axis: match direction {
-                        crate::display::SplitDirection::LeftRight => session::SplitAxis::LeftRight,
-                        crate::display::SplitDirection::TopBottom => session::SplitAxis::TopBottom,
-                    },
-                    ratio_permille: (ratio.clamp(0.0, 1.0) * 1000.0).round() as u16,
-                    first: Box::new(Self::layout_session(first, pane_cwd, pane_agent)),
-                    second: Box::new(Self::layout_session(second, pane_cwd, pane_agent)),
-                }
-            },
-        }
-    }
-
     /// 1 Hz autosave (piggybacks on the chrome clock tick): persist the session
     /// when it changed, so a crash or force-kill restores to within a second.
     /// Only the focused window writes — two open windows must not fight over
@@ -2137,391 +2013,6 @@ impl WindowContext {
         }
     }
 
-    /// Apply a typed AI-CLI lifecycle event (claude/codex via the nebula-hook
-    /// pipe) to its pane's turn state — the exact, edge-triggered version of
-    /// what the BEL heuristics approximate. Returns `false` when the pane
-    /// does not belong to this window so the processor can try the next one.
-    pub fn handle_ai_hook(&mut self, ev: &crate::ai_hook::AiHookEvent) -> bool {
-        // A missing pane id (env stripped by an intermediate layer) degrades
-        // to the focused pane of the first window asked.
-        let pane_id = ev.pane.unwrap_or_else(|| self.focused_pane_id());
-        let Some(idx) = self.pane_index(pane_id) else { return false };
-        // 路由第二因子：写管道那个进程必须真的跑在这个 pane 的进程树里。
-        // `NEBULA_PANE_ID` 是环境变量，任何进程都能设成别的 pane；祖先链不能
-        // 伪造。只有拿到明确反证时才拒绝，查不到证据（远端 OSC 通道、pane 还
-        // 没有本地 shell、helper 已退出）一律放行。
-        if let Some(client_pid) = ev.client_pid
-            && ev.pane == Some(pane_id)
-            && crate::process_tree::is_within_tree(client_pid, self.panes[idx].shell_pid)
-                == Some(false)
-        {
-            log::warn!(
-                "ai_hook: rejected event claiming pane {pane_id} from pid {client_pid} outside its \
-                 process tree (source={} kind={:?})",
-                ev.source,
-                ev.kind
-            );
-            return true;
-        }
-        let verdict = crate::ai_hook::accept_for_pane(ev, pane_id);
-        if !verdict.accepted() {
-            log::debug!(
-                "ai_hook: dropped event reason={verdict:?} source={} session={:?} pane={pane_id} \
-                 kind={:?} bridge_seq={:?}",
-                ev.source,
-                ev.session_id,
-                ev.kind,
-                ev.bridge_sequence
-            );
-            return true;
-        }
-
-        // The hook names its client ("claude" / "codex") — ground truth for
-        // the sidebar program icon, unlike the OSC 133 command-line sniffing
-        // which misses wrapped launches and integration-less shells.
-        {
-            let state = &mut self.panes[idx].nebula_state;
-            state.running_program = Some(ev.source.clone());
-            state.agent_hook_seen = true;
-            state.agent_status_source = crate::ai_agents::AgentStatusSource::Hook;
-            state.agent_status_rule = None;
-            if !matches!(ev.kind, crate::ai_hook::AiHookKind::SessionStart) {
-                state.agent_runtime_submit_pending = false;
-            }
-            // 精确边沿抵达 = 屏幕检测的空闲计数作废（上一回合攒下的拍数
-            // 不能把新回合的第一个空闲闪现立即降级）。
-            state.idle_screen_streak = 0;
-            // 会话身份跟着事件走：同一个 pane 里 /clear、重开会话都会带来
-            // 新 id，最后一次上报永远是权威。133;D（CLI 退回提示符）清除。
-            if let Some(id) = ev.session_id.as_deref() {
-                state.ai_session = Some(crate::display::AiSessionIdentity {
-                    source: ev.source.clone(),
-                    session_id: id.to_owned(),
-                });
-            }
-        }
-        if let Some(id) = ev.session_id.as_deref() {
-            let cwd = self.panes[idx].nebula_state.cwd.clone();
-            if let Err(error) = crate::ai_sessions::record_hook_session(&ev.source, id, &cwd, None)
-            {
-                log::warn!("agent session index: could not record {} {id}: {error}", ev.source);
-            }
-        }
-
-        match ev.kind {
-            crate::ai_hook::AiHookKind::SessionStart => {
-                let state = &mut self.panes[idx].nebula_state;
-                state.agent_status = crate::ai_agents::AgentStatus::Idle;
-                state.awaiting_input = true;
-                state.needs_attention = false;
-                state.command_started.get_or_insert_with(Instant::now);
-            },
-            crate::ai_hook::AiHookKind::PromptSubmit => {
-                // A turn started: spinner resumes, stale dot is consumed.
-                let state = &mut self.panes[idx].nebula_state;
-                state.agent_status = crate::ai_agents::AgentStatus::Working;
-                state.awaiting_input = false;
-                state.needs_attention = false;
-                state.finished_unseen = false;
-                // No shell integration = no OSC 133;C ever ran: give the
-                // spinner a start mark so the turn still animates.
-                state.command_started.get_or_insert_with(std::time::Instant::now);
-            },
-            crate::ai_hook::AiHookKind::ToolComplete => {
-                let state = &mut self.panes[idx].nebula_state;
-                // 一个工具刚跑完 = agent 正在干活，这是无条件事实。此前只
-                // 认 Blocked→Working，漏掉了「回合经不发 PromptSubmit 的路径
-                // 继续（授权点头、队列消息）后状态还挂在 Done」的场景——
-                // 也就是用户看到的「还在执行却已经显示完成蓝点」。
-                state.agent_status = crate::ai_agents::AgentStatus::Working;
-                state.awaiting_input = false;
-                state.needs_attention = false;
-                state.finished_unseen = false;
-                state.command_started.get_or_insert_with(Instant::now);
-            },
-            crate::ai_hook::AiHookKind::TurnDone if ev.active_background_tasks() > 0 => {
-                let active = ev.active_background_tasks();
-                let state = &mut self.panes[idx].nebula_state;
-                state.agent_status = crate::ai_agents::AgentStatus::Working;
-                state.agent_status_rule = Some(format!("hook.background_tasks.active={active}"));
-                state.awaiting_input = false;
-                state.needs_attention = false;
-                state.finished_unseen = false;
-                state.command_started.get_or_insert_with(Instant::now);
-            },
-            crate::ai_hook::AiHookKind::TurnDone | crate::ai_hook::AiHookKind::NeedsAttention => {
-                // codex 的 notify 只有"回合完成"一种事件：弹出交互式提问时
-                // 它发的也是 turn-complete，事件流分不出"说完了"和"在等你
-                // 回答"。回合结束的瞬间看一眼屏幕尾部——还挂着选择框或确认
-                // 提示，就按「等你批准」处理（蓝点升级成手掌）。
-                let screen_asks = ev.kind == crate::ai_hook::AiHookKind::TurnDone && {
-                    // 与 GPUI 壳同判据：走 per-agent manifest 的 blocked 规则
-                    // （带 region 锚定，只认当前活动框），不再拿裸关键词扫底部
-                    // 15 行全文——正文里出现 (y/n)、do you want to proceed 之类
-                    // 的字样（agent 打印的代码、上一轮没滚走的旧框）就会让正常
-                    // 结束的回合挂上警告三角，而 Blocked 一旦点亮就再难落下。
-                    let term = self.panes[idx].terminal.lock();
-                    let lines = term.screen_lines();
-                    lines > 0 && term.columns() > 0 && {
-                        let start = Point::new(Line(0), Column(0));
-                        let end = Point::new(
-                            Line(lines as i32 - 1),
-                            Column(term.columns().saturating_sub(1)),
-                        );
-                        let screen = term.bounds_to_string(start, end);
-                        crate::ai_agents::detect(&ev.source, &screen).is_some_and(|detection| {
-                            detection.status == crate::ai_agents::AgentStatus::Blocked
-                        })
-                    }
-                };
-                {
-                    let state = &mut self.panes[idx].nebula_state;
-                    state.agent_status =
-                        if ev.kind == crate::ai_hook::AiHookKind::NeedsAttention || screen_asks {
-                            crate::ai_agents::AgentStatus::Blocked
-                        } else {
-                            crate::ai_agents::AgentStatus::Done
-                        };
-                    state.awaiting_input = true;
-                    state.finished_unseen = true;
-                    // 「等你批准」是比「回合完成」更强的状态：它不是通知你
-                    // 结果，是挡在半路要你点头。徽章上分成手掌与圆点两种
-                    // 墨迹，此前两者共用一个点，界面上根本分不出来。
-                    if ev.kind == crate::ai_hook::AiHookKind::NeedsAttention || screen_asks {
-                        state.needs_attention = true;
-                    }
-                }
-                // Tab dot when the pane sits in a background tab (same rule
-                // as mark_pane_bell; the visible tab shows the pane itself).
-                let mut background_tab = false;
-                let active = self.active_tab;
-                for (i, tab) in self.tabs.iter_mut().enumerate() {
-                    let mut ids = Vec::new();
-                    tab.layout.leaves(&mut ids);
-                    if ids.contains(&pane_id) {
-                        if i != active {
-                            tab.has_bell = true;
-                            background_tab = true;
-                        }
-                        break;
-                    }
-                }
-                // Toast policy in one place: unfocused window, or focused
-                // window with the pane hidden in a background tab. The global
-                // toast throttle absorbs the BEL/OSC-9 double fire when
-                // claude's notif channel is active as well.
-                let attention =
-                    ev.kind == crate::ai_hook::AiHookKind::NeedsAttention || screen_asks;
-                if !self.display.window.has_focus() || background_tab {
-                    let message = ev
-                        .attention
-                        .as_ref()
-                        .map(|context| context.summary_for_pane(pane_id))
-                        .or_else(|| ev.message.clone());
-                    crate::notify::deliver(
-                        &self.display.window,
-                        &crate::notify::Notification::AiTurn {
-                            program: ev.source.clone(),
-                            message,
-                            attention,
-                        },
-                        Some(pane_id),
-                    );
-                }
-            },
-            crate::ai_hook::AiHookKind::SessionEnd => {
-                let state = &mut self.panes[idx].nebula_state;
-                state.agent_status = crate::ai_agents::AgentStatus::Unknown;
-                state.agent_status_source = crate::ai_agents::AgentStatusSource::Unknown;
-                state.agent_status_rule = None;
-                state.agent_hook_seen = false;
-                state.agent_runtime_submit_pending = false;
-                state.ai_session = None;
-                state.running_program = None;
-                state.pending_command_prompt = None;
-                state.awaiting_input = false;
-                state.needs_attention = false;
-            },
-        }
-
-        self.dirty = true;
-        self.display.window.request_redraw();
-        true
-    }
-
-    /// 1 Hz 声明式屏幕检测。Hook 仍是精确边界；屏幕承担两类补位：
-    ///
-    /// 1. Gemini/Cursor/Copilot 等尚无 hook 桥接的客户端；
-    /// 2. 可见的权限/问题框（比“turn complete”事件更能证明正在等人）。
-    ///
-    /// 只读底部 24 行，规则已预编译；普通 shell 或未知程序立即跳过。
-    pub fn refresh_agent_screen_states(&mut self) {
-        // Wakeup 不是所有 synchronized PTY 输出的必发事件；NebulaTick 在做
-        // Agent 检测前先冲刷所有已看到 Grid 变化的 Runtime 提交 barrier。
-        let pane_ids: Vec<_> = self.panes.iter().map(|pane| pane.id).collect();
-        for pane_id in pane_ids {
-            self.runtime_flush_pending_submit(Some(pane_id));
-        }
-        for pane in &mut self.panes {
-            let (prompt_restored, screen) = {
-                let term = pane.terminal.lock();
-                let lines = term.screen_lines();
-                if lines == 0 || term.columns() == 0 {
-                    continue;
-                }
-                let prompt_restored =
-                    pane.nebula_state.pending_command_prompt.as_deref().is_some_and(|expected| {
-                        crate::display::nebula_shell_prompt_restored_from_raw_grid(
-                            &term,
-                            expected,
-                            &pane.nebula_state.suggest_env,
-                        )
-                    });
-                let take = lines.min(24);
-                let start = Point::new(Line((lines - take) as i32), Column(0));
-                let end =
-                    Point::new(Line(lines as i32 - 1), Column(term.columns().saturating_sub(1)));
-                (prompt_restored, term.bounds_to_string(start, end))
-            };
-            if prompt_restored
-                && pane
-                    .nebula_state
-                    .running_program
-                    .as_deref()
-                    .and_then(crate::ai_agents::AgentKind::parse)
-                    .is_some()
-            {
-                log::debug!(
-                    "agent lifecycle: submitted shell prompt restored pane={} program={:?}",
-                    pane.id,
-                    pane.nebula_state.running_program
-                );
-                let state = &mut pane.nebula_state;
-                if let Some(run) = state.active_run.take() {
-                    state.last_run =
-                        Some(crate::runtime_api::RuntimeRunOutcome::command_done(run, None));
-                }
-                state.running_program = None;
-                state.ai_session = None;
-                state.agent_status = crate::ai_agents::AgentStatus::Unknown;
-                state.agent_status_source = crate::ai_agents::AgentStatusSource::Unknown;
-                state.agent_status_rule = None;
-                state.agent_hook_seen = false;
-                state.idle_screen_streak = 0;
-                state.agent_runtime_submit_pending = false;
-                state.runtime_submit_barrier = None;
-                state.command_started = None;
-                state.pending_command_prompt = None;
-                state.awaiting_input = false;
-                state.finished_unseen = false;
-                state.needs_attention = false;
-                continue;
-            }
-            let program = match pane.nebula_state.running_program.clone() {
-                Some(program) => program,
-                None => {
-                    let Some(agent) = crate::ai_agents::identify(&screen) else {
-                        pane.nebula_state.idle_screen_streak = 0;
-                        continue;
-                    };
-                    let program = agent.slug().to_owned();
-                    log::debug!("agent identity from screen: pane={} program={program}", pane.id);
-                    pane.nebula_state.running_program = Some(program.clone());
-                    pane.nebula_state.agent_status_source =
-                        crate::ai_agents::AgentStatusSource::Screen;
-                    pane.nebula_state.agent_status_rule = None;
-                    program
-                },
-            };
-            if crate::ai_agents::AgentKind::parse(&program).is_none() {
-                continue;
-            }
-            let Some(detection) = crate::ai_agents::detect(&program, &screen) else {
-                continue;
-            };
-
-            let state = &mut pane.nebula_state;
-            if detection.status == crate::ai_agents::AgentStatus::Idle
-                && state.agent_runtime_submit_pending
-            {
-                state.idle_screen_streak = 0;
-                continue;
-            }
-            if matches!(
-                detection.status,
-                crate::ai_agents::AgentStatus::Working | crate::ai_agents::AgentStatus::Blocked
-            ) {
-                state.agent_runtime_submit_pending = false;
-            }
-            // 空闲提示符降级要分三档（#「转圈不停」的根修）：
-            // - hook 报过的 Done/Blocked 是精确终态，不被提示符降级；
-            // - Working 可能是丢了 TurnDone 的僵尸态（打断的回合没有 Stop
-            //   事件），但单拍空闲可能只是重绘间隙——连续两拍才收场；
-            // - 其余状态照常应用。
-            if detection.status == crate::ai_agents::AgentStatus::Idle {
-                if state.agent_hook_seen
-                    && matches!(
-                        state.agent_status,
-                        crate::ai_agents::AgentStatus::Done
-                            | crate::ai_agents::AgentStatus::Blocked
-                    )
-                {
-                    continue;
-                }
-                if state.agent_status == crate::ai_agents::AgentStatus::Working {
-                    state.idle_screen_streak = state.idle_screen_streak.saturating_add(1);
-                    if state.idle_screen_streak < 2 {
-                        continue;
-                    }
-                }
-            } else {
-                state.idle_screen_streak = 0;
-            }
-            let previous = state.agent_status;
-            if previous != detection.status
-                || state.agent_status_rule.as_deref() != Some(&detection.rule_id)
-            {
-                log::debug!(
-                    "agent screen state: pane={} program={} {:?}->{:?} rule={}",
-                    pane.id,
-                    program,
-                    previous,
-                    detection.status,
-                    detection.rule_id
-                );
-            }
-            state.agent_status = detection.status;
-            state.agent_status_source = crate::ai_agents::AgentStatusSource::Screen;
-            state.agent_status_rule = Some(detection.rule_id);
-
-            match detection.status {
-                crate::ai_agents::AgentStatus::Blocked => {
-                    state.awaiting_input = true;
-                    state.needs_attention = true;
-                    state.finished_unseen = true;
-                },
-                crate::ai_agents::AgentStatus::Working => {
-                    state.awaiting_input = false;
-                    state.needs_attention = false;
-                    state.finished_unseen = false;
-                    state.command_started.get_or_insert_with(Instant::now);
-                },
-                crate::ai_agents::AgentStatus::Idle => {
-                    state.awaiting_input = true;
-                    state.needs_attention = false;
-                    if previous == crate::ai_agents::AgentStatus::Working {
-                        state.finished_unseen = true;
-                        state.finished_at = Some(Instant::now());
-                    }
-                },
-                crate::ai_agents::AgentStatus::Done | crate::ai_agents::AgentStatus::Unknown => {},
-            }
-        }
-        // Chrome/tray read the established fields; rebuilding their compact
-        // arrays here makes the detector visible in the same tick.
-        self.sync_chrome_tabs();
-    }
-
     /// 后台修复请求（spec 001）的结果落地：pane 归属本窗口即认领（返回
     /// true，AiHook 同款路由契约）。写入前校验 seq——条子已被用户撤掉、或
     /// 新失败已顶掉旧请求时，迟到的响应直接丢弃。
@@ -2551,7 +2042,7 @@ impl WindowContext {
         } else {
             crate::message_bar::MessageType::Warning
         };
-        self.message_buffer.push(crate::message_bar::Message::new(t!("backup.notice", message = message).to_string(), ty));
+        self.message_buffer.push(crate::message_bar::Message::new(format!("备份：{message}"), ty));
         self.dirty = true;
         self.display.window.request_redraw();
     }
@@ -2568,7 +2059,7 @@ impl WindowContext {
         } else {
             crate::message_bar::MessageType::Warning
         };
-        self.message_buffer.push(crate::message_bar::Message::new(t!("sync.notice", message = message).to_string(), ty));
+        self.message_buffer.push(crate::message_bar::Message::new(format!("同步：{message}"), ty));
         if history_changed {
             self.display.reload_nebula_history();
         }
@@ -3055,12 +2546,13 @@ impl WindowContext {
         let mut ai_fork = Vec::with_capacity(self.tabs.len());
         // 静默行右侧的 shell 短标；Default 启动的 tab 用当前默认 shell 的。
         let default_tag = self.display.default_shell_tag();
+        let ui_language = self.display.ui_language();
         for tab in &self.tabs {
             let pane = self.pane(tab.active_pane);
             let state = pane.map(|p| &p.nebula_state);
             // Use custom name if set, otherwise derive from cwd/title
             let mut label = if tab.settings {
-                format!("\u{eb51} {}", t!("common.settings"))
+                format!("\u{eb51} {}", ui_language.pick("设置", "Settings"))
             } else if let Some(custom) = &tab.custom_name {
                 custom.clone()
             } else {

@@ -9,6 +9,9 @@ param(
     [ValidateSet('NebulaTerminal', 'Pebrel')]
     [string] $PackageBrand = 'Pebrel',
 
+    [ValidateSet('x64', 'arm64')]
+    [string] $Architecture = 'x64',
+
     [switch] $SkipBuild,
     # 与 -SkipBuild 联用：跳过「exe 必须比源码新」的陈旧检查。仅用于脚本
     # 自测；发布安装包一律走全新构建。
@@ -57,7 +60,7 @@ if ([string]::IsNullOrWhiteSpace($TargetDirectory)) {
 }
 $cargoTargetRoot = [System.IO.Path]::GetFullPath($TargetDirectory)
 $targetRoot = Join-Path $cargoTargetRoot $Configuration
-$setupPath = Join-Path $outputRoot "$PackageBrand-v$Version-windows-x64-setup.exe"
+$setupPath = Join-Path $outputRoot "$PackageBrand-v$Version-windows-$Architecture-setup.exe"
 
 $requiredFiles = @(
     (Join-Path $targetRoot 'pebrel.exe'),
@@ -85,28 +88,7 @@ if (-not (Test-Path -LiteralPath $installerScript -PathType Leaf)) {
 }
 
 if (-not $SkipBuild) {
-    Push-Location $repo
-    $previousTargetDirectory = $env:CARGO_TARGET_DIR
-    try {
-        $env:CARGO_TARGET_DIR = $cargoTargetRoot
-        $workspaceArgs = @('build', '--workspace', '--exclude', 'nebula', '--locked')
-        $gpuiArgs = @('build', '-p', 'nebula', '--bin', 'pebrel', '--features', 'gpui-shell', '--locked')
-        if ($Configuration -eq 'release') {
-            $workspaceArgs += '--release'
-            $gpuiArgs += '--release'
-        }
-        & cargo @workspaceArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "Cargo workspace build failed with exit code $LASTEXITCODE"
-        }
-        & cargo @gpuiArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "Cargo gpui-shell build failed with exit code $LASTEXITCODE"
-        }
-    } finally {
-        $env:CARGO_TARGET_DIR = $previousTargetDirectory
-        Pop-Location
-    }
+    & (Join-Path $PSScriptRoot 'build-windows-product.ps1') -Configuration $Configuration -TargetDirectory $cargoTargetRoot
 }
 
 $missing = @($requiredFiles | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
@@ -115,6 +97,8 @@ if ($missing.Count -ne 0) {
 }
 
 $packagedExe = Join-Path $targetRoot 'pebrel.exe'
+. (Join-Path $PSScriptRoot 'windows-package-architecture.ps1')
+Assert-WindowsPackageArchitecture -Root $targetRoot -Architecture $Architecture
 if ($PackageBrand -eq 'Pebrel' -and (Get-Item -LiteralPath $packagedExe).VersionInfo.ProductName -ne 'Pebrel') {
     throw 'Pebrel packages require a freshly built Pebrel executable, not renamed Nebula binaries.'
 }
@@ -166,6 +150,7 @@ if ($ValidateOnly) {
         InstallerScript = $installerScript
         Version = $Version
         Configuration = $Configuration
+        Architecture = $Architecture
         Files = $requiredFiles.Count
     } | Format-List
     return
@@ -223,7 +208,7 @@ if (-not $translationValid) {
 
 Push-Location $PSScriptRoot
 try {
-    & $InnoCompiler "/DAppVersion=$Version" "/DNumericVersion=$numericVersion" "/DConfiguration=$Configuration" "/DPackageBrand=$PackageBrand" "/DBuildRoot=$targetRoot" "/O$outputRoot" $installerScript
+    & $InnoCompiler "/DAppVersion=$Version" "/DNumericVersion=$numericVersion" "/DConfiguration=$Configuration" "/DPackageBrand=$PackageBrand" "/DArchitecture=$Architecture" "/DBuildRoot=$targetRoot" "/O$outputRoot" $installerScript
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup compilation failed with exit code $LASTEXITCODE"
     }

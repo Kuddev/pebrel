@@ -1,0 +1,20 @@
+# Header and footer transcribed from the user's CodeBuddy Code 2.150.0
+# Windows/WSL screenshot (2026-09-14). This fallback covers hidden guest
+# processes; a historical banner followed by a shell prompt is not live chrome.
+id = "codebuddy"
+aliases = ["cbc", "codebuddy-code", "codebuddy-lowmem"]
+
+[[identity]]
+regex = [
+  '\bCodeBuddy Code v[0-9]+\.[0-9]+\.[0-9]+\b',
+  '(?m)^[ \t]*/agent-mode to switch[^\r\n]*\? for shortcuts[^\r\n]*← for agents[ \t]*\s*\z',
+]
+
+[[rules]]
+id = "prompt_footer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(4)"
+line_regex = ['^[ \t]*>[ \t]*$']
+regex = ['(?m)^[ \t]*/agent-mode to switch[^\r\n]*\? for shortcuts[^\r\n]*← for agents[ \t]*\s*\z']
+not = [{ contains = ["esc to interrupt"] }]

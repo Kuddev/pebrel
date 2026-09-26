@@ -27,7 +27,13 @@ fn runtime_key_sequence(
     repeat: u16,
 ) -> Result<Vec<u8>, ApiError> {
     let mode = *pane.terminal.lock().mode();
-    let bytes = crate::input::terminal_input::build_runtime_sequence(key, modifiers, repeat, mode);
+    let bytes = crate::input::terminal_input::build_runtime_sequence_for_program(
+        key,
+        modifiers,
+        repeat,
+        mode,
+        pane.nebula_state.running_program.as_deref(),
+    );
     if bytes.is_empty() {
         return Err(ApiError::new(
             "input_encoding_unavailable",
@@ -80,7 +86,7 @@ impl WindowContext {
                         ssh_destination: pane.ssh_destination.clone(),
                         running_program: pane.nebula_state.running_program.clone(),
                         agent: runtime_agent(pane),
-                        task_state: task_state(pane),
+                        task_state: task_state(&pane.nebula_state),
                         // Seeded to 0; the hub stamps the real transition
                         // counter at publish time, where the previous snapshot
                         // is available to compare against.
@@ -385,10 +391,16 @@ impl WindowContext {
                 "the pane is still committing previous runtime input",
             ));
         }
-        let recognized_agent = submit && runtime_agent(pane).is_some();
+        let agent = runtime_agent(pane);
+        let recognized_agent = submit && agent.is_some();
+        let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         let mode = *pane.terminal.lock().mode();
-        let mut bytes = crate::input::terminal_input::build_runtime_text_sequence(&text, mode);
-        if submit {
+        let mut bytes = if codex_submit {
+            crate::input::terminal_input::build_runtime_codex_submission(&text, mode)
+        } else {
+            crate::input::terminal_input::build_runtime_text_sequence(&text, mode)
+        };
+        if submit && !codex_submit {
             let submit_bytes =
                 runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
             if text.is_empty() {
@@ -413,11 +425,7 @@ impl WindowContext {
         pane.nebula_state.finished_unseen = false;
         pane.nebula_state.failed_unseen = false;
         if recognized_agent {
-            pane.nebula_state.agent_status = crate::ai_agents::AgentStatus::Working;
-            pane.nebula_state.agent_status_source = crate::ai_agents::AgentStatusSource::Process;
-            pane.nebula_state.agent_status_rule = None;
-            pane.nebula_state.agent_runtime_submit_pending = true;
-            pane.nebula_state.idle_screen_streak = 0;
+            pane.nebula_state.agent_activity.submitted();
             pane.nebula_state.command_started.get_or_insert_with(std::time::Instant::now);
         }
         self.dirty = true;
@@ -473,7 +481,10 @@ impl WindowContext {
         let mut bytes = b"\x1b[200~".to_vec();
         bytes.extend_from_slice(normalized.replace("\x1b[201~", "").as_bytes());
         bytes.extend_from_slice(b"\x1b[201~");
-        if submit {
+        let codex_submit = submit && runtime_agent(pane).is_some_and(|agent| agent.kind == "codex");
+        if codex_submit {
+            bytes = crate::input::terminal_input::build_runtime_codex_submission(&text, mode);
+        } else if submit {
             let submit_bytes =
                 runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
             pane.nebula_state.runtime_submit_barrier =
@@ -490,12 +501,7 @@ impl WindowContext {
             pane.nebula_state.finished_unseen = false;
             pane.nebula_state.failed_unseen = false;
             if recognized_agent {
-                pane.nebula_state.agent_status = crate::ai_agents::AgentStatus::Working;
-                pane.nebula_state.agent_status_source =
-                    crate::ai_agents::AgentStatusSource::Process;
-                pane.nebula_state.agent_status_rule = None;
-                pane.nebula_state.agent_runtime_submit_pending = true;
-                pane.nebula_state.idle_screen_streak = 0;
+                pane.nebula_state.agent_activity.submitted();
                 pane.nebula_state.command_started.get_or_insert_with(std::time::Instant::now);
             }
         }
@@ -521,7 +527,7 @@ impl WindowContext {
             self.id().into(),
             pane_id,
             lines,
-            task_state(pane),
+            task_state(&pane.nebula_state),
             false,
             None,
         ))
@@ -701,7 +707,7 @@ fn runtime_agent(pane: &super::Pane) -> Option<RuntimeAgent> {
         .map(|identity| identity.source.as_str())
         .or(state.running_program.as_deref())?;
     let kind = crate::ai_agents::AgentKind::parse(raw)?;
-    let state_source = match state.agent_status_source {
+    let state_source = match state.agent_activity.source() {
         crate::ai_agents::AgentStatusSource::Hook => RuntimeAgentStateSource::Hook,
         crate::ai_agents::AgentStatusSource::Screen => RuntimeAgentStateSource::Screen,
         crate::ai_agents::AgentStatusSource::Process
@@ -716,13 +722,20 @@ fn runtime_agent(pane: &super::Pane) -> Option<RuntimeAgent> {
         display_name: kind.display_name().to_owned(),
         session_id: state.ai_session.as_ref().map(|identity| identity.session_id.clone()),
         state_source,
-        state_rule: state.agent_status_rule.clone(),
-        hook_seen: state.agent_hook_seen,
+        state_rule: state.agent_activity.rule().map(str::to_owned),
+        hook_seen: state.agent_activity.hook_seen(),
     })
 }
 
-fn task_state(pane: &super::Pane) -> RuntimeTaskState {
-    let state = &pane.nebula_state;
+fn task_state(state: &crate::display::NebulaPaneState) -> RuntimeTaskState {
+    use crate::ai_agents::AgentStatus;
+    match state.agent_activity.status() {
+        AgentStatus::Working => return RuntimeTaskState::Running,
+        AgentStatus::Blocked => return RuntimeTaskState::Attention,
+        AgentStatus::Done => return RuntimeTaskState::Finished,
+        AgentStatus::Idle => return RuntimeTaskState::Idle,
+        AgentStatus::Unknown => {},
+    }
     if state.needs_attention {
         RuntimeTaskState::Attention
     } else if state.awaiting_input {
@@ -735,6 +748,33 @@ fn task_state(pane: &super::Pane) -> RuntimeTaskState {
         RuntimeTaskState::Finished
     } else {
         RuntimeTaskState::Idle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_runtime_projects_shared_agent_state_before_generic_flags() {
+        let mut state = crate::display::NebulaPaneState::default();
+        state.awaiting_input = true;
+        state.needs_attention = true;
+        state.command_started = Some(std::time::Instant::now());
+        for (name, expected) in [
+            ("SessionStart", RuntimeTaskState::Idle),
+            ("UserPromptSubmit", RuntimeTaskState::Running),
+            ("PermissionRequest", RuntimeTaskState::Attention),
+            ("PostToolUse", RuntimeTaskState::Running),
+            ("Stop", RuntimeTaskState::Finished),
+        ] {
+            let wire = format!(
+                "nebula-hook/1 source=claude\n{{\"hook_event_name\":\"{name}\",\"session_id\":\"main\"}}"
+            );
+            let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(1)).unwrap();
+            state.agent_activity.apply_hook(&event);
+            assert_eq!(task_state(&state), expected, "{name}");
+        }
     }
 }
 

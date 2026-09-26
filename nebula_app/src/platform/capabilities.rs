@@ -15,11 +15,13 @@ pub struct Capabilities {
     pub hide_window_on_close: bool,
     /// 系统托盘图标（`crate::tray`）。
     pub system_tray: bool,
+    /// Manage the per-user login startup entry.
+    pub launch_at_login: bool,
     /// 系统通知后端已实现；实际投递仍受系统通知权限控制。
     pub system_notifications: bool,
     /// 系统提示音（`platform::beep`）。
     pub system_bell: bool,
-    /// 下载并静默运行安装包完成更新；其余平台只能打开 Releases 页。
+    /// Verified Windows installer or macOS bundle replacement is implemented.
     pub self_update_install: bool,
     /// 自动往 Claude / Codex 配置里写入 hook 与 skill（`crate::ai_hook`）。
     pub ai_hook_server: bool,
@@ -39,6 +41,7 @@ pub const CAPABILITIES: Capabilities = {
         Capabilities {
             hide_window_on_close: true,
             system_tray: true,
+            launch_at_login: true,
             system_notifications: true,
             system_bell: true,
             self_update_install: true,
@@ -54,9 +57,10 @@ pub const CAPABILITIES: Capabilities = {
         Capabilities {
             hide_window_on_close: false,
             system_tray: false,
+            launch_at_login: false,
             system_notifications: true,
             system_bell: false,
-            self_update_install: false,
+            self_update_install: cfg!(target_os = "macos"),
             ai_hook_server: false,
             quick_terminal_hotkey: false,
             system_font_enumeration: true,
@@ -75,6 +79,7 @@ mod tests {
         let all = [
             CAPABILITIES.hide_window_on_close,
             CAPABILITIES.system_tray,
+            CAPABILITIES.launch_at_login,
             CAPABILITIES.system_notifications,
             CAPABILITIES.system_bell,
             CAPABILITIES.self_update_install,
@@ -93,7 +98,7 @@ mod tests {
             assert!(!CAPABILITIES.hide_window_on_close);
             assert!(!CAPABILITIES.system_tray);
             assert!(!CAPABILITIES.system_bell);
-            assert!(!CAPABILITIES.self_update_install);
+            assert_eq!(CAPABILITIES.self_update_install, cfg!(target_os = "macos"));
             assert!(!CAPABILITIES.ai_hook_server);
             assert!(!CAPABILITIES.quick_terminal_hotkey);
             assert!(!CAPABILITIES.shell_context_menu);

@@ -1,6 +1,38 @@
-if [[ -r $HOME/.bashrc ]]; then
+# Integration is per shell process. Re-sourcing must not repeat user startup or
+# duplicate PS0/PROMPT_COMMAND entries. A child shell has a different BASHPID.
+if [[ ${__pebrel_integration_pid:-} == ${BASHPID:-$$} ]]; then
+    return
+fi
+__pebrel_integration_pid=${BASHPID:-$$}
+
+if [[ ${PEBREL_REMOTE_LOGIN:-0} == 1 ]]; then
+    # Startup source observation: Copyright 2026 l0ng-ai, Apache-2.0.
+    # See THIRD-PARTY-NOTICES; Pebrel supplies the lifecycle/prompt integration.
+    unset PEBREL_REMOTE_LOGIN
+    # --rcfile is ignored by bash -l. Replay login startup, observing whether
+    # it already sourced .bashrc. This is an interactive rcfile shell; Bash's
+    # read-only login_shell flag cannot be enabled by shopt.
+    __pebrel_rc_seen=0
+    source() { case ${1-} in */.bashrc|.bashrc) __pebrel_rc_seen=1;; esac; builtin source "$@"; }
+    .() { case ${1-} in */.bashrc|.bashrc) __pebrel_rc_seen=1;; esac; builtin . "$@"; }
+    if [[ -r /etc/profile ]]; then source /etc/profile; fi
+    for __pebrel_profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+        if [[ -r $__pebrel_profile ]]; then source "$__pebrel_profile"; break; fi
+    done
+    unset -f source .
+    if [[ $__pebrel_rc_seen == 0 && -r $HOME/.bashrc ]]; then source "$HOME/.bashrc"; fi
+    unset __pebrel_rc_seen __pebrel_profile
+elif [[ -r $HOME/.bashrc ]]; then
     source "$HOME/.bashrc"
 fi
+
+# Without a writable prompt hook, PS0 alone would start commands that can never
+# emit their completion. Leave this shell to the non-integrated fallback.
+if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) =~ ^declare\ -[^[:space:]]*r ]]; then
+    return
+fi
+
+__pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}bash:${HOSTNAME:-localhost}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n')
 
 _nebula_cwd() {
     local LC_ALL=C cwd_value=$PWD encoded='' character ordinal index
@@ -15,7 +47,7 @@ _nebula_cwd() {
 }
 
 _nebula_preexec() {
-    if [[ ${_nebula_at_prompt:-0} == 1 && $BASH_COMMAND != _nebula_capture_status* ]]; then
+    if [[ ${_nebula_at_prompt:-0} == 1 && $BASH_COMMAND != __pebrel_prompt_status=* ]]; then
         _nebula_at_prompt=0
         _nebula_command_running=1
         printf '\e]133;C\a'
@@ -23,7 +55,7 @@ _nebula_preexec() {
 }
 
 _nebula_capture_status() {
-    _nebula_last_status=$?
+    _nebula_last_status=${1:-$?}
     if [[ ${_nebula_native_preexec:-0} == 1 ]]; then
         _nebula_command_running=${_nebula_at_prompt:-0}
     fi
@@ -32,6 +64,7 @@ _nebula_capture_status() {
 }
 
 _nebula_precmd() {
+    printf '\e]1337;SetUserVar=pebrel_shell=%s\a' "$__pebrel_shell_token"
     if [[ ${_nebula_command_running:-0} == 1 ]]; then
         printf '\e]133;D;%s\a' "$_nebula_last_status"
     fi
@@ -48,8 +81,11 @@ if ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4)));
 elif [[ -z $(trap -p DEBUG) ]]; then
     trap '_nebula_preexec' DEBUG
 fi
-if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
-    PROMPT_COMMAND=(_nebula_capture_status "${PROMPT_COMMAND[@]}" _nebula_precmd)
+__pebrel_capture='__pebrel_prompt_status=$?; if declare -F _nebula_capture_status >/dev/null 2>&1; then _nebula_capture_status "$__pebrel_prompt_status"; fi'
+__pebrel_prompt='if declare -F _nebula_precmd >/dev/null 2>&1; then _nebula_precmd; fi'
+if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) =~ ^declare\ -[^[:space:]]*a ]]; then
+    PROMPT_COMMAND=("$__pebrel_capture" "${PROMPT_COMMAND[@]}" "$__pebrel_prompt")
 else
-    PROMPT_COMMAND="_nebula_capture_status;${PROMPT_COMMAND:+$PROMPT_COMMAND;}_nebula_precmd"
+    PROMPT_COMMAND="$__pebrel_capture"$'\n'"${PROMPT_COMMAND-}"$'\n'"$__pebrel_prompt"
 fi
+unset __pebrel_capture __pebrel_prompt

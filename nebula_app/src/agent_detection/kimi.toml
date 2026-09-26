@@ -2,44 +2,81 @@
 id = "kimi"
 aliases = ["kimi-code"]
 
-[[rules]]
-id = "current_approval_panel"
-state = "blocked"
-priority = 400
-region = "whole_recent"
-contains = ["↵ confirm", " choose"]
-any = [
-  { contains = ["run this command?"] },
-  { contains = ["write this file?"] },
-  { contains = ["apply these edits?"] },
-  { contains = ["stop this task?"] },
-  { contains = ["ready to build with this plan?"] },
-]
-all = [{ any = [{ contains = ["approve"] }, { contains = ["reject"] }, { contains = ["revise"] }] }]
+# kimi 0.43.1 新会话欢迎框。2026-09-17 取证时框顶已滚出 30 行抓取窗口
+# (tmp/pane11.json 只留下框尾 "Version: 0.43.1 / MCP: 1 connected" 与框下的
+# Web UI 推广行);「Welcome to Kimi Code!」「Send /help for help information.」
+# 两条顶行文字已在本机 kimi.exe 0.43.1 二进制内直接核验。两条 gate 各自品牌
+# 独有,任意一条命中即可认定身份。
+[[identity]]
+contains = ["welcome to kimi code!"]
 
-[[rules]]
-id = "question_panel"
-state = "blocked"
-priority = 390
-region = "whole_recent"
-contains = ["↑↓ select", "esc cancel"]
-line_regex = ['^\s*question\s*$', '^\s*\? ']
-any = [
-  { contains = ["↵ choose"] },
-  { contains = ["↵ toggle"] },
-  { contains = ["↵ save"] },
-]
+[[identity]]
+contains = ["try kimi code web ui"]
 
+# 真实审批面板(2026-09-17,kimi 0.43.1,pebrel 1.8.1 pane 实屏 capture,
+# tmp/pane11-blocked.json):面板取代输入框固定在底部,上下各一条 ─ 横线;问句
+# 行是大写 R 的「▶ Run this command?」,选项「▶ 1. Approve once /
+# 2. Approve for this session / 3. Reject / 4. Reject with feedback」,底行
+# 「↑/↓ select · 1/2/3/4 choose · ↵ confirm」。旧规则是按想象中的小写
+# run this command?、无斜杠的 ↑↓ select 和 0.43.1 根本不存在的 esc cancel
+# 写的:question_panel 从未命中;current_approval_panel 仅靠 contains 不区分
+# 大小写侥幸碰到面板,400/390 的优先级又低于 shared 800,违反 _shared.toml
+# 的分层约定。line_regex 大小写敏感,正好把大写 R 的问句行钉成整行证据。
 [[rules]]
-id = "background_agent_status_working"
+id = "approval_panel_blocked"
+state = "blocked"
+priority = 900
+region = "bottom_non_empty_lines(16)"
+line_regex = ['^\s*▶\s*Run this command\?\s*$', '^\s*▶?\s*\d\.\s+(Approve|Reject)']
+contains = ["↑/↓ select", "↵ confirm"]
+
+# 兜底:面板底行本身。「↑/↓ select · 1/2/3/4 choose · ↵ confirm」只随审批
+# 面板出现,批准/拒绝后整面板被重绘消失(tmp/pane11-x3.json、x4.json 均无
+# 余痕)。问句措辞不同的审批变体没有 capture 证据,不逐项枚举,由这条接住。
+[[rules]]
+id = "approval_footer_blocked"
+state = "blocked"
+priority = 700
+region = "bottom_non_empty_lines(6)"
+contains = ["↑/↓ select", "1/2/3/4 choose", "↵ confirm"]
+
+# working 的主信号:输入框正上方的月相 spinner 行「🌔 · Tip: …」
+# (U+1F311–U+1F318 八月相 + U+00B7 中间点;tmp/pane11-w2–w8 逐帧 capture
+# 可见月相轮转,Tip 本文不固定,只钉前缀)。回合一结束该行被重绘消失,不会
+# 留进滚屏,无需 not 段。w1 在回合内却没抓到该行,属快照时差,由状态机的
+# 迟滞吸收,不是规则能消除的。
+[[rules]]
+id = "moon_spinner_working"
 state = "working"
 priority = 120
-region = "bottom_non_empty_lines(3)"
-line_regex = ['(?i)\bkimi[-\w.]*\s+thinking\b.*\[[1-9][0-9]*\s+agents?\s+running\]']
+region = "bottom_non_empty_lines(8)"
+line_regex = ['^\s*[\u{1F311}-\u{1F318}]\s*· ']
 
+# 次级 working 信号:「⠙ thinking…」盲文点阵 + U+2026 省略号,下面随流式
+# 思考预览(tmp/pane11-x5.json,回合进行中)。旧规则写 thinking\.\.\. 三个
+# ASCII 点,从未命中过 0.43.1 的真实字形;region 又是 whole_recent——思考
+# 预览是回合内内容,回合结束后被最终回答替换、只留在滚屏高处
+# (tmp/pane11.json),whole_recent 会被这种陈旧行拖成假 Working,所以必须
+# 锚定底部。思考文本任意长时该行会超出窗口,那时由月相规则作主。
 [[rules]]
-id = "braille_spinner_working"
+id = "braille_thinking_working"
 state = "working"
 priority = 90
-region = "whole_recent"
-line_regex = ['(?i)^\s*[\u2800-\u28FF]+\s*(thinking\.\.\.|working\.\.\.|using )']
+region = "bottom_non_empty_lines(8)"
+line_regex = ['^\s*[\u2800-\u28FF]+\s*thinking…']
+
+# idle:输入框(╭─╮ / │ > / ╰─╯)与状态行同在场。状态行「K3 thinking: high」
+# 是模型名 + 思考档位,「context: N%」是用量条,working / blocked 时同样在,
+# 不能单独作证;旧的 background_agent_status_working 想啃状态行,但 0.43.1
+# 的状态行既没有 "kimi" 字样也没有 "[N agents running]" 后缀(全部 capture
+# 一致),该规则从未命中,本次按证据删除。输入框在回合进行中同样可见,所以
+# idle 优先级(50)必须低于 working(120/90),再加月相 not 段双保险;│ > 与
+# ╰─╯ 两个行锚同时在场,挡住正文里被引用的 > 行。
+[[rules]]
+id = "prompt_idle"
+state = "idle"
+priority = 50
+region = "bottom_non_empty_lines(6)"
+line_regex = ['^\s*╰─+╯\s*$', '^\s*│\s*>']
+contains = ["context:"]
+not = [{ line_regex = ['^\s*[\u{1F311}-\u{1F318}]\s*· '] }]

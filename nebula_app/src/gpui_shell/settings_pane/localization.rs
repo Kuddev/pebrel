@@ -7,6 +7,15 @@ pub(super) fn localized_select_labels(
     values: &[&'static str],
     language: crate::display::UiLanguage,
 ) -> Vec<SharedString> {
+    if key == "scrollback_lines" {
+        return values
+            .iter()
+            .map(|value| {
+                let number = value.parse::<usize>().expect("validated scrollback choice");
+                format!("{},000", number / 1_000).into()
+            })
+            .collect();
+    }
     let labels: Vec<&'static str> = match key {
         "language" => nebula_settings::LanguagePref::ALL
             .iter()
@@ -21,6 +30,14 @@ pub(super) fn localized_select_labels(
         "quick_terminal_mode" => vec![
             language.text(crate::i18n::Message::SettingsQuickTerminalDedicated),
             language.text(crate::i18n::Message::SettingsQuickTerminalExisting),
+        ],
+        "notification_duration" => vec![
+            language.text(crate::i18n::Message::SettingsNotificationsDurationDefault),
+            language.text(crate::i18n::Message::SettingsNotificationsDurationFive),
+            language.text(crate::i18n::Message::SettingsNotificationsDurationTen),
+            language.text(crate::i18n::Message::SettingsNotificationsDurationThirty),
+            language.text(crate::i18n::Message::SettingsNotificationsDurationNinety),
+            language.text(crate::i18n::Message::SettingsNotificationsDurationPersistent),
         ],
         "cursor_shape" => vec![
             language.pick("条形（│）", "Bar (│)"),
@@ -49,6 +66,11 @@ pub(super) fn localized_select_labels(
             language.pick("自动检测", "Auto detect"),
             language.pick("仅 Git", "Git only"),
             language.pick("仅 SVN", "SVN only"),
+        ],
+        "ligatures" => vec![
+            language.text(crate::i18n::Message::SettingsFontLigaturesOn),
+            language.text(crate::i18n::Message::SettingsFontLigaturesOff),
+            language.text(crate::i18n::Message::SettingsFontLigaturesTheme),
         ],
         "cell_width_mode" => {
             vec![language.pick("紧凑", "Compact"), language.pick("宽松", "Relaxed")]
@@ -133,7 +155,6 @@ pub(super) fn localized_input_placeholder(
             language.pick("备份密码（至少 8 位）", "Backup password (at least 8 characters)")
         },
         "backup_secret" => language.tr("settings.input.backup_secret"),
-        "keymap_search" => language.pick("搜索动作或按键…", "Search actions or keys..."),
         _ => "",
     }
 }

@@ -132,6 +132,51 @@ class ShellIntegrationTests(unittest.TestCase):
         self.assertIn(b"FIRST_PROMPT", session.output)
         self.assertIn(b"SECOND_PROMPT", session.output)
 
+    def test_bash_preserves_exported_array_and_failure_status(self) -> None:
+        session = self.start("bash", "declare -ax PROMPT_COMMAND=('printf ARRAY_STATUS=%s_END\\n \"$?\"')\n")
+        output = session.command("(exit 7)", b"\x1b]133;D;7\x07")
+        self.assertIn(b"ARRAY_STATUS=7_END", output)
+
+    def test_bash_repeat_source_does_not_duplicate_startup_or_prompt_hooks(self) -> None:
+        session = self.start("bash", "(( user_rc_count += 1 ))\nPROMPT_COMMAND=('printf USER_PROMPT')\n")
+        session.command(f"source '{SCRIPTS / 'bashrc'}'", b"\x1b]133;D;0\x07")
+        output = session.command('printf "RC_COUNT=%s_END\\n" "$user_rc_count"', b"\x1b]133;D;0\x07")
+        self.assertIn(b"RC_COUNT=1_END", output)
+        self.assertEqual(output.count(b"\x1b]133;D;0\x07"), 1)
+
+    def test_bash_inherited_guard_does_not_call_missing_functions(self) -> None:
+        session = self.start("bash", "export PROMPT_COMMAND='printf INHERITED_USER_PROMPT'\n")
+        output = session.command("bash --noprofile --norc -i", b"INHERITED_USER_PROMPT")
+        output += session.command("(exit 7)", b"INHERITED_USER_PROMPT")
+        self.assertNotIn(b"command not found", output)
+
+    def test_bash_remote_login_sources_profile_and_rc_once(self) -> None:
+        if not shutil.which("bash") or sys.platform == "darwin":
+            self.skipTest("requires modern Bash")
+        for forwards in [False, True]:
+            with self.subTest(profile_forwards_to_rc=forwards):
+                (self.home / ".bash_profile").write_text(
+                    "(( profile_count += 1 ))\n" + ('source "$HOME/.bashrc"\n' if forwards else ""), encoding="utf-8")
+                (self.home / ".bashrc").write_text("(( user_rc_count += 1 ))\n", encoding="utf-8")
+                session = ShellSession(shutil.which("bash"), self.home,
+                                       ["--rcfile", str(SCRIPTS / "bashrc"), "-i"],
+                                       {"PEBREL_REMOTE_LOGIN": "1"})
+                self.addCleanup(session.close)
+                session.wait(b"\x1b]133;A\x07")
+                output = session.command('printf "STARTUP=%s:%s_END\\n" "$profile_count" "$user_rc_count"', b"\x1b]133;D;0\x07")
+                self.assertIn(b"STARTUP=1:1_END", output)
+
+    def test_readonly_prompt_does_not_emit_unmatched_command_start(self) -> None:
+        if not shutil.which("bash"):
+            self.skipTest("requires Bash")
+        (self.home / ".bashrc").write_text("readonly PROMPT_COMMAND='printf READONLY_PROMPT'\n", encoding="utf-8")
+        session = ShellSession(shutil.which("bash"), self.home,
+                               ["--noprofile", "--rcfile", str(SCRIPTS / "bashrc"), "-i"], {})
+        self.addCleanup(session.close)
+        session.wait(b"READONLY_PROMPT")
+        output = session.command("true", b"READONLY_PROMPT")
+        self.assertNotIn(b"\x1b]133;C", output)
+
     def test_zsh_sources_login_files_and_restores_zdotdir(self) -> None:
         session = self.start("zsh")
         session.command('printf "PROFILE=%s ZDOTDIR=%s\\n" "$NEBULA_PROFILE_TEST" "${ZDOTDIR-unset}"',

@@ -230,6 +230,45 @@ fn paste_accepts_layout_whitespace_but_not_terminal_control_sequences() {
     assert!(matches!(agent, RuntimeCommand::AgentPaste { generation: Some(9), submit: true, .. }));
 }
 
+/// `tab.new` / `window.create` 的 `shell` 是可选字段。
+///
+/// 老客户端（升级前的第二份进程、`pebrel ctl tab new`）不带它，必须逐字保持
+/// 原行为；带了它的新客户端由驻留实例按 id 解析。注意 `WindowParams` 是
+/// `deny_unknown_fields`：**反向**不兼容（新客户端 → 旧驻留实例）会得到一个
+/// `invalid_params`，调用方会退回冷启动——这是升级后要重启 Pebrel 的原因。
+#[test]
+fn tab_and_window_requests_take_an_optional_shell() {
+    let tab = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "tab.new",
+        json!({ "cwd": "D:\\work", "shell": "wsl:Ubuntu" }),
+    ))
+    .expect("tab.new with shell parses");
+    assert!(matches!(
+        tab,
+        RuntimeCommand::NewTab { shell_id: Some(ref id), .. } if id == "wsl:Ubuntu"
+    ));
+
+    let plain = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "tab.new",
+        json!({ "cwd": "D:\\work" }),
+    ))
+    .expect("tab.new without shell still parses");
+    assert!(matches!(plain, RuntimeCommand::NewTab { shell_id: None, .. }));
+
+    let window = RuntimeCommand::from_request(&ApiRequest::new(
+        "token".into(),
+        "window.create",
+        json!({ "shell": "wsl:Ubuntu" }),
+    ))
+    .expect("window.create with shell parses");
+    assert!(matches!(
+        window,
+        RuntimeCommand::NewWindow { shell_id: Some(ref id), .. } if id == "wsl:Ubuntu"
+    ));
+}
+
 #[test]
 fn layout_mutations_parse_and_enforce_their_bounds() {
     let parse = |method: &str, params: Value| {
@@ -437,11 +476,15 @@ fn agent_fork_rolls_back_when_ui_launch_fails() {
     assert!(!response.ok);
     assert_eq!(response.error.unwrap().code, "action_failed");
     assert!(!target.exists());
+    let mut branch_query = std::process::Command::new("git");
+    branch_query.arg("-C").arg(repository.path()).args([
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/heads/nebula/failed-agent",
+    ]);
     assert!(
-        !std::process::Command::new("git")
-            .arg("-C")
-            .arg(repository.path())
-            .args(["show-ref", "--verify", "--quiet", "refs/heads/nebula/failed-agent"])
+        !crate::platform::process::hidden_command(&mut branch_query)
             .status()
             .expect("query branch")
             .success()
@@ -489,12 +532,11 @@ fn managed_agent_keeps_worktree_provenance() {
 fn test_git_repository() -> tempfile::TempDir {
     let directory = tempfile::tempdir().expect("create repository directory");
     let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(directory.path())
-            .args(args)
-            .output()
-            .expect("run git")
+        // 测试二进制没有控制台，不压掉就会在用户屏幕上弹窗口（见
+        // `platform::process`）。
+        let mut command = std::process::Command::new("git");
+        command.arg("-C").arg(directory.path()).args(args);
+        crate::platform::process::hidden_command(&mut command).output().expect("run git")
     };
     assert!(git(&["init", "--initial-branch=main"]).status.success());
     std::fs::write(directory.path().join("tracked.txt"), "tracked").expect("write tracked file");

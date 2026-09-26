@@ -36,7 +36,7 @@
   "cases.split.status": "passed",
   "cases.ssh_loop.reason": "runtime_api_has_no_ssh_open_method",
   "cases.ssh_loop.status": "skipped",
-  "platform": "windows-x86_64",
+  "platform": "windows",
   "schema_version": 1,
   "summary.failed": 0,
   "summary.passed": 9,

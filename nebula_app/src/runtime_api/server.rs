@@ -8,6 +8,29 @@ pub(super) struct Endpoint {
     pub(super) token: String,
 }
 
+pub(crate) const ENDPOINT_ENV: &str = "PEBREL_RUNTIME_ENDPOINT";
+static CHILD_ENDPOINT: Mutex<Option<Endpoint>> = Mutex::new(None);
+
+/// Private instances publish discovery only to their own local PTY children.
+pub(crate) fn apply_child_endpoint(env: &mut std::collections::HashMap<String, String>) {
+    env.retain(|key, _| !key.eq_ignore_ascii_case(ENDPOINT_ENV));
+    if let Some(endpoint) =
+        CHILD_ENDPOINT.lock().unwrap_or_else(|error| error.into_inner()).as_ref()
+    {
+        env.insert(ENDPOINT_ENV.to_owned(), format!("{} {}", endpoint.port, endpoint.token));
+    }
+}
+
+fn parse_endpoint(data: &str) -> Option<Endpoint> {
+    let mut parts = data.split_whitespace();
+    let port = parts.next()?.parse().ok()?;
+    let token = parts.next()?;
+    if port == 0 || token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(Endpoint { port, token: token.to_owned() })
+}
+
 fn port_file() -> PathBuf {
     crate::display::nebula_data_dir().join("runtime.port")
 }
@@ -17,13 +40,22 @@ fn legacy_port_file() -> PathBuf {
 }
 
 pub(super) fn read_endpoint() -> Option<Endpoint> {
+    // A hosted instance owns its endpoint even when launched from another
+    // Pebrel terminal. Child CLI processes have no server and use the env below.
+    if let Some(endpoint) = CHILD_ENDPOINT.lock().unwrap_or_else(|error| error.into_inner()).clone()
+    {
+        return Some(endpoint);
+    }
+    if let Some(value) = std::env::var_os(ENDPOINT_ENV) {
+        // An invalid explicit endpoint must not silently select another instance.
+        return value.to_str().and_then(parse_endpoint);
+    }
     read_endpoint_from(port_file())
 }
 
 fn read_endpoint_from(path: PathBuf) -> Option<Endpoint> {
     let data = std::fs::read_to_string(path).ok()?;
-    let mut parts = data.split_whitespace();
-    Some(Endpoint { port: parts.next()?.parse().ok()?, token: parts.next()?.to_owned() })
+    parse_endpoint(&data)
 }
 
 pub(super) fn endpoint_addr(endpoint: &Endpoint) -> SocketAddr {
@@ -45,8 +77,8 @@ fn fresh_token() -> String {
 }
 
 /// 普通二次启动并入驻留实例：先恢复/聚焦窗口，再新建一个默认 shell 标签页。
-pub fn try_open_default_tab_existing() -> bool {
-    try_open_tab_existing(None)
+pub fn try_open_default_tab_existing(shell: Option<&str>) -> bool {
+    try_open_tab_existing(None, shell)
 }
 
 /// 后台任务把一行文本作为输入敲进某个 pane（不回车）。
@@ -64,34 +96,59 @@ pub fn dispatch_prompt(proxy: &EventLoopProxy<Event>, pane_id: u64, text: String
 }
 
 /// Explorer 右键或带 `--working-directory` 的启动并入驻留实例。
-pub fn try_open_directory_existing(dir: &std::path::Path) -> bool {
-    try_open_tab_existing(Some(dir))
+///
+/// `shell` 是命令行 `--shell <id>` 的原文（如 `wsl:Ubuntu`）；驻留实例按同一个
+/// id 解析启动身份。缺省 = 那边的默认 shell。
+pub fn try_open_directory_existing(dir: &std::path::Path, shell: Option<&str>) -> bool {
+    try_open_tab_existing(Some(dir), shell)
 }
 
 /// 按“创建新窗口”策略把一次普通启动交给驻留进程。
 ///
 /// 仍先发送 ATTACH，保证隐藏驻留进程被唤醒；真正的窗口由同一 GPUI App
 /// 创建，避免第二个进程争抢 runtime.port 和托盘所有权。
-pub fn try_open_window_existing(dir: Option<&std::path::Path>) -> bool {
+pub fn try_open_window_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
     if legacy_request("ATTACH").is_none() {
         return false;
     }
-    let params = dir.map_or_else(|| json!({}), |dir| json!({ "cwd": dir }));
-    cli::request_once("window.create", params, IO_TIMEOUT)
+    cli::request_once("window.create", handover_params(dir, shell), IO_TIMEOUT)
         .map(|response| response.ok)
         .unwrap_or(false)
 }
 
-fn try_open_tab_existing(dir: Option<&std::path::Path>) -> bool {
+/// 交接请求的参数：目录与 shell 都可缺省。
+///
+/// 只放**有值**的键——第二份进程与驻留实例可能不是同一个构建，缺省键让老
+/// 那边按 `serde(default)` 走原行为；空白 shell 也当作没给。
+fn handover_params(dir: Option<&std::path::Path>, shell: Option<&str>) -> serde_json::Value {
+    let mut params = serde_json::Map::new();
+    if let Some(dir) = dir {
+        params.insert("cwd".to_owned(), serde_json::json!(dir));
+    }
+    if let Some(shell) = shell.map(str::trim).filter(|shell| !shell.is_empty()) {
+        params.insert("shell".to_owned(), serde_json::json!(shell));
+    }
+    serde_json::Value::Object(params)
+}
+
+fn try_open_tab_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
     if legacy_request("ATTACH").is_none() {
         return false;
     }
     // ATTACH 与 tab.new 落到同一事件队列，窗口先恢复，新标签随后创建。
-    let params = dir.map_or_else(|| json!({}), |dir| json!({ "cwd": dir }));
-    cli::request_once("tab.new", params, IO_TIMEOUT).map(|response| response.ok).unwrap_or(false)
+    cli::request_once("tab.new", handover_params(dir, shell), IO_TIMEOUT)
+        .map(|response| response.ok)
+        .unwrap_or(false)
 }
 
 fn legacy_request(verb: &str) -> Option<()> {
+    let local = CHILD_ENDPOINT.lock().unwrap_or_else(|error| error.into_inner()).clone();
+    if let Some(endpoint) = local {
+        return legacy_request_to(verb, &endpoint);
+    }
+    if std::env::var_os(ENDPOINT_ENV).is_some() {
+        return read_endpoint().and_then(|endpoint| legacy_request_to(verb, &endpoint));
+    }
     read_endpoint()
         .and_then(|endpoint| legacy_request_to(verb, &endpoint))
         // 已运行的 pre-v1 版本只发布 mux.port；升级期间仍允许普通启动交接。
@@ -114,8 +171,8 @@ fn legacy_request_to(verb: &str, endpoint: &Endpoint) -> Option<()> {
 /// Resident versioned runtime API server.
 pub struct RuntimeServer {
     endpoint: Endpoint,
-    port_file: PathBuf,
-    _owner_lock: crate::atomic_file::LifetimeFileLock,
+    port_file: Option<PathBuf>,
+    _owner_lock: Option<crate::atomic_file::LifetimeFileLock>,
 }
 
 impl RuntimeServer {
@@ -133,19 +190,33 @@ impl RuntimeServer {
     }
 
     fn spawn_with_sink(sink: EventSink, hub: RuntimeHub) -> Option<Self> {
-        let path = port_file();
-        let owner_lock = match crate::atomic_file::try_lifetime_lock(&path) {
-            Ok(Some(lock)) => lock,
-            Ok(None) => {
+        Self::spawn_at(
+            sink,
+            hub,
+            (!crate::platform::elevation::requires_isolation()).then(port_file),
+        )
+    }
+
+    fn spawn_at(sink: EventSink, hub: RuntimeHub, path: Option<PathBuf>) -> Option<Self> {
+        let owner_lock = match path.as_ref().map(|path| crate::atomic_file::try_lifetime_lock(path))
+        {
+            Some(Ok(Some(lock))) => Some(lock),
+            None => None,
+            Some(Ok(None)) => {
                 info!("Runtime API owner is starting or already running; staying client-only");
                 return None;
             },
-            Err(error) => {
+            Some(Err(error)) => {
                 warn!("Runtime API: cannot lock {path:?}: {error}; control plane disabled");
                 return None;
             },
         };
-        if read_endpoint().and_then(|endpoint| legacy_request_to("PING", &endpoint)).is_some() {
+        if path
+            .as_ref()
+            .and_then(|path| read_endpoint_from(path.clone()))
+            .and_then(|endpoint| legacy_request_to("PING", &endpoint))
+            .is_some()
+        {
             info!("Runtime API server already running; this instance stays client-only");
             return None;
         }
@@ -153,7 +224,10 @@ impl RuntimeServer {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok()?;
         let endpoint = Endpoint { port: listener.local_addr().ok()?.port(), token: fresh_token() };
         let contents = format!("{} {} {}\n", endpoint.port, endpoint.token, PROTOCOL_VERSION);
-        if crate::atomic_file::write(&path, contents.as_bytes()).is_err() {
+        if path
+            .as_ref()
+            .is_some_and(|path| crate::atomic_file::write(path, contents.as_bytes()).is_err())
+        {
             warn!("Runtime API: cannot write {path:?}; control plane disabled");
             return None;
         }
@@ -163,15 +237,74 @@ impl RuntimeServer {
             .name("nebula-runtime-api".into())
             .spawn(move || serve(listener, server_token, sink, hub))
             .is_ok();
-        spawned.then(|| Self { endpoint, port_file: path, _owner_lock: owner_lock })
+        if spawned {
+            *CHILD_ENDPOINT.lock().unwrap_or_else(|error| error.into_inner()) =
+                Some(endpoint.clone());
+            Some(Self { endpoint, port_file: path, _owner_lock: owner_lock })
+        } else {
+            if let Some(path) = path {
+                let _ = std::fs::remove_file(path);
+            }
+            None
+        }
     }
 }
 
 impl Drop for RuntimeServer {
     fn drop(&mut self) {
         // Do not delete another process's newer discovery record.
-        if read_endpoint().as_ref() == Some(&self.endpoint) {
-            let _ = std::fs::remove_file(&self.port_file);
+        if let Some(path) = self.port_file.as_ref()
+            && read_endpoint_from(path.clone()).as_ref() == Some(&self.endpoint)
+        {
+            let _ = std::fs::remove_file(path);
         }
+        let mut child = CHILD_ENDPOINT.lock().unwrap_or_else(|error| error.into_inner());
+        if child.as_ref() == Some(&self.endpoint) {
+            *child = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_accepts_existing_records_and_rejects_invalid_endpoints() {
+        let token = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            parse_endpoint(&format!("12345 {token} 1\n")),
+            Some(Endpoint { port: 12345, token: token.into() })
+        );
+        for invalid in [
+            "",
+            "0 0123456789abcdef0123456789abcdef",
+            "65536 token",
+            "12 invalid",
+            "12 0123456789abcdef0123456789abcdeg",
+        ] {
+            assert!(parse_endpoint(invalid).is_none());
+        }
+    }
+
+    #[test]
+    fn private_server_keeps_discovery_off_disk_and_supplies_its_children() {
+        let server =
+            RuntimeServer::spawn_at(EventSink::Callback(Arc::new(|_| {})), RuntimeHub::new(), None)
+                .unwrap();
+        assert!(server.port_file.is_none());
+        assert!(server._owner_lock.is_none());
+        assert_eq!(read_endpoint().as_ref(), Some(&server.endpoint));
+        assert!(legacy_request_to("PING", &server.endpoint).is_some());
+        let mut env =
+            std::collections::HashMap::from([(ENDPOINT_ENV.to_owned(), "old endpoint".into())]);
+        apply_child_endpoint(&mut env);
+        assert_eq!(parse_endpoint(&env[ENDPOINT_ENV]).as_ref(), Some(&server.endpoint));
+        let mut wrong = server.endpoint.clone();
+        wrong.token = "00000000000000000000000000000000".into();
+        assert!(legacy_request_to("PING", &wrong).is_none());
+        drop(server);
+        apply_child_endpoint(&mut env);
+        assert!(!env.contains_key(ENDPOINT_ENV));
     }
 }

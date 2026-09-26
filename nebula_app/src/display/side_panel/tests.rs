@@ -284,7 +284,10 @@ mod tests {
         panel.open = true;
         panel.root = Some(root.clone());
         panel.followed_wsl = Some(located.clone());
-        panel.git = Some(GitInfo { branch: "keep-until-ready".to_owned(), ..Default::default() });
+        panel.git = Some(std::sync::Arc::new(GitInfo {
+            branch: "keep-until-ready".to_owned(),
+            ..Default::default()
+        }));
 
         *panel.snapshot_slot.lock().unwrap() = Some(PanelSnapshot {
             root: root.clone(),
@@ -548,7 +551,7 @@ mod tests {
     fn git_hover_only_accepts_real_file_rows() {
         let mut panel = SidePanel::new();
         panel.view = PanelView::Git;
-        panel.git = Some(GitInfo {
+        panel.git = Some(std::sync::Arc::new(GitInfo {
             vcs: VcsKind::Git,
             branch: "main".into(),
             plus: 0,
@@ -560,7 +563,7 @@ mod tests {
             history: Vec::new(),
             repository_root: None,
             repository: None,
-        });
+        }));
 
         assert!(!panel.git_row_is_file(0), "未暂存标题");
         assert!(panel.git_row_is_file(1));
@@ -1002,4 +1005,47 @@ fn git_history_parser_keeps_commit_identity_parents_and_fields() {
     assert_eq!(first.timestamp, 1_700_000_000);
     assert_eq!(first.parent_hashes, ["1111111", "2222222"]);
     assert_eq!(commits[1].subject, "side work");
+}
+
+#[test]
+fn repeated_panel_close_and_reopen_reuses_cache_and_releases_visible_results() {
+    let fixture = tempfile::tempdir().unwrap();
+    std::fs::write(fixture.path().join("needle.txt"), b"").unwrap();
+    let mut panel = SidePanel::new();
+    panel.toggle(PanelView::Files);
+    panel.sync(Some(fixture.path().to_owned()));
+    panel.wait_snapshot();
+    panel.set_file_search_query("needle".to_owned());
+    for _ in 0..12 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while panel.file_search_pending() || panel.rows.is_empty() {
+            panel.harvest_file_search();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(panel.rows[0].name, "needle.txt");
+        assert_eq!(panel.file_index.scans(), 1);
+        assert!(panel.search_memory.is_some());
+        panel.toggle(PanelView::Files);
+        assert_eq!(panel.rows.capacity(), 0);
+        assert!(panel.search_memory.is_none());
+        assert!(panel.file_index.take_result().is_none());
+        panel.toggle(PanelView::Files);
+    }
+    panel.toggle(PanelView::Files);
+    panel.file_index.release_for_test();
+}
+
+#[test]
+fn wide_directory_selection_bounds_capacity_and_keeps_late_best_entries() {
+    let entries = (0..50_000).rev().map(|number| {
+        let name = format!("item-{number:05}-{}", "a".repeat(80));
+        (false, name.clone(), PathBuf::from(name))
+    });
+    let kept = SidePanel::ordered_entries(entries, MAX_PER_DIR);
+    assert_eq!(kept.len(), MAX_PER_DIR);
+    assert!(kept.first().unwrap().1.starts_with("item-00000-"));
+    let bytes = kept.capacity() * std::mem::size_of::<(bool, String, PathBuf)>()
+        + kept.iter().map(|row| row.1.capacity() + row.2.capacity()).sum::<usize>();
+    assert!(bytes <= 512 * 1024);
 }

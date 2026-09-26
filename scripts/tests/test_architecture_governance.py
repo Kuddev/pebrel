@@ -8,8 +8,37 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCUMENTS = (
     "CONTRIBUTING.md", "docs/project-constraints.md", "docs/architecture.md",
     "docs/architecture-decisions.md", "docs/engineering-evidence.md",
-    "docs/internationalization.md",
+    "docs/internationalization.md", "architecture/notes/AGENTS.md",
 )
+AGENT_GUIDES = (
+    "AGENTS.md", "nebula_app/AGENTS.md", "nebula_terminal/AGENTS.md",
+    "nebula_settings/AGENTS.md", "scripts/AGENTS.md", "packaging/AGENTS.md",
+    "docs/AGENTS.md", "docs/release-notes/AGENTS.md",
+)
+PUBLIC_GUIDES = DOCUMENTS + AGENT_GUIDES
+NOTES_ROOT = ROOT / "architecture/notes"
+NOTE_REQUIRED_SECTIONS = (
+    "Status", "Context", "Evidence", "Decision", "Rejected alternatives",
+    "Consequences", "Validation", "Supersedes", "Revisit when",
+)
+MAX_NOTE_LINES = 200
+
+
+def decision_note_errors(text):
+    errors = []
+    if not re.search(r"(?m)^# [^#\n]+$", text):
+        errors.append("missing one level-one title")
+    headings = {
+        match.group(1).strip().casefold()
+        for match in re.finditer(r"(?m)^##\s+(.+?)\s*$", text)
+    }
+    for section in NOTE_REQUIRED_SECTIONS:
+        if section.casefold() not in headings:
+            errors.append(f"missing section: {section}")
+    line_count = len(text.splitlines())
+    if line_count > MAX_NOTE_LINES:
+        errors.append(f"{line_count} lines exceeds {MAX_NOTE_LINES}")
+    return errors
 
 
 class GovernanceTests(unittest.TestCase):
@@ -30,10 +59,13 @@ class GovernanceTests(unittest.TestCase):
         self.assertEqual(self.ignored_paths(paths), set(ignored))
 
     def test_contributor_documents_exist_and_are_not_ignored(self):
-        for name in DOCUMENTS:
+        for name in PUBLIC_GUIDES:
             with self.subTest(name=name):
                 self.assertTrue((ROOT / name).is_file())
-        self.assertEqual(self.ignored_paths(DOCUMENTS), set(), "public contributor docs must not be ignored")
+        self.assertEqual(
+            self.ignored_paths(PUBLIC_GUIDES), set(),
+            "public contributor and agent guides must not be ignored",
+        )
 
     def test_private_investigations_remain_ignored(self):
         paths = (
@@ -72,7 +104,7 @@ class GovernanceTests(unittest.TestCase):
 
     def test_maintained_tests_dependencies_and_public_assets_stay_visible(self):
         paths = (
-            *DOCUMENTS, ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md",
+            *PUBLIC_GUIDES, ".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md",
             ".github/workflows/architecture.yml", "architecture/dependencies.toml",
             "architecture/file-budgets.txt", "scripts/check_architecture.py",
             "scripts/tests/test_architecture_governance.py", "scripts/tests/new_regression.py",
@@ -84,11 +116,12 @@ class GovernanceTests(unittest.TestCase):
             "third_party/winit-0.30.13/src/lib.rs", "docs/screenshots/SHOTLIST.md",
             "docs/screenshots/hero.png", "docs/release-notes/v1.5.0.md",
             "docs/skills/pebrel-runtime/SKILL.md",
+            "architecture/notes/nebula_terminal/input/2026-09-19-example.md",
         )
         self.assertEqual(self.ignored_paths(paths), set())
 
     def test_relative_document_links_resolve(self):
-        for name in DOCUMENTS:
+        for name in PUBLIC_GUIDES:
             document = ROOT / name
             text = document.read_text(encoding="utf-8")
             for link in re.findall(r"\]\(([^)]+)\)", text):
@@ -97,6 +130,47 @@ class GovernanceTests(unittest.TestCase):
                 target = link.split("#", 1)[0]
                 with self.subTest(document=name, target=target):
                     self.assertTrue((document.parent / target).exists())
+
+    def test_decision_note_contract_accepts_and_rejects_known_examples(self):
+        valid = "# Decision\n\n" + "\n\n".join(
+            f"## {section}\n\nRecorded." for section in NOTE_REQUIRED_SECTIONS
+        )
+        self.assertEqual(decision_note_errors(valid), [])
+
+        missing_alternative = valid.replace("## Rejected alternatives", "## Options")
+        self.assertIn(
+            "missing section: Rejected alternatives",
+            decision_note_errors(missing_alternative),
+        )
+
+        oversized = valid + "\n" + "\n".join("detail" for _ in range(MAX_NOTE_LINES))
+        self.assertTrue(
+            any("exceeds" in error for error in decision_note_errors(oversized)),
+            "an oversized note must fail",
+        )
+
+    def test_reviewed_decision_notes_are_scoped_and_complete(self):
+        notes = [
+            path for path in NOTES_ROOT.rglob("*.md")
+            if path.name != "AGENTS.md"
+        ]
+        self.assertTrue(notes, "the governance migration must include its decision note")
+        self.assertFalse(
+            any(path.name.casefold() == "index.md" for path in NOTES_ROOT.rglob("*.md")),
+            "decision notes must not use a global index",
+        )
+        for path in notes:
+            relative = path.relative_to(NOTES_ROOT)
+            with self.subTest(note=relative.as_posix()):
+                self.assertGreaterEqual(len(relative.parts), 2, "notes must follow an owner path")
+                self.assertRegex(
+                    path.name,
+                    r"^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md$",
+                )
+                self.assertEqual(
+                    decision_note_errors(path.read_text(encoding="utf-8")),
+                    [],
+                )
 
     def test_required_job_is_unfiltered_and_unprivileged(self):
         workflow = (ROOT / ".github/workflows/architecture.yml").read_text(encoding="utf-8")

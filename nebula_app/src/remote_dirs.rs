@@ -75,11 +75,15 @@ fn key(env: &SuggestEnv, dir: &str) -> String {
         SuggestEnv::Local => format!("local\u{0}{dir}"),
         SuggestEnv::Wsl { distro } => format!("wsl:{distro}\u{0}{dir}"),
         SuggestEnv::Ssh { destination } => format!("ssh:{destination}\u{0}{dir}"),
+        SuggestEnv::Shell { .. } => format!("unavailable\0{dir}"),
     }
 }
 
 /// 已缓存且未过期的条目。
 pub fn lookup(env: &SuggestEnv, dir: &str) -> Option<Vec<RemoteEntry>> {
+    if !env.can_query_remote_paths() {
+        return None;
+    }
     let cache = cache();
     let cached = cache.by_dir.get(&key(env, dir))?;
     (cached.fetched.elapsed() < TTL).then(|| cached.entries.clone())
@@ -87,7 +91,7 @@ pub fn lookup(env: &SuggestEnv, dir: &str) -> Option<Vec<RemoteEntry>> {
 
 /// 认领一次拉取。`false` = 已经有人在拉这个目录，调用方不要再起一个。
 pub fn begin_fetch(env: &SuggestEnv, dir: &str) -> bool {
-    cache().inflight.insert(key(env, dir))
+    env.can_query_remote_paths() && cache().inflight.insert(key(env, dir))
 }
 
 /// 拉取结束。`None` = 这次失败了——只解锁不落缓存，下次还会重试；落一个空

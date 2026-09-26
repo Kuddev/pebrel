@@ -14,6 +14,7 @@ use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, Options, Shell};
 
 mod blocking;
 mod child;
+mod cmd_prompt;
 mod conpty;
 mod environment;
 
@@ -318,7 +319,8 @@ fn nebula_find_bash() -> Option<String> {
 /// makes the integrated experience look like Nebula out of the box instead of
 /// a bare PowerShell. ANSI sequences are emitted to stdout and rendered by the
 /// terminal itself, so colors work regardless of the PowerShell version.
-const NEBULA_PROMPT_PS1: &str = r#"
+const NEBULA_PROMPT_PS1: &str = concat!(
+    r#"
 $global:NebE = [char]27
 $global:PSDefaultParameterValues['Get-Content:Encoding'] = 'utf8'
 $global:NebArrow = [char]0xE0B0
@@ -407,6 +409,12 @@ if (-not $global:NebulaPromptInstalled) {
     $global:NebulaPromptInstalled = $true
 }
 
+# A shell instance owns its completion context; children must get a new token.
+if (-not $global:PebrelShellToken) {
+    $global:PebrelShellToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(
+        "pwsh:$PID`:$([Guid]::NewGuid().ToString('N'))"))
+}
+
 function global:prompt {
     # Same principle as Oh My Posh: prompt rendering may execute external
     # commands, so preserve the previous command status. Errors inside the
@@ -415,6 +423,7 @@ function global:prompt {
     # eating every user-facing error, e.g. a failed `cd`.)
     $originalDollarQuestion = $global:?
     $originalLastExitCode = $global:LASTEXITCODE
+    [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_shell=$global:PebrelShellToken$([char]7)")
     $ErrorActionPreference = 'SilentlyContinue'
     $global:NebulaLastCommandSucceeded = $originalDollarQuestion
     $global:NebulaLastCommandExitCode = $originalLastExitCode
@@ -488,11 +497,8 @@ function global:prompt {
         if ($global:NebulaPromptCount -gt 1) { $leadingNewline = "`n" }
     }
 
-    # Segment colors come from the terminal's 256-color palette, slots
-    # 16..=23 (icon bg/fg, path bg/fg, branch bg/fg, time bg/fg), published
-    # per-theme by Nebula (theme.rs::apply_term_colors). Indexed colors mean a
-    # theme switch recolors every prompt already in scrollback — truecolor
-    # (the old scheme) is frozen the moment it prints. No theme file, no polling.
+    # 使用主题的 ANSI-16 索引，历史提示符仍随主题换色；不占用应用所需的
+    # xterm 扩展色槽。路径和时间用默认前景/背景，避免浅色主题的 ANSI 灰阶低对比。
 
     if ($userPrompt) {
         # 视觉全部来自用户提示符；Nebula 只补协议：133;A 标出提示符起点，标题
@@ -500,25 +506,25 @@ function global:prompt {
         $output = "$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$userPrompt"
     } elseif (-not (Get-NebulaBoolSetting 'powerline' $true)) {
         $branchText = if ($branch) { " ($branch)" } else { "" }
-        $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$e[38;5;19m$loc$branchText $e[35m$NebPromptArrow $reset"
+        $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$e[38;5;6m$loc$branchText $e[35m$NebPromptArrow $reset"
     } else {
         $segs = New-Object System.Collections.ArrayList
-        [void]$segs.Add(@{ bg=16; fg=17; t=" $NebFolderIcon " })
-        [void]$segs.Add(@{ bg=18; fg=19; t="  $loc  " })
-        if ($branch) { [void]$segs.Add(@{ bg=20; fg=21; t=" $NebGitBranchIcon $branch  " }) }
-        [void]$segs.Add(@{ bg=22; fg=23; t=" $NebClockIcon $time  " })
+        [void]$segs.Add(@{ bg=4; fg='38;5;0'; t=" $NebFolderIcon " })
+        [void]$segs.Add(@{ bg=$null; fg='39'; t="  $loc  " })
+        if ($branch) { [void]$segs.Add(@{ bg=$null; fg='38;5;6'; t=" $NebGitBranchIcon $branch  " }) }
+        [void]$segs.Add(@{ bg=$null; fg='39'; t=" $NebClockIcon $time  " })
 
         # 49 = default background on both caps: the cap cell's square corners
         # always match the real terminal bg (any theme / wallpaper).
         $out = "$reset$e[38;5;$($segs[0].bg)m$e[49m$NebLeftRound$reset"
         for ($i = 0; $i -lt $segs.Count; $i++) {
             $s = $segs[$i]
-            $out += "$e[48;5;$($s.bg)m$e[38;5;$($s.fg)m$($s.t)"
-            if ($i -lt $segs.Count - 1) {
-                $nb = $segs[$i + 1].bg
-                $out += "$reset$e[38;5;$($s.bg)m$e[48;5;${nb}m$NebArrow$reset"
+            $bg = if ($null -eq $s.bg) { '49' } else { "48;5;$($s.bg)" }
+            $out += "$e[${bg}m$e[$($s.fg)m$($s.t)"
+            if ($null -ne $s.bg) {
+                $out += "$reset$e[38;5;$($s.bg)m$e[49m$NebArrow$reset"
             } else {
-                $out += "$reset$e[38;5;$($s.bg)m$e[49m$NebRightRound$reset"
+                $out += $reset
             }
         }
         $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$out`n`n$e[35m$NebPromptArrow $reset"
@@ -652,13 +658,10 @@ function global:Convert-NebulaBareCd {
     return ($Matches['indent'] + $Matches['cmd'] + " '" + $escaped + "'")
 }
 
-# oh-my-zsh-style experience: Nebula syntax colors. Prediction is OFF on
-# purpose: Nebula draws its own fish-style ghost hint, and running PSReadLine's
-# InlinePrediction alongside it double-renders a second gray hint AND races the
-# ghost-accept keys — the two sources desync and commit garbage like
-# "lsls sclaude" into history (which the hint then resurfaces, spooking users).
+# Keep the user's PSReadLine prediction configuration. The completion adapter
+# yields when the shell has text after the cursor, including native inline
+# predictions. Disabling Pebrel completion must not disable the shell's editor.
 if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) {
-    try { Set-PSReadLineOption -PredictionSource None -ErrorAction SilentlyContinue } catch {}
     try {
         # 不让 PowerShell 的 continuation prompt 回退成突兀的 `>>`，视觉上保持 Nebula 的单箭头。
         # 35=Magenta：主题表里的提示符色（浅色=优雅紫 #8250df），与主提示符一致。
@@ -765,13 +768,28 @@ if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) {
         # A blank Enter re-renders the prompt without running anything: no C,
         # so the spinner doesn't flash for a no-op.
         if (-not [string]::IsNullOrWhiteSpace($line)) {
+            # The accepted PSReadLine text also sees recall, paste and native
+            # completion. Resolve a simple PowerShell alias for scope tracking.
+            $scopeLine = $line
+            try {
+                $first = ($line.Trim() -split '\s+', 2)[0]
+                $alias = Get-Alias -Name $first -ErrorAction SilentlyContinue
+                if ($alias -and $alias.ResolvedCommand) {
+                    $scopeLine = $alias.ResolvedCommand.Name + ' ' + $line.Trim().Substring($first.Length)
+                }
+            } catch {}
+            $owner = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($global:PebrelShellToken))
+            $scopeLine64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($owner + "`n" + $scopeLine))
+            [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_command=$scopeLine64$([char]7)")
             [Console]::Write("$([char]27)]133;C$([char]7)")
         }
         $line
     }
 }
 Clear-Host
-"#;
+"#,
+    include_str!("../connection.ps1")
+);
 
 /// Write `contents` to `path` only when it differs from what's already there.
 /// These integration scripts sit on every pane-spawn's critical path, and the
@@ -897,11 +915,14 @@ __nebula_run_saved_prompt_command() {
     fi
 }
 
+__pebrel_shell_token=$(printf '%s' "bash:${HOSTNAME:-localhost}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n')
+
 __nebula_precmd() {
     # 同一个赋值语句会在任何 helper 改写状态前展开两者；分成两行会让
     # PIPESTATUS 只剩下 local/assignment 的结果，而不是用户的管道结果。
     NEBULA_CMD_STATUS=$? NEBULA_PIPE_STATUS=("${PIPESTATUS[@]}")
     local cmd_status="$NEBULA_CMD_STATUS" end_ms=""
+    printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"
 
     if [[ -n ${NEBULA_COMMAND_START_MS-} ]]; then
         end_ms="$(__nebula_now_ms)"
@@ -934,11 +955,18 @@ __nebula_precmd() {
     printf '\033]2;NEBULA|%s|%s\007' "$cwd" "$branch"
 
     if [[ -z ${__nebula_user_ps1-} ]]; then
+        # Readline counts bytes in non-multibyte locales (including Git Bash's
+        # unset-locale default). A three-byte arrow would leave two input cells
+        # behind when redrawing a wrapped line. Keep the user's locale intact.
+        local prompt_mark='❯'
+        if (( ${#prompt_mark} != 1 )); then
+            prompt_mark='>'
+        fi
         if __nebula_bool_on "$(__nebula_setting powerline 1)"; then
             # ANSI-16 only: 35=Magenta 提示符（同 PowerShell 侧），主题表决定实际色值。
-            PS1='\[\033[35m\]❯ \[\033[0m\]'
+            PS1='\[\033[35m\]'"$prompt_mark"' \[\033[0m\]'
         else
-            PS1='\[\033[90m\]\w \[\033[35m\]❯ \[\033[0m\]'
+            PS1='\[\033[90m\]\w \[\033[35m\]'"$prompt_mark"' \[\033[0m\]'
         fi
     fi
 
@@ -987,7 +1015,8 @@ fi
 
 fn nebula_bash_rc_path() -> Option<std::path::PathBuf> {
     let path = std::env::temp_dir().join("pebrel_bashrc");
-    write_if_changed(&path, NEBULA_BASH_RC.as_bytes()).then_some(path)
+    let script = format!("{NEBULA_BASH_RC}\n{}", super::connection_shell());
+    write_if_changed(&path, script.as_bytes()).then_some(path)
 }
 
 fn explicit_bash_integration_args(rc: &std::path::Path) -> Vec<String> {
@@ -1055,6 +1084,12 @@ pub fn powershell_with_nebula_integration(program: String, args: Vec<String>) ->
 }
 
 /// Build the default shell, injecting the Nebula prompt when possible.
+/// The engine's default launch, also used by workspace snapshots to freeze the
+/// actual shell without copying default-selection or integration rules.
+pub fn resolved_default_shell() -> Shell {
+    nebula_default_shell(nebula_runtime_settings())
+}
+
 fn nebula_default_shell(settings: NebulaRuntimeSettings) -> Shell {
     match settings.shell {
         NebulaShellExecutor::Bash => return nebula_bash_shell(),
@@ -1080,7 +1115,7 @@ fn nebula_default_shell(settings: NebulaRuntimeSettings) -> Shell {
 }
 
 fn cmdline(config: &Options) -> String {
-    let default_shell = nebula_default_shell(nebula_runtime_settings());
+    let default_shell = resolved_default_shell();
     let using_default_shell = config.shell.is_none();
     let shell = config.shell.as_ref().unwrap_or(&default_shell);
 
@@ -1106,6 +1141,7 @@ pub fn win32_string<S: AsRef<OsStr> + ?Sized>(value: &S) -> Vec<u16> {
 
 #[cfg(test)]
 mod test {
+    mod bash_input;
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -1319,6 +1355,118 @@ $env:NEBULA_CONFIG_DIR = $env:PEBREL_CONFIG_DIR
 function global:Set-PSReadLineOption { }
 "#;
 
+    #[test]
+    fn powershell_prompt_uses_only_theme_ansi_slots() {
+        run_powershell_integration_case(
+            PS_PRELUDE,
+            r#"
+function global:git { $global:LASTEXITCODE = 0; 'test-branch' }
+foreach ($powerline in @($true, $false)) {
+    $global:TestPowerline = $powerline
+    function global:Get-NebulaBoolSetting { param($key, $default); $global:TestPowerline }
+    $rendered = prompt
+    $colors = [regex]::Matches($rendered, '\x1b\[(?:38|48);5;(\d+)m')
+    if ($colors.Count -eq 0) { throw 'No indexed prompt colors' }
+    foreach ($color in $colors) {
+        if ([int]$color.Groups[1].Value -gt 15) {
+            throw "Prompt occupied extended color $($color.Groups[1].Value)"
+        }
+    }
+    if ($powerline) {
+        $e = [char]27
+        if (-not $rendered.Contains("$e[49m$e[39m  $((Get-Location).Path)  ")) {
+            throw 'Path must use theme default foreground and background'
+        }
+        if (-not $rendered.Contains("$e[49m$e[39m $([char]0xf017)")) {
+            throw 'Clock must use theme default foreground and background'
+        }
+    }
+    if ($rendered -notlike '*test-branch*') { throw 'Missing branch' }
+    if ($rendered -notlike "*$([char]27)]133;A*") { throw 'Missing prompt boundary' }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn powershell_integration_preserves_the_users_prediction_source() {
+        run_powershell_integration_case(
+            &format!(
+                "{PS_PRELUDE}\n\
+                 $global:TestPredictionSource = 'HistoryAndPlugin'\n\
+                 function global:Set-PSReadLineOption {{\n\
+                     param($PredictionSource)\n\
+                     if ($PSBoundParameters.ContainsKey('PredictionSource')) {{\n\
+                         $global:TestPredictionSource = $PredictionSource\n\
+                     }}\n\
+                 }}"
+            ),
+            "if ($global:TestPredictionSource -ne 'HistoryAndPlugin') { exit 90 }",
+        );
+    }
+
+    #[test]
+    fn powershell_reports_stable_shell_identity_and_accepted_alias_command() {
+        run_powershell_integration_case(
+            PS_PRELUDE,
+            r#"
+function global:ssh { }
+Set-Alias -Name scope_ssh -Value ssh -Scope Global
+$global:NebulaPreviousPSConsoleHostReadLine = { 'scope_ssh user@box' }
+$capture = New-Object System.IO.StringWriter
+$originalOutput = [Console]::Out
+try {
+    [Console]::SetOut($capture)
+    $first = prompt
+    $accepted = PSConsoleHostReadLine
+    $second = prompt
+} finally { [Console]::SetOut($originalOutput) }
+if ($accepted -ne 'scope_ssh user@box') { exit 80 }
+$events = [regex]::Matches($capture.ToString(), 'SetUserVar=pebrel_shell=([^\x07]+)')
+if ($events.Count -ne 2) { exit 81 }
+if ($events[0].Groups[1].Value -ne $events[1].Groups[1].Value) { exit 82 }
+$identity = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($events[0].Groups[1].Value))
+if ($identity -notlike "pwsh:$PID`:*") { exit 83 }
+$command = [regex]::Match($capture.ToString(), 'SetUserVar=pebrel_command=([^\x07]+)')
+$decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($command.Groups[1].Value))
+$parts = $decoded -split "`n", 2
+if ($parts[0] -ne $identity -or $parts[1] -notmatch '^ssh\s+user@box$') { exit 84 }
+exit 0
+"#,
+        );
+    }
+
+    #[test]
+    fn powershell_connection_preserves_arguments_exit_code_and_parent_report() {
+        run_powershell_integration_case(
+            PS_PRELUDE,
+            r#"
+$capture = New-Object System.IO.StringWriter
+$originalOutput = [Console]::Out
+$argument = "space ' quote; pipe | dollar `$"
+$child = Join-Path $env:TEMP "pebrel-connection-argv-$PID.ps1"
+Set-Content -LiteralPath $child -Value '[Console]::Write($args[0]); exit 7' -Encoding UTF8
+try {
+    [Console]::SetOut($capture)
+    $output = Invoke-PebrelConnection 'powershell.exe' @('-NoProfile', '-NonInteractive', '-File', $child, $argument)
+    $code = $LASTEXITCODE
+} finally {
+    [Console]::SetOut($originalOutput)
+    Remove-Item -LiteralPath $child
+}
+if ($code -ne 7 -or [string]$output -ne $argument) { exit 85 }
+$events = [regex]::Matches($capture.ToString(), 'SetUserVar=(pebrel_shell|pebrel_connection)=([^\x07]+)')
+if ($events.Count -ne 3) { exit 86 }
+if ($events[0].Groups[1].Value -ne 'pebrel_shell' -or $events[2].Groups[1].Value -ne 'pebrel_shell') { exit 87 }
+if ($events[0].Groups[2].Value -ne $events[2].Groups[2].Value) { exit 88 }
+$decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($events[1].Groups[2].Value))
+$words = ($decoded -split "`n", 2)[1] -split [char]0
+if ($words.Count -ne 6 -or $words[-1] -ne $argument) { exit 89 }
+exit 0
+"#,
+        );
+    }
+
     /// #80 的第二半：用户 `$PROFILE` 里的提示符（oh-my-posh/starship/手写）会
     /// 正常加载，但过去被 Nebula 的 powerline 盖掉，看起来就像 profile 没生效。
     #[test]
@@ -1412,6 +1560,7 @@ exit 0
         run_bash_integration_case(
             r#"
 PATH=/usr/bin:/mingw64/bin:$PATH
+export LC_ALL=C.UTF-8
 NEBULA_BASHRC_SOURCED=1
 HOME=/__nebula_test_missing_home__
 APPDATA=

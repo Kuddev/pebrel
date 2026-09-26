@@ -46,7 +46,7 @@ class PebrelBrandingTests(unittest.TestCase):
             "AppName=Pebrel",
             "AppId={{61022144-7D0A-4E54-94F2-C329A8F58656}",
             "DefaultDirName={code:DefaultInstallDir}",
-            "UsePreviousAppDir=no",
+            "UsePreviousAppDir=yes",
             r"Software\Pebrel",
             r"App Paths\pebrel.exe",
             r"shell\Pebrel",
@@ -74,9 +74,14 @@ class PebrelBrandingTests(unittest.TestCase):
                 self.assertIn("Stale binary:", source)
         installer = self.source("scripts/installer.iss")
         self.assertIn('#define PackageBrand "Pebrel"', installer)
-        self.assertIn("OutputBaseFilename={#PackageBrand}-v{#AppVersion}-windows-x64-setup", installer)
+        self.assertIn(
+            "OutputBaseFilename={#PackageBrand}-v{#AppVersion}-windows-{#Architecture}-setup",
+            installer,
+        )
         builder = self.source("scripts/build-installer.ps1")
+        self.assertIn("[ValidateSet('x64', 'arm64')]", builder)
         self.assertIn('"/DPackageBrand=$PackageBrand"', builder)
+        self.assertIn('"/DArchitecture=$Architecture"', builder)
 
     def test_update_asset_validation_shares_current_and_legacy_names(self):
         check = self.source("nebula_app/src/update_check.rs")
@@ -85,11 +90,23 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertIn('format!("Pebrel-v{version}-windows-x64-setup.exe")', check)
         self.assertIn('format!("NebulaTerminal-{version}-windows-x64-setup.exe")', check)
         self.assertIn("windows_x64_installer_names(version)", check)
-        self.assertIn("windows_x64_installer_names(&asset.version).contains(&asset.name)", download)
+        # Discovery and validation now route through the shared native selector.
+        # Retain the Windows brand contract while also checking the macOS path;
+        # executable Rust regressions cover accepted brands and rejected URLs.
+        assets = self.source("nebula_app/src/update_check/assets.rs")
+        self.assertIn("assets::native_names(&version)", check)
+        self.assertIn("assets::native_names(&asset.version)", download)
+        self.assertIn("super::windows_x64_installer_names(version).to_vec()", assets)
+        self.assertIn("Platform::MacOS => macos_names(version, std::env::consts::ARCH)", assets)
+        self.assertIn("if !names.contains(&asset.name)", download)
 
     def test_notification_identity_uses_pebrel(self):
         source = self.source("nebula_app/src/platform/notifications.rs")
-        self.assertIn('AUMID: &str = "com.pebrel.terminal";', source)
+        brand = self.source("nebula_app/src/brand.rs")
+        taskbar = self.source("nebula_app/src/app_icon/windows/taskbar.rs")
+        self.assertIn('WINDOWS_APP_ID: &str = "com.pebrel.terminal";', brand)
+        self.assertIn('AUMID: &str = crate::brand::WINDOWS_APP_ID;', source)
+        self.assertIn('set_string(&store, &APP_ID, crate::brand::WINDOWS_APP_ID)', taskbar)
         self.assertIn('set_reg_sz(&subkey, "DisplayName", crate::brand::NAME)', source)
 
     def test_config_directory_uses_pebrel_and_migrates_legacy_data(self):

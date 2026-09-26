@@ -5,10 +5,66 @@ use gpui::AppContext as _;
 use gpui_component::menu::PopupMenuItem;
 
 mod exchange;
+#[cfg(test)]
+mod tests;
+
+// Each virtual item includes its bottom gutter, so scrolling and hit tests use
+// the actual card extent rather than the previous contiguous table-row height.
+const HOST_CARD_HEIGHT: f32 = 68.0;
+const HOST_CARD_EXTENT: f32 = HOST_CARD_HEIGHT + 8.0;
+
+/// Center the glyph's ink, not its monospace advance or the surrounding text line.
+fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> impl IntoElement {
+    gpui::canvas(
+        move |bounds, window, _| {
+            let font = gpui::font(family);
+            let text_system = window.text_system();
+            let font_id = text_system.resolve_font(&font);
+            let base_size = px(18.0);
+            let ink = text_system.typographic_bounds(font_id, base_size, glyph).ok();
+            let scale = ink
+                .filter(|ink| ink.size.width > px(0.0) && ink.size.height > px(0.0))
+                .map(|ink| 18.0 / f32::from(ink.size.width.max(ink.size.height)))
+                .unwrap_or(1.0);
+            let font_size = base_size * scale;
+            let text: SharedString = glyph.to_string().into();
+            let line = text_system.shape_line(
+                text.clone(),
+                font_size,
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font,
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let height = line.ascent + line.descent;
+            let origin = if let Some(ink) = ink {
+                // Font coordinates are relative to the baseline with positive Y upwards.
+                let center = ink.center() * scale;
+                bounds.center() - gpui::point(center.x, line.ascent - center.y)
+            } else {
+                bounds.center() - gpui::point(line.width / 2.0, height / 2.0)
+            };
+            (line, origin, height)
+        },
+        |_, (line, origin, height), window, cx| {
+            if let Err(error) = line.paint(origin, height, gpui::TextAlign::Left, None, window, cx)
+            {
+                log::warn!("Unable to paint SSH host icon: {error}");
+            }
+        },
+    )
+    .size(px(22.0))
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::gpui_shell) enum HostScope {
     All,
+    Pinned,
     Managed,
     Recent,
 }
@@ -53,9 +109,49 @@ impl HostLibraryState {
 }
 
 impl SettingsPane {
+    pub(in crate::gpui_shell) fn prepare_launcher_ssh_host(
+        &mut self,
+        host: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ssh_library.scope = HostScope::All;
+        self.ssh_library.group_filter = None;
+        self.ssh_library.search.update(cx, |input, cx| input.set_value(host, window, cx));
+        self.ssh_library.reset_scroll();
+    }
+
+    fn duplicate_ssh_host(&mut self, host: String, window: &mut Window, cx: &mut Context<Self>) {
+        let label = self
+            .ssh_hosts
+            .profiles
+            .for_destination(&host)
+            .label
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or_else(|| host.clone());
+        let copy_label = self.ssh_hosts.profiles.next_default_label(label.trim());
+
+        self.open_ssh_editor(Some(host.clone()), window, cx);
+        if let Some(editor) = self.ssh_editor.as_mut() {
+            editor.original_destination = None;
+            // 复制不会重命名原主机，编辑路径排除的原地址仍应可用作新主机的跳板。
+            editor.jump_choices.push((host, label));
+        }
+        self.ssh_destination_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.ssh_label_input.update(cx, |input, cx| input.set_value(copy_label, window, cx));
+        self.ssh_password_input.update(cx, |input, cx| {
+            input.set_placeholder(
+                crate::gpui_shell::config::ui_language(cx)
+                    .pick("留空则连接时询问", "Leave empty to ask when connecting"),
+                window,
+                cx,
+            );
+        });
+    }
+
     fn filtered_library_hosts(&self, cx: &gpui::App) -> Vec<String> {
         let query = self.ssh_library.search.read(cx).value();
-        let hosts = if self.ssh_library.scope == HostScope::Recent {
+        let mut hosts = if self.ssh_library.scope == HostScope::Recent {
             self.ssh_hosts
                 .saved
                 .iter()
@@ -65,6 +161,9 @@ impl SettingsPane {
         } else {
             self.ssh_hosts.merged()
         };
+        if self.ssh_library.scope == HostScope::Pinned {
+            hosts.retain(|host| self.ssh_hosts.is_pinned(host));
+        }
         self.ssh_hosts.profiles.filter_hosts(
             hosts,
             &query,
@@ -83,34 +182,42 @@ impl SettingsPane {
             Some("") => language.text(Message::HostsUngrouped).to_owned(),
             Some(group) => group.to_owned(),
         };
-        v_flex()
+        h_flex()
+            .id("ssh-library-controls")
             .gap_2()
-            .mb_3()
-            .child(Input::new(&self.ssh_library.search).w_full())
+            .items_center()
+            .flex_wrap()
+            .child(
+                h_flex().gap_1().flex_wrap().children(
+                    [
+                        (HostScope::All, Message::HostsAll),
+                        (HostScope::Pinned, Message::HostsPinned),
+                        (HostScope::Managed, Message::HostsManaged),
+                        (HostScope::Recent, Message::HostsRecent),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (scope, label))| {
+                        Button::new(("host-scope", index))
+                            .debug_selector(move || format!("host-scope-{index}"))
+                            .label(language.text(label))
+                            .small()
+                            .ghost()
+                            .selected(self.ssh_library.scope == scope)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.ssh_library.scope = scope;
+                                this.ssh_library.reset_scroll();
+                                cx.notify();
+                            }))
+                    }),
+                ),
+            )
+            .child(div().flex_1())
             .child(
                 h_flex()
                     .gap_2()
+                    .items_center()
                     .flex_wrap()
-                    .children(
-                        [
-                            (HostScope::All, Message::HostsAll),
-                            (HostScope::Managed, Message::HostsManaged),
-                            (HostScope::Recent, Message::HostsRecent),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (scope, label))| {
-                            Button::new(("host-scope", index))
-                                .label(language.text(label))
-                                .small()
-                                .selected(self.ssh_library.scope == scope)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.ssh_library.scope = scope;
-                                    this.ssh_library.reset_scroll();
-                                    cx.notify();
-                                }))
-                        }),
-                    )
                     .child(
                         Button::new("host-group-filter").label(group_label).small().dropdown_menu(
                             move |mut menu, _, _| {
@@ -143,25 +250,125 @@ impl SettingsPane {
                             },
                         ),
                     )
-                    .child(div().flex_1())
                     .child(
-                        Button::new("hosts-import-csv")
-                            .label(language.text(Message::HostsImport))
-                            .small()
-                            .disabled(self.ssh_library.busy)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.import_host_csv(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("hosts-export-csv")
-                            .label(language.text(Message::HostsExport))
-                            .small()
-                            .disabled(self.ssh_library.busy)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.export_host_csv(window, cx)),
+                        div()
+                            .id("ssh-inline-filter")
+                            .debug_selector(|| "ssh-inline-filter".into())
+                            .w(px(210.0))
+                            .child(
+                                Input::new(&self.ssh_library.search)
+                                    .small()
+                                    .prefix(Icon::new(IconName::Search).size(px(14.0))),
                             ),
                     ),
+            )
+            .into_any_element()
+    }
+
+    fn library_header(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let owner = cx.entity().downgrade();
+        h_flex()
+            .gap_3()
+            .items_center()
+            .flex_wrap()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(220.0))
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(18.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(language.text(Message::HostsTitle)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(language.text(Message::HostsSubtitle)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("hosts-exchange")
+                            .label(language.text(Message::HostsExchange))
+                            .small()
+                            .disabled(self.ssh_library.busy)
+                            .dropdown_menu(move |menu, _, _| {
+                                let import_owner = owner.clone();
+                                let export_owner = owner.clone();
+                                menu.item(
+                                    PopupMenuItem::new(language.text(Message::HostsImport))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = import_owner.update(cx, |this, cx| {
+                                                this.import_host_csv(window, cx)
+                                            });
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new(language.text(Message::HostsExport))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = export_owner.update(cx, |this, cx| {
+                                                this.export_host_csv(window, cx)
+                                            });
+                                        }),
+                                )
+                            }),
+                    )
+                    .child(
+                        Button::new("ssh-add-host")
+                            .icon(IconName::Plus)
+                            .label(language.text(Message::HostsAdd))
+                            .small()
+                            .primary()
+                            .disabled(self.ssh_library.busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_ssh_editor(None, window, cx)
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn library_config_banner(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let count = self.ssh_hosts.configured.len();
+        let text = if count == 0 {
+            language.text(Message::HostsConfigEmpty).to_owned()
+        } else {
+            language.format(Message::HostsConfigShared, &[("count", &count.to_string())])
+        };
+        h_flex()
+            .id("ssh-config-banner")
+            .gap_2()
+            .px_3()
+            .py_2()
+            .items_center()
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().secondary.opacity(0.35))
+            .child(Icon::new(IconName::Info).size(px(14.0)).text_color(cx.theme().muted_foreground))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(text),
+            )
+            .child(
+                Button::new("ssh-import")
+                    .label(language.text(Message::HostsReload))
+                    .small()
+                    .ghost()
+                    .loading(self.ssh_library.busy)
+                    .disabled(self.ssh_library.busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.reload_host_library(cx))),
             )
             .into_any_element()
     }
@@ -214,7 +421,7 @@ impl SettingsPane {
         &self,
         host: String,
         ix: usize,
-        host_count: usize,
+        _host_count: usize,
         labels: &std::collections::HashMap<String, String>,
         icons: &std::collections::HashMap<String, String>,
         cx: &mut Context<Self>,
@@ -226,185 +433,267 @@ impl SettingsPane {
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let font_px = cx
             .try_global::<crate::gpui_shell::config::Settings>()
-            .map(|s| s.base_font_size_px)
+            .map(|s| s.ui_font_size_px)
             .unwrap_or(15.0);
-        let title_h = font_px;
-        let subtitle_h = font_px * 0.78;
+        let title_h = font_px * 0.9;
+        let subtitle_h = font_px * 0.8;
         let delete_confirm = self.ssh_delete_confirm.clone();
 
         let pinned = self.ssh_hosts.is_pinned(&host);
         let from_config = self.ssh_hosts.is_from_config(&host);
         let confirm = delete_confirm.as_deref() == Some(host.as_str());
         let label = labels.get(&host).cloned().unwrap_or_else(|| host.clone());
+        let group = self.ssh_hosts.profiles.organization(&host).group.clone();
+        let profile = self.ssh_hosts.profiles.for_destination(&host);
+        let auth = host_auth_label(&profile, language);
         // 行首 OS 图标（旧壳裁定 2026-08-09）：id 取自 ssh_profiles 存储，
         // 未认出回落通用终端形状；mono 字体渲染 Nerd Font 字位。
         let os_icon = crate::display::ui::os_icons::resolve(icons.get(&host).map(String::as_str));
+        let context_owner = cx.entity().downgrade();
+        let context_host = host.clone();
         let connect_host = host.clone();
         let edit_host = host.clone();
         let pin_host = host.clone();
         let delete_host = host.clone();
-        let row_group = SharedString::from(format!("ssh-host-actions-{ix}"));
-        h_flex()
-                .id(SharedString::from(format!("ssh-host-row-{ix}")))
-                .group(row_group.clone())
-                // 旧壳 `SSH_HOST_ROW_H` 固定 58px；两行文字与 OS 图标在
-                // 这个高度里共用中线，不能压成普通 48px 设置行。
-                .h(px(SSH_HOST_ROW_H))
-                .w_full()
-                .px_3()
-                .items_center()
-                .gap_3()
-                .when(ix == 0, |row| row.rounded_t(px(8.0)))
-                .when(ix + 1 == host_count, |row| row.rounded_b(px(8.0)))
-                .when(ix + 1 < host_count, |row| {
-                    row.border_b_1().border_color(theme.border.opacity(0.5))
-                })
-                .hover(move |row| row.bg(hover_bg))
-                .child(
-                    div()
-                        .w(px(22.0))
-                        .h_full()
-                        .flex_shrink_0()
-                        .relative()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .font_family(symbol_family.clone())
-                        .text_size(px(18.0))
-                        .text_color(muted)
-                        .text_center()
-                        .child(os_icon.glyph.to_string()),
-                )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .justify_center()
-                        .child(
-                            div()
-                                .h(px(title_h * 0.95))
-                                .flex()
-                                .items_center()
-                                .text_size(px(title_h))
-                                .line_height(px(title_h))
-                                .truncate()
-                                .gap_2()
-                                .child(label)
-                                .child(div().text_xs().text_color(muted)
-                                    .child(self.ssh_hosts.profiles.organization(&host).group.clone())),
+        div()
+            .h(px(HOST_CARD_EXTENT))
+            .w_full()
+            .pb(px(8.0))
+            .child(
+                h_flex()
+                    .id(SharedString::from(format!("ssh-host-row-{ix}")))
+                    .debug_selector(move || format!("ssh-host-row-{ix}"))
+                    .h(px(HOST_CARD_HEIGHT))
+                    .w_full()
+                    .px_3()
+                    .items_center()
+                    .gap_3()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.secondary.opacity(0.25))
+                    .hover(move |row| row.bg(hover_bg))
+                    .context_menu(move |menu, _, _| {
+                        let connect_owner = context_owner.clone();
+                        let edit_owner = context_owner.clone();
+                        let duplicate_owner = context_owner.clone();
+                        let delete_owner = context_owner.clone();
+                        let connect_host = context_host.clone();
+                        let edit_host = context_host.clone();
+                        let duplicate_host = context_host.clone();
+                        let delete_host = context_host.clone();
+                        menu.item(
+                            PopupMenuItem::new(language.text(Message::LauncherConnect)).on_click(
+                                move |_, _, cx| {
+                                    let _ = connect_owner.update(cx, |this, cx| {
+                                        cx.emit(SettingsPaneEvent::LaunchSsh(connect_host.clone()));
+                                        this.ssh_status =
+                                            Some(SshStatus::Opening(connect_host.clone()));
+                                        cx.notify();
+                                    });
+                                },
+                            ),
                         )
-                        .child(
-                            h_flex()
-                                .h(px(subtitle_h))
-                                .gap_2()
-                                .items_center()
-                                // 副行与旧壳同合同：只放目的地本身；来源用
-                                // 小徽章表达（config 源的删除语义是隐藏）。
-                                .child(
-                                    div()
-                                        .text_size(px(subtitle_h))
-                                        .line_height(px(subtitle_h))
-                                        .text_color(muted)
-                                        .truncate()
-                                        .child(host.clone()),
-                                )
-                                .when(from_config, |line| {
-                                    line.child(
+                        .item(PopupMenuItem::new(language.text(Message::LauncherEdit)).on_click(
+                            move |_, window, cx| {
+                                let _ = edit_owner.update(cx, |this, cx| {
+                                    this.open_ssh_editor(Some(edit_host.clone()), window, cx);
+                                });
+                            },
+                        ))
+                        .item(PopupMenuItem::new(language.text(Message::CommonCopy)).on_click(
+                            move |_, window, cx| {
+                                let _ = duplicate_owner.update(cx, |this, cx| {
+                                    this.duplicate_ssh_host(duplicate_host.clone(), window, cx);
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new(language.text(Message::LauncherDelete)).on_click(
+                                move |_, _, cx| {
+                                    let _ = delete_owner.update(cx, |this, cx| {
+                                        this.ssh_delete_confirm = Some(delete_host.clone());
+                                        cx.notify();
+                                    });
+                                },
+                            ),
+                        )
+                    })
+                    .child(
+                        crate::gpui_shell::widgets::device_icon_container(cx)
+                            .id(SharedString::from(format!("ssh-host-icon-{ix}")))
+                            .debug_selector(move || format!("ssh-host-icon-{ix}"))
+                            .child(host_icon(os_icon.glyph, symbol_family, muted)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .justify_center()
+                            .gap(px(3.0))
+                            .child(
+                                h_flex()
+                                    .min_w_0()
+                                    .items_center()
+                                    .text_size(px(title_h))
+                                    .line_height(px(title_h * 1.25))
+                                    .gap_2()
+                                    .child(
                                         div()
-                                            .flex_shrink_0()
-                                            .px(px(5.0))
-                                            .rounded_sm()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .border_1()
-                                            .border_color(theme.border)
-                                            .child("config"),
+                                            .min_w_0()
+                                            .truncate()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .child(label),
                                     )
-                                }),
-                        ),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("ssh-connect-{ix}")))
-                        .label(language.pick("连接", "Connect"))
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.emit(SettingsPaneEvent::LaunchSsh(connect_host.clone()));
-                            this.ssh_status = Some(SshStatus::Opening(connect_host.clone()));
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("ssh-edit-{ix}")))
-                        .icon(IconName::Settings2)
-                        .ghost()
-                        .small()
-                        .tooltip(language.pick("编辑主机", "Edit host"))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_ssh_editor(Some(edit_host.clone()), window, cx);
-                        })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("ssh-pin-{ix}")))
-                        .icon(Icon::default().path(crate::gpui_shell::assets::nav::PIN))
-                        .ghost()
-                        .small()
-                        .selected(pinned)
-                        .toggled(pinned)
-                        .tooltip(if pinned {
-                            language.pick("取消置顶", "Unpin")
-                        } else {
-                            language.pick("置顶", "Pin")
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.ssh_apply(
-                                |lists| lists.toggle_pin(&pin_host),
-                                SshStatus::Pinned,
-                                cx,
-                            );
-                        })),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("ssh-delete-{ix}")))
-                        .map(|button| {
-                            if confirm {
-                                button
-                                    .label(language.pick("确认删除", "Confirm delete"))
-                                    .danger()
+                                    .when(!group.is_empty(), |line| {
+                                        line.child(
+                                            div()
+                                                .max_w(px(120.0))
+                                                .truncate()
+                                                .px(px(5.0))
+                                                .rounded_sm()
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .bg(theme.secondary)
+                                                .child(group),
+                                        )
+                                    })
+                                    .when(from_config, |line| {
+                                        line.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .px(px(5.0))
+                                                .rounded_sm()
+                                                .text_size(px(10.0))
+                                                .text_color(muted)
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .child("ssh-config"),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                h_flex()
+                                    .min_w_0()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .text_size(px(subtitle_h))
+                                            .line_height(px(subtitle_h * 1.25))
+                                            .text_color(muted)
+                                            .truncate()
+                                            .child(host.clone()),
+                                    )
+                                    .child(div().text_color(muted).child("·"))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(subtitle_h))
+                                            .text_color(muted)
+                                            .child(auth),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .flex_shrink_0()
+                            .child(
+                                Button::new(SharedString::from(format!("ssh-connect-{ix}")))
+                                    .debug_selector(move || format!("ssh-connect-{ix}"))
+                                    .label(language.text(Message::HostsConnect))
                                     .small()
-                            } else {
-                                button
-                                    .icon(IconName::Delete)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.emit(SettingsPaneEvent::LaunchSsh(connect_host.clone()));
+                                        this.ssh_status =
+                                            Some(SshStatus::Opening(connect_host.clone()));
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("ssh-edit-{ix}")))
+                                    .debug_selector(move || format!("ssh-edit-{ix}"))
+                                    .icon(IconName::Settings2)
                                     .ghost()
                                     .small()
-                                    .tooltip(if from_config {
-                                        language.tr("settings.ssh.hide_config_host")
+                                    .size(px(32.0))
+                                    .tooltip(language.pick("编辑主机", "Edit host"))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_ssh_editor(Some(edit_host.clone()), window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("ssh-pin-{ix}")))
+                                    .debug_selector(move || format!("ssh-pin-{ix}"))
+                                    .icon(Icon::default().path(crate::gpui_shell::assets::nav::PIN))
+                                    .ghost()
+                                    .small()
+                                    .size(px(32.0))
+                                    .selected(pinned)
+                                    .toggled(pinned)
+                                    .tooltip(if pinned {
+                                        language.pick("取消置顶", "Unpin")
                                     } else {
-                                        language.pick("删除", "Delete")
+                                        language.pick("置顶", "Pin")
                                     })
-                            }
-                        })
-                        // 进了确认态就常显：指针移开还让它隐形，等于把「再点
-                        // 一次才真删」这个状态藏起来。
-                        .when(!confirm, |button| {
-                            button
-                                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this.ssh_delete_confirm.as_deref() == Some(delete_host.as_str()) {
-                                this.delete_ssh_host(&delete_host, cx);
-                            } else {
-                                this.ssh_delete_confirm = Some(delete_host.clone());
-                                cx.notify();
-                            }
-                        })),
-                )
-
-        .into_any_element()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.ssh_apply(
+                                            |lists| lists.toggle_pin(&pin_host),
+                                            SshStatus::Pinned,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("ssh-delete-{ix}")))
+                                    .debug_selector(move || format!("ssh-delete-{ix}"))
+                                    .map(|button| {
+                                        if confirm {
+                                            button
+                                                .label(language.pick("确认删除", "Confirm delete"))
+                                                .danger()
+                                                .small()
+                                        } else {
+                                            button
+                                                .icon(
+                                                    Icon::default().path(
+                                                        crate::gpui_shell::assets::nav::TRASH,
+                                                    ),
+                                                )
+                                                .ghost()
+                                                .small()
+                                                .size(px(32.0))
+                                                .tooltip(if from_config {
+                                                    language.tr("settings.ssh.hide_config_host")
+                                                } else {
+                                                    language.pick("删除", "Delete")
+                                                })
+                                        }
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if this.ssh_delete_confirm.as_deref()
+                                            == Some(delete_host.as_str())
+                                        {
+                                            this.delete_ssh_host(&delete_host, cx);
+                                        } else {
+                                            this.ssh_delete_confirm = Some(delete_host.clone());
+                                            cx.notify();
+                                        }
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
     }
 
     pub(in crate::gpui_shell) fn section_ssh(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
         let controls = self.library_controls(cx);
+        let header = self.library_header(cx);
+        let config_banner = self.library_config_banner(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let hosts = self.filtered_library_hosts(cx);
@@ -434,7 +723,7 @@ impl SettingsPane {
         )
         .track_scroll(&self.ssh_library.scroll)
         .w_full()
-        .h(px(SSH_HOST_ROW_H * host_count.clamp(1, 8) as f32));
+        .h(px(HOST_CARD_EXTENT * host_count.clamp(1, 8) as f32));
 
         let hidden_rows = self.ssh_show_hidden.then(|| {
             hidden
@@ -478,7 +767,12 @@ impl SettingsPane {
         let hidden_count = self.ssh_hosts.hidden_hosts().len();
         let undo_bar = self.ssh_delete_undo.as_ref().map(|undo| (undo.host.clone(), undo.seq));
 
-        self.group(language.pick("SSH 主机", "SSH hosts"), cx)
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(header)
+            .child(config_banner)
             .child(controls)
             .children(
                 self.ssh_hosts
@@ -486,107 +780,46 @@ impl SettingsPane {
                     .as_ref()
                     .map(|error| div().text_sm().text_color(theme.danger).child(error.clone())),
             )
-            .child(
-                h_flex()
-                    .h(px(32.0))
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_color(theme.foreground)
-                            .child(language.pick("已保存主机", "Saved hosts")),
+            .child(v_flex().w_full().when(host_count > 0, |card| card.child(host_rows)).when(
+                host_count == 0,
+                |card| {
+                    card.child(
+                        v_flex()
+                            .py_6()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_color(muted)
+                                    .child(language.text(Message::HostsNoMatches)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(language.tr("settings.ssh.empty_hint")),
+                            ),
                     )
-                    .when(host_count > 0, |header| {
-                        header.child(
-                            div()
-                                .px(px(6.0))
-                                .rounded_sm()
-                                .text_xs()
-                                .text_color(muted)
-                                .bg(theme.muted)
-                                .child(SharedString::from(host_count.to_string())),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        NebulaButton::new("ssh-add-host")
-                            .label(language.pick("+ 添加主机", "+ Add host"))
-                            .primary()
-                            .disabled(self.ssh_library.busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_ssh_editor(None, window, cx);
-                            })),
-                    ),
-            )
-            .child(div().h(px(SSH_HOST_GAP)))
-            .child(
-                v_flex()
-                    .w_full()
-                    .rounded(px(8.0))
-                    .border_1()
-                    .border_color(theme.border)
-                    .overflow_hidden()
-                    .when(host_count > 0, |card| card.child(host_rows))
-                    .when(host_count == 0, |card| {
-                        card.child(
-                            v_flex()
-                                .py_6()
-                                .gap_1()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .text_color(muted)
-                                        .child(language.text(Message::HostsNoMatches)),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child(language.tr("settings.ssh.empty_hint")),
-                                ),
-                        )
-                    }),
-            )
-            .child(div().h(px(SSH_HOST_GAP)))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        NebulaButton::new("ssh-import")
-                            .label(language.pick("导入 ~/.ssh/config", "Import ~/.ssh/config"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.reload_host_library(cx);
-                            })),
-                    )
-                    .when(hidden_count > 0, |row| {
-                        let show = self.ssh_show_hidden;
-                        row.child(
-                            NebulaButton::new("ssh-toggle-hidden")
-                                .label(if show {
-                                    SharedString::from(
-                                        language.pick("收起已隐藏", "Collapse hidden"),
-                                    )
-                                } else {
-                                    SharedString::from(format!(
-                                        "{} {hidden_count}",
-                                        language.pick("已隐藏", "Hidden")
-                                    ))
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.ssh_show_hidden = !this.ssh_show_hidden;
-                                    cx.notify();
-                                })),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(language.tr("settings.ssh.shared_data_hint")),
-                    ),
-            )
+                },
+            ))
+            .when(hidden_count > 0, |group| {
+                let show = self.ssh_show_hidden;
+                group.child(
+                    NebulaButton::new("ssh-toggle-hidden")
+                        .label(if show {
+                            SharedString::from(language.pick("收起已隐藏", "Collapse hidden"))
+                        } else {
+                            SharedString::from(format!(
+                                "{} {hidden_count}",
+                                language.pick("已隐藏", "Hidden")
+                            ))
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.ssh_show_hidden = !this.ssh_show_hidden;
+                            cx.notify();
+                        })),
+                )
+            })
             .when_some(hidden_rows, |group, rows| {
                 group.child(div().h(px(8.0))).child(
                     v_flex()
@@ -634,4 +867,24 @@ impl SettingsPane {
                 )
             })
     }
+}
+
+fn host_auth_label(
+    profile: &crate::ssh_profiles::SshProfileAuth,
+    language: crate::display::UiLanguage,
+) -> String {
+    use crate::ssh_profiles::SshAuthMode;
+    if profile.auth == SshAuthMode::PublicKey {
+        if let Some(name) = profile.private_keys.first().and_then(|path| path.file_name()) {
+            return name.to_string_lossy().into_owned();
+        }
+    }
+    language
+        .text(match profile.auth {
+            SshAuthMode::Auto => Message::HostsAuthAuto,
+            SshAuthMode::Password => Message::HostsAuthPassword,
+            SshAuthMode::PublicKey => Message::HostsAuthKey,
+            SshAuthMode::KeyboardInteractive => Message::HostsAuthInteractive,
+        })
+        .to_owned()
 }

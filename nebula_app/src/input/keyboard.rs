@@ -1105,7 +1105,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             && matches!(&key.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("v"));
         if !is_paste_shortcut {
             match &key.logical_key {
-                Key::Named(NamedKey::Enter) => self.ctx.nebula_commit_line(),
+                Key::Named(NamedKey::Enter) if mods.is_empty() => self.ctx.nebula_commit_line(),
                 Key::Named(NamedKey::Backspace) if mods.control_key() => {
                     self.ctx.nebula_delete_word();
                 },
@@ -1155,7 +1155,12 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         let build_key_sequence = Self::should_build_sequence(&key, text, mode, mods);
         let is_modifier_key = Self::is_modifier_key(&key);
 
-        let bytes = if build_key_sequence {
+        let newline = key.logical_key == Key::Named(NamedKey::Enter)
+            && mods == ModifiersState::SHIFT
+            && terminal_input::shift_enter_as_lf(self.ctx.nebula_running_program(), mode);
+        let bytes = if newline {
+            b"\n".to_vec()
+        } else if build_key_sequence {
             terminal_input::build_sequence(&terminal_input::KeyInput::from(&key), mods, mode)
         } else {
             let mut bytes = Vec::with_capacity(text.len() + 1);

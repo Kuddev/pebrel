@@ -4,17 +4,26 @@
 //! 弹窗覆盖在终端之上而不参与主布局，避免为了短时管理命令永久压缩 PTY。
 
 use super::*;
+mod groups;
+mod rows;
+pub(super) use groups::GroupMenu;
+use groups::{CommandDrag, ManagerRow};
 
 const PANEL_MAX_WIDTH: f32 = 430.0;
 const PANEL_MAX_HEIGHT: f32 = 360.0;
 const PANEL_EMPTY_HEIGHT: f32 = 196.0;
-const PANEL_FIXED_HEIGHT: f32 = 108.0;
+// Search padding, list padding, two footer rows and the panel's two borders.
+const PANEL_FIXED_HEIGHT: f32 = 146.0;
+const GROUP_NAV_HEIGHT: f32 = 36.0;
 const PANEL_MARGIN: f32 = 8.0;
 // 覆盖层从自绘标题栏下沿开始；固定组件依赖当前将该区域定义为 34px。
 const WINDOW_TITLE_BAR_HEIGHT: f32 = 34.0;
 const PANEL_FOOTER_HEIGHT: f32 = 44.0;
 const ROW_HEIGHT: f32 = 62.0;
+const ROW_ICON_SIZE: f32 = 16.0;
+const ROW_ICON_SLOT: f32 = 24.0;
 const EDITOR_DIALOG_HEIGHT: f32 = 430.0;
+const COMMAND_INPUT_HEIGHT: f32 = 150.0;
 const DELETE_DIALOG_HEIGHT: f32 = 230.0;
 const MAX_SEARCH_BYTES: usize = 2 * 1024;
 const COMMAND_MANAGER_KEY_CONTEXT: &str = "NebulaSavedCommands";
@@ -29,6 +38,13 @@ fn custom_icon(path: &'static str) -> Icon {
 
 fn command_run_icon(builtin: bool, append_enter: bool) -> IconName {
     if builtin || append_enter { IconName::Play } else { IconName::SquareTerminal }
+}
+
+fn command_editor_input(state: &Entity<InputState>, cx: &App) -> Input {
+    Input::new(state)
+        .w_full()
+        .h(px(COMMAND_INPUT_HEIGHT))
+        .font_family(cx.theme().mono_font_family.clone())
 }
 
 /// 多行文本直接逐行送进 PTY 时，前台程序可能把第二行当成自己的 stdin。
@@ -48,6 +64,24 @@ fn dispatch_text(command: &crate::saved_commands::SavedCommand) -> String {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn on_command_manager_input_event(
+        &mut self,
+        _: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Change => {
+                self.command_manager_selected = 0;
+                self.command_manager_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            },
+            InputEvent::PressEnter { .. } => self.run_selected_saved_command(window, cx),
+            _ => {},
+        }
+    }
+
     fn available_saved_commands(&self, cx: &App) -> Vec<crate::saved_commands::SavedCommand> {
         use crate::saved_commands::builtins::CommandPlatform;
         let remote = self
@@ -65,10 +99,11 @@ impl NebulaWorkspace {
             CommandPlatform::Posix
         };
         let mut commands = self.saved_commands.commands().to_vec();
-        commands.extend(crate::saved_commands::builtins::commands(
-            crate::gpui_shell::config::ui_language(cx),
-            platform,
-        ));
+        commands.extend(
+            self.saved_commands
+                .builtin_commands(crate::gpui_shell::config::ui_language(cx), platform),
+        );
+        self.sort_command_groups(&mut commands, cx);
         commands
     }
 
@@ -78,7 +113,17 @@ impl NebulaWorkspace {
         if query.len() > MAX_SEARCH_BYTES {
             return Vec::new();
         }
-        let commands = self.available_saved_commands(cx);
+        let commands = self
+            .available_saved_commands(cx)
+            .into_iter()
+            .filter(|command| {
+                if let Some(group) = self.command_manager_group.as_deref() {
+                    self.saved_commands.group_for(&command.id) == Some(group)
+                } else {
+                    !query.is_empty() || self.saved_commands.group_for(&command.id).is_none()
+                }
+            })
+            .collect::<Vec<_>>();
         if query.is_empty() {
             return commands;
         }
@@ -93,7 +138,9 @@ impl NebulaWorkspace {
             })
             .collect::<Vec<_>>();
         matches.sort_by(|(a, ai, _), (b, bi, _)| b.cmp(a).then(ai.cmp(bi)));
-        matches.into_iter().map(|(_, _, command)| command).collect()
+        let mut commands = matches.into_iter().map(|(_, _, command)| command).collect::<Vec<_>>();
+        self.sort_command_groups(&mut commands, cx);
+        commands
     }
 
     pub(super) fn toggle_command_manager(
@@ -107,21 +154,17 @@ impl NebulaWorkspace {
         }
         self.dismiss_palette_state();
         if let Err(error) = self.saved_commands.reload() {
-            let message = format!(
-                "{}{error}",
-                crate::gpui_shell::config::ui_language(cx)
-                    .pick("无法读取已保存命令：", "Could not read saved commands: "),
-            );
             crate::gpui_shell::toast::toast(
                 window,
                 cx,
                 crate::display::ToastKind::Warning,
-                message,
+                format!("无法读取已保存命令：{error}"),
             );
         }
         self.command_manager_open = true;
+        self.command_manager_group = None;
         self.command_manager_selected = 0;
-        self.command_manager_scroll.set_offset(gpui::point(px(0.0), px(0.0)));
+        self.command_manager_scroll.scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
         self.command_manager_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
             input.focus(window, cx);
@@ -134,6 +177,7 @@ impl NebulaWorkspace {
             return;
         }
         self.command_manager_open = false;
+        self.command_group_menu = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -154,13 +198,14 @@ impl NebulaWorkspace {
         if !self.command_manager_open {
             return;
         }
-        let len = self.filtered_saved_commands(cx).len();
+        let len = self.command_manager_rows(cx).len();
         self.command_manager_selected = if len == 0 {
             0
         } else {
             (self.command_manager_selected as isize + delta).rem_euclid(len as isize) as usize
         };
-        self.command_manager_scroll.scroll_to_item(self.command_manager_selected);
+        self.command_manager_scroll
+            .scroll_to_item(self.command_manager_selected, gpui::ScrollStrategy::Top);
         cx.notify();
     }
 
@@ -169,9 +214,10 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let command = self.filtered_saved_commands(cx).get(self.command_manager_selected).cloned();
-        if let Some(command) = command {
-            self.dispatch_saved_command(command, window, cx);
+        match self.command_manager_rows(cx).get(self.command_manager_selected).cloned() {
+            Some(ManagerRow::Command(command)) => self.dispatch_saved_command(command, window, cx),
+            Some(ManagerRow::Folder { id, .. }) => self.enter_command_group(Some(id), window, cx),
+            None => {},
         }
     }
 
@@ -183,13 +229,11 @@ impl NebulaWorkspace {
     ) {
         let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view).cloned();
         let Some(view) = view else {
-            let message = crate::gpui_shell::config::ui_language(cx)
-                .pick("当前标签不是可用的终端", "The current tab is not a usable terminal");
             crate::gpui_shell::toast::toast(
                 window,
                 cx,
                 crate::display::ToastKind::Warning,
-                message,
+                "当前标签不是可用的终端",
             );
             return;
         };
@@ -202,20 +246,12 @@ impl NebulaWorkspace {
                 self.focus_active(window, cx);
                 cx.notify();
             },
-            Err(error) => {
-                let message = format!(
-                    "{}{}",
-                    crate::gpui_shell::config::ui_language(cx)
-                        .pick("无法发送命令：", "Could not send command: "),
-                    error.message,
-                );
-                crate::gpui_shell::toast::toast(
-                    window,
-                    cx,
-                    crate::display::ToastKind::Warning,
-                    message,
-                );
-            },
+            Err(error) => crate::gpui_shell::toast::toast(
+                window,
+                cx,
+                crate::display::ToastKind::Warning,
+                format!("无法发送命令：{}", error.message),
+            ),
         }
     }
 
@@ -226,13 +262,7 @@ impl NebulaWorkspace {
         cx: &mut Context<'_, Self>,
     ) {
         cx.write_to_clipboard(ClipboardItem::new_string(command.command.clone()));
-        let message = crate::gpui_shell::config::ui_language(cx).pick("命令已复制", "Command copied");
-        crate::gpui_shell::toast::toast(
-            window,
-            cx,
-            crate::display::ToastKind::Info,
-            message,
-        );
+        crate::gpui_shell::toast::toast(window, cx, crate::display::ToastKind::Info, "命令已复制");
     }
 
     fn open_saved_command_editor(
@@ -245,13 +275,11 @@ impl NebulaWorkspace {
             self.available_saved_commands(cx).into_iter().find(|command| command.id == id)
         });
         if edit_id.is_some() && current.is_none() {
-            let message = crate::gpui_shell::config::ui_language(cx)
-                .pick("这条命令已不存在", "This command no longer exists");
             crate::gpui_shell::toast::toast(
                 window,
                 cx,
                 crate::display::ToastKind::Warning,
-                message,
+                "这条命令已不存在",
             );
             return;
         }
@@ -317,13 +345,7 @@ impl NebulaWorkspace {
                         .child(
                             div().text_sm().font_semibold().child(language.pick("命令", "Command")),
                         )
-                        .child(
-                            div().w_full().h(px(150.0)).child(
-                                Input::new(&command)
-                                    .w_full()
-                                    .font_family(cx.theme().mono_font_family.clone()),
-                            ),
-                        ),
+                        .child(command_editor_input(&command, cx)),
                 )
                 .child(
                     gpui_component::checkbox::Checkbox::new("saved-command-append-enter")
@@ -376,7 +398,12 @@ impl NebulaWorkspace {
                             },
                             None => workspace
                                 .saved_commands
-                                .insert(&name, &command, append_enter)
+                                .insert_in_group(
+                                    &name,
+                                    &command,
+                                    append_enter,
+                                    workspace.command_manager_group.as_deref(),
+                                )
                                 .map(|_| ()),
                         };
                         if result.is_ok() {
@@ -423,7 +450,7 @@ impl NebulaWorkspace {
         cx: &mut Context<'_, Self>,
     ) {
         let Some(command) =
-            self.saved_commands.commands().iter().find(|command| command.id == id).cloned()
+            self.available_saved_commands(cx).into_iter().find(|command| command.id == id)
         else {
             return;
         };
@@ -454,12 +481,14 @@ impl NebulaWorkspace {
                 .child(
                     DialogClose::new().child(
                         Button::new("saved-command-delete-cancel")
+                            .debug_selector(|| "saved-command-delete-cancel".into())
                             .label(language.pick("取消", "Cancel")),
                     ),
                 )
                 .child(
                     DialogAction::new().child(
                         Button::new("saved-command-delete-confirm")
+                            .debug_selector(|| "saved-command-delete-confirm".into())
                             .label(language.pick("删除", "Delete"))
                             .danger(),
                     ),
@@ -517,18 +546,15 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> gpui::AnyElement {
-        use crate::display::ui::tokens::{control, radius, space};
+        use crate::display::ui::tokens::{control, radius};
 
         let theme = cx.theme();
         let panel_bg = theme.popover;
         let surface_bg = theme.muted;
-        let selected_bg = theme.list_active;
         let hover_bg = theme.list_hover;
         let foreground = theme.foreground;
         let muted = theme.muted_foreground;
         let border = theme.border;
-        let accent = theme.primary;
-        let mono_family = theme.mono_font_family.clone();
         let language = crate::gpui_shell::config::ui_language(cx);
         let viewport = window.viewport_size();
         let panel_width =
@@ -536,196 +562,17 @@ impl NebulaWorkspace {
         let available_height =
             (f32::from(viewport.height) - WINDOW_TITLE_BAR_HEIGHT - PANEL_MARGIN * 2.0).max(0.0);
 
-        let commands = self.filtered_saved_commands(cx);
-        if self.command_manager_selected >= commands.len() {
-            self.command_manager_selected = commands.len().saturating_sub(1);
-        }
-        let selected_index = self.command_manager_selected;
-        // 固定区域只保留搜索和新增入口；命令增多时仅滚动中间列表，避免退化成大面板。
-        let desired_height = if commands.is_empty() {
-            PANEL_EMPTY_HEIGHT
-        } else {
-            PANEL_FIXED_HEIGHT + commands.len() as f32 * ROW_HEIGHT
-        };
+        let rows = self.command_manager_rows(cx);
+        self.command_manager_selected =
+            self.command_manager_selected.min(rows.len().saturating_sub(1));
+        let in_group = self.command_manager_group.is_some();
+        let fixed_height = PANEL_FIXED_HEIGHT
+            + if in_group { GROUP_NAV_HEIGHT - PANEL_FOOTER_HEIGHT } else { 0.0 };
+        let content_height = rows.len() as f32 * ROW_HEIGHT;
+        let desired_height =
+            if rows.is_empty() { PANEL_EMPTY_HEIGHT } else { fixed_height + content_height };
         let panel_height = desired_height.min(PANEL_MAX_HEIGHT).min(available_height);
-        let list_scrollable =
-            commands.len() as f32 * ROW_HEIGHT > (panel_height - PANEL_FIXED_HEIGHT).max(0.0);
-
-        let mut rows = Vec::with_capacity(commands.len());
-        for (index, command) in commands.into_iter().enumerate() {
-            let selected = index == selected_index;
-            let builtin = command.id.starts_with("builtin:");
-            let hover_group = SharedString::from(format!("saved-command-row-hover-{index}"));
-            let preview = command
-                .command
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ");
-            let mode_label = if builtin {
-                language.text(crate::i18n::Message::CommandsBuiltinLabel)
-            } else if command.append_enter {
-                language.pick("运行", "Run")
-            } else {
-                language.pick("插入", "Insert")
-            };
-            let run_tooltip = if command.append_enter {
-                language.pick("运行命令", "Run command")
-            } else {
-                language.pick("插入到当前终端", "Insert into current terminal")
-            };
-            let run_icon = command_run_icon(builtin, command.append_enter);
-            let run_command = command.clone();
-            let row_command = command.clone();
-            let copy_command = command.clone();
-            let edit_id = command.id.clone();
-            let delete_id = command.id.clone();
-
-            rows.push(
-                h_flex()
-                    .id(SharedString::from(format!("saved-command-row-{index}")))
-                    .group(hover_group.clone())
-                    .w_full()
-                    .h(px(ROW_HEIGHT))
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(space::XS))
-                    .px_2()
-                    .when(list_scrollable, |row| row.pr(px(18.0)))
-                    .rounded(px(radius::CONTROL))
-                    .cursor_pointer()
-                    .when(selected, |row| row.bg(selected_bg))
-                    .when(!selected, |row| {
-                        row.group_hover(hover_group.clone(), |row| row.bg(hover_bg))
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.command_manager_selected = index;
-                        this.dispatch_saved_command(row_command.clone(), window, cx);
-                    }))
-                    .child(
-                        Button::new(SharedString::from(format!("saved-command-run-{index}")))
-                            .icon(run_icon)
-                            .ghost()
-                            .xsmall()
-                            .tooltip(run_tooltip)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.command_manager_selected = index;
-                                this.dispatch_saved_command(run_command.clone(), window, cx);
-                            })),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(space::XXS))
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_sm()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(foreground)
-                                            .child(command.name),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .rounded(px(radius::CHIP))
-                                            .border_1()
-                                            .border_color(border)
-                                            .px_1()
-                                            .text_size(px(10.0))
-                                            .text_color(if selected { accent } else { muted })
-                                            .child(mode_label),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_family(mono_family.clone())
-                                    .text_size(px(11.0))
-                                    .text_color(muted)
-                                    .child(preview),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                Button::new(SharedString::from(format!(
-                                    "saved-command-copy-{index}"
-                                )))
-                                .icon(IconName::Copy)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(language.pick("复制命令", "Copy command"))
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.copy_saved_command(&copy_command, window, cx);
-                                    },
-                                )),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!(
-                                    "saved-command-edit-{index}"
-                                )))
-                                .icon(custom_icon(crate::gpui_shell::assets::nav::PENCIL))
-                                .ghost()
-                                .xsmall()
-                                .tooltip(if builtin {
-                                    language.text(crate::i18n::Message::CommandsSaveCopy)
-                                } else {
-                                    language.pick("编辑命令", "Edit command")
-                                })
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.open_saved_command_editor(
-                                            Some(edit_id.clone()),
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                )),
-                            )
-                            .when(!builtin, |actions| {
-                                actions.child(
-                                    Button::new(SharedString::from(format!(
-                                        "saved-command-delete-{index}"
-                                    )))
-                                    .icon(custom_icon(crate::gpui_shell::assets::nav::TRASH))
-                                    .ghost()
-                                    .xsmall()
-                                    .tooltip(language.pick("删除命令", "Delete command"))
-                                    .on_click(cx.listener(
-                                        move |this, _, window, cx| {
-                                            cx.stop_propagation();
-                                            this.open_delete_saved_command_dialog(
-                                                delete_id.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        },
-                                    )),
-                                )
-                            }),
-                    )
-                    .into_any_element(),
-            );
-        }
+        let list_scrollable = content_height > (panel_height - fixed_height).max(0.0);
 
         let search_box = h_flex()
             .w_full()
@@ -763,12 +610,25 @@ impl NebulaWorkspace {
                 .into_any_element()
         } else {
             let scroll_handle = self.command_manager_scroll.clone();
-            let list = v_flex()
-                .id("saved-command-results-scroll")
-                .size_full()
-                .overflow_y_scroll()
-                .track_scroll(&scroll_handle)
-                .children(rows);
+            let list = gpui::uniform_list(
+                "saved-command-results-scroll",
+                rows.len(),
+                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                    range
+                        .map(|index| match rows[index].clone() {
+                            ManagerRow::Command(command) => {
+                                this.render_saved_command_row(index, command, list_scrollable, cx)
+                            },
+                            ManagerRow::Folder { id, name, count } => {
+                                this.render_command_folder(index, id, name, count, cx)
+                            },
+                        })
+                        .collect()
+                }),
+            )
+            .size_full()
+            .with_sizing_behavior(gpui::ListSizingBehavior::Auto)
+            .track_scroll(&scroll_handle);
             div()
                 .relative()
                 .size_full()
@@ -777,8 +637,10 @@ impl NebulaWorkspace {
                 .child(list)
                 .when(list_scrollable, |list| {
                     list.child(
-                        gpui_component::scroll::Scrollbar::vertical(&scroll_handle)
-                            .scrollbar_show(gpui_component::scroll::ScrollbarShow::Always),
+                        div().absolute().top_0().right_0().bottom_0().w(px(16.0)).child(
+                            gpui_component::scroll::Scrollbar::vertical(&scroll_handle)
+                                .scrollbar_show(gpui_component::scroll::ScrollbarShow::Always),
+                        ),
                     )
                 })
                 .into_any_element()
@@ -806,7 +668,18 @@ impl NebulaWorkspace {
                         cx.stop_propagation();
                     },
                     "escape" => {
-                        this.close_command_manager(window, cx);
+                        if this.command_manager_group.is_some() {
+                            this.enter_command_group(None, window, cx);
+                        } else {
+                            this.close_command_manager(window, cx);
+                        }
+                        cx.stop_propagation();
+                    },
+                    "left" | "backspace"
+                        if this.command_manager_group.is_some()
+                            && this.command_manager_input.read(cx).value().is_empty() =>
+                    {
+                        this.enter_command_group(None, window, cx);
                         cx.stop_propagation();
                     },
                     _ => {},
@@ -831,10 +704,15 @@ impl NebulaWorkspace {
                         cx.listener(|_, _, _, cx| cx.stop_propagation()),
                     )
                     .child(div().w_full().flex_shrink_0().p_2().child(search_box))
+                    .when(in_group, |panel| panel.child(self.render_command_group_navigation(cx)))
                     .child(div().flex_1().min_h_0().px_2().pb_2().child(list_content))
                     .child(
                         h_flex()
                             .id("saved-command-add")
+                            .debug_selector(|| "saved-command-add".into())
+                            .focusable()
+                            .tab_stop(true)
+                            .role(gpui::Role::Button)
                             .w_full()
                             .h(px(PANEL_FOOTER_HEIGHT))
                             .flex_shrink_0()
@@ -847,14 +725,70 @@ impl NebulaWorkspace {
                             .text_color(muted)
                             .cursor_pointer()
                             .hover(move |row| row.bg(hover_bg).text_color(foreground))
+                            .active(move |row| row.bg(hover_bg))
+                            .focus_visible(move |row| row.bg(hover_bg).text_color(foreground))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    cx.stop_propagation();
+                                    this.open_saved_command_editor(None, window, cx);
+                                }
+                            }))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.open_saved_command_editor(None, window, cx);
                             }))
-                            .child(Icon::new(IconName::Plus).xsmall())
-                            .child(language.pick("新增命令", "Command")),
-                    ),
+                            .child(
+                                div()
+                                    .id("saved-command-add-icon")
+                                    .debug_selector(|| "saved-command-add-icon".into())
+                                    .child(Icon::new(IconName::Plus).xsmall()),
+                            )
+                            .child(language.text(crate::i18n::Message::CommandsAddCommand)),
+                    )
+                    .when(!in_group, |panel| {
+                        panel.child(
+                            h_flex()
+                                .id("saved-command-add-group")
+                                .debug_selector(|| "saved-command-add-group".into())
+                                .focusable()
+                                .tab_stop(true)
+                                .role(gpui::Role::Button)
+                                .w_full()
+                                .h(px(PANEL_FOOTER_HEIGHT))
+                                .flex_shrink_0()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .text_sm()
+                                .text_color(muted)
+                                .cursor_pointer()
+                                .hover(move |row| row.bg(hover_bg).text_color(foreground))
+                                .active(move |row| row.bg(hover_bg))
+                                .focus_visible(move |row| row.bg(hover_bg).text_color(foreground))
+                                .on_key_down(cx.listener(
+                                    |this, event: &KeyDownEvent, window, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            cx.stop_propagation();
+                                            this.open_command_group_editor(window, cx);
+                                        }
+                                    },
+                                ))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_command_group_editor(window, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .id("saved-command-add-group-icon")
+                                        .debug_selector(|| "saved-command-add-group-icon".into())
+                                        .child(Icon::new(IconName::Folder).xsmall()),
+                                )
+                                .child(language.text(crate::i18n::Message::CommandsAddGroup)),
+                        )
+                    }),
             )
+            .children(self.render_command_group_menu())
             .into_any_element()
     }
 }
@@ -870,3 +804,9 @@ mod tests {
         assert!(matches!(command_run_icon(false, false), IconName::SquareTerminal));
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod input_tests;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod group_tests;

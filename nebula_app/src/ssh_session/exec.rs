@@ -11,18 +11,27 @@ pub(super) async fn capture(
     raw_destination: &str,
 ) -> Result<String, SessionError> {
     let mut channel = lifecycle::own_channel(channel);
-    channel.exec(true, command).await?;
-    if !script.is_empty() {
-        channel.data_bytes(script.to_vec()).await?;
-        // 不发 EOF 的话远端 `sh` 会一直等更多输入，命令永远不结束。
-        channel.eof().await?;
-    }
-
     let collect = async {
+        channel.exec(true, command).await?;
+        let mut submitted = script.is_empty();
         let mut stdout = Vec::new();
         while let Some(message) = channel.wait().await {
             match message {
-                ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                ChannelMsg::Success if !submitted => {
+                    channel.data_bytes(script.to_vec()).await?;
+                    channel.eof().await?;
+                    submitted = true;
+                },
+                ChannelMsg::Data { data } => {
+                    if stdout.len().saturating_add(data.len()) > 16 * 1024 * 1024 {
+                        return Err("remote probe exceeded its output budget".into());
+                    }
+                    stdout.extend_from_slice(&data);
+                },
+                ChannelMsg::Failure => return Err("remote server rejected exec request".into()),
+                ChannelMsg::ExitStatus { exit_status } if exit_status != 0 => {
+                    return Err(format!("remote command exited with status {exit_status}").into());
+                },
                 // 标准错误只当诊断线索，不混进结果——远端的 `ps: not found`
                 // 之类抱怨不该被当成路径。
                 ChannelMsg::ExtendedData { data, .. } => {
@@ -37,7 +46,7 @@ pub(super) async fn capture(
                 _ => {},
             }
         }
-        stdout
+        Ok::<_, SessionError>(stdout)
     };
 
     let result = tokio::time::timeout(budget, collect).await;
@@ -47,7 +56,7 @@ pub(super) async fn capture(
         // "整次探测失败"；真正需要字节精度的路径操作走 SFTP，不走这里。
         Ok(stdout) => {
             closed?;
-            Ok(String::from_utf8_lossy(&stdout).into_owned())
+            Ok(String::from_utf8_lossy(&stdout?).into_owned())
         },
         Err(_) => Err(format!("远端命令超过 {} 秒未返回", budget.as_secs()).into()),
     }

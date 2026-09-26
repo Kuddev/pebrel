@@ -357,6 +357,10 @@ impl<T: EventListener> Execute<T> for Action {
             // and profiles all ride the shared tab-request/display plumbing,
             // which is platform-independent (the tab bar is self-drawn).
             Action::CloseTab => ctx.nebula_tab(crate::event::TabRequest::Close),
+            Action::RenameTab => {
+                let index = ctx.display().active_tab_index();
+                ctx.nebula_tab(crate::event::TabRequest::BeginRename(index));
+            },
             Action::SplitRight => ctx.nebula_tab(crate::event::TabRequest::SplitToggle(
                 crate::display::SplitDirection::LeftRight,
             )),

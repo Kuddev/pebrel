@@ -110,11 +110,7 @@ impl AiSession {
     fn ensure_title(&mut self) {
         if self.title.is_empty() {
             let short = self.id.chars().take(8).collect::<String>();
-            self.title = if crate::i18n::UiLanguage::current() == crate::i18n::UiLanguage::ZhCn {
-                format!("{} 会话 {short}", self.source.display_name())
-            } else {
-                format!("{} session {short}", self.source.display_name())
-            };
+            self.title = format!("{} 会话 {short}", self.source.display_name());
         }
     }
 }
@@ -289,28 +285,11 @@ pub fn scan(limit: usize) -> Vec<AiSession> {
 pub fn relative_label(modified: SystemTime) -> String {
     let elapsed = SystemTime::now().duration_since(modified).unwrap_or(Duration::ZERO);
     let minutes = elapsed.as_secs() / 60;
-    let language = crate::i18n::UiLanguage::current();
-    let count = |value: u64| value.to_string();
     match minutes {
-        0 => language.text(crate::i18n::Message::TimeJustNow).to_owned(),
-        1 => language.text(crate::i18n::Message::TimeMinuteAgo).to_owned(),
-        2..=59 => language.format(crate::i18n::Message::TimeMinutesAgo, &[("count", &count(minutes))]),
-        60..=1439 => {
-            let hours = minutes / 60;
-            if hours == 1 {
-                language.text(crate::i18n::Message::TimeHourAgo).to_owned()
-            } else {
-                language.format(crate::i18n::Message::TimeHoursAgo, &[("count", &count(hours))])
-            }
-        },
-        _ => {
-            let days = minutes / 1440;
-            if days == 1 {
-                language.text(crate::i18n::Message::TimeDayAgo).to_owned()
-            } else {
-                language.format(crate::i18n::Message::TimeDaysAgo, &[("count", &count(days))])
-            }
-        },
+        0 => "刚刚".to_owned(),
+        1..=59 => format!("{minutes} 分钟前"),
+        60..=1439 => format!("{} 小时前", minutes / 60),
+        _ => format!("{} 天前", minutes / 1440),
     }
 }
 
@@ -398,14 +377,7 @@ fn scan_codex() -> Vec<AiSession> {
 /// rollout 文件名末尾是会话 uuid：`rollout-2026-08-01T12-30-00-<uuid>.jsonl`。
 /// 按「最后 36 个字符 + 连字符位置」验证，不然时间戳里的数字段会被当成 id。
 fn codex_session_id(path: &Path) -> Option<String> {
-    let stem = path.file_stem()?.to_str()?;
-    if stem.len() < 36 {
-        return None;
-    }
-    let (_, tail) = stem.split_at(stem.len() - 36);
-    let dashes_ok = tail.match_indices('-').map(|(i, _)| i).eq([8, 13, 18, 23]);
-    let charset_ok = tail.chars().all(|c| c == '-' || c.is_ascii_hexdigit());
-    (dashes_ok && charset_ok).then(|| tail.to_owned())
+    crate::session::codex_rollout_id(path.to_str()?).map(str::to_owned)
 }
 
 fn read_head(path: &Path, limit: usize) -> std::io::Result<String> {
@@ -608,8 +580,9 @@ mod tests {
 
     #[test]
     fn codex_ids_come_from_the_uuid_tail_only() {
-        let path =
-            Path::new("rollout-2026-08-01T12-30-00-0199a213-c2a4-7cf5-8f6b-d746fbb6e86c.jsonl");
+        let path = Path::new(
+            "/sessions/rollout-2026-08-01T12-30-00-0199a213-c2a4-7cf5-8f6b-d746fbb6e86c.jsonl",
+        );
         assert_eq!(codex_session_id(path), Some("0199a213-c2a4-7cf5-8f6b-d746fbb6e86c".to_owned()));
         // 名字不带 uuid 的不是会话文件。
         assert_eq!(codex_session_id(Path::new("rollout-notes.jsonl")), None);

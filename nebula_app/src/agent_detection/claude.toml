@@ -15,18 +15,6 @@ any = [
   { contains = ["tab to amend"] },
 ]
 
-[[rules]]
-id = "yes_no_blocked"
-state = "blocked"
-priority = 700
-region = "bottom_non_empty_lines(12)"
-any = [
-  { contains = ["do you want to proceed?"] },
-  { contains = ["waiting for permission"] },
-  { contains = ["(y/n)"] },
-  { contains = ["[y/n]"] },
-]
-
 # 回合进行中的唯一可靠证据是底栏的「esc to interrupt」：Claude Code 只在
 # 真正可中断（即回合未结束）时打印它，回合一结束整行消失。
 #

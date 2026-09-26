@@ -18,6 +18,7 @@ _pebrel() {
 '--embed=[X11 window ID to embed Pebrel within (decimal or hexadecimal with "0x" prefix)]:EMBED:_default' \
 '--config-file=[Specify an alternative configuration file.]:CONFIG_FILE:_files' \
 '--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
+'(-e --command)--shell=[Start this shell instead of the configured default one, by the same id the \`shell\` setting uses (\`pwsh\`, \`cmd\`, \`wsl\:Ubuntu\`, or a profile'\''s settings id)]:ID:_default' \
 '*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
 '*--command=[Command and args to execute (must be last argument)]:COMMAND:_default' \
 '-T+[Defines the window title \[default\: Pebrel\]]:TITLE:_default' \
@@ -1128,7 +1129,10 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (setup-ai)
 _arguments "${_arguments_options[@]}" : \
-'--remove[Remove Pebrel'\''s hooks from claude'\''s settings.json instead of installing them]' \
+'(--wsl)--ssh=[Install or remove hooks on an SSH host (alias or user@host)]:DESTINATION:_default' \
+'--wsl=[Install or remove hooks in a WSL distribution'\''s own user configuration]:DISTRIBUTION:_default' \
+'--wsl-user=[WSL user; defaults to that distribution'\''s configured user]:USER:_default' \
+'--remove[Remove Pebrel-managed hooks for every supported agent and preserve other integrations. Without this flag, enable Claude Code and Codex plus agents explicitly enabled in settings]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0

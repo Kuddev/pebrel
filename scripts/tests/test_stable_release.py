@@ -16,6 +16,7 @@ from scripts.stable_release import (
 )
 from scripts.preview_release import sha256
 from scripts.preview_release import MIN_ASSET_SIZE
+from scripts.ci_plan import plan_matrices
 
 
 VERSION = "1.6.0"
@@ -68,21 +69,48 @@ def notes(checksum_placeholder: bool = True) -> str:
 
 
 class StableReleaseTests(unittest.TestCase):
-    def test_stable_workflow_runs_gpui_interaction_tests_on_every_platform(self) -> None:
+    def test_stable_workflow_packages_without_repeating_native_tests(self) -> None:
+        # The Full native tests workflow already covers every PR, merge group
+        # and main push; the release run only packages and verifies the runtime
+        # conformance evidence of each package, so its wall time is bounded by
+        # the slowest build rather than by test scheduling.
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        command = "cargo test --locked -p nebula --bin pebrel --features gpui-test-support gpui_shell::"
-        self.assertEqual(workflow.count(command), 3)
-        windows_step = workflow.split("      - name: Test workspace and native harness\n", 1)[1]
-        windows_step = windows_step.split("      - name:", 1)[0]
-        self.assertIn("shell: pwsh", windows_step)
-        lines = [line.strip() for line in windows_step.splitlines()]
-        commands = 0
-        for index, line in enumerate(lines):
-            if line.startswith(("cargo test ", "python -m unittest ")):
-                commands += 1
-                self.assertEqual(lines[index + 1], "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
-        self.assertEqual(commands, 5)
+        self.assertNotIn("  native-tests:\n", workflow)
+        self.assertNotIn("uses: ./.github/workflows/linux-lua.yml", workflow)
+        shared = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
+        # Platform coverage comes from the event plan, not literal runner names
+        # in YAML. Verify both the consumer wiring and the full caller matrices.
+        for output in ("native_matrix", "release_matrix"):
+            self.assertIn(f"fromJSON(needs.lint.outputs.{output})", shared)
+        self.assertIn("runs-on: ${{ matrix.os }}", shared)
+        for event in ("push", "merge_group", "workflow_call", "workflow_dispatch"):
+            with self.subTest(event=event):
+                native, release = plan_matrices(event, {})
+                self.assertCountEqual(
+                    [row["os"] for row in native],
+                    ["ubuntu-24.04", "windows-2022", "windows-11-arm", "macos-26", "macos-26-intel"],
+                )
+                self.assertCountEqual(
+                    [row["os"] for row in release], ["macos-26", "macos-26-intel"],
+                )
+        for trigger in ("pull_request:", "merge_group:", "branches: [main]"):
+            self.assertIn(trigger, shared)
+        self.assertIn("run: python scripts/ci_native_tests.py", shared)
+        self.assertIn("cargo check --locked --workspace --release", shared)
+        self.assertIn("tools/i18n-contract/Cargo.toml", shared)
+        self.assertNotIn("continue-on-error", shared)
+        aggregate = workflow.split("\n  aggregate:\n", 1)[1].split("\n  publish:\n", 1)[0]
+        self.assertIn("needs: [prepare, linux, macos, windows, windows-arm64]", aggregate)
+        self.assertIn("windows_arm64=True", aggregate)
+        arm = workflow.split("\n  windows-arm64:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
+        for required in ("runs-on: windows-11-arm", "host: aarch64-pc-windows-msvc",
+                         "-Architecture arm64", "windows-arm64-report.json",
+                         "scripts/build-windows-product.ps1", "scripts/build-installer.ps1",
+                         "windows-arm64-setup.exe", "--platform windows-aarch64"):
+            self.assertIn(required, arm)
+        self.assertNotIn("continue-on-error", arm)
+        self.assertNotIn("always()", aggregate)
 
     def test_native_packagers_expose_stable_channel_without_preview_id(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -110,12 +138,48 @@ class StableReleaseTests(unittest.TestCase):
             expected_asset_names("1.6.0-rc.1")
 
     def test_17_and_later_assets_use_only_pebrel_installer(self) -> None:
-        for version in ("1.7.0", "1.7.1", "1.10.0", "2.0.0"):
+        for version in ("1.7.0", "1.7.1", "1.9.0", "1.9.1", "1.9.2", "1.10.0", "2.0.0"):
             with self.subTest(version=version):
                 names = expected_asset_names(version)
-                self.assertEqual(len(names), 7)
+                parsed = tuple(map(int, version.split('.')))
+                self.assertEqual(len(names), 9 if parsed >= (1, 9, 2) else 8 if parsed >= (1, 9, 0) else 7)
                 self.assertIn(f"Pebrel-v{version}-windows-x64-setup.exe", names)
                 self.assertNotIn(f"NebulaTerminal-{version}-windows-x64-setup.exe", names)
+
+    def test_19_requires_native_windows_arm64_without_changing_historical_assets(self) -> None:
+        self.assertNotIn("Pebrel-v1.8.2-windows-arm64.zip", expected_asset_names("1.8.2"))
+        version = "1.9.0"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in expected_asset_names(version):
+                write_fake_asset(root / name)
+            self.assertEqual(len(validate_assets(root, version)), 8)
+            (root / "Pebrel-v1.9.0-windows-arm64.zip").unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing: Pebrel-v1.9.0-windows-arm64.zip"):
+                validate_assets(root, version)
+
+    def test_post_191_requires_native_windows_arm64_installer(self) -> None:
+        for version in ("1.9.0", "1.9.1"):
+            with self.subTest(historical_version=version):
+                self.assertNotIn(
+                    f"Pebrel-v{version}-windows-arm64-setup.exe",
+                    expected_asset_names(version),
+                )
+        for version in ("1.9.2", "1.10.0", "2.0.0"):
+            with self.subTest(version=version):
+                self.assertIn(
+                    f"Pebrel-v{version}-windows-arm64-setup.exe",
+                    expected_asset_names(version),
+                )
+        version = "1.9.2"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in expected_asset_names(version):
+                write_fake_asset(root / name)
+            self.assertEqual(len(validate_assets(root, version)), 9)
+            (root / f"Pebrel-v{version}-windows-arm64-setup.exe").unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing: Pebrel-v1.9.2-windows-arm64-setup.exe"):
+                validate_assets(root, version)
 
     def test_17_assets_reject_retired_alias_and_missing_installer(self) -> None:
         version = "1.7.0"
@@ -180,6 +244,27 @@ class StableReleaseTests(unittest.TestCase):
             source.write_text(notes().replace("https://github.com/Kuddev", "https://example.invalid"), encoding="utf-8")
             with self.assertRaisesRegex(StableReleaseError, "GitHub links"):
                 validate_notes(source, VERSION)
+
+    def test_notes_allow_no_pr_contributors_but_keep_section_contracts(self) -> None:
+        before, rest = notes().split("## Contributors\n", 1)
+        contributor_body, after = rest.split("## SHA256\n", 1)
+        without_contributors = before + "## SHA256\n" + after
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "notes.md"
+            source.write_text(without_contributors, encoding="utf-8")
+            self.assertEqual(validate_notes(source, VERSION), without_contributors)
+            invalid = (
+                (before + "## Contributors\n\n## SHA256\n" + after, "GitHub links"),
+                (notes().replace("## Contributors", "## Contributors\n\n## Contributors"), "at most one"),
+                (without_contributors + "\n## Contributors\n" + contributor_body, "out of order"),
+                (without_contributors.replace("### 新增", "### 修复"), "matching bilingual"),
+                (without_contributors.replace("## 中文", "## Chinese"), "require one"),
+            )
+            for body, error in invalid:
+                with self.subTest(error=error):
+                    source.write_text(body, encoding="utf-8")
+                    with self.assertRaisesRegex(StableReleaseError, error):
+                        validate_notes(source, VERSION)
 
     def test_changelog_must_list_the_same_stable_asset_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

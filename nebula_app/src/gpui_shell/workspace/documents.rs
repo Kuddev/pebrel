@@ -15,6 +15,14 @@ impl WorkspaceTab {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn sync_document_activity(&self, window: &mut Window, cx: &mut Context<Self>) {
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let Some(file) = tab.file_editor(cx) else { continue };
+            let active = index == self.active && !self.settings_open && !self.window_hidden;
+            file.update(cx, |file, cx| file.set_render_active(active, window, cx));
+        }
+    }
+
     pub(super) fn guard_file_tab_close(
         &mut self,
         index: usize,
@@ -316,6 +324,7 @@ impl NebulaWorkspace {
     ) {
         match event {
             DocTabViewEvent::Changed => cx.notify(),
+            DocTabViewEvent::DetailsRequested => self.toggle_document_details(cx),
             DocTabViewEvent::SelectionContextMenuRequested { position, text } => {
                 self.open_document_selection_context_menu(*position, text.clone(), window, cx);
             },

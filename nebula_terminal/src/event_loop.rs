@@ -195,11 +195,15 @@ impl StreamProcessor {
         bytes: &[u8],
     ) {
         let osc_events = self.cwd_sniffer.feed(bytes);
-        let mut latest_cwd = None;
         let mut advanced = 0;
         for (offset, event) in osc_events {
+            // Titles and shell identity/cwd reports must retain wire order:
+            // coalescing a remote cwd past a parent prompt would attribute that
+            // directory to the parent shell's completion history.
+            self.parser.advance(terminal, &bytes[advanced..offset]);
+            advanced = offset;
             match event {
-                OscEvent::Cwd(cwd) => latest_cwd = Some(cwd),
+                OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
                 OscEvent::CommandStart => {
                     terminal.nebula_end_prompt();
                     event_proxy.send_event(Event::CommandStart);
@@ -221,13 +225,10 @@ impl StreamProcessor {
                     }
                 },
                 OscEvent::PromptMark => {
-                    self.parser.advance(terminal, &bytes[advanced..offset]);
-                    advanced = offset;
                     terminal.nebula_add_prompt_mark();
                 },
+                OscEvent::PromptInput => terminal.nebula_mark_prompt_input(),
                 OscEvent::InlineImage { data, width, height } => {
-                    self.parser.advance(terminal, &bytes[advanced..offset]);
-                    advanced = offset;
                     let (cell_w, cell_h) = self.window_size.map_or((9.0, 20.0), |ws| {
                         (f32::from(ws.cell_width), f32::from(ws.cell_height))
                     });
@@ -250,9 +251,6 @@ impl StreamProcessor {
             }
         }
         self.parser.advance(terminal, &bytes[advanced..]);
-        if let Some(cwd) = latest_cwd {
-            event_proxy.send_event(Event::CwdReport(cwd));
-        }
     }
 }
 
@@ -300,6 +298,7 @@ pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     event_proxy: U,
     drain_on_exit: bool,
     ref_test: bool,
+    remote_hook_token: Option<String>,
 }
 
 impl<T, U> EventLoop<T, U>
@@ -326,11 +325,17 @@ where
             event_proxy,
             drain_on_exit,
             ref_test,
+            remote_hook_token: None,
         })
     }
 
     pub fn channel(&self) -> EventLoopSender {
         EventLoopSender { sender: self.tx.clone(), poller: self.poll.clone() }
+    }
+
+    /// Bind in-band hook delivery to this PTY before its reader starts.
+    pub fn set_remote_hook_token(&mut self, token: String) {
+        self.remote_hook_token = Some(token);
     }
 
     /// Drain the channel.
@@ -421,12 +426,22 @@ where
                 Ok(got) => {
                     // Startup profiling: the process-wide first PTY output ≈
                     // the console host finished its bring-up handshake and
-                    // the shell started talking.
+                    // the shell started talking. The first chunks are dumped
+                    // escaped so a silent boot can be aligned with the host's
+                    // handshake byte for byte.
                     {
-                        use std::sync::atomic::{AtomicBool, Ordering};
-                        static FIRST_BYTES: AtomicBool = AtomicBool::new(false);
-                        if !FIRST_BYTES.swap(true, Ordering::Relaxed) {
+                        use std::sync::atomic::{AtomicUsize, Ordering};
+                        static CHUNKS: AtomicUsize = AtomicUsize::new(0);
+                        let index = CHUNKS.fetch_add(1, Ordering::Relaxed);
+                        if index == 0 {
                             crate::pty_trace("first conout bytes");
+                        }
+                        if index < 12 {
+                            let shown = &buf[unprocessed..unprocessed + got.min(200)];
+                            crate::pty_trace(&format!(
+                                "conout chunk {index} ({got} bytes): {}",
+                                shown.escape_ascii()
+                            ));
                         }
                     }
                     unprocessed += got;
@@ -475,6 +490,16 @@ where
             self.event_proxy.send_event(Event::Wakeup);
         }
 
+        // Boot profiling: a readable wake that carried no bytes is the
+        // signature of a lost or spurious wakeup; report only the first few.
+        if processed == 0 {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static EMPTY_READS: AtomicUsize = AtomicUsize::new(0);
+            if EMPTY_READS.fetch_add(1, Ordering::Relaxed) < 8 {
+                crate::pty_trace("pty_read: readable wake with no bytes");
+            }
+        }
+
         Ok(processed)
     }
 
@@ -490,6 +515,18 @@ where
                         break 'write_many;
                     },
                     Ok(n) => {
+                        {
+                            use std::sync::atomic::{AtomicUsize, Ordering};
+                            static WRITES: AtomicUsize = AtomicUsize::new(0);
+                            let index = WRITES.fetch_add(1, Ordering::Relaxed);
+                            if index < 12 {
+                                let shown = &current.remaining_bytes()[..n.min(200)];
+                                crate::pty_trace(&format!(
+                                    "conin write {index} ({n} bytes): {}",
+                                    shown.escape_ascii()
+                                ));
+                            }
+                        }
                         current.advance(n);
                         if current.finished() {
                             state.goto_next();
@@ -513,6 +550,9 @@ where
     pub fn spawn(mut self) -> JoinHandle<(Self, State)> {
         thread::spawn_named("PTY reader", move || {
             let mut state = State::default();
+            if let Some(token) = self.remote_hook_token.take() {
+                state.stream.set_remote_hook_token(token);
+            }
             let mut buf = [0u8; READ_BUFFER_SIZE];
 
             let poll_opts = PollMode::Level;
@@ -919,6 +959,110 @@ mod tests {
     use crate::event::VoidListener;
     use crate::term::Config;
     use crate::term::test::TermSize;
+
+    #[test]
+    fn authenticated_hook_frames_survive_every_chunk_boundary_and_reject_other_panes() {
+        #[derive(Clone, Default)]
+        struct Listener(std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                if let Event::AiHookEnvelope(envelope) = event {
+                    self.0.lock().unwrap().push(envelope);
+                }
+            }
+        }
+        // Base64 for a small envelope; authentication is checked before delivery.
+        let frame = b"\x1b]777;nebula-hook;0123456789abcdef0123456789abcdef;bmVidWxhLWhvb2svMSBzb3VyY2U9Y29kZXgKe30=\x07";
+        for token in [
+            None,
+            Some("ffffffffffffffffffffffffffffffff"),
+            Some("0123456789abcdef0123456789abcdef"),
+        ] {
+            for split in 0..=frame.len() {
+                let listener = Listener::default();
+                let mut terminal =
+                    Term::new(Config::default(), &TermSize::new(80, 24), listener.clone());
+                let mut stream = StreamProcessor::default();
+                if let Some(token) = token {
+                    stream.set_remote_hook_token(token.into());
+                }
+                stream.feed(&mut terminal, &listener, &frame[..split]);
+                stream.feed(&mut terminal, &listener, &frame[split..]);
+                let events = listener.0.lock().unwrap();
+                if token == Some("0123456789abcdef0123456789abcdef") {
+                    assert_eq!(events.as_slice(), [b"nebula-hook/1 source=codex\n{}".to_vec()]);
+                } else {
+                    assert!(events.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shell_identity_cwd_and_title_keep_wire_order_across_chunk_boundaries() {
+        #[derive(Clone, Default)]
+        struct Listener(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                let label = match event {
+                    Event::UserVar { value, .. } => format!("shell:{value}"),
+                    Event::CwdReport(cwd) => format!("cwd:{cwd}"),
+                    Event::Title(title) => format!("title:{title}"),
+                    _ => return,
+                };
+                self.0.lock().unwrap().push(label);
+            }
+        }
+        let bytes = b"\x1b]1337;SetUserVar=pebrel_shell=cmVtb3Rl\x07\x1b]7;file://box/remote\x07\x1b]2;remote\x07\x1b]1337;SetUserVar=pebrel_shell=bG9jYWw=\x07\x1b]7;file://localhost/local\x07";
+        for split in 0..=bytes.len() {
+            let listener = Listener::default();
+            let size = TermSize::new(80, 24);
+            let mut terminal = Term::new(Config::default(), &size, listener.clone());
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut terminal, &listener, &bytes[..split]);
+            stream.feed(&mut terminal, &listener, &bytes[split..]);
+            assert_eq!(
+                *listener.0.lock().unwrap(),
+                ["shell:remote", "cwd:/remote", "title:remote", "shell:local", "cwd:/local"],
+                "split at {split}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_input_boundary_survives_chunking_and_scrolling() {
+        use crate::index::{Column, Line, Point};
+
+        let bytes = b"\x1b]133;A\x07[first]\r\n>\x1b]133;B\x07pause";
+        for split in 0..=bytes.len() {
+            let mut terminal = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut terminal, &VoidListener, &bytes[..split]);
+            stream.feed(&mut terminal, &VoidListener, &bytes[split..]);
+            assert_eq!(terminal.nebula_prompt_input_point(), Some(Point::new(Line(1), Column(1))));
+            stream.feed(&mut terminal, &VoidListener, b"\r\n");
+            assert_eq!(terminal.nebula_prompt_input_point(), Some(Point::new(Line(0), Column(1))));
+            stream.feed(&mut terminal, &VoidListener, b"\x1b]133;C\x07");
+            assert_eq!(terminal.nebula_prompt_input_point(), None);
+        }
+    }
+
+    #[test]
+    fn input_boundaries_require_a_prompt_and_do_not_survive_reflow_or_reset() {
+        let mut terminal = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        stream.feed(&mut terminal, &VoidListener, b"\x1b]133;B\x07");
+        assert_eq!(terminal.nebula_prompt_input_point(), None);
+        for ending in [b"\x1bc".as_slice(), b"\x1b]133;D;0\x07", b"\x1b]133;A\x07"] {
+            stream.feed(&mut terminal, &VoidListener, b"\x1b]133;A\x07\x1b]133;B\x07");
+            assert!(terminal.nebula_prompt_input_point().is_some());
+            stream.feed(&mut terminal, &VoidListener, ending);
+            assert_eq!(terminal.nebula_prompt_input_point(), None);
+        }
+        stream.feed(&mut terminal, &VoidListener, b"\x1b]133;A\x07\x1b]133;B\x07");
+        terminal.resize(TermSize::new(10, 2));
+        assert_eq!(terminal.nebula_prompt_input_point(), None);
+    }
 
     #[test]
     fn shell_semantic_events_track_the_active_prompt() {

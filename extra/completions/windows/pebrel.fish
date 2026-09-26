@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_pebrel_global_optspecs
-	string join \n print-events ref-test embed= gpui config-file= q v daemon working-directory= hold e/command= T/title= class= o/option= h/help V/version
+	string join \n print-events ref-test embed= gpui config-file= q v daemon working-directory= shell= hold e/command= T/title= class= o/option= h/help V/version
 end
 
 function __fish_pebrel_needs_command
@@ -27,6 +27,7 @@ end
 complete -c pebrel -n "__fish_pebrel_needs_command" -l embed -d 'X11 window ID to embed Pebrel within (decimal or hexadecimal with "0x" prefix)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -l config-file -d 'Specify an alternative configuration file.' -r -F
 complete -c pebrel -n "__fish_pebrel_needs_command" -l working-directory -d 'Start the shell in the specified working directory' -r -F
+complete -c pebrel -n "__fish_pebrel_needs_command" -l shell -d 'Start this shell instead of the configured default one, by the same id the `shell` setting uses (`pwsh`, `cmd`, `wsl:Ubuntu`, or a profile\'s settings id)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -s e -l command -d 'Command and args to execute (must be last argument)' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -s T -l title -d 'Defines the window title [default: Pebrel]' -r
 complete -c pebrel -n "__fish_pebrel_needs_command" -l class -d 'Defines window class/app_id on X11/Wayland [default: Pebrel]' -r
@@ -517,7 +518,10 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand config; and __fish_seen_su
 complete -c pebrel -n "__fish_pebrel_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "init" -d 'Create an annotated Lua configuration template'
 complete -c pebrel -n "__fish_pebrel_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c pebrel -n "__fish_pebrel_using_subcommand notify-test" -s h -l help -d 'Print help'
-complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l remove -d 'Remove Pebrel\'s hooks from claude\'s settings.json instead of installing them'
+complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l ssh -d 'Install or remove hooks on an SSH host (alias or user@host)' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l wsl -d 'Install or remove hooks in a WSL distribution\'s own user configuration' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l wsl-user -d 'WSL user; defaults to that distribution\'s configured user' -r
+complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l remove -d 'Remove Pebrel-managed hooks for every supported agent and preserve other integrations. Without this flag, enable Claude Code and Codex plus agents explicitly enabled in settings'
 complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -s h -l help -d 'Print help'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ssh" -s h -l help -d 'Print help'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and not __fish_seen_subcommand_from ctl env window tab pane agent migrate config notify-test setup-ai ssh help" -f -a "ctl" -d 'Agent-oriented terminal control: split panes, run commands, start Codex/Claude, send prompts, wait for state changes, and read verified terminal output'

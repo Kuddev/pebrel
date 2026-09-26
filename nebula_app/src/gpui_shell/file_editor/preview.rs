@@ -201,6 +201,24 @@ fn fence_language(source: &str, start: usize, end: usize, language: &str) -> Opt
     Some(format!("{}{}{}", &source[..token_start], language, &source[token_end..]))
 }
 
+fn block_frame(index: usize, heading: Option<u8>) -> gpui::Stateful<gpui::Div> {
+    div()
+        // Every virtual row needs its own identity scope, including structured
+        // rows whose children reuse local cell/item numbers.
+        .id(("markdown-document-block", index))
+        .w_full()
+        .max_w(px(reader_presentation::PAGE_WIDTH))
+        .mx_auto()
+        .min_w_0()
+        .min_h(px(32.0))
+        .pt(px(if index > 0 && heading.is_some() { 20.0 } else { 4.0 }))
+        .pb(px(10.0))
+        .debug_selector(move || format!("markdown-preview-block-{index}"))
+        .text_size(px(reader_presentation::BODY_SIZE))
+        .line_height(gpui::relative(reader_presentation::LINE_HEIGHT))
+        .whitespace_normal()
+}
+
 impl TextFileView {
     fn start_preview_selection_scroll(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.preview_selection_scroll_active {
@@ -257,7 +275,7 @@ impl TextFileView {
         if epoch != self.preview_selection_scroll_epoch || !self.preview_selection_scroll_active {
             return None;
         }
-        let bounds = *self.preview_bounds.borrow();
+        let bounds = self.scroll.viewport_bounds();
         let Some(delta) = selection_scroll_delta(
             window.has_text_selection(cx),
             window.mouse_position().y,
@@ -275,17 +293,33 @@ impl TextFileView {
     }
 
     pub(super) fn render_markdown_preview(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.preview_images.update(cx, |images, _| images.begin_frame());
+        let frame_images = self.preview_images.clone();
         let blocks = self.blocks.clone();
+        let frame_blocks = Rc::new(RefCell::new(std::collections::HashSet::new()));
+        let rendered_blocks = frame_blocks.clone();
+        let retained_blocks = self.blocks.clone();
+        let inline_views = self.inline_views.clone();
         let owner = cx.entity().downgrade();
+        let selection_owner = owner.clone();
         let extensions = self.preview_extensions.clone();
         let scroll = self.scroll.clone();
-        let bounds = self.preview_bounds.clone();
+        let live_mode = self.live_mode;
         let style = TextViewStyle {
             image_base: self.path.parent().map(Arc::from),
             highlight_theme: cx.theme().highlight_theme.clone(),
             is_dark: cx.theme().is_dark(),
             paragraph_gap: gpui::rems(0.7),
             heading_base_font_size: px(reader_presentation::HEADING_BASE),
+            table: {
+                let mut style = gpui::StyleRefinement::default();
+                style.overflow.x = Some(gpui::Overflow::Scroll);
+                style
+            },
+            inline_code: gpui::HighlightStyle {
+                background_color: Some(super::super::theme::code_block_background(cx)),
+                ..Default::default()
+            },
             code_block: {
                 let mut style = gpui::StyleRefinement::default();
                 style.padding.top = Some(px(16.0).into());
@@ -295,6 +329,7 @@ impl TextFileView {
             ..Default::default()
         };
         div()
+            .image_cache(self.preview_images.clone())
             .flex_1()
             .min_w_0()
             .h_full()
@@ -303,23 +338,10 @@ impl TextFileView {
             .px(px(reader_presentation::PAGE_MARGIN))
             .pt(px(reader_presentation::TOP_MARGIN))
             .debug_selector(|| "markdown-preview-viewport".to_owned())
-            .on_prepaint(move |viewport, _, _| *bounds.borrow_mut() = viewport)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.start_preview_selection_scroll(window, cx);
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.stop_preview_selection_scroll();
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.stop_preview_selection_scroll();
                 }),
             )
             .on_mouse_down(
@@ -337,6 +359,19 @@ impl TextFileView {
             )
             .child(
                 gpui::list(scroll.clone(), move |index, window, cx| {
+                    rendered_blocks.borrow_mut().insert(index);
+                    let heading =
+                        owner.upgrade().and_then(|file| file.read(cx).outline.heading_level(index));
+                    if let Some(element) = owner.upgrade().and_then(|file| {
+                        file.update(cx, |file, cx| file.render_structured_block(index, window, cx))
+                    }) {
+                        return block_frame(index, heading).child(element).into_any_element();
+                    }
+                    if let Some(element) = owner.upgrade().and_then(|file| {
+                        file.update(cx, |file, cx| file.render_live_block(index, cx))
+                    }) {
+                        return block_frame(index, heading).child(element).into_any_element();
+                    }
                     let cached = blocks.borrow().get(index).cloned().flatten();
                     let block = cached.unwrap_or_else(|| {
                         let (source, selected) = owner
@@ -350,7 +385,9 @@ impl TextFileView {
                         if selected {
                             state.update(cx, |state, cx| state.select_all(cx));
                         }
-                        blocks.borrow_mut()[index] = Some(state.clone());
+                        if let Some(slot) = blocks.borrow_mut().get_mut(index) {
+                            *slot = Some(state.clone());
+                        }
                         state
                     });
                     let owner = owner.clone();
@@ -364,34 +401,86 @@ impl TextFileView {
                         })
                         .read(cx)
                         .clone();
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .py_1()
+                    let edit_owner = owner.clone();
+                    let link_owner = owner.clone();
+                    block_frame(index, heading)
+                        .when(live_mode, |block| {
+                            block.cursor_text().on_click(move |event, window, cx| {
+                                let _ = edit_owner.update(cx, |file, cx| {
+                                    file.begin_live_edit_at(index, Some(event), window, cx);
+                                });
+                            })
+                        })
                         .child(
-                            div()
+                            TextView::new(&block)
                                 .w_full()
-                                .max_w(px(reader_presentation::PAGE_WIDTH))
-                                .mx_auto()
                                 .min_w_0()
-                                .debug_selector(move || format!("markdown-preview-block-{index}"))
-                                .text_size(px(reader_presentation::BODY_SIZE))
-                                .line_height(gpui::relative(reader_presentation::LINE_HEIGHT))
-                                .whitespace_normal()
-                                .child(
-                                    TextView::new(&block)
-                                        .w_full()
-                                        .min_w_0()
-                                        .max_w_full()
-                                        .selectable(true)
-                                        .scrollable(false)
-                                        .style(style.clone())
-                                        .markdown_extensions(block_extensions),
-                                ),
+                                .max_w_full()
+                                .selectable(true)
+                                .scrollable(false)
+                                .style(style.clone())
+                                .when(live_mode, |text| {
+                                    text.on_link_click(move |url, event, window, cx| {
+                                        if event.modifiers().control || event.modifiers().platform {
+                                            cx.open_url(url);
+                                        } else {
+                                            let _ = link_owner.update(cx, |file, cx| {
+                                                file.begin_live_edit_at(
+                                                    index,
+                                                    Some(event),
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        }
+                                    })
+                                })
+                                .markdown_extensions(block_extensions),
                         )
                         .into_any_element()
                 })
-                .size_full(),
+                .size_full()
+                .max_w(px(reader_presentation::PAGE_WIDTH))
+                .mx_auto(),
+            )
+            .child(
+                gpui::canvas(
+                    move |_, window, cx| {
+                        frame_images.update(cx, |images, cx| images.finish_frame(window, cx));
+                        // Evict view state after this frame's virtual list has
+                        // mounted its visible and overscan items. The active input
+                        // is document-owned and survives this eviction.
+                        let mounted = std::mem::take(&mut *frame_blocks.borrow_mut());
+                        inline_views.borrow_mut().retain(|(block, _), _| mounted.contains(block));
+                        if !mounted.is_empty() {
+                            for (index, slot) in retained_blocks.borrow_mut().iter_mut().enumerate()
+                            {
+                                if !mounted.contains(&index) {
+                                    *slot = None;
+                                }
+                            }
+                        }
+                    },
+                    move |_, _, window, _| {
+                        let owner = selection_owner.clone();
+                        window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                            if phase.capture() && event.pressed_button != Some(MouseButton::Left) {
+                                let _ = owner
+                                    .update(cx, |view, _| view.stop_preview_selection_scroll());
+                            }
+                        });
+                        let owner = selection_owner.clone();
+                        window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                            // A child can consume release, and the pointer can leave the reader.
+                            if phase.capture() && event.button == MouseButton::Left {
+                                let _ = owner
+                                    .update(cx, |view, _| view.stop_preview_selection_scroll());
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .inset_0(),
             )
             .child(
                 div()
@@ -423,23 +512,59 @@ impl TextFileView {
         start: usize,
         end: usize,
         language: &str,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let key = (block, start);
         let Some((start, end)) = self.outline.source_span(block, start, end) else { return };
         let Some(source) = self.outline.blocks.get(block) else { return };
         let Some(next) = fence_language(source, start, end, language) else { return };
-        self.outline.replace_block(block, next, end);
-        let source = self.outline.block_source(block);
-        if let Some(state) = self.blocks.borrow().get(block).cloned().flatten() {
-            state.update(cx, |state, cx| state.set_text(&source, cx));
+        if !self.preview_editable() {
+            if self.preview && self.render_active && !self.loading {
+                self.preview_code_languages.insert(key, language.to_owned().into());
+                cx.notify();
+            }
+            return;
         }
-        cx.notify();
+        let Some(range) = self.outline.source_ranges.get(block).cloned() else { return };
+        self.commit_structure_edit(range, &next, None, window, cx);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn virtual_rows_scope_repeated_child_ids_to_their_own_block(cx: &mut gpui::TestAppContext) {
+        struct Rows(Rc<RefCell<Vec<gpui::GlobalElementId>>>);
+        impl Render for Rows {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().children((0..3).map(|index| {
+                    let ids = self.0.clone();
+                    block_frame(index, None).min_h(px(20.0)).on_prepaint(move |_, window, _| {
+                        // Cell and task indices restart at zero in each block.
+                        // Observe actual layout ancestry, as accessibility does.
+                        window.with_global_id(("repeated-child", 0usize).into(), |id, _| {
+                            ids.borrow_mut().push(id.clone());
+                        });
+                    })
+                }))
+            }
+        }
+        let ids = Rc::new(RefCell::new(Vec::new()));
+        let (_, window) = cx.add_window_view(|_, _| Rows(ids.clone()));
+        window.update(|window, cx| {
+            ids.borrow_mut().clear();
+            window.refresh();
+            let _ = window.draw(cx);
+        });
+        let ids = ids.borrow();
+        assert_eq!(ids.len(), 3);
+        let distinct: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(distinct.len(), 3, "visible blocks must not share child identity scopes");
+    }
 
     #[test]
     fn selection_auto_scroll_requires_a_selection_near_a_viewport_edge() {

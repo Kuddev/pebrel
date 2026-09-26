@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 from pathlib import Path
 
@@ -29,6 +29,47 @@ from conformance.harness import (  # noqa: E402
     SkipCase,
 )
 from conformance.macos_launch import capture_screenshot
+
+
+class BootReadinessTests(unittest.TestCase):
+    def context(self, outputs):
+        from conformance.harness import ConformanceContext, PROTOCOL_NAME, PROTOCOL_VERSION
+
+        pane = {"id": 1, "cwd": r"C:\fixture"}
+        tab = {"panes": [pane]}
+        snapshot = {"protocol_version": PROTOCOL_VERSION, "windows": [{"tabs": [tab]}]}
+        context = SimpleNamespace(
+            snapshot=lambda: snapshot, refresh_targets=lambda value: None,
+            window_id=1, pane_id=1, startup_ms=10, startup_timeout=4,
+            description={"protocol": PROTOCOL_NAME, "protocol_version": PROTOCOL_VERSION,
+                         "capabilities": ["runtime.snapshot", "window.close", "tab.new",
+                                          "tab.rename", "pane.split", "pane.resize", "pane.prompt",
+                                          "pane.paste", "pane.read", "pane.procs", "pane.send_key"]},
+            detect_shell=lambda: "powershell", api=lambda *args: {"processes": [{"pid": 42}]},
+            tab_for_pane=lambda *args: tab, read=Mock(side_effect=outputs),
+        )
+        context.poll = ConformanceContext.poll.__get__(context)
+        return context
+
+    def test_runtime_discovery_alone_does_not_finish_cold_shell_boot(self):
+        from conformance.cases.boot import run
+
+        context = self.context([{"text": ""}, {"text": " \n"}, {"text": "PS C:\\fixture> "}])
+        with patch("time.sleep"), patch("time.monotonic", side_effect=range(20)):
+            result = run(context)
+        self.assertEqual(context.read.call_count, 3)
+        self.assertTrue(result["default_tab_present"])
+        self.assertGreater(result["startup_ms"], context.startup_ms)
+
+    def test_silent_shell_fails_boot_instead_of_being_marked_ready(self):
+        from conformance.cases.boot import run
+
+        context = self.context(None)
+        context.read.side_effect = None
+        context.read.return_value = {"text": ""}
+        with patch("time.sleep"), patch("time.monotonic", side_effect=range(20)):
+            with self.assertRaisesRegex(ConformanceError, "did not render initial output"):
+                run(context)
 
 
 class NormalizationTests(unittest.TestCase):
@@ -112,6 +153,30 @@ class ComparisonTests(unittest.TestCase):
             second["cases"]["echo"]["tail_contains_marker"] = False
             errors = compare_reports([first, second], golden)
             self.assertTrue(any("tail_contains_marker" in error for error in errors))
+
+    def test_platform_golden_serves_every_architecture_of_a_family(self) -> None:
+        from conformance.harness import compare_platform_golden, stable_flat
+
+        report = {
+            "schema_version": 1,
+            "platform": "windows-x86_64",
+            "cases": {"boot": {"status": "passed", "duration_ms": 3}},
+            "summary": {"total": 1, "passed": 1, "failed": 0, "skipped": 0},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            golden = Path(directory)
+            (golden / "whitelist.json").write_text(
+                json.dumps({"volatile": {"cases.*.duration_ms": "timing"}, "cross_platform": {}}),
+                encoding="utf-8",
+            )
+            expected = stable_flat(report, golden)
+            self.assertEqual(expected["platform"], "windows")
+            (golden / "windows.json").write_text(json.dumps(expected), encoding="utf-8")
+            arm64 = json.loads(json.dumps(report))
+            arm64["platform"] = "windows-aarch64"
+            self.assertEqual(compare_platform_golden(arm64, golden), [])
+            arm64["cases"]["boot"]["status"] = "failed"
+            self.assertTrue(compare_platform_golden(arm64, golden))
 
 
 class ArchiveSafetyTests(unittest.TestCase):

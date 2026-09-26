@@ -18,10 +18,13 @@ use super::{SessionError, SharedSession, SshDestination, SshEventHost, SshStage}
 pub(super) const NETWORK_TIMEOUT: Duration = Duration::from_secs(20);
 const AUTH_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 
-pub(super) async fn authentication<T>(
+pub(super) async fn authentication<T, Error>(
     operation: &str,
-    future: impl Future<Output = Result<T, russh::Error>>,
-) -> Result<T, SessionError> {
+    future: impl Future<Output = Result<T, Error>>,
+) -> Result<T, SessionError>
+where
+    Error: Into<SessionError>,
+{
     network_with_budget(operation, AUTH_RESPONSE_TIMEOUT, future).await
 }
 
@@ -332,6 +335,8 @@ async fn open_shell_channel(
     size: WindowSize,
     remote_cwd: Option<&str>,
 ) -> Result<(ShellChannel, String), SessionError> {
+    let hook_token = super::remote_hook_token()?;
+    let bootstrap = super::integration::prepare(session, &hook_token).await;
     let mut channel = ShellChannel {
         channel: Some(session.channel_open_session().await?),
         pending: VecDeque::new(),
@@ -349,7 +354,33 @@ async fn open_shell_channel(
         )
         .await?;
     wait_request_success(&mut channel, "PTY").await?;
-    let hook_token = super::remote_hook_token()?;
+    if let Some(command) = bootstrap {
+        match super::integration::start(&mut channel, &command).await {
+            Ok(()) => {
+                if let Some(command) = super::initial_remote_cd_command(remote_cwd) {
+                    channel.data_bytes(command).await?;
+                }
+                return Ok((channel, hook_token));
+            },
+            Err(error) => {
+                log::debug!("SSH integrated shell rejected; opening ordinary shell: {error}");
+                channel.finish().await?;
+                channel = own_channel(session.channel_open_session().await?);
+                channel
+                    .request_pty(
+                        true,
+                        "xterm-256color",
+                        u32::from(size.num_cols),
+                        u32::from(size.num_lines),
+                        u32::from(size.cell_width) * u32::from(size.num_cols),
+                        u32::from(size.cell_height) * u32::from(size.num_lines),
+                        &[],
+                    )
+                    .await?;
+                wait_request_success(&mut channel, "PTY").await?;
+            },
+        }
+    }
     channel.set_env(false, "NEBULA_REMOTE_HOOK_TOKEN", hook_token.clone()).await?;
     let _ = channel.set_env(false, "NEBULA_PANE_REMOTE", "1").await;
     channel.request_shell(true).await?;
@@ -360,7 +391,7 @@ async fn open_shell_channel(
     Ok((channel, hook_token))
 }
 
-async fn wait_request_success(
+pub(super) async fn wait_request_success(
     channel: &mut ShellChannel,
     request: &str,
 ) -> Result<(), SessionError> {
@@ -418,12 +449,22 @@ async fn pump<H: SshEventHost>(
             message = input.recv() => match message {
                 Some(Msg::Input(bytes)) => network("channel write", channel.data(bytes.as_ref())).await?,
                 Some(Msg::Resize(size)) => {
+                    // SSH has no local EventLoop to apply the grid half of a
+                    // resize. Keep the terminal model in lockstep with the
+                    // stream and the remote PTY, just as the local event loop
+                    // does before calling ResizePseudoConsole.
+                    terminal.lock().resize(size);
                     stream.resize(size);
+                    event_proxy.send_event(TerminalEvent::Wakeup);
                     network("channel resize", channel.window_change(u32::from(size.num_cols), u32::from(size.num_lines),
                         u32::from(size.cell_width) * u32::from(size.num_cols),
                         u32::from(size.cell_height) * u32::from(size.num_lines))).await?;
                 },
-                Some(Msg::ResizeGrid(size)) => stream.resize(size),
+                Some(Msg::ResizeGrid(size)) => {
+                    terminal.lock().resize(size);
+                    stream.resize(size);
+                    event_proxy.send_event(TerminalEvent::Wakeup);
+                },
                 Some(Msg::Shutdown) | None => return Ok(()),
             },
             message = channel.wait() => match message {

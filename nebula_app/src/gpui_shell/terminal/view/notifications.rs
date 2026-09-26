@@ -6,29 +6,21 @@ impl super::TerminalView {
         self.answer_reader.is_some()
     }
 
-    pub(super) fn notify_command_done(&self, cx: &mut Context<Self>) {
+    pub(super) fn notify_command_done(&self, exit_code: Option<i32>, cx: &mut Context<Self>) {
         if let Some(started) = self.command_started
-            && started.elapsed() >= crate::notify::COMMAND_NOTIFY_MIN
+            && let Some(notification) = crate::notify::Notification::command_finished(
+                self.running_program.clone(),
+                started.elapsed(),
+                exit_code,
+                self.agent_activity.hook_seen(),
+            )
         {
-            cx.emit(super::TerminalViewEvent::Notification(
-                crate::notify::Notification::CommandDone {
-                    duration: started.elapsed(),
-                    program: self.running_program.clone(),
-                },
-            ));
+            cx.emit(super::TerminalViewEvent::Notification(notification));
         }
     }
 }
 
-pub(super) fn screen_notification(previous: AgentStatus, next: AgentStatus) -> Option<bool> {
-    match next {
-        AgentStatus::Blocked if previous != AgentStatus::Blocked => Some(true),
-        AgentStatus::Done if matches!(previous, AgentStatus::Working | AgentStatus::Blocked) => {
-            Some(false)
-        },
-        _ => None,
-    }
-}
+pub(super) use crate::ai_hook::lifecycle::screen_notification;
 
 pub(super) fn screen_program(
     current: Option<&str>,
@@ -54,14 +46,39 @@ mod tests {
 
     #[test]
     fn screen_completion_and_attention_are_edges_not_idle_polling() {
-        assert_eq!(screen_notification(AgentStatus::Working, AgentStatus::Done), Some(false));
-        assert_eq!(screen_notification(AgentStatus::Blocked, AgentStatus::Done), Some(false));
-        assert_eq!(screen_notification(AgentStatus::Working, AgentStatus::Blocked), Some(true));
-        assert_eq!(screen_notification(AgentStatus::Unknown, AgentStatus::Blocked), Some(true));
-        assert_eq!(screen_notification(AgentStatus::Done, AgentStatus::Done), None);
-        assert_eq!(screen_notification(AgentStatus::Blocked, AgentStatus::Blocked), None);
-        assert_eq!(screen_notification(AgentStatus::Unknown, AgentStatus::Idle), None);
-        assert_eq!(screen_notification(AgentStatus::Idle, AgentStatus::Idle), None);
+        // 无 hook 时屏幕是唯一证据，「完成」照旧提示。
+        assert_eq!(
+            screen_notification(AgentStatus::Working, AgentStatus::Done, false),
+            Some(false)
+        );
+        assert_eq!(
+            screen_notification(AgentStatus::Blocked, AgentStatus::Done, false),
+            Some(false)
+        );
+        assert_eq!(
+            screen_notification(AgentStatus::Working, AgentStatus::Blocked, false),
+            Some(true)
+        );
+        assert_eq!(
+            screen_notification(AgentStatus::Unknown, AgentStatus::Blocked, false),
+            Some(true)
+        );
+        assert_eq!(screen_notification(AgentStatus::Done, AgentStatus::Done, false), None);
+        assert_eq!(screen_notification(AgentStatus::Blocked, AgentStatus::Blocked, false), None);
+        assert_eq!(screen_notification(AgentStatus::Unknown, AgentStatus::Idle, false), None);
+        assert_eq!(screen_notification(AgentStatus::Idle, AgentStatus::Idle, false), None);
+    }
+
+    /// hook 在场时，屏幕推断的 Done 不能触发完成通知。
+    #[test]
+    fn screen_inferred_completion_stays_silent_while_hooks_are_live() {
+        assert_eq!(screen_notification(AgentStatus::Working, AgentStatus::Done, true), None);
+        assert_eq!(screen_notification(AgentStatus::Blocked, AgentStatus::Done, true), None);
+        // 等输入是真事件，与完成无关，不受 hook 影响。
+        assert_eq!(
+            screen_notification(AgentStatus::Working, AgentStatus::Blocked, true),
+            Some(true)
+        );
     }
 
     #[test]

@@ -89,8 +89,46 @@ struct Job {
     bitmap_reservation: usize,
 }
 
+/// Images stay charged until the UI thread has removed their window atlas entries.
+#[derive(Default)]
+struct RetiredImages {
+    pending: Vec<Arc<RenderImage>>,
+    pending_bytes: usize,
+    releasing_bytes: Option<usize>,
+}
+
+impl RetiredImages {
+    fn push(&mut self, resource: Resource) {
+        if let Resource::Image(image, _) | Resource::Molecule(image) = resource {
+            self.pending_bytes += image.as_bytes(0).map_or(0, |bytes| bytes.len());
+            self.pending.push(image);
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        self.pending_bytes + self.releasing_bytes.unwrap_or(0)
+    }
+
+    fn busy(&self) -> bool {
+        !self.pending.is_empty() || self.releasing_bytes.is_some()
+    }
+
+    fn begin_release(&mut self) -> Option<Vec<Arc<RenderImage>>> {
+        if self.pending.is_empty() || self.releasing_bytes.is_some() {
+            return None;
+        }
+        self.releasing_bytes = Some(std::mem::take(&mut self.pending_bytes));
+        Some(std::mem::take(&mut self.pending))
+    }
+
+    fn finish_release(&mut self) {
+        self.releasing_bytes = None;
+    }
+}
+
 struct State {
     cache: RenderCache<Key, Resource>,
+    retired: RetiredImages,
     pending: HashSet<Key>,
     queue: VecDeque<Job>,
     pending_bytes: usize,
@@ -102,6 +140,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             cache: RenderCache::new(CACHE_BYTES, CACHE_ENTRIES),
+            retired: RetiredImages::default(),
             pending: HashSet::new(),
             queue: VecDeque::new(),
             pending_bytes: 0,
@@ -127,16 +166,19 @@ impl State {
     }
 
     fn start(&mut self) -> Option<Job> {
-        if self.running >= MAX_RUNNING {
+        if self.running >= MAX_RUNNING || self.retired.busy() {
             return None;
         }
         let reservation = self.queue.front()?.bitmap_reservation;
         if self.reserved_bitmap_bytes.saturating_add(reservation) > CACHE_BYTES {
             return None;
         }
-        self.reserved_bitmap_bytes += reservation;
         // Evict before the worker allocates, not after its image already exists.
-        self.cache.set_byte_budget(CACHE_BYTES - self.reserved_bitmap_bytes);
+        self.evict_to(CACHE_BYTES - self.reserved_bitmap_bytes - reservation);
+        if self.retired.busy() {
+            return None;
+        }
+        self.reserved_bitmap_bytes += reservation;
         let job = self.queue.pop_front()?;
         self.running += 1;
         Some(job)
@@ -145,11 +187,32 @@ impl State {
     fn finish(&mut self, job: &Job, result: Resource) {
         self.running -= 1;
         self.reserved_bitmap_bytes -= job.bitmap_reservation;
-        self.cache.set_byte_budget(CACHE_BYTES - self.reserved_bitmap_bytes);
         self.pending_bytes -= job.charge;
         self.pending.remove(&job.key);
         let charge = job.key.bytes().saturating_add(result.bytes());
-        self.cache.insert(job.key.clone(), result, charge);
+        let available = CACHE_BYTES
+            .saturating_sub(self.reserved_bitmap_bytes)
+            .saturating_sub(self.retired.bytes());
+        if charge > available {
+            return;
+        }
+        self.evict_to(available - charge);
+        let available = CACHE_BYTES
+            .saturating_sub(self.reserved_bitmap_bytes)
+            .saturating_sub(self.retired.bytes());
+        if self.cache.used_bytes().saturating_add(charge) > available {
+            // Layout jobs have no bitmap reservation. If they displaced images,
+            // retry after the UI releases those images instead of retaining both.
+            return;
+        }
+        self.evict_to(available);
+        self.cache.insert_with_eviction(job.key.clone(), result, charge, |resource| {
+            self.retired.push(resource);
+        });
+    }
+
+    fn evict_to(&mut self, bytes: usize) {
+        self.cache.set_byte_budget_with_eviction(bytes, |resource| self.retired.push(resource));
     }
 }
 
@@ -179,7 +242,11 @@ pub(super) fn init(cx: &mut App) {
     cx.spawn(async move |cx| {
         while receiver.next().await.is_some() {
             renderer.wake_pending.store(false, Ordering::Release);
-            cx.update(|cx| cx.refresh_windows());
+            cx.update(|cx| {
+                renderer.release_retired(cx);
+                renderer.drive();
+                cx.refresh_windows();
+            });
         }
     })
     .detach();
@@ -197,6 +264,23 @@ impl Drop for DocumentPermit {
 }
 
 impl ScientificRender {
+    fn notify_changed(&self) {
+        if !self.wake_pending.swap(true, Ordering::AcqRel) {
+            let _ = self.changed.unbounded_send(());
+        }
+    }
+
+    fn release_retired(&self, cx: &mut App) {
+        let images = self.state.lock().unwrap_or_else(|e| e.into_inner()).retired.begin_release();
+        let Some(images) = images else { return };
+        // This runs from the application task, with all windows back in App.
+        // Keep the release charged while dropping images outside the state lock.
+        for image in images {
+            cx.drop_image(image, None);
+        }
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).retired.finish_release();
+    }
+
     pub(super) async fn document_permit(self: &Arc<Self>) -> DocumentPermit {
         loop {
             if self
@@ -240,8 +324,13 @@ impl ScientificRender {
                 state.queue.clear();
                 return;
             }
-            let Some(job) = state.start() else { return };
+            let job = state.start();
+            let needs_release = !state.retired.pending.is_empty();
             drop(state);
+            if needs_release {
+                self.notify_changed();
+            }
+            let Some(job) = job else { return };
             let engine = self.clone();
             self.executor
                 .spawn(async move {
@@ -250,9 +339,7 @@ impl ScientificRender {
                     }))
                     .unwrap_or(Resource::Failed);
                     engine.state.lock().unwrap_or_else(|e| e.into_inner()).finish(&job, result);
-                    if !engine.wake_pending.swap(true, Ordering::AcqRel) {
-                        let _ = engine.changed.unbounded_send(());
-                    }
+                    engine.notify_changed();
                     engine.drive();
                 })
                 .detach();
@@ -350,6 +437,14 @@ impl ScientificRender {
 mod tests {
     use super::*;
 
+    fn image() -> Arc<RenderImage> {
+        Arc::new(RenderImage::new([image::Frame::new(image::RgbaImage::from_pixel(
+            4,
+            4,
+            image::Rgba([0, 0, 0, 255]),
+        ))]))
+    }
+
     fn job(id: usize) -> Job {
         Job {
             key: Key::Molecule(format!("C{id}").into(), false),
@@ -379,6 +474,96 @@ mod tests {
         state.finish(&second, Resource::Failed);
         assert_eq!(state.reserved_bitmap_bytes, 0);
         assert_eq!(state.pending_bytes, 0);
+    }
+
+    #[test]
+    fn bitmap_allocation_waits_for_the_ui_to_release_evicted_images() {
+        let mut state = State::default();
+        let image = image();
+        let weak = Arc::downgrade(&image);
+        state.cache.insert(job(99).key, Resource::Molecule(image), 320);
+        let mut work = job(0);
+        work.bitmap_reservation = CACHE_BYTES;
+        assert!(state.admit(work));
+        for _ in 0..100 {
+            assert!(state.start().is_none());
+            assert_eq!(state.running, 0);
+            assert_eq!(state.reserved_bitmap_bytes, 0);
+            assert_eq!(state.retired.bytes(), 64);
+            assert_eq!(state.queue.len(), 1);
+        }
+        let images = state.retired.begin_release().unwrap();
+        assert!(weak.upgrade().is_some());
+        assert!(state.start().is_none(), "taking the release queue is not a GPU release");
+        assert_eq!(state.retired.bytes(), 64);
+        drop(images);
+        assert!(weak.upgrade().is_none());
+        state.retired.finish_release();
+        let work = state.start().expect("resume after the actual release");
+        assert_eq!(state.retired.bytes(), 0);
+        assert_eq!(state.reserved_bitmap_bytes, CACHE_BYTES);
+        state.finish(&work, Resource::Failed);
+        assert_eq!(state.pending_bytes, 0);
+    }
+
+    #[test]
+    fn completions_during_ui_release_keep_both_batches_charged() {
+        let mut state = State { cache: RenderCache::new(CACHE_BYTES, 1), ..State::default() };
+        state.cache.insert(job(99).key, Resource::Molecule(image()), 320);
+        for id in 0..3 {
+            assert!(state.admit(job(id)));
+        }
+        let first = state.start().unwrap();
+        let second = state.start().unwrap();
+        let first_image = image();
+        let weak = Arc::downgrade(&first_image);
+        state.finish(&first, Resource::Molecule(first_image));
+        let releasing = state.retired.begin_release().unwrap();
+        state.finish(&second, Resource::Molecule(image()));
+        assert_eq!(state.retired.bytes(), 128);
+        assert!(state.start().is_none());
+        drop(releasing);
+        state.retired.finish_release();
+        assert_eq!(state.retired.bytes(), 64);
+        assert!(state.start().is_none(), "a second batch still awaits release");
+        assert!(weak.upgrade().is_some());
+        drop(state.retired.begin_release().unwrap());
+        state.retired.finish_release();
+        assert!(weak.upgrade().is_none());
+        assert!(state.cache.used_bytes() + state.retired.bytes() <= CACHE_BYTES);
+        assert!(state.start().is_some());
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn retirement_callback_removes_real_window_atlas_entries(cx: &mut gpui::TestAppContext) {
+        use gpui::{Context, IntoElement, ParentElement, Render, Styled, Window, div, img, px};
+        struct Picture(Option<Arc<RenderImage>>);
+        impl Render for Picture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().size(px(40.0)).children(self.0.clone().map(|image| img(image).size(px(40.0))))
+            }
+        }
+        cx.update(init);
+        let image = image();
+        let (picture, mut window) = cx.add_window_view(|_, _| Picture(Some(image.clone())));
+        window.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(window.has_image_atlas_entry(&image));
+            picture.update(cx, |picture, _| picture.0 = None);
+            let renderer = assets(cx);
+            let mut state = renderer.state.lock().unwrap();
+            state.cache.insert(job(99).key, Resource::Molecule(image.clone()), 320);
+            state.evict_to(0);
+            drop(state);
+            renderer.notify_changed();
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            assert!(!window.has_image_atlas_entry(&image));
+            let renderer = assets(cx);
+            assert!(!renderer.state.lock().unwrap().retired.busy());
+        });
     }
 
     #[test]

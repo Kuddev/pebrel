@@ -19,7 +19,6 @@ use {
 };
 
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
 use {
@@ -129,7 +128,7 @@ pub struct Window {
     /// Hold the window when terminal exits.
     pub hold: bool,
 
-    window: Arc<WinitWindow>,
+    window: WinitWindow,
 
     /// Current window title.
     title: String,
@@ -204,7 +203,7 @@ impl Window {
             .with_fullscreen(fullscreen)
             .with_window_level(config.window.level.into());
 
-        let window = Arc::new(event_loop.create_window(window_attributes)?);
+        let window = event_loop.create_window(window_attributes)?;
 
         // Nebula: normal arrow cursor by default (no I-beam over the terminal).
         let current_mouse_cursor = CursorIcon::Default;
@@ -316,14 +315,6 @@ impl Window {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn native_window(&self) -> &WinitWindow {
         &self.window
-    }
-
-    /// Shared native window handle for renderer backends whose surface must
-    /// own the window lifetime, notably wgpu. OpenGL continues borrowing the
-    /// same window through the existing raw-handle path.
-    #[cfg(feature = "wgpu-foundation")]
-    pub(crate) fn shared_window(&self) -> Arc<WinitWindow> {
-        Arc::clone(&self.window)
     }
 
     #[inline]

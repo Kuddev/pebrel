@@ -105,6 +105,18 @@ generation 绑定（Codex 退出重开后不会把任务投给新会话），pan
 不是"本来就是静的"，这正是把提交前的 idle 误判成"已完成"的那个经典竞态。`--no-submit` 与
 `--wait` 是逻辑矛盾（没提交等什么），由参数解析直接拒绝，不会执行一半再静默停下。
 
+发送/粘贴命令会在写入前校验等待超时，包括读取 stdin/文件粘贴内容之前。提交响应缺少
+有效的非零状态基线时，资源命令和旧 `ctl prompt/paste --wait` 都明确报错，不降级为
+可能立即匹配旧 idle 的无基线等待。超时只表示未确认结果，不代表输入没有送达；先读目标
+状态与输出，再决定是否重试，不能盲目重复投递。
+这些接口仍然等待 pane/Agent 的语义状态，不提供独立任务回合的关联回执；并发向同一
+Agent 投递时，状态结束不能单独证明某一条请求已完成。`settled` 也不等同于任务成功。
+
+已识别 Codex 的提交将文本、Right 粘贴结束边界和按当前键盘协议编码的 Enter 按顺序
+放在同一次 PTY 写入中；终端启用 bracketed paste 时同时使用粘贴包络。它不依赖首次
+屏幕重绘或固定延时来推断输入已经接收。普通 shell 保留回显屏障，`--no-submit` 不附加
+边界键或 Enter。此处的提交只说明已交给 PTY 输入链路，不是服务端模型请求成功的保证。
+
 `agent send` 与 `agent delegate` 的结果合同不同：前者只负责投递（可选同步等待），后者从
 `PEBREL_PANE_ID` 记录调用 Agent 的位置和会话身份，登记并提交成功后立即返回。目标 Agent 的
 完成 Hook 到达后，Pebrel 把最多 4000 字符的结构化最终消息作为不可信 `worker_output` 自动提交
@@ -159,10 +171,10 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `agent.paste` | 向同一 Agent generation 发送受控 bracketed-paste 文本 | `agent`, `generation?`, `text`, `submit?` |
 | `agent.read` | 读取命名 Agent 所在 Pane 的真实 Grid 尾部 | `agent`, `generation?`, `lines?` |
 | `agent.wait` | 等待同一 Agent generation 的状态跃迁；被替换/退出即明确失败 | `agent`, `generation`, `state`, `timeout_ms`, `after_seq?` |
-| `window.create` | 创建新窗口 | 无 |
+| `window.create` | 创建新窗口 | `cwd?`, `shell?` |
 | `window.close` | 关闭空闲窗口；忙碌 Pane 返回显式确认错误 | `window_id?` |
 | `window.focus` | 聚焦窗口或 Pane | `window_id?`, `pane_id?` |
-| `tab.new` | 创建默认 Shell 标签 | `window_id?` |
+| `tab.new` | 创建标签（默认 Shell，或 `shell` 点名的那个） | `window_id?`, `cwd?`, `shell?` |
 | `tab.close` | 按窗口内零基索引关闭空闲 Tab | `window_id?`, `tab_index` |
 | `tab.rename` | 设置或清除 Tab 自定义名称 | `window_id?`, `tab_index`, `name` |
 | `tab.move` | 在同一窗口内移动 Tab | `window_id?`, `tab_index`, `to_index` |
@@ -182,6 +194,13 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 `pane.prompt` 有意拒绝换行、ESC 和其他控制字符，并限制为 32 KiB。它是 Prompt 接口，不是
 任意终端字节注入接口。控制键走 `pane.send_key`：只开放命名键，字母必须配
 `control=true`，`repeat` 上限 64；API 不接受任意 bytes 或 ANSI 字符串。
+
+`tab.new` / `window.create` 的 `shell` 用与 `shell=` 设置相同的 id（`pwsh`、`cmd`、
+`wsl:Ubuntu`，或某个 profile 的 settings id），只作用于这一次创建；缺省照旧用设置里的
+默认 Shell。id 解析不出来时请求以 `invalid_shell` 失败，**不会**回落到默认 Shell——
+静默换掉用户点名要的 Shell 是最难查的失败。注意参数是 `deny_unknown_fields` 的：
+升级后的客户端带 `shell` 请求旧运行时会在解析阶段被拒（`invalid_params`），因此升级后
+需要重启驻留实例。
 
 `pane.paste` 专用于确实需要保留换行的输入：只接受 UTF-8，限制 32 KiB，拒绝 ESC、NUL
 与危险控制字符，并要求目标终端已启用 bracketed-paste。SSH Pane 明确拒绝本地文件/文本
@@ -367,6 +386,8 @@ Shell/hook 结束事件归位；因此即使命令在 120ms Runtime pump 的两�
 - `exit_code_unavailable`：当前 Shell 没有提供可信的 OSC 133 exit code。
 - `ssh_not_ready`：SSH Pane 尚未进入可安全读写的 Ready 阶段，或连接已经失败。
 - `runtime_unavailable`：当前壳/生命周期没有该动作所需的真实 owner；不会伪造成功。
+- `submission_outcome_unknown`：CLI 的 Prompt、Paste 或委派请求遇到传输/响应解析失败；
+  输入可能已经送达。先读取目标状态与输出，不能直接当作“未发送”重试。
 - `timeout`：`pane.wait` 未在期限内观察到目标状态。`details` 会带上 `after_seq` 与最后
   观察到的 `observed_state_change_seq`，用于区分「Pane 一直没动」和「跃迁了但没到目标态」。
 

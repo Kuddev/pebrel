@@ -93,6 +93,23 @@ fn use_win32_input_mode(mode: &TermMode) -> bool {
     crate::input::terminal_input::use_win32_input_mode(*mode)
 }
 
+/// Notification choices are synthetic keystrokes, not an IME composition.
+/// Encode printable keys when the client explicitly requests every key as CSI-u.
+pub(super) fn encode_choice_text(text: &str, mode: &TermMode) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for ch in text.chars() {
+        let key = Keystroke {
+            modifiers: Default::default(),
+            key: ch.to_string(),
+            key_char: Some(ch.to_string()),
+        };
+        bytes.extend(
+            kitty_sequence(&key, mode, true).unwrap_or_else(|| ch.to_string().into_bytes()),
+        );
+    }
+    bytes
+}
+
 /// 子进程是否请求过 kitty 键盘协议（三位标志任一）。kitty 是线上合同，
 /// 压过 DECSET 9001——口径同旧壳 `input/terminal_input.rs`。
 fn kitty_keyboard_active(mode: &TermMode) -> bool {
@@ -113,13 +130,37 @@ fn kitty_escape(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     Some(if param == 1 { b"\x1b[27u".to_vec() } else { format!("\x1b[27;{param}u").into_bytes() })
 }
 
-/// 修饰回车由对端编辑器解释，不能当成普通 shell 提交。传统 VT 无法区分
-/// Shift/Ctrl+Enter，仍沿用回车提交；Win32 和 kitty 则保留其修饰信息。
+/// The default multiline chord also works for byte-stream readers without a negotiated keyboard protocol.
+fn is_shift_enter(ks: &Keystroke) -> bool {
+    let mods = &ks.modifiers;
+    ks.key == "enter"
+        && mods.shift
+        && !mods.control
+        && !mods.alt
+        && !mods.platform
+        && !mods.function
+}
+
+pub(super) fn encode_for_program(
+    ks: &Keystroke,
+    mode: &TermMode,
+    program: Option<&str>,
+) -> Option<Vec<u8>> {
+    if is_shift_enter(ks) && crate::input::terminal_input::shift_enter_as_lf(program, *mode) {
+        Some(b"\n".to_vec())
+    } else {
+        encode(ks, mode)
+    }
+}
+
+/// 修饰回车由对端编辑器解释，不能当成普通 shell 提交。纯 Shift+Enter
+/// 在传统 VT 中发送 LF；Win32 和 CSI-u 还保留按键与修饰信息。
 pub(super) fn preserves_enter_modifiers(ks: &Keystroke, mode: &TermMode) -> bool {
     let mods = &ks.modifiers;
     let modified = mods.shift || mods.control || mods.alt;
     ks.key == "enter"
-        && ((kitty_keyboard_active(mode) && (modified || mods.platform))
+        && (is_shift_enter(ks)
+            || (kitty_keyboard_active(mode) && (modified || mods.platform))
             || (cfg!(windows) && use_win32_input_mode(mode) && modified))
 }
 
@@ -141,7 +182,7 @@ pub(super) fn trace_enter(ks: &Keystroke, mode: &TermMode, bytes: &[u8]) {
     );
 }
 
-fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
+fn kitty_sequence(ks: &Keystroke, mode: &TermMode, synthetic: bool) -> Option<Vec<u8>> {
     use crate::input::terminal_input::{KeyInput, build_sequence};
     use winit::event::ElementState;
     use winit::keyboard::{Key, KeyLocation, ModifiersState, NamedKey};
@@ -158,7 +199,9 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
         (Key::Named(NamedKey::Enter), Key::Named(NamedKey::Enter))
     } else {
         if !mode.intersects(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC)
-            || !(ks.modifiers.control || ks.modifiers.alt)
+            || !(ks.modifiers.control
+                || ks.modifiers.alt
+                || synthetic && mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC))
         {
             return None;
         }
@@ -173,7 +216,9 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
                 _ => return None,
             }
         };
-        let character = if ks.modifiers.shift {
+        let character = if synthetic {
+            ks.key_char.as_deref().and_then(|text| text.chars().next()).unwrap_or(base)
+        } else if ks.modifiers.shift {
             ks.key_char
                 .as_deref()
                 .filter(|text| text.len() == 1 && text.as_bytes()[0].is_ascii_graphic())
@@ -184,7 +229,7 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
         };
         (Key::Character(character.to_string().into()), Key::Character(base.to_string().into()))
     };
-    let input = KeyInput {
+    let mut input = KeyInput {
         logical_key,
         state: ElementState::Pressed,
         location: KeyLocation::Standard,
@@ -206,11 +251,32 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     modifiers.set(ModifiersState::ALT, ks.modifiers.alt);
     modifiers.set(ModifiersState::CONTROL, ks.modifiers.control);
     modifiers.set(ModifiersState::SUPER, ks.modifiers.platform);
-    Some(build_sequence(&input, modifiers, *mode))
+    let mut bytes = build_sequence(&input, modifiers, *mode);
+    if synthetic && mode.contains(TermMode::REPORT_EVENT_TYPES) {
+        input.state = ElementState::Released;
+        bytes.extend(build_sequence(&input, modifiers, *mode));
+    }
+    Some(bytes)
 }
 
-/// 返回 `None` 表示这次按键不由编码器处理（交给 IME/文本输入路径）。
+/// These Windows chords must reach DefWindowProc so the existing close guard
+/// and native system menu run. Other modifiers retain their terminal meaning.
+pub(super) fn is_native_window_shortcut(ks: &Keystroke) -> bool {
+    let mods = &ks.modifiers;
+    crate::platform::Platform::current() == crate::platform::Platform::Windows
+        && mods.alt
+        && !mods.control
+        && !mods.shift
+        && !mods.platform
+        && !mods.function
+        && matches!(ks.key.as_str(), "f4" | "space")
+}
+
+/// 返回 `None` 表示这次按键交给系统窗口处理或 IME/文本输入路径。
 pub fn encode(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
+    if is_native_window_shortcut(ks) {
+        return None;
+    }
     let mods = &ks.modifiers;
 
     #[cfg(windows)]
@@ -239,13 +305,19 @@ pub fn encode(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     if let Some(bytes) = kitty_escape(ks, mode) {
         return Some(bytes);
     }
-    if let Some(bytes) = kitty_sequence(ks, mode) {
+    if let Some(bytes) = kitty_sequence(ks, mode, false) {
         return Some(bytes);
     }
 
     match ks.key.as_str() {
         "enter" => {
-            return Some(if mods.alt { b"\x1b\r".to_vec() } else { b"\r".to_vec() });
+            return Some(if is_shift_enter(ks) {
+                b"\n".to_vec()
+            } else if mods.alt {
+                b"\x1b\r".to_vec()
+            } else {
+                b"\r".to_vec()
+            });
         },
         "backspace" => {
             // kitty 合同下带 Ctrl 的 Backspace 走 CSI u（127 = kitty 的 Backspace
@@ -329,6 +401,147 @@ mod tests {
 
     fn keystroke(key: &str) -> Keystroke {
         Keystroke { modifiers: gpui::Modifiers::default(), key: key.to_owned(), key_char: None }
+    }
+
+    #[test]
+    fn native_window_shortcuts_follow_the_host_window_policy() {
+        let native = crate::platform::Platform::current() == crate::platform::Platform::Windows;
+        for mode in [
+            TermMode::empty(),
+            TermMode::WIN32_INPUT_MODE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            TermMode::REPORT_ALL_KEYS_AS_ESC,
+            TermMode::WIN32_INPUT_MODE | TermMode::DISAMBIGUATE_ESC_CODES,
+        ] {
+            for screen in [TermMode::empty(), TermMode::ALT_SCREEN] {
+                for combo in ["alt-f4", "alt-space"] {
+                    let mut key = Keystroke::parse(combo).unwrap();
+                    for text in [None, Some(" ".to_owned())] {
+                        key.key_char = text;
+                        if native {
+                            assert_eq!(encode(&key, &(mode | screen)), None, "{combo}: {mode:?}");
+                        } else {
+                            assert!(!is_native_window_shortcut(&key), "{combo}");
+                            if key.key == "f4" || key.key_char.is_some() {
+                                assert!(
+                                    encode(&key, &(mode | screen)).is_some(),
+                                    "{combo}: {mode:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn neighboring_alt_and_function_keys_keep_their_terminal_encoding() {
+        for (combo, expected) in [
+            ("f4", b"\x1bOS".as_slice()),
+            ("alt-f3", b"\x1b[1;3R".as_slice()),
+            ("alt-n", b"\x1bn".as_slice()),
+            ("ctrl-alt-f4", b"\x1b[1;7S".as_slice()),
+            ("ctrl-alt-space", b"\x1b\0".as_slice()),
+        ] {
+            assert_eq!(
+                encode(&Keystroke::parse(combo).unwrap(), &TermMode::empty()).as_deref(),
+                Some(expected),
+                "{combo}",
+            );
+        }
+        if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+            let mut space = Keystroke::parse("alt-space").unwrap();
+            space.key_char = Some(" ".to_owned());
+            assert_eq!(encode(&space, &TermMode::empty()), Some(b"\x1b ".to_vec()));
+            assert_eq!(
+                encode(&Keystroke::parse("alt-f4").unwrap(), &TermMode::empty()),
+                Some(b"\x1b[1;3S".to_vec()),
+            );
+        }
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn native_window_shortcuts_propagate_through_root_and_terminal(cx: &mut gpui::TestAppContext) {
+        use gpui::{
+            AppContext as _, Context, FocusHandle, InteractiveElement as _, IntoElement,
+            KeyDownEvent, ParentElement as _, Render, Styled as _, Window, div,
+        };
+        use gpui_component::Root;
+
+        struct InputProbe {
+            focus: FocusHandle,
+            mode: TermMode,
+            received: usize,
+            encoded: Vec<u8>,
+        }
+
+        impl Render for InputProbe {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .key_context(crate::gpui_shell::terminal::KEY_CONTEXT)
+                    .track_focus(&self.focus)
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        this.received += 1;
+                        if let Some(bytes) = encode(&event.keystroke, &this.mode) {
+                            this.encoded.extend(bytes);
+                            cx.stop_propagation();
+                        }
+                    }))
+            }
+        }
+
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::workspace::init(cx);
+        });
+        let mut probe_out = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let probe = cx.new(|cx| InputProbe {
+                focus: cx.focus_handle(),
+                mode: TermMode::empty(),
+                received: 0,
+                encoded: Vec::new(),
+            });
+            let focus = probe.read(cx).focus.clone();
+            focus.focus(window, cx);
+            probe_out = Some(probe.clone());
+            Root::new(probe, window, cx)
+        });
+        let probe = probe_out.unwrap();
+        cx.run_until_parked();
+        let native = crate::platform::Platform::current() == crate::platform::Platform::Windows;
+        for mode in [
+            TermMode::empty(),
+            TermMode::WIN32_INPUT_MODE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            TermMode::REPORT_ALL_KEYS_AS_ESC | TermMode::ALT_SCREEN,
+        ] {
+            probe.update(cx, |probe, _| probe.mode = mode);
+            for combo in ["alt-f4", "alt-space"] {
+                cx.update(|window, cx| {
+                    let before = probe.read(cx).received;
+                    probe.update(cx, |probe, _| probe.encoded.clear());
+                    let mut keystroke = Keystroke::parse(combo).unwrap();
+                    if combo == "alt-space" {
+                        keystroke.key_char = Some(" ".to_owned());
+                    }
+                    let result = window.dispatch_event(
+                        gpui::PlatformInput::KeyDown(KeyDownEvent {
+                            keystroke,
+                            is_held: false,
+                            prefer_character_input: false,
+                        }),
+                        cx,
+                    );
+                    assert_eq!(result.propagate, native, "{combo} in {mode:?}");
+                    assert_eq!(probe.read(cx).encoded.is_empty(), native);
+                    assert_eq!(probe.read(cx).received, before + 1);
+                });
+            }
+        }
     }
 
     /// 传统 VT 路径（子进程没要过 DECSET 9001）：Esc 就是裸 `\x1b`。
@@ -471,7 +684,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_enter_chords_keep_the_existing_cr_encoding() {
+    fn shift_enter_inserts_a_newline_without_kitty_negotiation() {
+        let mut key = keystroke("enter");
+        key.modifiers.shift = true;
+        for mode in
+            [TermMode::default(), TermMode::REPORT_ALTERNATE_KEYS, TermMode::REPORT_ASSOCIATED_TEXT]
+        {
+            for text in [None, Some("\r"), Some("\n")] {
+                key.key_char = text.map(str::to_owned);
+                assert_eq!(encode(&key, &mode), Some(b"\n".to_vec()), "{key:?} {mode:?}");
+                assert!(preserves_enter_modifiers(&key, &mode), "newline must not commit history");
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_enter_chords_distinguish_newline_from_submit() {
         for mode in
             [TermMode::default(), TermMode::REPORT_ALTERNATE_KEYS, TermMode::REPORT_ASSOCIATED_TEXT]
         {
@@ -480,15 +708,24 @@ mod tests {
                 (true, false, false),
                 (false, true, false),
                 (false, false, true),
+                (true, true, false),
+                (true, false, true),
                 (true, true, true),
             ] {
                 let mut key = keystroke("enter");
                 key.modifiers.shift = shift;
                 key.modifiers.control = control;
                 key.modifiers.alt = alt;
-                let expected: &[u8] = if alt { b"\x1b\r" } else { b"\r" };
+                let newline = shift && !control && !alt;
+                let expected: &[u8] = if alt {
+                    b"\x1b\r"
+                } else if newline {
+                    b"\n"
+                } else {
+                    b"\r"
+                };
                 assert_eq!(encode(&key, &mode).as_deref(), Some(expected));
-                assert!(!preserves_enter_modifiers(&key, &mode));
+                assert_eq!(preserves_enter_modifiers(&key, &mode), newline);
             }
         }
     }
@@ -538,15 +775,17 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn win32_enter_keeps_native_characters_and_modifier_bits_in_both_records() {
+    fn win32_enter_keeps_native_key_identity_and_character() {
         let mode = TermMode::WIN32_INPUT_MODE;
         for (shift, control, alt, text, character, flags) in [
             (false, false, false, None, 13, 0),
             (true, false, false, None, 13, 16),
             (true, false, false, Some("\r"), 13, 16),
+            (true, false, false, Some("\n"), 10, 16),
             (false, true, false, None, 10, 8),
             (false, true, false, Some("\n"), 10, 8),
             (false, false, true, Some("\r"), 13, 2),
+            (true, false, true, Some("\r"), 13, 18),
             (true, true, false, Some("\n"), 10, 24),
         ] {
             let mut key = keystroke("enter");
@@ -573,12 +812,32 @@ mod tests {
                 assert_eq!(record.len(), 6);
                 assert_eq!(record[0], 13, "VK_RETURN");
                 assert_ne!(record[1], 0, "native scan code");
-                assert_eq!(record[2], character, "keep WM_CHAR and the CR fallback");
+                assert_eq!(record[2], character, "native records preserve WM_CHAR");
                 assert_eq!(record[3], u16::from(index == 0));
                 assert_eq!(record[4], flags, "Shift/Ctrl/Alt are carried in Cs");
                 assert_eq!(record[5], 1);
             }
             assert_eq!(preserves_enter_modifiers(&key, &mode), flags != 0);
+        }
+    }
+
+    #[test]
+    fn claude_newline_fallback_preserves_codex_and_negotiated_protocols() {
+        let key = Keystroke::parse("shift-enter").unwrap();
+        let mode = TermMode::WIN32_INPUT_MODE;
+        for program in ["claude", "claude-code"] {
+            assert_eq!(encode_for_program(&key, &mode, Some(program)), Some(b"\n".to_vec()));
+            assert_eq!(
+                encode_for_program(&key, &(mode | TermMode::DISAMBIGUATE_ESC_CODES), Some(program)),
+                Some(b"\x1b[13;2u".to_vec())
+            );
+        }
+        for program in [None, Some("codex"), Some("pwsh")] {
+            assert_eq!(encode_for_program(&key, &mode, program), encode(&key, &mode));
+        }
+        for chord in ["enter", "ctrl-enter", "alt-enter", "ctrl-shift-enter"] {
+            let key = Keystroke::parse(chord).unwrap();
+            assert_eq!(encode_for_program(&key, &mode, Some("claude")), encode(&key, &mode));
         }
     }
 
@@ -663,13 +922,23 @@ mod tests {
     }
 
     #[test]
-    fn kitty_modified_space_and_ascii_punctuation_use_csi_u() {
+    fn kitty_modified_space_and_ascii_punctuation_respect_native_shortcuts() {
         for (name, codepoint) in [("space", 32), ("[", 91), ("/", 47)] {
             let mut key = keystroke(name);
             key.modifiers.alt = true;
+            let expected = if crate::platform::Platform::current()
+                == crate::platform::Platform::Windows
+                && name == "space"
+            {
+                None
+            } else {
+                Some(format!("\x1b[{codepoint};3u").into_bytes())
+            };
+            assert_eq!(encode(&key, &pi_keyboard_mode()), expected);
+            key.modifiers.control = true;
             assert_eq!(
                 encode(&key, &pi_keyboard_mode()),
-                Some(format!("\x1b[{codepoint};3u").into_bytes())
+                Some(format!("\x1b[{codepoint};7u").into_bytes())
             );
         }
     }
@@ -742,7 +1011,7 @@ mod tests {
         );
         let mut parser: Processor = Processor::new();
         // Captured from AGY 1.1.7's outer ConPTY stream before authentication.
-        // The host's 9001 mode must not override the later Kitty negotiation.
+        // The host's 9001 mode must not override the later CSI-u negotiation.
         parser.advance(&mut term, b"\x1b[?9001h\x1b[=0;1u\x1b[=1;1u\x1b[?u");
         assert!(term.mode().contains(TermMode::WIN32_INPUT_MODE));
         assert_eq!(
@@ -788,7 +1057,7 @@ mod tests {
         let mut ctrl_enter = keystroke("enter");
         ctrl_enter.modifiers.control = true;
 
-        assert_eq!(encode(&shift_enter, term.mode()), Some(b"\r".to_vec()));
+        assert_eq!(encode(&shift_enter, term.mode()), Some(b"\n".to_vec()));
         // Codex 0.153.4 requests disambiguation, event types and alternate keys.
         parser.advance(&mut term, b"\x1b[>7u\x1b[?u");
         assert_eq!(*term.mode() & TermMode::KITTY_KEYBOARD_PROTOCOL, pi_keyboard_mode());
@@ -797,8 +1066,8 @@ mod tests {
         assert_eq!(encode(&keystroke("enter"), term.mode()), Some(b"\r".to_vec()));
 
         parser.advance(&mut term, b"\x1b[<u\x1b[?u");
-        assert_eq!(encode(&shift_enter, term.mode()), Some(b"\r".to_vec()));
-        assert!(!preserves_enter_modifiers(&shift_enter, term.mode()));
+        assert_eq!(encode(&shift_enter, term.mode()), Some(b"\n".to_vec()));
+        assert!(preserves_enter_modifiers(&shift_enter, term.mode()));
         parser.advance(&mut term, b"\x1b[>7u\x1b[=0u\x1b[?u");
         assert_eq!(encode(&ctrl_enter, term.mode()), Some(b"\r".to_vec()));
         assert_eq!(recorder.0.borrow().as_slice(), ["\x1b[?7u", "\x1b[?0u", "\x1b[?0u"]);

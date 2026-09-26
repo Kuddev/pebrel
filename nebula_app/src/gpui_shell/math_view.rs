@@ -537,6 +537,7 @@ impl Render for MathFormulaView {
         div()
             .relative()
             .flex_shrink_0()
+            .debug_selector(|| "markdown-math-formula".to_owned())
             .group(group.clone())
             .child(MathView {
                 source,

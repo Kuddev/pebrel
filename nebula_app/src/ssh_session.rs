@@ -24,11 +24,14 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(feature = "legacy-shell")]
 use crate::event::EventProxy;
 use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, ProxyTestRoute};
-use crate::i18n::t;
 
+mod agent;
+mod config;
 mod exec;
+mod integration;
 mod lifecycle;
 mod route;
+pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
@@ -121,6 +124,7 @@ fn report_stage<H: SshEventHost>(progress: Option<&H>, stage: SshStage) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AuthMethod {
     PrivateKey(PathBuf),
+    Agent,
     StoredPassword,
     KeyboardInteractive,
     PromptPassword,
@@ -141,28 +145,27 @@ fn authentication_plan(
 ) -> Vec<AuthMethod> {
     use crate::ssh_profiles::SshAuthMode;
 
-    let key_methods = || {
+    let key_methods = |with_agent| {
         let mut seen = Vec::<String>::new();
-        explicit_keys
-            .iter()
-            .chain(resolved_keys)
-            .filter(|path| {
+        let mut methods = Vec::new();
+        for (index, paths) in [explicit_keys, resolved_keys].into_iter().enumerate() {
+            if with_agent && index == 1 {
+                methods.push(AuthMethod::Agent);
+            }
+            for path in paths {
                 let normalized = path.to_string_lossy().to_lowercase();
-                if seen.contains(&normalized) {
-                    false
-                } else {
+                if !seen.contains(&normalized) {
                     seen.push(normalized);
-                    true
+                    methods.push(AuthMethod::PrivateKey(path.clone()));
                 }
-            })
-            .cloned()
-            .map(AuthMethod::PrivateKey)
-            .collect::<Vec<_>>()
+            }
+        }
+        methods
     };
 
     match mode {
         SshAuthMode::Auto => {
-            let mut methods = key_methods();
+            let mut methods = key_methods(true);
             methods.extend([
                 AuthMethod::StoredPassword,
                 AuthMethod::KeyboardInteractive,
@@ -180,7 +183,7 @@ fn authentication_plan(
                 AuthMethod::PromptPassword,
             ]
         },
-        SshAuthMode::PublicKey => key_methods(),
+        SshAuthMode::PublicKey => key_methods(false),
         SshAuthMode::KeyboardInteractive => vec![AuthMethod::KeyboardInteractive],
     }
 }
@@ -200,10 +203,10 @@ impl SshDestination {
         let original = value.trim().to_owned();
         let address = original.strip_prefix("ssh://").unwrap_or(&original).to_owned();
         let (user, host_port) = address.rsplit_once('@').ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.address_needs_user_host"))
+            io::Error::new(io::ErrorKind::InvalidInput, "SSH 地址需要包含 user@host")
         })?;
         if user.is_empty() || host_port.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.address_incomplete")));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "SSH 地址不完整"));
         }
 
         let (host, port) = parse_host_port(host_port)?;
@@ -224,7 +227,7 @@ impl SshDestination {
         crate::ssh_profiles::validate_ssh_destination(&original)
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
         if original.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.address_empty")));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "SSH 地址为空"));
         }
 
         // OpenSSH 不把裸 `user@host:port` 识别为端口语法，而会原样输出成
@@ -242,6 +245,14 @@ impl SshDestination {
             }
         }
 
+        match config::resolve_from_ssh_config(&original) {
+            Ok(Some(destination)) => return Ok(destination),
+            Ok(None) => {},
+            Err(message) => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, message));
+            },
+        }
+
         if let Ok(destination) = Self::parse(&original) {
             return Ok(destination);
         }
@@ -250,7 +261,7 @@ impl SshDestination {
         let (host, port) = parse_host_port(address)?;
         let user = std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.username_undetermined")))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "无法确定 SSH 用户名"))?;
         Ok(Self {
             original,
             user,
@@ -288,31 +299,35 @@ fn ssh_config_probe_target(value: &str) -> Cow<'_, str> {
 }
 
 fn parse_host_port(host_port: &str) -> io::Result<(String, u16)> {
+    let (host, port) = parse_host_port_optional(host_port)?;
+    Ok((host, port.unwrap_or(22)))
+}
+
+fn parse_host_port_optional(host_port: &str) -> io::Result<(String, Option<u16>)> {
     let (host, port) = if let Some(rest) = host_port.strip_prefix('[') {
         let (host, suffix) = rest
             .split_once(']')
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.ipv6_invalid")))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "无效的 IPv6 SSH 地址"))?;
         let port = suffix
             .strip_prefix(':')
             .map(str::parse)
             .transpose()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.port_invalid")))?
-            .unwrap_or(22);
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "无效的 SSH 端口"))?;
         (host.to_owned(), port)
     } else if let Some((host, port)) = host_port.rsplit_once(':') {
         if host.contains(':') {
-            (host_port.to_owned(), 22)
+            (host_port.to_owned(), None)
         } else {
             let port = port
                 .parse()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.port_invalid")))?;
-            (host.to_owned(), port)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "无效的 SSH 端口"))?;
+            (host.to_owned(), Some(port))
         }
     } else {
-        (host_port.to_owned(), 22)
+        (host_port.to_owned(), None)
     };
     if host.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, t!("ssh.session.host_empty")));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "SSH 主机为空"));
     }
     Ok((host, port))
 }
@@ -324,15 +339,23 @@ fn parse_resolved_config(original: &str, text: &str) -> Option<SshDestination> {
     let mut identity_files = Vec::new();
     let mut proxy_jump = None;
     for line in text.lines() {
-        let (key, value) = line.split_once(char::is_whitespace)?;
-        let value = value.trim();
+        let tokens = crate::ssh::ssh_config_tokens(line);
+        let Some(key) = tokens.first() else { continue };
+        let value = tokens[1..].join(" ");
+        if value.is_empty() {
+            continue;
+        }
         match key.to_ascii_lowercase().as_str() {
             "user" if user.is_none() => user = Some(value.to_owned()),
             "hostname" if host.is_none() => host = Some(value.to_owned()),
             "port" if port.is_none() => port = value.parse().ok(),
-            "identityfile" => identity_files.push(expand_home(value)),
+            "identityfile" => {
+                if !value.eq_ignore_ascii_case("none") {
+                    identity_files.push(expand_home(&value));
+                }
+            },
             "proxyjump" if !value.eq_ignore_ascii_case("none") => {
-                proxy_jump = Some(value.to_owned());
+                proxy_jump = Some(value);
             },
             _ => {},
         }
@@ -346,7 +369,6 @@ fn parse_resolved_config(original: &str, text: &str) -> Option<SshDestination> {
         proxy_jump,
     })
 }
-
 fn find_ssh() -> PathBuf {
     if let Some(root) = std::env::var_os("SystemRoot") {
         let path = PathBuf::from(root).join("System32").join("OpenSSH").join("ssh.exe");
@@ -365,18 +387,28 @@ fn find_ssh() -> PathBuf {
 /// flash particularly visible. Other platforms keep the ordinary process
 /// flags.
 fn ssh_config_output(target: &str) -> io::Result<std::process::Output> {
+    ssh_config_command(target, crate::ssh::ssh_config_path().as_deref()).output()
+}
+
+fn ssh_config_command(target: &str, config: Option<&Path>) -> Command {
     let mut command = Command::new(find_ssh());
-    command.arg("-G").arg("--").arg(target);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    // Use the same per-user config as the SSH host list, including portable
+    // Windows installs whose OpenSSH environment may differ from the shell.
+    if let Some(path) = config {
+        command.arg("-F").arg(path);
     }
-    command.output()
+    command.arg("-G").arg("--").arg(target);
+    crate::platform::process::hidden_command(&mut command);
+    command
 }
 
 fn expand_home(value: &str) -> PathBuf {
-    let value = value.trim_matches('"');
+    let value = value.trim_matches(|character| matches!(character, '"' | '\''));
+    if value == "~" {
+        if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+            return PathBuf::from(home);
+        }
+    }
     if let Some(rest) = value.strip_prefix("~/").or_else(|| value.strip_prefix("~\\")) {
         if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
             return PathBuf::from(home).join(rest);
@@ -415,6 +447,31 @@ impl ClientHandler {
         }
         russh::keys::known_hosts::check_known_hosts(&self.host, self.port, key)
     }
+
+    async fn confirm_unknown_key(
+        &self,
+        key: &ssh_key::PublicKey,
+        confirmation: impl std::future::Future<Output = bool>,
+    ) -> bool {
+        if !self.allow_prompt || !self.handshake.confirm(confirmation).await {
+            return false;
+        }
+        let result = self.remember_host_key(key);
+        if let Err(error) = result {
+            warn!("Could not save trusted SSH host key: {error}");
+        }
+        true
+    }
+
+    fn remember_host_key(&self, key: &ssh_key::PublicKey) -> Result<(), russh::keys::Error> {
+        #[cfg(test)]
+        if let Some(path) = &self.known_hosts_path {
+            return russh::keys::known_hosts::learn_known_hosts_path(
+                &self.host, self.port, key, path,
+            );
+        }
+        russh::keys::known_hosts::learn_known_hosts(&self.host, self.port, key)
+    }
 }
 
 impl client::Handler for ClientHandler {
@@ -426,31 +483,17 @@ impl client::Handler for ClientHandler {
     ) -> Result<bool, Self::Error> {
         match self.verify_host_key(server_public_key) {
             Ok(true) => Ok(true),
-            Ok(false) => {
-                if self.allow_prompt
-                    && self
-                        .handshake
-                        .confirm(confirm_new_host(&self.host, self.port, server_public_key))
-                        .await
-                {
-                    if let Err(err) = russh::keys::known_hosts::learn_known_hosts(
-                        &self.host,
-                        self.port,
-                        server_public_key,
-                    ) {
-                        warn!("{}", t!("ssh.session.host_config_failed", error = err));
-                    }
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            },
+            Ok(false) => Ok(self
+                .confirm_unknown_key(
+                    server_public_key,
+                    confirm_new_host(&self.host, self.port, server_public_key),
+                )
+                .await),
             Err(err) => {
-                warn!("{}", t!("ssh.host_key.changed", host = &self.host, port = self.port, detail = err));
-                if self.allow_prompt {
-                    show_host_key_changed(&self.host, self.port, &err.to_string());
-                }
-                Ok(false)
+                warn!("SSH 主机密钥验证失败: {err}");
+                // Return the verification error to the terminal/test status. A blocking
+                // native message box here stalls the async handshake and hides the cause.
+                Err(err.into())
             },
         }
     }
@@ -469,7 +512,7 @@ pub(crate) fn runtime() -> io::Result<&'static tokio::runtime::Runtime> {
             .map_err(|err| err.to_string())
     }) {
         Ok(runtime) => Ok(runtime),
-        Err(err) => Err(io::Error::other(t!("ssh.session.runtime_init_failed", error = err))),
+        Err(err) => Err(io::Error::other(format!("SSH Runtime 初始化失败: {err}"))),
     }
 }
 
@@ -546,7 +589,7 @@ async fn authenticated_session_at<H: SshEventHost>(
     depth: u8,
 ) -> Result<AcquiredSession, SessionError> {
     let route = resolve_connection_route(destination, profile, depth, None).await?;
-    authenticated_route(&route, progress, false).await
+    authenticated_route(&route, progress, false, true).await
 }
 
 async fn resolve_connection_route(
@@ -561,7 +604,7 @@ async fn resolve_connection_route(
         let global = crate::ssh_proxy::SshProxyConfig::load_global();
         let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
         let profiles = crate::ssh_profiles::SshProfiles::load(&path)
-            .map_err(|err| t!("ssh.session.host_config_failed", error = err).to_string())?;
+            .map_err(|err| format!("读取 SSH 主机配置失败: {err}"))?;
         route::resolve_route_with(
             destination,
             profile,
@@ -570,17 +613,17 @@ async fn resolve_connection_route(
             proxy_password.as_deref(),
             &mut |spec| {
                 let destination = SshDestination::resolve(spec)
-                    .map_err(|err| t!("ssh.session.jump_parse_failed", error = err).to_string())?;
+                    .map_err(|err| format!("解析跳板地址失败: {err}"))?;
                 Ok((destination, profiles.for_destination(spec)))
             },
             &mut |target| {
                 crate::ssh_credentials::load_generic_secret(target)
-                    .map_err(|err| t!("ssh.session.proxy_credential_failed", error = err).to_string())
+                    .map_err(|err| format!("读取代理凭据失败，请重新保存代理密码: {err}"))
             },
         )
     })
     .await
-    .map_err(|err| t!("ssh.session.route_parse_failed", error = err).to_string())?
+    .map_err(|err| format!("解析 SSH 连接路径任务失败: {err}"))?
     .map_err(Into::into)
 }
 
@@ -588,13 +631,14 @@ async fn authenticated_route<H: SshEventHost>(
     route: &ResolvedRoute,
     progress: Option<&H>,
     unattended: bool,
+    allow_host_key_prompt: bool,
 ) -> Result<AcquiredSession, SessionError> {
     let key = route.pool_key();
     let existing =
         if unattended { None } else { connection_pool().lock().await.get(&key).cloned() };
     if let Some(existing) = existing {
         if !existing.is_closed() {
-            info!("{}", t!("ssh.session.reuse_authenticated_connection", key = key));
+            info!("复用已认证 SSH 连接: {key}");
             return Ok(AcquiredSession {
                 key,
                 session: existing,
@@ -612,7 +656,7 @@ async fn authenticated_route<H: SshEventHost>(
         ..Default::default()
     });
     report_stage(progress, SshStage::Connect);
-    let mut transport = open_transport(route, config, unattended).await?;
+    let mut transport = open_transport(route, config, unattended, allow_host_key_prompt).await?;
     report_stage(progress, SshStage::Authenticate);
     if unattended {
         let request = SshTestRequest {
@@ -665,13 +709,14 @@ async fn open_transport(
     route: &ResolvedRoute,
     config: Arc<client::Config>,
     unattended: bool,
+    allow_host_key_prompt: bool,
 ) -> Result<OpenedTransport, SessionError> {
     let destination = &route.destination;
     let handshake = lifecycle::Handshake::default();
     let handler = ClientHandler {
         host: destination.host.clone(),
         port: destination.port,
-        allow_prompt: !unattended,
+        allow_prompt: allow_host_key_prompt,
         handshake: handshake.clone(),
         #[cfg(test)]
         known_hosts_path: route.known_hosts_path.clone(),
@@ -679,22 +724,26 @@ async fn open_transport(
     let mut jump_sessions = Vec::new();
     let session = match &route.transport {
         RouteTransport::Server(server) => {
-            info!("{}", t!("ssh.session.connect_via_proxy", proxy = server.display(), host = &destination.host, port = destination.port));
+            info!("经代理 {} 连接 {}:{}", server.display(), destination.host, destination.port);
             let stream = lifecycle::network(
                 "proxy connection",
                 crate::ssh_proxy::connect(server, &destination.host, destination.port),
             )
             .await
-            .map_err(|err| t!("ssh.session.proxy_connect_failed", proxy = server.display(), error = err).to_string())?;
+            .map_err(|err| format!("经代理 {} 连接失败: {err}", server.display()))?;
             handshake.connect(client::connect_stream(config, stream, handler)).await?
         },
         RouteTransport::Jump(jump) => {
             let spec = &jump.destination.original;
-            info!("{}", t!("ssh.session.connect_via_jump_host", spec = spec, host = &destination.host, port = destination.port));
-            let acquired =
-                Box::pin(authenticated_route(jump, None::<&NoopSshEventHost>, unattended))
-                    .await
-                    .map_err(|err| t!("ssh.session.jump_connect_failed", jump = spec, error = err).to_string())?;
+            info!("经跳板 {spec} 连接 {}:{}", destination.host, destination.port);
+            let acquired = Box::pin(authenticated_route(
+                jump,
+                None::<&NoopSshEventHost>,
+                unattended,
+                allow_host_key_prompt,
+            ))
+            .await
+            .map_err(|err| format!("连接跳板 {spec} 失败: {err}"))?;
             let channel = lifecycle::network(
                 "jump channel",
                 acquired.session.channel_open_direct_tcpip(
@@ -706,7 +755,10 @@ async fn open_transport(
             )
             .await
             .map_err(|err| {
-                t!("ssh.session.jump_forward_failed", jump = spec, host = &destination.host, port = destination.port, error = err)
+                format!(
+                    "经跳板 {spec} 转发到 {}:{} 失败: {err}",
+                    destination.host, destination.port
+                )
             })?;
             jump_sessions = acquired.jump_sessions;
             jump_sessions.push(acquired.session);
@@ -715,13 +767,13 @@ async fn open_transport(
                 .await?
         },
         RouteTransport::Command(command) => {
-            info!("{}", t!("ssh.session.connect_via_custom_command", host = &destination.host, port = destination.port));
+            info!("经自定义命令连接 {}:{}", destination.host, destination.port);
             let stream = lifecycle::network(
                 "proxy command",
                 crate::ssh_proxy::connect_command(command, &destination.host, destination.port),
             )
             .await
-            .map_err(|err| t!("ssh.session.custom_command_spawn_failed", error = err).to_string())?;
+            .map_err(|err| format!("自定义代理命令启动失败: {err}"))?;
             handshake.connect(client::connect_stream(config, stream, handler)).await?
         },
         RouteTransport::Direct => {
@@ -757,7 +809,9 @@ async fn authenticate(
     let key_count =
         plan.iter().filter(|method| matches!(method, AuthMethod::PrivateKey(_))).count();
     if profile.auth == crate::ssh_profiles::SshAuthMode::Auto && key_count >= 3 {
-        warn!("{}", t!("ssh.session.auto_max_auth_tries", key_count = key_count));
+        warn!(
+            "自动认证将尝试 {key_count} 把私钥；若服务器触发 MaxAuthTries，请在 SSH Profile 中明确指定密钥"
+        );
     }
 
     let mut reusable_password = None;
@@ -765,14 +819,26 @@ async fn authenticate(
     let mut stored_password_was_present = false;
     let mut interactive_prompt_was_shown = false;
     let mut local_key_errors = Vec::new();
+    let mut agent_attempt = None;
     for method in plan {
         match method {
             AuthMethod::PrivateKey(path) => {
+                if matches!(agent_attempt, Some(agent::Attempt::PartialSuccess { .. })) {
+                    continue;
+                }
                 if try_private_key(session, destination, &path, true, &mut local_key_errors).await?
                 {
                     clear_secret(&mut reusable_password);
                     return Ok(());
                 }
+            },
+            AuthMethod::Agent => {
+                let attempt =
+                    agent::authenticate(session, destination, &profile.private_keys).await?;
+                if attempt == agent::Attempt::Authenticated {
+                    return Ok(());
+                }
+                agent_attempt = Some(attempt);
             },
             AuthMethod::StoredPassword => {
                 if !loaded_stored_password {
@@ -843,7 +909,11 @@ async fn authenticate(
         }
     }
     clear_secret(&mut reusable_password);
-    Err(auth_failure(profile.auth, key_count, &local_key_errors).into())
+    Err(agent::with_diagnostic(
+        auth_failure(profile.auth, key_count, &local_key_errors),
+        agent_attempt.as_ref(),
+    )
+    .into())
 }
 
 /// 在目标主机上跑一条命令并收集它的标准输出，脚本经标准输入送入。
@@ -856,7 +926,7 @@ async fn authenticate(
 /// 失败）。
 ///
 /// `budget` 到点即放弃：远端可能因为负载或磁盘卡住不回话，而调用方是 UI，
-/// Timeout semantics: must not wait indefinitely. Return error on timeout rather than empty string.
+/// 不能无限等。超时返回错误而不是空字符串——"问不到"和"答案是空"必须分开。
 pub(crate) async fn exec_capture(
     raw_destination: &str,
     command: &str,
@@ -872,7 +942,7 @@ pub(crate) async fn exec_capture(
         Ok::<_, io::Error>((destination, profiles.for_destination(&raw)))
     })
     .await
-    .map_err(|err| t!("ssh.session.address_resolve_failed", error = err).to_string())??;
+    .map_err(|err| format!("SSH 地址解析任务失败: {err}"))??;
 
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
     let channel = lifecycle::network("exec channel", session.channel_open_session()).await?;
@@ -891,10 +961,10 @@ pub(crate) async fn open_sftp(
         Ok::<_, io::Error>((destination, profiles.for_destination(&raw)))
     })
     .await
-    .map_err(|err| t!("ssh.session.address_resolve_failed", error = err).to_string())??;
+    .map_err(|err| format!("SSH 地址解析任务失败: {err}"))??;
 
     if let Some(proxy_jump) = destination.proxy_jump.as_deref() {
-        info!("{}", t!("ssh.session.sftp_via_jump_host", proxy_jump = proxy_jump));
+        info!("SFTP 将经跳板 {proxy_jump} 建立");
     }
 
     // SFTP 面板自己有加载态，不参与终端 pane 的连接卡片。
@@ -958,21 +1028,22 @@ pub struct SshTestResult {
     pub elapsed_ms: u64,
 }
 
-/// 执行一次无人值守的草稿测试。绝不弹 AskPass：草稿/已存密码可以回答明确的
-/// keyboard-interactive 密码问题，OTP 等真正需要用户参与的问题则留给正式连接
-/// （见 [`test_authenticate`]）。
+/// 执行一次草稿测试。认证不弹 AskPass：草稿/已存密码可以回答明确的
+/// keyboard-interactive 密码问题；未知主机密钥仍须用户在确认对话框中明确信任。
 async fn run_test(request: SshTestRequest) -> SshTestResult {
     let started = std::time::Instant::now();
     let request_id = request.request_id;
     let raw = request.destination.clone();
-    let outcome = tokio::time::timeout(TEST_TIMEOUT, async {
+    // Keep the short budget for local resolution; host-key confirmation is
+    // user driven and therefore intentionally outside it.
+    let route_outcome = tokio::time::timeout(TEST_TIMEOUT, async {
         let resolved = tokio::task::spawn_blocking({
             let raw = raw.clone();
             move || SshDestination::resolve(&raw)
         })
         .await
         .map_err(|err| -> SessionError {
-            t!("ssh.session.address_resolve_failed", error = err).to_string().into()
+            format!("SSH 地址解析任务失败: {err}").into()
         })??;
         let profile = crate::ssh_profiles::SshProfileAuth {
             destination: request.destination.clone(),
@@ -985,13 +1056,16 @@ async fn run_test(request: SshTestRequest) -> SshTestResult {
         let route =
             resolve_connection_route(&resolved, &profile, 0, request.proxy_password.clone())
                 .await?;
-        test_connect(&route, &request).await
+        Ok::<_, SessionError>(route)
     })
     .await;
-    let (ok, message) = match outcome {
-        Ok(Ok(())) => (true, String::new()),
+    let (ok, message) = match route_outcome {
+        Ok(Ok(route)) => match test_connect(&route, &request).await {
+            Ok(()) => (true, String::new()),
+            Err(err) => (false, err.to_string()),
+        },
         Ok(Err(err)) => (false, err.to_string()),
-        Err(_) => (false, t!("ssh.session.connect_timeout", seconds = TEST_TIMEOUT.as_secs()).to_string()),
+        Err(_) => (false, format!("连接超时（{} 秒无响应）", TEST_TIMEOUT.as_secs())),
     };
     SshTestResult {
         request_id,
@@ -1008,9 +1082,13 @@ async fn run_test(request: SshTestRequest) -> SshTestResult {
 pub fn start_test(
     request: SshTestRequest,
 ) -> io::Result<tokio::sync::oneshot::Receiver<SshTestResult>> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let (mut sender, receiver) = tokio::sync::oneshot::channel();
     runtime()?.spawn(async move {
-        let _ = sender.send(run_test(request).await);
+        tokio::select! {
+            biased;
+            _ = sender.closed() => {},
+            result = run_test(request) => { let _ = sender.send(result); },
+        }
     });
     Ok(receiver)
 }
@@ -1226,7 +1304,7 @@ async fn proxy_test_stream(
                     let profile = crate::ssh_profiles::SshProfiles::load(&path)
                         .map_err(|error| ProxyTestFailure::JumpResolve {
                             target: spec.clone(),
-                            error: t!("ssh.session.host_config_failed", error = error).to_string(),
+                            error: format!("读取 SSH 主机配置失败: {error}"),
                         })?
                         .for_destination(&spec);
                     Ok::<_, ProxyTestFailure>((destination, profile))
@@ -1240,12 +1318,12 @@ async fn proxy_test_stream(
                 target: spec.clone(),
                 error: error.to_string(),
             })?;
-            let jump = authenticated_route(&route, None::<&NoopSshEventHost>, true).await.map_err(
-                |error| ProxyTestFailure::JumpConnect {
+            let jump = authenticated_route(&route, None::<&NoopSshEventHost>, true, false)
+                .await
+                .map_err(|error| ProxyTestFailure::JumpConnect {
                     target: spec.clone(),
                     error: error.to_string(),
-                },
-            )?;
+                })?;
             let channel = jump
                 .session
                 .channel_open_direct_tcpip(
@@ -1280,11 +1358,11 @@ async fn test_connect(route: &ResolvedRoute, request: &SshTestRequest) -> Result
         keepalive_max: 3,
         ..Default::default()
     });
-    let mut transport = open_transport(route, config, true).await?;
+    let mut transport = open_transport(route, config, true, true).await?;
     test_authenticate(&mut transport.session, &route.destination, request).await
 }
 
-/// 无人值守版认证：none → 草稿密码 → 密钥/已存密码计划。明确的
+/// 无人值守版认证沿用正式连接的计划；草稿密码只替代其中的保存密码。明确的
 /// keyboard-interactive 密码问题可以复用已有密码；OTP 与「连接时询问」在这里
 /// 跳过——测试不能弹框，也不能把真实的二次验证误报成配置错误。
 async fn test_authenticate(
@@ -1292,26 +1370,45 @@ async fn test_authenticate(
     destination: &SshDestination,
     request: &SshTestRequest,
 ) -> Result<(), SessionError> {
+    let mut using_agent = false;
+    match tokio::time::timeout(
+        TEST_TIMEOUT,
+        test_authentication_plan(session, destination, request, &mut using_agent),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) if using_agent => Err(agent::timed_out()),
+        Err(_) => Err(format!("认证超时（{} 秒无响应）", TEST_TIMEOUT.as_secs()).into()),
+    }
+}
+
+async fn test_authentication_plan(
+    session: &mut ClientSession,
+    destination: &SshDestination,
+    request: &SshTestRequest,
+    using_agent: &mut bool,
+) -> Result<(), SessionError> {
     if session.authenticate_none(&destination.user).await?.success() {
         return Ok(());
     }
     let has_draft_password =
         request.password.as_deref().is_some_and(|password| !password.is_empty());
-    if let Some(password) = request.password.as_deref().filter(|p| !p.is_empty()) {
-        if authenticate_password(session, &destination.user, password.as_bytes()).await? {
-            return Ok(());
-        }
-    }
     let plan =
         authentication_plan(request.auth, &request.private_keys, &destination.identity_files);
     let mut interactive_skipped = false;
     let mut stored_password = None;
     let mut loaded_stored_password = false;
     let mut local_key_errors = Vec::new();
-    let mut credential_was_attempted = has_draft_password;
+    let mut credential_was_attempted = false;
+    let mut agent_attempt = None;
     for method in plan {
+        *using_agent = matches!(method, AuthMethod::Agent);
         match method {
             AuthMethod::PrivateKey(path) => {
+                if matches!(agent_attempt, Some(agent::Attempt::PartialSuccess { .. })) {
+                    continue;
+                }
                 // allow_prompt=false：spawn_test 承诺绝不弹框，密钥口令也
                 // 不例外——受口令保护且无已存口令的密钥记为本地问题。
                 if try_private_key(session, destination, &path, false, &mut local_key_errors)
@@ -1321,11 +1418,26 @@ async fn test_authenticate(
                     return Ok(());
                 }
             },
+            AuthMethod::Agent => {
+                let attempt =
+                    agent::authenticate(session, destination, &request.private_keys).await?;
+                if attempt == agent::Attempt::Authenticated {
+                    return Ok(());
+                }
+                agent_attempt = Some(attempt);
+            },
             AuthMethod::StoredPassword => {
                 // A non-empty draft is the user's explicit answer for this
                 // test. Do not let an older credential-manager value turn a
                 // wrong draft into a misleading success.
                 if has_draft_password {
+                    credential_was_attempted = true;
+                    let password = request.password.as_deref().unwrap_or_default();
+                    if authenticate_password(session, &destination.user, password.as_bytes())
+                        .await?
+                    {
+                        return Ok(());
+                    }
                     continue;
                 }
                 if !loaded_stored_password {
@@ -1365,13 +1477,14 @@ async fn test_authenticate(
         }
     }
     clear_secret(&mut stored_password);
-    if !local_key_errors.is_empty() {
-        return Err(t!("ssh.session.keys_unusable", error = local_key_errors.join("；")).to_string().into());
-    }
-    if interactive_skipped {
-        return Err(t!("ssh.session.interactive_required").to_string().into());
-    }
-    Err(t!("ssh.session.auth_failed").to_string().into())
+    let message = if !local_key_errors.is_empty() {
+        format!("私钥无法使用：{}", local_key_errors.join("；"))
+    } else if interactive_skipped {
+        "服务器可达，但此配置需要连接时交互输入（密码/MFA），测试无法替你完成".into()
+    } else {
+        "认证未通过：请检查密码、私钥或服务器端授权".into()
+    };
+    Err(agent::with_diagnostic(message, agent_attempt.as_ref()).into())
 }
 
 fn auth_failure(
@@ -1386,26 +1499,26 @@ fn auth_failure(
         && !local_key_errors.is_empty()
         && local_key_errors.len() >= key_count
     {
-        return t!("ssh.session.keys_unusable", error = local_key_errors.join("；")).to_string();
+        return format!("私钥无法使用：{}", local_key_errors.join("；"));
     }
     let message = match mode {
-        SshAuthMode::Auto if key_count >= 3 => {
-            t!("ssh.session.auto_max_auth_tries", key_count = key_count).to_string()
-        },
-        SshAuthMode::Auto => t!("ssh.session.auto_rejected").to_string(),
-        SshAuthMode::Password => t!("ssh.session.password_rejected").to_string(),
+        SshAuthMode::Auto if key_count >= 3 => format!(
+            "服务器拒绝了自动认证；已尝试 {key_count} 把私钥，可能触发 MaxAuthTries，请明确选择一把密钥"
+        ),
+        SshAuthMode::Auto => "服务器拒绝了所有可用的 SSH 认证方式".to_owned(),
+        SshAuthMode::Password => "服务器拒绝了密码认证，未回退到其他认证方式".to_owned(),
         SshAuthMode::PublicKey if key_count == 0 => {
-            t!("ssh.session.no_private_keys").to_string()
+            "密钥认证没有可用的私钥，请选择私钥文件或配置 IdentityFile".to_owned()
         },
-        SshAuthMode::PublicKey => t!("ssh.session.public_key_rejected").to_string(),
+        SshAuthMode::PublicKey => "服务器拒绝了指定的私钥，未回退到密码认证".to_owned(),
         SshAuthMode::KeyboardInteractive => {
-            t!("ssh.session.keyboard_interactive_rejected").to_string()
+            "服务器拒绝了 keyboard-interactive 认证，未回退到密码认证".to_owned()
         },
     };
     if local_key_errors.is_empty() {
         message
     } else {
-        format!("{message}{}", t!("ssh.session.local_key_problems_suffix", error = local_key_errors.join("；")))
+        format!("{message}（本地密钥问题：{}）", local_key_errors.join("；"))
     }
 }
 
@@ -1437,8 +1550,8 @@ async fn try_private_key(
     let private_key = match std::fs::read(path) {
         Ok(private_key) => private_key,
         Err(err) => {
-            warn!("{}", t!("ssh.session.key_unreadable", path = path.display(), error = err));
-            local_errors.push(t!("ssh.session.key_unreadable", path = path.display(), error = err).to_string());
+            warn!("无法读取 SSH 私钥 {}: {err}", path.display());
+            local_errors.push(format!("{}: 无法读取（{err}）", path.display()));
             return Ok(false);
         },
     };
@@ -1448,8 +1561,8 @@ async fn try_private_key(
         Ok(key) => Some(key),
         Err(err) if key_needs_passphrase(&err, &private_key) => None,
         Err(err) => {
-            warn!("{}", t!("ssh.session.key_unparseable", path = path.display(), error = err));
-            local_errors.push(t!("ssh.session.key_unparseable", path = path.display(), error = err).to_string());
+            warn!("SSH 私钥 {} 无法解析: {err}", path.display());
+            local_errors.push(format!("{}: 无法解析（{err}）", path.display()));
             return Ok(false);
         },
     };
@@ -1475,10 +1588,10 @@ async fn try_private_key(
 
     if key.is_none() {
         if !allow_prompt {
-            local_errors.push(t!("ssh.session.key_passphrase_protected", path = path.display()).to_string());
+            local_errors.push(format!("{}: 私钥受口令保护，测试无法替你输入口令", path.display()));
             return Ok(false);
         }
-        let prompt = t!("ssh.session.key_passphrase_prompt", path = path.display()).to_string();
+        let prompt = format!("密钥口令: {}", path.display());
         if let Some((mut passphrase, save)) = prompt_secret(prompt, None, true).await? {
             let text = zeroize::Zeroizing::new(String::from_utf8_lossy(&passphrase).into_owned());
             key = russh::keys::load_secret_key(path, Some(&text)).ok();
@@ -1488,7 +1601,7 @@ async fn try_private_key(
             passphrase.fill(0);
         }
         if key.is_none() {
-            local_errors.push(t!("ssh.session.key_passphrase_wrong", path = path.display()).to_string());
+            local_errors.push(format!("{}: 密钥口令不正确或已取消", path.display()));
         }
     }
     let Some(key) = key else { return Ok(false) };
@@ -1621,7 +1734,7 @@ async fn prompt_secret(
             .map(|response| response.map(|(value, save)| (zeroize::Zeroizing::new(value), save)))
     })
     .await
-    .map_err(|err| io::Error::other(t!("ssh.session.credential_prompt_failed", error = err)))?
+    .map_err(|err| io::Error::other(format!("凭据输入任务失败: {err}")))?
 }
 
 fn clear_secret(secret: &mut Option<Vec<u8>>) {
@@ -1632,15 +1745,7 @@ fn clear_secret(secret: &mut Option<Vec<u8>>) {
 }
 
 fn remote_hook_token() -> io::Result<String> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes)
-        .map_err(|err| io::Error::other(t!("ssh.session.hook_token_failed", error = err)))?;
-    let mut token = String::with_capacity(32);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(token, "{byte:02x}");
-    }
-    Ok(token)
+    crate::ai_hook::remote::new_token()
 }
 
 fn render_error<H: SshEventHost>(
@@ -1676,11 +1781,6 @@ fn confirm_new_host_legacy(host: &str, port: u16, _key: &ssh_key::PublicKey) -> 
     false
 }
 
-#[cfg(not(windows))]
-fn show_host_key_changed(host: &str, port: u16, detail: &str) {
-    log::error!("{}", t!("ssh.host_key.changed", host = host, port = port, detail = detail));
-}
-
 #[cfg(windows)]
 fn confirm_new_host_legacy(host: &str, port: u16, key: &ssh_key::PublicKey) -> bool {
     use std::ptr::null_mut;
@@ -1689,7 +1789,9 @@ fn confirm_new_host_legacy(host: &str, port: u16, key: &ssh_key::PublicKey) -> b
     };
 
     let fingerprint = key.fingerprint(ssh_key::HashAlg::Sha256);
-    let text = wide(&t!("ssh.host_key.first_connect", host = host, port = port, fingerprint = fingerprint).to_string());
+    let text = wide(&format!(
+        "首次连接到 {host}:{port}。\n\n主机密钥：{fingerprint}\n\n是否信任并保存此主机密钥？"
+    ));
     let title = wide("Nebula SSH");
     unsafe {
         MessageBoxW(
@@ -1698,24 +1800,6 @@ fn confirm_new_host_legacy(host: &str, port: u16, key: &ssh_key::PublicKey) -> b
             title.as_ptr(),
             MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND,
         ) == IDYES
-    }
-}
-
-#[cfg(windows)]
-fn show_host_key_changed(host: &str, port: u16, detail: &str) {
-    use std::ptr::null_mut;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
-    };
-    let text = wide(&t!("ssh.host_key.changed", host = host, port = port, detail = detail).to_string());
-    let title = wide("Nebula SSH");
-    unsafe {
-        MessageBoxW(
-            null_mut(),
-            text.as_ptr(),
-            title.as_ptr(),
-            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
-        );
     }
 }
 

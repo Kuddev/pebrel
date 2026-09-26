@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::i18n::t;
-
 #[cfg(feature = "legacy-shell")]
 use super::window::Window;
 
@@ -25,10 +23,10 @@ struct FileFilter {
 }
 
 const ALL_FILES_FILTER: FileFilter =
-    FileFilter { name: "file_dialog.filter.all_files", extensions: &["*"], patterns: &["*.*"] };
+    FileFilter { name: "All files", extensions: &["*"], patterns: &["*.*"] };
 const IMAGE_FILTERS: &[FileFilter] = &[
     FileFilter {
-        name: "file_dialog.filter.images",
+        name: "Images",
         extensions: &["png", "jpg", "jpeg", "webp", "bmp"],
         patterns: &["*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp"],
     },
@@ -36,7 +34,7 @@ const IMAGE_FILTERS: &[FileFilter] = &[
 ];
 const FONT_FILTERS: &[FileFilter] = &[
     FileFilter {
-        name: "file_dialog.filter.fonts",
+        name: "Fonts",
         extensions: &["ttf", "otf", "ttc", "otc"],
         patterns: &["*.ttf", "*.otf", "*.ttc", "*.otc"],
     },
@@ -44,7 +42,7 @@ const FONT_FILTERS: &[FileFilter] = &[
 ];
 const PRIVATE_KEY_FILTERS: &[FileFilter] = &[
     FileFilter {
-        name: "file_dialog.filter.private_keys",
+        name: "SSH private keys",
         extensions: &["pem", "key", "ppk"],
         patterns: &["id_*", "*.pem", "*.key", "*.ppk"],
     },
@@ -52,7 +50,7 @@ const PRIVATE_KEY_FILTERS: &[FileFilter] = &[
 ];
 const WORKSPACE_FILTERS: &[FileFilter] = &[
     FileFilter {
-        name: "file_dialog.filter.workspaces",
+        name: "Nebula workspaces",
         extensions: &["json"],
         patterns: &["*.nebula-workspace.json", "*.json"],
     },
@@ -60,7 +58,7 @@ const WORKSPACE_FILTERS: &[FileFilter] = &[
 ];
 const BACKUP_FILTERS: &[FileFilter] = &[
     FileFilter {
-        name: "file_dialog.filter.backups",
+        name: "Nebula encrypted backups",
         extensions: &["nebula-backup"],
         patterns: &["*.nebula-backup"],
     },
@@ -106,18 +104,18 @@ pub(super) fn classify_private_key_contents(contents: &[u8]) -> PrivateKeyFileKi
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_image_file(owner: &Window) -> Option<String> {
-    platform::pick_file(owner, &t!("file_dialog.choose_background_image"), IMAGE_FILTERS)
+    platform::pick_file(owner, "Choose background image", IMAGE_FILTERS)
         .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_font_file(owner: &Window) -> Option<PathBuf> {
-    platform::pick_file(owner, &t!("file_dialog.import_terminal_font"), FONT_FILTERS)
+    platform::pick_file(owner, "导入终端字体", FONT_FILTERS)
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_private_key_file(owner: &Window) -> Option<Result<PathBuf, String>> {
-    let path = platform::pick_file(owner, &t!("file_dialog.choose_private_key"), PRIVATE_KEY_FILTERS)?;
+    let path = platform::pick_file(owner, "Choose SSH private key", PRIVATE_KEY_FILTERS)?;
     Some(validate_private_key_path(&path))
 }
 
@@ -125,7 +123,7 @@ pub(super) fn pick_private_key_file(owner: &Window) -> Option<Result<PathBuf, St
 /// 不依赖 winit `Window`。Windows 上应优先走 [`pick_private_key_file_with_hwnd`]。
 #[cfg(not(windows))]
 pub(crate) fn pick_private_key_file_unowned() -> Option<Result<PathBuf, String>> {
-    let path = platform::pick_file_unowned(&t!("file_dialog.choose_private_key"), PRIVATE_KEY_FILTERS)?;
+    let path = platform::pick_file_unowned("选择 SSH 私钥", PRIVATE_KEY_FILTERS)?;
     Some(validate_private_key_path(&path))
 }
 
@@ -134,7 +132,7 @@ pub(crate) fn pick_private_key_file_unowned() -> Option<Result<PathBuf, String>>
 pub(crate) fn pick_private_key_file_with_hwnd(
     hwnd: windows_sys::Win32::Foundation::HWND,
 ) -> Option<Result<PathBuf, String>> {
-    let path = platform::pick_file_with_hwnd(hwnd, &t!("file_dialog.choose_private_key"), PRIVATE_KEY_FILTERS)?;
+    let path = platform::pick_file_with_hwnd(hwnd, "选择 SSH 私钥", PRIVATE_KEY_FILTERS)?;
     Some(validate_private_key_path(&path))
 }
 
@@ -154,72 +152,72 @@ pub(crate) fn pick_folder_with_hwnd(
 pub(crate) fn pick_upload_files_with_hwnd(
     hwnd: windows_sys::Win32::Foundation::HWND,
 ) -> Vec<PathBuf> {
-    platform::pick_files_with_hwnd(hwnd, &t!("file_dialog.choose_upload_files"), &[ALL_FILES_FILTER])
+    platform::pick_files_with_hwnd(hwnd, "选择要上传的文件", &[ALL_FILES_FILTER])
 }
 
 /// Validate a path selected by a non-winit UI shell. The legacy picker and GPUI
 /// both use this exact classifier so a `.pub` file can never silently enter a
 /// profile just because the shell used a different native file-dialog API.
 pub(crate) fn validate_private_key_path(path: &std::path::Path) -> Result<PathBuf, String> {
-    let contents = std::fs::read(path)
-        .map_err(|err| t!("file_dialog.private_key.read_failed", path = path.display(), error = err).to_string())?;
+    let contents =
+        std::fs::read(path).map_err(|err| format!("无法读取私钥 {}: {err}", path.display()))?;
     match classify_private_key_contents(&contents) {
         PrivateKeyFileKind::PrivateKey => Ok(path.to_path_buf()),
-        PrivateKeyFileKind::PublicKey => Err(t!("file_dialog.private_key.public_key").to_string()),
+        PrivateKeyFileKind::PublicKey => Err("请选择私钥文件，不要选择 .pub 公钥".to_owned()),
         PrivateKeyFileKind::Unsupported => {
-            Err(t!("file_dialog.private_key.unsupported").to_string())
+            Err("文件不是受支持的 OpenSSH、PEM 或 PPK 私钥".to_owned())
         },
     }
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_upload_files(owner: &Window) -> Vec<PathBuf> {
-    platform::pick_files(owner, &t!("file_dialog.choose_upload_files"), &[ALL_FILES_FILTER])
+    platform::pick_files(owner, "选择要上传的文件", &[ALL_FILES_FILTER])
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_upload_directory(owner: &Window) -> Option<PathBuf> {
-    platform::pick_folder(owner, &t!("file_dialog.choose_upload_directory"))
+    platform::pick_folder(owner, "选择要上传的文件夹")
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_download_directory(owner: &Window) -> Option<PathBuf> {
-    platform::pick_folder(owner, &t!("file_dialog.choose_download_directory"))
+    platform::pick_folder(owner, "选择下载位置")
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_side_panel_directory(owner: &Window) -> Option<PathBuf> {
-    platform::pick_folder(owner, &t!("file_dialog.choose_tree_root"))
+    platform::pick_folder(owner, "选择目录树根目录")
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_startup_directory(owner: &Window) -> Option<PathBuf> {
-    platform::pick_folder(owner, &t!("file_dialog.choose_startup_directory"))
+    platform::pick_folder(owner, "选择终端启动目录")
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_terminal_directory(owner: &Window) -> Option<PathBuf> {
-    platform::pick_folder(owner, &t!("file_dialog.import_terminal_directory"))
+    platform::pick_folder(owner, "导入终端目录")
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn save_workspace_file(owner: &Window, default_name: &str) -> Option<PathBuf> {
-    platform::save_file(owner, &t!("file_dialog.export_workspace"), WORKSPACE_FILTERS, default_name)
+    platform::save_file(owner, "导出工作区", WORKSPACE_FILTERS, default_name)
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_workspace_file(owner: &Window) -> Option<PathBuf> {
-    platform::pick_file(owner, &t!("file_dialog.open_workspace"), WORKSPACE_FILTERS)
+    platform::pick_file(owner, "打开工作区", WORKSPACE_FILTERS)
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn save_backup_file(owner: &Window) -> Option<PathBuf> {
-    platform::save_file(owner, &t!("file_dialog.export_backup"), BACKUP_FILTERS, "nebula-backup.nebula-backup")
+    platform::save_file(owner, "导出 Nebula 备份", BACKUP_FILTERS, "nebula-backup.nebula-backup")
 }
 
 #[cfg(feature = "legacy-shell")]
 pub(super) fn pick_backup_file(owner: &Window) -> Option<PathBuf> {
-    platform::pick_file(owner, &t!("file_dialog.restore_backup"), BACKUP_FILTERS)
+    platform::pick_file(owner, "恢复 Nebula 备份", BACKUP_FILTERS)
 }
 
 #[cfg(test)]

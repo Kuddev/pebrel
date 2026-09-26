@@ -1,18 +1,14 @@
 //! Startup update check against GitHub Releases.
 //!
-//! Zero new dependencies: Windows 10+ ships `curl.exe`, so the release metadata
-//! probe is a short-lived child process instead of another HTTP stack.
-//! Everything is best-effort — no network, no curl, malformed JSON, or a
+//! Release metadata and installer downloads share the updater's ureq client and
+//! proxy resolver. Everything is best-effort — no network, malformed JSON, or a
 //! GitHub outage all degrade to "no banner", never to an error the user sees.
 
-use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-
-use crate::i18n::UiLanguage;
 #[cfg(feature = "legacy-shell")]
 use winit::event_loop::EventLoopProxy;
 
@@ -25,6 +21,12 @@ const RELEASES_API: &str = "https://api.github.com/repos/Kuddev/pebrel/releases/
 pub const RELEASES_PAGE: &str = "https://github.com/Kuddev/pebrel/releases";
 const UPDATE_STATE_FILE: &str = "update_state.json";
 const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
+
+pub(crate) mod assets;
+mod fallback;
+
+#[cfg(feature = "update-test-source")]
+pub(crate) mod test_source;
 
 static UPDATE_STATE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -73,7 +75,7 @@ impl UpdatePromptState {
 
 /// 可由当前平台直接下载的 release 资产。名称与架构在解析 API 时已精确匹配，
 /// 下载器仍会再次验证 URL、文件名、大小与 SHA-256，避免 UI 数据被误用。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct UpdateAsset {
     pub version: String,
     pub name: String,
@@ -140,11 +142,7 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
             log::debug!("update-check: v{current} is current (latest v{latest})");
             return;
         }
-        let text = UiLanguage::current().tr_args(
-            "command_palette.update_notice",
-            &[("latest", &latest), ("current", current)],
-        );
-        let text = format!("{text} ({RELEASES_PAGE})");
+        let text = format!("Pebrel v{latest} 已发布（当前 v{current}），下载：{RELEASES_PAGE}");
         let _ = proxy.send_event(Event::new(
             EventType::Message(Message::new(text, MessageType::Warning)),
             None,
@@ -159,15 +157,37 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
 /// 轻通知，再由用户决定是否打开更新详情弹窗。
 #[cfg(feature = "gpui-shell")]
 pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiShellEvent>) {
-    if !nebula_settings::RuntimeSettings::load().auto_check_updates {
-        log::debug!("update-check: automatic checks disabled in settings");
-        return;
-    }
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
     let spawned = std::thread::Builder::new().name("update-check-gpui".into()).spawn(move || {
+        crate::update_download::hydrate();
+        if let Some(asset) = crate::update_download::cached_asset() {
+            let failed = matches!(
+                crate::update_download::status(&asset),
+                crate::update_download::DownloadStatus::InstallFailed(_)
+            );
+            if (failed || can_install_version(&asset.version).unwrap_or(false))
+                && (should_prompt(&asset.version)
+                    || (failed
+                        && crate::update_download::installation_failure_unseen(
+                            &update_state_path(),
+                        )))
+            {
+                let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable(
+                    UpdateCheckResult {
+                        current: env!("CARGO_PKG_VERSION").into(),
+                        latest: asset.version.clone(),
+                        update_available: true,
+                        asset: Some(asset),
+                    },
+                ));
+            }
+        }
+        if !nebula_settings::RuntimeSettings::load().auto_check_updates {
+            return;
+        }
         // 对齐旧壳：首屏和首个终端会话稳定后再联网。
         std::thread::sleep(Duration::from_secs(12));
         let result = match check_now() {
@@ -193,12 +213,13 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
 }
 
 /// 立即检查 GitHub 最新 release；调用方必须把它放到后台执行器，避免
-/// `curl` 的网络等待阻塞 UI 线程。
+/// 网络等待阻塞 UI 线程。
 pub fn check_now() -> Result<UpdateCheckResult, String> {
     let release = fetch_latest_release()?;
     let current = env!("CARGO_PKG_VERSION").to_owned();
+    let update_available = can_install_version(&release.version)?;
     Ok(UpdateCheckResult {
-        update_available: is_newer(&release.version, &current),
+        update_available,
         current,
         latest: release.version,
         asset: release.asset,
@@ -235,16 +256,16 @@ fn update_prompt_state(change: impl FnOnce(&mut UpdatePromptState)) -> Result<()
     let _guard = UPDATE_STATE_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let path = update_state_path();
     let Some(_file_lock) = crate::atomic_file::try_lock(&path)
-        .map_err(|error| UiLanguage::current().tr_args("update.prompt_state_lock_failed", &[("error", &error.to_string())]))?
+        .map_err(|error| format!("无法锁定更新提醒状态：{error}"))?
     else {
-        return Err(UiLanguage::current().tr("update.prompt_state_busy").to_owned());
+        return Err("更新提醒状态正由另一个 Pebrel 进程写入".to_owned());
     };
     let mut state = load_prompt_state();
     change(&mut state);
     let bytes = serde_json::to_vec_pretty(&state)
-        .map_err(|error| UiLanguage::current().tr_args("update.prompt_state_serialize_failed", &[("error", &error.to_string())]))?;
+        .map_err(|error| format!("无法序列化更新提醒状态：{error}"))?;
     crate::atomic_file::write(&path, &bytes)
-        .map_err(|error| UiLanguage::current().tr_args("update.prompt_state_save_failed", &[("error", &error.to_string())]))
+        .map_err(|error| format!("无法保存更新提醒状态：{error}"))
 }
 
 pub fn should_prompt(version: &str) -> bool {
@@ -266,53 +287,59 @@ pub fn skip_version(version: &str) -> Result<(), String> {
 }
 
 fn fetch_latest_release() -> Result<LatestRelease, String> {
-    let mut command = Command::new("curl");
-    command.args([
-        "-fsSL",
-        "--max-time",
-        "10",
-        "-H",
-        "User-Agent: pebrel",
-        "-H",
-        "Accept: application/vnd.github+json",
-        RELEASES_API,
-    ]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(feature = "update-test-source")]
+    if let Some(origin) = test_source::origin()? {
+        let url = format!("{origin}/release.json");
+        let agent = test_source::agent(Duration::from_secs(10));
+        return fetch_release_with_agent(&agent, &url);
     }
-    let output = command.output().map_err(|error| UiLanguage::current().tr_args("update.curl_start_failed", &[("error", &error.to_string())]))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        let detail = detail.trim();
-        return Err(if detail.is_empty() {
-            UiLanguage::current().tr_args("update.github_request_curl_failed", &[("status", &output.status.to_string())])
-        } else {
-            UiLanguage::current().tr_args("update.github_request_failed", &[("detail", detail)])
-        });
-    }
-    parse_latest_release(&output.stdout)
+    let agent = crate::update_proxy::agent(RELEASES_API, Duration::from_secs(10));
+    fetch_release_with_fallback(&agent, RELEASES_API, fallback::fetch_latest)
+}
+
+#[cfg(any(test, feature = "update-test-source"))]
+fn fetch_release_with_agent(agent: &ureq::Agent, url: &str) -> Result<LatestRelease, String> {
+    // Explicit local rehearsals must never fall back to the public network.
+    fetch_release_with_fallback(agent, url, |status| Err(format!("GitHub HTTP {status}")))
+}
+
+fn fetch_release_with_fallback(
+    agent: &ureq::Agent,
+    url: &str,
+    on_rate_limit: impl FnOnce(u16) -> Result<LatestRelease, String>,
+) -> Result<LatestRelease, String> {
+    let response = agent
+        .get(url)
+        .header("User-Agent", "pebrel")
+        .header("Accept", "application/vnd.github+json")
+        .call();
+    let mut response = match response {
+        Err(ureq::Error::StatusCode(status @ (403 | 429))) => return on_rate_limit(status),
+        other => other.map_err(|error| format!("GitHub 请求失败：{error}"))?,
+    };
+    let bytes = response
+        .body_mut()
+        .with_config()
+        .limit(2 * 1024 * 1024)
+        .read_to_vec()
+        .map_err(|error| format!("GitHub 请求失败：{error}"))?;
+    parse_latest_release(&bytes)
 }
 
 fn parse_latest_release(bytes: &[u8]) -> Result<LatestRelease, String> {
     let release: GitHubRelease =
-        serde_json::from_slice(bytes).map_err(|error| UiLanguage::current().tr_args("update.github_invalid_data", &[("error", &error.to_string())]))?;
+        serde_json::from_slice(bytes).map_err(|error| format!("GitHub 返回了无效数据：{error}"))?;
     let version = release.tag_name.trim().trim_start_matches(['v', 'V']);
     if version.is_empty() {
-        return Err(UiLanguage::current().tr("update.github_empty_version").to_owned());
+        return Err("GitHub release 的版本号为空".to_owned());
     }
     let version = version.to_owned();
-    let asset = if cfg!(all(windows, target_arch = "x86_64")) {
-        select_windows_x64_installer(
-            &version,
-            release.body.as_deref().unwrap_or_default(),
-            release.assets,
-        )
-    } else {
-        None
-    };
+    let asset = assets::select(
+        &version,
+        release.body.as_deref().unwrap_or_default(),
+        &release.assets,
+        &assets::native_names(&version),
+    );
     Ok(LatestRelease { version, asset })
 }
 
@@ -329,22 +356,7 @@ fn select_windows_x64_installer(
     release_body: &str,
     assets: Vec<GitHubReleaseAsset>,
 ) -> Option<UpdateAsset> {
-    let selected = windows_x64_installer_names(version)
-        .iter()
-        .find_map(|name| assets.iter().position(|asset| asset.name == *name))?;
-    let asset = assets.into_iter().nth(selected)?;
-    let sha256 = asset
-        .digest
-        .as_deref()
-        .and_then(normalize_sha256)
-        .or_else(|| checksum_from_release_body(release_body, &asset.name));
-    Some(UpdateAsset {
-        version: version.to_owned(),
-        name: asset.name,
-        download_url: asset.browser_download_url,
-        size: (asset.size > 0).then_some(asset.size),
-        sha256,
-    })
+    assets::select(version, release_body, &assets, &windows_x64_installer_names(version))
 }
 
 fn normalize_sha256(value: &str) -> Option<String> {
@@ -365,9 +377,22 @@ fn checksum_from_release_body(body: &str, asset_name: &str) -> Option<String> {
     })
 }
 
+/// Discovery and scheduled installation share one version policy. The explicit
+/// debug rehearsal may reinstall exactly this version, but never downgrade it.
+pub(crate) fn can_install_version(latest: &str) -> Result<bool, String> {
+    let rehearsal = false;
+    #[cfg(feature = "update-test-source")]
+    let rehearsal = rehearsal || test_source::origin()?.is_some();
+    Ok(version_is_installable(latest, env!("CARGO_PKG_VERSION"), rehearsal))
+}
+
+fn version_is_installable(latest: &str, current: &str, rehearsal: bool) -> bool {
+    is_newer(latest, current) || (rehearsal && latest == current)
+}
+
 /// Compare dotted numeric prefixes ("0.7.10" > "0.7.9"); anything after the
 /// digits in a segment is ignored, so "1.0.0-rc1" reads as `[1, 0, 0]`.
-fn is_newer(latest: &str, current: &str) -> bool {
+pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
     fn segments(version: &str) -> Vec<u64> {
         version
             .split('.')
@@ -390,10 +415,39 @@ fn is_newer(latest: &str, current: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn release_check_uses_the_resolved_proxy_for_an_unresolvable_target() {
+        use crate::update_proxy::test_support::{Server, response};
+        let server = Server::start(vec![response(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            r#"{"tag_name":"v1.7.0","assets":[]}"#,
+        )]);
+        let result =
+            super::fetch_release_with_agent(&server.agent(&[]), "http://api.update.invalid/latest")
+                .unwrap();
+        assert_eq!(result.version, "1.7.0");
+        let requests = server.finish();
+        assert!(requests[0].0.starts_with("CONNECT api.update.invalid:80 "));
+        assert!(requests[0].1.starts_with("GET /latest "));
+        assert!(requests[0].1.to_ascii_lowercase().contains("accept: application/vnd.github+json"));
+    }
+
     use super::{
         GitHubReleaseAsset, REMIND_LATER_SECS, UpdatePromptState, checksum_from_release_body,
         is_newer, parse_latest_release, select_windows_x64_installer, windows_x64_installer_names,
     };
+
+    #[test]
+    fn rehearsal_permits_only_exact_reinstall_or_upgrade() {
+        for rehearsal in [false, true] {
+            assert!(super::version_is_installable("1.9.0", "1.8.0", rehearsal));
+            assert!(!super::version_is_installable("1.7.0", "1.8.0", rehearsal));
+            assert!(!super::version_is_installable("1.8.0-rc1", "1.8.0", rehearsal));
+        }
+        assert!(!super::version_is_installable("1.8.0", "1.8.0", false));
+        assert!(super::version_is_installable("1.8.0", "1.8.0", true));
+    }
 
     #[test]
     fn version_comparison_is_numeric_per_segment() {

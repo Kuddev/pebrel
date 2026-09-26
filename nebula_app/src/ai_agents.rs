@@ -19,6 +19,8 @@ use std::time::{Duration, Instant, SystemTime};
 use regex::Regex;
 use serde::Deserialize;
 
+mod screen_context;
+
 /// AI clients Nebula can identify as a first-class terminal workload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentKind {
@@ -47,10 +49,12 @@ pub enum AgentKind {
     Kilo,
     Qoder,
     Maki,
+    Trae,
+    CodeBuddy,
 }
 
 impl AgentKind {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::Claude,
         Self::Codex,
         Self::Gemini,
@@ -76,6 +80,8 @@ impl AgentKind {
         Self::Kilo,
         Self::Qoder,
         Self::Maki,
+        Self::Trae,
+        Self::CodeBuddy,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -105,6 +111,8 @@ impl AgentKind {
             Self::Kilo => "kilo",
             Self::Qoder => "qodercli",
             Self::Maki => "maki",
+            Self::Trae => "trae-cli",
+            Self::CodeBuddy => "codebuddy",
         }
     }
 
@@ -135,6 +143,8 @@ impl AgentKind {
             Self::Kilo => "Kilo Code",
             Self::Qoder => "Qoder",
             Self::Maki => "Maki",
+            Self::Trae => "Trae CLI",
+            Self::CodeBuddy => "CodeBuddy Code",
         }
     }
 
@@ -142,7 +152,8 @@ impl AgentKind {
         self.slug()
     }
 
-    fn aliases(self) -> &'static [&'static str] {
+    /// 进程识别与设置页可执行文件发现共用同一组官方/兼容名称。
+    pub(crate) fn aliases(self) -> &'static [&'static str] {
         match self {
             Self::Claude => &["claude", "claude-code"],
             Self::Codex => &["codex", "codex-cli"],
@@ -171,6 +182,10 @@ impl AgentKind {
             Self::Kilo => &["kilo", "kilo-code"],
             Self::Qoder => &["qodercli", "qoderclicn", "qoder", "qodercn"],
             Self::Maki => &["maki"],
+            // ByteDance's trae-agent declares this console entry point.
+            Self::Trae => &["trae-cli"],
+            // @tencent-ai/codebuddy-code 2.150.0's interactive bin entries.
+            Self::CodeBuddy => &["codebuddy", "cbc", "codebuddy-code", "codebuddy-lowmem"],
         }
     }
 
@@ -219,6 +234,9 @@ impl AgentKind {
 
         tokens
             .filter(|token| !token.starts_with('-'))
+            // The prewarm helper also lives inside the codebuddy-code package;
+            // its parent directory alone must not identify it as a live CLI.
+            .filter(|token| launcher_stem(token) != "cbc-prewarm")
             .find_map(|token| token.split(['/', '\\']).find_map(Self::parse))
     }
 
@@ -250,7 +268,9 @@ impl AgentKind {
             | Self::Kiro
             | Self::Kilo
             | Self::Qoder
-            | Self::Maki => return None,
+            | Self::Maki
+            | Self::Trae
+            | Self::CodeBuddy => return None,
             Self::Kimi => format!("kimi --session {session_id}"),
         })
     }
@@ -332,7 +352,7 @@ fn is_agent_interpreter(token: &str) -> bool {
     )
 }
 
-/// Semantic state inferred from live application chrome.
+/// Semantic Agent state shared by lifecycle hooks and fallback observations.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentStatus {
     Idle,
@@ -490,6 +510,7 @@ const BUNDLED: &[(AgentKind, &str)] = &[
     (AgentKind::Kilo, include_str!("agent_detection/kilo.toml")),
     (AgentKind::Qoder, include_str!("agent_detection/qodercli.toml")),
     (AgentKind::Maki, include_str!("agent_detection/maki.toml")),
+    (AgentKind::CodeBuddy, include_str!("agent_detection/codebuddy.toml")),
 ];
 
 static CACHE: OnceLock<RwLock<Cache>> = OnceLock::new();
@@ -587,9 +608,15 @@ pub fn detect(program: &str, screen: &str) -> Option<Detection> {
     refresh_overrides_if_needed();
     let guard = cache().read().ok()?;
     let loaded = guard.manifests.get(&agent)?;
+    let attention_screen = screen_context::attention_region(agent, screen);
+    let live_input = screen_context::has_live_input_controls(attention_screen);
     let mut best: Option<(&Rule, &CompiledGate)> = None;
     for (rule, gate) in loaded.manifest.rules.iter().zip(&loaded.rules) {
-        let text = region(screen, &rule.region);
+        let blocked = matches!(rule.state, RuleState::Blocked);
+        if blocked && !live_input {
+            continue;
+        }
+        let text = region(if blocked { attention_screen } else { screen }, &rule.region);
         if !gate.matches(text) {
             continue;
         }
@@ -817,6 +844,72 @@ mod tests {
     }
 
     #[test]
+    fn trae_cli_identity_does_not_guess_session_commands() {
+        for command in ["trae-cli", r"C:\tools\TRAE-CLI.EXE", "/usr/bin/trae-cli"] {
+            assert_eq!(AgentKind::parse(command), Some(AgentKind::Trae));
+        }
+        assert_eq!(AgentKind::parse_command("uv run trae-cli --help"), Some(AgentKind::Trae));
+        assert_eq!(AgentKind::parse("trae-cli-helper"), None);
+        assert_eq!(AgentKind::Trae.start_command(), None);
+        assert_eq!(AgentKind::Trae.resume_command("session-1"), None);
+        assert_eq!(AgentKind::Trae.fork_command("session-1"), None);
+    }
+
+    #[test]
+    fn codebuddy_entry_points_identify_the_cli_without_claiming_its_helper() {
+        for command in [
+            "codebuddy",
+            "cbc",
+            "codebuddy-code",
+            "codebuddy-lowmem",
+            r"C:\tools\CODEBUDDY.CMD",
+            "/usr/bin/cbc",
+        ] {
+            assert_eq!(AgentKind::parse(command), Some(AgentKind::CodeBuddy), "{command}");
+        }
+        for command in [
+            "npx --yes @tencent-ai/codebuddy-code",
+            "node /opt/node_modules/@tencent-ai/codebuddy-code/dist/codebuddy.js",
+            "env DEBUG=1 codebuddy --help",
+        ] {
+            assert_eq!(AgentKind::parse_command(command), Some(AgentKind::CodeBuddy), "{command}");
+        }
+        for command in [
+            "cbc-prewarm",
+            "codebuddy-helper",
+            "cat codebuddy.md",
+            "node /opt/node_modules/@tencent-ai/codebuddy-code/bin/cbc-prewarm",
+        ] {
+            assert_eq!(AgentKind::parse_command(command), None, "{command}");
+        }
+        assert_eq!(AgentKind::CodeBuddy.start_command(), None);
+        assert_eq!(AgentKind::CodeBuddy.resume_command("session-1"), None);
+        assert_eq!(AgentKind::CodeBuddy.fork_command("session-1"), None);
+    }
+
+    #[test]
+    fn codebuddy_screen_identity_requires_brand_and_live_footer() {
+        // Transcribed from the user's 2.150.0 Windows/WSL screenshot, not a
+        // runtime capture. Only the observed prompt/footer establishes idle.
+        let screen = "╭─ CodeBuddy Code v2.150.0 ─╮\nTips for getting started\n\
+                      ────────────────\n> \n────────────────\n\
+                      /agent-mode to switch · ? for shortcuts ← for agents";
+        assert_eq!(identify(screen), Some(AgentKind::CodeBuddy));
+        let idle = detect("codebuddy", screen).unwrap();
+        assert_eq!(idle.status, AgentStatus::Idle);
+        for text in [
+            "CodeBuddy Code is a CLI.",
+            "CodeBuddy Code v2.150.0\nuser@host:~$ ",
+            "/agent-mode to switch · ? for shortcuts ← for agents",
+            "> generic prompt\n? for shortcuts ← for agents",
+            &format!("{screen}\nuser@host:~$ "),
+        ] {
+            assert_eq!(identify(text), None, "{text}");
+        }
+        assert!(detect("codebuddy", &format!("{screen}\nuser@host:~$ ")).is_none());
+    }
+
+    #[test]
     fn submitted_commands_resolve_agents_across_wsl_launch_forms() {
         for agent in AgentKind::ALL {
             assert_eq!(AgentKind::parse_command(agent.slug()), Some(agent), "{}", agent.slug());
@@ -900,6 +993,20 @@ mod tests {
     }
 
     #[test]
+    fn review_regression_restored_codex_identity_requires_live_prompt_and_footer() {
+        let live = "› Ask Codex to do anything\n\n  gpt-6-astra max · /mnt/d/temp_build/project · Saved conversation";
+        assert_eq!(identify(live), Some(AgentKind::Codex));
+        for text in [
+            "› generic shell prompt",
+            "The CLI says Ask Codex to do anything.",
+            "› Ask Codex to do anything\nuser@host:~$ ",
+            "› Ask Codex to do anything\ngpt-6-astra max · /project\nuser@host:~$ ",
+        ] {
+            assert_eq!(identify(text), None, "{text}");
+        }
+    }
+
+    #[test]
     fn branded_screen_chrome_identifies_codex_without_a_visible_host_process() {
         let screen = "OpenAI Codex (v0.42.0)\n\n› Ask Codex to do anything";
         assert_eq!(identify(screen), Some(AgentKind::Codex));
@@ -955,6 +1062,24 @@ mod tests {
     }
 
     #[test]
+    fn codex_queue_and_compaction_are_live_work_only_in_the_chrome_tail() {
+        for chrome in [
+            "• Working (12s · esc to interrupt)\n• Messages to be submitted after next tool call (press esc to interrupt and send immediately)\n  ↳ Continue the task",
+            "• Compacting context (1m 41s · esc to interrupt)\n  └ Making room to continue.",
+        ] {
+            let frame = format!("{chrome}\n› Ask Codex to do anything\ngpt-6 max · /project");
+            assert_eq!(detect("codex", &frame).unwrap().status, AgentStatus::Working);
+            let stale = format!(
+                "{chrome}\n{}› Ask Codex to do anything\ngpt-6 max · /project",
+                "completed output\n".repeat(20)
+            );
+            assert_eq!(detect("codex", &stale).unwrap().status, AgentStatus::Idle);
+        }
+        let quoted = "The log said Compacting context; Messages to be submitted after next tool call\n› Ask Codex to do anything\ngpt-6 max · /project";
+        assert_eq!(detect("codex", quoted).unwrap().status, AgentStatus::Idle);
+    }
+
+    #[test]
     fn real_codex_idle_chrome_reads_idle() {
         // codex 早已答完，屏幕上就是空闲输入框。这块屏幕当初根本没人去匹:
         // running_program 是 None，1 Hz 看门狗在入口就早退了，于是转圈长挂。
@@ -965,12 +1090,139 @@ mod tests {
         assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
     }
 
+    /// 下面六段是 2026-09-17 用 pebrel 1.8.1 的 runtime `pane.read` 从 kimi
+    /// 0.43.1 真实窗口抓的原文(tmp/pane11*.json)的精简转写,也就是判错的
+    /// 现场。规则改动必须对着它们回归,不能对着记忆里的格式写。
+    #[test]
+    fn real_kimi_working_chrome_reads_working() {
+        // 回合进行中:输入框正上方挂月相 spinner 行(U+1F311–U+1F318 逐帧轮转,
+        // pane11-w2–w8),回合结束该行被重绘消失。输入框与状态行此时同样在
+        // 场,idle 规则必须输给 working。
+        let screen = "✨ 写一首关于秋天的四行短诗,直接输出诗,不要解释\n\
+                      \x20 🌕 · Tip: /tasks to check progress and status for background tasks\n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.4k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Working, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "moon_spinner_working");
+    }
+
+    #[test]
+    fn real_kimi_idle_chrome_reads_idle() {
+        // 回合已结束(pane11-idle.json):月相行消失,只剩历史回答、空输入框
+        // 和状态行。状态行的「K3 thinking: high」是模型名 + 思考档位,
+        // 「context: N%」是用量条,都不是 working 证据。
+        let screen = "● 叶落知秋深,\n\
+                      \x20  风凉染层林。\n\
+                      \x20  雁过长天远,\n\
+                      \x20  霜轻月色沉。\n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.6k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "prompt_idle");
+    }
+
+    #[test]
+    fn real_kimi_approval_panel_reads_blocked() {
+        // 真实审批面板(pane11-blocked.json):面板取代输入框固定在底部,上下
+        // 各一条 ─ 横线;问句是大写 R 的「▶ Run this command?」,底行是
+        // 「↑/↓ select · 1/2/3/4 choose · ↵ confirm」——旧规则写的小写
+        // 问句、无斜杠 ↑↓ 和 esc cancel 都对不上这块面板。
+        let screen = "● Running a command · $ echo hello-kimi-probe\n\
+                      \x20  Press Ctrl+B to run in background\n\
+                      \x20──────────────────────────────────────\n\
+                      \x20  ▶ Run this command?\n\
+                      \n\
+                      \x20  cwd: D:/Documents/HTA/My Projects/pebrel/tmp\n\
+                      \x20  $ echo hello-kimi-probe\n\
+                      \n\
+                      \x20  ▶ 1. Approve once\n\
+                      \x20    2. Approve for this session\n\
+                      \x20    3. Reject\n\
+                      \x20    4. Reject with feedback\n\
+                      \n\
+                      \x20  ↑/↓ select · 1/2/3/4 choose · ↵ confirm\n\
+                      \x20──────────────────────────────────────\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917  ctrl+o expand\n\
+                      \x20                                       context: 4% (33.7k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Blocked, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "approval_panel_blocked");
+    }
+
+    #[test]
+    fn real_kimi_thinking_preview_reads_working() {
+        // 回合内的另一种 working 画面(pane11-x5.json):没有月相行,盲文
+        // spinner + 流式思考预览悬在输入框正上方。盲文行锚定底部后才是有效
+        // 证据,这条把它钉住。
+        let screen = "    /exit\n\
+                      \n\
+                      \x20 ⠙ thinking…\n\
+                      \x20  User input weird: \"D:/Git/exit\n\
+                      \x20  /exit\". Likely trying to exit\n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.8k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Working, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "braille_thinking_working");
+    }
+
+    #[test]
+    fn kimi_stale_braille_thinking_line_does_not_read_working() {
+        // 回合结束后,「⠙ thinking…」预览被最终回答替换,只可能留在滚屏高处
+        // (pane11.json 里旧思考内容距底部 10+ 非空行)。陈旧盲文行没有月相行
+        // 陪同、又不在底部窗口内时,不得把屏幕拖回 Working。
+        let screen = " ⠙ thinking…\n\
+                      \x20  User input weird: \"D:/Git/exit\n\
+                      \x20  /exit\". Likely trying to exit\n\
+                      \n\
+                      \x20● Bash 工具没有运行成功:用户拒绝了执行批准请求,没有产生输出。\n\
+                      \n\
+                      \x20╭─────────────────────────────────────╮\n\
+                      \x20│ >                                    │\n\
+                      \x20╰─────────────────────────────────────╯\n\
+                      \x20K3 thinking: high  D:\\pebrel\\tmp  feat/kimi-hooks-20260917\n\
+                      \x20                                       context: 4% (33.8k/1M)";
+        let detection = detect("kimi", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "prompt_idle");
+    }
+
+    #[test]
+    fn kimi_welcome_box_identifies_the_cli() {
+        // 「Welcome to Kimi Code!」与「Send /help for help information.」两条
+        // 顶行文字在 kimi.exe 0.43.1 二进制内核验;30 行 capture 窗口
+        // (pane11.json)只留下框尾和下面的 Web UI 推广行,后者同样品牌独有。
+        let welcome = "╭─────────────────────────────────────╮\n\
+                       \x20│   Welcome to Kimi Code!                │\n\
+                       \x20│   Send /help for help information.     │\n\
+                       \x20╰─────────────────────────────────────╯";
+        assert_eq!(identify(welcome), Some(AgentKind::Kimi));
+        let tail = " │  Version:   0.43.1\n\
+                    │  MCP:       1 connected\n\
+                    ╰──────────────────────────────────────────────╯\n\
+                    ✦ Try Kimi Code Web UI - clearer task progress and settings management";
+        assert_eq!(identify(tail), Some(AgentKind::Kimi));
+        assert_eq!(identify("the docs say welcome to kimi code, warmly"), None);
+        assert_eq!(identify("user@host:~$ \n> generic prompt"), None);
+    }
+
     #[test]
     fn shared_rules_light_up_agents_without_their_own_working_rule() {
         // 归一化的意义：中断提示对每个注册的 CLI 都点亮 working，新接的 CLI
         // 不必从零再写一遍 spinner 正则（cline 至今就没有 working 规则）。
         let screen = "some output\n────────\n> \n  esc to interrupt · ? for shortcuts";
-        for agent in ["grok", "pi", "opencode", "gemini", "cline", "kilo"] {
+        for agent in ["grok", "pi", "opencode", "gemini", "cline", "kilo", "kimi"] {
             let found =
                 detect(agent, screen).unwrap_or_else(|| panic!("{agent} produced no detection"));
             assert_eq!(found.status, AgentStatus::Working, "{agent} rule={}", found.rule_id);
@@ -983,7 +1235,7 @@ mod tests {
         // 每个 CLI 都记得写 blocked 规则。
         let screen = "Run rm -rf /tmp/x ?\n  Do you want to proceed?\n  1. Yes\n  2. No\n\
                       esc to cancel · enter to confirm";
-        for agent in ["grok", "pi", "cline", "kilo"] {
+        for agent in ["grok", "pi", "cline", "kilo", "kimi"] {
             let found =
                 detect(agent, screen).unwrap_or_else(|| panic!("{agent} produced no detection"));
             assert_eq!(found.status, AgentStatus::Blocked, "{agent} rule={}", found.rule_id);

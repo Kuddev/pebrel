@@ -51,7 +51,6 @@ pub(super) fn ai_session_palette_rows(
             source_order.insert(session.source, order);
             order
         };
-        let language = super::workspace_ui_language();
         let group = crate::display::command_palette::source_group_label(session.source);
         let place = session.place_label();
         let time = crate::ai_sessions::relative_label(session.modified);
@@ -66,10 +65,7 @@ pub(super) fn ai_session_palette_rows(
                 group_order,
                 group: group.clone(),
                 label: session.title.clone(),
-                hint: language.tr_args(
-                    "workspace.agent.resume_metadata",
-                    &[("source", source), ("location", &location)],
-                ),
+                hint: format!("恢复 · {source} · {location}"),
                 hint_style: super::WorkspacePaletteHintStyle::Metadata,
                 search: format!("恢复 resume {search}"),
                 action: WorkspacePaletteAction::RunAiSession { command, cwd: cwd.clone() },
@@ -82,10 +78,7 @@ pub(super) fn ai_session_palette_rows(
             rows.push(WorkspacePaletteRow {
                 group_order,
                 group: group.clone(),
-                label: language.tr_args(
-                    "workspace.agent.fork_label",
-                    &[("title", &session.title)],
-                ),
+                label: format!("分叉 · {}", session.title),
                 hint: format!("{source} · {location}"),
                 hint_style: super::WorkspacePaletteHintStyle::Metadata,
                 search: format!("分叉 fork {search}"),
@@ -346,7 +339,7 @@ impl NebulaWorkspace {
             // Default 与旧壳一致取「分叉这一刻」的默认 shell，不是源 tab
             // 创建时的快照。
             None | Some(crate::session::LaunchSession::Default) => {
-                Self::configured_local_launch(cx)
+                super::shell_launch::configured_local_launch(cx)
             },
             Some(shell @ crate::session::LaunchSession::Shell { .. }) => shell,
             // Profile 可能直接把 agent 当启动命令，SSH 会把命令注入认证
@@ -377,12 +370,7 @@ impl NebulaWorkspace {
             at,
             tab,
             TabMeta {
-                custom_name: agent.map(|agent| {
-                    super::workspace_ui_language().tr_args(
-                        "workspace.agent.fork_tab_name",
-                        &[("agent", agent.display_name())],
-                    )
-                }),
+                custom_name: agent.map(|agent| format!("{} 分叉", agent.display_name())),
                 color,
                 shell_tag,
                 launch: Some(launch_session),

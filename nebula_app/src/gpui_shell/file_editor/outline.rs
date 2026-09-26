@@ -13,26 +13,8 @@ pub(super) struct Heading {
     pub(super) depth: u8,
     pub(super) row: u32,
     pub(super) block: usize,
-    pub(super) number: String,
     pub(super) parent: Option<usize>,
     pub(super) indent: usize,
-    text_offset: Option<usize>,
-}
-
-impl Heading {
-    fn prefix(&self) -> String {
-        let token = self.label.split_whitespace().next().unwrap_or_default();
-        let numeric = token.trim_end_matches(['.', '、']);
-        let authored = (token.contains('.') || token.ends_with('、'))
-            && numeric
-                .split('.')
-                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
-        if authored { String::new() } else { format!("{} ", self.number) }
-    }
-
-    pub(super) fn display_label(&self) -> String {
-        format!("{}{}", self.prefix(), self.label)
-    }
 }
 
 #[derive(Default)]
@@ -42,12 +24,59 @@ pub(super) struct Outline {
     pub(super) limited: bool,
     definitions: HashMap<String, (String, Vec<String>)>,
     references: Vec<Vec<String>>,
-    heading_ranges: Vec<std::ops::Range<usize>>,
+    pub(super) source_ranges: Vec<std::ops::Range<usize>>,
+    pub(super) structures: Vec<Option<std::sync::Arc<super::block_structure::BlockStructure>>>,
+    heading_levels: Vec<Option<u8>>,
 }
 
 impl Outline {
-    fn block_headings(&self, block: usize) -> &[Heading] {
-        self.heading_ranges.get(block).map_or(&[], |range| &self.headings[range.clone()])
+    /// An empty paragraph has no AST node, but still needs a caret between the
+    /// surrounding blocks. Its source position disappears on the next parse.
+    pub(super) fn edit_block_at(&mut self, offset: usize) -> usize {
+        if let Some(index) = self
+            .source_ranges
+            .iter()
+            .position(|range| range.contains(&offset) || range.end == offset)
+        {
+            return index;
+        }
+        let index = self.source_ranges.partition_point(|range| range.start < offset);
+        self.source_ranges.insert(index, offset..offset);
+        self.blocks.insert(index, String::new());
+        self.references.insert(index, Vec::new());
+        self.heading_levels.insert(index, None);
+        self.structures.insert(index, None);
+        for heading in &mut self.headings {
+            if heading.block >= index {
+                heading.block += 1;
+            }
+        }
+        index
+    }
+
+    pub(super) fn heading_level(&self, block: usize) -> Option<u8> {
+        self.heading_levels.get(block).copied().flatten()
+    }
+
+    pub(super) fn prepare(source: &str, base: Option<&std::path::Path>) -> Self {
+        let mut outline = Self::parse(source);
+        // Rendering may substitute cached still images, but editing always uses
+        // byte ranges in the original source, never the rewritten preview text.
+        for (block, structure) in outline.blocks.iter_mut().zip(&mut outline.structures) {
+            if let Some(structure) = structure {
+                for part in &mut std::sync::Arc::make_mut(structure).parts {
+                    let source = &block[part.range.clone()];
+                    let preview = super::images::rewrite_doc_images(source, base);
+                    part.preview = (preview != source).then_some(preview);
+                }
+            } else {
+                *block = super::images::rewrite_doc_images(block, base);
+            }
+        }
+        for (definition, _) in outline.definitions.values_mut() {
+            *definition = super::images::rewrite_doc_images(definition, base);
+        }
+        outline
     }
 
     pub(super) fn block_source(&self, index: usize) -> String {
@@ -56,13 +85,6 @@ impl Outline {
             return literal_preview(block);
         };
         let mut text = block.clone();
-        for heading in self.block_headings(index).iter().rev() {
-            if let Some(offset) =
-                heading.text_offset.filter(|offset| text.is_char_boundary(*offset))
-            {
-                text.insert_str(offset, &heading.prefix());
-            }
-        }
         for definition in definitions {
             text.push_str("\n\n");
             text.push_str(definition);
@@ -72,12 +94,6 @@ impl Outline {
 
     fn reference_sources(&self, index: usize) -> Option<Vec<&str>> {
         let mut bytes = self.blocks.get(index)?.len();
-        bytes += self
-            .block_headings(index)
-            .iter()
-            .filter(|h| h.text_offset.is_some())
-            .map(|h| h.prefix().len())
-            .sum::<usize>();
         if bytes > MAX_BLOCK_BYTES {
             return None;
         }
@@ -111,6 +127,8 @@ impl Outline {
             return Self {
                 headings: vec![],
                 blocks: vec![source.to_owned()],
+                source_ranges: vec![0..source.len()],
+                heading_levels: vec![None],
                 limited,
                 ..Self::default()
             };
@@ -151,14 +169,13 @@ impl Outline {
             let Some(text) = source.get(position.start.offset..position.end.offset) else {
                 continue;
             };
-            let heading_start = result.headings.len();
-            collect_headings(
-                node,
-                result.blocks.len(),
-                position.start.offset,
-                &mut result.headings,
-            );
-            result.heading_ranges.push(heading_start..result.headings.len());
+            collect_headings(node, result.blocks.len(), &mut result.headings);
+            result.source_ranges.push(position.start.offset..position.end.offset);
+            result.heading_levels.push(if let Node::Heading(heading) = node {
+                Some(heading.depth)
+            } else {
+                None
+            });
             let mut references = Vec::new();
             collect_references(node, &mut references);
             result.references.push(references);
@@ -168,15 +185,35 @@ impl Outline {
                 result.limited = true;
                 result.references.last_mut().unwrap().clear();
                 result.blocks.push(literal_preview(text));
+                result.structures.push(None);
             } else {
                 result.blocks.push(text.to_owned());
+                result.structures.push(
+                    super::block_structure::BlockStructure::from_node(
+                        node,
+                        text,
+                        position.start.offset,
+                    )
+                    .map(std::sync::Arc::new),
+                );
             }
         }
-        number_headings(&mut result.headings);
+        link_heading_parents(&mut result.headings);
         let references_limited =
             (0..result.blocks.len()).any(|index| result.reference_sources(index).is_none());
         result.limited |= references_limited;
         result
+    }
+
+    pub(super) fn part_source(&self, index: usize, text: &str) -> String {
+        let mut source = text.to_owned();
+        if let Some(definitions) = self.reference_sources(index) {
+            for definition in definitions {
+                source.push_str("\n\n");
+                source.push_str(definition);
+            }
+        }
+        source
     }
 
     pub(super) fn visible_headings<'a>(
@@ -197,66 +234,33 @@ impl Outline {
         self.headings.get(index + 1).is_some_and(|next| next.parent == Some(index))
     }
 
-    /// Map code-action offsets from numbered presentation back to its raw block.
+    /// Preview code actions must stay inside the block, not appended definitions.
     pub(super) fn source_span(
         &self,
         block: usize,
         start: usize,
         end: usize,
     ) -> Option<(usize, usize)> {
-        let map = |offset: usize| {
-            let mut added = 0;
-            for heading in self.block_headings(block) {
-                let Some(at) = heading.text_offset else { continue };
-                let length = heading.prefix().len();
-                if offset < at + added {
-                    break;
-                }
-                if offset < at + added + length {
-                    return None;
-                }
-                added += length;
-            }
-            offset.checked_sub(added)
-        };
-        Some((map(start)?, map(end)?))
+        self.blocks.get(block)?.get(start..end)?;
+        Some((start, end))
     }
 
-    pub(super) fn replace_block(&mut self, block: usize, next: String, changed_end: usize) {
-        let Some(source) = self.blocks.get_mut(block) else { return };
-        let delta = next.len() as isize - source.len() as isize;
-        *source = next;
-        if let Some(range) = self.heading_ranges.get(block) {
-            for heading in &mut self.headings[range.clone()] {
-                if let Some(offset) = heading.text_offset.filter(|offset| *offset >= changed_end) {
-                    heading.text_offset = offset.checked_add_signed(delta);
-                }
-            }
+    pub(super) fn replace_block(&mut self, block: usize, next: String) {
+        if let Some(source) = self.blocks.get_mut(block) {
+            *source = next;
         }
     }
 }
 
-fn number_headings(headings: &mut [Heading]) {
-    let mut stack: Vec<(usize, u32)> = Vec::new();
-    let mut roots = 0;
+fn link_heading_parents(headings: &mut [Heading]) {
+    let mut stack: Vec<usize> = Vec::new();
     for index in 0..headings.len() {
-        while stack
-            .last()
-            .is_some_and(|(parent, _)| headings[*parent].depth >= headings[index].depth)
-        {
+        while stack.last().is_some_and(|parent| headings[*parent].depth >= headings[index].depth) {
             stack.pop();
         }
-        let (parent, number) = if let Some((parent, children)) = stack.last_mut() {
-            *children += 1;
-            (Some(*parent), format!("{}.{}", headings[*parent].number, children))
-        } else {
-            roots += 1;
-            (None, roots.to_string())
-        };
-        headings[index].parent = parent;
+        headings[index].parent = stack.last().copied();
         headings[index].indent = stack.len();
-        headings[index].number = number;
-        stack.push((index, 0));
+        stack.push(index);
     }
 }
 
@@ -310,7 +314,7 @@ fn label(node: &Node, text: &mut String) {
     }
 }
 
-fn collect_headings(node: &Node, block: usize, block_start: usize, headings: &mut Vec<Heading>) {
+fn collect_headings(node: &Node, block: usize, headings: &mut Vec<Heading>) {
     if let Node::Heading(heading) = node {
         let mut text = String::new();
         label(node, &mut text);
@@ -319,19 +323,13 @@ fn collect_headings(node: &Node, block: usize, block_start: usize, headings: &mu
             depth: heading.depth,
             row: heading.position.as_ref().map_or(0, |p| p.start.line.saturating_sub(1) as u32),
             block,
-            number: String::new(),
             parent: None,
             indent: 0,
-            text_offset: heading
-                .children
-                .first()
-                .and_then(Node::position)
-                .and_then(|position| position.start.offset.checked_sub(block_start)),
         });
     }
     if let Some(children) = node.children() {
         for child in children {
-            collect_headings(child, block, block_start, headings);
+            collect_headings(child, block, headings);
         }
     }
 }
@@ -341,16 +339,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn numbering_and_nested_folds_share_one_tree_without_rewriting_source() {
+    fn history_cursor_at_paragraph_end_reuses_the_existing_block() {
+        let mut outline = Outline::parse("Paragraph\n\nNext");
+        assert_eq!(outline.edit_block_at("Paragraph".len()), 0);
+        assert_eq!(outline.blocks.len(), 2);
+        assert_eq!(outline.edit_block_at("Paragraph\n".len()), 1);
+        assert_eq!(outline.source_ranges[1], 10..10);
+    }
+
+    #[test]
+    fn authored_headings_and_nested_folds_share_one_tree_without_rewriting_source() {
         let source = "# First\n\n## Sub\n\n### Deep\n\n## Other\n\n# Next\n";
         let outline = Outline::parse(source);
-        assert_eq!(
-            outline.headings.iter().map(|h| h.number.as_str()).collect::<Vec<_>>(),
-            ["1", "1.1", "1.1.1", "1.2", "2"]
-        );
+        assert_eq!(outline.headings.iter().map(|h| h.indent).collect::<Vec<_>>(), [0, 1, 2, 1, 0]);
         assert_eq!(outline.blocks[0], "# First");
-        assert_eq!(outline.block_source(0), "# 1 First");
-        assert_eq!(outline.headings[1].display_label(), "1.1 Sub");
+        assert_eq!(outline.block_source(0), "# First");
+        assert_eq!(outline.headings[1].label, "Sub");
         let mut collapsed = HashSet::from([0, 1]);
         assert_eq!(
             outline.visible_headings(&collapsed).map(|(i, _)| i).collect::<Vec<_>>(),
@@ -366,14 +370,14 @@ mod tests {
     }
 
     #[test]
-    fn numbering_preserves_setext_and_inline_markup_and_maps_action_offsets() {
+    fn preview_preserves_setext_inline_markup_and_code_action_offsets() {
         let outline = Outline::parse(
             "Title\n===\n\n## **Bold**\n\n> ### Quote\n>\n> ```rust\n> old\n> ```\n",
         );
-        assert_eq!(outline.block_source(0), "1 Title\n===");
-        assert_eq!(outline.block_source(1), "## 1.1 **Bold**");
+        assert_eq!(outline.block_source(0), "Title\n===");
+        assert_eq!(outline.block_source(1), "## **Bold**");
         let shown = outline.block_source(2);
-        assert!(shown.starts_with("> ### 1.1.1 Quote"));
+        assert!(shown.starts_with("> ### Quote"));
         let displayed = shown.find("```rust").unwrap();
         let raw = outline.blocks[2].find("```rust").unwrap();
         assert_eq!(outline.source_span(2, displayed, displayed + 7), Some((raw, raw + 7)));

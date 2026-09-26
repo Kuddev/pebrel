@@ -128,6 +128,10 @@ pub trait ActionContext<T: EventListener> {
     fn nebula_input_backspace(&mut self) {}
     fn nebula_delete_word(&mut self) {}
     fn nebula_commit_line(&mut self) {}
+    /// Foreground identity used only for terminal input compatibility.
+    fn nebula_running_program(&self) -> Option<&str> {
+        None
+    }
     fn nebula_clear_line(&mut self) {}
     fn spawn_new_instance(&mut self) {}
     /// Send a Nebula tab management request for this window.

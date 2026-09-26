@@ -3,6 +3,9 @@ use gpui::{Context, Window};
 use super::{NebulaWorkspace, WorkspaceTab};
 use crate::notify::Notification;
 
+static FAILURES: std::sync::Mutex<crate::notify::PaneFailureThrottle> =
+    std::sync::Mutex::new(crate::notify::PaneFailureThrottle::new());
+
 fn source_is_visible(window_active: bool, source_active: bool, overlay_open: bool) -> bool {
     window_active && source_active && !overlay_open
 }
@@ -33,6 +36,54 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if notification.is_attention()
+            && let Some(source) = self.tabs.iter().find_map(|tab| match tab {
+                WorkspaceTab::Terminal { panes, .. } => {
+                    panes.iter().find(|pane| pane.id == pane_id).map(|pane| pane.view.clone())
+                },
+                _ => None,
+            })
+            && source.update(cx, |view, _| view.capture_confirmation()).is_none()
+        {
+            let generation = source.read(cx).confirmation_generation();
+            let source = source.downgrade();
+            let executor = cx.background_executor().clone();
+            cx.spawn_in(window, async move |this, cx| {
+                for attempt in 0..8 {
+                    executor.timer(std::time::Duration::from_millis(75)).await;
+                    let ready = source
+                        .update(cx, |view, _| {
+                            if view.confirmation_generation() != generation
+                                || !view.confirmation_waiting()
+                            {
+                                return None;
+                            }
+                            Some(view.capture_confirmation().is_some())
+                        })
+                        .ok()
+                        .flatten();
+                    let Some(ready) = ready else { return };
+                    if ready || attempt == 7 {
+                        let _ = this.update_in(cx, |workspace, window, cx| {
+                            workspace.deliver_ready_notification(pane_id, notification, window, cx);
+                        });
+                        return;
+                    }
+                }
+            })
+            .detach();
+            return;
+        }
+        self.deliver_ready_notification(pane_id, notification, window, cx);
+    }
+
+    fn deliver_ready_notification(
+        &mut self,
+        pane_id: u64,
+        notification: Notification,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(tab_index) = self.tab_of_pane(pane_id) else { return };
         let Some(WorkspaceTab::Terminal { panes, focused, .. }) = self.tabs.get(tab_index) else {
             return;
@@ -51,30 +102,38 @@ impl NebulaWorkspace {
             visible,
             crate::gpui_shell::config::ai_toasts_enabled(cx),
         );
-        if !delivery.in_app && !delivery.system {
-            return;
-        }
         let source_view =
             panes.iter().find(|pane| pane.id == pane_id).map(|pane| pane.view.clone());
         if !visible && let Some(meta) = self.tab_meta.get_mut(tab_index) {
             meta.has_bell = true;
         }
+        // Apply once before either channel, so retry errors cannot sound via
+        // the native channel after their in-app duplicate was suppressed.
+        if !FAILURES.lock().unwrap_or_else(|error| error.into_inner()).accepts(
+            pane_id,
+            &notification,
+            delivery.in_app || delivery.system,
+            std::time::Instant::now(),
+        ) {
+            cx.notify();
+            return;
+        }
+        let attention = notification.is_attention();
+        let confirmation = if attention {
+            source_view.and_then(|view| view.update(cx, |view, _| view.capture_confirmation()))
+        } else {
+            None
+        };
         if delivery.in_app {
-            let attention = notification.is_attention();
-            let confirmation = if attention {
-                source_view.and_then(|view| view.update(cx, |view, _| view.capture_confirmation()))
-            } else {
-                None
-            };
             // Log the original message before the banner creates a bounded preview.
             let (title, body) = notification.raw_toast_text();
-            let kind = if attention {
+            let kind = if attention || notification.is_failure() {
                 crate::display::ToastKind::Warning
             } else {
                 crate::display::ToastKind::Info
             };
             let text = format!("{title} \u{b7} {body}");
-            if let Some(confirmation) = confirmation {
+            if let Some(confirmation) = confirmation.clone() {
                 crate::gpui_shell::toast::confirmation_for_pane(
                     window,
                     cx,
@@ -89,12 +148,24 @@ impl NebulaWorkspace {
                     kind,
                     text,
                     pane_id,
-                    notification.is_ai(),
+                    &notification,
                 );
             }
         }
         if delivery.system {
-            crate::notify::deliver_gpui(&notification, pane_id);
+            let choices = confirmation.map(|confirmation| {
+                let language = crate::gpui_shell::config::ui_language(cx);
+                let labels = if confirmation.choices.is_empty() {
+                    vec![
+                        language.text(crate::i18n::Message::CommonYes).to_owned(),
+                        language.text(crate::i18n::Message::CommonNo).to_owned(),
+                    ]
+                } else {
+                    confirmation.choices
+                };
+                (confirmation.id, labels)
+            });
+            crate::notify::deliver_gpui_with_choices(&notification, pane_id, choices);
         }
         cx.notify();
     }

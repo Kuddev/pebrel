@@ -216,6 +216,7 @@ pub struct NebulaPaneState {
     /// 改写。`cwd` 只说"在哪个目录"，这个说"在哪台机器"——两者都对了补齐才
     /// 补得对，见 [`crate::display::suggest_engine::SuggestEnv`]。
     pub suggest_env: crate::display::suggest_engine::SuggestEnv,
+    pub(crate) completion_context: crate::completion_context::CompletionContext,
     /// 上一次重算发现"这个来宾/远端目录还没缓存"，壳该去异步拉一次。
     ///
     /// 补齐本身绝不做 IO（WSL 冷启动可达 7.5 秒），所以它只能把需求登记在
@@ -249,20 +250,8 @@ pub struct NebulaPaneState {
     /// 与 `running_program` 同生命周期：133;D 命令收尾时一起清除，快照据此
     /// 判断「关窗那一刻这个 pane 里还开着哪个对话」，冷恢复接续它。
     pub ai_session: Option<AiSessionIdentity>,
-    /// 统一 agent 语义状态。Hook 是权威边界；声明式屏幕规则补足无 hook
-    /// 客户端及“回合完成 vs 正在问人”这类事件流无法分辨的现场。
-    pub agent_status: crate::ai_agents::AgentStatus,
-    pub agent_status_source: crate::ai_agents::AgentStatusSource,
-    /// 最后命中的声明式规则 id，供诊断日志/问题截图对账。
-    pub agent_status_rule: Option<String>,
-    /// 本次前台 agent 命令是否收到过 hook。屏幕规则的 idle 不得覆盖精确的
-    /// hook done；可见 blocker/working 仍可纠正漏报或过时事件。
-    pub agent_hook_seen: bool,
-    /// 屏幕检测连续看到空闲提示符的拍数。Working 要连续两拍空闲才降级
-    /// （单拍可能是重绘间隙）；任何非 idle 检测都会清零。
-    pub idle_screen_streak: u8,
-    /// Runtime 派活后的旧提示符不能在新回合出现任何证据前覆盖 Working。
-    pub agent_runtime_submit_pending: bool,
+    /// Shared lifecycle; UI flags below are projections, never hook arbitration.
+    pub(crate) agent_activity: crate::ai_hook::lifecycle::AgentActivity,
     pub(crate) runtime_submit_barrier: Option<RuntimeSubmitBarrier>,
     pub last_committed: String,
     pub awaiting_input: bool,

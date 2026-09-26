@@ -33,6 +33,7 @@ use nebula_split::{SplitDirection, SplitTree};
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::{TerminalInput, TerminalView};
+use crate::i18n::Message;
 
 use super::{NebulaWorkspace, WorkspaceTab};
 
@@ -247,6 +248,7 @@ impl NebulaWorkspace {
         corners: HeaderCorners,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
         let dark = theme.is_dark();
         let muted = theme.muted_foreground;
@@ -260,9 +262,8 @@ impl NebulaWorkspace {
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
-        let label_px = settings.map(|settings| settings.base_font_size_px).unwrap_or(15.0);
+        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let title_px = label_px * 0.78;
-        let language = crate::gpui_shell::config::ui_language(cx);
         let PaneTitle { logo, glyph, text } = self.pane_title(view, cx, dark);
         let group: SharedString = format!("pane-header-{pane_id}").into();
         let icon_ink = if focused { ink } else { muted };
@@ -361,9 +362,9 @@ impl NebulaWorkspace {
                             .xsmall()
                             .selected(broadcast)
                             .tooltip(if broadcast {
-                                language.tr("workspace.pane.stop_broadcast_input")
+                                language.text(Message::WorkspacePaneStopBroadcastInput)
                             } else {
-                                language.tr("workspace.pane.broadcast_input_tooltip")
+                                language.text(Message::WorkspacePaneBroadcastInputTooltip)
                             })
                             .child(broadcast_mark(
                                 title_px,
@@ -388,9 +389,9 @@ impl NebulaWorkspace {
                             .xsmall()
                             .selected(zoomed)
                             .tooltip(if zoomed {
-                                language.tr("workspace.pane.exit_zen_mode")
+                                language.text(Message::WorkspacePaneRestoreLayout)
                             } else {
-                                language.tr("workspace.pane.zen_mode")
+                                language.text(Message::WorkspacePaneZoom)
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -403,7 +404,7 @@ impl NebulaWorkspace {
                             .icon(Icon::new(IconName::Close).text_color(icon_ink))
                             .ghost()
                             .xsmall()
-                            .tooltip(language.tr("workspace.pane.close"))
+                            .tooltip(language.text(Message::WorkspacePaneClose))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.request_close_pane(tab_ix, pane_id, window, cx);
@@ -440,8 +441,8 @@ impl NebulaWorkspace {
                 window,
                 cx,
                 crate::display::ToastKind::Info,
-                language.tr_args(
-                    "workspace.pane.broadcast_enabled",
+                language.format(
+                    Message::WorkspacePaneBroadcastEnabled,
                     &[("count", &count.to_string())],
                 ),
             );
@@ -670,8 +671,8 @@ impl NebulaWorkspace {
     pub(super) fn pane_drag_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let drag = self.pane_drag.as_ref().filter(|drag| drag.active)?;
         let (x, y, detach) = (drag.x, drag.y, drag.detach);
-        let theme = cx.theme();
         let language = crate::gpui_shell::config::ui_language(cx);
+        let theme = cx.theme();
         let hint_bg = if detach { theme.primary } else { theme.muted };
         let hint_fg = if detach { theme.primary_foreground } else { theme.muted_foreground };
         Some(
@@ -700,11 +701,11 @@ impl NebulaWorkspace {
                         .bg(hint_bg)
                         .text_size(px(11.0))
                         .text_color(hint_fg)
-                        .child(language.tr(if detach {
-                            "workspace.pane.extract_release"
+                        .child(if detach {
+                            language.text(Message::WorkspacePaneExtractRelease)
                         } else {
-                            "workspace.pane.extract_drag_hint"
-                        })),
+                            language.text(Message::WorkspacePaneExtractDragHint)
+                        }),
                 )
                 .into_any_element(),
         )

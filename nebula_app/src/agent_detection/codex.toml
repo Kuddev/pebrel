@@ -8,6 +8,11 @@ id = "codex"
 [[identity]]
 contains = ["openai codex"]
 
+# A restored conversation can omit the startup banner. Require its branded
+# empty prompt immediately followed by the live model/effort footer at the tail.
+[[identity]]
+regex = ['(?m)^[ \t]*› Ask Codex to do anything[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*\S+[ \t]+(?:minimal|low|medium|high|xhigh|max)[ \t]*[·•][^\r\n]*\s*\z']
+
 [[rules]]
 id = "strong_blocker"
 state = "blocked"
@@ -22,22 +27,14 @@ any = [
 ]
 
 [[rules]]
-id = "yes_no_blocker"
-state = "blocked"
-priority = 700
-region = "bottom_non_empty_lines(12)"
-any = [
-  { contains = ["[y/n]"] },
-  { contains = ["(y/n)"] },
-  { contains = ["yes (y)"] },
-]
-
-[[rules]]
 id = "working_status"
 state = "working"
 priority = 400
-region = "bottom_non_empty_lines(4)"
-line_regex = ['^[•◦]\s+Working \([^)]*esc to interrupt\)(?: · .*)?$']
+region = "bottom_non_empty_lines(16)"
+any = [
+  { line_regex = ['^[•◦]\s+(?:Working|Compacting context) \([^)]*esc to interrupt\)(?: · .*)?$'] },
+  { line_regex = ['^[•◦]\s+Messages to be submitted after next tool call \(press esc to interrupt and send immediately\)$'] },
+]
 
 [[rules]]
 id = "prompt_idle"

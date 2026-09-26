@@ -1,15 +1,6 @@
 use super::{SshConnectionOptions, SshHostJumpMode, SshHostProxyMode, validate_ssh_destination};
 use crate::ssh_profiles::{SshAuthMode, SshProfiles};
 
-/// 校验文案经 `UiLanguage::current()` 取词，而它是进程级全局状态；串行钉住
-/// 语言，避免并行测试线程互相覆盖。
-fn pin_language(language: crate::i18n::UiLanguage) -> std::sync::MutexGuard<'static, ()> {
-    static LANGUAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let guard = LANGUAGE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    language.activate();
-    guard
-}
-
 fn proxy() -> SshConnectionOptions {
     SshConnectionOptions {
         proxy_mode: SshHostProxyMode::Socks5,
@@ -119,11 +110,7 @@ fn self_jump_is_rejected_before_resolution() {
         jump_host: "ssh://root@HOST:22".to_owned(),
         ..Default::default()
     };
-    let _language = pin_language(crate::i18n::UiLanguage::ZhCn);
     assert!(options.validate("root@host").unwrap_err().contains("自身"));
-    crate::i18n::UiLanguage::EnUs.activate();
-    let error = options.validate("root@host").unwrap_err();
-    assert!(error.contains("its own jump host"), "actual message: {error}");
 }
 
 #[test]

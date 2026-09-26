@@ -16,6 +16,7 @@ use gpui_component::menu::PopupMenuItem;
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::SidebarActivity;
+use crate::i18n::{Message, UiLanguage};
 
 use super::{
     NebulaWorkspace, NewWindow, OpenSettings, TAB_LABEL_ICON_SIZE, TAB_LABEL_ICON_W, TabDrag,
@@ -88,27 +89,25 @@ fn horizontal_wheel_delta(x: f32, y: f32) -> f32 {
 /// 顶部加号的生产调用点与鼠标测试共用同一个元素构造，避免测试只证明
 /// `title_bar_panel_controls` 本身，却漏掉真实按钮没有接入它。
 pub(super) fn top_new_tab_control(
+    language: UiLanguage,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Div {
     title_bar_panel_controls().h_auto().child(
         Button::new("top-new-tab")
             .icon(IconName::Plus)
             .ghost()
-            .tooltip(
-            crate::i18n::UiLanguage::current()
-                .text(crate::i18n::Message::ChromeNewTerminalCtrlShiftT),
-        )
+            .tooltip(language.text(Message::ChromeNewTerminalCtrlShiftT))
             .on_click(on_click),
     )
 }
 
 /// “更多”入口的生产按钮与几何探针共用同一个构造，避免测试用近似尺寸替代。
-pub(super) fn top_tabs_menu_button(settings_active: bool) -> Button {
+pub(super) fn top_tabs_menu_button(settings_active: bool, language: UiLanguage) -> Button {
     Button::new("top-tabs-menu")
         .icon(IconName::EllipsisVertical)
         .ghost()
         .selected(settings_active)
-        .tooltip(crate::i18n::UiLanguage::current().text(crate::i18n::Message::ChromeMore))
+        .tooltip(language.text(Message::ChromeMore))
 }
 
 /// 紧邻 TabView 的操作按钮占满同一条 34px 行，再在槽内居中 32px 按钮。
@@ -127,8 +126,6 @@ impl NebulaWorkspace {
 
     pub(super) fn render_top_title_bar(
         &self,
-        files_active: bool,
-        git_active: bool,
         settings_active: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -147,7 +144,7 @@ impl NebulaWorkspace {
             .unwrap_or(nebula_settings::TabRevealName::Slide);
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
-        let label_px = settings.map(|settings| settings.base_font_size_px).unwrap_or(15.0);
+        let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let tab_capacity_w =
             (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W).max(TOP_TAB_MIN_W);
         let tab_w = tab_width(tab_capacity_w, self.top_tab_count());
@@ -171,10 +168,15 @@ impl NebulaWorkspace {
         let items_running = std::cell::Cell::new(false);
         let items = (0..self.top_tab_count())
             .map(|ix| {
-                let settings_navigation = self.settings_open && ix == self.tabs.len();
-                let active = settings_navigation || (!self.settings_open && ix == self.active);
+                let settings_navigation = self.settings_tab_open && ix == self.tabs.len();
+                let active = if settings_navigation {
+                    self.settings_open
+                } else {
+                    !self.settings_open && ix == self.active
+                };
                 let TabPresentation {
                     title,
+                    tooltip,
                     is_settings,
                     activity,
                     logo_image,
@@ -187,6 +189,14 @@ impl NebulaWorkspace {
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
                 let status_color = if active { active_fg } else { muted };
+                let status_width = Self::shell_status_width(
+                    window,
+                    shell_tag.as_ref(),
+                    &chrome_family,
+                    label_px * 0.8,
+                    TOP_TAB_STATUS_W,
+                    tab_w * 0.4,
+                );
                 let resting_status: Option<gpui::AnyElement> = match activity {
                     SidebarActivity::Running => {
                         items_running.set(true);
@@ -230,13 +240,13 @@ impl NebulaWorkspace {
                             .into_any_element(),
                     ),
                     SidebarActivity::Idle => shell_tag.map(|tag| {
-                        div()
-                            .font_family(chrome_family.clone())
-                            .text_size(px(label_px * 0.8))
-                            .font_weight(FontWeight::NORMAL)
-                            .text_color(status_color)
-                            .child(tag)
-                            .into_any_element()
+                        Self::shell_status_label(
+                            tag,
+                            chrome_family.clone(),
+                            label_px * 0.8,
+                            status_color,
+                        )
+                        .into_any_element()
                     }),
                 };
                 let strip = color.map(|color| gpui::Rgba {
@@ -258,6 +268,10 @@ impl NebulaWorkspace {
 
                 let row = h_flex()
                     .id(("top-tab", ix))
+                    .when_some(tooltip, |row, text| row.tooltip(move |window, cx| {
+                        super::tab_presentation::tooltip(text.clone(), window, cx)
+                    }))
+                    .debug_selector(|| format!("top-tab-{ix}"))
                     .group(hover_group.clone())
                     .relative()
                     .w(px(tab_w))
@@ -450,11 +464,7 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        div()
-                            .relative()
-                            .w(px(TOP_TAB_STATUS_W))
-                            .h_full()
-                            .flex_shrink_0()
+                        Self::tab_status_slot(status_width)
                             .when_some(resting_status, |slot, status| {
                                 slot.child(
                                     h_flex()
@@ -548,7 +558,7 @@ impl NebulaWorkspace {
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_start(scroll_x))
-                                        .tooltip(language.text(crate::i18n::Message::ChromeScrollTabsLeft))
+                                        .tooltip(language.text(Message::ChromeScrollTabsLeft))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 -1.0,
@@ -596,7 +606,7 @@ impl NebulaWorkspace {
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_end(scroll_x, strip_w, tab_viewport_w))
-                                        .tooltip(language.text(crate::i18n::Message::ChromeScrollTabsRight))
+                                        .tooltip(language.text(Message::ChromeScrollTabsRight))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 1.0,
@@ -611,7 +621,7 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        top_tab_action_slot(top_new_tab_control(cx.listener(
+                        top_tab_action_slot(top_new_tab_control(language, cx.listener(
                             |this, _, window, cx| {
                                 this.add_terminal(window, cx);
                             },
@@ -619,7 +629,7 @@ impl NebulaWorkspace {
                     )
                     .child(
                         top_tab_action_slot(
-                            top_tabs_menu_button(settings_active).dropdown_menu_with_anchor(
+                            top_tabs_menu_button(settings_active, language).dropdown_menu_with_anchor(
                                 gpui::Anchor::TopRight,
                                 move |menu, _, _| {
                                     let shell_picker = menu_workspace.clone();
@@ -627,7 +637,7 @@ impl NebulaWorkspace {
                                     let settings = menu_workspace.clone();
                                     menu.external_link_icon(false)
                                         .item(
-                                            PopupMenuItem::new(language.text(crate::i18n::Message::CommonNewWindow))
+                                            PopupMenuItem::new(language.text(Message::CommonNewWindow))
                                                 .icon(IconName::Plus)
                                                 .action(Box::new(NewWindow))
                                                 .on_click(move |_, _, cx| {
@@ -641,7 +651,7 @@ impl NebulaWorkspace {
                                                 }),
                                         )
                                         .item(
-                                            PopupMenuItem::new(language.text(crate::i18n::Message::ChromeSelectTerminal))
+                                            PopupMenuItem::new(language.text(Message::ChromeSelectTerminal))
                                                 .icon(IconName::SquareTerminal)
                                                 .action(Box::new(ToggleShellPicker))
                                                 .on_click(move |_, window, cx| {
@@ -654,7 +664,7 @@ impl NebulaWorkspace {
                                         )
                                         .separator()
                                         .item(
-                                            PopupMenuItem::new(language.text(crate::i18n::Message::CommonSettings))
+                                            PopupMenuItem::new(language.text(Message::CommonSettings))
                                                 .icon(IconName::Settings)
                                                 .action(Box::new(OpenSettings))
                                                 .on_click(move |_, window, cx| {
@@ -671,7 +681,7 @@ impl NebulaWorkspace {
                     ),
             )
             // 新建 split button 紧跟 TabView；剩余空间才是可拖拽标题栏，
-            // 文件树与 Git 固定在其右侧。
+            // 共享详情侧栏入口固定在其右侧。
             .child(div().h_full().flex_1().min_w_0())
             .child(
                 title_bar_panel_controls()
@@ -684,31 +694,12 @@ impl NebulaWorkspace {
                             )
                             .ghost()
                             .selected(self.command_manager_open)
-                            .tooltip(language.text(crate::i18n::Message::ChromeCommandList))
+                            .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),
                     )
-                    .child(
-                        Button::new("top-toggle-file-tree")
-                            .icon(if files_active {
-                                IconName::FolderOpen
-                            } else {
-                                IconName::FolderClosed
-                            })
-                            .ghost()
-                            .selected(files_active)
-                            .tooltip(language.text(crate::i18n::Message::ChromeFileTree))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_file_tree(cx))),
-                    )
-                    .child(
-                        Button::new("top-toggle-git-tree")
-                            .icon(IconName::Github)
-                            .ghost()
-                            .selected(git_active)
-                            .tooltip(crate::gpui_shell::config::ui_language(cx).text(crate::i18n::Message::VcsToggleGit))
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_git_tree(cx))),
-                    ),
+                    .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()
     }

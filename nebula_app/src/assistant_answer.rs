@@ -21,7 +21,12 @@ impl AssistantAnswer {
             "claude" if payload.get("hook_event_name")?.as_str()? == "Stop" => {
                 "last_assistant_message"
             },
-            "codex" if payload.get("type")?.as_str()? == "agent-turn-complete" => {
+            "codex" if payload.get("hook_event_name").and_then(Value::as_str) == Some("Stop") => {
+                "last_assistant_message"
+            },
+            "codex"
+                if payload.get("type").and_then(Value::as_str) == Some("agent-turn-complete") =>
+            {
                 "last-assistant-message"
             },
             _ => return None,
@@ -40,16 +45,13 @@ impl AssistantAnswer {
         }
     }
 
-    pub fn notice(&self, language: crate::i18n::UiLanguage) -> Option<String> {
+    pub fn notice(&self) -> Option<String> {
         match self {
             Self::Complete(_) => None,
-            Self::Missing => Some(language.text(crate::i18n::Message::AnswerMissing).into()),
-            Self::TooLarge { bytes } => Some(language.format(
-                crate::i18n::Message::AnswerTooLarge,
-                &[
-                    ("bytes", &bytes.to_string()),
-                    ("limit", &(MAX_ANSWER_BYTES / 1024).to_string()),
-                ],
+            Self::Missing => Some("未收到完整回答原文；保留终端内容，不从屏幕猜测。".into()),
+            Self::TooLarge { bytes } => Some(format!(
+                "回答原文共 {bytes} 字节，超过 {} KiB 阅读上限；未截断渲染，请在终端查看。",
+                MAX_ANSWER_BYTES / 1024
             )),
         }
     }
@@ -175,12 +177,7 @@ mod tests {
             let answer = AssistantAnswer::from_hook(provider, &payload(provider, &source)).unwrap();
             assert_eq!(answer, AssistantAnswer::TooLarge { bytes: source.len() });
             assert!(answer.source().is_none());
-            assert!(
-                answer
-                    .notice(crate::i18n::UiLanguage::EnUs)
-                    .unwrap()
-                    .contains("not truncated")
-            );
+            assert!(answer.notice().unwrap().contains("未截断"));
         }
     }
 

@@ -247,6 +247,24 @@ pub(crate) fn build_sequence(input: &KeyInput, mods: ModifiersState, mode: TermM
 /// Encode one API-level named key from normalized facts. This path deliberately
 /// excludes printable text and synthesizes a complete press/release pair only
 /// for protocols that report key state.
+pub(crate) fn build_runtime_sequence_for_program(
+    key: RuntimeKey,
+    modifiers: RuntimeKeyModifiers,
+    repeat: u16,
+    mode: TermMode,
+    program: Option<&str>,
+) -> Vec<u8> {
+    if key == RuntimeKey::Enter
+        && modifiers.shift
+        && !modifiers.control
+        && !modifiers.alt
+        && shift_enter_as_lf(program, mode)
+    {
+        return vec![b'\n'; usize::from(repeat)];
+    }
+    build_runtime_sequence(key, modifiers, repeat, mode)
+}
+
 pub(crate) fn build_runtime_sequence(
     key: RuntimeKey,
     modifiers: RuntimeKeyModifiers,
@@ -287,6 +305,28 @@ pub(crate) fn build_runtime_sequence(
 /// Enter 等控制键由 submit barrier 在下一批按当前协议单独编码。
 pub(crate) fn build_runtime_text_sequence(text: &str, _mode: TermMode) -> Vec<u8> {
     text.as_bytes().to_vec()
+}
+
+/// Codex flushes its buffered paste on a non-character key before handling that
+/// key. Put Right before Enter in the same ordered PTY write, so even ConPTY's
+/// native reader cannot reinterpret Enter as another line of a paste burst.
+/// A repaint or a fixed delay is not evidence that the input burst has ended.
+/// Call only for an identified Codex submission; shell input keeps its own path.
+pub(crate) fn build_runtime_codex_submission(text: &str, mode: TermMode) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if !text.is_empty() {
+        if mode.contains(TermMode::BRACKETED_PASTE) {
+            bytes.extend_from_slice(b"\x1b[200~");
+            let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+            bytes.extend_from_slice(normalized.replace("\x1b[201~", "").as_bytes());
+            bytes.extend_from_slice(b"\x1b[201~");
+        } else {
+            bytes.extend_from_slice(text.as_bytes());
+        }
+        bytes.extend(build_runtime_sequence(RuntimeKey::Right, Default::default(), 1, mode));
+    }
+    bytes.extend(build_runtime_sequence(RuntimeKey::Enter, Default::default(), 1, mode));
+    bytes
 }
 
 fn runtime_modifiers(modifiers: RuntimeKeyModifiers) -> ModifiersState {
@@ -515,11 +555,24 @@ fn runtime_legacy_sequence(
 
 /// Select protocol precedence for ConPTY's native input mode. Child-requested
 /// Win32 records are the fallback, not a competing encoder. Once the child has
-/// requested Kitty keyboard flags, those flags describe the wire contract and
+/// requested CSI-u keyboard flags, those flags describe the wire contract and
 /// must take precedence over DECSET 9001.
 #[inline]
 pub(crate) fn use_win32_input_mode(mode: TermMode) -> bool {
     mode.contains(TermMode::WIN32_INPUT_MODE) && !mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)
+}
+
+/// Multiline compatibility when the application has not negotiated a keyboard
+/// protocol. Claude enables CSI-u only for a terminal-name allowlist (including
+/// WT); unknown terminals use its LF newline binding. ConPTY translates a native
+/// Shift+Return record to CR for byte readers, even when UnicodeChar is LF.
+/// Keep native records for other Windows readers (Codex and PSReadLine).
+pub(crate) fn shift_enter_as_lf(program: Option<&str>, mode: TermMode) -> bool {
+    !mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)
+        && (!cfg!(windows)
+            || !use_win32_input_mode(mode)
+            || program.and_then(crate::ai_agents::AgentKind::parse)
+                == Some(crate::ai_agents::AgentKind::Claude))
 }
 
 /// Synthesize key-up sequences for modifiers still held when the window loses
@@ -864,7 +917,7 @@ impl SequenceBuilder {
             _ => base,
         };
 
-        // NOTE: Kitty's protocol mandates that the modifier state is applied before
+        // NOTE: CSI-u's protocol mandates that the modifier state is applied before
         // key press, however winit sends them after the key press, so for modifiers
         // itself apply the state based on keysyms and not the _actual_ modifiers
         // state, which is how kitty is doing so and what is suggested in such case.
@@ -923,7 +976,7 @@ bitflags::bitflags! {
         const ALT     = 0b0000_0010;
         const CONTROL = 0b0000_0100;
         const SUPER   = 0b0000_1000;
-        // NOTE: Kitty protocol defines additional modifiers to what is present here, like
+        // NOTE: CSI-u protocol defines additional modifiers to what is present here, like
         // Capslock, but it's not a modifier as per winit.
     }
 }
@@ -1066,6 +1119,74 @@ mod vt_tests {
     }
 
     #[test]
+    fn runtime_multiline_compatibility_preserves_native_and_negotiated_keys() {
+        let shift = RuntimeKeyModifiers { shift: true, ..Default::default() };
+        for mode in [TermMode::empty(), TermMode::WIN32_INPUT_MODE] {
+            assert_eq!(
+                build_runtime_sequence_for_program(
+                    RuntimeKey::Enter,
+                    shift,
+                    2,
+                    mode,
+                    Some("claude")
+                ),
+                b"\n\n"
+            );
+            assert!(
+                build_runtime_sequence_for_program(
+                    RuntimeKey::Enter,
+                    shift,
+                    0,
+                    mode,
+                    Some("claude")
+                )
+                .is_empty()
+            );
+        }
+        let native = TermMode::WIN32_INPUT_MODE;
+        if cfg!(windows) {
+            for program in [None, Some("codex"), Some("pwsh")] {
+                assert_eq!(
+                    build_runtime_sequence_for_program(
+                        RuntimeKey::Enter,
+                        shift,
+                        1,
+                        native,
+                        program
+                    ),
+                    build_runtime_sequence(RuntimeKey::Enter, shift, 1, native),
+                );
+            }
+        }
+        for mode in [
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            native | TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES,
+        ] {
+            assert_eq!(
+                build_runtime_sequence_for_program(
+                    RuntimeKey::Enter,
+                    shift,
+                    1,
+                    mode,
+                    Some("claude")
+                ),
+                build_runtime_sequence(RuntimeKey::Enter, shift, 1, mode),
+            );
+        }
+        let combined = RuntimeKeyModifiers { control: true, ..shift };
+        assert_eq!(
+            build_runtime_sequence_for_program(
+                RuntimeKey::Enter,
+                combined,
+                1,
+                native,
+                Some("claude")
+            ),
+            build_runtime_sequence(RuntimeKey::Enter, combined, 1, native),
+        );
+    }
+
+    #[test]
     fn runtime_ctrl_letter_uses_c0_or_kitty_without_printable_text() {
         let modifiers = RuntimeKeyModifiers { control: true, ..Default::default() };
         assert_eq!(
@@ -1095,6 +1216,45 @@ mod vt_tests {
         assert!(records[0].starts_with("\x1b[27;"));
         assert!(records[0].contains(";27;1;0;1_"));
         assert!(records[1].contains(";27;0;0;1_"));
+    }
+
+    #[test]
+    fn runtime_submission_codex_flushes_burst_before_enter() {
+        assert_eq!(
+            build_runtime_codex_submission("继续", TermMode::empty()),
+            "继续\x1b[C\r".as_bytes()
+        );
+        assert_eq!(build_runtime_codex_submission("", TermMode::empty()), b"\r");
+        assert_eq!(
+            build_runtime_codex_submission("first\nsecond", TermMode::BRACKETED_PASTE),
+            b"\x1b[200~first\rsecond\x1b[201~\x1b[C\r",
+        );
+        assert_eq!(
+            build_runtime_codex_submission("prompt", TermMode::APP_CURSOR),
+            b"prompt\x1bOC\r",
+        );
+    }
+
+    #[test]
+    fn runtime_submission_codex_large_paste_has_one_boundary_and_one_submit() {
+        let text = "中文\n".repeat(4096);
+        let bytes = build_runtime_codex_submission(&text, TermMode::BRACKETED_PASTE);
+        assert!(bytes.starts_with(b"\x1b[200~"));
+        assert!(bytes.ends_with(b"\x1b[201~\x1b[C\r"));
+        assert_eq!(bytes.windows(6).filter(|part| *part == b"\x1b[201~").count(), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn runtime_submission_codex_native_keys_flush_before_pressing_enter() {
+        let bytes = build_runtime_codex_submission("继续", TermMode::WIN32_INPUT_MODE);
+        let sequence = String::from_utf8(bytes).unwrap();
+        let records: Vec<_> = sequence.strip_prefix("继续").unwrap().split_inclusive('_').collect();
+        assert_eq!(records.len(), 4, "Right press/release then Enter press/release");
+        assert!(records[0].starts_with("\x1b[39;"));
+        assert!(records[1].starts_with("\x1b[39;"));
+        assert!(records[2].starts_with("\x1b[13;"));
+        assert!(records[3].starts_with("\x1b[13;"));
     }
 
     #[cfg(target_os = "windows")]
@@ -1138,7 +1298,7 @@ mod vt_tests {
         let held = ModifiersState::CONTROL | ModifiersState::SHIFT;
         // Legacy VT never encodes bare modifiers.
         assert!(build_focus_loss_key_ups(held, TermMode::empty()).is_empty());
-        // Kitty without REPORT_EVENT_TYPES never reports releases; a
+        // CSI-u without REPORT_EVENT_TYPES never reports releases; a
         // synthetic one would be a protocol violation.
         assert!(build_focus_loss_key_ups(held, TermMode::REPORT_ALL_KEYS_AS_ESC).is_empty());
         // Disambiguate-only sessions never saw the modifier go down.

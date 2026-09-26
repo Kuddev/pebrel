@@ -16,9 +16,7 @@ use gpui_component::text::{
 
 use crate::assistant_answer::AnswerSnapshot;
 use crate::assistant_answer::document::{self, AnswerImage, IMAGE_LANGUAGE, ReaderDocument};
-use crate::gpui_shell::config::ui_language;
 use crate::gpui_shell::prelude::*;
-use crate::i18n::{Message, UiLanguage};
 
 const IMAGE_BUDGET: usize = 64 * 1024 * 1024;
 const LITERAL_BLOCK: &str = "nebula-answer-literal";
@@ -67,7 +65,7 @@ impl EventEmitter<ReaderEvent> for AnswerReader {}
 impl AnswerReader {
     pub fn new(snapshot: AnswerSnapshot, cx: &mut Context<Self>) -> Self {
         let source = snapshot.content.source().cloned();
-        let notice = snapshot.content.notice(ui_language(cx));
+        let notice = snapshot.content.notice();
         let reader = Self {
             focus_handle: cx.focus_handle(),
             snapshot,
@@ -121,14 +119,12 @@ impl AnswerReader {
                 bytes: 0,
             })
             .collect();
-        let language = ui_language(cx);
         if document.images_omitted > 0 {
-            self.notice = Some(language.format(
-                Message::AnswerImagesOmitted,
-                &[("count", &document.images_omitted.to_string())],
+            self.notice = Some(format!(
+                "另有 {} 张图片超过本次阅读上限，原文未删减。",
+                document.images_omitted
             ));
         }
-        let image_placeholder = language.text(Message::AnswerImagePlaceholder);
         let weak = cx.entity().downgrade();
         self.extensions = MarkdownExtensions::default()
             .block_parser(move |node, context| {
@@ -140,7 +136,7 @@ impl AnswerReader {
                 }
                 let index = image_placeholder_index(node, context.offset(), &starts)?;
                 let source = context.node_source(node)?.to_owned();
-                Some(MarkdownNode::new(IMAGE_LANGUAGE, index).text(image_placeholder).markdown(source))
+                Some(MarkdownNode::new(IMAGE_LANGUAGE, index).text("[图片]").markdown(source))
             })
             .block_renderer(IMAGE_LANGUAGE, move |node, _, cx| match node.data::<usize>() {
                 Some(index) => render_image(&weak, *index, cx),
@@ -173,9 +169,7 @@ impl AnswerReader {
                         Some(path) => path,
                         None => document::local_image_path(
                             &target,
-                            base.as_deref().ok_or_else(|| {
-                                UiLanguage::current().text(Message::AnswerNoLocalDir).to_owned()
-                            })?,
+                            base.as_deref().ok_or("回答未携带本地目录，请主动选择图片文件。")?,
                         )?,
                     };
                     let bytes = document::read_image(&path)?;
@@ -195,7 +189,7 @@ impl AnswerReader {
                         },
                         Ok(_) => {
                             reader.images[index].status = ImageStatus::Failed(
-                                UiLanguage::current().text(Message::AnswerBudgetExceeded).into(),
+                                "图片超过本次阅读的 64 MiB 总预算，未显示。".into(),
                             )
                         },
                         Err(error) => reader.images[index].status = ImageStatus::Failed(error),
@@ -213,7 +207,7 @@ impl AnswerReader {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some(ui_language(cx).text(Message::AnswerChooseImagePrompt).into()),
+            prompt: Some("选择 PNG / JPEG 图片".into()),
         });
         cx.spawn(async move |reader, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
@@ -291,7 +285,6 @@ fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -
     let Some(entity) = reader.upgrade() else { return div().into_any_element() };
     let state = entity.read(cx);
     let Some(image) = state.images.get(index) else { return div().into_any_element() };
-    let language = ui_language(cx);
     let target: SharedString = image.spec.target.clone().into();
     let alt: SharedString = image.spec.alt.clone().into();
     let mut block = v_flex().w_full().gap_2().py_2();
@@ -319,7 +312,7 @@ fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(language.text(Message::AnswerClickToEnlarge)),
+                        .child("点击放大 · Esc 返回"),
                 );
         },
         ImageStatus::Waiting | ImageStatus::Loading => {
@@ -327,7 +320,7 @@ fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(language.text(Message::AnswerLoadingImage)),
+                    .child("正在检查并加载本地图片…"),
             );
         },
         ImageStatus::Failed(error) => {
@@ -336,7 +329,7 @@ fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -
                 .child(div().text_sm().text_color(cx.theme().muted_foreground).child(error.clone()))
                 .child(
                     Button::new(("answer-pick-image", index))
-                        .label(language.text(Message::AnswerPickLocal))
+                        .label("选择本地图片")
                         .ghost()
                         .small()
                         .on_click(move |_, _, cx| {
@@ -370,7 +363,6 @@ impl Render for AnswerReader {
             "codex" => "Codex",
             _ => "Agent",
         };
-        let language = ui_language(cx);
         let muted = cx.theme().muted_foreground;
         let has_source = self.snapshot.content.source().is_some();
         let text = if self.raw_mode { &self.raw_text } else { &self.text };
@@ -392,15 +384,15 @@ impl Render for AnswerReader {
                     .items_center()
                     .child(
                         Button::new("reader-return")
-                            .label(language.text(Message::CommonTerminal))
+                            .label("终端")
                             .ghost()
                             .small()
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(ReaderEvent::Close))),
                     )
-                    .child(div().text_sm().flex_1().child(language.format(Message::AnswerLatestAnswer, &[("provider", provider)])))
+                    .child(div().text_sm().flex_1().child(format!("{provider} · 最近完整回答")))
                     .child(
                         Button::new("reader-source")
-                            .label(language.text(if self.raw_mode { Message::AnswerRead } else { Message::AnswerSource }))
+                            .label(if self.raw_mode { "阅读" } else { "原文" })
                             .ghost()
                             .small()
                             .disabled(!has_source)
@@ -411,7 +403,7 @@ impl Render for AnswerReader {
                     )
                     .child(
                         Button::new("reader-copy")
-                            .label(language.text(Message::AnswerCopySource))
+                            .label("复制原文")
                             .ghost()
                             .small()
                             .disabled(!has_source)
@@ -431,7 +423,7 @@ impl Render for AnswerReader {
                         .py_1()
                         .text_sm()
                         .text_color(cx.theme().warning)
-                        .child(language.text(Message::AnswerAttention)),
+                        .child("终端需要你处理输入或审批；点击「终端」返回。"),
                 )
             })
             .when(self.newer_answer, |root| {
@@ -441,33 +433,68 @@ impl Render for AnswerReader {
                         .py_1()
                         .text_sm()
                         .text_color(muted)
-                        .child(language.text(Message::AnswerNewerAnswer)),
+                        .child("已收到新回答；本页不跳动，返回终端再点「阅读」查看。"),
                 )
             })
             .when_some(self.notice.clone(), |root, notice| {
                 root.child(div().px_3().py_2().text_sm().text_color(muted).child(notice))
             })
             .when(self.preparing, |root| {
-                root.child(div().p_3().text_sm().text_color(muted).child(language.text(Message::AnswerPreparing)))
-            })
-            .child(
-                div().flex_1().min_h_0().min_w_0().px_3().py_2().child(
-                    TextView::new(text)
-                        .selectable(true)
-                        .scrollable(true)
-                        .markdown_extensions(extensions)
-                        .on_link_click(|url, _, _, cx| {
-                            if url.starts_with("https://") || url.starts_with("http://") {
-                                cx.open_url(url);
-                            }
+                root.child(div().p_3().text_sm().text_color(muted).child("正在整理完整回答…"))
+            });
+        let cwd = self.snapshot.cwd.clone();
+        let markdown = div().flex_1().min_h_0().min_w_0().px_3().py_2().child(
+            TextView::new(text)
+                .selectable(true)
+                .scrollable(true)
+                .markdown_extensions(extensions)
+                .on_link_click(move |url, _, window, cx| {
+                    if url.starts_with('#') {
+                        return;
+                    }
+                    let language = super::super::config::ui_language(cx);
+                    let url = url.to_owned();
+                    let cwd = cwd.clone();
+                    // Path metadata and system openers can block on mounted/network
+                    // filesystems. Keep both outside the window's render thread.
+                    let task = cx.background_executor().spawn(async move {
+                        let result =
+                            crate::file_uri::try_open_local_link_with_cwd(&url, cwd.as_deref());
+                        (url, result)
+                    });
+                    window
+                        .spawn(cx, async move |cx| {
+                            let (url, result) = task.await;
+                            let _ = cx.update(|window, cx| {
+                                let message = match result {
+                                    Some(Ok(())) => return,
+                                    Some(Err(error)) => error.localized_message(language),
+                                    None if crate::file_uri::is_web_or_protocol_uri(&url) => {
+                                        cx.open_url(&url);
+                                        return;
+                                    },
+                                    None => language.format(
+                                        crate::i18n::Message::CommonLinkUnrecognized,
+                                        &[("target", &url)],
+                                    ),
+                                };
+                                crate::gpui_shell::toast::toast(
+                                    window,
+                                    cx,
+                                    crate::display::ToastKind::Warning,
+                                    message,
+                                );
+                            });
                         })
-                        .style(TextViewStyle {
-                            highlight_theme: cx.theme().highlight_theme.clone(),
-                            is_dark: cx.theme().is_dark(),
-                            ..TextViewStyle::default()
-                        }),
-                ),
-            );
+                        .detach();
+                })
+                .style(TextViewStyle {
+                    highlight_theme: cx.theme().highlight_theme.clone(),
+                    is_dark: cx.theme().is_dark(),
+                    ..TextViewStyle::default()
+                }),
+        );
+        root = root.child(markdown);
         if let Some(image) = self.preview.clone() {
             root = root.child(
                 v_flex()
@@ -478,9 +505,9 @@ impl Render for AnswerReader {
                     .p_3()
                     .gap_2()
                     .child(
-                        h_flex().justify_between().child(language.text(Message::AnswerImagePreview)).child(
+                        h_flex().justify_between().child("图片预览").child(
                             Button::new("reader-close-preview")
-                                .label(language.text(Message::AnswerBackToRead))
+                                .label("返回阅读 · Esc")
                                 .ghost()
                                 .small()
                                 .on_click(cx.listener(|reader, _, _, cx| {

@@ -29,14 +29,13 @@ use crate::renderer::shader::ShaderError;
 use crate::renderer::ui::{UiQuad, UiRenderer};
 
 pub mod image;
+mod image_layout;
 pub(crate) mod math;
 pub mod platform;
 pub mod rects;
 mod shader;
 mod text;
 pub mod ui;
-#[cfg(feature = "wgpu-foundation")]
-pub mod wgpu_foundation;
 pub(crate) use text::Rasterizer;
 pub(crate) use text::glyph_cache::{primary_font_family, split_font_families};
 

@@ -64,24 +64,30 @@ impl TextFileView {
                         )
                     }),
             )
-            .when(self.markdown, |bar| bar.child(self.render_mode_switch(cx)))
+            .when(self.markdown, |bar| bar.child(self.render_document_menu(cx)))
             .child(div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border))
-            .child(
-                Button::new("file-details-toggle")
-                    .ghost()
-                    .size(px(design::CONTROL_HEIGHT))
-                    .flex_shrink_0()
-                    .icon(Icon::new(IconName::PanelRight).size(px(design::ICON_SIZE)))
-                    .selected(self.show_details)
-                    .tooltip(language.text(Message::EditorDetailsToggle))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_details = !this.show_details;
-                        if !this.markdown {
-                            this.info = true;
-                        }
-                        cx.notify();
-                    })),
-            )
+            .when(!self.details_hosted, |bar| {
+                bar.child(
+                    Button::new("file-details-toggle")
+                        .ghost()
+                        .size(px(design::CONTROL_HEIGHT))
+                        .flex_shrink_0()
+                        .icon(Icon::new(IconName::PanelRight).size(px(design::ICON_SIZE)))
+                        .selected(self.show_details)
+                        .tooltip(language.text(Message::EditorDetailsToggle))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.details_hosted {
+                                cx.emit(TextFileEvent::DetailsRequested);
+                                return;
+                            }
+                            this.show_details = !this.show_details;
+                            if !this.markdown {
+                                this.info = true;
+                            }
+                            cx.notify();
+                        })),
+                )
+            })
             .when((self.loading || self.saving) && self.source.is_remote(), |bar| {
                 bar.child(
                     Button::new("file-cancel-operation")
@@ -154,46 +160,25 @@ impl TextFileView {
             .into_any_element()
     }
 
-    fn render_mode_switch(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_document_menu(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let language = super::super::config::ui_language(cx);
-        h_flex()
-            .flex_shrink_0()
-            .p(px(3.0))
-            .gap(px(2.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted)
-            .children(
-                [
-                    (true, "file-mode-read", Message::EditorReading),
-                    (false, "file-mode-edit", Message::EditorEdit),
-                ]
-                .into_iter()
-                .map(|(preview, id, label)| {
-                    div().debug_selector(move || id.to_owned()).child(
-                        Button::new(id)
-                            .ghost()
-                            .xsmall()
-                            .h(px(design::CONTROL_HEIGHT))
-                            .rounded(px(4.0))
-                            .px(px(10.0))
-                            .text_size(px(design::SECONDARY_SIZE))
-                            .label(language.text(label))
-                            .when(self.preview == preview, |button| {
-                                button.bg(cx.theme().background).text_color(cx.theme().foreground)
-                            })
-                            .when(self.preview != preview, |button| {
-                                button.text_color(cx.theme().muted_foreground)
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if this.preview != preview {
-                                    this.toggle_preview(window, cx);
-                                }
-                            })),
-                    )
-                }),
-            )
+        let source = !self.preview;
+        let owner = cx.weak_entity();
+        Button::new("file-document-menu")
+            .ghost()
+            .size(px(design::CONTROL_HEIGHT))
+            .icon(IconName::Ellipsis)
+            .tooltip(language.text(Message::EditorDocumentActions))
+            .dropdown_menu(move |menu, _, _| {
+                let owner = owner.clone();
+                menu.item(
+                    gpui_component::menu::PopupMenuItem::new(language.text(Message::EditorSource))
+                        .checked(source)
+                        .on_click(move |_, window, cx| {
+                            let _ = owner.update(cx, |view, cx| view.toggle_preview(window, cx));
+                        }),
+                )
+            })
             .into_any_element()
     }
 

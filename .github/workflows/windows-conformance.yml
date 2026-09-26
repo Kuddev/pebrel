@@ -1,0 +1,56 @@
+name: Windows conformance diagnostics
+
+on:
+  workflow_call:
+    inputs:
+      runtime_run:
+        description: Release run whose Windows runtime artifact should be diagnosed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: "1"
+      NEBULA_RESIZE_TRACE: "1"
+      NEBULA_BOOT_TRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: stable-runtime-windows-x64
+          run-id: ${{ inputs.runtime_run }}
+          github-token: ${{ github.token }}
+          path: diagnostic-runtime
+      - name: Test native permission helpers
+        run: python -m unittest scripts.conformance.tests.test_windows_standard_user -v
+      - name: Read runtime file permissions
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Acl diagnostic-runtime/pebrel.exe | Format-List
+          Get-Acl $env:pythonLocation/python.exe | Format-List
+      - name: Test containment with an ordinary token
+        if: always()
+        run: python scripts/conformance/windows_standard_user.py -m unittest scripts.conformance.tests.test_lifecycle -v
+      - name: Diagnose the previously built runtime
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/conformance/windows_standard_user.py scripts/conformance/run.py --app diagnostic-runtime/pebrel.exe --platform windows-x86_64 --output diagnostic-output/windows-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-conformance-diagnostics
+          path: diagnostic-output
+          if-no-files-found: warn
+          retention-days: 7

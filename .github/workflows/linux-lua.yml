@@ -2,47 +2,107 @@ name: Full native tests
 
 on:
   workflow_dispatch:
+    inputs:
+      windows_diagnostics_run:
+        description: Diagnose a previous Windows runtime without running a release validation
+        type: string
+        default: ""
+  workflow_call:
   push:
-    paths:
-      - "**/*.rs"
-      - "scripts/**/*.py"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/linux-lua.yml"
+    branches: [main]
+  # Include docs, catalogs, assets and workflow edits: every PR gets test results.
+  # ready_for_review starts the scarce-runner jobs that draft pushes skip.
   pull_request:
-    paths:
-      - "**/*.rs"
-      - "scripts/**/*.py"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/linux-lua.yml"
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  windows-diagnostics:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_diagnostics_run != '' }}
+    uses: ./.github/workflows/windows-conformance.yml
+    with:
+      runtime_run: ${{ inputs.windows_diagnostics_run }}
+
+  # rustfmt only for now. clippy joins once the existing warning backlog is
+  # cleared; several crates deny lints, so it cannot run advisory.
+  lint:
+    if: ${{ inputs.windows_diagnostics_run == '' }}
+    name: lint
+    outputs:
+      native_matrix: ${{ steps.matrix.outputs.native_matrix }}
+      release_matrix: ${{ steps.matrix.outputs.release_matrix }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Test CI contracts before matrix planning
+        run: |
+          python3 -m unittest \
+            scripts.tests.test_ci_plan \
+            scripts.tests.test_ci_native_tests \
+            scripts.tests.test_stable_release \
+            scripts.tests.test_ci_cache \
+            scripts.tests.test_platform_cfg \
+            scripts.tests.test_pr_size_workflow -v
+      - name: Check platform cfg budget before native jobs
+        run: python3 scripts/check_platform_cfg.py
+      - name: Plan native validation
+        id: matrix
+        shell: bash
+        run: |
+          python scripts/ci_plan.py \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --output "$GITHUB_OUTPUT"
+
+  # The required lint job validates the matrix before heavy runners are
+  # requested. Draft PRs omit deferred platforms entirely; ready PRs and
+  # release callers require the full matrix. Deferred checks remain missing
+  # on drafts instead of being reported as successful tests.
   native-tests:
+    needs: lint
+    if: ${{ inputs.windows_diagnostics_run == '' }}
     name: Tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, macos-26, macos-26-intel]
+        include: ${{ fromJSON(needs.lint.outputs.native_matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
       PYTHONUTF8: "1"
       CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      RUST_TOOLCHAIN: "1.97.1"
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Install native dependencies
-        if: runner.os == 'Linux'
+        if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -53,30 +113,42 @@ jobs:
             libx11-xcb-dev libxcb1-dev libxcb-render0-dev \
             libxcb-shape0-dev libxcb-xfixes0-dev libxcb-xinput-dev libxcb-xkb-dev libxi-dev
       - name: Require the AppKit SDK used by this PR
-        if: runner.os == 'macOS'
+        if: ${{ runner.os == 'macOS' }}
         run: |
           sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
           test "${sdk_version%%.*}" -ge 26
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
-      - uses: Swatinem/rust-cache@v2
-      - name: Test native titlebar alignment
-        if: runner.os == 'macOS'
-        run: >-
-          cargo test --locked -p nebula --bin pebrel --features gpui-test-support platform::window_chrome::macos::tests::
-      - name: Test all Python helpers
-        if: ${{ !cancelled() }}
-        run: python -m unittest discover -s scripts/tests -v
-      - name: Test all conformance harness helpers
-        if: ${{ !cancelled() }}
-        run: python -m unittest discover -s scripts/conformance/tests -v
-      - name: Test the full Rust workspace
-        if: ${{ !cancelled() }}
-        run: cargo test --locked --workspace
-      - name: Test all GPUI product and interaction cases
-        if: ${{ !cancelled() }}
-        run: cargo test --locked -p nebula --bin pebrel --features gpui-test-support
+      - name: Require a native Windows ARM64 compiler
+        if: ${{ matrix.os == 'windows-11-arm' }}
+        shell: pwsh
+        run: |
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
+            throw 'The Windows ARM job requires an ARM64 host.'
+          }
+          $compiler = rustc -vV
+          if ($LASTEXITCODE -ne 0 -or $compiler -notcontains 'host: aarch64-pc-windows-msvc') {
+            throw 'The Windows ARM job must compile and run ARM64 tests.'
+          }
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: native
+          extra-key: ${{ runner.os != 'macOS' && '-release-check-v2' || '' }}
+          target: |
+            target/ci
+            ${{ runner.os != 'macOS' && 'target/release' || '' }}
+          legacy-key: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'Linux' && 'linux' || 'macos' }}
+      - name: Prepare pinned Windows console runtime
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $architecture = if ('${{ runner.arch }}' -eq 'ARM64') { 'arm64' } else { 'x64' }
+          ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture $architecture
+          ./scripts/tests/windows-runtime.tests.ps1 -Architecture $architecture
+      - name: Test complete workspace and native harness
+        run: python scripts/ci_native_tests.py
       - name: Check source architecture
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: python scripts/check_architecture.py
@@ -84,5 +156,79 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: cargo test --locked --manifest-path tools/i18n-contract/Cargo.toml
       - name: Check the release workspace
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && runner.os != 'macOS' }}
         run: cargo check --locked --workspace --release
+      - name: Save compiled workload
+        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target/ci
+            ${{ runner.os != 'macOS' && 'target/release' || '' }}
+          key: ${{ steps.rust-cache.outputs.cache-key }}
+      - name: Upload native compilation timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-timings-${{ matrix.os }}
+          path: target/cargo-timings
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
+
+  # The release check has no dependency on the test executable. Keeping it in
+  # the Intel test job added 11m33s after a 22m29s test/compile step in run
+  # 34856491552. Both jobs remain part of this reusable workflow's result, so
+  # the stable release aggregation still requires every check to succeed.
+  macos-release-check:
+    needs: lint
+    if: ${{ inputs.windows_diagnostics_run == '' }}
+    name: Release workspace (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.lint.outputs.release_matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      PYTHONUTF8: "1"
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      RUST_TOOLCHAIN: "1.97.1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Require the AppKit SDK used by this PR
+        run: |
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          test "${sdk_version%%.*}" -ge 26
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: native-release-check
+          target: target/release
+          legacy-key: macos
+      - name: Check the release workspace
+        run: cargo check --locked --workspace --release --timings
+      - name: Save compiled workload
+        if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
+      - name: Upload release check compilation timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-check-timings-${{ matrix.os }}
+          path: target/cargo-timings
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14

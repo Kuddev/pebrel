@@ -1,7 +1,7 @@
 //! 代码文件 Tab：普通文件共用可保存的文本编辑器；Git 冲突使用三栏合并器。
 //!
-//! 普通代码继续走组件库的虚拟化 code editor。冲突页遵循 IntelliJ 一类合并器
-//! 的空间语义：左侧当前版本、中间可编辑结果、右侧传入版本；外侧两栏只读，
+//! 普通代码继续走组件库的虚拟化 code editor。冲突页采用三栏布局：
+//! 左侧当前版本、中间可编辑结果、右侧传入版本；外侧两栏只读，
 //! 应用结果后写回工作树并 `git add`，不会另开浮窗或挤占 VCS 抽屉。
 
 use std::io::Write as _;
@@ -15,21 +15,7 @@ use gpui::{
 };
 
 use crate::display::side_panel::GitLocation;
-use crate::gpui_shell::config::ui_language;
 use crate::gpui_shell::prelude::*;
-use crate::i18n::{Message, UiLanguage};
-
-fn loc() -> UiLanguage {
-    UiLanguage::current()
-}
-
-fn loc_text(message: Message) -> String {
-    loc().text(message).to_owned()
-}
-
-fn loc_fmt(message: Message, args: &[(&str, &str)]) -> String {
-    loc().format(message, args)
-}
 
 /// 一次性读入的上限。行级虚拟化解决的是渲染成本，解析/塑形仍随内容量
 /// 增长；8MB 已覆盖常见源码文件，超限的普通文件截断，冲突文件则拒绝写回。
@@ -206,13 +192,10 @@ impl CodeTabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let title = {
-            let name = Path::new(&relative_path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| relative_path.clone());
-            loc_fmt(Message::MergeTitle, &[("name", &name)])
-        };
+        let title = Path::new(&relative_path)
+            .file_name()
+            .map(|name| format!("合并 · {}", name.to_string_lossy()))
+            .unwrap_or_else(|| format!("合并 · {relative_path}"));
         let language = language_for_path(&relative_path);
         let input = code_input(language, window, cx);
         let ours = code_input(language, window, cx);
@@ -337,7 +320,7 @@ impl CodeTabView {
         }
         let result = self.input.read(cx).value().to_string();
         if contains_conflict_markers(&result) {
-            self.notice = Some(loc_text(Message::MergeUnresolvedNotice));
+            self.notice = Some("合并结果中仍有冲突标记，请处理后再应用".to_owned());
             cx.notify();
             return;
         }
@@ -378,25 +361,18 @@ impl CodeTabView {
         let display_path = merge.key.display_path();
         let ready = matches!(merge.state, MergeState::Ready);
         let unresolved = contains_conflict_markers(self.input.read(cx).value().as_ref());
-        let language = ui_language(cx);
         let (status, status_color) = match &merge.state {
-            MergeState::Loading => (language.text(Message::MergeLoading).to_owned(), muted),
-            MergeState::Ready if unresolved => (language.text(Message::MergeUnresolvedStatus).to_owned(), theme.warning),
-            MergeState::Ready => (language.text(Message::MergeReady).to_owned(), theme.success),
-            MergeState::Saving => (language.text(Message::MergeSaving).to_owned(), muted),
-            MergeState::Resolved => (language.text(Message::MergeResolved).to_owned(), theme.success),
+            MergeState::Loading => ("正在读取三个 Git 阶段…".to_owned(), muted),
+            MergeState::Ready if unresolved => ("仍有冲突标记".to_owned(), theme.warning),
+            MergeState::Ready => ("可应用".to_owned(), theme.success),
+            MergeState::Saving => ("正在写回并暂存…".to_owned(), muted),
+            MergeState::Resolved => ("已写回并暂存".to_owned(), theme.success),
             MergeState::Error(error) => (error.clone(), theme.danger),
         };
-        let ours_label = language.text(if merge.ours_missing {
-            Message::MergeOursMissing
-        } else {
-            Message::MergeOurs
-        });
-        let theirs_label = language.text(if merge.theirs_missing {
-            Message::MergeTheirsMissing
-        } else {
-            Message::MergeTheirs
-        });
+        let ours_label =
+            if merge.ours_missing { "当前版本（文件不存在）" } else { "当前版本" };
+        let theirs_label =
+            if merge.theirs_missing { "传入版本（文件不存在）" } else { "传入版本" };
 
         v_flex()
             .size_full()
@@ -433,7 +409,7 @@ impl CodeTabView {
                             .icon(IconName::Redo2)
                             .ghost()
                             .xsmall()
-                            .tooltip(language.text(Message::MergeReloadTooltip))
+                            .tooltip("重新读取冲突阶段")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.reload_git_merge(window, cx);
                             })),
@@ -441,14 +417,14 @@ impl CodeTabView {
                     .child(
                         Button::new("merge-apply")
                             .icon(IconName::Check)
-                            .label(language.text(Message::MergeApply))
+                            .label("应用并暂存")
                             .small()
                             .disabled(!ready || unresolved)
-                            .tooltip(language.text(if unresolved {
-                                Message::MergeClearMarkersTooltip
+                            .tooltip(if unresolved {
+                                "请先清除合并结果中的冲突标记"
                             } else {
-                                Message::MergeApplyTooltip
-                            }))
+                                "写回工作树并执行 git add"
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.save_git_merge(cx))),
                     ),
             )
@@ -480,7 +456,7 @@ impl CodeTabView {
                                 .ghost()
                                 .xsmall()
                                 .disabled(!ready)
-                                .tooltip(language.text(Message::MergeUseOursTooltip))
+                                .tooltip("用当前版本替换合并结果")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.adopt_ours(window, cx);
                                 })),
@@ -491,7 +467,7 @@ impl CodeTabView {
                         muted,
                     ))
                     .child(merge_pane(
-                        language.text(Message::MergeResult),
+                        "合并结果（可编辑）",
                         &self.input,
                         false,
                         None,
@@ -510,7 +486,7 @@ impl CodeTabView {
                                 .ghost()
                                 .xsmall()
                                 .disabled(!ready)
-                                .tooltip(language.text(Message::MergeUseTheirsTooltip))
+                                .tooltip("用传入版本替换合并结果")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.adopt_theirs(window, cx);
                                 })),
@@ -622,14 +598,14 @@ fn contains_conflict_markers(text: &str) -> bool {
 
 fn validate_relative_path(path: &str) -> Result<(), String> {
     if path.is_empty() || path.chars().any(char::is_control) {
-        return Err(loc_text(Message::MergeInvalidPath));
+        return Err("冲突文件路径无效".to_owned());
     }
     let local = Path::new(path);
     if local.components().any(|component| {
         matches!(component, Component::Prefix(_) | Component::RootDir | Component::ParentDir)
     }) || path.split('/').any(|part| part == "..")
     {
-        return Err(loc_text(Message::MergeOutsideRepo));
+        return Err("冲突文件不在当前仓库内".to_owned());
     }
     Ok(())
 }
@@ -639,28 +615,28 @@ fn load_conflict(key: &MergeKey) -> Result<ConflictDocument, String> {
     let ours = read_stage(key, 2)?;
     let theirs = read_stage(key, 3)?;
     if ours.is_none() && theirs.is_none() {
-        return Err(loc_text(Message::MergeNoStages));
+        return Err("Git 索引里没有可合并的 :2/:3 阶段".to_owned());
     }
     let result = read_worktree_file(key)?;
     Ok(ConflictDocument {
-        ours: ours.map(|bytes| decode_conflict_text(bytes, loc().text(Message::MergeOurs))).transpose()?,
-        theirs: theirs.map(|bytes| decode_conflict_text(bytes, loc().text(Message::MergeTheirs))).transpose()?,
-        result: decode_conflict_text(result, loc().text(Message::MergeResultLabel))?,
+        ours: ours.map(|bytes| decode_conflict_text(bytes, "当前版本")).transpose()?,
+        theirs: theirs.map(|bytes| decode_conflict_text(bytes, "传入版本")).transpose()?,
+        result: decode_conflict_text(result, "合并结果")?,
     })
 }
 
 fn decode_conflict_text(bytes: Vec<u8>, label: &str) -> Result<String, String> {
     if bytes.len() > MAX_CODE_BYTES {
-        return Err(loc_fmt(
-            Message::MergeTooLarge,
-            &[("label", label), ("limit", &(MAX_CODE_BYTES / 1024 / 1024).to_string())],
+        return Err(format!(
+            "{label}超过 {} MB，不能在三栏编辑器中安全处理",
+            MAX_CODE_BYTES / 1024 / 1024
         ));
     }
     if bytes.contains(&0) {
-        return Err(loc_fmt(Message::MergeBinary, &[("label", label)]));
+        return Err(format!("{label}是二进制内容，三栏文本合并器无法处理"));
     }
     String::from_utf8(bytes)
-        .map_err(|_| loc_fmt(Message::MergeNotUtf8, &[("label", label)]))
+        .map_err(|_| format!("{label}不是 UTF-8 文本，已阻止可能破坏编码的写回"))
 }
 
 fn read_stage(key: &MergeKey, stage: u8) -> Result<Option<Vec<u8>>, String> {
@@ -674,15 +650,15 @@ fn read_worktree_file(key: &MergeKey) -> Result<Vec<u8>, String> {
         GitLocation::Local { root } => match std::fs::read(root.join(&key.relative_path)) {
             Ok(bytes) => Ok(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(loc_fmt(Message::MergeReadResultFailed, &[("error", &error.to_string())])),
+            Err(error) => Err(format!("读取合并结果失败: {error}")),
         },
         GitLocation::Wsl { distro, root } => {
             let path = join_guest_path(root, &key.relative_path);
             let mut command = Command::new("wsl.exe");
-            let output = hidden_command(&mut command)
+            let output = crate::platform::process::hidden_command(&mut command)
                 .args(["-d", distro, "--", "cat", "--", path.as_str()])
                 .output()
-                .map_err(|error| loc_fmt(Message::MergeWslReadFailed, &[("error", &error.to_string())]))?;
+                .map_err(|error| format!("无法从 WSL 读取冲突文件: {error}"))?;
             if output.status.success() { Ok(output.stdout) } else { Ok(Vec::new()) }
         },
     }
@@ -691,42 +667,42 @@ fn read_worktree_file(key: &MergeKey) -> Result<Vec<u8>, String> {
 fn write_conflict_result(key: &MergeKey, result: String) -> Result<(), String> {
     validate_relative_path(&key.relative_path)?;
     if result.len() > MAX_CODE_BYTES {
-        return Err(loc_fmt(Message::MergeResultTooLarge, &[("limit", &(MAX_CODE_BYTES / 1024 / 1024).to_string())]));
+        return Err(format!("合并结果超过 {} MB，已取消写回", MAX_CODE_BYTES / 1024 / 1024));
     }
     match &key.location {
         GitLocation::Local { root } => {
             std::fs::write(root.join(&key.relative_path), result.as_bytes())
-                .map_err(|error| loc_fmt(Message::MergeWriteFailed, &[("error", &error.to_string())]))?
+                .map_err(|error| format!("写回合并结果失败: {error}"))?
         },
         GitLocation::Wsl { distro, root } => {
             let path = join_guest_path(root, &key.relative_path);
             let mut command = Command::new("wsl.exe");
-            let mut child = hidden_command(&mut command)
+            let mut child = crate::platform::process::hidden_command(&mut command)
                 .args(["-d", distro, "--", "sh", "-c", "cat > \"$1\"", "nebula", path.as_str()])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|error| loc_fmt(Message::MergeWslWriteSpawnFailed, &[("error", &error.to_string())]))?;
+                .map_err(|error| format!("无法向 WSL 写回冲突文件: {error}"))?;
             let write_result = child
                 .stdin
                 .take()
-                .ok_or_else(|| loc_text(Message::MergeWslPipeFailed))?
+                .ok_or("无法打开 WSL 写入管道".to_owned())?
                 .write_all(result.as_bytes());
             if let Err(error) = write_result {
                 let _ = child.kill();
-                return Err(loc_fmt(Message::MergeWslWriteFailed, &[("error", &error.to_string())]));
+                return Err(format!("写入 WSL 冲突文件失败: {error}"));
             }
             let output =
-                child.wait_with_output().map_err(|error| loc_fmt(Message::MergeWslWaitFailed, &[("error", &error.to_string())]))?;
+                child.wait_with_output().map_err(|error| format!("等待 WSL 写回失败: {error}"))?;
             if !output.status.success() {
-                return Err(first_command_error(&output.stderr, loc().text(Message::MergeWslWriteError)));
+                return Err(first_command_error(&output.stderr, "WSL 写回失败"));
             }
         },
     }
     let staged = git_command(&key.location, &["add", "--", &key.relative_path])?;
     if !staged.status.success() {
-        return Err(first_command_error(&staged.stderr, loc().text(Message::MergeGitAddFailed)));
+        return Err(first_command_error(&staged.stderr, "git add 失败；文件已写回但尚未暂存"));
     }
     Ok(())
 }
@@ -749,19 +725,10 @@ fn git_command(location: &GitLocation, args: &[&str]) -> Result<std::process::Ou
             command
         },
     };
-    hidden_command(&mut command)
+    crate::platform::process::hidden_command(&mut command)
         .args(args)
         .output()
-        .map_err(|error| loc_fmt(Message::MergeGitRunFailed, &[("error", &error.to_string())]))
-}
-
-fn hidden_command(command: &mut Command) -> &mut Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        command.creation_flags(0x0800_0000);
-    }
-    command
+        .map_err(|error| format!("无法运行 git: {error}"))
 }
 
 fn first_command_error(stderr: &[u8], fallback: &str) -> String {
@@ -785,13 +752,15 @@ mod tests {
     use super::*;
 
     fn git(root: &Path, args: &[&str]) -> std::process::Output {
-        Command::new("git")
+        // 测试二进制没有控制台：不加这个 flag，每条 git 都会在用户屏幕上弹一个
+        // 终端窗口（见 `platform::process`）。
+        let mut command = Command::new("git");
+        command
             .arg("-C")
             .arg(root)
             .args(["-c", "user.name=Nebula Test", "-c", "user.email=nebula@example.invalid"])
-            .args(args)
-            .output()
-            .expect("run git")
+            .args(args);
+        crate::platform::process::hidden_command(&mut command).output().expect("run git")
     }
 
     fn commit(root: &Path, message: &str) {

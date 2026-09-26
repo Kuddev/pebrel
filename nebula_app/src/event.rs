@@ -1,6 +1,5 @@
 //! Process window events.
 
-use crate::i18n::t;
 use crate::ConfigMonitor;
 use glutin::config::GetGlConfig;
 use std::borrow::Cow;
@@ -68,6 +67,7 @@ use crate::window_transition::{NativeWindowStage, NativeWindowStageTracker};
 
 mod agent_runtime;
 mod input_state;
+mod link_open;
 mod proxy;
 mod quick_hotkey;
 mod runtime_control;
@@ -273,8 +273,11 @@ impl Processor {
                 // 「一恢复就崩」的唯一现场。
                 Some(session) if !session.tabs.is_empty() => {
                     blocked_notice = Some(match crate::session::quarantine() {
-                        Some(path) => t!("workspace.restore.skipped_repeated_failures", path = path.display()),
-                        None => t!("workspace.restore.skipped").to_string(),
+                        Some(path) => format!(
+                            "连续三次启动失败，已跳过会话恢复；上次的会话保存在 {}。",
+                            path.display()
+                        ),
+                        None => "连续三次启动失败，已跳过会话恢复。".to_owned(),
                     });
                     None
                 },
@@ -654,7 +657,7 @@ impl ApplicationHandler<Event> for Processor {
                     } else {
                         crate::backup_remote::pull_latest().and_then(|(name, packet)| {
                             crate::encrypted_backup::restore(&packet, &passphrase)
-                                .map(|()| format!("{} {name}, {}", t!("ux.restored_from_remote"), t!("ux.restart_to_apply")))
+                                .map(|()| format!("已从远端恢复 {name}，重启后应用全部设置"))
                         })
                     };
                     crate::backup_remote::warn_result(&result);
@@ -1305,7 +1308,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     /// exactly one notification path while paste remains silent.
     fn notify_copy(&mut self, text: &str) {
         let lines = text.lines().count().max(1);
-        let message = t!("common.copied_lines", lines = lines);
+        let language = self.display.ui_language();
+        let message = match language {
+            UiLanguage::ZhCn => format!("已复制 {lines} 行到剪贴板"),
+            _ => format!("Copied {lines} lines to clipboard"),
+        };
         self.display.push_toast(message, ToastKind::Info);
     }
 
@@ -1564,6 +1571,10 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         self.display.nebula_commit_line(self.nebula_state);
     }
 
+    fn nebula_running_program(&self) -> Option<&str> {
+        self.nebula_state.running_program.as_deref()
+    }
+
     #[inline]
     fn nebula_clear_line(&mut self) {
         crate::display::nebula_clear_line(self.nebula_state);
@@ -1672,7 +1683,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 request_id,
                 &destination,
                 false,
-                &format!("{}: {err}", t!("ux.test_task_failed")),
+                &format!("无法启动测试任务：{err}"),
                 0,
             );
         }
@@ -2089,17 +2100,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     /// 资源管理器里定位到条目本身（文件树右键「在资源管理器中显示」）。
-    /// `/select,` 与路径必须是同一个参数，逗号后直接拼路径。
+    /// 命令构造统一在 `platform::file_manager`（Windows 必须是
+    /// `/select,"<path>"`，引号只包路径），这里不再另写一份。
     fn reveal_in_file_manager(&mut self, path: &std::path::Path) {
-        #[cfg(windows)]
-        {
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path.as_os_str());
-            self.spawn_daemon("explorer.exe", &[arg.as_os_str()]);
-        }
-        #[cfg(not(windows))]
-        if let Some(parent) = path.parent() {
-            self.spawn_daemon("xdg-open", &[parent.as_os_str()]);
+        if let Err(err) = crate::platform::file_manager::reveal(path) {
+            warn!("Unable to reveal {} in file manager: {err}", path.display());
         }
     }
 
@@ -2123,26 +2128,19 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         match &hint.action() {
             // Launch an external program.
             HintAction::Command(command) => {
-                // On Windows, a `file://` OSC 8 link (our clickable `ls`) is
-                // opened via `explorer.exe` with a translated native path. This
-                // sidesteps `cmd /c start` mangling spaces/unicode and lets
-                // WSL/MSYS posix paths (`/mnt/c/…`, `/d/…`) actually resolve.
-                #[cfg(windows)]
-                if let Some(path) = crate::file_uri::file_uri_to_local_path(&text) {
-                    crate::display::nebula_link_log(format!(
-                        "trigger_hint file-uri explorer path={path:?} (from {text:?})"
-                    ));
-                    self.spawn_daemon("explorer.exe", &[path.as_os_str()]);
-                    return;
+                if command == &crate::config::ui_config::default_hint_command() {
+                    link_open::open(
+                        command.clone(),
+                        text.into_owned(),
+                        self.display.ui_language(),
+                        self.event_proxy.clone(),
+                        self.display.window.id(),
+                    );
+                } else {
+                    let mut args = command.args().to_vec();
+                    args.push(text.into_owned());
+                    self.spawn_daemon(command.program(), &args);
                 }
-
-                let mut args = command.args().to_vec();
-                args.push(text.into());
-                crate::display::nebula_link_log(format!(
-                    "trigger_hint spawn program={:?} args={args:?}",
-                    command.program()
-                ));
-                self.spawn_daemon(command.program(), &args);
             },
             // Copy the text to the clipboard.
             HintAction::Action(HintInternalAction::Copy) => {
@@ -2815,6 +2813,10 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     self.ctx.message_buffer.push(message);
                     self.ctx.display.pending_update.dirty = true;
                 },
+                EventType::LinkOpenFailed(message) => {
+                    self.ctx.display.push_toast(message, ToastKind::Warning);
+                    *self.ctx.dirty = true;
+                },
                 EventType::Terminal(event) => match event {
                     // OSC 9;4：程序自报任务进度。旧壳一个窗口只投一次，不像
                     // GPUI 壳那样先判「这个 pane 是不是正被看着」——旧壳的多
@@ -2839,17 +2841,16 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         if let Some(rest) = title.strip_prefix("NEBULA|") {
                             let mut parts = rest.splitn(3, '|');
                             let cwd = parts.next().unwrap_or("").to_owned();
-                            if self.ctx.nebula_state.cwd != cwd {
-                                self.ctx.nebula_state.cwd.clone_from(&cwd);
-                                self.ctx.display.nebula_record_directory(&cwd);
-                            }
+                            self.ctx.display.nebula_report_cwd(self.ctx.nebula_state, &cwd);
                             self.ctx.nebula_state.branch = parts.next().unwrap_or("").to_owned();
                             if let Some(program) = parts.next() {
-                                self.ctx.nebula_state.running_program = if program.is_empty() {
-                                    None
-                                } else {
-                                    Some(program.to_owned())
-                                };
+                                if !self.ctx.nebula_state.agent_activity.hook_seen() {
+                                    self.ctx.nebula_state.running_program = if program.is_empty() {
+                                        None
+                                    } else {
+                                        Some(program.to_owned())
+                                    };
+                                }
                                 // A 4-field title only ever comes from the
                                 // remote `nebula ssh` integration, so the
                                 // typed ssh login is confirmed connected:
@@ -2889,9 +2890,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         // Standard OSC 7 / 9;9 directory report. Update cwd only,
                         // leaving any branch captured from a `NEBULA|cwd|branch`
                         // title intact, so the two channels coexist.
-                        if self.ctx.nebula_state.cwd != cwd {
-                            self.ctx.nebula_state.cwd.clone_from(&cwd);
-                            self.ctx.display.nebula_record_directory(&cwd);
+                        if self.ctx.display.nebula_report_cwd(self.ctx.nebula_state, &cwd) {
                             *self.ctx.dirty = true;
                         }
                     },
@@ -2939,32 +2938,26 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         }
                         // Program identity for the sidebar tab icon, from the
                         // line captured at Enter (buffers are cleared by now).
-                        self.ctx.nebula_state.running_program =
-                            crate::ai_agents::AgentKind::parse_command(
-                                &self.ctx.nebula_state.last_committed,
-                            )
-                            .map(|agent| agent.slug().to_owned())
-                            .or_else(|| {
-                                crate::display::extract_program(
+                        if !self.ctx.nebula_state.agent_activity.hook_seen() {
+                            self.ctx.nebula_state.running_program =
+                                crate::ai_agents::AgentKind::parse_command(
                                     &self.ctx.nebula_state.last_committed,
                                 )
-                            });
-                        self.ctx.nebula_state.agent_hook_seen = false;
-                        self.ctx.nebula_state.agent_status_rule = None;
-                        self.ctx.nebula_state.agent_status_source =
-                            crate::ai_agents::AgentStatusSource::Process;
-                        self.ctx.nebula_state.agent_status = if self
-                            .ctx
-                            .nebula_state
-                            .running_program
-                            .as_deref()
-                            .and_then(crate::ai_agents::AgentKind::parse)
-                            .is_some()
-                        {
-                            crate::ai_agents::AgentStatus::Working
-                        } else {
-                            crate::ai_agents::AgentStatus::Unknown
-                        };
+                                .map(|agent| agent.slug().to_owned())
+                                .or_else(|| {
+                                    crate::display::extract_program(
+                                        &self.ctx.nebula_state.last_committed,
+                                    )
+                                });
+                            let agent = self
+                                .ctx
+                                .nebula_state
+                                .running_program
+                                .as_deref()
+                                .and_then(crate::ai_agents::AgentKind::parse)
+                                .is_some();
+                            self.ctx.nebula_state.agent_activity.begin_command(agent);
+                        }
                         // Arm the ssh host auto-save: when this command is an
                         // interactive ssh login, hold its destination until a
                         // remote NEBULA| title or a long-enough session
@@ -2991,15 +2984,17 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         // CLI 退回提示符，对话不再是这个 pane 的前台事实；
                         // 留着它，快照会把一个已经退出的会话当活的接续。
                         self.ctx.nebula_state.ai_session = None;
-                        self.ctx.nebula_state.agent_hook_seen = false;
-                        self.ctx.nebula_state.agent_status = crate::ai_agents::AgentStatus::Unknown;
-                        self.ctx.nebula_state.agent_status_source =
-                            crate::ai_agents::AgentStatusSource::Unknown;
-                        self.ctx.nebula_state.agent_status_rule = None;
+                        let hooked = self.ctx.nebula_state.agent_activity.hook_seen();
+                        self.ctx.nebula_state.agent_activity.command_finished();
                         self.ctx.nebula_state.pending_command_prompt = None;
-                        self.ctx.nebula_state.agent_runtime_submit_pending = false;
                         self.ctx.nebula_state.runtime_submit_barrier = None;
-                        self.ctx.nebula_state.idle_screen_streak = 0;
+                        #[cfg(windows)]
+                        if let Some(hwnd) = self.ctx.display.window.native_window_handle_id() {
+                            crate::taskbar::apply(
+                                hwnd as isize,
+                                crate::taskbar::TaskProgress::None,
+                            );
+                        }
                         let pending_ssh = self.ctx.nebula_state.pending_ssh_host.take();
                         self.ctx.nebula_state.awaiting_input = false;
                         if let Some(run) = self.ctx.nebula_state.active_run.take() {
@@ -3024,7 +3019,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                                     self.ctx.display.nebula_save_ssh_host(&host);
                                 }
                             }
-                            if duration >= crate::notify::COMMAND_NOTIFY_MIN {
+                            if !hooked && duration >= crate::notify::COMMAND_NOTIFY_MIN {
                                 // Sidebar dot until the tab gets looked at
                                 // (cleared instantly for the visible tab).
                                 self.ctx.nebula_state.finished_unseen = true;
@@ -3054,8 +3049,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         }
                     },
                     TerminalEvent::UserVar { name, value } => {
-                        // `nebula_ai_query`（`#` 自然语言转命令）是阶段二的
-                        // 消费者；通道先贯通，其余变量目前无人认领。
+                        self.ctx.nebula_state.completion_shell_report(&name, &value);
                         if name == "nebula_ai_query" {
                             info!(
                                 "assistant: query channel received ({} chars)",
@@ -3079,6 +3073,9 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     },
                     TerminalEvent::AiHookEnvelope(_) => (),
                     TerminalEvent::Bell => {
+                        if self.ctx.nebula_state.agent_activity.hook_seen() {
+                            return;
+                        }
                         // Claude Code / Codex ring BEL when a turn finishes, so
                         // an unfocused bell is the primary "AI task done"
                         // signal: always request attention + sound, without
@@ -3096,13 +3093,6 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                                 },
                                 tab_id,
                             );
-                        }
-
-                        // A bell from a tracked program (claude finishing a
-                        // turn) means it now waits for input: pause the
-                        // sidebar spinner until the user types again.
-                        if self.ctx.nebula_state.running_program.is_some() {
-                            self.ctx.nebula_state.awaiting_input = true;
                         }
 
                         // Ring visual bell.
@@ -3170,7 +3160,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         // 随后到来的 `Exit` 走既有的 tab 关闭路径。
                         crate::display::nebula_debug_log(format!("pty failure: {reason}"));
                         self.ctx.message_buffer.push(Message::new(
-                            format!("{}: {reason}", t!("ux.terminal_abnormal_exit")),
+                            format!("终端会话异常终止(宿主或管道故障):{reason}"),
                             MessageType::Error,
                         ));
                         self.ctx.display.pending_update.dirty = true;

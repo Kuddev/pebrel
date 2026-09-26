@@ -1,8 +1,8 @@
 //! Nebula's renderer-independent motion runtime.
 //!
 //! The runtime owns time normalization and motion math only. Rendering code
-//! decides how values map to pixels, so OpenGL and wgpu consume identical
-//! animation state without either backend becoming a timing source.
+//! decides how values map to pixels, so each shell consumes the same animation
+//! state without its renderer becoming a timing source.
 
 use std::time::{Duration, Instant};
 

@@ -17,15 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use log::warn;
 
-use crate::i18n::UiLanguage;
-
-fn tr(key: &'static str) -> &'static str {
-    UiLanguage::current().tr(key)
-}
-
-fn tr_args(key: &'static str, args: &[(&str, &str)]) -> String {
-    UiLanguage::current().tr_args(key, args)
-}
+pub(crate) mod preferences;
 
 /// 远程备份配置文件（位于 `nebula_data_dir()`），独立于 `nebula_sync.txt`：
 /// 备份管道自身的配置不该被备份恢复覆盖到不可用。
@@ -38,7 +30,7 @@ const LEGACY_ARCHIVE_PREFIX: &str = "nebula-backup-";
 const ARCHIVE_SUFFIX: &str = ".nbk";
 
 /// 每个远端保留的归档份数。
-const KEEP_ARCHIVES: usize = 10;
+pub(crate) const KEEP_ARCHIVES: usize = 10;
 
 /// Windows 凭据管理器条目（与 `sync.rs` 的通用 DPAPI 存取同一后端）。
 #[cfg(windows)]
@@ -96,6 +88,7 @@ pub struct BackupRemoteConfig {
     pub sftp_path: String,
     /// 手写豁免开关（UI 故意不给入口）：自建内网 WebDAV/S3 允许 http。
     pub allow_http: bool,
+    pub selection: crate::encrypted_backup::BackupSelection,
 }
 
 pub fn config_path() -> PathBuf {
@@ -149,6 +142,11 @@ impl BackupRemoteConfig {
                 "sftp_destination" => cfg.sftp_destination = value.to_owned(),
                 "sftp_path" => cfg.sftp_path = value.to_owned(),
                 "allow_http" => cfg.allow_http = matches!(value, "1" | "true" | "on"),
+                "selection" => {
+                    if let Ok(selection) = serde_json::from_str(value) {
+                        cfg.selection = selection;
+                    }
+                },
                 _ => {},
             }
         }
@@ -191,8 +189,29 @@ impl BackupRemoteConfig {
     }
 
     pub fn save(&self) -> Result<(), String> {
+        self.save_at(&config_path())
+    }
+
+    fn save_at(&self, path: &std::path::Path) -> Result<(), String> {
+        use std::io::Write;
+        if [
+            &self.folder_path,
+            &self.webdav_url,
+            &self.webdav_username,
+            &self.s3_endpoint,
+            &self.s3_region,
+            &self.s3_bucket,
+            &self.s3_access_key,
+            &self.sftp_destination,
+            &self.sftp_path,
+        ]
+        .iter()
+        .any(|value| value.contains(['\r', '\n']))
+        {
+            return Err("Configuration values cannot contain line breaks".into());
+        }
         let text = format!(
-            "protocol={}\nfolder_path={}\nwebdav_url={}\nwebdav_username={}\ns3_endpoint={}\ns3_region={}\ns3_bucket={}\ns3_access_key={}\nsftp_destination={}\nsftp_path={}\nallow_http={}\n",
+            "protocol={}\nfolder_path={}\nwebdav_url={}\nwebdav_username={}\ns3_endpoint={}\ns3_region={}\ns3_bucket={}\ns3_access_key={}\nsftp_destination={}\nsftp_path={}\nallow_http={}\nselection={}\n",
             self.protocol.settings_value(),
             self.folder_path.trim(),
             self.webdav_url.trim(),
@@ -204,8 +223,16 @@ impl BackupRemoteConfig {
             self.sftp_destination.trim(),
             self.sftp_path.trim(),
             self.allow_http as u8,
+            serde_json::to_string(&self.selection).map_err(|error| error.to_string())?,
         );
-        std::fs::write(config_path(), text).map_err(|err| tr_args("backup_remote.config_write_failed", &[("error", &err.to_string())]))
+        let parent = path.parent().ok_or("Invalid configuration path")?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+        temporary.write_all(text.as_bytes()).map_err(|error| error.to_string())?;
+        temporary.as_file().sync_all().map_err(|error| error.to_string())?;
+        temporary.persist(path).map_err(|error| error.to_string())?;
+        Ok(())
     }
 }
 
@@ -226,7 +253,7 @@ pub fn store_webdav_password(username: &str, secret: &str) -> Result<(), String>
         username,
         secret.trim().as_bytes(),
     )
-    .map_err(|err| tr_args("backup_remote.credential_store_failed", &[("error", &err.to_string())]))
+    .map_err(|err| format!("保存到凭据管理器失败：{err}"))
 }
 
 #[cfg(windows)]
@@ -236,17 +263,17 @@ pub fn store_s3_secret(access_key: &str, secret: &str) -> Result<(), String> {
         access_key,
         secret.trim().as_bytes(),
     )
-    .map_err(|err| tr_args("backup_remote.credential_store_failed", &[("error", &err.to_string())]))
+    .map_err(|err| format!("保存到凭据管理器失败：{err}"))
 }
 
 #[cfg(not(windows))]
 pub fn store_webdav_password(_username: &str, _secret: &str) -> Result<(), String> {
-    Err(tr("backup_remote.set_webdav_password_env").to_owned())
+    Err("此平台请设环境变量 PEBREL_BACKUP_WEBDAV_PASSWORD".to_owned())
 }
 
 #[cfg(not(windows))]
 pub fn store_s3_secret(_access_key: &str, _secret: &str) -> Result<(), String> {
-    Err(tr("backup_remote.set_s3_secret_env").to_owned())
+    Err("此平台请设环境变量 PEBREL_BACKUP_S3_SECRET".to_owned())
 }
 
 fn webdav_password() -> Option<String> {
@@ -368,45 +395,47 @@ trait Backend {
 /// 校验配置完整性并组装后端。缺什么直接说清楚缺什么，绝不半配置上路。
 fn backend(cfg: &BackupRemoteConfig) -> Result<Box<dyn Backend>, String> {
     match cfg.protocol {
-        BackupProtocol::Off => Err(tr("backup_remote.disabled").to_owned()),
+        BackupProtocol::Off => Err("未启用远程备份：先在设置 → 备份里选择协议".to_owned()),
         BackupProtocol::Folder => {
             let path = cfg.folder_path.trim();
             if path.is_empty() {
-                return Err(tr("backup_remote.folder_path_missing").to_owned());
+                return Err("未配置备份目录路径".to_owned());
             }
             Ok(Box::new(FolderBackend { root: PathBuf::from(path) }))
         },
         BackupProtocol::WebDav => {
             let url = cfg.webdav_url.trim().trim_end_matches('/').to_owned();
             if url.is_empty() {
-                return Err(tr("backup_remote.webdav_url_missing").to_owned());
+                return Err("未配置 WebDAV 目录 URL".to_owned());
             }
             if !url.starts_with("https://") && !cfg.allow_http {
                 return Err(
-                    tr("backup_remote.webdav_https_required").to_owned(),
+                    "已拒绝：WebDAV URL 不是 HTTPS（自建内网服务可在 pebrel_backup.txt 写 allow_http=1 豁免）"
+                        .to_owned(),
                 );
             }
             let username = cfg.webdav_username.trim().to_owned();
             if username.is_empty() {
-                return Err(tr("backup_remote.webdav_username_missing").to_owned());
+                return Err("未配置 WebDAV 用户名".to_owned());
             }
             let password = webdav_password()
-                .ok_or(tr("backup_remote.webdav_password_missing"))?;
+                .ok_or("缺少 WebDAV 密码：在设置里输入或设 PEBREL_BACKUP_WEBDAV_PASSWORD")?;
             Ok(Box::new(WebDavBackend { url, username, password }))
         },
         BackupProtocol::S3 => {
             let endpoint = cfg.s3_endpoint.trim().trim_end_matches('/').to_owned();
             if endpoint.is_empty() {
-                return Err(tr("backup_remote.s3_endpoint_missing").to_owned());
+                return Err("未配置 S3 Endpoint".to_owned());
             }
             if !endpoint.starts_with("https://") && !cfg.allow_http {
                 return Err(
-                    tr("backup_remote.s3_https_required").to_owned(),
+                    "已拒绝：S3 Endpoint 不是 HTTPS（自建内网服务可在 pebrel_backup.txt 写 allow_http=1 豁免）"
+                        .to_owned(),
                 );
             }
             let region = cfg.s3_region.trim().to_owned();
             if region.is_empty() {
-                return Err(tr("backup_remote.s3_region_missing").to_owned());
+                return Err("未配置 S3 区域（MinIO/R2 可写 us-east-1 / auto）".to_owned());
             }
             let raw = cfg.s3_bucket.trim().trim_matches('/');
             let (bucket, prefix) = match raw.split_once('/') {
@@ -414,21 +443,21 @@ fn backend(cfg: &BackupRemoteConfig) -> Result<Box<dyn Backend>, String> {
                 None => (raw.to_owned(), String::new()),
             };
             if bucket.is_empty() {
-                return Err(tr("backup_remote.s3_bucket_missing").to_owned());
+                return Err("未配置 S3 存储桶".to_owned());
             }
             let access_key = cfg.s3_access_key.trim().to_owned();
             if access_key.is_empty() {
-                return Err(tr("backup_remote.s3_access_key_missing").to_owned());
+                return Err("未配置 S3 Access Key".to_owned());
             }
             let secret_key = s3_secret()
-                .ok_or(tr("backup_remote.s3_secret_missing"))?;
+                .ok_or("缺少 S3 Secret Key：在设置里输入或设 PEBREL_BACKUP_S3_SECRET")?;
             Ok(Box::new(S3Backend { endpoint, region, bucket, prefix, access_key, secret_key }))
         },
         BackupProtocol::Sftp => {
             let destination = cfg.sftp_destination.trim().to_owned();
             if destination.is_empty() {
                 return Err(
-                    tr("backup_remote.sftp_destination_missing").to_owned()
+                    "未配置 SFTP 目标（user@host[:port]，认证复用 SSH 主机配置）".to_owned()
                 );
             }
             let mut path = cfg.sftp_path.trim().trim_end_matches('/').to_owned();
@@ -451,22 +480,22 @@ pub fn validate() -> Result<(), String> {
 /// 上传一份新归档并尽力清理超出保留数的旧份。阻塞，跑在后台线程。
 pub fn push(packet: &[u8]) -> Result<String, String> {
     let cfg = BackupRemoteConfig::load();
-    let backend = backend(&cfg)?;
+    push_to(&cfg, packet)
+}
+
+pub(crate) fn push_to(cfg: &BackupRemoteConfig, packet: &[u8]) -> Result<String, String> {
+    let backend = backend(cfg)?;
     let name = archive_name(now_unix());
     backend.put(&name, packet)?;
-    let destination = backend.describe();
-    let size_kb = packet.len().div_ceil(1024).to_string();
-    let mut message = tr_args(
-        "backup_remote.push_success",
-        &[("destination", &destination), ("name", &name), ("size_kb", &size_kb)],
-    );
+    let mut message =
+        format!("已备份到{}（{name}，{} KB）", backend.describe(), packet.len().div_ceil(1024));
     // 清理是尽力而为：上传已经成功，旧份删不掉只降级为日志加一句提示。
     match prune(backend.as_ref()) {
-        Ok(kept) if kept > 1 => message.push_str(&tr_args("backup_remote.retention_suffix", &[("kept", &kept.to_string())])),
+        Ok(kept) if kept > 1 => message.push_str(&format!("，远端保留 {kept} 份")),
         Ok(_) => {},
         Err(err) => {
             warn!("backup prune: {err}");
-            message.push_str(tr("backup_remote.prune_failed_suffix"));
+            message.push_str("；旧份清理失败（详见日志）");
         },
     }
     Ok(message)
@@ -475,15 +504,32 @@ pub fn push(packet: &[u8]) -> Result<String, String> {
 /// 取回远端最新一份归档：`(归档名, 密文字节)`。阻塞，跑在后台线程。
 pub fn pull_latest() -> Result<(String, Vec<u8>), String> {
     let cfg = BackupRemoteConfig::load();
-    let backend = backend(&cfg)?;
+    pull_from(&cfg, None)
+}
+
+/// Read-only listing doubles as the settings connection check. No probe file or
+/// directory is created and no retention cleanup runs until an explicit upload.
+pub(crate) fn snapshots(cfg: &BackupRemoteConfig) -> Result<Vec<String>, String> {
+    let backend = backend(cfg)?;
     let mut names: Vec<String> =
         backend.list()?.into_iter().filter(|name| is_archive_name(name)).collect();
     sort_archives(&mut names);
-    let Some(latest) = names.pop() else {
-        return Err(tr_args("backup_remote.no_archives", &[("destination", &backend.describe())]));
+    names.dedup();
+    names.reverse();
+    Ok(names)
+}
+
+pub(crate) fn pull_from(
+    cfg: &BackupRemoteConfig,
+    name: Option<&str>,
+) -> Result<(String, Vec<u8>), String> {
+    let name = match name {
+        Some(name) if is_archive_name(name) => name.to_owned(),
+        Some(_) => return Err("Invalid backup name".into()),
+        None => snapshots(cfg)?.into_iter().next().ok_or("No backup archives")?,
     };
-    let bytes = backend.get(&latest)?;
-    Ok((latest, bytes))
+    let bytes = backend(cfg)?.get(&name)?;
+    Ok((name, bytes))
 }
 
 /// 删除超出 [`KEEP_ARCHIVES`] 的最旧归档，返回清理后的份数。
@@ -506,24 +552,24 @@ struct FolderBackend {
 
 impl Backend for FolderBackend {
     fn put(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        std::fs::create_dir_all(&self.root).map_err(|err| tr_args("backup_remote.folder_create_failed", &[("error", &err.to_string())]))?;
+        std::fs::create_dir_all(&self.root).map_err(|err| format!("创建备份目录失败：{err}"))?;
         crate::atomic_file::write(&self.root.join(name), bytes)
-            .map_err(|err| tr_args("backup_remote.write_backup_failed", &[("error", &err.to_string())]))
+            .map_err(|err| format!("写入备份失败：{err}"))
     }
 
     fn get(&self, name: &str) -> Result<Vec<u8>, String> {
-        std::fs::read(self.root.join(name)).map_err(|err| tr_args("backup_remote.read_backup_failed", &[("error", &err.to_string())]))
+        std::fs::read(self.root.join(name)).map_err(|err| format!("读取备份失败：{err}"))
     }
 
     fn list(&self) -> Result<Vec<String>, String> {
         let entries = match std::fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(tr_args("backup_remote.folder_list_failed", &[("error", &err.to_string())])),
+            Err(err) => return Err(format!("读取备份目录失败：{err}")),
         };
         let mut names = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(|err| tr_args("backup_remote.folder_list_failed", &[("error", &err.to_string())]))?;
+            let entry = entry.map_err(|err| format!("读取备份目录失败：{err}"))?;
             if entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
                 names.push(entry.file_name().to_string_lossy().into_owned());
             }
@@ -532,12 +578,11 @@ impl Backend for FolderBackend {
     }
 
     fn delete(&self, name: &str) -> Result<(), String> {
-        std::fs::remove_file(self.root.join(name)).map_err(|err| tr_args("backup_remote.delete_old_failed", &[("error", &err.to_string())]))
+        std::fs::remove_file(self.root.join(name)).map_err(|err| format!("删除旧备份失败：{err}"))
     }
 
     fn describe(&self) -> String {
-        let path = self.root.display().to_string();
-        tr_args("backup_remote.folder_describe", &[("path", &path)])
+        format!("目录 {}", self.root.display())
     }
 }
 
@@ -574,7 +619,7 @@ impl WebDavBackend {
             .put(&self.file_url(name))
             .header("Authorization", &self.auth())
             .send(bytes)
-            .map_err(|err| tr_args("backup_remote.upload_failed", &[("error", &err.to_string())]))?;
+            .map_err(|err| format!("上传失败：{err}"))?;
         Ok(response.status().as_u16())
     }
 
@@ -586,14 +631,14 @@ impl WebDavBackend {
             .uri(&self.url)
             .header("Authorization", self.auth())
             .body(Vec::new())
-            .map_err(|err| tr_args("backup_remote.mkcol_build_failed", &[("error", &err.to_string())]))?;
+            .map_err(|err| format!("构造 MKCOL 请求失败：{err}"))?;
         let response =
-            http_agent().run(request).map_err(|err| tr_args("backup_remote.remote_directory_create_failed", &[("error", &err.to_string())]))?;
+            http_agent().run(request).map_err(|err| format!("创建远端目录失败：{err}"))?;
         match response.status().as_u16() {
             // 405 = 目录已存在（Method Not Allowed on existing collection）。
             200 | 201 | 405 => Ok(()),
-            401 | 403 => Err(tr("backup_remote.webdav_auth_failed").to_owned()),
-            status => Err(tr_args("backup_remote.remote_directory_http_failed", &[("status", &status.to_string())])),
+            401 | 403 => Err("认证失败：检查 WebDAV 用户名/密码".to_owned()),
+            status => Err(format!("创建远端目录失败：HTTP {status}")),
         }
     }
 }
@@ -611,8 +656,8 @@ impl Backend for WebDavBackend {
         };
         match status {
             200 | 201 | 204 => Ok(()),
-            401 | 403 => Err(tr("backup_remote.webdav_auth_failed").to_owned()),
-            other => Err(tr_args("backup_remote.upload_http_failed", &[("status", &other.to_string())])),
+            401 | 403 => Err("认证失败：检查 WebDAV 用户名/密码".to_owned()),
+            other => Err(format!("上传失败：HTTP {other}")),
         }
     }
 
@@ -621,11 +666,11 @@ impl Backend for WebDavBackend {
             .get(&self.file_url(name))
             .header("Authorization", &self.auth())
             .call()
-            .map_err(|err| tr_args("backup_remote.download_failed", &[("error", &err.to_string())]))?;
+            .map_err(|err| format!("下载失败：{err}"))?;
         match response.status().as_u16() {
-            200 => response.body_mut().read_to_vec().map_err(|err| tr_args("backup_remote.remote_read_failed", &[("error", &err.to_string())])),
-            401 | 403 => Err(tr("backup_remote.webdav_auth_failed").to_owned()),
-            status => Err(tr_args("backup_remote.download_http_failed", &[("status", &status.to_string())])),
+            200 => response.body_mut().read_to_vec().map_err(|err| format!("读取远端失败：{err}")),
+            401 | 403 => Err("认证失败：检查 WebDAV 用户名/密码".to_owned()),
+            status => Err(format!("下载失败：HTTP {status}")),
         }
     }
 
@@ -637,18 +682,18 @@ impl Backend for WebDavBackend {
             .header("Depth", "1")
             .header("Content-Type", "application/xml")
             .body(r#"<?xml version="1.0"?><propfind xmlns="DAV:"><prop><displayname/></prop></propfind>"#.to_owned())
-            .map_err(|err| tr_args("backup_remote.list_request_build_failed", &[("error", &err.to_string())]))?;
+            .map_err(|err| format!("构造列表请求失败：{err}"))?;
         let mut response =
-            http_agent().run(request).map_err(|err| tr_args("backup_remote.remote_list_failed", &[("error", &err.to_string())]))?;
+            http_agent().run(request).map_err(|err| format!("列出远端失败：{err}"))?;
         match response.status().as_u16() {
             207 | 200 => {},
             // 目录还不存在 = 还没有任何备份。
             404 => return Ok(Vec::new()),
-            401 | 403 => return Err(tr("backup_remote.webdav_auth_failed").to_owned()),
-            status => return Err(tr_args("backup_remote.remote_list_http_failed", &[("status", &status.to_string())])),
+            401 | 403 => return Err("认证失败：检查 WebDAV 用户名/密码".to_owned()),
+            status => return Err(format!("列出远端失败：HTTP {status}")),
         }
         let body =
-            response.body_mut().read_to_vec().map_err(|err| tr_args("backup_remote.list_read_failed", &[("error", &err.to_string())]))?;
+            response.body_mut().read_to_vec().map_err(|err| format!("读取列表失败：{err}"))?;
         Ok(propfind_archive_names(&String::from_utf8_lossy(&body)))
     }
 
@@ -658,11 +703,11 @@ impl Backend for WebDavBackend {
             .uri(&self.file_url(name))
             .header("Authorization", self.auth())
             .body(Vec::new())
-            .map_err(|err| tr_args("backup_remote.delete_request_build_failed", &[("error", &err.to_string())]))?;
-        let response = http_agent().run(request).map_err(|err| tr_args("backup_remote.delete_old_failed", &[("error", &err.to_string())]))?;
+            .map_err(|err| format!("构造删除请求失败：{err}"))?;
+        let response = http_agent().run(request).map_err(|err| format!("删除旧备份失败：{err}"))?;
         match response.status().as_u16() {
             200 | 204 | 404 => Ok(()),
-            status => Err(tr_args("backup_remote.delete_old_http_failed", &[("status", &status.to_string())])),
+            status => Err(format!("删除旧备份失败：HTTP {status}")),
         }
     }
 
@@ -756,11 +801,11 @@ impl S3Backend {
             .header("x-amz-date", &amz_date)
             .header("x-amz-content-sha256", &payload_hash)
             .body(body.to_vec())
-            .map_err(|err| tr_args("backup_remote.s3_request_build_failed", &[("error", &err.to_string())]))?;
-        let mut response = http_agent().run(request).map_err(|err| tr_args("backup_remote.connection_failed", &[("error", &err.to_string())]))?;
+            .map_err(|err| format!("构造 S3 请求失败：{err}"))?;
+        let mut response = http_agent().run(request).map_err(|err| format!("连接失败：{err}"))?;
         let status = response.status().as_u16();
         let bytes =
-            response.body_mut().read_to_vec().map_err(|err| tr_args("backup_remote.response_read_failed", &[("error", &err.to_string())]))?;
+            response.body_mut().read_to_vec().map_err(|err| format!("读取响应失败：{err}"))?;
         Ok((status, bytes))
     }
 
@@ -783,8 +828,8 @@ impl Backend for S3Backend {
         let (status, body) = self.request("PUT", &self.object_path(name), &[], bytes)?;
         match status {
             200 => Ok(()),
-            403 => Err(tr("backup_remote.s3_auth_failed").to_owned()),
-            _ => Err(tr_args("backup_remote.upload_failed", &[("error", &Self::explain(status, &body))])),
+            403 => Err("认证失败：检查 S3 Access Key / Secret Key / 区域".to_owned()),
+            _ => Err(format!("上传失败：{}", Self::explain(status, &body))),
         }
     }
 
@@ -792,8 +837,8 @@ impl Backend for S3Backend {
         let (status, body) = self.request("GET", &self.object_path(name), &[], &[])?;
         match status {
             200 => Ok(body),
-            403 => Err(tr("backup_remote.s3_auth_failed").to_owned()),
-            _ => Err(tr_args("backup_remote.download_failed", &[("error", &Self::explain(status, &body))])),
+            403 => Err("认证失败：检查 S3 Access Key / Secret Key / 区域".to_owned()),
+            _ => Err(format!("下载失败：{}", Self::explain(status, &body))),
         }
     }
 
@@ -806,8 +851,8 @@ impl Backend for S3Backend {
                 self.request("GET", &path, &[("list-type", "2"), ("prefix", &prefix)], &[])?;
             match status {
                 200 => {},
-                403 => return Err(tr("backup_remote.s3_auth_failed").to_owned()),
-                _ => return Err(tr_args("backup_remote.remote_list_failed", &[("error", &Self::explain(status, &body))])),
+                403 => return Err("认证失败：检查 S3 Access Key / Secret Key / 区域".to_owned()),
+                _ => return Err(format!("列出远端失败：{}", Self::explain(status, &body))),
             }
             let text = String::from_utf8_lossy(&body);
             let mut rest: &str = &text;
@@ -829,7 +874,7 @@ impl Backend for S3Backend {
         let (status, body) = self.request("DELETE", &self.object_path(name), &[], &[])?;
         match status {
             200 | 204 => Ok(()),
-            _ => Err(tr_args("backup_remote.delete_old_failed", &[("error", &Self::explain(status, &body))])),
+            _ => Err(format!("删除旧备份失败：{}", Self::explain(status, &body))),
         }
     }
 
@@ -951,12 +996,12 @@ impl SftpBackend {
         Fut: std::future::Future<Output = Result<T, String>>,
     {
         let runtime =
-            crate::ssh_session::runtime().map_err(|err| tr_args("backup_remote.ssh_runtime_unavailable", &[("error", &err.to_string())]))?;
+            crate::ssh_session::runtime().map_err(|err| format!("SSH 运行时不可用：{err}"))?;
         let destination = self.destination.clone();
         runtime.block_on(async move {
             let sftp = crate::ssh_session::open_sftp(&destination)
                 .await
-                .map_err(|err| tr_args("backup_remote.sftp_connection_failed", &[("error", &err.to_string())]))?;
+                .map_err(|err| format!("SFTP 连接失败：{err}"))?;
             job(sftp).await
         })
     }
@@ -975,9 +1020,9 @@ impl Backend for SftpBackend {
             let mut file = sftp
                 .open_with_flags(remote, OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE)
                 .await
-                .map_err(|err| tr_args("backup_remote.remote_file_open_failed", &[("error", &err.to_string())]))?;
-            file.write_all(&bytes).await.map_err(|err| tr_args("backup_remote.write_failed", &[("error", &err.to_string())]))?;
-            file.shutdown().await.map_err(|err| tr_args("backup_remote.write_finish_failed", &[("error", &err.to_string())]))?;
+                .map_err(|err| format!("打开远端文件失败：{err}"))?;
+            file.write_all(&bytes).await.map_err(|err| format!("写入失败：{err}"))?;
+            file.shutdown().await.map_err(|err| format!("写入收尾失败：{err}"))?;
             Ok(())
         })
     }
@@ -987,9 +1032,9 @@ impl Backend for SftpBackend {
         let remote = self.remote_file(name);
         self.run(|sftp| async move {
             let mut file =
-                sftp.open(remote).await.map_err(|err| tr_args("backup_remote.remote_file_open_failed", &[("error", &err.to_string())]))?;
+                sftp.open(remote).await.map_err(|err| format!("打开远端文件失败：{err}"))?;
             let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes).await.map_err(|err| tr_args("backup_remote.read_failed", &[("error", &err.to_string())]))?;
+            file.read_to_end(&mut bytes).await.map_err(|err| format!("读取失败：{err}"))?;
             Ok(bytes)
         })
     }
@@ -1009,7 +1054,7 @@ impl Backend for SftpBackend {
     fn delete(&self, name: &str) -> Result<(), String> {
         let remote = self.remote_file(name);
         self.run(|sftp| async move {
-            sftp.remove_file(remote).await.map_err(|err| tr_args("backup_remote.delete_old_failed", &[("error", &err.to_string())]))
+            sftp.remove_file(remote).await.map_err(|err| format!("删除旧备份失败：{err}"))
         })
     }
 
@@ -1077,6 +1122,7 @@ mod tests {
             sftp_destination: "dev@10.0.0.8:2222".into(),
             sftp_path: "/home/dev/backups".into(),
             allow_http: true,
+            selection: Default::default(),
         };
         let text = format!(
             "protocol={}\nfolder_path={}\nwebdav_url={}\nwebdav_username={}\ns3_endpoint={}\ns3_region={}\ns3_bucket={}\ns3_access_key={}\nsftp_destination={}\nsftp_path={}\nallow_http=1\n",

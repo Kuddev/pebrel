@@ -40,6 +40,9 @@ impl WindowContext {
         if config.cursor.style().blinking {
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
+        let mut nebula_state = NebulaPaneState::default();
+        nebula_state.suggest_env =
+            crate::display::SuggestEnv::Ssh { destination: destination.clone() };
         Ok(Pane {
             terminal,
             notifier: Notifier(sender),
@@ -49,7 +52,7 @@ impl WindowContext {
             title: String::from("ssh"),
             exec_context: None,
             ssh_destination: Some(destination),
-            nebula_state: NebulaPaneState::default(),
+            nebula_state,
             intro_cols: None,
             shell_pid: 0,
             window_route,

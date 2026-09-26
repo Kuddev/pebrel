@@ -27,6 +27,7 @@
   <img src="https://img.shields.io/github/stars/Kuddev/pebrel?style=flat-square&color=ffd33d&logo=github" alt="Stars" />
   <img src="https://img.shields.io/github/forks/Kuddev/pebrel?style=flat-square&color=8957e5&logo=github" alt="Forks" />
   <img src="https://img.shields.io/github/last-commit/Kuddev/pebrel?style=flat-square&color=3fb950" alt="最近提交" />
+  <a href="https://discord.gg/VFn4rcxmhn"><img src="https://img.shields.io/badge/Discord-join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://linux.do"><img src="https://img.shields.io/badge/%E5%8F%8B%E9%93%BE-linux.do-ffb003?style=flat-square&logo=discourse&logoColor=white" alt="linux.do" /></a>
 </p>
 
@@ -47,6 +48,20 @@
 <p align="center">
   <img src="docs/screenshots/split-ai-workflows.png" alt="OpenCode、Claude Code 与 Codex 分屏工作流" width="1040" />
 </p>
+
+## 💖 赞助商
+
+<table>
+  <tr>
+    <td align="center" width="240">
+      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_fluxionai.png" alt="Fluxion AI" width="200" /></a><br />
+      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><strong>Fluxion AI</strong></a>
+    </td>
+    <td>
+      感谢 Fluxion AI 赞助本项目！Fluxion AI 是一个入口，接入并管理全球主流 AI 模型：面向个人开发者、技术团队与企业，通过统一 API 接入并管理全球主流 AI 模型；通过多线路动态调度提升可用性，模型表现、响应时间与费用透明可查。根据不同模型与线路，API 调用成本较官方或基准价格可降低 40%—98%。<a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel">立即访问并注册</a>，即可获得 $3 API 额度。
+    </td>
+  </tr>
+</table>
 
 ## 一个工作区
 
@@ -133,6 +148,16 @@ pebrel config check
 生成的 Lua 配置使用 `require 'pebrel'` 与 `pebrel.config_builder()`。
 重载失败时继续使用上一份有效配置。设置与示例见 [Lua 配置指南](docs/lua-configuration.md)。
 
+在 **设置 → 终端 → 提醒** 中，**通知显示时长** 可选择 **保留原有时长**、
+5、10、30、90 秒，或 **保持常驻**。默认保留已有行为：短提示显示 5 秒，消息
+提醒显示 90 秒，更新通知保持常驻。该选项独立于是否显示 AI 提醒的开关，保存后
+对所有新显示或刷新的应用内卡片生效。包括常驻模式在内，仅保留最新三条卡片；
+新卡片替换更早的卡片时不会执行其操作。隐藏卡片不会同意或拒绝请求，也不会改变
+任务状态；请求仍可在对应终端中处理，更新仍可在设置中查看。系统通知不受影响。
+持久化键为 `notification_duration`，可取 `default`、`5`、`10`、`30`、`90`
+或 `persistent`。
+可查看[通知显示时长菜单示例](docs/screenshots/notification-duration.png)。
+
 ## 构建
 
 安装项目固定的 Rust 工具链与对应平台依赖后运行：
@@ -147,6 +172,8 @@ cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
 ## 联系方式
 
 邮箱：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+
+Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
 ## 致谢
 

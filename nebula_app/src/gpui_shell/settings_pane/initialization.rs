@@ -32,7 +32,15 @@ impl SettingsPane {
                     if let SelectEvent::Confirm(Some(_)) = event {
                         let row = entity.read(cx).selected_index(cx).map(|path| path.row);
                         if let Some(value) = row.and_then(|row| values.get(row)) {
-                            this.persist(&[(key, (*value).to_string())], cx);
+                            if key == "notification_duration" {
+                                this.set_notification_duration(value, window, cx);
+                                return;
+                            }
+                            if key == "scrollback_lines" {
+                                this.commit_scrollback_lines(value, window, cx);
+                            } else {
+                                this.persist(&[(key, (*value).to_string())], cx);
+                            }
                             if key == "language" {
                                 this.refresh_localized_controls(window, cx);
                                 cx.refresh_windows();
@@ -63,6 +71,13 @@ impl SettingsPane {
             cx,
         );
         add_select("theme", &THEME_VALUES, runtime.theme.prompt_name(), window, cx);
+        add_select(
+            "notification_duration",
+            nebula_settings::NotificationDuration::VALUES,
+            runtime.notification_duration.settings_value(),
+            window,
+            cx,
+        );
         // 选项顺序与文案照抄旧壳 `CURSOR_SHAPE_OPTIONS` / `cursor_shape_label`。
         add_select(
             "cursor_shape",
@@ -114,9 +129,23 @@ impl SettingsPane {
             cx,
         );
         add_select(
+            "ligatures",
+            nebula_settings::Ligatures::VALUES,
+            runtime.ligatures.settings_value(),
+            window,
+            cx,
+        );
+        add_select(
             "cell_width_mode",
             &["compact", "relaxed"],
             runtime.cell_width_mode.settings_value(),
+            window,
+            cx,
+        );
+        add_select(
+            "scrollback_lines",
+            nebula_settings::SCROLLBACK_VALUES,
+            &runtime.scrollback_lines.to_string(),
             window,
             cx,
         );
@@ -228,7 +257,7 @@ impl SettingsPane {
         ));
 
         let bg_hex_input = {
-            let term = crate::gpui_shell::theme::chrome_theme_resolved(cx).palette().term_bg;
+            let term = crate::gpui_shell::theme::resolved_palette(cx).term_bg;
             let rgb = runtime.background.unwrap_or([term.r, term.g, term.b]);
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
@@ -248,9 +277,31 @@ impl SettingsPane {
             ));
             input
         };
+        let theme_foreground_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("#rrggbb").default_value(
+                runtime
+                    .theme_foreground
+                    .map(format_hex_rgb)
+                    .unwrap_or_else(|| "#ffffff".to_owned()),
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &theme_foreground_input,
+            window,
+            |this: &mut Self,
+             _: &Entity<InputState>,
+             event: &InputEvent,
+             window: &mut Window,
+             cx: &mut Context<Self>| {
+                this.on_theme_foreground_input_event(event, window, cx);
+            },
+        ));
         let opacity_slider = cx.new(|_| {
             SliderState::new().min(0.00).max(1.00).step(0.05).default_value(runtime.opacity)
         });
+        let scroll_speed_slider =
+            Self::create_scroll_speed_slider(&runtime, window, cx, &mut subscriptions);
+        let scroll_speed_focus = cx.focus_handle().tab_stop(true);
         subscriptions.push(cx.subscribe(&opacity_slider, |this, _, event: &SliderEvent, cx| {
             if let SliderEvent::Change(value) = event {
                 this.set_opacity(value.start(), cx);
@@ -346,6 +397,7 @@ impl SettingsPane {
         // 构造体内按当前协议回填。
         let backup_remote_inputs: Vec<Entity<InputState>> =
             (0..4).map(|_| cx.new(|cx| InputState::new(window, cx))).collect();
+        let backup_remote = crate::backup_remote::BackupRemoteConfig::load();
 
         let ssh_library =
             crate::gpui_shell::ssh_settings::library::HostLibraryState::new(window, cx);
@@ -439,8 +491,42 @@ impl SettingsPane {
             },
         ));
 
+        let font_family_cjk_input = cx.new(|cx| {
+            InputState::new(window, cx).default_value(
+                runtime
+                    .font_family_cjk
+                    .clone()
+                    .unwrap_or_else(|| crate::font_install::REQUIRED_FONT_FAMILY.to_owned()),
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &font_family_cjk_input,
+            window,
+            |this: &mut Self, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    let raw = input.read(cx).value();
+                    let normalized = crate::font_install::normalize_font_family_chain(&raw);
+                    let value = if normalized.is_empty() {
+                        crate::font_install::REQUIRED_FONT_FAMILY.to_owned()
+                    } else {
+                        normalized
+                    };
+                    let current = this
+                        .runtime
+                        .font_family_cjk
+                        .as_deref()
+                        .unwrap_or(crate::font_install::REQUIRED_FONT_FAMILY);
+                    let changed = current != value;
+                    input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
+                    if changed {
+                        this.persist(&[("font_family_cjk", value)], cx);
+                    }
+                }
+            },
+        ));
+
         let bg_picker_hsv = {
-            let term = crate::gpui_shell::theme::chrome_theme_resolved(cx).palette().term_bg;
+            let term = crate::gpui_shell::theme::resolved_palette(cx).term_bg;
             let rgb = runtime.background.unwrap_or([term.r, term.g, term.b]);
             crate::display::rgb_to_hsv(crate::display::color::Rgb::new(rgb[0], rgb[1], rgb[2]))
         };
@@ -484,14 +570,21 @@ impl SettingsPane {
         Self {
             focus_handle: cx.focus_handle(),
             runtime,
+            launch_at_login: crate::platform::startup::launch_at_login(),
             active_section: 1,
+            agents: agents::AgentSettingsState::new(cx),
             appearance_picker: None,
+            appearance_picker_seq: 0,
+            theme_editor: None,
+            theme_editor_seq: 0,
+            theme_transfer: theme_transfer::ThemeTransferState::default(),
             theme_picker_trigger: cx.focus_handle(),
             icon_picker_trigger: cx.focus_handle(),
             expanded_setting_help: std::collections::HashSet::new(),
             about_update: AboutUpdateState::Idle,
             about_update_seq: 0,
             about_last_checked: None,
+            about_sponsor_open: false,
             settings_search_input,
             search_origin_section: None,
             selects,
@@ -505,8 +598,13 @@ impl SettingsPane {
             bg_picker_trigger_bounds: None,
             bg_sv_bounds: None,
             bg_hue_bounds: None,
+            theme_foreground_input,
+            theme_foreground_input_syncing: false,
+            theme_foreground_picker: theme_foreground::ThemeForegroundState::new(cx),
             opacity_slider,
             wallpaper_opacity_slider,
+            scroll_speed_slider,
+            scroll_speed_focus,
             proxy_url_input,
             proxy_protocol_select,
             proxy_test_seq: 0,
@@ -538,6 +636,7 @@ impl SettingsPane {
             ssh_editor_focus_handle: cx.focus_handle(),
             ssh_editor_seq: 0,
             ssh_test_seq: 0,
+            ssh_test_task: None,
             ssh_status: None,
             ssh_show_hidden: false,
             ssh_delete_confirm: None,
@@ -548,8 +647,10 @@ impl SettingsPane {
             font_system: None,
             font_imported: Vec::new(),
             font_family_input,
+            font_family_cjk_input,
             font_picker_trigger_bounds: None,
-            backup_selection: crate::encrypted_backup::BackupSelection::default(),
+            backup_selection: backup_remote.selection,
+            backup_ui: backup::BackupUiState::default(),
             backup_pass_input: cx.new(|cx| {
                 InputState::new(window, cx)
                     .masked(true)
@@ -559,7 +660,7 @@ impl SettingsPane {
             backup_busy: false,
             backup_seq: 0,
             backup_remote: {
-                let cfg = crate::backup_remote::BackupRemoteConfig::load();
+                let cfg = backup_remote;
                 for (ix, input) in backup_remote_inputs.iter().enumerate() {
                     let value = cfg.slot(ix).unwrap_or_default().to_owned();
                     input.update(cx, |input, cx| input.set_value(value, window, cx));
@@ -572,28 +673,6 @@ impl SettingsPane {
                     .masked(true)
                     .placeholder(localized_input_placeholder("backup_secret", language))
             }),
-            keymap_search_input: {
-                let input = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .placeholder(localized_input_placeholder("keymap_search", language))
-                });
-                subscriptions.push(cx.subscribe_in(
-                    &input,
-                    window,
-                    |_this: &mut Self,
-                     _: &Entity<InputState>,
-                     event: &InputEvent,
-                     _: &mut Window,
-                     cx: &mut Context<Self>| {
-                        // 搜索词变化只影响可见行集合；捕获态不因打字被打断
-                        // （捕获期间焦点在分区根上，输入框收不到键）。
-                        if matches!(event, InputEvent::Change) {
-                            cx.notify();
-                        }
-                    },
-                ));
-                input
-            },
             keymap_capture: None,
             keymap_capture_preview: String::new(),
             keymap_binds: nebula_settings::keybind_pairs(),

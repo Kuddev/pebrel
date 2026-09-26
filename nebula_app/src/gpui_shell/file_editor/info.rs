@@ -2,7 +2,7 @@ use super::reader_presentation as design;
 use super::*;
 
 impl TextFileView {
-    pub(super) fn render_info(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_info_content(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let language = super::super::config::ui_language(cx);
         let muted = cx.theme().muted_foreground;
         let text = self.input.read(cx).value();
@@ -172,6 +172,10 @@ impl TextFileView {
             .child(section(Message::EditorStatistics, statistics))
             .child(section(Message::EditorProperties, properties))
             .child(actions);
+        body.into_any_element()
+    }
+
+    pub(super) fn render_info(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         v_flex()
             .id("file-info-panel")
             .relative()
@@ -183,7 +187,7 @@ impl TextFileView {
             .border_l_1()
             .border_color(cx.theme().border)
             .child(self.render_details_header(cx))
-            .child(body)
+            .child(self.render_info_content(cx))
             .child(self.render_details_resize_handle(cx))
             .into_any_element()
     }

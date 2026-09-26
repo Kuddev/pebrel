@@ -11,6 +11,8 @@ pub mod element;
 mod event_mailbox;
 mod inline_image;
 pub mod keymap;
+mod ligatures;
+mod link_underline;
 pub mod math_overlay;
 mod molecule_overlay;
 pub mod mouse_protocol;

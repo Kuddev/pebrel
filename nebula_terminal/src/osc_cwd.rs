@@ -43,6 +43,8 @@ pub enum OscEvent {
     Cwd(String),
     /// OSC 133;A — the shell is about to draw a prompt (semantic zone start).
     PromptMark,
+    /// OSC 133;B — the prompt ended; subsequent cells contain shell input.
+    PromptInput,
     /// OSC 133;C — a command started executing.
     CommandStart,
     /// OSC 133;D — the command finished. `exit_code` is the first parameter
@@ -207,11 +209,13 @@ impl CwdSniffer {
         }
         if let Some(rest) = self.payload.strip_prefix(b"133;") {
             // Semantic prompt zones (FinalTerm). `A` may carry kitty-style
-            // `;key=value` params — accept those too. B (command start being
-            // typed) has no consumer yet.
+            // `;key=value` params — accept those too.
             let phased = |ch: u8| rest.first() == Some(&ch) && (rest.len() == 1 || rest[1] == b';');
             if phased(b'A') {
                 return Some(OscEvent::PromptMark);
+            }
+            if phased(b'B') {
+                return Some(OscEvent::PromptInput);
             }
             if phased(b'C') {
                 return Some(OscEvent::CommandStart);
@@ -557,7 +561,7 @@ mod tests {
     #[test]
     fn osc133_other_phases_ignored() {
         // B (command line start) has no consumer; C/D became events.
-        assert!(events(b"\x1b]133;B\x07").is_empty());
+        assert_eq!(events(b"\x1b]133;B\x07"), vec![(8, OscEvent::PromptInput)]);
         assert_eq!(events(b"\x1b]133;C\x07"), vec![(8, OscEvent::CommandStart)]);
         assert_eq!(
             events(b"\x1b]133;D;0\x07"),

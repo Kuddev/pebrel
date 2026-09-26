@@ -52,27 +52,25 @@ impl TerminalView {
     }
 
     pub(super) fn on_command_start(&mut self, cx: &mut Context<Self>) {
-        self.answers.begin_command();
-        // 程序身份来自 Enter 时捕获的完整命令行；直接启动和
-        // npx/node/uvx 等包装启动都会归一成 Agent slug。它是 WSL
-        // 看不见来宾进程时的主通道，hook 信封仍是更准的覆盖层。
-        let identity = crate::ai_agents::AgentKind::parse_command(&self.suggest.last_committed)
-            .map(|agent| agent.slug().to_owned())
-            .or_else(|| crate::display::extract_program(&self.suggest.last_committed));
-        // A probe belongs to one foreground command. Invalidate it
-        // before replacing the command identity so a slow WSL result
-        // from Codex A cannot become the identity of Codex B.
-        self.invalidate_ai_session_probe();
-        if identity != self.running_program {
-            self.running_program = identity;
-            self.ai_session = None;
-            cx.emit(TerminalViewEvent::TitleChanged);
-        }
-        if self.running_program.as_deref().and_then(crate::ai_agents::AgentKind::parse).is_some()
-            && !self.agent_hook_seen
-        {
-            self.agent_status_source = crate::ai_agents::AgentStatusSource::Process;
-            self.agent_status_rule = None;
+        if !self.agent_activity.hook_seen() {
+            self.answers.begin_command();
+            // Shell capture covers wrappers/WSL until a hook owns the session.
+            // A late OSC 133;C must not replace an already identified Agent.
+            let identity = crate::ai_agents::AgentKind::parse_command(&self.suggest.last_committed)
+                .map(|agent| agent.slug().to_owned())
+                .or_else(|| crate::display::extract_program(&self.suggest.last_committed));
+            self.invalidate_ai_session_probe();
+            if identity != self.running_program {
+                self.running_program = identity;
+                self.ai_session = None;
+                cx.emit(TerminalViewEvent::TitleChanged);
+            }
+            let agent = self
+                .running_program
+                .as_deref()
+                .and_then(crate::ai_agents::AgentKind::parse)
+                .is_some();
+            self.agent_activity.begin_command(agent);
         }
         self.mark_command_running();
         self.probe_missing_codex_session(cx);
@@ -114,6 +112,7 @@ impl TerminalView {
         self.ssh_connect_last_step = std::time::Instant::now();
         if matches!(stage, crate::ssh_session::SshStage::Failed(_)) {
             self.pending_runtime_submit = None;
+            self.pending_shell_command = None;
             self.command_running = false;
             self.command_started = None;
             self.confirmation.invalidate();
@@ -127,29 +126,53 @@ impl TerminalView {
     /// after the submitted shell prompt is observed again. OSC 133;D remains
     /// the primary edge; the cached-prompt path calls the same reset so the two
     /// lifecycle routes cannot drift apart.
-    pub(super) fn clear_foreground_agent_state(&mut self) -> bool {
+    pub(super) fn clear_foreground_agent_state(&mut self, cx: &mut Context<Self>) -> bool {
         self.confirmation.observe_waiting(false);
+        self.recovery.command_ended();
         self.answers.close();
-        let title_changed =
-            self.running_program.take().is_some() || self.ai_session.take().is_some();
-        self.invalidate_ai_session_probe();
-        self.primary_agent_pid = None;
+        let program_changed = self.running_program.take().is_some();
+        let title_changed = self.ai_session.take().is_some() || program_changed;
+        if !self.recovery.preparing() {
+            self.invalidate_ai_session_probe();
+        }
         self.ai_session_from_probe = false;
-        self.agent_status = crate::ai_agents::AgentStatus::Unknown;
-        self.agent_status_source = crate::ai_agents::AgentStatusSource::Unknown;
-        self.agent_status_rule = None;
-        self.agent_hook_seen = false;
-        self.agent_turn_active = false;
-        self.idle_screen_streak = 0;
-        self.agent_runtime_submit_pending = false;
+        self.agent_activity.command_finished();
+        if self.progress != crate::taskbar::TaskProgress::None {
+            self.progress = crate::taskbar::TaskProgress::None;
+            cx.emit(TerminalViewEvent::ProgressChanged(self.progress));
+        }
         self.command_running = false;
         self.command_running_disproved = false;
         self.command_started = None;
         self.last_process_probe = None;
+        self.prompt_process_probe = None;
+        self.last_prompt_process_probe = None;
+        self.consume_native_prompt();
         self.pending_runtime_submit = None;
         self.suggest.pending_command_prompt = None;
         self.awaiting_input = false;
         title_changed
+    }
+
+    pub(super) fn finish_foreground_command(
+        &mut self,
+        exit_code: Option<i32>,
+        cx: &mut Context<Self>,
+    ) {
+        let choose_codex_session = self.codex_restore_target_missing(exit_code);
+        self.notify_command_done(exit_code, cx);
+        self.last_command_failed = exit_code.is_some_and(|code| code != 0);
+        if self.clear_foreground_agent_state(cx) {
+            cx.emit(TerminalViewEvent::TitleChanged);
+        }
+        if let Some(run) = self.active_run.take() {
+            self.last_run =
+                Some(crate::runtime_api::RuntimeRunOutcome::command_done(run, exit_code));
+        }
+        if choose_codex_session {
+            self.choose_codex_recovery_session(cx);
+        }
+        cx.notify();
     }
 
     pub fn runtime_task_state(&self) -> crate::runtime_api::RuntimeTaskState {
@@ -161,15 +184,12 @@ impl TerminalView {
         {
             return RuntimeTaskState::Failed;
         }
-        if self.agent_status == AgentStatus::Blocked {
+        if self.agent_activity.status() == AgentStatus::Blocked {
             return RuntimeTaskState::Attention;
         }
-        // 权威判定排在响铃兜底之前。`awaiting_input` 只由 BEL 置位，而 CC /
-        // codex 回合结束同样响铃——原来它压在这段 match 之上，于是 hook 明确报
-        // 出的 `Done` 每次都被改写成 `WaitingInput`，tab 上显示「在问你」。
-        // 置位那头也有同一条闸（`AgentStatus::is_decided`），这里再挡一次是为了
-        // 历史遗留的旗子改不了新判定。
-        match self.agent_status {
+        // The shared Agent lifecycle is authoritative over generic pane flags.
+        // BEL never establishes waiting, completion or failure.
+        match self.agent_activity.status() {
             AgentStatus::Working => return RuntimeTaskState::Running,
             AgentStatus::Done => return RuntimeTaskState::Finished,
             AgentStatus::Idle => return RuntimeTaskState::Idle,
@@ -179,19 +199,9 @@ impl TerminalView {
         if self.awaiting_input {
             return RuntimeTaskState::WaitingInput;
         }
-        // `command_running` 是 OSC 133 的忠实记录，但 133;D 会因为宿主 shell
-        // 被 cmd/wsl/ssh 接管而永不到达；`command_running_disproved` 是进程树
-        // 给出的反证，看门狗每 2 秒复核一次。
-        //
-        // `running_program` 必须接受同一条判据。它是推断出来的（PowerShell 用
-        // `NEBULA|` 标题上报、或从命令行首 token 提取），而接管终端的那个 shell
-        // 不会再更新标题，于是这个值会永远停在最后一次推断上。少了下面这层
-        // 判断，pane 就会一直转圈：`command_running` 那边早已被反证，Running
-        // 却从这条 OR 分支漏了出来。
-        //
-        // 前台是交互式 shell 只说明「有个已知程序占着终端」，不说明有活儿在跑。
-        // 真在那个 shell 里跑起活儿由上面 `command_running` 那条路负责——进程树
-        // 会看到多出来的子进程，撤销反证。
+        // Entering a nested interactive shell is not itself a running task.
+        // Local process evidence refines that case; ordinary commands retain
+        // their shell boundary even when they have no child process.
         let program_is_work = self
             .running_program
             .as_deref()
@@ -234,7 +244,7 @@ impl TerminalView {
         &self,
         kind: crate::ai_agents::AgentKind,
     ) -> crate::runtime_api::RuntimeAgent {
-        let state_source = match self.agent_status_source {
+        let state_source = match self.agent_activity.source() {
             crate::ai_agents::AgentStatusSource::Hook => {
                 crate::runtime_api::RuntimeAgentStateSource::Hook
             },
@@ -255,8 +265,8 @@ impl TerminalView {
             display_name: kind.display_name().to_owned(),
             session_id: self.ai_session.as_ref().map(|identity| identity.session_id.clone()),
             state_source,
-            state_rule: self.agent_status_rule.clone(),
-            hook_seen: self.agent_hook_seen,
+            state_rule: self.agent_activity.rule().map(str::to_owned),
+            hook_seen: self.agent_activity.hook_seen(),
         }
     }
 
@@ -267,7 +277,9 @@ impl TerminalView {
         if state == crate::runtime_api::RuntimeTaskState::Failed {
             return SidebarActivity::Failed;
         }
-        if let Some(activity) = progress_sidebar_activity(self.progress, self.agent_status) {
+        if let Some(activity) =
+            progress_sidebar_activity(self.progress, self.agent_activity.status())
+        {
             return activity;
         }
         // 「上一条命令失败」盖在完成/空闲之上：那两个说的是「没在忙」，而退出码
@@ -343,11 +355,12 @@ impl TerminalView {
         modifiers: crate::runtime_api::RuntimeKeyModifiers,
         repeat: u16,
     ) -> Result<Vec<u8>, crate::runtime_api::ApiError> {
-        let bytes = crate::input::terminal_input::build_runtime_sequence(
+        let bytes = crate::input::terminal_input::build_runtime_sequence_for_program(
             key,
             modifiers,
             repeat,
             self.term_mode(),
+            self.running_program.as_deref(),
         );
         if bytes.is_empty() {
             return Err(crate::runtime_api::ApiError::new(
@@ -417,6 +430,9 @@ impl TerminalView {
         self.ensure_runtime_readable()?;
         let bytes = self.runtime_key_sequence(key, modifiers, repeat)?;
         let bytes_sent = bytes.len();
+        if key == crate::runtime_api::RuntimeKey::Enter && modifiers == Default::default() {
+            self.commit_line(cx);
+        }
         self.write_input(bytes, cx);
         Ok(bytes_sent)
     }
@@ -463,6 +479,7 @@ impl TerminalView {
             baseline_screen: self.runtime_screen_snapshot().unwrap_or_default(),
             submit_bytes,
         });
+        self.capture_runtime_prompt();
         let run = crate::runtime_api::begin_runtime_run();
         let run_id = run.run_id;
         self.active_run = Some(run);
@@ -508,13 +525,20 @@ impl TerminalView {
                 "the pane is still committing previous runtime input",
             ));
         }
-        let recognized_agent = submit && self.runtime_agent().is_some();
-        let mut bytes =
-            crate::input::terminal_input::build_runtime_text_sequence(&text, self.term_mode());
+        let agent = self.runtime_agent();
+        let recognized_agent = submit && agent.is_some();
+        let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         if submit {
-            // Codex/Claude 可启用 kitty 或 Win32 输入协议；裸 CR 只在 legacy VT
-            // 下等价于 Enter。Win32 模式下文本也已编码为 VK_PACKET 记录，
-            // 整个提交因此是一条同质协议流，不依赖 ConPTY 的读取边界。
+            self.capture_runtime_prompt();
+        }
+        let mut bytes = if codex_submit {
+            crate::input::terminal_input::build_runtime_codex_submission(&text, self.term_mode())
+        } else {
+            crate::input::terminal_input::build_runtime_text_sequence(&text, self.term_mode())
+        };
+        if submit && !codex_submit {
+            // Non-Codex input keeps the echo barrier. Enter must still follow
+            // the negotiated keyboard protocol; a bare CR is only legacy VT.
             let submit_bytes = self.runtime_key_sequence(
                 crate::runtime_api::RuntimeKey::Enter,
                 crate::runtime_api::RuntimeKeyModifiers::default(),
@@ -540,12 +564,7 @@ impl TerminalView {
             self.awaiting_input = false;
             self.mark_command_running();
             if recognized_agent {
-                self.agent_status = crate::ai_agents::AgentStatus::Working;
-                self.agent_status_source = crate::ai_agents::AgentStatusSource::Process;
-                self.agent_status_rule = None;
-                self.agent_runtime_submit_pending = true;
-                self.agent_turn_active = true;
-                self.idle_screen_streak = 0;
+                self.agent_activity.submitted();
             }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
@@ -657,7 +676,9 @@ impl TerminalView {
             ));
         }
 
-        if submit {
+        let codex_submit =
+            submit && self.runtime_agent().is_some_and(|agent| agent.kind == "codex");
+        if submit && !codex_submit {
             let submit_bytes = self.runtime_key_sequence(
                 crate::runtime_api::RuntimeKey::Enter,
                 crate::runtime_api::RuntimeKeyModifiers::default(),
@@ -668,17 +689,20 @@ impl TerminalView {
                 submit_bytes,
             });
         }
-        self.paste_now_impl(&text, false, cx);
+        if codex_submit {
+            let bytes = crate::input::terminal_input::build_runtime_codex_submission(
+                &text,
+                self.term_mode(),
+            );
+            self.write_input(bytes, cx);
+        } else {
+            self.paste_now_impl(&text, false, cx);
+        }
         if submit {
             self.awaiting_input = false;
             self.mark_command_running();
             if recognized_agent {
-                self.agent_status = crate::ai_agents::AgentStatus::Working;
-                self.agent_status_source = crate::ai_agents::AgentStatusSource::Process;
-                self.agent_status_rule = None;
-                self.agent_runtime_submit_pending = true;
-                self.agent_turn_active = true;
-                self.idle_screen_streak = 0;
+                self.agent_activity.submitted();
             }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
@@ -691,35 +715,29 @@ impl TerminalView {
         crate::ai_agents::AgentKind::parse(&identity.source)?.fork_command(&identity.session_id)
     }
 
-    /// 冷恢复把快照里的 hook 身份种回 pane，右键分叉不必再等下一条事件。
-    pub fn seed_ai_session(&mut self, source: String, session_id: String, cx: &mut Context<Self>) {
-        if session_id.is_empty() {
-            return;
-        }
-        self.ai_session = Some(crate::display::AiSessionIdentity { source, session_id });
-        cx.emit(TerminalViewEvent::TitleChanged);
-        cx.notify();
-    }
-
     pub(crate) fn prepare_ai_session_save(&mut self, cx: &mut Context<Self>) {
-        if self.ai_session_from_probe {
-            self.ai_session = None;
-        }
+        // A refresh may fail or time out. Keep the last confirmed native ID.
         self.last_ai_session_probe = None;
         self.probe_missing_codex_session(cx);
     }
 
     pub(crate) fn ai_session_save_pending(&self) -> bool {
+        // A failed refresh cannot erase an already durable identity. Pi/Codex
+        // without any native target must finish identifying before safe exit.
         self.ai_session_probe_pending
+            || self.session_agent().is_some_and(|agent| {
+                matches!(agent.source.as_str(), "pi" | "codex")
+                    && agent.session_id.as_deref().is_none_or(str::is_empty)
+            })
     }
 
     /// Read the active conversation metadata when its hook has not reported an ID.
     /// File and process operations run on the background executor. Only results
-    /// for the same foreground command are applied; hook identities take priority.
+    /// for the same foreground command and unchanged identity are applied.
     pub(super) fn probe_missing_codex_session(&mut self, cx: &mut Context<Self>) {
         if self.exited.is_some()
-            || (self.agent_hook_seen && !self.ai_session_from_probe && self.ai_session.is_some())
             || self.ai_session_probe_pending
+            || self.ssh_destination.is_some()
             || !self
                 .running_program
                 .as_deref()
@@ -737,10 +755,16 @@ impl TerminalView {
         let Some(exec_context) = self.exec_context.clone() else { return };
         let epoch = self.ai_session_probe_epoch;
         let pane_id = self.pane_id;
+        let shell_pid = self.session.as_ref().map(|session| session.shell_pid);
+        let previous_target = self.session_agent();
         self.ai_session_probe_pending = true;
         self.last_ai_session_probe = Some(std::time::Instant::now());
         let work = cx.background_executor().spawn(async move {
-            crate::platform::ai_session_identity::probe_codex_session(pane_id, Some(&exec_context))
+            crate::platform::ai_session_identity::probe_codex_session(
+                pane_id,
+                Some(&exec_context),
+                shell_pid,
+            )
         });
         cx.spawn(async move |this, cx| {
             let session_id = work.await;
@@ -751,19 +775,32 @@ impl TerminalView {
                 if !probe_result_is_current(
                     view.ai_session_probe_epoch,
                     epoch,
-                    view.agent_hook_seen
-                        && !view.ai_session_from_probe
-                        && view.ai_session.is_some(),
+                    view.session_agent() != previous_target,
                     view.running_program.as_deref(),
                 ) {
                     return;
                 }
-                if let Some(session_id) = session_id {
+                if let Some(session) = session_id {
                     log::debug!("agent session identity from active rollout: pane={pane_id}");
+                    let target = crate::session::AgentSession {
+                        source: "codex".to_owned(),
+                        session_id: Some(session.session_id.clone()),
+                        session_file: Some(session.session_file),
+                    };
+                    let previous = view.recovery.target.clone();
+                    if !view.recovery.confirm(target) {
+                        return;
+                    }
+                    if previous != view.recovery.target {
+                        cx.emit(TerminalViewEvent::SessionIdentityChanged);
+                    }
                     view.ai_session = Some(crate::display::AiSessionIdentity {
                         source: "codex".to_owned(),
-                        session_id,
+                        session_id: session.session_id,
                     });
+                    if let Some(cwd) = session.cwd {
+                        view.process_event(nebula_terminal::event::Event::CwdReport(cwd), cx);
+                    }
                     view.ai_session_from_probe = true;
                     cx.emit(TerminalViewEvent::TitleChanged);
                     cx.notify();
@@ -773,388 +810,136 @@ impl TerminalView {
         .detach();
     }
 
-    /// Queue a full shell command. Like cold resume, input may arrive before
-    /// the first prompt; ConPTY preserves ordering until the shell reads it.
-    pub fn run_command(&mut self, command: String, cx: &mut Context<Self>) {
-        if command.is_empty() || self.exited.is_some() {
+    pub(super) fn sync_native_prompt(&mut self) {
+        if !self.suggest.suggest_env.is_this_machine() {
             return;
         }
-        let mut bytes = command.into_bytes();
-        bytes.push(b'\r');
-        self.write_input(bytes, cx);
-    }
-
-    /// 事件声明的 pane 与写管道进程的祖先链是否互相矛盾。
-    ///
-    /// 三种情况都返回 `false`（放行）：事件没有声明 pane（本就要回退焦点）、
-    /// 拿不到客户端 pid（远端 SSH 走 OSC 通道，没有本地进程）、这个 pane 还
-    /// 没有本地 shell，或者进程表给不出证据。只有明确证明「这个 pid 不在本
-    /// pane 树内」时才判为矛盾。
-    fn ai_hook_client_mismatched(&self, event: &crate::ai_hook::AiHookEvent) -> bool {
-        let Some(client_pid) = event.client_pid else { return false };
-        // 没有自报 pane 的事件不存在「声明与事实矛盾」，交给上层回退规则。
-        if event.pane != Some(self.pane_id) {
-            return false;
-        }
-        let Some(shell_pid) = self.session.as_ref().map(|session| session.shell_pid) else {
-            return false;
-        };
-        crate::process_tree::is_within_tree(client_pid, shell_pid) == Some(false)
-    }
-
-    /// 这条事件是不是来自这个 pane 的主 agent（而非它 spawn 的嵌套子代理）。
-    ///
-    /// 判据是 agent 的进程 pid：第一个报到的就是主 agent——子代理必须由主 agent
-    /// spawn，不可能先到。只有主 agent 能写 pane 的会话身份，子代理的状态边沿
-    /// 照常生效（它在干活，spinner 该转）。
-    ///
-    /// 拿不到 pid 时一律当主 agent：远端 SSH、旧版 bridge、快照竞态都会落到这
-    /// 里，宁可少一层区分，也不能把真实会话身份丢掉。
-    fn claim_primary_agent(&mut self, event: &crate::ai_hook::AiHookEvent) -> bool {
-        let Some(agent_pid) = event.agent_pid else { return true };
-        match self.primary_agent_pid {
-            Some(primary) => primary == agent_pid,
-            None => {
-                self.primary_agent_pid = Some(agent_pid);
-                true
-            },
+        if let Some(session) = &self.session {
+            let prompt = session.native_prompt.snapshot();
+            self.native_prompt_seen = prompt.seen;
+            self.native_prompt_epoch = prompt.pending.then_some(prompt.input_epoch);
         }
     }
 
-    /// Apply one lifecycle event already routed to this pane by the workspace.
-    ///
-    /// 旧壳 `WindowContext::handle_ai_hook` 状态机的忠实移植：不能把所有
-    /// 非 SessionEnd 事件压平成 running，否则 TurnDone 后 spinner 不会停。
-    pub fn handle_ai_hook(
-        &mut self,
-        event: &crate::ai_hook::AiHookEvent,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        use crate::ai_agents::AgentStatus;
-        use crate::ai_hook::AiHookKind;
-
-        // 路由第二因子：写管道那个进程必须真的跑在这个 pane 的进程树里。
-        // `NEBULA_PANE_ID` 是环境变量，任何进程都能设成别的 pane；祖先链不能
-        // 伪造。只有拿到明确反证时才拒绝，`None`（查不到、竞态）一律放行。
-        if self.ai_hook_client_mismatched(event) {
-            log::warn!(
-                "ai_hook: rejected event claiming pane {} from pid {:?} outside its process tree \
-                 (source={} kind={:?})",
-                self.pane_id,
-                event.client_pid,
-                event.source,
-                event.kind
-            );
-            return false;
+    pub(super) fn consume_native_prompt(&mut self) {
+        if let Some(session) = &self.session {
+            session.native_prompt.consume_native_prompt();
         }
-
-        let verdict = crate::ai_hook::accept_for_pane(event, self.pane_id);
-        if !verdict.accepted() {
-            // 带原因：事件被静默丢掉是这条链路最难查的故障，用户只看到「通知
-            // 没出现」。原因字段直接对应事件门里的那一条规则。
-            log::debug!(
-                "ai_hook: dropped event reason={verdict:?} source={} session={:?} pane={} \
-                 kind={:?} bridge_seq={:?}",
-                event.source,
-                event.session_id,
-                self.pane_id,
-                event.kind,
-                event.bridge_sequence
-            );
-            return false;
-        }
-
-        // SessionEnd 可能是第一次携带最终权威 id 的事件；必须先落盘再清理
-        // pane 现场，否则 CLI 正常退出后反而无法冷恢复。
-        //
-        // 但嵌套子代理的会话不能落盘也不能上位：`claude -p` 起的子代理有自己的
-        // 短命 session id，把它记成这个 pane 的身份，之后 `claude --resume` 就会
-        // 指向一个早已结束的会话，真正活着的那个反而丢了。第一个报到的 agent
-        // 进程就是主 agent（子代理必须由它 spawn，不可能先到）。
-        let from_primary_agent = self.claim_primary_agent(event);
-        if from_primary_agent && self.ssh_destination.is_none() && self.exited.is_none() {
-            if self.answers.observe(event, self.pane_id)
-                && let Some(reader) = &self.answer_reader
-            {
-                reader.update(cx, |reader, cx| reader.answer_arrived(cx));
-            }
-        }
-        if event.kind == AiHookKind::NeedsAttention
-            && let Some(reader) = &self.answer_reader
-        {
-            reader.update(cx, |reader, cx| reader.needs_attention(cx));
-        }
-        if from_primary_agent
-            && let Some(id) = event.session_id.as_deref()
-            && let Err(error) =
-                crate::ai_sessions::record_hook_session(&event.source, id, &self.cwd, None)
-        {
-            log::warn!("agent session index: could not record {} {id}: {error}", event.source);
-        }
-        match event.kind {
-            // 嵌套子代理结束了，主 agent 还在跑：绝不能清 pane 现场。这条 arm
-            // 排在前面就是为了把「谁的 SessionEnd」分开——子代理的退出对 pane
-            // 而言什么都不是。
-            AiHookKind::SessionEnd if !from_primary_agent => {},
-            AiHookKind::SessionEnd => {
-                self.clear_foreground_agent_state();
-            },
-            kind => {
-                self.running_program = Some(event.source.clone());
-                self.agent_hook_seen = true;
-                self.agent_status_source = crate::ai_agents::AgentStatusSource::Hook;
-                self.agent_status_rule = None;
-                // 精确边沿抵达 = 屏幕检测的空闲计数作废（上一回合攒下的
-                // 拍数不能把新回合的第一个空闲闪现立即降级）。
-                self.idle_screen_streak = 0;
-                if !matches!(kind, AiHookKind::SessionStart) {
-                    self.agent_runtime_submit_pending = false;
-                }
-                if from_primary_agent && let Some(id) = event.session_id.as_deref() {
-                    self.ai_session_from_probe = false;
-                    self.ai_session = Some(crate::display::AiSessionIdentity {
-                        source: event.source.clone(),
-                        session_id: id.to_owned(),
-                    });
-                }
-                match kind {
-                    AiHookKind::SessionStart => {
-                        self.agent_status = AgentStatus::Idle;
-                        // 新会话还没开工，此前那点未读痕迹不该带进来。
-                        self.agent_turn_active = false;
-                    },
-                    AiHookKind::PromptSubmit | AiHookKind::ToolComplete => {
-                        self.agent_status = AgentStatus::Working;
-                        self.agent_turn_active = true;
-                    },
-                    AiHookKind::TurnDone if event.active_background_tasks() > 0 => {
-                        let active = event.active_background_tasks();
-                        self.agent_status = AgentStatus::Working;
-                        self.agent_turn_active = true;
-                        self.agent_status_rule =
-                            Some(format!("hook.background_tasks.active={active}"));
-                    },
-                    AiHookKind::TurnDone | AiHookKind::NeedsAttention => {
-                        let screen_asks =
-                            event.kind == AiHookKind::TurnDone && self.screen_tail_asks();
-                        self.agent_status =
-                            if event.kind == AiHookKind::NeedsAttention || screen_asks {
-                                AgentStatus::Blocked
-                            } else {
-                                AgentStatus::Done
-                            };
-                    },
-                    AiHookKind::SessionEnd => unreachable!("handled above"),
-                }
-            },
-        }
-        if from_primary_agent {
-            self.confirmation.observe_waiting(self.agent_status == AgentStatus::Blocked);
-        }
-        if event.kind == AiHookKind::NeedsAttention {
-            self.confirmation.set_provider_request(event.event_id.as_deref());
-            if let Some(mut attention) = event.attention.clone() {
-                attention.pane_id = Some(self.pane_id);
-                cx.emit(TerminalViewEvent::AiAttention(attention));
-            } else {
-                cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::AiTurn {
-                    program: event.source.clone(),
-                    message: event.message.clone(),
-                    attention: true,
-                }));
-            }
-        } else if from_primary_agent
-            && event.kind == AiHookKind::TurnDone
-            && matches!(self.agent_status, AgentStatus::Done | AgentStatus::Blocked)
-        {
-            cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::AiTurn {
-                program: event.source.clone(),
-                message: event.message.clone(),
-                attention: self.agent_status == AgentStatus::Blocked,
-            }));
-        }
-        cx.emit(TerminalViewEvent::TitleChanged);
-        cx.notify();
-        true
+        self.native_prompt_epoch = None;
     }
 
-    /// TurnDone 到达时，屏幕上是否真的还挂着一个等人表态的框。
-    ///
-    /// 2026-08-22：此前这里把底部 15 行整段丢给一张裸关键词表（`(y/n)` /
-    /// `do you want to proceed` / `enter to confirm` …），关键词落在**正文任何
-    /// 位置**都算数——agent 打印的代码片段、上一轮已答完但还没滚走的权限框、
-    /// 乃至讨论这套判据本身的聊天记录，都会让正常结束的回合挂上警告三角。
-    /// 改走 per-agent manifest 的 blocked 规则：它们带 region 锚定
-    /// （`after_last_horizontal_rule` / 底部 N 行），只认当前活动框。
-    fn screen_tail_asks(&self) -> bool {
-        let Some(program) = self.running_program.as_deref() else { return false };
-        let Some(screen) = self.runtime_screen_snapshot() else { return false };
-        crate::ai_agents::detect(program, &screen)
-            .is_some_and(|detection| detection.status == crate::ai_agents::AgentStatus::Blocked)
-    }
-
-    /// 1 Hz 屏幕看门狗：hook 提供精确边沿，屏幕补偿丢失边沿和无 hook 客户端。
-    pub fn refresh_agent_screen_state(&mut self, cx: &mut Context<Self>) {
-        use crate::ai_agents::AgentStatus;
-
-        if self.exited.is_some()
-            || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
+    pub(super) fn on_native_cmd_prompt(&mut self, cx: &mut Context<Self>) {
+        self.sync_native_prompt();
+        if self.pending_runtime_submit.is_some()
+            || self.pending_shell_command.is_some()
+            || self.recovery.preparing()
+            || self.exited.is_some()
         {
             return;
         }
+        if self.command_running && self.native_prompt_epoch == Some(self.prompt_input_epoch) {
+            self.probe_restored_prompt(cx);
+        }
+    }
 
-        // Wakeup 会被 synchronized-update 合并；1 Hz 看门狗提供可靠的
-        // Grid 后置检查，确保 Runtime 文本回显后一定能补发 Enter。
-        self.flush_pending_runtime_submit(cx);
-        // 进程树对账必须排在下面那道早退之前：身份认不出来就早退，等于让
-        // 这个 pane 永远退出屏幕检测。
-        self.reconcile_shell_activity(cx);
-        self.probe_missing_codex_session(cx);
+    pub(super) fn probe_restored_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_process_probe.is_some()
+            || self
+                .last_prompt_process_probe
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1))
+        {
+            return;
+        }
         let Some(session) = &self.session else { return };
-        let (prompt_restored, screen) = {
-            let term = session.term.lock();
-            let lines = term.screen_lines();
-            if lines == 0 || term.columns() == 0 {
-                return;
-            }
-            let prompt_restored =
-                self.suggest.pending_command_prompt.as_deref().is_some_and(|expected| {
-                    crate::display::nebula_shell_prompt_restored_from_raw_grid(
-                        &term,
-                        expected,
-                        &self.suggest.suggest_env,
-                    )
-                });
-            let take = lines.min(24);
-            let start = TermPoint::new(Line((lines - take) as i32), Column(0));
-            let end =
-                TermPoint::new(Line(lines as i32 - 1), Column(term.columns().saturating_sub(1)));
-            (prompt_restored, term.bounds_to_string(start, end))
-        };
-        if prompt_restored
-            && self
-                .running_program
-                .as_deref()
-                .and_then(crate::ai_agents::AgentKind::parse)
-                .is_some()
+        let pid = session.shell_pid;
+        let started = self.command_started;
+        let input_epoch = self.prompt_input_epoch;
+        self.last_prompt_process_probe = Some(std::time::Instant::now());
+        let work =
+            cx.background_executor().spawn(async move { crate::process_tree::descendants(pid) });
+        self.prompt_process_probe = Some(cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |view, cx| {
+                view.prompt_process_probe = None;
+                view.apply_prompt_process_probe(started, input_epoch, result, cx);
+            });
+        }));
+    }
+
+    pub(super) fn apply_prompt_process_probe(
+        &mut self,
+        started: Option<std::time::Instant>,
+        input_epoch: u64,
+        result: Result<Vec<crate::process_tree::ProcessEntry>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_native_prompt();
+        if self.command_started != started
+            || self.prompt_input_epoch != input_epoch
+            || self.pending_runtime_submit.is_some()
+            || self.exited.is_some()
         {
-            log::debug!(
-                "agent lifecycle: submitted shell prompt restored pane={} program={:?}",
-                self.pane_id,
-                self.running_program
-            );
-            if let Some(run) = self.active_run.take() {
-                self.last_run =
-                    Some(crate::runtime_api::RuntimeRunOutcome::command_done(run, None));
-            }
-            let title_changed = self.clear_foreground_agent_state();
-            if title_changed {
-                cx.emit(TerminalViewEvent::TitleChanged);
-            }
-            cx.notify();
             return;
         }
-        let identify =
-            super::notifications::screen_identity_allowed(self.running_program.as_deref());
-        let detected = identify.then(|| crate::ai_agents::identify(&screen)).flatten();
-        let Some(program) =
-            super::notifications::screen_program(self.running_program.as_deref(), detected)
-        else {
-            self.idle_screen_streak = 0;
-            return;
-        };
-        if self.running_program.as_deref() != Some(program.as_str()) {
-            self.running_program = Some(program.clone());
-            self.agent_status_source = crate::ai_agents::AgentStatusSource::Screen;
-            self.agent_status_rule = None;
-            cx.emit(TerminalViewEvent::TitleChanged);
-            cx.notify();
-        }
-        if crate::ai_agents::AgentKind::parse(&program).is_none() {
-            return;
-        }
-        let Some(detection) = crate::ai_agents::detect(&program, &screen) else { return };
-
-        if detection.status == AgentStatus::Idle && self.agent_runtime_submit_pending {
-            self.idle_screen_streak = 0;
-            return;
-        }
-        if matches!(detection.status, AgentStatus::Working | AgentStatus::Blocked) {
-            self.agent_runtime_submit_pending = false;
-        }
-
-        let next = match detection.status {
-            AgentStatus::Idle => {
-                // hook 报出的 Done 是精确终态，屏幕不得改写。
-                if self.agent_hook_seen && self.agent_status == AgentStatus::Done {
-                    return;
-                }
-                self.idle_screen_streak = self.idle_screen_streak.saturating_add(1);
-                match self.agent_status {
-                    // Blocked 必须能自愈：问题框已经从屏幕上消失（用户答完了，
-                    // 或者当初就是误判），继续挂警告三角就是假警报。此前它和
-                    // Done 一起被 hook_seen 挡在门外，于是三角一旦点亮就再也
-                    // 下不来，只能等下一个 hook 边沿——真实框还在时 blocked
-                    // 规则会持续命中并走下面的分支，所以这里放行不会误灭。
-                    AgentStatus::Blocked => {
-                        if self.idle_screen_streak < 2 {
-                            return;
-                        }
-                        AgentStatus::Done
-                    },
-                    // Working 降级更谨慎：hook 在场时 TurnDone 才是权威终态，
-                    // 屏幕只在它迟迟不来时兜底，门槛拉到 5 拍；无 hook 的客户端
-                    // 屏幕是唯一证据，维持 2 拍。
-                    AgentStatus::Working => {
-                        let threshold = if self.agent_hook_seen { 5 } else { 2 };
-                        if self.idle_screen_streak < threshold {
-                            return;
-                        }
-                        AgentStatus::Done
-                    },
-                    // 「干完了、你还没看」与「从没开工」必须分开：前者要留
-                    // 蓝点。此前两者都落到 Idle，于是 hook 掉线的 pane 干完
-                    // 整整一轮活也只显示 shell 标签，用户根本看不出哪个有结果
-                    // （实测三个 claude tab 全是这样）。
-                    _ if self.agent_turn_active => AgentStatus::Done,
-                    _ => AgentStatus::Idle,
-                }
-            },
-            status @ (AgentStatus::Working | AgentStatus::Blocked) => {
-                self.idle_screen_streak = 0;
-                if status == AgentStatus::Working {
-                    self.agent_turn_active = true;
-                }
-                status
-            },
-            AgentStatus::Done | AgentStatus::Unknown => {
-                self.idle_screen_streak = 0;
+        let Ok(processes) = result else { return };
+        if self.native_prompt_seen {
+            if self.native_prompt_epoch != Some(input_epoch) {
                 return;
-            },
-        };
-        self.confirmation.observe_waiting(next == AgentStatus::Blocked);
-        if next != self.agent_status {
-            if let Some(attention) =
-                super::notifications::screen_notification(self.agent_status, next)
-            {
-                cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::AiTurn {
-                    program: program.clone(),
-                    message: None,
-                    attention,
-                }));
             }
-            log::debug!(
-                "agent screen state: pane={} program={} {:?}->{next:?} rule={}",
-                self.pane_id,
-                program,
-                self.agent_status,
-                detection.rule_id
-            );
-            self.agent_status = next;
-            self.agent_status_source = crate::ai_agents::AgentStatusSource::Screen;
-            self.agent_status_rule = Some(detection.rule_id);
-            cx.emit(TerminalViewEvent::TitleChanged);
-            cx.notify();
+            // Nested shells inherit PROMPT; their marker cannot end the outer run.
+            let root_is_cmd = processes.iter().any(|p| {
+                p.depth == 0
+                    && crate::process_tree::display_name(&p.executable).eq_ignore_ascii_case("cmd")
+            });
+            let nested_shell = processes.iter().any(|p| {
+                p.depth > 0
+                    && crate::process_tree::is_interactive_shell_command(
+                        &crate::process_tree::display_name(&p.executable),
+                    )
+            });
+            self.consume_native_prompt();
+            if root_is_cmd {
+                if nested_shell {
+                    self.command_running_disproved = true;
+                    if !self.agent_activity.hook_seen()
+                        && !self.agent_activity.status().is_decided()
+                    {
+                        self.process_event(
+                            nebula_terminal::event::Event::Progress { state: 0, value: None },
+                            cx,
+                        );
+                    }
+                    cx.notify();
+                } else {
+                    self.finish_foreground_command(None, cx);
+                }
+            }
+            return;
+        }
+        if processes.iter().any(|process| {
+            process.depth > 0
+                && !crate::process_tree::is_interactive_shell_command(
+                    &crate::process_tree::display_name(&process.executable),
+                )
+                && !matches!(
+                    process.executable.to_ascii_lowercase().as_str(),
+                    "conhost.exe" | "openconsole.exe"
+                )
+        }) {
+            return;
+        }
+        let restored = self.session.as_ref().is_some_and(|session| {
+            let term = session.term.lock();
+            self.suggest.pending_command_prompt.as_deref().is_some_and(|expected| {
+                crate::display::nebula_shell_prompt_restored_from_raw_grid(
+                    &term,
+                    expected,
+                    &self.suggest.suggest_env,
+                )
+            })
+        });
+        if restored {
+            self.finish_foreground_command(None, cx);
         }
     }
 
@@ -1164,7 +949,10 @@ impl TerminalView {
     /// 上一条命令的失败标记与「刚完成」的对勾也在这里作废：新命令一起跑，旧结果
     /// 就不再是这个 pane 的现状。
     pub(super) fn mark_command_running(&mut self) {
+        self.consume_native_prompt();
         if !self.command_running {
+            self.prompt_process_probe = None;
+            self.last_prompt_process_probe = None;
             self.command_started = Some(std::time::Instant::now());
             self.last_process_probe = None;
         }
@@ -1185,11 +973,11 @@ impl TerminalView {
     /// 身份的第一来源是命令行首 token（`TermEvent::CommandStart` 那条路），
     /// 那是脆弱推断：会话恢复、shell 别名、`npx codex` 这类间接启动都会让它
     /// 落空。进程树是客观事实，只是慢一拍——而慢一拍在 1 Hz 看门狗里无所谓。
-    fn reconcile_shell_activity(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reconcile_shell_activity(&mut self, cx: &mut Context<Self>) {
         if !self.suggest.suggest_env.is_this_machine() {
             return;
         }
-        if !self.command_running {
+        if !self.command_running && !self.agent_activity.hook_seen() {
             self.command_running_disproved = false;
             return;
         }
@@ -1211,8 +999,27 @@ impl TerminalView {
         }
         self.last_process_probe = Some(std::time::Instant::now());
 
+        let Ok(evidence) =
+            crate::process_tree::activity_evidence(shell_pid, self.agent_activity.primary_pid())
+        else {
+            // A failed or incomplete process snapshot is not an idle shell.
+            return;
+        };
+        let known_agent =
+            self.running_program.as_deref().and_then(crate::ai_agents::AgentKind::parse).is_some();
+        if known_agent
+            && (evidence.primary_present == Some(false)
+                || (evidence.primary_present.is_none()
+                    && evidence.agent.is_none()
+                    && !evidence.child_present))
+        {
+            // This establishes process exit, not the turn's success or an exit
+            // code. The normal command boundary owns cleanup and deduplication.
+            self.finish_foreground_command(None, cx);
+            return;
+        }
         if self.running_program.is_none()
-            && let Some(agent) = crate::process_tree::agent_child(shell_pid)
+            && let Some(agent) = evidence.agent
         {
             log::debug!("agent identity from process tree: pane={} program={agent}", self.pane_id);
             self.running_program = Some(agent);
@@ -1221,35 +1028,23 @@ impl TerminalView {
             return;
         }
 
-        // 反证：树里只剩交互式 shell 与 console plumbing，没有真在跑的活儿。
-        // 判据与关闭确认共用 `STATELESS` 白名单——两处对「算不算在跑活儿」
-        // 必须同口径，否则同一个 cmd 会话会一边说「随便关」一边说「忙着呢」。
-        let disproved = crate::process_tree::busy_child(shell_pid).is_none();
+        // Only a deliberately entered interactive shell may use this hint.
+        // Start-Sleep and other builtins run inside the shell itself; absence
+        // of a child cannot finish them. SSH/WSL were excluded at entry.
+        // A native CMD prompt is stronger than the process fallback. In particular,
+        // an idle nested shell remains a child of the outer command.
+        if self.native_prompt_seen {
+            return;
+        }
+        let interactive_shell =
+            crate::process_tree::is_interactive_shell_command(&self.suggest.last_committed);
+        let disproved = interactive_shell && !evidence.busy;
         if disproved != self.command_running_disproved {
             log::debug!(
                 "command_running disproved={disproved} by process tree: pane={}",
                 self.pane_id
             );
             self.command_running_disproved = disproved;
-            cx.notify();
-        }
-        // 反证成立时，把推断出来的 `running_program` 里已经过期的那部分作废。
-        // 它的来源都是推断（标题协议、命令行首 token），而进程树是客观事实：
-        // 树里没有活儿，这个值就是上一条命令留下的残留（`npm run dev` 被 Ctrl+C
-        // 掉、133;D 又没来，就是这种情形）。
-        //
-        // 交互式 shell 例外，不清：`cmd` 确实还占着这个 pane 的前台，那是要显示
-        // 给用户的正确信息，而它不算「活儿」已经由 `runtime_task_state` 里的
-        // `program_is_work` 判掉了。真在跑的 agent 也不会被误清——claude 等在提示
-        // 符上时进程仍在树里，`busy_child` 看得见，反证根本不成立。
-        if disproved
-            && self
-                .running_program
-                .as_deref()
-                .is_some_and(|program| !crate::process_tree::is_interactive_shell_command(program))
-        {
-            self.running_program = None;
-            cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
         }
     }

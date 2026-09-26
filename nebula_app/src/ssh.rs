@@ -25,9 +25,11 @@
 #[cfg(windows)]
 const REMOTE_BASH: &str = r#"
 [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+__pebrel_shell_token=$(printf '%s' "bash:${HOSTNAME:-remote}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n')
 __nebula_branch=""
 __nebula_at_prompt=0
 __nebula_precmd() {
+    printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"
     printf '\033]133;D\007'
     if command -v git >/dev/null 2>&1; then
         __nebula_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -67,8 +69,10 @@ const REMOTE_ZSH: &str = r#"
 [ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv"
 [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
 autoload -Uz add-zsh-hook 2>/dev/null
+__pebrel_shell_token=$(printf '%s' "zsh:${HOST:-remote}:$$:$RANDOM" | base64 | tr -d '\r\n')
 __nebula_branch=""
 __nebula_precmd() {
+    printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"
     printf '\033]133;D\007'
     if command -v git >/dev/null 2>&1; then
         __nebula_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
@@ -122,10 +126,16 @@ pub const SAVE_CONNECTED_AFTER: std::time::Duration = std::time::Duration::from_
 /// session (`-N`/`-f`/`-G`/`-T`/`-V`/`-W`), or an explicit remote command
 /// (`ssh host ls`): none of those confirm as "connected to this host".
 pub fn ssh_destination(line: &str) -> Option<String> {
-    let mut tokens = line.split_whitespace();
+    let words = command_words(line)?;
+    ssh_destination_words(&words)
+}
+
+pub(crate) fn ssh_destination_words(words: &[String]) -> Option<String> {
+    let mut tokens = words.iter().map(String::as_str);
     // Program identity, path/extension-normalized (`/usr/bin/ssh`,
     // `ssh.exe`); `nebula ssh …` counts too — same wrapper, same semantics.
-    let mut program = crate::display::extract_program(tokens.next()?)?;
+    let executable = tokens.next()?.rsplit(['/', '\\']).next()?;
+    let mut program = crate::display::extract_program(executable)?;
     if matches!(program.as_str(), "pebrel" | "nebula") {
         if tokens.next() != Some("ssh") {
             return None;
@@ -175,6 +185,39 @@ pub fn ssh_destination(line: &str) -> Option<String> {
         };
     }
     None
+}
+
+/// Literal argv for an individual entered command. Preserve quoted executable
+/// paths and option values; a compound shell expression is not one SSH login.
+pub(crate) fn command_words(line: &str) -> Option<Vec<String>> {
+    let line = line.trim().strip_prefix("& ").unwrap_or(line.trim());
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    for c in line.chars() {
+        if quote == Some(c) {
+            quote = None;
+        } else if quote.is_some() {
+            word.push(c);
+        } else if matches!(c, '\'' | '"') {
+            quote = Some(c);
+        } else if matches!(c, ';' | '|' | '&' | '\n' | '\r') {
+            return None;
+        } else if c.is_whitespace() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    (!words.is_empty()).then_some(words)
 }
 
 /// Fold `-l user` / `-p port` into a destination string that reconnects when
@@ -295,7 +338,13 @@ fn cli_verdict(args: &[String]) -> CliVerdict {
 /// (inject) if ssh can't run or errors, so a config quirk never blocks a login.
 #[cfg(windows)]
 fn config_forces_passthrough(ssh: &str, args: &[String]) -> bool {
-    let out = std::process::Command::new(ssh).arg("-G").args(args).output();
+    let mut command = std::process::Command::new(ssh);
+    // 这是个非交互探针（`-G` 只解析配置、不连接），和 `ssh_session.rs` 里那条
+    // 同源：不压掉就会从无控制台的 GUI 进程里闪出一个新控制台（见
+    // `platform::process`）。`pebrel ssh <host>` 的**交互会话**是另一回事，它
+    // 靠 `AttachConsole` 继承父控制台，绝不能压。
+    crate::platform::process::hidden_command(&mut command);
+    let out = command.arg("-G").args(args).output();
     match out {
         Ok(o) if o.status.success() => {
             parse_g_says_passthrough(&String::from_utf8_lossy(&o.stdout))
@@ -392,31 +441,105 @@ fn already_has_tty(args: &[String]) -> bool {
 /// `?`) and negations are skipped: they are match rules, not destinations
 /// you can click to connect to. Missing/unreadable config → empty list
 /// (the section simply doesn't render).
-pub fn ssh_config_hosts() -> Vec<String> {
-    let Some(home) = crate::platform::dirs::home_dir() else { return Vec::new() };
-    let Ok(data) = std::fs::read_to_string(home.join(".ssh").join("config")) else {
-        return Vec::new();
-    };
-    let mut hosts = Vec::new();
-    for line in data.lines() {
-        let line = line.trim();
-        let Some(rest) = line
-            .strip_prefix("Host ")
-            .or_else(|| line.strip_prefix("host "))
-            .or_else(|| line.strip_prefix("Host\t"))
-        else {
+pub(crate) fn ssh_config_path() -> Option<std::path::PathBuf> {
+    let home = crate::platform::dirs::home_dir()?;
+    let path = home.join(".ssh").join("config");
+    path.is_file().then_some(path)
+}
+
+/// Read the same per-user file used by host discovery and the OpenSSH probe.
+/// Invalid encodings must not silently corrupt hostnames or identity paths.
+pub(crate) fn read_ssh_config() -> std::io::Result<String> {
+    let path = ssh_config_path().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "SSH config file not found")
+    })?;
+    std::fs::read_to_string(path)
+}
+
+/// Tokenize one OpenSSH config line, preserving quoted spaces and Windows
+/// backslashes while treating an unquoted `#` after whitespace as a comment.
+pub(crate) fn ssh_config_tokens(line: &str) -> Vec<String> {
+    ssh_config_tokens_checked(line).unwrap_or_default()
+}
+
+pub(crate) fn ssh_config_tokens_checked(line: &str) -> std::io::Result<Vec<String>> {
+    let line = line.trim_start_matches('\u{feff}').trim_start();
+    if line.is_empty() || line.starts_with('#') {
+        return Ok(Vec::new());
+    }
+    let boundary = line.find(|ch: char| ch.is_whitespace() || ch == '=').unwrap_or(line.len());
+    let (keyword, rest) = line.split_at(boundary);
+    let rest = rest.trim_start().strip_prefix('=').unwrap_or(rest.trim_start()).trim_start();
+    let mut tokens = vec![keyword.to_owned()];
+    let mut current = String::new();
+    let mut quote = None;
+    let mut separated = true;
+
+    for character in rest.chars() {
+        if let Some(delimiter) = quote {
+            if character == delimiter {
+                quote = None;
+            } else {
+                current.push(character);
+            }
+            separated = false;
             continue;
-        };
-        for name in rest.split_whitespace() {
-            if name.contains(['*', '?']) || name.starts_with('!') {
+        }
+        match character {
+            '\'' | '"' => {
+                quote = Some(character);
+                separated = false;
+            },
+            '#' if separated => break,
+            character if character.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                separated = true;
+            },
+            character => {
+                current.push(character);
+                separated = false;
+            },
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    if quote.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Unterminated SSH config quote",
+        ));
+    }
+    Ok(tokens)
+}
+
+fn parse_ssh_config_hosts(text: &str) -> Vec<String> {
+    let mut hosts = Vec::new();
+    for line in text.lines() {
+        let tokens = ssh_config_tokens(line);
+        if tokens.first().is_none_or(|keyword| !keyword.eq_ignore_ascii_case("host")) {
+            continue;
+        }
+        for name in tokens.into_iter().skip(1) {
+            if name.contains(['*', '?'])
+                || name.starts_with('!')
+                || crate::ssh_profiles::validate_ssh_destination(&name).is_err()
+            {
                 continue;
             }
-            if !hosts.iter().any(|h| h == name) {
-                hosts.push(name.to_owned());
+            if !hosts.iter().any(|host| host == &name) {
+                hosts.push(name);
             }
         }
     }
     hosts
+}
+
+pub fn ssh_config_hosts() -> Vec<String> {
+    let Ok(data) = read_ssh_config() else { return Vec::new() };
+    parse_ssh_config_hosts(&data)
 }
 
 fn askpass_destination_from_args(args: &[String]) -> Option<String> {
@@ -581,7 +704,11 @@ pub fn run(args: Vec<String>) -> i32 {
         },
         SshPlan::Inject => {
             let b64 = base64::engine::general_purpose::STANDARD;
-            let bootstrap = build_bootstrap(&b64.encode(REMOTE_BASH), &b64.encode(REMOTE_ZSH));
+            let shell = nebula_terminal::tty::connection_shell();
+            let bootstrap = build_bootstrap(
+                &b64.encode(format!("{REMOTE_BASH}\n{shell}")),
+                &b64.encode(format!("{REMOTE_ZSH}\n{shell}")),
+            );
             // Keepalive: long-idle managed sessions (claude/codex runs) were
             // dropped by NAT/firewall idle timeouts. Application-level pings
             // every 30s survive those; 6 missed replies ≈ 3 min before the
@@ -623,6 +750,38 @@ pub fn run(args: Vec<String>) -> i32 {
         let _ = std::fs::remove_file(context.attempt_path);
     }
     result
+}
+
+#[cfg(test)]
+mod ssh_config_tests {
+    use super::{parse_ssh_config_hosts, ssh_config_tokens};
+
+    #[test]
+    fn config_tokens_handle_bom_quotes_comments_and_windows_paths() {
+        assert_eq!(
+            ssh_config_tokens("\u{feff}  IdentityFile \"D:\\keys\\key one.pem\" # note"),
+            vec!["IdentityFile", r"D:\keys\key one.pem"]
+        );
+        assert_eq!(
+            ssh_config_tokens("HostName server#with-hash"),
+            vec!["HostName", "server#with-hash"]
+        );
+        assert_eq!(ssh_config_tokens("HostName server # comment"), vec!["HostName", "server"]);
+    }
+
+    #[test]
+    fn config_hosts_accept_indentation_case_and_multiple_patterns() {
+        let config = concat!(
+            "\u{feff}\r\n",
+            "  hOsT rain staging !ignored\r\n",
+            "    HostName 192.168.100.3\r\n",
+            "Host *\r\n",
+            "Host ?\r\n",
+            "Host ignored\r\n",
+            "HostName ignored.example\r\n",
+        );
+        assert_eq!(parse_ssh_config_hosts(config), vec!["rain", "staging", "ignored"]);
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -690,6 +849,11 @@ mod tests {
         assert_eq!(d("ssh user@host"), Some("user@host".into()));
         assert_eq!(d("  ssh.exe   user@host  "), Some("user@host".into()));
         assert_eq!(d("/usr/bin/ssh host"), Some("host".into()));
+        assert_eq!(
+            d(r#"& 'C:\Program Files\OpenSSH\ssh.exe' -i 'key file' host"#),
+            Some("host".into())
+        );
+        assert_eq!(d(r#"ssh -o 'ProxyCommand=ssh -W %h:%p jump' host"#), Some("host".into()));
         assert_eq!(d("nebula ssh host"), Some("host".into()));
         assert_eq!(d("pebrel ssh host"), Some("host".into()));
         assert_eq!(d("pebrel.exe ssh -- user@host"), Some("user@host".into()));
@@ -726,6 +890,9 @@ mod tests {
         assert_eq!(d("ssh -fN host"), None);
         assert_eq!(d("ssh -W target:22 jump"), None);
         assert_eq!(d("ssh -V"), None);
+        assert_eq!(d("ssh host; echo done"), None);
+        assert_eq!(d("ssh host | cat"), None);
+        assert_eq!(d("ssh 'host"), None);
     }
 
     #[test]

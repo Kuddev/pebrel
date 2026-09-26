@@ -34,11 +34,71 @@ fn typed_and_compatibility_lookups_agree() {
 }
 
 #[test]
+fn tab_context_menu_has_translations_for_every_supported_language() {
+    let items = [
+        Message::CommonCopyWorkingDirectory,
+        Message::CommonDuplicateTab,
+        Message::TabMenuForkAiSession,
+        Message::TabMenuMoveToNewWindow,
+        Message::TabMenuExportAsWorkspace,
+        Message::TabMenuSplitLeftRight,
+        Message::TabMenuSplitTopBottom,
+        Message::TabMenuMoveLeft,
+        Message::TabMenuMoveRight,
+        Message::CommonRename,
+        Message::CommonClose,
+        Message::TabMenuTabColor,
+    ];
+    for language in UiLanguage::ALL {
+        for item in items {
+            assert!(!language.text(item).is_empty(), "{}: {item:?}", language.code());
+            if *language != UiLanguage::EnUs {
+                assert_ne!(
+                    language.text(item),
+                    UiLanguage::EnUs.text(item),
+                    "{}: {item:?}",
+                    language.code()
+                );
+            }
+        }
+    }
+    assert_eq!(UiLanguage::KoKr.text(Message::CommonCopyWorkingDirectory), "작업 디렉터리 복사");
+    assert_eq!(UiLanguage::KoKr.text(Message::TabMenuTabColor), "탭 색상");
+}
+
+#[test]
 fn inline_migration_preserves_bilingual_text_and_english_fallback() {
     assert_eq!(UiLanguage::ZhCn.pick("网络", "Network"), "网络");
     assert_eq!(UiLanguage::EnUs.pick("网络", "Network"), "Network");
     assert_eq!(UiLanguage::FrFr.pick("网络", "Network"), "Réseau");
     assert_eq!(UiLanguage::FrFr.pick("未迁移文案", "Unmigrated text"), "Unmigrated text");
+    // File menus reuse CommonOpen instead of adding an en/zh-only "Open"
+    // alias which would disable the existing translations in the bridge.
+    for language in UiLanguage::ALL {
+        assert_eq!(language.pick("打开", "Open"), language.text(Message::CommonOpen));
+    }
+}
+
+#[test]
+fn workspace_confirmations_preserve_names_and_resolve_each_language_independently() {
+    let process = "worker {process} 世界";
+    let message = Message::WorkspaceCloseRunningProcess;
+    assert_eq!(
+        UiLanguage::EnUs.format(message, &[("process", process)]),
+        "worker {process} 世界 is still running. Closing will stop it."
+    );
+    assert_eq!(
+        UiLanguage::ZhCn.format(message, &[("process", process)]),
+        "worker {process} 世界 仍在运行，关闭会中止它。"
+    );
+    assert_eq!(
+        UiLanguage::EnUs.format(Message::FilesDeleteTitle, &[("name", "{name}.txt")]),
+        "Delete {name}.txt?"
+    );
+    assert_eq!(
+        UiLanguage::FrFr.format(message, &[("process", process)]),
+        UiLanguage::EnUs.format(message, &[("process", process)])
+    );
 }
 
 #[test]
@@ -80,20 +140,4 @@ fn measure_static_catalog_costs() {
         black_box(black_box(UiLanguage::FrFr).tr(black_box("settings.sidebar.network")));
     }
     eprintln!("key lookup: {} ns/op", started.elapsed().as_nanos() / count);
-}
-
-#[test]
-fn language_cache_defaults_to_english_and_round_trips() {
-    use std::sync::atomic::Ordering;
-
-    let previous = super::CURRENT_LANGUAGE.load(Ordering::Relaxed);
-    super::CURRENT_LANGUAGE.store(super::UNSET, Ordering::Relaxed);
-    assert_eq!(UiLanguage::current(), UiLanguage::EnUs);
-    super::CURRENT_LANGUAGE.store(usize::MAX - 1, Ordering::Relaxed);
-    assert_eq!(UiLanguage::current(), UiLanguage::EnUs);
-    UiLanguage::FrFr.activate();
-    assert_eq!(UiLanguage::current(), UiLanguage::FrFr);
-    UiLanguage::ZhCn.activate();
-    assert_eq!(UiLanguage::current(), UiLanguage::ZhCn);
-    super::CURRENT_LANGUAGE.store(previous, Ordering::Relaxed);
 }

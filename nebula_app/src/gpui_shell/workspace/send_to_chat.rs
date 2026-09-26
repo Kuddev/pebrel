@@ -128,6 +128,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let language = workspace_ui_language();
+        let copy_cwd = super::tab_menu::copy_working_directory_item(&source, cx);
         let source = source.downgrade();
         let copy_item = PopupMenuItem::new(language.pick("复制选区", "Copy Selection"))
             .icon(IconName::Copy)
@@ -138,7 +139,13 @@ impl NebulaWorkspace {
                     });
                 }
             });
-        self.open_selection_context_menu(position, selection.into(), copy_item, window, cx);
+        self.open_selection_context_menu(
+            position,
+            selection.into(),
+            vec![copy_item, copy_cwd],
+            window,
+            cx,
+        );
     }
 
     pub(super) fn open_document_selection_context_menu(
@@ -162,24 +169,27 @@ impl NebulaWorkspace {
                     language.pick("选区已复制", "Selection copied"),
                 );
             });
-        self.open_selection_context_menu(position, selection, copy_item, window, cx);
+        self.open_selection_context_menu(position, selection, vec![copy_item], window, cx);
     }
 
     fn open_selection_context_menu(
         &mut self,
         position: Point<Pixels>,
         selection: Arc<str>,
-        copy_item: PopupMenuItem,
+        copy_items: Vec<PopupMenuItem>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let language = workspace_ui_language();
         let has_targets = !self.send_to_chat_targets(cx).is_empty();
         let workspace = cx.entity().downgrade();
-        let menu = PopupMenu::build(window, cx, move |menu, _window, _cx| {
+        let menu = PopupMenu::build(window, cx, move |mut menu, _window, _cx| {
             let send_workspace = workspace.clone();
             let send_selection = selection.clone();
-            menu.external_link_icon(false).item(copy_item).item(
+            for item in copy_items {
+                menu = menu.item(item);
+            }
+            menu.external_link_icon(false).item(
                 PopupMenuItem::new(language.pick("发送到聊天...", "Send to Chat..."))
                     // 当前图标包没有 speech-bubble；对 Agent 使用中性星形而非
                     // CLI 品牌图，与 Quick Jump 的会话行保持同一语义。

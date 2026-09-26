@@ -103,7 +103,16 @@ impl Processor {
         match command {
             RuntimeCommand::Snapshot => serde_json::to_value(self.publish_runtime_snapshot())
                 .map_err(|error| ApiError::new("serialization_failed", error.to_string())),
-            RuntimeCommand::NewWindow { cwd: _ } => {
+            // 旧壳（winit/GL）没有"按 id 选 shell"的能力。显式拒绝而不是忽略：
+            // 调用方（右键菜单的第二份进程）拿到失败会冷启动一份 GPUI 实例，
+            // 用户最终得到的是他要的那个发行版；静默忽略则会在旧壳里开一个
+            // 默认 shell 的标签，正是这条功能要消灭的失败。
+            RuntimeCommand::NewWindow { shell_id: Some(_), .. }
+            | RuntimeCommand::NewTab { shell_id: Some(_), .. } => Err(ApiError::new(
+                "invalid_shell",
+                "this runtime does not support shell selection on tab.new/window.create",
+            )),
+            RuntimeCommand::NewWindow { cwd: _, .. } => {
                 // GL backends require every current context to be released
                 // before another window surface is created.
                 for window in self.windows.values_mut() {
@@ -145,7 +154,7 @@ impl Processor {
                     "pane_id": pane_id
                 }))
             },
-            RuntimeCommand::NewTab { window_id, cwd } => {
+            RuntimeCommand::NewTab { window_id, cwd, .. } => {
                 let id = self.runtime_target_window(*window_id, None)?;
                 let window = self.windows.get_mut(&id).expect("resolved runtime window exists");
                 let pane_id = window.runtime_new_tab(cwd.clone())?;

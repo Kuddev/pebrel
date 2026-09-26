@@ -1,4 +1,9 @@
+use super::super::osc_links::link_modifier;
 use super::*;
+use gpui_component::WindowExt as _;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests;
 
 impl TerminalView {
     pub(in crate::gpui_shell::terminal) fn scrollbar_thumb(
@@ -139,7 +144,13 @@ impl TerminalView {
                 let term = session.term.lock();
                 super::super::osc_links::highlighted_at(&term, &self.hint_config, point, mods)
                     .and_then(|hint| {
-                        super::super::osc_links::hover_from_hint(&term, hint, self.rows, self.cols)
+                        super::super::osc_links::hover_from_hint(
+                            &term,
+                            hint,
+                            self.rows,
+                            self.cols,
+                            crate::gpui_shell::config::ui_language(cx),
+                        )
                     })
             })
         };
@@ -165,11 +176,23 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn try_open_hovered_link(&self, cx: &Context<Self>) {
+    pub(super) fn try_open_hovered_link(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(hover) = self.link_hover.as_ref() else { return };
         let Some(session) = self.session.as_ref() else { return };
-        let term = session.term.lock();
-        super::super::osc_links::open_hint(&hover.hint, &term, cx);
+        let text = {
+            let term = session.term.lock();
+            hover.hint.text(&*term).map(|t| t.into_owned())
+        };
+        let Some(text) = text else { return };
+        let cwd = self.local_cwd();
+        super::super::osc_links::open_hint_match(
+            &hover.hint,
+            &text,
+            cwd.as_deref(),
+            &self.session_launch,
+            window,
+            cx,
+        );
     }
 
     /// 应用是否接管了鼠标（vim/htop 等）。Shift 按住时强制旁路——这是
@@ -346,6 +369,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
+        self.pending_link_open = false;
         cx.emit(TerminalViewEvent::FocusRequested);
         if self.session.is_none() {
             return;
@@ -391,6 +415,17 @@ impl TerminalView {
             cx.notify();
             return;
         }
+        if link_modifier(&event.modifiers) && event.click_count == 1 {
+            self.update_link_hover(event.position, &event.modifiers, cx);
+            if self.link_hover.is_some() {
+                if let Some(session) = &self.session {
+                    session.term.lock().selection = None;
+                }
+                self.selecting = false;
+                self.pending_link_open = true;
+                return;
+            }
+        }
         if self.mouse_mode_active(&event.modifiers) {
             self.send_mouse_report(
                 event.position,
@@ -399,28 +434,6 @@ impl TerminalView {
                 &event.modifiers,
             );
             return;
-        }
-        if event.modifiers.control && event.click_count == 1 {
-            let (point, _) = self.grid_point(event.position);
-            let hit = self.session.as_ref().is_some_and(|session| {
-                let term = session.term.lock();
-                super::super::osc_links::highlighted_at(
-                    &term,
-                    &self.hint_config,
-                    point,
-                    &event.modifiers,
-                )
-                .is_some()
-            });
-            if hit {
-                if let Some(session) = &self.session {
-                    session.term.lock().selection = None;
-                }
-                self.selecting = false;
-                self.pending_link_open = true;
-                self.update_link_hover(event.position, &event.modifiers, cx);
-                return;
-            }
         }
         let (point, side) = self.grid_point(event.position);
         let ty = match event.click_count {
@@ -453,9 +466,14 @@ impl TerminalView {
     pub(super) fn on_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Retain the pressed link until release; dragging must not retarget it
+        // or leak part of the consumed gesture to the application.
+        if self.pending_link_open {
+            return;
+        }
         if self.move_completion_popup_scrollbar(event, cx) {
             cx.stop_propagation();
             return;
@@ -501,6 +519,25 @@ impl TerminalView {
             // 事件往往还在网格中间，靠 move 判定就永远起不来。
             cx.notify();
             return;
+        }
+        // The element's hitbox already excludes occluding menus. Do not move
+        // focus during a drag or let pointer movement dismiss modal input.
+        if event.pressed_button.is_none()
+            && !cx.has_active_drag()
+            && window.is_window_active()
+            && !self.focus_handle.is_focused(window)
+            && cx.try_global::<Settings>().is_some_and(|settings| settings.focus_follows_mouse)
+            && !window.has_active_dialog(cx)
+            && !window.has_active_sheet(cx)
+        {
+            window.focus(&self.focus_handle, cx);
+            cx.emit(TerminalViewEvent::FocusRequested);
+        }
+        if event.pressed_button.is_none() && link_modifier(&event.modifiers) {
+            self.update_link_hover(event.position, &event.modifiers, cx);
+            if self.link_hover.is_some() {
+                return;
+            }
         }
         if self.mouse_mode_active(&event.modifiers) {
             self.clear_link_hover(cx);
@@ -552,7 +589,8 @@ impl TerminalView {
             cx.notify();
             return;
         }
-        if !self.selecting && self.mouse_mode_active(&event.modifiers) {
+        let pending_link_open = std::mem::take(&mut self.pending_link_open);
+        if !pending_link_open && !self.selecting && self.mouse_mode_active(&event.modifiers) {
             self.send_mouse_report(
                 event.position,
                 mouse_protocol::BUTTON_LEFT,
@@ -562,15 +600,15 @@ impl TerminalView {
             return;
         }
         self.selecting = false;
-        let open_link = (self.pending_link_open || event.modifiers.control)
+        let (point, _) = self.grid_point(event.position);
+        let open_link = pending_link_open
             && self.selection_is_empty()
-            && self.link_hover.is_some();
+            && self.link_hover.as_ref().is_some_and(|hover| hover.hint.bounds().contains(&point));
         if open_link {
-            self.try_open_hovered_link(cx);
+            self.try_open_hovered_link(window, cx);
         } else if self.copy_on_select {
             self.copy_selection(false, window, cx);
         }
-        self.pending_link_open = false;
         cx.notify();
     }
 
@@ -590,6 +628,7 @@ impl TerminalView {
         }
         self.stop_selection_scroll();
         let dragging_scrollbar = self.scrollbar_drag.take().is_some();
+        self.pending_link_open = false;
         if !self.selecting {
             if dragging_scrollbar {
                 cx.notify();
@@ -597,7 +636,6 @@ impl TerminalView {
             return;
         }
         self.selecting = false;
-        self.pending_link_open = false;
         // 指针不在终端上，链接打开不该发生；只补选中即复制这一条收尾。
         if self.copy_on_select {
             self.copy_selection(false, window, cx);
@@ -840,12 +878,11 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
-        self.scroll_px += delta_y;
-        let lines = (self.scroll_px / self.line_height.as_f32().max(1.0)).trunc() as i32;
+        let speed = cx.try_global::<Settings>().map_or(1.0, |settings| settings.scroll_speed);
+        let lines = wheel_scroll_lines(&mut self.scroll_px, event.delta, self.line_height, speed);
         if lines == 0 {
             return;
         }
-        self.scroll_px -= lines as f32 * self.line_height.as_f32();
         let mode = self.term_mode();
         // 应用接管鼠标时滚轮也归应用（htop 列表滚动）；Shift 旁路回本地回滚。
         if !event.modifiers.shift && mode.intersects(TermMode::MOUSE_MODE) {
@@ -876,5 +913,82 @@ impl TerminalView {
             session.term.lock().scroll_display(Scroll::Delta(lines));
         }
         cx.notify();
+    }
+}
+
+/// Preserve fractional deltas across events. Wheel speed must not rescale
+/// pixel-precise trackpad input, font zoom, or completion-list scrolling.
+fn wheel_scroll_lines(
+    remainder: &mut f32,
+    delta: gpui::ScrollDelta,
+    line_height: Pixels,
+    speed: f32,
+) -> i32 {
+    let pixels = delta.pixel_delta(line_height).y.as_f32();
+    let pixels = match delta {
+        gpui::ScrollDelta::Lines(_) => pixels * speed,
+        gpui::ScrollDelta::Pixels(_) => pixels,
+    };
+    if !pixels.is_finite() {
+        return 0;
+    }
+    let height = line_height.as_f32().max(1.0);
+    *remainder += pixels;
+    let lines = (*remainder / height).trunc() as i32;
+    *remainder -= lines as f32 * height;
+    lines
+}
+
+#[cfg(test)]
+mod scrolling_tests {
+    use super::wheel_scroll_lines;
+    use gpui::{ScrollDelta, point, px};
+
+    #[test]
+    fn normal_wheel_speed_preserves_existing_steps() {
+        let mut remainder = 0.0;
+        assert_eq!(
+            wheel_scroll_lines(&mut remainder, ScrollDelta::Lines(point(0.0, 3.0)), px(20.0), 1.0),
+            3
+        );
+        assert_eq!(
+            wheel_scroll_lines(&mut remainder, ScrollDelta::Lines(point(0.0, -3.0)), px(20.0), 2.0),
+            -6
+        );
+        assert_eq!(remainder, 0.0);
+    }
+
+    #[test]
+    fn slow_wheel_accumulates_without_dropping_small_inputs() {
+        let mut remainder = 0.0;
+        let lines: Vec<_> = (0..4)
+            .map(|_| {
+                wheel_scroll_lines(
+                    &mut remainder,
+                    ScrollDelta::Lines(point(0.0, 1.0)),
+                    px(20.0),
+                    0.25,
+                )
+            })
+            .collect();
+        assert_eq!(lines, [0, 0, 0, 1]);
+        assert_eq!(remainder, 0.0);
+    }
+
+    #[test]
+    fn trackpad_pixels_are_independent_of_wheel_speed_and_keep_direction() {
+        for speed in [0.25, 1.0, 4.0] {
+            let mut remainder = 0.0;
+            let delta = ScrollDelta::Pixels(point(px(0.0), px(5.0)));
+            assert_eq!(
+                (0..4)
+                    .map(|_| wheel_scroll_lines(&mut remainder, delta, px(20.0), speed))
+                    .sum::<i32>(),
+                1
+            );
+            let delta = ScrollDelta::Pixels(point(px(0.0), px(-20.0)));
+            assert_eq!(wheel_scroll_lines(&mut remainder, delta, px(20.0), speed), -1);
+            assert_eq!(remainder, 0.0);
+        }
     }
 }

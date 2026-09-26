@@ -7,6 +7,8 @@
 //! needs no shell integration (unlike the OSC 133 approach), so it works with
 //! any shell out of the box.
 
+use crate::platform::process_snapshot::{self, ProcessRow};
+
 /// Programs whose presence never blocks a close: shells themselves plus the
 /// console plumbing every ConPTY session drags along. `git.exe` is here
 /// because Nebula's own prompt integration spawns it on every prompt render
@@ -126,121 +128,57 @@ fn is_stateless_process(executable: &str) -> bool {
     INTERACTIVE_SHELLS.contains(&stem) || login_shell || stem == "git"
 }
 
-/// Parse the stable three-column `ps` output used by Unix snapshots. The
-/// command column is the remainder so executable paths containing spaces are
-/// not split into a fake fourth field.
-#[allow(dead_code)]
-fn parse_ps_line(line: &str) -> Option<(u32, u32, String)> {
-    fn field(input: &str) -> Option<(&str, &str)> {
-        let input = input.trim_start();
-        let end = input.find(char::is_whitespace).unwrap_or(input.len());
-        let value = &input[..end];
-        (!value.is_empty()).then(|| (value, &input[end..]))
-    }
-
-    let (pid, rest) = field(line)?;
-    let (parent_pid, executable) = field(rest)?;
-    let executable = executable.trim();
-    if executable.is_empty() {
-        return None;
-    }
-    Some((pid.parse().ok()?, parent_pid.parse().ok()?, executable.to_owned()))
+fn snapshot() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
+    Ok(verified_parentage(process_snapshot::snapshot()?))
 }
 
-/// One Toolhelp pass over every process on the machine: `pid -> (parent, exe)`.
-///
-/// Shared by the descendant walk and the ancestry check so a caller never pays
-/// for two snapshots, and so both see the same instant.
-#[cfg(windows)]
-fn snapshot() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
-    use std::collections::HashMap;
-    use std::mem;
-
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-        TH32CS_SNAPPROCESS,
-    };
-
-    let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(format!(
-            "CreateToolhelp32Snapshot failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-
-    let mut processes: HashMap<u32, (u32, String)> = HashMap::new();
-    let read_result = unsafe {
-        let mut entry: PROCESSENTRY32W = mem::zeroed();
-        entry.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
-        if Process32FirstW(handle, &mut entry) == 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            loop {
-                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(0);
-                let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
-                processes.insert(entry.th32ProcessID, (entry.th32ParentProcessID, name));
-                if Process32NextW(handle, &mut entry) == 0 {
-                    break;
-                }
-            }
-            Ok(())
-        }
-    };
-    unsafe { CloseHandle(handle) };
-    read_result.map_err(|error| format!("Process32FirstW failed: {error}"))?;
-    Ok(processes)
-}
-
-/// Unix has no Toolhelp equivalent shared by Linux and macOS. `ps` is part of
-/// both base systems and this path only runs for explicit process inspection
-/// or a throttled identity check, never on the render loop.
-#[cfg(not(windows))]
-fn snapshot() -> Result<std::collections::HashMap<u32, (u32, String)>, String> {
-    let output = std::process::Command::new("ps")
-        .args(["-axo", "pid=,ppid=,comm="])
-        .output()
-        .map_err(|error| format!("could not launch ps: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "ps exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    let mut processes = std::collections::HashMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some((pid, parent_pid, executable)) = parse_ps_line(line) {
-            processes.insert(pid, (parent_pid, executable));
-        }
-    }
-    if processes.is_empty() {
-        return Err("ps returned no process rows".to_owned());
-    }
-    Ok(processes)
+fn verified_parentage(rows: Vec<ProcessRow>) -> std::collections::HashMap<u32, (u32, String)> {
+    // Windows keeps a creator's PID after it exits. If that number now belongs
+    // to a younger process, it cannot be this child's parent. Missing creation
+    // times preserve the edge so uncertainty cannot hide a real busy child.
+    let creation_times: std::collections::HashMap<_, _> =
+        rows.iter().map(|row| (row.pid, row.created)).collect();
+    rows.into_iter()
+        .map(|row| {
+            let reused = row.created != 0
+                && creation_times.get(&row.parent).is_some_and(|parent| *parent > row.created);
+            let parent = if reused { 0 } else { row.parent };
+            (row.pid, (parent, row.executable))
+        })
+        .collect()
 }
 
 /// Snapshot the real local descendants owned by one terminal shell. The root
 /// is included at depth zero so clients can distinguish the PTY owner from the
-/// commands below it. Toolhelp is intentionally sampled on demand; running it
+/// commands below it. The OS is intentionally sampled on demand; running this
 /// on the 1 Hz UI state pump would scan the whole machine continuously.
 pub fn descendants(root_pid: u32) -> Result<Vec<ProcessEntry>, String> {
-    use std::collections::{HashMap, HashSet, VecDeque};
+    descendants_from_rows(root_pid, process_snapshot::snapshot()?)
+}
 
+pub(crate) fn descendants_from_rows(
+    root_pid: u32,
+    rows: Vec<ProcessRow>,
+) -> Result<Vec<ProcessEntry>, String> {
     if root_pid == 0 {
         return Err("the pane does not own a local shell process".to_owned());
     }
 
-    let processes = snapshot()?;
+    descendants_from_snapshot(root_pid, &verified_parentage(rows))
+}
+
+fn descendants_from_snapshot(
+    root_pid: u32,
+    processes: &std::collections::HashMap<u32, (u32, String)>,
+) -> Result<Vec<ProcessEntry>, String> {
+    use std::collections::{HashMap, HashSet, VecDeque};
 
     if !processes.contains_key(&root_pid) {
         return Err(format!("shell process {root_pid} is no longer present"));
     }
 
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (&pid, &(parent, _)) in &processes {
+    for (&pid, &(parent, _)) in processes {
         if parent != pid {
             children.entry(parent).or_default().push(pid);
         }
@@ -275,6 +213,47 @@ pub fn descendants(root_pid: u32) -> Result<Vec<ProcessEntry>, String> {
 /// when the whole tree is safe to kill. The name is used in the confirm modal.
 pub fn busy_child(root_pid: u32) -> Option<String> {
     busy_descendant(descendants(root_pid).ok()?)
+}
+
+/// Liveness evidence for status reconciliation, separate from the close-warning
+/// exemptions. A safe-to-close process (for example git) can still be working.
+pub(crate) struct ActivityEvidence {
+    pub agent: Option<String>,
+    pub primary_present: Option<bool>,
+    pub child_present: bool,
+    pub busy: bool,
+}
+
+pub(crate) fn activity_evidence(
+    root_pid: u32,
+    primary_pid: Option<u32>,
+) -> Result<ActivityEvidence, String> {
+    Ok(activity_from_snapshot(&descendants(root_pid)?, primary_pid))
+}
+
+fn activity_from_snapshot(rows: &[ProcessEntry], primary_pid: Option<u32>) -> ActivityEvidence {
+    let mut evidence = ActivityEvidence {
+        agent: None,
+        primary_present: primary_pid.map(|pid| rows.iter().any(|row| row.pid == pid)),
+        child_present: false,
+        busy: false,
+    };
+    for (index, row) in rows.iter().enumerate() {
+        let name = display_name(&row.executable).to_ascii_lowercase();
+        if evidence.agent.is_none() {
+            evidence.agent =
+                crate::ai_agents::AgentKind::parse(&name).map(|agent| agent.slug().to_owned());
+        }
+        if index == 0 {
+            continue;
+        }
+        if matches!(name.as_str(), "conhost" | "openconsole" | "winpty-agent") {
+            continue;
+        }
+        evidence.child_present = true;
+        evidence.busy |= !is_shell_executable(&row.executable);
+    }
+    evidence
 }
 
 fn busy_descendant(processes: Vec<ProcessEntry>) -> Option<String> {
@@ -440,8 +419,9 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        ProcessEntry, busy_descendant, display_name, is_interactive_shell_command,
-        is_stateless_process, parse_ps_line, resolve_agent_ancestor, resolve_within_tree,
+        ProcessEntry, ProcessRow, busy_descendant, descendants_from_snapshot, display_name,
+        is_interactive_shell_command, is_stateless_process, resolve_agent_ancestor,
+        resolve_within_tree, verified_parentage,
     };
 
     #[test]
@@ -474,12 +454,79 @@ mod tests {
     }
 
     #[test]
-    fn unix_process_rows_keep_the_complete_command_column() {
+    fn activity_evidence_keeps_close_exemptions_and_liveness_separate() {
+        let rows = |names: &[&str]| {
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| ProcessEntry {
+                    pid: index as u32 + 1,
+                    parent_pid: index as u32,
+                    executable: (*name).into(),
+                    depth: index as u32,
+                })
+                .collect::<Vec<_>>()
+        };
+        let tree = rows(&["pwsh.exe", "git.exe"]);
+        assert_eq!(busy_descendant(tree.clone()), None);
+        let evidence = super::activity_from_snapshot(&tree, None);
+        assert!(evidence.busy, "git is safe to close, but still executing");
+        assert!(evidence.child_present);
+        assert_eq!(evidence.primary_present, None);
+
+        let tree = rows(&["pwsh.exe", "node.exe", "codex.exe"]);
+        let evidence = super::activity_from_snapshot(&tree, Some(3));
+        assert_eq!(evidence.agent.as_deref(), Some("codex"));
+        assert_eq!(evidence.primary_present, Some(true));
+        let evidence = super::activity_from_snapshot(&tree[..2], Some(3));
+        assert_eq!(evidence.primary_present, Some(false));
+        assert!(evidence.child_present, "a wrapper can outlive the agent");
+
+        let evidence = super::activity_from_snapshot(&rows(&["pwsh.exe", "openconsole.exe"]), None);
+        assert!(!evidence.child_present);
+        assert!(!evidence.busy);
+        assert!(super::activity_evidence(0, None).is_err(), "no snapshot is not proof of idle");
+    }
+
+    fn row(pid: u32, parent: u32, created: u64, executable: &str) -> ProcessRow {
+        ProcessRow { pid, parent, created, executable: executable.to_owned() }
+    }
+
+    #[test]
+    fn reused_parent_pid_cannot_attach_an_older_process_to_a_new_shell() {
+        let processes = verified_parentage(vec![
+            row(100, 4, 300, "cmd.exe"),
+            row(200, 100, 100, "csrss.exe"),
+            row(300, 200, 200, "other-user-work.exe"),
+        ]);
+        let descendants = descendants_from_snapshot(100, &processes).unwrap();
+        assert_eq!(descendants.len(), 1);
+        assert_eq!(busy_descendant(descendants), None);
+        assert_eq!(resolve_within_tree(&processes, 300, 100), Some(false));
+    }
+
+    #[test]
+    fn a_real_busy_child_still_requires_confirmation() {
+        let processes = verified_parentage(vec![
+            row(100, 4, 100, "cmd.exe"),
+            row(200, 100, 100, "powershell.exe"),
+            row(300, 200, 101, "cargo.exe"),
+        ]);
         assert_eq!(
-            parse_ps_line("  42     7 /Applications/Nebula Preview/bin/zsh"),
-            Some((42, 7, "/Applications/Nebula Preview/bin/zsh".to_owned()))
+            busy_descendant(descendants_from_snapshot(100, &processes).unwrap()),
+            Some("cargo.exe".to_owned())
         );
-        assert_eq!(parse_ps_line("header"), None);
+        assert_eq!(resolve_within_tree(&processes, 300, 100), Some(true));
+    }
+
+    #[test]
+    fn unknown_creation_time_does_not_hide_a_busy_child() {
+        let processes =
+            verified_parentage(vec![row(100, 4, 100, "cmd.exe"), row(200, 100, 0, "vim.exe")]);
+        assert_eq!(
+            busy_descendant(descendants_from_snapshot(100, &processes).unwrap()),
+            Some("vim.exe".to_owned())
+        );
     }
 
     fn table(rows: &[(u32, u32)]) -> HashMap<u32, (u32, String)> {

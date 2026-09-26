@@ -50,6 +50,7 @@ mod chemistry;
 mod cli;
 mod clipboard;
 mod codex_config;
+mod completion_context;
 mod config;
 mod config_cli;
 mod daemon;
@@ -63,7 +64,6 @@ mod document_io;
 mod encrypted_backup;
 #[cfg(feature = "legacy-shell")]
 mod event;
-#[cfg(windows)]
 mod file_uri;
 mod font_install;
 mod git_worktree;
@@ -126,10 +126,13 @@ mod taskbar;
 mod terminal_profiles;
 mod text_document;
 mod text_preview;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod theme_library;
 mod tray;
 mod update_check;
 #[cfg(feature = "gpui-shell")]
 mod update_download;
+mod update_proxy;
 mod ux;
 #[cfg(feature = "legacy-shell")]
 pub(crate) mod window_context;
@@ -163,6 +166,13 @@ use crate::macos::locale;
 use crate::polling::{IoListener, ipc};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(all(target_os = "macos", feature = "gpui-shell"))]
+    if let Some(code) = update_download::handoff::macos::run_helper_if_requested() {
+        std::process::exit(code);
+    }
+    if let Some(code) = platform::ai_session_identity::run_helper_if_requested() {
+        std::process::exit(code);
+    }
     // No worker threads exist yet; import the new override names for legacy readers.
     unsafe { platform::environment::import_environment_aliases() };
     // OpenSSH AskPass reuses the GUI executable as a credential helper. It
@@ -192,31 +202,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(windows)]
     panic::attach_handler();
 
-    // Portable builds are not necessarily on PATH. Export the exact executable
-    // before any PTY is created so Codex/Claude can call the supported control
-    // plane directly instead of scanning processes, port files, or source code.
-    //
-    // This is the fallback layer: every terminal pane gets the full identity
-    // contract (`TERM_PROGRAM`, pane id, bin dir, `PATH`) from `agent_env`.
-    // Setting it on the process too covers children spawned outside a PTY,
-    // which never see `tty::Options::env`.
-    #[cfg(windows)]
     if options.subcommands.is_none()
-        && let Ok(executable) = env::current_exe()
+        && let Err(error) = platform::startup::prepare_gui_process()
     {
-        // SAFETY: startup is still single-threaded here; all child PTYs are
-        // created later and inherit this stable value.
-        unsafe { env::set_var(agent_env::CLI_ENV, executable) };
-    }
-
-    #[cfg(windows)]
-    if options.subcommands.is_none() && env::var_os("NEBULA_DETACHED_LAUNCH").is_some() {
-        // 必须在进任何消息循环之前脱离启动控制台。GPUI 以前在这条
-        // FreeConsole 之前就 `return`，启动器（agent 作业对象）一退出
-        // 窗口就被带走。旧壳注释同一合同。
-        unsafe {
-            FreeConsole();
-        }
+        platform::startup::report_error(&error, true);
+        return Err(error.into());
     }
 
     // 产品主窗：GPUI 作为 nebula.exe 的 UI 层，从主线程直接进 GPUI
@@ -227,19 +217,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     // （ATTACH），不能再拉一套 PTY。
     #[cfg(feature = "gpui-shell")]
     if wants_gpui_shell(&options) {
-        let initial_cwd = options
-            .window_options
-            .terminal_options
+        let terminal_options = &options.window_options.terminal_options;
+        let initial_cwd = terminal_options
             .resolved_working_directory()
             .filter(|path| path.is_dir())
             .and_then(|path| std::path::absolute(path).ok());
+        // `--shell <id>`（右键菜单「在 Pebrel 中打开（Ubuntu）」用它）一路带到
+        // 首个标签；缺省仍然用设置里的默认 shell。
+        let shell_id = terminal_options.shell_id();
         platform::startup::prepare_gui();
         let _log_file = logging::initialize(&options).expect("Unable to initialize logger");
+        // 显式点名的 shell 解析不了就别开窗：悄悄换回默认 shell 是这条路径最该
+        // 避免的失败（用户点的是 Ubuntu，拿到的却是 PowerShell）。校验排在交接
+        // 之前，坏 id 不会被丢给驻留实例。
+        if let Some(shell_id) = shell_id.as_deref()
+            && let Err(error) =
+                crate::gpui_shell::workspace::shell_launch::resolve_shell_id(shell_id)
+        {
+            platform::startup::report_error(&error, true);
+            return Err(error.into());
+        }
         #[cfg(windows)]
         if try_hand_over_to_resident(&options) {
             return Ok(());
         }
-        gpui_shell::run_shell(initial_cwd);
+        gpui_shell::run_shell(initial_cwd, terminal_options.command(), shell_id);
         return Ok(());
     }
 
@@ -260,6 +262,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Subcommands::NotifyTest) => std::process::exit(crate::notify::notify_test()),
         #[cfg(windows)]
         Some(Subcommands::SetupAi(options)) => {
+            if let Some(distro) = &options.wsl {
+                std::process::exit(crate::platform::wsl_hooks::setup_cli(
+                    distro,
+                    options.wsl_user.as_deref(),
+                    options.remove,
+                ));
+            }
+            if let Some(destination) = &options.ssh {
+                std::process::exit(crate::ssh_session::setup_ai_cli(destination, options.remove));
+            }
             std::process::exit(crate::ai_hook::setup_ai_cli(options.remove))
         },
         #[cfg(windows)]
@@ -519,23 +531,28 @@ fn wants_gpui_shell(options: &Options) -> bool {
 /// 驻留进程，再 `tab.new`。GPUI 与 winit 共用，避免第二份进程无声退出。
 #[cfg(windows)]
 fn try_hand_over_to_resident(options: &Options) -> bool {
-    let has_command = options.window_options.terminal_options.command().is_some();
+    if platform::elevation::requires_isolation() {
+        return false;
+    }
+    let terminal_options = &options.window_options.terminal_options;
+    let shell_id = terminal_options.shell_id();
+    let has_command = terminal_options.command().is_some();
     let launch_dir = options
         .window_options
         .terminal_options
         .resolved_working_directory()
-        .filter(|path| path.is_dir());
+        .or_else(|| env::current_dir().ok())
+        .filter(|path| path.is_dir())
+        .and_then(|path| std::path::absolute(path).ok());
     if !options.daemon
         && !has_command
         && nebula_settings::RuntimeSettings::load().windowing_behavior
             == nebula_settings::WindowingBehaviorName::UseNew
     {
-        return runtime_api::try_open_window_existing(launch_dir.as_deref());
+        return runtime_api::try_open_window_existing(launch_dir.as_deref(), shell_id.as_deref());
     }
-    let plain_launch = !options.daemon
-        && options.window_options.terminal_options.working_directory.is_none()
-        && !has_command;
-    if plain_launch && runtime_api::try_open_default_tab_existing() {
+    let plain_launch = !options.daemon && launch_dir.is_none() && !has_command;
+    if plain_launch && runtime_api::try_open_default_tab_existing(shell_id.as_deref()) {
         return true;
     }
     // Explorer 右键「在 Nebula 中打开」带着 --working-directory 走到这里。
@@ -544,7 +561,7 @@ fn try_hand_over_to_resident(options: &Options) -> bool {
     let dir_launch = !options.daemon && !has_command;
     if dir_launch
         && let Some(dir) = launch_dir
-        && runtime_api::try_open_directory_existing(&dir)
+        && runtime_api::try_open_directory_existing(&dir, shell_id.as_deref())
     {
         return true;
     }

@@ -337,13 +337,13 @@ class _WindowsJob:
         self._process_handles: list[int] = []
         self._handle = self._api.CreateJobObjectW(None, None)
         if not self._handle:
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error(), "CreateJobObjectW failed")
         limits = ExtendedLimits()
         limits.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
         if not self._api.SetInformationJobObject(
             self._handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)
         ):
-            error = ctypes.WinError(ctypes.get_last_error())
+            error = ctypes.WinError(ctypes.get_last_error(), "SetInformationJobObject failed")
             self.close()
             raise error
 
@@ -351,7 +351,7 @@ class _WindowsJob:
         # CPython retains the native process handle on Windows. Using that
         # handle avoids opening a PID that could have been recycled.
         if not self._api.AssignProcessToJobObject(self._handle, int(process._handle)):
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise ctypes.WinError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
 
     def terminate(self, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout
@@ -936,7 +936,10 @@ def load_rules(golden_dir: Path) -> dict[str, Any]:
 
 def stable_flat(report: dict[str, Any], golden_dir: Path) -> dict[str, Any]:
     rules = load_rules(golden_dir)
-    return filter_flat(flatten(report), list(rules.get("volatile", {})))
+    flat = filter_flat(flatten(report), list(rules.get("volatile", {})))
+    # One golden per family serves every architecture of that platform.
+    flat["platform"] = platform_family(str(report["platform"]))
+    return flat
 
 
 def compare_platform_golden(report: dict[str, Any], golden_dir: Path) -> list[str]:

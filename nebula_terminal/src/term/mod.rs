@@ -33,6 +33,7 @@ mod damage;
 mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
+mod prompt;
 mod renderable;
 pub mod search;
 
@@ -231,6 +232,8 @@ pub struct Term<T> {
 
     /// Whether OSC 133 currently identifies this pane as accepting shell input.
     nebula_prompt_active: bool,
+    /// OSC 133;B input start in absolute grid coordinates.
+    nebula_prompt_input: Option<(usize, Column)>,
 
     /// One-shot suppression of the next primary-DA answer: the side-loaded
     /// ConPTY host's bring-up DA1 query was already answered by the response
@@ -356,84 +359,6 @@ impl<T> Term<T> {
         }
     }
 
-    /// The cursor row in the grid's absolute line numbering (see
-    /// [`Grid::scrolled_out`]): stable across scrollback growth, so overlays
-    /// (prompt marks, inline images) can anchor to it.
-    pub fn nebula_cursor_abs_line(&self) -> usize {
-        self.grid.scrolled_out()
-            + self.grid.history_size()
-            + self.grid.cursor.point.line.0.max(0) as usize
-    }
-
-    /// Record a shell prompt row (OSC 133;A) at the current cursor line.
-    ///
-    /// Called by the PTY reader between `parser.advance` slices, so the cursor
-    /// sits exactly on the fresh prompt row. Marks only make sense on the
-    /// primary screen — the alternate screen has no scrollback to jump.
-    pub fn nebula_add_prompt_mark(&mut self) {
-        if self.mode.contains(TermMode::ALT_SCREEN) {
-            return;
-        }
-        let abs = self.nebula_cursor_abs_line();
-
-        // A screen redraw (clear, resize) can re-emit a mark for the same or
-        // an earlier row; drop those so the deque stays strictly increasing.
-        while self.nebula_prompt_marks.back().is_some_and(|&m| m >= abs) {
-            self.nebula_prompt_marks.pop_back();
-        }
-        // Prune marks whose rows have scrolled out of history entirely.
-        let floor = self.grid.scrolled_out();
-        while self.nebula_prompt_marks.front().is_some_and(|&m| m < floor) {
-            self.nebula_prompt_marks.pop_front();
-        }
-
-        self.nebula_prompt_marks.push_back(abs);
-        self.nebula_prompt_active = true;
-    }
-
-    pub fn nebula_end_prompt(&mut self) {
-        self.nebula_prompt_active = false;
-    }
-
-    pub fn nebula_prompt_active(&self) -> bool {
-        self.nebula_prompt_active && !self.mode.contains(TermMode::ALT_SCREEN)
-    }
-
-    /// Scroll the viewport to the previous (`up`) or next shell prompt mark.
-    ///
-    /// Returns whether the viewport moved, so callers know to redraw.
-    pub fn nebula_prompt_jump(&mut self, up: bool) -> bool
-    where
-        T: EventListener,
-    {
-        if self.mode.contains(TermMode::ALT_SCREEN) || self.nebula_prompt_marks.is_empty() {
-            return false;
-        }
-
-        let scrolled_out = self.grid.scrolled_out();
-        let history = self.grid.history_size();
-        // Absolute line currently shown at the top of the viewport.
-        let top_abs = scrolled_out + history - self.grid.display_offset();
-
-        let target = if up {
-            self.nebula_prompt_marks.iter().rev().find(|&&m| m < top_abs)
-        } else {
-            self.nebula_prompt_marks.iter().find(|&&m| m > top_abs)
-        };
-        let Some(&mark) = target else { return false };
-
-        // Put the mark's row at the viewport top: offset = history - relative
-        // row. Marks on the visible screen clamp to 0 (bottom), long-gone
-        // marks clamp to the scrollback top.
-        let offset = (scrolled_out + history).saturating_sub(mark).min(history);
-        let delta = offset as i32 - self.grid.display_offset() as i32;
-        if delta == 0 {
-            return false;
-        }
-        self.scroll_display(Scroll::Delta(delta));
-        true
-    }
-
     pub fn new<D: Dimensions>(config: Config, dimensions: &D, event_proxy: T) -> Term<T> {
         let num_cols = dimensions.columns();
         let num_lines = dimensions.screen_lines();
@@ -472,6 +397,7 @@ impl<T> Term<T> {
             keyboard_mode_stack: Default::default(),
             nebula_prompt_marks: Default::default(),
             nebula_prompt_active: false,
+            nebula_prompt_input: None,
             active_charset: Default::default(),
             vi_mode_cursor: Default::default(),
             cursor_style: Default::default(),
@@ -841,6 +767,7 @@ impl<T> Term<T> {
         // Reflow rewraps history rows, so absolute prompt-mark lines no longer
         // match; drop them rather than jump to shifted positions.
         self.nebula_prompt_marks.clear();
+        self.nebula_prompt_input = None;
 
         // Invalidate selection and tabs only when necessary.
         if old_cols != num_cols {
@@ -2069,6 +1996,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.grid.reset();
         self.inactive_grid.reset();
         self.nebula_prompt_marks.clear();
+        self.nebula_prompt_input = None;
         self.nebula_prompt_active = false;
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
         self.tabs = TabStops::new(self.columns());

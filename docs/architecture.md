@@ -25,6 +25,11 @@ to rename all existing directories or create abstract interfaces everywhere.
 | `nebula_app/src/i18n` | Static lookup, locale resolution and formatting | Runtime catalog parsing or UI ownership |
 | `nebula_app/src/math` | Parse, validate, layout, compile and cache responsibilities | A duplicated per-shell math engine |
 | `nebula_app/src/platform` | Explicit platform capabilities and native adapters | A dumping ground for unrelated logic |
+| `nebula_app/src/ai_hook` | Normalized provider facts, bounded ordering, one shared pane lifecycle and owned installation policy; Windows adapters | Screen keyword rules or a separate state machine per UI shell |
+| `nebula_app/src/platform/ssh_agent.rs` | Native agent endpoints, transport connection and bounded identity discovery | Host authentication policy or private key selection |
+| `nebula_app/src/ssh_session/agent.rs` | SSH agent identity selection, signing outcomes and total discovery budget; fresh scope per host | A second authentication plan, credential store or agent forwarding service |
+| `nebula_app/src/ssh_session/integration.rs` | Authenticated exec/PTY orchestration for remote hook installation and shell startup | Provider policy or a second Agent state machine |
+| `nebula_app/src/ai_agents` | Agent identity and structurally constrained screen observations | Authority to overwrite hook results or infer remote completion from silence |
 | `nebula_app/src/gpui_shell` | GPUI views, UI state, commands and subscriptions | A second settings/domain implementation |
 | `nebula_app/src/product_ui` | Feature-selected shared presentation facade | A route to legacy rendering dependencies |
 | `nebula_app/src/display`, `renderer` | Legacy rendering and still-shared extracted models | A source of new undifferentiated functionality |
@@ -88,7 +93,8 @@ whole product.
   direction, cost, ownership and why an existing module is insufficient.
 
 See [CONTRIBUTING](../CONTRIBUTING.md), [enforced contracts](project-constraints.md),
-and [decision records](architecture-decisions.md). Architectural review evaluates
+the [causal note policy](../architecture/notes/AGENTS.md), and the
+[legacy decision archive](architecture-decisions.md). Architectural review evaluates
 cohesion and knowledge shared across boundaries; CI provides narrower mechanical
 checks, not a guarantee against every future design mistake.
 

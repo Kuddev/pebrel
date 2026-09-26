@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
+
 from conformance.harness import ConformanceContext, PROTOCOL_NAME, PROTOCOL_VERSION, path_shape, require
 
 
 def run(ctx: ConformanceContext) -> dict[str, object]:
+    started = time.monotonic()
     snapshot = ctx.snapshot()
     ctx.refresh_targets(snapshot)
     windows = snapshot.get("windows") or []
@@ -47,6 +50,14 @@ def run(ctx: ConformanceContext) -> dict[str, object]:
     cwd = pane.get("cwd", "")
     require(path_shape(cwd) != "relative", f"pane cwd is not absolute: {cwd!r}")
 
+    # Runtime discovery and a child PID can exist before a cold shell emits any
+    # text. Finish the bounded boot phase before the echo case submits input;
+    # its own output deadline and single submission remain unchanged.
+    ctx.poll(
+        ctx.read, lambda read: bool(read["text"].strip()),
+        "default shell did not render initial output", ctx.startup_timeout,
+    )
+
     return {
         "window_count": 1,
         "default_tab_present": True,
@@ -54,5 +65,5 @@ def run(ctx: ConformanceContext) -> dict[str, object]:
         "process_tree_available": True,
         "shell_category": shell,
         "cwd_shape": path_shape(cwd),
-        "startup_ms": ctx.startup_ms,
+        "startup_ms": ctx.startup_ms + round((time.monotonic() - started) * 1000),
     }

@@ -2,8 +2,6 @@
 
 use std::time::{Duration, Instant};
 
-use crate::i18n::t;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryAction {
     None,
@@ -47,26 +45,21 @@ impl UserFacingError {
     }
 
     pub fn message(&self) -> String {
-        let body = t!("ux.error.body",
-            title = &self.title,
-            cause = &self.cause,
-            suggestion = &self.suggestion
-        );
-        let mut message = body.to_string();
-
+        let mut message =
+            format!("{}\n原因：{}\n建议：{}", self.title, self.cause, self.suggestion);
         let action = match self.retry {
             RetryAction::None => None,
-            RetryAction::Retry => Some(t!("ux.error.retry")),
-            RetryAction::OpenSettings => Some(t!("ux.error.open_settings")),
-            RetryAction::OpenLogs => Some(t!("ux.error.open_logs")),
+            RetryAction::Retry => Some("操作：请重试"),
+            RetryAction::OpenSettings => Some("操作：打开设置检查配置"),
+            RetryAction::OpenLogs => Some("操作：打开日志查看诊断信息"),
         };
         if let Some(action) = action {
             message.push('\n');
             message.push_str(action);
         }
         if let Some(details) = &self.details {
-            message.push('\n');
-            message.push_str(&t!("ux.error.details", details = details));
+            message.push_str("\n详情：");
+            message.push_str(details);
         }
         message
     }
@@ -205,40 +198,15 @@ impl FocusIndex {
 mod tests {
     use super::*;
 
-    // 本进程是测试工作进程，`LanguagePreference::resolved()` 只在应用启动路径
-    // 里固定 `UiLanguage::current()`；而 `current()` 是进程级全局状态，并行
-    // 测试线程会互相覆盖。相关用例共用一把锁串行钉住语言，断言才不依赖运行
-    // 机器的区域设置或其他测试线程。
-    fn pin_language(language: crate::i18n::UiLanguage) -> std::sync::MutexGuard<'static, ()> {
-        static LANGUAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let guard = LANGUAGE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        language.activate();
-        guard
-    }
-
     #[test]
     fn structured_error_contains_cause_and_next_step() {
-        let _language = pin_language(crate::i18n::UiLanguage::ZhCn);
         let error = UserFacingError::new("连接失败", "主机不可达", "检查地址后重试")
             .retry(RetryAction::Retry)
             .details("timeout");
         let message = error.message();
-        assert!(message.contains("原因：主机不可达"), "实际文案: {message}");
-        assert!(message.contains("建议：检查地址后重试"), "实际文案: {message}");
-        assert!(message.contains("操作：请重试"), "实际文案: {message}");
-    }
-
-    #[test]
-    fn structured_error_message_follows_the_active_language() {
-        let _language = pin_language(crate::i18n::UiLanguage::EnUs);
-        let error = UserFacingError::new("Connection failed", "host unreachable", "check the address")
-            .retry(RetryAction::OpenLogs)
-            .details("timeout");
-        let message = error.message();
-        assert!(message.contains("Cause: host unreachable"), "actual message: {message}");
-        assert!(message.contains("Suggestion: check the address"), "actual message: {message}");
-        assert!(message.contains("Action: open the logs for diagnostic details"), "actual message: {message}");
-        assert!(message.contains("Details: timeout"), "actual message: {message}");
+        assert!(message.contains("原因：主机不可达"));
+        assert!(message.contains("建议：检查地址后重试"));
+        assert!(message.contains("操作：请重试"));
     }
 
     #[test]

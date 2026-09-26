@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use super::Row;
 use crate::index::Line;
 
-/// Maximum number of buffered lines outside of the grid for performance optimization.
-const MAX_CACHE_SIZE: usize = 1_000;
+/// Bounds for the number of initialized rows kept ahead of active scrollback.
+const MIN_CACHE_SIZE: usize = 32;
+const MAX_CACHE_SIZE: usize = 128;
 
 /// A ring buffer for optimizing indexing and rotation.
 ///
@@ -96,10 +97,10 @@ impl<T> Storage<T> {
     pub fn shrink_visible_lines(&mut self, next: usize) {
         // Shrink the size without removing any lines.
         let shrinkage = self.visible_lines - next;
-        self.shrink_lines(shrinkage);
 
-        // Update visible lines.
+        // Reclaim against the new viewport's cache allowance.
         self.visible_lines = next;
+        self.shrink_lines(shrinkage);
     }
 
     /// Shrink the number of lines in the buffer.
@@ -108,7 +109,7 @@ impl<T> Storage<T> {
         self.len -= shrinkage;
 
         // Free memory.
-        if self.inner.len() > self.len + MAX_CACHE_SIZE {
+        if self.inner.len() > self.len + self.cache_size() {
             self.truncate();
         }
     }
@@ -130,7 +131,7 @@ impl<T> Storage<T> {
         if self.len + additional_rows > self.inner.len() {
             self.rezero();
 
-            let realloc_size = self.inner.len() + max(additional_rows, MAX_CACHE_SIZE);
+            let realloc_size = self.inner.len() + max(additional_rows, self.cache_size());
             self.inner.resize_with(realloc_size, || Row::new(columns));
         }
 
@@ -140,6 +141,13 @@ impl<T> Storage<T> {
     #[inline]
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// Keep roughly one viewport ready so line-at-a-time output does not have to
+    /// rezero the ring on every scroll, without prebuilding thousands of cells.
+    #[inline]
+    fn cache_size(&self) -> usize {
+        self.visible_lines.clamp(MIN_CACHE_SIZE, MAX_CACHE_SIZE)
     }
 
     /// Swap implementation for Row<T>.
@@ -267,7 +275,7 @@ impl<T> IndexMut<Line> for Storage<T> {
 mod tests {
     use crate::grid::GridCell;
     use crate::grid::row::Row;
-    use crate::grid::storage::{MAX_CACHE_SIZE, Storage};
+    use crate::grid::storage::{MAX_CACHE_SIZE, MIN_CACHE_SIZE, Storage};
     use crate::index::{Column, Line};
     use crate::term::cell::Flags;
 
@@ -345,7 +353,7 @@ mod tests {
     ///   2: -
     ///   3: \0
     ///   ...
-    ///   MAX_CACHE_SIZE: \0
+    ///   MIN_CACHE_SIZE: \0
     #[test]
     fn grow_after_zero() {
         // Setup storage area.
@@ -366,7 +374,7 @@ mod tests {
             visible_lines: 4,
             len: 4,
         };
-        expected.inner.append(&mut vec![filled_row('\0'); MAX_CACHE_SIZE]);
+        expected.inner.append(&mut vec![filled_row('\0'); MIN_CACHE_SIZE]);
 
         assert_eq!(storage.visible_lines, expected.visible_lines);
         assert_eq!(storage.inner, expected.inner);
@@ -386,7 +394,7 @@ mod tests {
     ///   2: -
     ///   3: \0
     ///   ...
-    ///   MAX_CACHE_SIZE: \0
+    ///   MIN_CACHE_SIZE: \0
     #[test]
     fn grow_before_zero() {
         // Setup storage area.
@@ -407,7 +415,7 @@ mod tests {
             visible_lines: 4,
             len: 4,
         };
-        expected.inner.append(&mut vec![filled_row('\0'); MAX_CACHE_SIZE]);
+        expected.inner.append(&mut vec![filled_row('\0'); MIN_CACHE_SIZE]);
 
         assert_eq!(storage.visible_lines, expected.visible_lines);
         assert_eq!(storage.inner, expected.inner);
@@ -738,13 +746,81 @@ mod tests {
             filled_row('4'),
             filled_row('5'),
         ];
-        let expected_init_size = std::cmp::max(init_size, MAX_CACHE_SIZE);
+        let expected_init_size = std::cmp::max(init_size, MIN_CACHE_SIZE);
         expected_inner.append(&mut vec![filled_row('\0'); expected_init_size]);
         let expected_storage = Storage { inner: expected_inner, zero: 0, visible_lines: 0, len: 9 };
 
         assert_eq!(storage.len, expected_storage.len);
         assert_eq!(storage.zero, expected_storage.zero);
         assert_eq!(storage.inner, expected_storage.inner);
+    }
+
+    #[test]
+    fn initialize_caches_one_bounded_viewport() {
+        let mut ordinary = Storage::<char>::with_capacity(30, 1);
+        ordinary.initialize(1, 1);
+        assert_eq!(ordinary.len, 31);
+        assert_eq!(ordinary.inner.len(), 30 + MIN_CACHE_SIZE);
+
+        let mut medium = Storage::<char>::with_capacity(80, 1);
+        medium.initialize(1, 1);
+        assert_eq!(medium.inner.len(), 160);
+
+        let mut tall = Storage::<char>::with_capacity(200, 1);
+        tall.initialize(1, 1);
+        assert_eq!(tall.inner.len(), 200 + MAX_CACHE_SIZE);
+    }
+
+    #[test]
+    fn shrink_lines_releases_cache_beyond_one_viewport() {
+        let mut storage = Storage::<char>::with_capacity(40, 1);
+        storage.initialize(80, 1);
+        assert_eq!(storage.inner.len(), 120);
+
+        storage.shrink_lines(80);
+
+        assert_eq!(storage.len, 40);
+        assert_eq!(storage.inner.len(), 40);
+    }
+
+    #[test]
+    fn shrinking_viewport_uses_the_smaller_cache_allowance() {
+        let mut storage = Storage::<char>::with_capacity(100, 1);
+        storage.initialize(1, 1);
+
+        storage.shrink_visible_lines(30);
+
+        assert_eq!(storage.visible_lines, 30);
+        assert_eq!(storage.len, 31);
+        assert_eq!(storage.inner.len(), 31);
+    }
+
+    #[test]
+    fn repeated_growth_and_rotated_reclamation_preserve_line_order() {
+        let mut storage = Storage::<char>::with_capacity(40, 1);
+        for value in 1..=400_u32 {
+            storage.initialize(1, 1);
+            storage.rotate(-1);
+            storage[Line(39)][Column(0)] = char::from_u32(value).unwrap();
+            assert!(storage.inner.len() - storage.len < 40);
+            for offset in 0..value {
+                assert_eq!(
+                    storage[Line(39 - offset as i32)][Column(0)],
+                    char::from_u32(value - offset).unwrap(),
+                );
+            }
+        }
+
+        storage.shrink_lines(350);
+
+        assert_eq!(storage.len, 90);
+        assert_eq!(storage.inner.len(), 90);
+        for offset in 0..90 {
+            assert_eq!(
+                storage[Line(39 - offset)][Column(0)],
+                char::from_u32(400 - offset as u32).unwrap(),
+            );
+        }
     }
 
     #[test]

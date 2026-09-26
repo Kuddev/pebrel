@@ -4,6 +4,9 @@
 //! `NebulaWorkspace`。所有外部启动和 runtime 命令先在这里选择窗口，再把
 //! 变更投递到对应 workspace，避免多个 receiver 竞争消费同一事件流。
 
+mod shutdown;
+pub(crate) use shutdown::{quit_all, quit_for_update};
+
 #[cfg(windows)]
 mod quick_window;
 #[cfg(windows)]
@@ -21,11 +24,11 @@ use std::time::Duration;
 
 use super::DockTarget;
 use gpui::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, WeakEntity, Window,
-    WindowBounds, WindowOptions, div, point, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, IntoElement, Render,
+    Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowOptions, div, point, px,
+    size,
 };
-use gpui_component::{ActiveTheme as _, Root, TitleBar};
+use gpui_component::{Root, TitleBar};
 use nebula_split::SplitTree;
 use serde_json::json;
 
@@ -38,11 +41,16 @@ use crate::runtime_api::{
     ApiError, RuntimeCommand, RuntimeDispatch, RuntimeSnapshot, RuntimeWindow,
 };
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod transfer_tests;
+
 /// 新窗口的首帧内容。只有进程的第一个窗口恢复全局 session；其它窗口必须
 /// 明确创建一个新终端或暂时保持空白，不能把同一份 session 重放多次。
 pub(crate) enum WorkspaceStartup {
     RestoreOrDefault,
+    RestoreUpdate(crate::session::Session),
     NewTerminal { cwd: Option<PathBuf> },
+    LaunchTerminal { cwd: Option<PathBuf>, launch: crate::session::LaunchSession },
     Empty,
 }
 
@@ -146,7 +154,6 @@ pub(crate) struct CrossWindowTabDrag {
     source: WeakEntity<NebulaWorkspace>,
     source_window_id: u64,
     pane_id: u64,
-    title: SharedString,
 }
 
 impl CrossWindowTabDrag {
@@ -169,23 +176,14 @@ struct NativeCursorTarget {
     client_y: i32,
 }
 
-pub(crate) struct TabDragPreview {
-    title: SharedString,
-}
+/// GPUI requires a renderable entity for native cross-window dragging, while
+/// the source tab row already follows the pointer in our own reorder layer.
+/// Keep this proxy invisible so the tab title is not painted a second time.
+pub(crate) struct TabDragPreview;
 
 impl Render for TabDragPreview {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .max_w(px(280.0))
-            .px_3()
-            .py_2()
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().popover)
-            .text_color(cx.theme().popover_foreground)
-            .shadow_md()
-            .child(self.title.clone())
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(1.0)).opacity(0.0)
     }
 }
 
@@ -216,21 +214,15 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
     let quit_subscription = cx.on_app_quit(|cx| {
         #[cfg(windows)]
         quick_window::persist_quick_size(cx);
-        save_combined_session(cx, true);
+        if let Err(error) = save_combined_session(cx, true) {
+            log::warn!("Final session write: {error}");
+        }
         async {}
     });
     let closed_subscription = cx.on_window_closed(|cx, _window_id| {
-        prune_entries(cx);
-        // 快速终端不能改变普通 session 的生命周期：最后一扇普通窗口关闭后，
-        // 即使隐藏的 Quake 窗口仍存活，也不能再补写一份空的普通 session。
-        if cx
-            .global::<WindowRegistry>()
-            .entries
-            .iter()
-            .any(|entry| entry.role == WindowRole::Regular)
-        {
-            save_combined_session(cx, false);
-        }
+        // A tab transfer can close its source while the destination workspace
+        // is still borrowed. Snapshot all windows only after that update ends.
+        cx.defer(save_after_window_closed);
     });
     cx.global_mut::<WindowRegistry>()
         ._subscriptions
@@ -245,15 +237,68 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
     .detach();
 }
 
+fn save_after_window_closed(cx: &mut App) {
+    prune_entries(cx);
+    // 快速终端不能改变普通 session 的生命周期：最后一扇普通窗口关闭后，
+    // 即使隐藏的 Quake 窗口仍存活，也不能再补写一份空的普通 session。
+    if cx.global::<WindowRegistry>().entries.iter().any(|entry| entry.role == WindowRole::Regular) {
+        if let Err(error) = save_combined_session(cx, false) {
+            log::warn!("Session checkpoint: {error}");
+        }
+    }
+}
+
 pub(crate) fn open_initial_window(
     cx: &mut App,
     ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
     shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
     initial_cwd: Option<PathBuf>,
+    initial_command: Option<crate::config::ui_config::Program>,
+    shell_id: Option<String>,
 ) {
-    let startup = match initial_cwd {
-        Some(cwd) => WorkspaceStartup::NewTerminal { cwd: Some(cwd) },
-        None => WorkspaceStartup::RestoreOrDefault,
+    if !crate::platform::elevation::requires_isolation()
+        && let Some(sessions) = crate::update_download::handoff::restore_ticket()
+    {
+        let mut sessions = sessions.into_iter();
+        if let Some(first) = sessions.next() {
+            open_workspace_window(
+                cx,
+                WorkspaceStartup::RestoreUpdate(first),
+                Some(ai_events),
+                Some(shell_events),
+                true,
+                WindowRole::Regular,
+            )
+            .expect("failed to reopen updated workspace");
+            for session in sessions {
+                if let Err(error) = open_workspace_window(
+                    cx,
+                    WorkspaceStartup::RestoreUpdate(session),
+                    None,
+                    None,
+                    true,
+                    WindowRole::Regular,
+                ) {
+                    log::warn!("Could not reopen an updated window: {error}");
+                }
+            }
+            return;
+        }
+    }
+    let startup = if shell_id.is_some() {
+        match runtime_window_startup(initial_cwd, shell_id.as_deref()) {
+            Ok(startup) => startup,
+            Err(error) => {
+                log::error!("Could not resolve requested shell: {error:?}");
+                return;
+            },
+        }
+    } else {
+        initial_startup(
+            initial_cwd,
+            initial_command,
+            crate::platform::elevation::requires_isolation(),
+        )
     };
     open_workspace_window(
         cx,
@@ -264,6 +309,85 @@ pub(crate) fn open_initial_window(
         WindowRole::Regular,
     )
     .expect("failed to open Pebrel GPUI window");
+}
+
+fn initial_startup(
+    cwd: Option<PathBuf>,
+    command: Option<crate::config::ui_config::Program>,
+    isolated: bool,
+) -> WorkspaceStartup {
+    if let Some(command) = command {
+        let program = command.program().to_owned();
+        let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
+        return WorkspaceStartup::LaunchTerminal {
+            cwd,
+            launch: crate::session::LaunchSession::Shell {
+                name,
+                program,
+                args: command.args().to_vec(),
+            },
+        };
+    }
+    if cwd.is_some() || isolated {
+        WorkspaceStartup::NewTerminal { cwd }
+    } else {
+        WorkspaceStartup::RestoreOrDefault
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn invalid_explicit_shell_cannot_create_a_runtime_window(cx: &mut gpui::TestAppContext) {
+        let error = cx
+            .update(|cx| open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into())))
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_shell");
+        assert!(cx.update(|cx| cx.windows().is_empty()));
+    }
+
+    #[test]
+    fn default_runtime_startup_keeps_the_requested_directory() {
+        let cwd = Some(PathBuf::from("project"));
+        assert!(
+            matches!(runtime_window_startup(cwd.clone(), None).unwrap(), WorkspaceStartup::NewTerminal { cwd: actual } if actual == cwd)
+        );
+    }
+
+    #[test]
+    fn explicit_program_is_kept_with_its_arguments_and_directory() {
+        let command = crate::config::ui_config::Program::WithArgs {
+            program: "shell.exe".into(),
+            args: vec!["--literal=two words".into()],
+        };
+        let cwd = Some(PathBuf::from("C:/work area"));
+        let WorkspaceStartup::LaunchTerminal { launch, cwd: actual_cwd } =
+            initial_startup(cwd.clone(), Some(command), true)
+        else {
+            panic!("explicit launch was discarded");
+        };
+        assert_eq!(actual_cwd, cwd);
+        assert_eq!(
+            launch,
+            crate::session::LaunchSession::Shell {
+                name: "shell.exe".into(),
+                program: "shell.exe".into(),
+                args: vec!["--literal=two words".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn privileged_startup_never_restores_the_ordinary_session() {
+        assert!(matches!(initial_startup(None, None, false), WorkspaceStartup::RestoreOrDefault));
+        assert!(matches!(
+            initial_startup(None, None, true),
+            WorkspaceStartup::NewTerminal { cwd: None }
+        ));
+    }
 }
 
 pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App) {
@@ -375,7 +499,14 @@ fn open_workspace_window(
     role: WindowRole,
 ) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {
     let (runtime_window_id, runtime_hub) = allocate_window(cx);
-    let options = workspace_window_options(cx, focus, role);
+    let start_hidden = shell_events.is_some()
+        && matches!(startup, WorkspaceStartup::RestoreOrDefault)
+        && crate::platform::startup::start_hidden(&nebula_settings::RuntimeSettings::load());
+    let mut options = workspace_window_options(cx, focus, role);
+    if start_hidden {
+        options.show = false;
+        options.focus = false;
+    }
     let workspace_slot = Rc::new(RefCell::new(None));
     let hwnd_slot = Rc::new(RefCell::new(0isize));
     let workspace_out = workspace_slot.clone();
@@ -398,6 +529,7 @@ fn open_workspace_window(
                 cx,
             )
         });
+        workspace.update(cx, |workspace, _| workspace.window_hidden = start_hidden);
         if runtime_window_id == 1
             && let Ok(path) = std::env::var("NEBULA_GPUI_OPEN_DOC")
             && !path.is_empty()
@@ -441,15 +573,28 @@ pub(crate) fn open_new_window(cx: &mut App, cwd: Option<PathBuf>) -> gpui::Resul
     Ok((window_id, pane_id))
 }
 
-fn open_runtime_window(cx: &mut App, cwd: Option<PathBuf>) -> gpui::Result<(u64, u64)> {
-    let (window_id, workspace) = open_workspace_window(
-        cx,
-        WorkspaceStartup::NewTerminal { cwd },
-        None,
-        None,
-        false,
-        WindowRole::Regular,
-    )?;
+/// Resolve explicit shell identity before any window or terminal is created.
+fn runtime_window_startup(
+    cwd: Option<PathBuf>,
+    shell_id: Option<&str>,
+) -> Result<WorkspaceStartup, ApiError> {
+    match shell_id {
+        Some(id) => super::shell_launch::resolve_shell_at(id, cwd.as_deref())
+            .map(|launch| WorkspaceStartup::LaunchTerminal { cwd, launch })
+            .map_err(|error| ApiError::new("invalid_shell", error)),
+        None => Ok(WorkspaceStartup::NewTerminal { cwd }),
+    }
+}
+
+fn open_runtime_window(
+    cx: &mut App,
+    cwd: Option<PathBuf>,
+    shell_id: Option<String>,
+) -> Result<(u64, u64), ApiError> {
+    let startup = runtime_window_startup(cwd, shell_id.as_deref())?;
+    let (window_id, workspace) =
+        open_workspace_window(cx, startup, None, None, false, WindowRole::Regular)
+            .map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
     let pane_id = workspace.read(cx).active_terminal_pane_id().unwrap_or_default();
     Ok((window_id, pane_id))
 }
@@ -716,6 +861,12 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
     for event in events {
         match event {
             GpuiShellEvent::NotificationFocus(pane_id) => focus_notification(pane_id, cx),
+            GpuiShellEvent::NotificationChoice { pane_id, request_id, choice } => {
+                let feedback = entry_with_pane(pane_id, cx).map(|entry| entry.handle);
+                crate::gpui_shell::toast::reply_to_choice(
+                    pane_id, request_id, choice, feedback, cx,
+                );
+            },
             GpuiShellEvent::TrayFocus(pane_id) => {
                 let target =
                     pane_id.and_then(|pane_id| entry_with_pane(pane_id, cx)).or_else(|| {
@@ -858,32 +1009,32 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             );
             return;
         },
-        RuntimeCommand::NewWindow { cwd } => {
-            let response = open_runtime_window(cx, cwd.clone())
-                .map_err(|error| ApiError::new("window_create_failed", error.to_string()))
-                .map(|(window_id, pane_id)| {
+        RuntimeCommand::NewWindow { cwd, shell_id } => {
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
+                |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
                         "action": { "window_id": window_id, "pane_id": pane_id },
                         "snapshot": snapshot
                     })
-                });
+                },
+            );
             dispatch.respond(response);
             return;
         },
-        RuntimeCommand::NewTab { window_id: None, cwd }
+        RuntimeCommand::NewTab { window_id: None, cwd, shell_id }
             if nebula_settings::RuntimeSettings::load().windowing_behavior
                 == nebula_settings::WindowingBehaviorName::UseNew =>
         {
-            let response = open_runtime_window(cx, cwd.clone())
-                .map_err(|error| ApiError::new("window_create_failed", error.to_string()))
-                .map(|(window_id, pane_id)| {
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
+                |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
                         "action": { "window_id": window_id, "pane_id": pane_id },
                         "snapshot": snapshot
                     })
-                });
+                },
+            );
             dispatch.respond(response);
             return;
         },
@@ -923,27 +1074,21 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
 
     let entry = match route_entry(&dispatch.command, cx) {
         Ok(entry) => entry,
-        Err(error)
+        Err(_error)
             if matches!(dispatch.command, RuntimeCommand::NewTab { window_id: None, .. }) =>
         {
-            let RuntimeCommand::NewTab { cwd, .. } = &dispatch.command else { unreachable!() };
-            let response = open_runtime_window(cx, cwd.clone())
-                .map_err(|create| {
-                    ApiError::new(
-                        "window_create_failed",
-                        format!(
-                            "{}: {}; creating a fallback window also failed: {create}",
-                            error.code, error.message
-                        ),
-                    )
-                })
-                .map(|(window_id, pane_id)| {
+            let RuntimeCommand::NewTab { cwd, shell_id, .. } = &dispatch.command else {
+                unreachable!()
+            };
+            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
+                |(window_id, pane_id)| {
                     let snapshot = publish_runtime_snapshot(cx);
                     json!({
                         "action": { "window_id": window_id, "pane_id": pane_id },
                         "snapshot": snapshot
                     })
-                });
+                },
+            );
             dispatch.respond(response);
             return;
         },
@@ -1102,6 +1247,7 @@ pub(crate) fn focus_notification(pane_id: Option<u64>, cx: &mut App) {
         }
         super::quick_terminal::show_native_window(entry.native_hwnd);
     }
+    cx.activate(true);
     let workspace = entry.workspace.clone();
     let _ = entry.handle.update(cx, move |_, window, cx| {
         let _ = workspace.update(cx, |workspace, cx| {
@@ -1115,12 +1261,22 @@ pub(crate) fn focus_notification(pane_id: Option<u64>, cx: &mut App) {
             #[cfg(windows)]
             if let Some(hwnd) = native_hwnd(window) {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    IsIconic, SW_RESTORE, ShowWindow,
+                    BringWindowToTop, IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOW,
+                    SetForegroundWindow, ShowWindow,
                 };
+                // Consult native visibility: tray/OS state can differ from the
+                // workspace flag. A notification click is an explicit request
+                // to reveal and foreground this window, including a hidden HWND.
                 unsafe {
                     let hwnd = hwnd as *mut std::ffi::c_void;
                     if IsIconic(hwnd) != 0 {
                         ShowWindow(hwnd, SW_RESTORE);
+                    } else if IsWindowVisible(hwnd) == 0 {
+                        ShowWindow(hwnd, SW_SHOW);
+                    }
+                    BringWindowToTop(hwnd);
+                    if SetForegroundWindow(hwnd) == 0 {
+                        log::debug!("notification foreground request deferred to GPUI activation");
                     }
                 }
             }
@@ -1221,7 +1377,28 @@ pub(crate) fn publish_runtime_snapshot_with_current(
 pub(crate) fn autosave_tick(cx: &mut App) {
     #[cfg(windows)]
     quick_window::persist_quick_size(cx);
-    save_combined_session(cx, false);
+    if let Err(error) = save_combined_session(cx, false) {
+        log::warn!("Session checkpoint: {error}");
+        return;
+    }
+    let workspaces = cx
+        .global::<WindowRegistry>()
+        .entries
+        .iter()
+        .filter(|entry| entry.role == WindowRole::Regular)
+        .filter_map(|entry| entry.workspace.upgrade())
+        .collect::<Vec<_>>();
+    let ready = workspaces.iter().all(|workspace| {
+        workspace.read(cx).tabs.iter().all(|tab| match tab {
+            WorkspaceTab::Terminal { panes, .. } => {
+                panes.iter().all(|pane| pane.view.read(cx).recovery_ready())
+            },
+            _ => true,
+        })
+    });
+    if ready {
+        crate::update_download::handoff::acknowledge_restore(workspaces.len());
+    }
 }
 
 fn combined_session(
@@ -1255,10 +1432,10 @@ fn combined_session(
     combine_sessions(sessions)
 }
 
-fn save_combined_session(cx: &mut App, clean: bool) {
+fn save_combined_session(cx: &mut App, clean: bool) -> std::io::Result<()> {
     let session = combined_session(None, cx);
     let reason = if clean { SaveReason::Quit } else { SaveReason::Checkpoint };
-    cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason);
+    cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason)
 }
 
 pub(super) fn save_current_window_session(
@@ -1266,49 +1443,14 @@ pub(super) fn save_current_window_session(
     session: crate::session::Session,
     reason: SaveReason,
     cx: &mut App,
-) {
+) -> std::io::Result<()> {
     if !cx.global::<WindowRegistry>().entries.iter().any(|entry| {
         entry.runtime_window_id == runtime_window_id && entry.role == WindowRole::Regular
     }) {
-        return;
+        return Ok(());
     }
     let session = combined_session(Some((runtime_window_id, session)), cx);
-    cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason);
-}
-
-pub(crate) fn quit_all(cx: &mut App) {
-    if cx.global::<WindowRegistry>().quit_pending {
-        return;
-    }
-    cx.global_mut::<WindowRegistry>().quit_pending = true;
-    let entries = cx.global::<WindowRegistry>().entries.clone();
-    let panes = entries
-        .iter()
-        .filter(|entry| entry.role == WindowRole::Regular)
-        .filter_map(|entry| {
-            entry.workspace.update(cx, |workspace, cx| workspace.prepare_session_save(cx)).ok()
-        })
-        .flatten()
-        .collect::<Vec<_>>();
-    cx.spawn(async move |cx| {
-        super::closing::wait_for_session_ids(&panes, cx).await;
-        cx.update(finish_quit_all);
-    })
-    .detach();
-}
-
-fn finish_quit_all(cx: &mut App) {
-    save_combined_session(cx, true);
-    prune_entries(cx);
-    let entries = cx.global::<WindowRegistry>().entries.clone();
-    for entry in entries {
-        let workspace = entry.workspace.clone();
-        let _ = entry.handle.update(cx, move |_, _window, cx| {
-            let _ = workspace.update(cx, |workspace, cx| workspace.shutdown_terminal_panes(cx));
-        });
-    }
-    crate::tray::shutdown();
-    cx.quit();
+    cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason)
 }
 
 pub(crate) fn move_tab_to_new_window(payload: CrossWindowTabDrag, cx: &mut App) {
@@ -1382,7 +1524,11 @@ pub(super) fn close_saved_workspace_window(
     window: &mut Window,
     cx: &mut App,
 ) {
-    save_current_window_session(runtime_window_id, session, SaveReason::WindowClose, cx);
+    if let Err(error) =
+        save_current_window_session(runtime_window_id, session, SaveReason::WindowClose, cx)
+    {
+        log::warn!("Could not checkpoint moved window: {error}");
+    }
     unregister(runtime_window_id, cx);
     window.remove_window();
 }
@@ -1401,7 +1547,11 @@ pub(crate) fn close_empty_workspace_window(
         let reason =
             if session.is_some() { SaveReason::TabsClosed } else { SaveReason::WindowClose };
         let session = session.unwrap_or_else(|| crate::session::Session::new(0, Vec::new()));
-        cx.global_mut::<WindowRegistry>().session_persistence.save(Some(session), reason);
+        if let Err(error) =
+            cx.global_mut::<WindowRegistry>().session_persistence.save(Some(session), reason)
+        {
+            log::warn!("Could not save empty workspace: {error}");
+        }
     }
     window.remove_window();
 }
@@ -1417,15 +1567,14 @@ impl NebulaWorkspace {
             source: cx.entity().downgrade(),
             source_window_id: self.runtime_window_id,
             pane_id: *focused,
-            title: self.tab_title(ix, cx),
         })
     }
 
     pub(crate) fn cross_window_drag_preview(
-        payload: &CrossWindowTabDrag,
+        _payload: &CrossWindowTabDrag,
         cx: &mut App,
     ) -> Entity<TabDragPreview> {
-        cx.new(|_| TabDragPreview { title: payload.title.clone() })
+        cx.new(|_| TabDragPreview)
     }
 
     pub(crate) fn schedule_move_tab_to_new_window(&self, ix: usize, cx: &mut Context<Self>) {
@@ -1471,6 +1620,9 @@ impl NebulaWorkspace {
         } else {
             let _ = source_handle.update(cx, move |_, source_window, cx| {
                 let _ = source.update(cx, |source, cx| {
+                    if source.tabs.is_empty() && source.settings_tab_open {
+                        source.open_settings(source_window, cx);
+                    }
                     source.reveal_active_tab();
                     source.focus_active(source_window, cx);
                     source.sync_side_panel_to_active(true, cx);
@@ -1507,7 +1659,7 @@ impl NebulaWorkspace {
         if !self.tabs.is_empty() {
             self.active = self.active.min(self.tabs.len() - 1);
         }
-        let source_became_empty = self.tabs.is_empty();
+        let source_became_empty = self.tabs.is_empty() && !self.settings_tab_open;
         Some(DetachedTerminalTab {
             tab,
             meta,
@@ -1713,14 +1865,14 @@ mod tests {
             RuntimeWindowPolicy::Focus
         );
         assert_eq!(
-            runtime_window_policy(&RuntimeCommand::NewWindow { cwd: None }),
+            runtime_window_policy(&RuntimeCommand::NewWindow { cwd: None, shell_id: None }),
             RuntimeWindowPolicy::CreateWithoutActivation
         );
 
         let preserve = vec![
             RuntimeCommand::Snapshot,
             RuntimeCommand::CloseWindow { window_id: Some(1) },
-            RuntimeCommand::NewTab { window_id: Some(1), cwd: None },
+            RuntimeCommand::NewTab { window_id: Some(1), cwd: None, shell_id: None },
             RuntimeCommand::CloseTab { window_id: Some(1), tab_index: 0 },
             RuntimeCommand::RenameTab {
                 window_id: Some(1),

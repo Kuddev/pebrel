@@ -43,7 +43,7 @@ pub use super::document_model::viewable_file;
 
 // ---- layout constants (logical px, multiplied by scale at use sites) ----
 
-/// Reading column: capped like a Typora page so long lines stay readable on
+/// Reading column: capped so long lines stay readable on
 /// wide windows; centered in the pane area with a comfortable gutter.
 const MAX_COLUMN_W: f32 = 860.0;
 const GUTTER: f32 = 44.0;
@@ -743,7 +743,7 @@ impl LayoutCtx<'_> {
         match block {
             FormattedTextLine::Heading(header) => {
                 let (text_scale, top, bottom) = match header.heading_size {
-                    // Sharply separated tiers (SiYuan/Typora-like): H1 reads as
+                    // Sharply separated tiers: H1 reads as
                     // a page title, H2 as a section, H3 a step below body+bold.
                     1 => (1.7, 1.1, 0.45),
                     2 => (1.42, 0.95, 0.4),
@@ -771,7 +771,7 @@ impl LayoutCtx<'_> {
                         span.strong_ink = true;
                     }
                     let mut decor = decor;
-                    // Typora-style underline on H1/H2, on the last wrap line.
+                    // Underline H1/H2 on the last wrap line.
                     decor.underline_row = header.heading_size <= 2 && i + 1 == count;
                     let math_height = spans
                         .iter()

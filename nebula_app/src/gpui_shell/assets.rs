@@ -14,7 +14,7 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, Result, SharedString};
 
-/// 编译期嵌入。就这么几个、每个不到 1KB，用不着 rust-embed 那一套。
+/// 小型 SVG 编译期嵌入，不引入额外资源加载依赖。
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
         &[$((
@@ -33,9 +33,22 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "pin",
     "pencil",
     "trash-2",
+    "refresh",
     "vcs-changes",
     "vcs-history",
     "vcs-conflict",
+    "agent-cursor",
+    "agent-copilot",
+    "agent-openai",
+    "agent-opencode",
+    "agent-pi",
+    "agent-grok",
+];
+
+const AGENT_ICONS: &[(&str, &[u8])] = &[
+    ("icons/agent-claude.svg", include_bytes!("../../../extra/logo/ai_claude.svg")),
+    ("icons/agent-kimi.svg", include_bytes!("../../../extra/logo/ai_kimi.svg")),
+    ("icons/agent-omp.svg", include_bytes!("../../../extra/logo/ai_omp.svg")),
 ];
 
 /// 先查本仓库，未命中再交给组件库。
@@ -43,7 +56,9 @@ pub struct NebulaAssets;
 
 impl AssetSource for NebulaAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some((_, bytes)) = NEBULA_ICONS.iter().find(|(name, _)| *name == path) {
+        if let Some((_, bytes)) =
+            NEBULA_ICONS.iter().chain(AGENT_ICONS).find(|(name, _)| *name == path)
+        {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
         gpui_component_assets::Assets.load(path)
@@ -54,6 +69,7 @@ impl AssetSource for NebulaAssets {
         names.extend(
             NEBULA_ICONS
                 .iter()
+                .chain(AGENT_ICONS)
                 .filter(|(name, _)| name.starts_with(path))
                 .map(|(name, _)| SharedString::from(*name)),
         );
@@ -63,6 +79,15 @@ impl AssetSource for NebulaAssets {
 
 /// 自带图标的路径。走路径而不是 `IconName`：扩展那个枚举等于改 fork。
 pub mod nav {
+    pub const AGENT_CLAUDE: &str = "icons/agent-claude.svg";
+    pub const AGENT_KIMI: &str = "icons/agent-kimi.svg";
+    pub const AGENT_OMP: &str = "icons/agent-omp.svg";
+    pub const AGENT_OPENAI: &str = "icons/nebula-agent-openai.svg";
+    pub const AGENT_OPENCODE: &str = "icons/nebula-agent-opencode.svg";
+    pub const AGENT_PI: &str = "icons/nebula-agent-pi.svg";
+    pub const AGENT_GROK: &str = "icons/nebula-agent-grok.svg";
+    pub const AGENT_CURSOR: &str = "icons/nebula-agent-cursor.svg";
+    pub const AGENT_COPILOT: &str = "icons/nebula-agent-copilot.svg";
     pub const LAYOUT_GRID: &str = "icons/nebula-layout-grid.svg";
     pub const MOUSE_POINTER: &str = "icons/nebula-mouse-pointer.svg";
     pub const SLIDERS: &str = "icons/nebula-sliders.svg";
@@ -75,6 +100,7 @@ pub mod nav {
     pub const PENCIL: &str = "icons/nebula-pencil.svg";
     /// Lucide trash-2；删除保存命令不能借用表示 Backspace 的 `IconName::Delete`。
     pub const TRASH: &str = "icons/nebula-trash-2.svg";
+    pub const REFRESH: &str = "icons/nebula-refresh.svg";
     /// IDEA Commit 工具窗口同语义的“基线 + 提交节点”：工作区变更入口。
     pub const VCS_CHANGES: &str = "icons/nebula-vcs-changes.svg";
     /// 带分叉节点的提交线路：版本历史入口。

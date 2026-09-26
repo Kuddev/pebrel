@@ -4,15 +4,10 @@
 //! （`nebula_terminal::render::RenderSnapshot`）把可见网格快照成纯数据后立刻
 //! 放锁；颜色解析（调色板 + OSC 覆盖表）与绘制都在锁外进行。
 //!
-//! 定位合同（与旧壳 `Renderer::draw_string` 相同）：每个 cell 的字形单独
-//! 塑形、从 `列号 × cell_width` 的整数 cell 原点起笔。绝不把整段文本交给
-//! `force_width` 批量塑形——GPUI 只在字形偏离目标格超过 1px 时才吸附
-//! （line_layout.rs），1px 内保留字体自然 advance；删除字符或分段变化引发
-//! 整行重塑形时，每个字形都可能在"自然位置/吸附位置"间翻转，肉眼即为
-//! 字符左右跳动。逐 cell 塑形时首字形天然落在 x=0，排版引擎没有移动
-//! 字形的权力；单字符行在 GPUI 行缓存中按 (字符, 字体) 去重，命中率极高。
-
-use std::collections::HashSet;
+//! 定位合同：字形落在 `列号 × cell_width`，不使用 `force_width` 的
+//! 1px 吸附容差。关闭连字时逐格塑形；开启时，同样式的相邻 ASCII 格
+//! 共同塑形，再由 `ligatures` 把字形簇映射回固定列号。其余字符逐格
+//! 绘制，组合字符跟随基字；编辑、光标和选区不能改变无关格的原点。
 
 use gpui::{
     App, Bounds, ContentMask, Corners, CursorStyle, DispatchPhase, Element, ElementId,
@@ -30,6 +25,10 @@ use nebula_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
 use super::colors::Palette;
 use super::view::TerminalView;
+
+#[cfg(test)]
+#[path = "element/color_tests.rs"]
+mod color_tests;
 
 pub struct TerminalElement {
     view: gpui::Entity<TerminalView>,
@@ -87,7 +86,8 @@ impl TerminalElement {
         rows: usize,
         cols: usize,
         cx: &App,
-    ) -> Option<(RenderSnapshot, Option<String>, usize, HashSet<(u16, u16)>, usize, i64)> {
+    ) -> Option<(RenderSnapshot, Option<String>, usize, super::osc_links::LinkCells, usize, i64)>
+    {
         let view = self.view.read(cx);
         let session = view.session.as_ref()?;
         let hint_config = view.hint_config.clone();
@@ -142,12 +142,23 @@ impl TerminalElement {
     fn resolve_app_colors(
         &self,
         snap: &mut RenderSnapshot,
+        links: &mut super::osc_links::LinkCells,
         theme: &Palette,
         overrides: &Colors,
         cx: &mut App,
     ) {
         self.view.update(cx, |view, _| {
             resolve_app_colors_into(snap, theme, overrides, &mut view.color_resolver);
+            for cell in links.values_mut() {
+                cell.fg = resolve_text_foreground(
+                    cell.fg,
+                    cell.bg,
+                    cell.bold,
+                    theme,
+                    overrides,
+                    &mut view.color_resolver,
+                );
+            }
         });
     }
 }
@@ -284,7 +295,7 @@ impl Element for TerminalElement {
         let focused = focus_handle.is_focused(window);
         // 旧壳只让光标本身参与闪烁；ghost、弹窗补齐和 IME 仍复用同一个坐标锚点。
         let cursor_visible = self.view.read(cx).cursor_visible();
-        let Some((mut snap, prompt_line, history, dashed, scrollback_floor, viewport_top_abs)) =
+        let Some((mut snap, prompt_line, history, mut dashed, scrollback_floor, viewport_top_abs)) =
             self.snapshot(layout.rows, layout.cols, cx)
         else {
             return;
@@ -298,7 +309,7 @@ impl Element for TerminalElement {
             view.drive_pending_remote_dir(cx);
         });
         let overrides = snap.color_overrides;
-        self.resolve_app_colors(&mut snap, &theme, &overrides, cx);
+        self.resolve_app_colors(&mut snap, &mut dashed, &theme, &overrides, cx);
         let (theme_anchor, theme_is_light) = themed_anchor(&theme, cx);
         let host_cursor_follows_theme = is_default_host_cursor(&theme);
         let app_cursor = snap.cursor.as_ref().filter(|cursor| {
@@ -479,7 +490,7 @@ impl Element for TerminalElement {
             }
         }
 
-        let (font, bold_font, italic_font, bold_italic_font, font_size) = {
+        let (font, bold_font, italic_font, bold_italic_font, font_size, ligatures) = {
             let view = self.view.read(cx);
             (
                 view.font.clone(),
@@ -487,6 +498,7 @@ impl Element for TerminalElement {
                 view.font_italic.clone(),
                 view.font_bold_italic.clone(),
                 view.font_size,
+                view.ligatures,
             )
         };
         // 全宽（CJK 等）bold run 的字形策略（设置 `cjk_bold_regular`，默认
@@ -497,8 +509,14 @@ impl Element for TerminalElement {
             .try_global::<crate::gpui_shell::config::Settings>()
             .map(|settings| settings.cjk_bold_regular)
             .unwrap_or(true);
+        let cjk_fonts = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .and_then(|settings| settings.font_cjk.clone());
         let pick_font = |bold: bool, italic: bool, wide: bool| {
             let bold = bold && !(wide && cjk_bold_regular);
+            if let Some(fonts) = cjk_fonts.as_ref().filter(|_| wide) {
+                return fonts[usize::from(bold) + 2 * usize::from(italic)].clone();
+            }
             match (bold, italic) {
                 (false, false) => font.clone(),
                 (true, false) => bold_font.clone(),
@@ -534,7 +552,7 @@ impl Element for TerminalElement {
             {
                 app_cursor_color.unwrap_or_else(|| theme.resolve(glyph.fg, &overrides, glyph.bold))
             } else if cursor_inverts(glyph.row, glyph.col) {
-                theme.background
+                theme.cursor_text.unwrap_or(theme.background)
             } else if let Some(foreground) = selected_foreground(glyph.row, glyph.col) {
                 foreground
             } else {
@@ -578,12 +596,13 @@ impl Element for TerminalElement {
             }
         }
 
-        // 旧壳定位合同：每个 cell 单独塑形，从自己的整数 cell 原点起笔。
-        // 不传 force_width——单 cell 首字形天然落在 x=0，位置完全由列号决定，
-        // 组合字符（零宽）跟随基字自然排布，不会被按字形序号吸附到邻格。
-        // 光标反色在这里只是换色，不影响任何字形位置。
+        // 连字仅合并同一行内同样式的窄 ASCII 格，光标、选区和公式
+        // 投影边界仍逐格裁定。字形簇的原点始终由固定网格决定。
         for seg in &snap.segments {
-            for cell in &seg.cells {
+            let mut cells = seg.cells.as_slice();
+            while let Some(cell) = cells.first() {
+                let remaining = cells;
+                cells = &cells[1..];
                 // 被公式覆盖的源格不画原文（公式直接落在卡底上，与旧壳
                 // CoverageMask 合同一致；计划失败的公式不进掩码、原文保留）。
                 if math_frame.covers(seg.row as usize, cell.col as usize) {
@@ -595,13 +614,13 @@ impl Element for TerminalElement {
                     continue;
                 };
                 let fg: Hsla = if cursor_inverts(seg.row, cell.col) {
-                    theme.background.into()
+                    theme.cursor_text.unwrap_or(theme.background).into()
                 } else if let Some(foreground) = selected_foreground(seg.row, cell.col) {
                     foreground.into()
                 } else {
                     theme.resolve(cell.fg, &overrides, cell.bold).into()
                 };
-                let dashed_link = dashed.contains(&(seg.row, cell.col));
+                let dashed_link = dashed.contains_key(&(seg.row, cell.col));
                 let underline = (cell.underline && !dashed_link).then(|| UnderlineStyle {
                     thickness: px(1.0),
                     color: Some(fg),
@@ -622,25 +641,80 @@ impl Element for TerminalElement {
                     bounds.origin.x + layout.cell_width * visual_col as f32,
                     bounds.origin.y + layout.line_height * seg.row as f32,
                 );
-                paint_cell_text(
-                    window,
-                    cx,
-                    SharedString::from(cell.text.clone()),
-                    run,
-                    font_size,
-                    origin,
-                    layout.line_height,
-                );
-                if dashed_link {
-                    paint_dashed_underline(
-                        window,
-                        origin,
+                let count = if ligatures && !seg.wide && !dashed_link {
+                    super::ligatures::span_len(remaining, |next, offset| {
+                        !math_frame.covers(seg.row as usize, next.col as usize)
+                            && math_frame.project_cell(
+                                seg.row as usize,
+                                next.col as usize,
+                                layout.cols,
+                            ) == Some(visual_col + offset)
+                            && cursor_inverts(seg.row, next.col)
+                                == cursor_inverts(seg.row, cell.col)
+                            && selected_foreground(seg.row, next.col)
+                                == selected_foreground(seg.row, cell.col)
+                            && !dashed.contains_key(&(seg.row, next.col))
+                    })
+                } else {
+                    1
+                };
+                if count > 1 {
+                    let text: String =
+                        remaining[..count].iter().map(|cell| cell.text.as_str()).collect();
+                    let shaped = super::ligatures::shape_ascii_span(
+                        window.text_system(),
+                        text.into(),
+                        font_size,
+                        run,
                         layout.cell_width,
+                    );
+                    let _ = shaped.paint(
+                        origin,
                         layout.line_height,
-                        fg,
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                    cells = &remaining[count..];
+                } else {
+                    paint_cell_text(
+                        window,
+                        cx,
+                        SharedString::from(cell.text.clone()),
+                        run,
+                        font_size,
+                        origin,
+                        layout.line_height,
                     );
                 }
             }
+        }
+
+        // Link decoration follows grid columns, including wide-character spacer
+        // cells and spaces omitted by text shaping. Every cell shares one dash
+        // phase, so font fallback and ASCII/CJK boundaries cannot restart it.
+        for (&(row, col), cell) in &dashed {
+            if math_frame.covers(row as usize, col as usize) {
+                continue;
+            }
+            let Some(visual_col) = math_frame.project_cell(row as usize, col as usize, layout.cols)
+            else {
+                continue;
+            };
+            let color = if cursor_inverts(row, col) {
+                theme.cursor_text.unwrap_or(theme.background)
+            } else if let Some(foreground) = selected_foreground(row, col) {
+                foreground
+            } else {
+                theme.resolve(cell.fg, &overrides, cell.bold)
+            };
+            super::link_underline::paint(
+                window,
+                cell_rect(row as usize, visual_col, 1),
+                bounds.origin.x,
+                color.into(),
+            );
         }
 
         // 公式位图画在格子文本之后、装饰（ghost/光标/滚动条）之前，
@@ -902,27 +976,6 @@ impl Element for TerminalElement {
     }
 }
 
-fn paint_dashed_underline(
-    window: &mut Window,
-    origin: gpui::Point<Pixels>,
-    cell_width: Pixels,
-    line_height: Pixels,
-    color: Hsla,
-) {
-    let y = origin.y + line_height - px(1.0);
-    let end: f32 = origin.x.as_f32() + cell_width.as_f32();
-    let mut x: f32 = origin.x.as_f32();
-    let dash: f32 = 3.0;
-    let gap: f32 = 2.0;
-    while x < end {
-        let width = f32::min(dash, end - x);
-        if width > 0.0 {
-            window.paint_quad(fill(Bounds::new(point(px(x), y), size(px(width), px(1.0))), color));
-        }
-        x += dash + gap;
-    }
-}
-
 /// Align geometry-only terminal primitives to the device pixel grid. Cell
 /// widths/heights are already measured in device pixels and converted back to
 /// logical units, but a pane origin can still be fractional after a split or
@@ -985,10 +1038,10 @@ fn paint_link_preview(
     );
 }
 
-/// 唯一的 cell 文本落笔原语：单 cell 文本塑形后从调用方给定的整数 cell
+/// 单格文本落笔原语：单 cell 文本塑形后从调用方给定的整数 cell
 /// 原点起笔，不传 `force_width`（首字形天然在 x=0，位置只由列号决定）。
-/// 网格、ghost、弹窗全部经由此处——定位合同只此一份，禁止绕开它直接
-/// `shape_line` 网格对齐文本。
+/// 网格的单格回退、ghost 和弹窗经由此处；ASCII 连字由 `ligatures`
+/// 显式映射字形簇到列号。两条路径都不依赖自然 advance 定位后续格。
 fn paint_cell_text(
     window: &mut Window,
     cx: &mut App,
@@ -1599,9 +1652,6 @@ fn resolve_app_colors_into(
     use crate::display::content::is_terminal_graphic;
     use crate::display::terminal_color::is_fixed_color;
 
-    let theme_fg = rgb_from_rgba(theme.foreground);
-    let theme_bg = rgb_from_rgba(theme.background);
-
     for run in &mut snap.bg_runs {
         let base = rgb_from_rgba(theme.resolve(run.color, overrides, false));
         let resolved = resolver.resolve_background(base, is_fixed_color(run.color, overrides));
@@ -1619,16 +1669,31 @@ fn resolve_app_colors_into(
         // 对比度是一对颜色的属性：这个前景可不可读，取决于它**这一格**底下是
         // 什么，而不是主题底色。默认底色的格子没有 bg run，所以 `SnapCell::bg`
         // 单独带着这个值。
-        let bg_base = rgb_from_rgba(theme.resolve(cell.bg, overrides, false));
-        let bg = resolver.resolve_background(bg_base, is_fixed_color(cell.bg, overrides));
-        // bold 提亮（0-7 → 8-15）必须发生在矫正**之前**，否则写回的 `Spec` 会把
-        // 提亮吃掉。
-        let base = rgb_from_rgba(theme.resolve(cell.fg, overrides, cell.bold));
-        let resolved = resolver.resolve_foreground(base, bg, true, theme_fg, theme_bg);
-        if resolved != base {
-            cell.fg = Color::Spec(resolved.0);
-        }
+        cell.fg = resolve_text_foreground(cell.fg, cell.bg, cell.bold, theme, overrides, resolver);
     }
+}
+
+fn resolve_text_foreground(
+    fg: Color,
+    bg: Color,
+    bold: bool,
+    theme: &Palette,
+    overrides: &Colors,
+    resolver: &mut crate::display::terminal_color::TerminalColorResolver,
+) -> Color {
+    use crate::display::terminal_color::is_fixed_color;
+    let bg_base = rgb_from_rgba(theme.resolve(bg, overrides, false));
+    let bg = resolver.resolve_background(bg_base, is_fixed_color(bg, overrides));
+    // Resolve bold before contrast adjustment; Spec must retain that brightening.
+    let base = rgb_from_rgba(theme.resolve(fg, overrides, bold));
+    let resolved = resolver.resolve_foreground(
+        base,
+        bg,
+        true,
+        rgb_from_rgba(theme.foreground),
+        rgb_from_rgba(theme.background),
+    );
+    if resolved != base { Color::Spec(resolved.0) } else { fg }
 }
 
 pub(super) fn rgba_rgb(color: crate::display::color::Rgb, alpha: f32) -> Rgba {
@@ -1641,7 +1706,7 @@ pub(super) fn rgba_rgb(color: crate::display::color::Rgb, alpha: f32) -> Rgba {
 }
 
 fn themed_anchor(palette: &super::colors::Palette, cx: &App) -> (crate::display::color::Rgb, bool) {
-    let sk = crate::gpui_shell::theme::chrome_theme_resolved(cx).skin();
+    let sk = crate::gpui_shell::theme::resolved_skin(cx);
     // ANSI magenta = index 5；旧壳 `display.colors[NamedColor::Magenta]`。
     let magenta = rgb_from_rgba(palette.ansi[5]);
     let mix = if sk.is_light {
