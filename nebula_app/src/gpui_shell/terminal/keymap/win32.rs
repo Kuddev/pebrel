@@ -2,7 +2,7 @@
 
 use gpui::Keystroke;
 
-/// 普通可打印字符必须交给 IME / `TranslateMessage`，不能编进 PTY。
+/// 无修饰的字母/数字/空格必须交给 IME / `TranslateMessage`，不能编进 PTY。
 ///
 /// GPUI 的 Windows 后端：`on_key_down` 一旦 `stop_propagation`，就不会再
 /// `TranslateMessage`。IME 组字（微软拼音）是 TranslateMessage 喂进去的；
@@ -18,7 +18,7 @@ pub(super) fn win32_encodes_keystroke(ks: &Keystroke) -> bool {
     }
     let mut chars = key.chars();
     match (chars.next(), chars.next()) {
-        (Some(c), None) if c.is_ascii_graphic() => false,
+        (Some(c), None) if c.is_ascii_alphanumeric() => false,
         _ => true,
     }
 }
