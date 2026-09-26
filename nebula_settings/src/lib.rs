@@ -19,7 +19,9 @@ mod agent_hooks;
 pub use agent_hooks::AgentHook;
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
+mod cursor_motion;
 mod custom_theme;
+pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
     IndexedPalette, TerminalThemeColors, ThemeAppearance, ThemeDefinition, ThemeEffects,
     ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, foreground_recommendations,
@@ -979,6 +981,7 @@ pub struct RuntimeSettings {
     pub ligatures: Ligatures,
     pub cursor_shape: Option<CursorShapeName>,
     pub cursor_blink: Option<bool>,
+    pub cursor_motion: CursorMotion,
     pub copy_on_select: bool,
     /// Maximum retained history for new terminals, without altering open sessions.
     pub scrollback_lines: usize,
@@ -1152,6 +1155,10 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             cursor_shape: raw.value("cursor_shape").and_then(CursorShapeName::from_settings),
             cursor_blink: raw.bool_on("cursor_blink"),
+            cursor_motion: raw
+                .value("cursor_motion")
+                .and_then(CursorMotion::from_settings)
+                .unwrap_or_default(),
             copy_on_select: raw.bool_on("copy_on_select").unwrap_or(false),
             scrollback_lines: scrolling::scrollback_lines(raw),
             scroll_speed: normalize_scroll_speed(
