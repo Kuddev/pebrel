@@ -225,7 +225,10 @@ mod tests {
             assert!(view.port_forward_task.is_none());
             assert!(view.port_forwards.is_empty());
         });
-        let select_all = if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" };
+        let select_all = match crate::platform::Platform::current() {
+            crate::platform::Platform::MacOS => "cmd-a",
+            _ => "ctrl-a",
+        };
         for selector in ["ssh-forward-remote", "ssh-forward-local"] {
             let bounds = cx.debug_bounds(selector).unwrap();
             assert!(f32::from(bounds.size.height) >= 28.0);
