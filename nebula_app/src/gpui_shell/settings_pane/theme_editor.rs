@@ -969,12 +969,7 @@ impl SettingsPane {
         &self,
         field: ThemeAdvancedField,
     ) -> Option<Entity<gpui_component::color_picker::ColorPickerState>> {
-        self.theme_editor
-            .as_ref()?
-            .advanced_editor
-            .as_ref()?
-            .picker(field)
-            .cloned()
+        self.theme_editor.as_ref()?.advanced_editor.as_ref()?.picker(field).cloned()
     }
 
     fn request_close_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {

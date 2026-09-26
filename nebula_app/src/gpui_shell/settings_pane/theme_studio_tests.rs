@@ -489,9 +489,8 @@ fn emit_advanced_picker_color(
     color: [u8; 3],
     cx: &mut VisualTestContext,
 ) {
-    let picker = pane.read_with(cx, |pane, _| {
-        pane.theme_advanced_picker(field).expect("advanced color picker")
-    });
+    let picker = pane
+        .read_with(cx, |pane, _| pane.theme_advanced_picker(field).expect("advanced color picker"));
     picker.update(cx, |_, cx| {
         let [r, g, b] = color;
         let hsla: gpui::Hsla = gpui::Rgba {
@@ -786,12 +785,7 @@ fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_re
         selection_foreground,
         &mut window,
     );
-    emit_advanced_picker_color(
-        &pane,
-        ThemeAdvancedField::CursorText,
-        cursor_text,
-        &mut window,
-    );
+    emit_advanced_picker_color(&pane, ThemeAdvancedField::CursorText, cursor_text, &mut window);
 
     let draft = editor_draft(&pane, &mut window);
     assert_eq!(draft.terminal.selection_background, Some(selection_background));
@@ -809,9 +803,7 @@ fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_re
             theme_cleanup.track(document);
         }
     }
-    let applied_id = RuntimeSettings::load()
-        .custom_theme
-        .expect("advanced color theme is active");
+    let applied_id = RuntimeSettings::load().custom_theme.expect("advanced color theme is active");
     let applied = after_documents
         .iter()
         .find(|document| document.id() == Some(applied_id.as_str()))

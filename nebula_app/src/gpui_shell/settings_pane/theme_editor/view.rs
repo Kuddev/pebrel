@@ -21,10 +21,8 @@ impl SettingsPane {
         let foreground = theme_color(draft.terminal.foreground, 1.0);
         let accent = theme_color(resolved_ui.accent, 1.0);
         let cursor = theme_color(draft.terminal.cursor.unwrap_or(draft.terminal.foreground), 1.0);
-        let cursor_text = theme_color(
-            draft.terminal.cursor_text.unwrap_or(draft.terminal.background),
-            1.0,
-        );
+        let cursor_text =
+            theme_color(draft.terminal.cursor_text.unwrap_or(draft.terminal.background), 1.0);
         let selection_background = theme_color(
             draft
                 .terminal
