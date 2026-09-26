@@ -32,6 +32,10 @@ impl SettingsPane {
                     if let SelectEvent::Confirm(Some(_)) = event {
                         let row = entity.read(cx).selected_index(cx).map(|path| path.row);
                         if let Some(value) = row.and_then(|row| values.get(row)) {
+                            if key == "cursor_motion" {
+                                this.set_cursor_motion(value, window, cx);
+                                return;
+                            }
                             if key == "notification_duration" {
                                 this.set_notification_duration(value, window, cx);
                                 return;
@@ -54,6 +58,13 @@ impl SettingsPane {
 
         let cursor_current =
             runtime.cursor_shape.map(|shape| shape.settings_value()).unwrap_or("beam");
+        add_select(
+            "cursor_motion",
+            nebula_settings::CursorMotion::VALUES,
+            runtime.cursor_motion.settings_value(),
+            window,
+            cx,
+        );
         let shell_current = crate::platform::shell::effective_shell_id(runtime.shell.as_deref());
 
         add_select(

@@ -319,6 +319,7 @@ impl TerminalView {
             copy_on_select,
             last_report_point: None,
             cursor_visible: true,
+            cursor_animation: Default::default(),
             cursor_blink_epoch: 0,
             cursor_window_active,
             cursor_pane_focused,
