@@ -462,14 +462,15 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests {
     use super::*;
-    use gpui::{AvailableSpace, TestAppContext, point};
+    use gpui::TestAppContext;
     use gpui_component::{Theme, ThemeMode};
 
     struct DialogProbe;
 
     impl Render for DialogProbe {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().size_full()
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // 滚动组件依赖当前视图；沿用真实模态层，避免裸绘制 Dialog 缺失实体上下文。
+            div().size_full().children(Root::render_dialog_layer(window, cx))
         }
     }
 
@@ -483,6 +484,7 @@ mod tests {
             let view = cx.new(|_| DialogProbe);
             Root::new(view, window, cx)
         });
+        cx.simulate_resize(size(px(800.0), px(600.0)));
         for name in [nebula_settings::ThemeName::LinenLight, nebula_settings::ThemeName::Nord] {
             cx.update(|window, cx| {
                 let mut runtime = nebula_settings::RuntimeSettings::from_raw(
@@ -502,27 +504,35 @@ mod tests {
             });
             for alpha in [0.0, 0.2, 0.75, 1.0] {
                 for height in [UPDATE_DIALOG_IDLE_HEIGHT, UPDATE_DIALOG_STATUS_HEIGHT] {
-                    cx.draw(
-                        point(px(0.0), px(0.0)),
-                        size(
-                            AvailableSpace::Definite(px(800.0)),
-                            AvailableSpace::Definite(px(600.0)),
-                        ),
-                        |window, cx| {
-                            let panel = crate::gpui_shell::theme::settings_panel_bg(cx);
-                            let shell = panel.opacity(alpha);
-                            let theme = Theme::global_mut(cx);
-                            theme.background = shell;
-                            theme.tokens.background = shell.into();
-                            let mut dialog =
-                                update_dialog_frame(Dialog::new(cx), window, height, cx);
+                    let shell = cx.update(|window, cx| {
+                        let panel = crate::gpui_shell::theme::settings_panel_bg(cx);
+                        let shell = panel.opacity(alpha);
+                        let theme = Theme::global_mut(cx);
+                        theme.background = shell;
+                        theme.tokens.background = shell.into();
+                        window.open_dialog(cx, move |dialog, window, cx| {
+                            let mut dialog = update_dialog_frame(dialog, window, height, cx);
                             assert_eq!(panel.a, 1.0);
                             assert_eq!(dialog.style().background, Some(panel.into()));
                             assert_eq!(cx.theme().background, shell);
                             assert_eq!(cx.theme().tokens.background, shell.into());
-                            dialog.title("Update").child("Version details").into_any_element()
-                        },
-                    );
+                            dialog.title("Update").child(
+                                div()
+                                    .debug_selector(|| "update-dialog-body".to_owned())
+                                    .child("Version details"),
+                            )
+                        });
+                        shell
+                    });
+                    cx.run_until_parked();
+                    cx.update(|window, cx| {
+                        let _ = window.draw(cx);
+                        assert_eq!(cx.theme().background, shell);
+                        assert_eq!(cx.theme().tokens.background, shell.into());
+                    });
+                    let bounds = cx.debug_bounds("update-dialog-body").expect("rendered dialog");
+                    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+                    cx.update(|window, cx| window.close_dialog(cx));
                 }
             }
         }
