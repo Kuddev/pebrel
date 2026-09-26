@@ -13,7 +13,7 @@ pub(super) fn win32_encodes_keystroke(ks: &Keystroke) -> bool {
         return true;
     }
     let key = ks.key.as_str();
-    if key == "space" {
+    if key == "space" || key == "/" {
         return false;
     }
     let mut chars = key.chars();
@@ -23,15 +23,14 @@ pub(super) fn win32_encodes_keystroke(ks: &Keystroke) -> bool {
     }
 }
 
-/// GPUI 键名 → Win32 虚拟键码。
+/// GPUI 键名 → Win32 虚拟键码及布局所需的修饰键。
 ///
 /// 旧壳从 winit fork 的 `RawKeyEventInfo` 直接拿到系统报的 VK；GPUI 的
-/// `Keystroke` 只有键名，所以这里按名字反查。表只覆盖**编码器会处理的键**
-/// （控制键、方向、功能键）——可打印字符在 GPUI 走 IME 管道，不经这里。
-pub(super) fn virtual_key_of(key: &str) -> Option<u16> {
+/// `Keystroke` 只有键名，所以这里按名字反查；普通文本仍走 IME 管道。
+pub(super) fn virtual_key_of(key: &str) -> Option<(u16, u16)> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_HOME, VK_INSERT, VK_LEFT,
-        VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
+        VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP, VkKeyScanW,
     };
 
     let vk = match key {
@@ -50,6 +49,11 @@ pub(super) fn virtual_key_of(key: &str) -> Option<u16> {
         "delete" => VK_DELETE,
         "pageup" => VK_PRIOR,
         "pagedown" => VK_NEXT,
+        "/" => {
+            // GPUI 将布局所需的 Shift 合入键名，不能写死美式布局的 VK_OEM_2。
+            let mapping = unsafe { VkKeyScanW(b'/' as u16) };
+            return (mapping != -1).then_some((mapping as u16 & 0xff, mapping as u16 >> 8));
+        },
         // F1..F24 在 VK 表里连号。
         key if key.starts_with('f') => {
             let index: u16 = key[1..].parse().ok()?;
@@ -68,7 +72,7 @@ pub(super) fn virtual_key_of(key: &str) -> Option<u16> {
             c.to_ascii_uppercase() as u16
         },
     };
-    Some(vk)
+    Some((vk, 0))
 }
 
 /// 控制键必须携带真实 `KEY_EVENT_RECORD` 的字符值（Esc=0x1B、Enter=0x0D、
@@ -121,17 +125,17 @@ pub(super) fn win32_input_record(ks: &Keystroke, key_down: bool) -> Option<Vec<u
     const LEFT_ALT_PRESSED: u32 = 0x0002;
     const LEFT_CTRL_PRESSED: u32 = 0x0008;
 
-    let vk = virtual_key_of(ks.key.as_str())?;
+    let (vk, layout_modifiers) = virtual_key_of(ks.key.as_str())?;
     // 扫描码问系统要，不硬编码：非 US 布局与笔记本键盘上这张表并不通用。
     let scan_code = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC) };
     let mut control_key_state = 0u32;
-    if ks.modifiers.shift {
+    if ks.modifiers.shift || layout_modifiers & 1 != 0 {
         control_key_state |= SHIFT_PRESSED;
     }
-    if ks.modifiers.alt {
+    if ks.modifiers.alt || layout_modifiers & 4 != 0 {
         control_key_state |= LEFT_ALT_PRESSED;
     }
-    if ks.modifiers.control {
+    if ks.modifiers.control || layout_modifiers & 2 != 0 {
         control_key_state |= LEFT_CTRL_PRESSED;
     }
     let key_down = u8::from(key_down);
