@@ -67,6 +67,11 @@ impl TerminalView {
                         | crate::ai_hook::AiTurnOutcome::Incomplete
                 );
         }
+        if let Some(session) = &self.session {
+            session.term.lock().set_redraw_anchor_enabled(
+                event.source == "pi" && event.kind != AiHookKind::SessionEnd,
+            );
+        }
         if let Some(target) = target {
             let previous = self.recovery.target.clone();
             self.recovery.confirm(target);
