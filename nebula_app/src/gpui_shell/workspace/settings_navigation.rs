@@ -36,7 +36,6 @@ impl NebulaWorkspace {
             let view = cx.new(|cx| SettingsPane::new(window, cx));
             let subscription = cx.subscribe_in(&view, window, Self::on_settings_event);
             self.settings_surface = Some((view, subscription));
-            self.sync_settings_agent_logos(cx);
         }
 
         self.settings_tab_open = true;
@@ -67,15 +66,6 @@ impl NebulaWorkspace {
         cx.notify();
         if self.tabs.is_empty() {
             windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
-        }
-    }
-
-    pub(super) fn sync_settings_agent_logos(&self, cx: &mut Context<Self>) {
-        if let Some((view, _)) = self.settings_surface.as_ref() {
-            view.update(cx, |pane, cx| {
-                pane.set_agent_logos(&self.sidebar_logo_images);
-                cx.notify();
-            });
         }
     }
 
@@ -132,7 +122,9 @@ impl NebulaWorkspace {
             return self.tab_presentation(index, cx, dark);
         }
         TabPresentation {
-            title: super::workspace_ui_language().text(crate::i18n::Message::CommonSettings).into(),
+            title: crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::CommonSettings)
+                .into(),
             tooltip: None,
             is_settings: true,
             activity: SidebarActivity::Idle,

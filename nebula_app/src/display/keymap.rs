@@ -45,6 +45,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
     // -- 标签页 --
     (Action::CreateNewTab, "新建标签页", "New tab"),
     (Action::CloseTab, "关闭标签页 / 分屏", "Close tab / pane"),
+    (Action::RenameTab, "重命名标签页", "Rename tab"),
     (Action::SelectNextTab, "下一个标签页", "Next tab"),
     (Action::SelectPreviousTab, "上一个标签页", "Previous tab"),
     // -- 窗格 --
@@ -74,7 +75,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
 /// `usize` 是本组行数；区间连续覆盖全部可编辑行（含第 0 行快速终端）。
 pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
     ("全局", "Global", 6),
-    ("标签页", "Tabs", 4),
+    ("标签页", "Tabs", 5),
     ("窗格", "Panes", 7),
     ("侧栏面板", "Side panels", 2),
     ("终端", "Terminal", 9),
@@ -135,6 +136,17 @@ pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
     ("cmd+q", Action::Quit),
 ];
 
+pub(crate) fn action_label(
+    row: &(Action, &'static str, &'static str),
+    language: super::UiLanguage,
+) -> &'static str {
+    if row.0 == Action::RenameTab {
+        language.text(crate::i18n::Message::CommonRenameTab)
+    } else {
+        language.pick(row.1, row.2)
+    }
+}
+
 #[cfg(test)]
 mod group_tests {
     use super::*;
@@ -181,6 +193,13 @@ pub(crate) fn default_shortcuts() -> Vec<(String, Action)> {
         shortcuts.extend(extra);
     }
     shortcuts
+}
+
+/// Editing one action moves its shortcut: old keys pass through to the terminal.
+/// Keep explicit bindings for other actions so the editor can report conflicts.
+pub(crate) fn rebind_action(raw: &mut Vec<(String, String)>, action: &Action, combo: String) {
+    clear_action(raw, action);
+    raw.push((combo, action_storage_name(action)));
 }
 
 /// Preserve the existing keybind format: ReceiveChar explicitly passes a key
@@ -645,6 +664,56 @@ pub(crate) fn gpui_mods_prefix(modifiers: &::gpui::Modifiers) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rename_binding_moves_persists_clears_and_restores() {
+        use super::*;
+        let action = Action::RenameTab;
+        assert_eq!(effective_combo(&action, &[]), Some(("F2".into(), false)));
+        let mut raw = Vec::new();
+        rebind_action(&mut raw, &action, "ctrl+alt+r".into());
+        let saved = nebula_settings::apply_keybinds("theme=nord\n", &raw);
+        let mut restored = nebula_settings::keybind_pairs_from_text(&saved);
+        let bindings = build_bindings(&restored);
+        assert_eq!(effective_combo(&action, &bindings), Some(("Ctrl+Alt+R".into(), true)));
+        let (mods, trigger) = parse_combo("f2").unwrap();
+        let f2 = bindings.iter().find(|b| b.mods == mods && b.trigger == trigger).unwrap();
+        assert_eq!(f2.action, Action::ReceiveChar, "the old default must reach the CLI");
+        clear_action(&mut restored, &action);
+        assert_eq!(effective_combo(&action, &build_bindings(&restored)), None);
+        reset_action(&mut restored, &action);
+        assert_eq!(
+            effective_combo(&action, &build_bindings(&restored)),
+            Some(("F2".into(), false))
+        );
+    }
+
+    #[test]
+    fn rename_rebinding_preserves_explicit_ownership_of_the_old_key() {
+        use super::*;
+        let mut raw = vec![("f2".into(), "CreateNewTab".into())];
+        rebind_action(&mut raw, &Action::RenameTab, "ctrl+alt+r".into());
+        assert_eq!(raw[0], ("f2".into(), "CreateNewTab".into()));
+        assert!(
+            !raw.iter()
+                .any(|(key, action)| key.eq_ignore_ascii_case("f2") && action == "ReceiveChar")
+        );
+    }
+
+    #[test]
+    fn rename_is_editable_and_localized_in_every_language() {
+        use super::*;
+        let row =
+            EDITABLE_ACTIONS.iter().find(|(action, ..)| *action == Action::RenameTab).unwrap();
+        for language in super::super::UiLanguage::ALL {
+            assert_eq!(
+                action_label(row, *language),
+                language.text(crate::i18n::Message::CommonRenameTab)
+            );
+            assert!(!action_label(row, *language).is_empty());
+        }
+        assert_eq!(action_label(row, super::super::UiLanguage::ZhCn), "重命名标签页");
+    }
+
     #[test]
     fn clearing_ctrl_k_survives_persistence_and_restore_is_explicit() {
         use super::*;

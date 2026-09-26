@@ -195,7 +195,7 @@ pub(crate) fn open_update_dialog(
 
     let dialog_result = result.clone();
     window.open_dialog(cx, move |dialog, window, cx| {
-        let language = workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let title: SharedString = language.pick("Pebrel 更新", "Pebrel Update").into();
         let current_label: SharedString = language.pick("当前版本", "Current").into();
         let latest_label: SharedString = language.pick("最新版本", "Latest").into();
@@ -203,7 +203,7 @@ pub(crate) fn open_update_dialog(
         let latest_version: SharedString = format!("v{}", dialog_result.latest).into();
         let later_text: SharedString =
             language.text(Message::UpdateLater).into();
-        let skip_text: SharedString = language.pick("跳过此版本", "Skip this version").into();
+        let skip_text: SharedString = language.text(Message::UpdateSkipVersion).into();
         let muted = cx.theme().muted_foreground;
         let latest_color = cx.theme().warning;
         let version_background = cx.theme().muted;
@@ -226,12 +226,7 @@ pub(crate) fn open_update_dialog(
         };
 
         let hint: SharedString = match (&status, asset.as_ref()) {
-            (DownloadStatus::Downloading { .. }, _) => language
-                .pick(
-                    "正在后台下载并校验 Windows x64 安装包。",
-                    "Downloading and verifying the Windows x64 installer in the background.",
-                )
-                .into(),
+            (DownloadStatus::Downloading { .. }, _) => language.text(Message::UpdateDownloadingHint).into(),
             (DownloadStatus::Ready { .. }, _) => language.text(Message::UpdateReadyHint).into(),
             (DownloadStatus::InstallFailed(_), _) => language.text(Message::UpdateInstallationFailedHint).into(),
             (DownloadStatus::Failed(_), _) => language
@@ -246,20 +241,14 @@ pub(crate) fn open_update_dialog(
                     "Pebrel will download and verify the installer, then wait for your confirmation before installing.",
                 )
                 .into(),
-            // 非 Windows 目前没有自动安装路径（能力表 `self_update_install`）：
-            // 不说「缺 Windows 安装包」，那对 Mac/Linux 用户是句错话。
+            // Platforms without an installation adapter retain manual downloads.
             _ if !crate::platform::CAPABILITIES.self_update_install => language
                 .pick(
                     "此平台暂不支持应用内自动更新；请到发布页下载对应的安装包。",
                     "In-app automatic updates are not available on this platform yet. Download the matching package from the Releases page.",
                 )
                 .into(),
-            _ => language
-                .pick(
-                    "此 release 没有可验证的 Windows x64 安装包，已禁用自动执行；可打开发布页手动处理。",
-                    "This release has no verifiable Windows x64 installer, so automatic execution is disabled. Use the Releases page instead.",
-                )
-                .into(),
+            _ => language.text(Message::UpdateNoVerifiedPackage).into(),
         };
 
         let primary_text: SharedString = match status {
@@ -371,6 +360,7 @@ pub(crate) fn open_update_dialog(
         let cancel_save_failed_prefix = save_failed_prefix.to_owned();
         let cancel_error_separator = error_separator.to_owned();
         let mut footer = DialogFooter::new()
+            .gap(px(6.0))
             .child(
                 Button::new("skip-nebula-update")
                     .label(skip_text)

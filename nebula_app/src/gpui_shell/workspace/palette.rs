@@ -68,7 +68,7 @@ impl NebulaWorkspace {
             .get(self.active)
             .and_then(WorkspaceTab::focused_view)
             .is_some_and(|view| view.read(cx).working_directory().is_some());
-        let language = workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let rows = self.palette_override.clone().unwrap_or_else(|| {
             let mut rows: Vec<WorkspacePaletteRow> = crate::display::command_palette::catalog()
                 .iter()
@@ -100,26 +100,31 @@ impl NebulaWorkspace {
             // 次序由共享 merge 权威裁定。
             let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
             rows.extend(
-                crate::gpui_shell::ssh_hosts::SshHostLists::load().merged().into_iter().map(
-                    |host| {
+                crate::gpui_shell::ssh_hosts::SshHostLists::load()
+                    .merged_with_labels()
+                    .into_iter()
+                    .map(|(host, label)| {
                         let glyph = crate::display::ui::os_icons::resolve(
                             ssh_icons.get(&host).map(String::as_str),
                         )
                         .glyph;
+                        let named = (!label.is_empty()).then_some(label.as_str());
+                        let (label, hint) = shell_picker::ssh_host_display(named, &host);
+                        let search =
+                            format!("{label} {host} ssh host remote lianjie 连接").to_lowercase();
                         WorkspacePaletteRow {
                             group_order: usize::MAX,
                             group: language.pick("SSH 主机", "SSH HOSTS").to_owned(),
-                            label: host.clone(),
-                            hint: "SSH".to_owned(),
+                            label,
+                            hint,
                             hint_style: WorkspacePaletteHintStyle::Metadata,
-                            search: format!("{host} ssh host remote lianjie 连接").to_lowercase(),
+                            search,
                             action: WorkspacePaletteAction::LaunchSshHost(host),
                             icon: None,
                             icon_glyph: Some(glyph),
                             icon_path: None,
                         }
-                    },
-                ),
+                    }),
             );
             rows
         });
@@ -171,7 +176,7 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let overlay = theme.overlay;
         let mono_family = theme.mono_font_family.clone();
-        let language = workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let palette_filters = if self.shell_picker_open {
             Some((
                 WorkspacePaletteFilter::Launcher(self.launcher_filter),

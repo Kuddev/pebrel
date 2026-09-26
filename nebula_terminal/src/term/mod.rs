@@ -2094,14 +2094,10 @@ impl<T: EventListener> Handler for Term<T> {
             self.mode.insert(TermMode::WIN32_INPUT_MODE);
             return;
         }
-        // DECSET 2031。订阅的同一刻先答一次当前值：规范里取初值靠 `CSI ? 996 n`
-        // 查询，但 vte 0.15 只把**没有** `?` 中间字节的 `CSI n` 路由到
-        // `device_status`，私有 DSR 根本到不了 handler，我们答不了那条查询。
-        // 订阅即回报把这个洞补上——多一条报告对订阅方无害（它本来就要处理这个
-        // 序列），少一条则意味着 app 在主题变化之前永远不知道当前是亮还是暗。
+        // DECSET 2031 只订阅后续配色变化，不是 CSI ? 996 n 查询；
+        // 在这里回报会在 shell 交接终端时注入它未请求的输入。
         if matches!(mode, PrivateMode::Unknown(2031)) {
             self.mode.insert(TermMode::COLOR_SCHEME_UPDATES);
-            self.report_color_scheme();
             return;
         }
         let mode = match mode {

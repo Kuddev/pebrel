@@ -7,7 +7,7 @@ pub(super) const REPOSITORY_URL: &str = "https://github.com/Kuddev/pebrel";
 pub(super) const BUG_REPORT_TEMPLATE: &str = "bug_report.yml";
 
 /// 左侧分区的稳定路由表。2026-08-28 产品裁定：默认 GPUI 导航收敛为常用项，
-/// 暂时隐藏“AI 供应商”；页面实现与索引继续保留。后续恢复入口时只改
+/// 暂时隐藏“AI 供应商”和“备份”；页面实现与索引继续保留。后续恢复入口时只改
 /// [`HIDDEN_NAV_SECTIONS`]，不得删除或重排这里的条目。
 pub(super) const SECTION_IDS: [&str; 11] = [
     "application",
@@ -40,7 +40,7 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 11] = [
     "agents agent hook hooks 智能体 钩子 接入 claude codex opencode cursor kimi pi omp copilot grok",
 ];
 
-pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
+pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3, 9];
 
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
 /// 下标，不复制设置状态或路由。

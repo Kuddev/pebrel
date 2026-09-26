@@ -426,12 +426,22 @@ where
                 Ok(got) => {
                     // Startup profiling: the process-wide first PTY output ≈
                     // the console host finished its bring-up handshake and
-                    // the shell started talking.
+                    // the shell started talking. The first chunks are dumped
+                    // escaped so a silent boot can be aligned with the host's
+                    // handshake byte for byte.
                     {
-                        use std::sync::atomic::{AtomicBool, Ordering};
-                        static FIRST_BYTES: AtomicBool = AtomicBool::new(false);
-                        if !FIRST_BYTES.swap(true, Ordering::Relaxed) {
+                        use std::sync::atomic::{AtomicUsize, Ordering};
+                        static CHUNKS: AtomicUsize = AtomicUsize::new(0);
+                        let index = CHUNKS.fetch_add(1, Ordering::Relaxed);
+                        if index == 0 {
                             crate::pty_trace("first conout bytes");
+                        }
+                        if index < 12 {
+                            let shown = &buf[unprocessed..unprocessed + got.min(200)];
+                            crate::pty_trace(&format!(
+                                "conout chunk {index} ({got} bytes): {}",
+                                shown.escape_ascii()
+                            ));
                         }
                     }
                     unprocessed += got;
@@ -480,6 +490,16 @@ where
             self.event_proxy.send_event(Event::Wakeup);
         }
 
+        // Boot profiling: a readable wake that carried no bytes is the
+        // signature of a lost or spurious wakeup; report only the first few.
+        if processed == 0 {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static EMPTY_READS: AtomicUsize = AtomicUsize::new(0);
+            if EMPTY_READS.fetch_add(1, Ordering::Relaxed) < 8 {
+                crate::pty_trace("pty_read: readable wake with no bytes");
+            }
+        }
+
         Ok(processed)
     }
 
@@ -495,6 +515,18 @@ where
                         break 'write_many;
                     },
                     Ok(n) => {
+                        {
+                            use std::sync::atomic::{AtomicUsize, Ordering};
+                            static WRITES: AtomicUsize = AtomicUsize::new(0);
+                            let index = WRITES.fetch_add(1, Ordering::Relaxed);
+                            if index < 12 {
+                                let shown = &current.remaining_bytes()[..n.min(200)];
+                                crate::pty_trace(&format!(
+                                    "conin write {index} ({n} bytes): {}",
+                                    shown.escape_ascii()
+                                ));
+                            }
+                        }
                         current.advance(n);
                         if current.finished() {
                             state.goto_next();
@@ -927,6 +959,30 @@ mod tests {
     use crate::event::VoidListener;
     use crate::term::Config;
     use crate::term::test::TermSize;
+
+    #[test]
+    fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
+        use crate::render::{RenderSnapshot, SnapshotConfig};
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let cfg = SnapshotConfig { rows: 2, cols: 20 };
+        stream.feed(&mut term, &VoidListener, b"old");
+        let before = RenderSnapshot::capture(&term, &cfg);
+        for bytes in [b"\x1b[?20".as_slice(), b"26h\r", b"new", b"\x1b[10G", b"\x1b[?2026"] {
+            stream.feed(&mut term, &VoidListener, bytes);
+            // Animation frames read the grid even without a Wakeup.
+            let frame = RenderSnapshot::capture(&term, &cfg);
+            assert_eq!(frame.cursor.as_ref().unwrap().col, before.cursor.as_ref().unwrap().col);
+            assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        }
+        stream.feed(&mut term, &VoidListener, b"l");
+        assert_eq!(RenderSnapshot::capture(&term, &cfg).cursor.unwrap().col, 9);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h\rtimeout");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.stop_sync(&mut term);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 't');
+    }
 
     #[test]
     fn authenticated_hook_frames_survive_every_chunk_boundary_and_reject_other_panes() {

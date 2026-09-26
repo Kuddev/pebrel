@@ -101,7 +101,7 @@ impl SettingsPane {
             } else {
                 keymap::EDITABLE_ACTIONS
                     .get(flat - 1)
-                    .map(|(_, zh, en)| language.pick(zh, en).to_owned())
+                    .map(|row| keymap::action_label(row, language).to_owned())
                     .unwrap_or_default()
             }
         };
@@ -164,9 +164,7 @@ impl SettingsPane {
             return;
         }
         let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(row - 1) else { return };
-        let name = keymap::action_storage_name(action);
-        self.keymap_binds.retain(|(_, a)| !a.eq_ignore_ascii_case(&name));
-        self.keymap_binds.push((combo, name));
+        keymap::rebind_action(&mut self.keymap_binds, action, combo);
         self.persist_keybinds(cx);
     }
 
@@ -271,7 +269,7 @@ impl SettingsPane {
         } else {
             keymap::EDITABLE_ACTIONS
                 .get(flat - 1)
-                .map(|(_, zh, en)| language.pick(zh, en).to_owned())
+                .map(|row| keymap::action_label(row, language).to_owned())
                 .unwrap_or_default()
                 .into()
         };

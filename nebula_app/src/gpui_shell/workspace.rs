@@ -841,7 +841,6 @@ pub struct NebulaWorkspace {
     /// 系统关闭按钮可能连续送来多次 should-close；确认框在场时只保留一份。
     window_close_confirm_open: bool,
     window_close_pending: bool,
-    recovery_boot_attempts: u32,
     /// `keep_session` 关窗后 HWND 已隐藏、PTY 仍在；托盘 / mux ATTACH 用来捞回。
     window_hidden: bool,
     /// 开窗时记下，mux `tab.new` 需要从 pump 拿到 `&mut Window`。
@@ -1073,7 +1072,6 @@ impl NebulaWorkspace {
             spinner_visible: std::cell::Cell::new(false),
             window_close_confirm_open: false,
             window_close_pending: false,
-            recovery_boot_attempts: 0,
             window_hidden: false,
             window_handle: window.window_handle(),
             runtime_window_id,
@@ -1658,66 +1656,6 @@ impl NebulaWorkspace {
         )
     }
 
-    fn request_close_pane(
-        &mut self,
-        tab_ix: usize,
-        pane_id: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(process) = self.busy_process_in_tab(tab_ix, Some(pane_id), cx) else {
-            self.close_pane(tab_ix, pane_id, window, cx);
-            return;
-        };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
-        let workspace = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, window, _cx| {
-            let workspace = workspace.clone();
-            confirm_dialog(
-                dialog,
-                window,
-                "关闭此分栏？",
-                body.clone(),
-                "关闭",
-                "取消",
-                ButtonVariant::Danger,
-            )
-            .on_ok(move |_, window, cx| {
-                let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_pane(tab_ix, pane_id, window, cx);
-                });
-                true
-            })
-        });
-    }
-
-    fn request_close_tab(&mut self, tab_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(process) = self.busy_process_in_tab(tab_ix, None, cx) else {
-            self.close_tab(tab_ix, window, cx);
-            return;
-        };
-        let body: SharedString = format!("{process} 仍在运行，关闭会中止它。").into();
-        let workspace = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, window, _cx| {
-            let workspace = workspace.clone();
-            confirm_dialog(
-                dialog,
-                window,
-                "关闭此标签页？",
-                body.clone(),
-                "关闭",
-                "取消",
-                ButtonVariant::Danger,
-            )
-            .on_ok(move |_, window, cx| {
-                let _ = workspace.update(cx, |workspace, cx| {
-                    workspace.close_tab(tab_ix, window, cx);
-                });
-                true
-            })
-        });
-    }
-
     /// 聚焦另一个 pane（点击上报或方向导航落点）。
     fn focus_pane(
         &mut self,
@@ -2230,7 +2168,7 @@ impl NebulaWorkspace {
             crate::terminal_profiles::TerminalProfiles::load()
                 .map(|store| store.as_config_profiles())
                 .unwrap_or_default(),
-            crate::gpui_shell::ssh_hosts::SshHostLists::load().merged(),
+            crate::gpui_shell::ssh_hosts::SshHostLists::load().merged_with_labels(),
             &default_shell_id,
             language,
             window.scale_factor().max(0.5),
@@ -3114,7 +3052,6 @@ impl Render for NebulaWorkspace {
             // 变化时重建，普通 render 不重复解码 PNG。
             self.sidebar_logo_images = sidebar_logo_images(sidebar_logo_target_px);
             self.sidebar_logo_target_px = sidebar_logo_target_px;
-            self.sync_settings_agent_logos(cx);
         }
         // Some tab-open/restore paths assign `active` directly. Clear a focus
         // record tied to a different entity before deriving layout booleans.

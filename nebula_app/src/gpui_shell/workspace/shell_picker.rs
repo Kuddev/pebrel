@@ -15,13 +15,24 @@ fn fallback_shell_glyph(id: &str, has_brand: bool) -> Option<char> {
     crate::shell_detect::icon_for_id(id).chars().next()
 }
 
+/// SSH 主机的展示名与次要信息，与旧壳 `SshRow` 同口径：
+///
+/// - 用户在 SSH 设置里起过"主机名称"：label 显示别名，hint 给真实连接地址；
+/// - 没起名：回落地址本身当 label，hint 保持 "SSH" 类型标签，避免重复。
+pub(super) fn ssh_host_display(label: Option<&str>, host: &str) -> (String, String) {
+    match label {
+        Some(label) if !label.trim().is_empty() => (label.trim().to_owned(), host.to_owned()),
+        _ => (host.to_owned(), "SSH".to_owned()),
+    }
+}
+
 /// 新建终端弹窗的行：已检测 shell + SSH 主机，分组对照旧壳
 /// `CommandPalette::open_profiles`（推荐 / 所有 Shell / SSH 主机）。
 /// 三点菜单与 Ctrl+K 打开的是这份列表，不是通用命令面板。
 pub(super) fn shell_palette_rows(
     shells: Vec<crate::shell_detect::DetectedShell>,
     profiles: Vec<crate::config::ui_config::Profile>,
-    ssh_hosts: impl IntoIterator<Item = String>,
+    ssh_hosts: impl IntoIterator<Item = (String, String)>,
     default_shell_id: &str,
     language: crate::display::UiLanguage,
     scale_factor: f32,
@@ -85,16 +96,20 @@ pub(super) fn shell_palette_rows(
         rows.insert(0, default_row);
     }
     let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
-    rows.extend(ssh_hosts.into_iter().map(|host| {
+    rows.extend(ssh_hosts.into_iter().map(|(host, label)| {
         let glyph =
             crate::display::ui::os_icons::resolve(ssh_icons.get(&host).map(String::as_str)).glyph;
+        // 空串 = 没起名：`ssh_host_display` 回落地址本身，hint 保持 "SSH"。
+        let named = (!label.is_empty()).then_some(label.as_str());
+        let (label, hint) = ssh_host_display(named, &host);
+        let search = format!("{label} {host} ssh host remote lianjie 连接").to_lowercase();
         WorkspacePaletteRow {
             group_order: 2,
             group: ssh_group.to_owned(),
-            label: host.clone(),
-            hint: "SSH".to_owned(),
+            label,
+            hint,
             hint_style: WorkspacePaletteHintStyle::Metadata,
-            search: format!("{host} ssh host remote lianjie 连接").to_lowercase(),
+            search,
             action: WorkspacePaletteAction::LaunchSshHost(host),
             icon: None,
             icon_glyph: Some(glyph),

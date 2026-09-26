@@ -878,7 +878,7 @@ pub(super) fn nebula_settings_load(config: &UiConfig) -> NebulaRuntimeSettings {
         pinned_hosts: Vec::new(),
         saved_hosts: Vec::new(),
         hidden_hosts: Vec::new(),
-        panel_resize: false,
+        panel_resize: true,
         sidebar_w: super::SIDEBAR_W_LOGICAL,
         drawer_w: super::side_panel::PANEL_W_LOGICAL,
         hosts_band: 0.0,
@@ -970,7 +970,7 @@ pub(super) fn nebula_settings_load(config: &UiConfig) -> NebulaRuntimeSettings {
                 Some(("restore_session", v)) => settings.restore_session = parse_bool(v, true),
                 Some(("resume_ai", v)) => settings.resume_ai = parse_bool(v, true),
                 Some(("tray", v)) => settings.tray = parse_bool(v, true),
-                Some(("panel_resize", v)) => settings.panel_resize = parse_bool(v, false),
+                Some(("panel_resize", v)) => settings.panel_resize = parse_bool(v, true),
                 Some(("sidebar_w", v)) => {
                     if let Ok(w) = v.trim().parse::<f32>() {
                         settings.sidebar_w = w.clamp(super::SIDEBAR_W_MIN, super::SIDEBAR_W_MAX);
@@ -7338,15 +7338,14 @@ pub(super) fn draw_text(
                 }
                 let i = flat;
                 let ty = rect.1 + (kh - cell_h) / 2.0;
-                let (zh_label, en_label) = if i == keymap::QUICK_TERMINAL_ROW {
+                let label = if i == keymap::QUICK_TERMINAL_ROW {
                     if view.quick_hotkey_error.is_some() {
-                        ("快速终端（注册失败）", "Quick terminal (failed)")
+                        language.pick("快速终端（注册失败）", "Quick terminal (failed)")
                     } else {
-                        ("快速终端", "Quick terminal")
+                        language.pick("快速终端", "Quick terminal")
                     }
                 } else {
-                    let (_, zh, en) = keymap::EDITABLE_ACTIONS[i - 1];
-                    (zh, en)
+                    keymap::action_label(&keymap::EDITABLE_ACTIONS[i - 1], language)
                 };
                 r.draw_chrome_text(
                     size,
@@ -7357,7 +7356,7 @@ pub(super) fn draw_text(
                     } else {
                         sk.ink
                     },
-                    language.pick(zh_label, en_label),
+                    label,
                     gc,
                 );
                 let hovered = view.hover == SettingsHit::KeymapRow(slot);

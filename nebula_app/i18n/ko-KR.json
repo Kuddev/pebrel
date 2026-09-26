@@ -45,6 +45,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+왼쪽 클릭으로 열기",
+    "link_ctrl_click": "Ctrl+왼쪽 클릭으로 열기",
     "settings": "설정",
     "language": "언어",
     "about": "정보",
@@ -73,6 +75,7 @@
     "delete": "삭제",
     "edit": "편집",
     "rename": "이름 바꾸기",
+    "rename_tab": "탭 이름 바꾸기",
     "copy": "복사",
     "paste": "붙여넣기",
     "cut": "잘라내기",
@@ -104,6 +107,7 @@
     "new_window": "새 창",
     "close_tab": "탭 닫기",
     "duplicate_tab": "탭 복제",
+    "copy_working_directory": "작업 디렉터리 복사",
     "terminal": "터미널",
     "connect": "연결",
     "disconnect": "연결 해제",
@@ -173,5 +177,22 @@
     "copied_lines": "{lines}줄을 클립보드에 복사했습니다",
     "paste_lines": "{lines}줄을 붙여넣을까요?",
     "sent_to": "{target}(으)로 전송했습니다"
+  },
+  "update": {
+    "skip_version": "이 버전 건너뛰기",
+    "downloading_hint": "이 기기에 맞는 업데이트 패키지를 다운로드하고 검증하는 중입니다.",
+    "no_verified_package": "이 릴리스에는 이 기기에 맞는 검증된 업데이트 패키지가 없습니다. 릴리스 페이지에서 직접 다운로드하세요.",
+    "check_fallback_failed": "GitHub API 접근이 제한되었으며(HTTP {status}) 공식 릴리스 페이지에도 연결할 수 없습니다: {error}. 나중에 다시 시도하거나 릴리스 페이지를 여세요.",
+    "check_unrecognized_release": "공식 릴리스 페이지에서 지원되는 안정 버전을 확인할 수 없습니다. 나중에 다시 시도하거나 릴리스 페이지를 여세요."
+  },
+  "tab_menu": {
+    "fork_ai_session": "AI 세션 분기",
+    "move_to_new_window": "새 창으로 이동",
+    "export_as_workspace": "작업 공간으로 내보내기…",
+    "split_left_right": "좌우로 분할",
+    "split_top_bottom": "위아래로 분할",
+    "move_left": "왼쪽으로 이동",
+    "move_right": "오른쪽으로 이동",
+    "tab_color": "탭 색상"
   }
 }

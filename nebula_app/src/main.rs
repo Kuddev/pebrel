@@ -166,6 +166,10 @@ use crate::macos::locale;
 use crate::polling::{IoListener, ipc};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(all(target_os = "macos", feature = "gpui-shell"))]
+    if let Some(code) = update_download::handoff::macos::run_helper_if_requested() {
+        std::process::exit(code);
+    }
     if let Some(code) = platform::ai_session_identity::run_helper_if_requested() {
         std::process::exit(code);
     }

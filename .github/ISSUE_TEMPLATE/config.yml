@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Existing issues
-    url: https://github.com/Kuddev/nebula/issues
-    about: Search existing reports before opening a new issue.
-  - name: Latest release
-    url: https://github.com/Kuddev/nebula/releases/latest
-    about: Check whether the problem is already fixed in the latest version.
+  - name: Existing issues / 已有 issue
+    url: https://github.com/Kuddev/pebrel/issues
+    about: Search existing reports before opening a new issue. / 先搜一下是否已有人反馈。
+  - name: Latest release / 最新版本
+    url: https://github.com/Kuddev/pebrel/releases/latest
+    about: Check whether the problem is already fixed in the latest version. / 看看最新版是否已修复。
+  - name: Discord
+    url: https://discord.gg/VFn4rcxmhn
+    about: Quick questions and discussion. / 快速提问与交流。

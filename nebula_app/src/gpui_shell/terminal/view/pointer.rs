@@ -1,3 +1,4 @@
+use super::super::osc_links::link_modifier;
 use super::*;
 use gpui_component::WindowExt as _;
 
@@ -143,7 +144,13 @@ impl TerminalView {
                 let term = session.term.lock();
                 super::super::osc_links::highlighted_at(&term, &self.hint_config, point, mods)
                     .and_then(|hint| {
-                        super::super::osc_links::hover_from_hint(&term, hint, self.rows, self.cols)
+                        super::super::osc_links::hover_from_hint(
+                            &term,
+                            hint,
+                            self.rows,
+                            self.cols,
+                            crate::gpui_shell::config::ui_language(cx),
+                        )
                     })
             })
         };
@@ -178,7 +185,14 @@ impl TerminalView {
         };
         let Some(text) = text else { return };
         let cwd = self.local_cwd();
-        super::super::osc_links::open_hint_match(&hover.hint, &text, cwd.as_deref(), window, cx);
+        super::super::osc_links::open_hint_match(
+            &hover.hint,
+            &text,
+            cwd.as_deref(),
+            &self.session_launch,
+            window,
+            cx,
+        );
     }
 
     /// 应用是否接管了鼠标（vim/htop 等）。Shift 按住时强制旁路——这是
@@ -355,6 +369,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
+        self.pending_link_open = false;
         cx.emit(TerminalViewEvent::FocusRequested);
         if self.session.is_none() {
             return;
@@ -400,6 +415,17 @@ impl TerminalView {
             cx.notify();
             return;
         }
+        if link_modifier(&event.modifiers) && event.click_count == 1 {
+            self.update_link_hover(event.position, &event.modifiers, cx);
+            if self.link_hover.is_some() {
+                if let Some(session) = &self.session {
+                    session.term.lock().selection = None;
+                }
+                self.selecting = false;
+                self.pending_link_open = true;
+                return;
+            }
+        }
         if self.mouse_mode_active(&event.modifiers) {
             self.send_mouse_report(
                 event.position,
@@ -408,28 +434,6 @@ impl TerminalView {
                 &event.modifiers,
             );
             return;
-        }
-        if event.modifiers.control && event.click_count == 1 {
-            let (point, _) = self.grid_point(event.position);
-            let hit = self.session.as_ref().is_some_and(|session| {
-                let term = session.term.lock();
-                super::super::osc_links::highlighted_at(
-                    &term,
-                    &self.hint_config,
-                    point,
-                    &event.modifiers,
-                )
-                .is_some()
-            });
-            if hit {
-                if let Some(session) = &self.session {
-                    session.term.lock().selection = None;
-                }
-                self.selecting = false;
-                self.pending_link_open = true;
-                self.update_link_hover(event.position, &event.modifiers, cx);
-                return;
-            }
         }
         let (point, side) = self.grid_point(event.position);
         let ty = match event.click_count {
@@ -465,6 +469,11 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Retain the pressed link until release; dragging must not retarget it
+        // or leak part of the consumed gesture to the application.
+        if self.pending_link_open {
+            return;
+        }
         if self.move_completion_popup_scrollbar(event, cx) {
             cx.stop_propagation();
             return;
@@ -524,6 +533,12 @@ impl TerminalView {
             window.focus(&self.focus_handle, cx);
             cx.emit(TerminalViewEvent::FocusRequested);
         }
+        if event.pressed_button.is_none() && link_modifier(&event.modifiers) {
+            self.update_link_hover(event.position, &event.modifiers, cx);
+            if self.link_hover.is_some() {
+                return;
+            }
+        }
         if self.mouse_mode_active(&event.modifiers) {
             self.clear_link_hover(cx);
             // 鼠标模式的移动上报：拖动 = 按钮码+32（需 DRAG 或 MOTION 任一），
@@ -574,7 +589,8 @@ impl TerminalView {
             cx.notify();
             return;
         }
-        if !self.selecting && self.mouse_mode_active(&event.modifiers) {
+        let pending_link_open = std::mem::take(&mut self.pending_link_open);
+        if !pending_link_open && !self.selecting && self.mouse_mode_active(&event.modifiers) {
             self.send_mouse_report(
                 event.position,
                 mouse_protocol::BUTTON_LEFT,
@@ -584,15 +600,15 @@ impl TerminalView {
             return;
         }
         self.selecting = false;
-        let open_link = (self.pending_link_open || event.modifiers.control)
+        let (point, _) = self.grid_point(event.position);
+        let open_link = pending_link_open
             && self.selection_is_empty()
-            && self.link_hover.is_some();
+            && self.link_hover.as_ref().is_some_and(|hover| hover.hint.bounds().contains(&point));
         if open_link {
             self.try_open_hovered_link(window, cx);
         } else if self.copy_on_select {
             self.copy_selection(false, window, cx);
         }
-        self.pending_link_open = false;
         cx.notify();
     }
 
@@ -612,6 +628,7 @@ impl TerminalView {
         }
         self.stop_selection_scroll();
         let dragging_scrollbar = self.scrollbar_drag.take().is_some();
+        self.pending_link_open = false;
         if !self.selecting {
             if dragging_scrollbar {
                 cx.notify();
@@ -619,7 +636,6 @@ impl TerminalView {
             return;
         }
         self.selecting = false;
-        self.pending_link_open = false;
         // 指针不在终端上，链接打开不该发生；只补选中即复制这一条收尾。
         if self.copy_on_select {
             self.copy_selection(false, window, cx);
