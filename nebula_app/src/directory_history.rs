@@ -1,7 +1,7 @@
-//! Shared directory intelligence derived from successful cwd transitions.
+//! Shared directory intelligence derived from successful local terminal locations.
 //!
-//! Unlike command-text heuristics, this service records only directories the
-//! shell actually entered (reported through OSC cwd/title integration). The
+//! Unlike command-text heuristics, this service records only directories a local
+//! terminal successfully starts in or later reports through cwd integration. The
 //! resulting frecency score is reused by ghost text, path completion and UI
 //! directory pickers; no shell-specific command or alias is introduced.
 
@@ -157,7 +157,7 @@ impl DirectoryHistory {
         }
     }
 
-    /// Record a directory only after the shell reports it as the active cwd.
+    /// Record a directory confirmed by local terminal startup or cwd reporting.
     pub(crate) fn record(&self, path: &str) -> bool {
         let Some(observation) = observation(path, current_time()) else { return false };
         let mut state = self.state.lock();
