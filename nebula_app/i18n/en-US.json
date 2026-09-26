@@ -503,7 +503,34 @@
     "ignore_failed": "Could not change Git ignore rules: {error}",
     "preview_loading": "Preparing preview…",
     "preview_unavailable": "Preview unavailable for this file",
-    "preview_pages": "Page 1 of {pages}"
+    "preview_pages": "Page 1 of {pages}",
+    "open_terminal_here": "Open terminal here",
+    "tree": {
+      "open_in_explorer": "Open in File Explorer",
+      "follow_refresh": "Follow the current terminal and refresh (Alt+R)"
+    },
+    "copy_linux_path": "Copy Linux path",
+    "reveal_in_explorer": "Show in File Explorer",
+    "copy_path": "Copy path",
+    "empty": {
+      "reading_title": "Reading directory",
+      "reading_body": "Still enumerating the current working directory.",
+      "reading_hint": "Wait a moment, or click Follow again in the top-right.",
+      "read_failed_title": "Could not read directory",
+      "read_failed_body": "The directory could not be read completely. Check access permissions or try again.",
+      "read_failed_hint": "Click Follow again in the top-right, or choose another directory.",
+      "no_directory_title": "No directory to browse",
+      "no_directory_body": "The current terminal has not reported a working directory yet.",
+      "no_directory_hint": "Enter a directory in the terminal, then click Follow in the top-right.",
+      "directory_empty_title": "This directory is empty",
+      "directory_empty_body": "The current working directory has no files to show.",
+      "directory_empty_hint": "Create files in the terminal, or choose another directory."
+    },
+    "delete": {
+      "title": "Delete {name}?",
+      "folder_body": "The folder and all of its contents will be moved to the Recycle Bin.",
+      "file_body": "The file will be moved to the Recycle Bin."
+    }
   },
   "recipe": {
     "title": "Layout recipes",
@@ -921,5 +948,57 @@
     "move_left": "Move left",
     "move_right": "Move right",
     "tab_color": "Tab color"
+  },
+  "chrome": {
+    "new_terminal_ctrl_shift_t": "New terminal (Ctrl+Shift+T)",
+    "more": "More",
+    "scroll_tabs_left": "Scroll tabs left",
+    "scroll_tabs_right": "Scroll tabs right",
+    "select_terminal": "Select terminal",
+    "command_list": "Command list",
+    "toggle_sidebar": "Show/hide sidebar (Ctrl+Shift+B)",
+    "settings_shortcut": "Settings (Ctrl+,)"
+  },
+  "workspace": {
+    "pane": {
+      "stop_broadcast_input": "Stop broadcasting input",
+      "broadcast_input_tooltip": "Broadcast input to every pane in this tab",
+      "close": "Close this pane",
+      "extract_release": "Release to extract as a new tab",
+      "extract_drag_hint": "Drag outside the terminal to extract",
+      "broadcast_enabled": "Broadcasting input to {count} panes in this tab",
+      "restore_layout": "Restore pane layout (Ctrl+Shift+Enter)",
+      "zoom": "Zoom this pane (Ctrl+Shift+Enter)"
+    },
+    "close": {
+      "running_process": "{process} is still running. Closing will stop it.",
+      "running_window_process": "{process} is still running. Closing the window will stop it."
+    },
+    "close_window": {
+      "title": "Close window?"
+    },
+    "close_pane": {
+      "title": "Close this pane?"
+    },
+    "close_tab": {
+      "title": "Close this tab?"
+    }
+  },
+  "remote": {
+    "locating": "Locating the remote directory…",
+    "parent": "Up one level",
+    "reread": "Reload",
+    "upload_files": "Upload files",
+    "upload_folder": "Upload folder",
+    "download": "Download to this computer",
+    "copy_item": "Copy remote item",
+    "paste_here": "Paste into the current remote directory",
+    "skip_unchanged": "Skip unchanged",
+    "cancel": "Cancel transfer",
+    "preparing": "Preparing the transfer…",
+    "reading": "Reading the remote directory…",
+    "empty": "This directory is empty.",
+    "error_retry": "{error} (click Reload in the top-right to retry)",
+    "busy_other": "Another host is transferring: {destination}"
   }
 }

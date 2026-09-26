@@ -19,7 +19,9 @@ mod agent_hooks;
 pub use agent_hooks::AgentHook;
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
+mod cursor_motion;
 mod custom_theme;
+pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
     IndexedPalette, TerminalThemeColors, ThemeAppearance, ThemeDefinition, ThemeEffects,
     ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, foreground_recommendations,
@@ -979,6 +981,7 @@ pub struct RuntimeSettings {
     pub ligatures: Ligatures,
     pub cursor_shape: Option<CursorShapeName>,
     pub cursor_blink: Option<bool>,
+    pub cursor_motion: CursorMotion,
     pub copy_on_select: bool,
     /// Maximum retained history for new terminals, without altering open sessions.
     pub scrollback_lines: usize,
@@ -1152,6 +1155,10 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             cursor_shape: raw.value("cursor_shape").and_then(CursorShapeName::from_settings),
             cursor_blink: raw.bool_on("cursor_blink"),
+            cursor_motion: raw
+                .value("cursor_motion")
+                .and_then(CursorMotion::from_settings)
+                .unwrap_or_default(),
             copy_on_select: raw.bool_on("copy_on_select").unwrap_or(false),
             scrollback_lines: scrolling::scrollback_lines(raw),
             scroll_speed: normalize_scroll_speed(
@@ -1233,7 +1240,7 @@ impl RuntimeSettings {
             background_image_cover_chrome: raw
                 .bool_on("background_image_cover_chrome")
                 .unwrap_or(false),
-            panel_resize: raw.bool_on("panel_resize").unwrap_or(false),
+            panel_resize: raw.bool_on("panel_resize").unwrap_or(true),
             sidebar_width: raw
                 .f32("sidebar_w")
                 .map(|width| width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH))
@@ -1552,7 +1559,10 @@ mod tests {
         assert_eq!(settings.background, None);
         assert_eq!(settings.theme_foreground, None);
         assert_eq!(settings.custom_theme, None);
-        assert!(!settings.panel_resize);
+        assert!(settings.panel_resize);
+        assert!(
+            !RuntimeSettings::from_raw(&RawSettings::from_text("panel_resize=0\n")).panel_resize
+        );
         assert_eq!(settings.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
         assert_eq!(settings.ssh_proxy_mode, ProxyModeName::Off);
         assert_eq!(settings.quick_terminal_hotkey, DEFAULT_QUICK_TERMINAL_HOTKEY);

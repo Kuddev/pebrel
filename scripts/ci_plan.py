@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Plan the native CI matrices before GitHub creates runner jobs.
 
-The output file is the path normally supplied as ``GITHUB_OUTPUT``.  Planning
-is deliberately separate from workflow steps: a draft pull request therefore
-does not materialize jobs for the scarce platforms.
+The output file is the path normally supplied as ``GITHUB_OUTPUT``. Validate
+the event before requesting runners; draft and ready PRs get the same coverage.
 """
 
 from __future__ import annotations
@@ -19,17 +18,16 @@ from typing import Any, Sequence
 @dataclass(frozen=True)
 class Platform:
     runner: str
-    draft: bool
     release_check: bool = False
 
 
-# One platform catalog owns both draft eligibility and release compilation.
+# 所有 PR 共用平台清单，避免提速时把草稿的原生覆盖悄悄省略。
 PLATFORMS = (
-    Platform("ubuntu-24.04", draft=True),
-    Platform("windows-2022", draft=True),
-    Platform("macos-26", draft=True, release_check=True),
-    Platform("windows-11-arm", draft=False),
-    Platform("macos-26-intel", draft=False, release_check=True),
+    Platform("ubuntu-24.04"),
+    Platform("windows-2022"),
+    Platform("macos-26", release_check=True),
+    Platform("windows-11-arm"),
+    Platform("macos-26-intel", release_check=True),
 )
 
 FULL_EVENTS = frozenset(
@@ -41,11 +39,10 @@ class PlanError(ValueError):
     """An event cannot be converted into a safe CI plan."""
 
 
-def _matrices(draft: bool) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    selected = [platform for platform in PLATFORMS if not draft or platform.draft]
+def _matrices() -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     return (
-        [{"os": platform.runner} for platform in selected],
-        [{"os": platform.runner} for platform in selected if platform.release_check],
+        [{"os": platform.runner} for platform in PLATFORMS],
+        [{"os": platform.runner} for platform in PLATFORMS if platform.release_check],
     )
 
 
@@ -79,10 +76,10 @@ def plan_matrices(event_name: str, payload: dict[str, Any]) -> tuple[list[dict[s
         draft = pull_request.get("draft")
         if not isinstance(draft, bool):
             raise PlanError("pull_request.draft must be a boolean")
-        return _matrices(draft)
+        return _matrices()
 
     if event_name in FULL_EVENTS:
-        return _matrices(draft=False)
+        return _matrices()
 
     supported = sorted(FULL_EVENTS | {"pull_request"})
     raise PlanError(f"unsupported event name {event_name!r}; expected one of {', '.join(supported)}")
