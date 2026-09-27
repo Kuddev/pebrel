@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::i18n::Message;
+use gpui_component::dialog::CancelDialog;
 
 impl NebulaWorkspace {
     pub(super) fn remote_transfer_snapshot(&self) -> Option<SftpSnapshot> {
@@ -296,20 +297,22 @@ impl NebulaWorkspace {
             let overwrite_workspace = workspace.clone();
             let overwrite_pending = pending.clone();
             let overwrite_target = target.clone();
+            // DialogClose 的固定 ID 会让同级包装器共享点击状态；直接在按钮上
+            // 派发关闭动作，也让鼠标和键盘激活使用同一条路径。
             let footer = DialogFooter::new()
                 .child(
-                    DialogClose::new().child(
-                        Button::new("sftp-conflict-cancel")
-                            .label(language.text(Message::TransferCancel)),
-                    ),
+                    Button::new("sftp-conflict-cancel")
+                        .label(language.text(Message::TransferCancel))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(CancelDialog), cx);
+                        }),
                 )
                 .child(div().flex_1())
                 .child(
-                    DialogClose::new().child(
-                        Button::new("sftp-conflict-skip")
-                            .label(language.text(Message::TransferSkip))
-                            .on_click(move |_, _, cx| {
-                                let Some(workspace) = skip_workspace.upgrade() else { return };
+                    Button::new("sftp-conflict-skip")
+                        .label(language.text(Message::TransferSkip))
+                        .on_click(move |_, window, cx| {
+                            if let Some(workspace) = skip_workspace.upgrade() {
                                 let _ = workspace.update(cx, |workspace, cx| {
                                     workspace.start_remote_transfer(
                                         skip_pending.clone(),
@@ -318,15 +321,15 @@ impl NebulaWorkspace {
                                         cx,
                                     );
                                 });
-                            }),
-                    ),
+                            }
+                            window.dispatch_action(Box::new(CancelDialog), cx);
+                        }),
                 )
                 .child(
-                    DialogClose::new().child(
-                        Button::new("sftp-conflict-keep-both")
-                            .label(language.text(Message::TransferKeepBoth))
-                            .on_click(move |_, _, cx| {
-                                let Some(workspace) = keep_workspace.upgrade() else { return };
+                    Button::new("sftp-conflict-keep-both")
+                        .label(language.text(Message::TransferKeepBoth))
+                        .on_click(move |_, window, cx| {
+                            if let Some(workspace) = keep_workspace.upgrade() {
                                 let _ = workspace.update(cx, |workspace, cx| {
                                     workspace.start_remote_transfer(
                                         keep_pending.clone(),
@@ -335,17 +338,17 @@ impl NebulaWorkspace {
                                         cx,
                                     );
                                 });
-                            }),
-                    ),
+                            }
+                            window.dispatch_action(Box::new(CancelDialog), cx);
+                        }),
                 )
                 .child(
-                    DialogClose::new().child(
-                        Button::new("sftp-conflict-overwrite")
-                            .label(language.text(Message::TransferOverwrite))
-                            .danger()
-                            .disabled(!overwrite_allowed)
-                            .on_click(move |_, _, cx| {
-                                let Some(workspace) = overwrite_workspace.upgrade() else { return };
+                    Button::new("sftp-conflict-overwrite")
+                        .label(language.text(Message::TransferOverwrite))
+                        .danger()
+                        .disabled(!overwrite_allowed)
+                        .on_click(move |_, window, cx| {
+                            if let Some(workspace) = overwrite_workspace.upgrade() {
                                 let _ = workspace.update(cx, |workspace, cx| {
                                     workspace.start_remote_transfer(
                                         overwrite_pending.clone(),
@@ -354,13 +357,20 @@ impl NebulaWorkspace {
                                         cx,
                                     );
                                 });
-                            }),
-                    ),
+                            }
+                            window.dispatch_action(Box::new(CancelDialog), cx);
+                        }),
                 );
 
             center_modal_dialog(dialog, window, 220.0)
                 .close_button(false)
                 .overlay_closable(true)
+                // 此处没有默认传输策略。Enter 应交给聚焦按钮的按下/抬起处理，
+                // 不能由 Dialog 的默认确认动作直接关闭而跳过策略选择。
+                .on_ok(|_, _, cx| {
+                    cx.propagate();
+                    false
+                })
                 .title(
                     div()
                         .text_lg()
