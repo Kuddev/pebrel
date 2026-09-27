@@ -11,6 +11,12 @@ use crate::update_download::DownloadStatus;
 const UPDATE_DIALOG_IDLE_HEIGHT: f32 = 250.0;
 const UPDATE_DIALOG_STATUS_HEIGHT: f32 = 280.0;
 
+fn update_dialog_frame(dialog: Dialog, window: &Window, estimated_height: f32, cx: &App) -> Dialog {
+    // 默认 Dialog 继承终端壳的透明背景；更新内容需像设置页一样遮住底层文字。
+    center_modal_dialog(dialog, window, estimated_height)
+        .bg(crate::gpui_shell::theme::settings_panel_bg(cx))
+}
+
 struct UpdateNotification;
 
 /// 自动检查只在右下角提示，不抢终端焦点；默认常驻，也遵循通知时长设置。
@@ -195,7 +201,7 @@ pub(crate) fn open_update_dialog(
 
     let dialog_result = result.clone();
     window.open_dialog(cx, move |dialog, window, cx| {
-        let language = workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let title: SharedString = language.pick("Pebrel 更新", "Pebrel Update").into();
         let current_label: SharedString = language.pick("当前版本", "Current").into();
         let latest_label: SharedString = language.pick("最新版本", "Latest").into();
@@ -203,7 +209,7 @@ pub(crate) fn open_update_dialog(
         let latest_version: SharedString = format!("v{}", dialog_result.latest).into();
         let later_text: SharedString =
             language.text(Message::UpdateLater).into();
-        let skip_text: SharedString = language.pick("跳过此版本", "Skip this version").into();
+        let skip_text: SharedString = language.text(Message::UpdateSkipVersion).into();
         let muted = cx.theme().muted_foreground;
         let latest_color = cx.theme().warning;
         let version_background = cx.theme().muted;
@@ -226,12 +232,7 @@ pub(crate) fn open_update_dialog(
         };
 
         let hint: SharedString = match (&status, asset.as_ref()) {
-            (DownloadStatus::Downloading { .. }, _) => language
-                .pick(
-                    "正在后台下载并校验 Windows x64 安装包。",
-                    "Downloading and verifying the Windows x64 installer in the background.",
-                )
-                .into(),
+            (DownloadStatus::Downloading { .. }, _) => language.text(Message::UpdateDownloadingHint).into(),
             (DownloadStatus::Ready { .. }, _) => language.text(Message::UpdateReadyHint).into(),
             (DownloadStatus::InstallFailed(_), _) => language.text(Message::UpdateInstallationFailedHint).into(),
             (DownloadStatus::Failed(_), _) => language
@@ -246,20 +247,14 @@ pub(crate) fn open_update_dialog(
                     "Pebrel will download and verify the installer, then wait for your confirmation before installing.",
                 )
                 .into(),
-            // 非 Windows 目前没有自动安装路径（能力表 `self_update_install`）：
-            // 不说「缺 Windows 安装包」，那对 Mac/Linux 用户是句错话。
+            // Platforms without an installation adapter retain manual downloads.
             _ if !crate::platform::CAPABILITIES.self_update_install => language
                 .pick(
                     "此平台暂不支持应用内自动更新；请到发布页下载对应的安装包。",
                     "In-app automatic updates are not available on this platform yet. Download the matching package from the Releases page.",
                 )
                 .into(),
-            _ => language
-                .pick(
-                    "此 release 没有可验证的 Windows x64 安装包，已禁用自动执行；可打开发布页手动处理。",
-                    "This release has no verifiable Windows x64 installer, so automatic execution is disabled. Use the Releases page instead.",
-                )
-                .into(),
+            _ => language.text(Message::UpdateNoVerifiedPackage).into(),
         };
 
         let primary_text: SharedString = match status {
@@ -371,6 +366,7 @@ pub(crate) fn open_update_dialog(
         let cancel_save_failed_prefix = save_failed_prefix.to_owned();
         let cancel_error_separator = error_separator.to_owned();
         let mut footer = DialogFooter::new()
+            .gap(px(6.0))
             .child(
                 Button::new("skip-nebula-update")
                     .label(skip_text)
@@ -404,7 +400,7 @@ pub(crate) fn open_update_dialog(
         let primary = Button::new("ok").label(primary_text).primary();
         footer = footer.child(DialogAction::new().child(primary));
 
-        center_modal_dialog(dialog, window, estimated_height)
+        update_dialog_frame(dialog, window, estimated_height, cx)
             .close_button(true)
             // 保留新 Dialog 的遮罩点击取消；它与 Esc、取消按钮共用 on_cancel。
             .overlay_closable(true)
@@ -460,5 +456,85 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KiB", bytes as f64 / KIB)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use gpui_component::{Theme, ThemeMode};
+
+    struct DialogProbe;
+
+    impl Render for DialogProbe {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            // 滚动组件依赖当前视图；沿用真实模态层，避免裸绘制 Dialog 缺失实体上下文。
+            div().size_full().children(Root::render_dialog_layer(window, cx))
+        }
+    }
+
+    #[gpui::test]
+    fn update_dialog_stays_opaque_without_changing_terminal_opacity(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| DialogProbe);
+            Root::new(view, window, cx)
+        });
+        cx.simulate_resize(size(px(800.0), px(600.0)));
+        for name in [nebula_settings::ThemeName::LinenLight, nebula_settings::ThemeName::Nord] {
+            cx.update(|window, cx| {
+                let mut runtime = nebula_settings::RuntimeSettings::from_raw(
+                    &nebula_settings::RawSettings::default(),
+                );
+                runtime.theme = name;
+                runtime.follow_system_theme = false;
+                cx.set_global(crate::gpui_shell::config::Settings::load_with_runtime(
+                    name, runtime,
+                ));
+                let mode = if crate::gpui_shell::theme::resolved_skin(cx).is_light {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
+                Theme::change(mode, Some(window), cx);
+            });
+            for alpha in [0.0, 0.2, 0.75, 1.0] {
+                for height in [UPDATE_DIALOG_IDLE_HEIGHT, UPDATE_DIALOG_STATUS_HEIGHT] {
+                    let shell = cx.update(|window, cx| {
+                        let panel = crate::gpui_shell::theme::settings_panel_bg(cx);
+                        let shell = panel.opacity(alpha);
+                        let theme = Theme::global_mut(cx);
+                        theme.background = shell;
+                        theme.tokens.background = shell.into();
+                        window.open_dialog(cx, move |dialog, window, cx| {
+                            let mut dialog = update_dialog_frame(dialog, window, height, cx);
+                            assert_eq!(panel.a, 1.0);
+                            assert_eq!(dialog.style().background, Some(panel.into()));
+                            assert_eq!(cx.theme().background, shell);
+                            assert_eq!(cx.theme().tokens.background, shell.into());
+                            dialog.title("Update").child(
+                                div()
+                                    .debug_selector(|| "update-dialog-body".to_owned())
+                                    .child("Version details"),
+                            )
+                        });
+                        shell
+                    });
+                    cx.run_until_parked();
+                    cx.update(|window, cx| {
+                        let _ = window.draw(cx);
+                        assert_eq!(cx.theme().background, shell);
+                        assert_eq!(cx.theme().tokens.background, shell.into());
+                    });
+                    let bounds = cx.debug_bounds("update-dialog-body").expect("rendered dialog");
+                    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+                    cx.update(|window, cx| window.close_dialog(cx));
+                }
+            }
+        }
     }
 }

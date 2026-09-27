@@ -92,7 +92,6 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         ArrowLeft,  +BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1bOD".into());
         // Legacy keys handling which can't be automatically encoded.
         F1,         ~BindingMode::VI, ~BindingMode::SEARCH, ~BindingMode::REPORT_ALL_KEYS_AS_ESC, ~BindingMode::DISAMBIGUATE_ESC_CODES; Action::Esc("\x1bOP".into());
-        F2,         ~BindingMode::VI, ~BindingMode::SEARCH, ~BindingMode::REPORT_ALL_KEYS_AS_ESC, ~BindingMode::DISAMBIGUATE_ESC_CODES; Action::Esc("\x1bOQ".into());
         F3,         ~BindingMode::VI, ~BindingMode::SEARCH, ~BindingMode::REPORT_ALL_KEYS_AS_ESC, ~BindingMode::DISAMBIGUATE_ESC_CODES; Action::Esc("\x1bOR".into());
         F4,         ~BindingMode::VI, ~BindingMode::SEARCH, ~BindingMode::REPORT_ALL_KEYS_AS_ESC, ~BindingMode::DISAMBIGUATE_ESC_CODES; Action::Esc("\x1bOS".into());
         Tab,       ModifiersState::SHIFT,   ~BindingMode::VI,   ~BindingMode::SEARCH, ~BindingMode::REPORT_ALL_KEYS_AS_ESC, ~BindingMode::DISAMBIGUATE_ESC_CODES; Action::Esc("\x1b[Z".into());
@@ -201,6 +200,7 @@ pub fn nebula_key_bindings() -> Vec<KeyBinding> {
         KeyBinding;
         "t",        ctrl_shift; Action::CreateNewTab;
         "w",        ctrl_shift; Action::CloseTab;
+        F2;                    Action::RenameTab;
         Tab,        ctrl;       Action::SelectNextTab;
         Tab,        ctrl_shift; Action::SelectPreviousTab;
         "e",        ctrl_shift; Action::CreateNewWindow;

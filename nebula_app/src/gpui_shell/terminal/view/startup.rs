@@ -2,6 +2,16 @@
 
 use super::*;
 
+fn startup_history_directory(
+    options: &nebula_terminal::tty::Options,
+    env: &crate::display::SuggestEnv,
+) -> Option<std::path::PathBuf> {
+    env.is_this_machine()
+        .then(|| options.working_directory.clone().or_else(|| std::env::current_dir().ok()))
+        .flatten()
+        .and_then(|path| std::path::absolute(path).ok())
+}
+
 impl TerminalView {
     /// `spawn_grid`：PTY 出生网格（宿主已把窗口定形到该几何）。首帧布局
     /// 与之相同则零下发；见 `set_layout` 的启动稳定闸。
@@ -116,7 +126,21 @@ impl TerminalView {
                     },
                 );
                 let options = session::local_options(effective, pane_id, cwd);
+                let history_cwd = startup_history_directory(&options, &suggest_env);
                 let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
+                let spawned = session::spawn(initial, term_config, options);
+                if spawned.is_ok()
+                    && let Some(cwd) = history_cwd
+                {
+                    // 目录校验和原子落盘不能拖慢开窗；已成功启动的访问记录也不随 pane 关闭取消。
+                    cx.background_executor()
+                        .spawn(async move {
+                            if let Some(cwd) = cwd.to_str() {
+                                crate::directory_history::global().record(cwd);
+                            }
+                        })
+                        .detach();
+                }
                 (
                     None,
                     String::from("shell"),
@@ -124,7 +148,7 @@ impl TerminalView {
                     suggest_env,
                     Some(exec_context),
                     session_launch,
-                    session::spawn(initial, term_config, options),
+                    spawned,
                 )
             },
             TerminalLaunch::Ssh { destination, cwd } => (
@@ -330,5 +354,41 @@ impl TerminalView {
         view.refresh_ssh_label();
         view.restart_cursor_blink(cx);
         view
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_history_uses_only_local_initial_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut options = nebula_terminal::tty::Options::default();
+        options.working_directory = Some(directory.path().to_path_buf());
+
+        assert_eq!(
+            startup_history_directory(&options, &crate::display::SuggestEnv::Local).as_deref(),
+            Some(directory.path())
+        );
+        assert_eq!(
+            startup_history_directory(
+                &options,
+                &crate::display::SuggestEnv::Wsl { distro: "Debian".into() }
+            ),
+            None
+        );
+        assert_eq!(
+            startup_history_directory(
+                &options,
+                &crate::display::SuggestEnv::Ssh { destination: "example".into() }
+            ),
+            None
+        );
+        options.working_directory = None;
+        assert_eq!(
+            startup_history_directory(&options, &crate::display::SuggestEnv::Local),
+            Some(std::path::absolute(std::env::current_dir().unwrap()).unwrap())
+        );
     }
 }

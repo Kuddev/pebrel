@@ -37,7 +37,24 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
                 .collect::<Vec<_>>()
         });
         let ready = super::super::closing::wait_for_session_ids(&panes, cx).await;
-        let mut prepared = if ready && let Some(asset) = update {
+        let incomplete_approved = if ready {
+            false
+        } else {
+            let handle = cx.update(|cx| {
+                cx.global::<WindowRegistry>().entries.first().map(|entry| entry.handle)
+            });
+            let approved = if let Some(handle) = handle {
+                super::super::closing::confirm_incomplete_session(handle, cx).await
+            } else {
+                false
+            };
+            if !approved {
+                cx.update(|cx| cx.global_mut::<WindowRegistry>().quit_pending = false);
+                return;
+            }
+            true
+        };
+        let mut prepared = if let Some(asset) = update {
             let result = cx
                 .background_executor()
                 .spawn(async move { crate::update_download::handoff::prepare(&asset) })
@@ -69,7 +86,7 @@ fn request_quit(update: Option<crate::update_check::UpdateAsset>, cx: &mut App) 
                         _ => true,
                     })
                 });
-            if !ready || !identities_ready {
+            if !identities_ready && !incomplete_approved {
                 abort_quit(Message::SessionIdentityPending, cx);
                 return;
             }

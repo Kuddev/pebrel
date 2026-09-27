@@ -277,13 +277,13 @@ end;
 
 { —— 按 WSL 发行版注册的右键项 ——
 
-  「在 Pebrel 中打开（Ubuntu）」这类菜单项按**安装那一刻**机器上的发行版动态生成：
+  WSL 发行版子菜单按**安装那一刻**机器上的发行版动态生成：
   `Lxss` 里的 `DistributionName` 是唯一真相，枚举口径与 Rust 侧
   `shell_detect::find_wsl_distros` 一致（跳过 `docker-desktop*` 这类 plumbing 发行版）。
 
   走 `[Code]` 而不是 `[Registry]` 的原因只有一个：键的条数取决于机器上有几个发行版。
   代价是这些键没有 `uninsdeletekey`，卸载由 `RemoveOwnedWslContextMenus` 按名字前缀
-  加命令串里的可执行文件与 `--shell` 认领后删除。 }
+  加精确命令与级联菜单归属标记认领后删除。 }
 
 const
   LxssRoot = 'Software\Microsoft\Windows\CurrentVersion\Lxss';
@@ -308,67 +308,117 @@ begin
   SetArrayLength(Result, Count);
 end;
 
-{ 删掉本安装器写下的 WSL 右键项：键名以 `PebrelWsl` 开头、命令串里同时有我们的
-  可执行文件和 `--shell`，两条都满足才算我们写的。发行版后来被移除也不会留下
-  点不动的死项。 }
+{ WSL 右键项按精确可执行文件前缀归属；级联菜单还校验所有子项，保留用户编辑。
+  发行版移除后，下次安装重建菜单时不留下旧项。 }
+function IsOwnedWslCommand(Command, Executable: string): Boolean;
+var
+  Prefix: string;
+begin
+  Prefix := '"' + Executable + '" --gpui --shell "wsl:';
+  Result := CompareText(Copy(Command, 1, Length(Prefix)), Prefix) = 0;
+end;
+
+function IsOwnedWslMenu(Key, Executable: string): Boolean;
+var
+  Owner, Command: string;
+  Children, Subkeys: TArrayOfString;
+  Index: Integer;
+begin
+  Result := False;
+  if not RegQueryStringValue(HKCU, Key, 'PebrelOwner', Owner) or
+    (CompareText(Owner, Executable) <> 0) then
+    Exit;
+  if not RegGetSubkeyNames(HKCU, Key, Subkeys) then
+    Exit;
+  for Index := 0 to GetArrayLength(Subkeys) - 1 do
+    if CompareText(Subkeys[Index], 'shell') <> 0 then
+      Exit;
+  if GetArrayLength(Subkeys) > 0 then begin
+    if not RegGetSubkeyNames(HKCU, Key + '\shell', Children) then
+      Exit;
+    for Index := 0 to GetArrayLength(Children) - 1 do begin
+      if not RegQueryStringValue(HKCU, Key + '\shell\' + Children[Index] + '\command', '', Command) or
+        not IsOwnedWslCommand(Command, Executable) then
+        Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+procedure RemoveOwnedWslContextMenusAt(Root, Executable: string);
+var
+  Key, Command: string;
+  Names: TArrayOfString;
+  NameIndex: Integer;
+begin
+  if RegGetSubkeyNames(HKCU, Root, Names) then
+    for NameIndex := 0 to GetArrayLength(Names) - 1 do
+      if Pos('PebrelWsl', Names[NameIndex]) = 1 then begin
+        Key := Root + '\' + Names[NameIndex];
+        Command := '';
+        if IsOwnedWslMenu(Key, Executable) or
+          (RegQueryStringValue(HKCU, Key + '\command', '', Command) and
+            IsOwnedWslCommand(Command, Executable)) then
+          if not RegDeleteKeyIncludingSubkeys(HKCU, Key) then
+            RaiseException('Unable to remove an owned WSL context menu: ' + Key);
+      end;
+end;
+
 procedure RemoveOwnedWslContextMenus;
 var
   Roots: array[0..1] of string;
-  Root, Key, Command: string;
-  Names: TArrayOfString;
-  Index, NameIndex: Integer;
+  Index: Integer;
 begin
   Roots[0] := 'Software\Classes\Directory\shell';
   Roots[1] := 'Software\Classes\Directory\Background\shell';
-  for Index := 0 to 1 do begin
-    Root := Roots[Index];
-    if RegGetSubkeyNames(HKCU, Root, Names) then
-      for NameIndex := 0 to GetArrayLength(Names) - 1 do
-        if Pos('PebrelWsl', Names[NameIndex]) = 1 then begin
-          Key := Root + '\' + Names[NameIndex];
-          Command := '';
-          if RegQueryStringValue(HKCU, Key + '\command', '', Command) and
-            (Pos(ExpandConstant('{app}\pebrel.exe'), Command) > 0) and
-            (Pos('--shell', Command) > 0) then
-            if not RegDeleteKeyIncludingSubkeys(HKCU, Key) then
-              RaiseException('Unable to remove an owned WSL context menu: ' + Key);
-        end;
+  for Index := 0 to 1 do
+    RemoveOwnedWslContextMenusAt(Roots[Index], ExpandConstant('{app}\pebrel.exe'));
+end;
+
+procedure RegisterWslContextMenuAt(Root, Executable, DirectoryArgument: string;
+  Distros: TArrayOfString);
+var
+  Index: Integer;
+  Distro, Verb, Command, Key, Menu: string;
+begin
+  Menu := Root + '\PebrelWslMenu';
+  { Never overwrite an unknown installation or an edited submenu. }
+  if RegKeyExists(HKCU, Menu) and not IsOwnedWslMenu(Menu, Executable) then
+    RaiseException(FmtMessage(CustomMessage('WslMenuConflict'), [Menu]));
+  RemoveOwnedWslContextMenusAt(Root, Executable);
+  if GetArrayLength(Distros) = 0 then
+    Exit;
+  if not RegWriteStringValue(HKCU, Menu, 'MUIVerb', CustomMessage('OpenInPebrelWsl')) or
+    not RegWriteStringValue(HKCU, Menu, 'Icon', Executable + ',0') or
+    not RegWriteStringValue(HKCU, Menu, 'SubCommands', '') or
+    not RegWriteStringValue(HKCU, Menu, 'PebrelOwner', Executable) then
+    RaiseException(CustomMessage('WslMenuRegistrationFailed'));
+  for Index := 0 to GetArrayLength(Distros) - 1 do begin
+    Distro := Distros[Index];
+    { 键名用序号而不是发行版名：注册表键名里带空格与非 ASCII 只会给自己找麻烦，
+      何况我们靠前缀认领。 }
+    Verb := 'PebrelWsl' + IntToStr(Index);
+    { `--shell` 必须排在 `--working-directory` 之前：盘根（`D:\`）时后者的收尾
+      反斜杠会吃掉它的收尾引号，并把后面整段并进同一个参数（issue #36 的另一面），
+      顺序写反会静默开出一个既没有 cwd、也没用上指定发行版的标签。 }
+    Command := '"' + Executable + '" --gpui --shell "wsl:' + Distro + '" --working-directory ';
+    Key := Menu + '\shell\' + Verb;
+    if not RegWriteStringValue(HKCU, Key, 'MUIVerb', Distro) or
+      not RegWriteStringValue(HKCU, Key, 'Icon', Executable + ',0') or
+      not RegWriteStringValue(HKCU, Key + '\command', '', Command + '"' + DirectoryArgument + '"') then
+      RaiseException('Unable to register the WSL context menu for ' + Distro + '.');
   end;
 end;
 
 procedure RegisterWslContextMenus;
 var
   Distros: TArrayOfString;
-  Index: Integer;
-  Distro, Verb, LabelText, Executable, Command, Key: string;
+  Executable: string;
 begin
-  { 先清掉上一次写下的：发行版被移除后，残留的索引键会指向一个已经不存在的发行版。 }
-  RemoveOwnedWslContextMenus;
   Distros := WslDistroNames;
-  if GetArrayLength(Distros) = 0 then
-    Exit;
   Executable := ExpandConstant('{app}\pebrel.exe');
-  for Index := 0 to GetArrayLength(Distros) - 1 do begin
-    Distro := Distros[Index];
-    { 键名用序号而不是发行版名：注册表键名里带空格与非 ASCII 只会给自己找麻烦，
-      何况我们靠前缀认领。 }
-    Verb := 'PebrelWsl' + IntToStr(Index);
-    LabelText := CustomMessage('OpenInPebrelWsl') + ' (' + Distro + ')';
-    { `--shell` 必须排在 `--working-directory` 之前：盘根（`D:\`）时后者的收尾
-      反斜杠会吃掉它的收尾引号，并把后面整段并进同一个参数（issue #36 的另一面），
-      顺序写反会静默开出一个既没有 cwd、也没用上指定发行版的标签。 }
-    Command := '"' + Executable + '" --gpui --shell "wsl:' + Distro + '" --working-directory ';
-    Key := 'Software\Classes\Directory\shell\' + Verb;
-    if not RegWriteStringValue(HKCU, Key, 'MUIVerb', LabelText) or
-      not RegWriteStringValue(HKCU, Key, 'Icon', Executable + ',0') or
-      not RegWriteStringValue(HKCU, Key + '\command', '', Command + '"%1"') then
-      RaiseException('Unable to register the WSL context menu for ' + Distro + '.');
-    Key := 'Software\Classes\Directory\Background\shell\' + Verb;
-    if not RegWriteStringValue(HKCU, Key, 'MUIVerb', LabelText) or
-      not RegWriteStringValue(HKCU, Key, 'Icon', Executable + ',0') or
-      not RegWriteStringValue(HKCU, Key + '\command', '', Command + '"%V"') then
-      RaiseException('Unable to register the WSL background context menu for ' + Distro + '.');
-  end;
+  RegisterWslContextMenuAt('Software\Classes\Directory\shell', Executable, '%1', Distros);
+  RegisterWslContextMenuAt('Software\Classes\Directory\Background\shell', Executable, '%V', Distros);
 end;
 
 procedure MigrateLegacyIntegrations;

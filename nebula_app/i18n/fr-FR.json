@@ -95,6 +95,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+clic gauche pour ouvrir",
+    "link_ctrl_click": "Ctrl+clic gauche pour ouvrir",
     "settings": "Paramètres",
     "language": "Langue",
     "about": "À propos",
@@ -123,6 +125,7 @@
     "delete": "Supprimer",
     "edit": "Modifier",
     "rename": "Renommer",
+    "rename_tab": "Renommer l’onglet",
     "copy": "Copier",
     "paste": "Coller",
     "cut": "Couper",
@@ -154,6 +157,7 @@
     "new_window": "Nouvelle fenêtre",
     "close_tab": "Fermer l’onglet",
     "duplicate_tab": "Dupliquer l’onglet",
+    "copy_working_directory": "Copier le répertoire de travail",
     "terminal": "Terminal",
     "connect": "Connecter",
     "disconnect": "Déconnecter",
@@ -244,5 +248,15 @@
       "http_status": "Le service a renvoyé HTTP {status}",
       "start_failed": "Impossible de démarrer le test du fournisseur : {error}"
     }
+  },
+  "tab_menu": {
+    "fork_ai_session": "Dupliquer la session IA",
+    "move_to_new_window": "Déplacer vers une nouvelle fenêtre",
+    "export_as_workspace": "Exporter en espace de travail…",
+    "split_left_right": "Diviser verticalement",
+    "split_top_bottom": "Diviser horizontalement",
+    "move_left": "Déplacer vers la gauche",
+    "move_right": "Déplacer vers la droite",
+    "tab_color": "Couleur de l’onglet"
   }
 }

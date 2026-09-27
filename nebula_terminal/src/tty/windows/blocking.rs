@@ -70,6 +70,7 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
                     Poll::Ready(Ok(0)) => {
                         // Either the pipe is closed or the reader is at its EOF.
                         // In any case, we are done.
+                        crate::pty_trace("conout reader thread: EOF");
                         return;
                     },
 
@@ -84,10 +85,14 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
                     },
 
                     // Windows reports normal anonymous-pipe EOF this way.
-                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => return,
+                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => {
+                        crate::pty_trace("conout reader thread: broken pipe");
+                        return;
+                    },
 
                     Poll::Ready(Err(e)) => {
                         log::error!("error writing to pipe: {}", e);
+                        crate::pty_trace("conout reader thread: read error");
                         return;
                     },
 
@@ -397,6 +402,22 @@ mod tests {
         let event = Event::readable(KEY);
         let mut reader = UnblockedReader::new(ScriptedSource { rx, pending: Vec::new() }, 4096);
 
+        // Readiness permits another poll; it does not guarantee bytes. piper
+        // can deliberately yield for fairness and wake us again, and a queued
+        // notification can outlive the data that originally triggered it.
+        // Retry only after a notification so a genuinely lost wake still fails.
+        let read_chunk = |reader: &mut UnblockedReader<ScriptedSource>, buf: &mut [u8]| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let read = reader.try_read(buf);
+                if read > 0 {
+                    return read;
+                }
+                assert!(Instant::now() < deadline, "readiness never produced data");
+                assert!(readable_arrived(&poller, KEY), "pending read was not woken");
+            }
+        };
+
         // 首次 register 自带一次无条件投递；先消化掉，后面等到的事件就只可能
         // 来自 try_read 的补投。
         reader.register(&poller, event, PollMode::Level);
@@ -409,7 +430,8 @@ mod tests {
         );
 
         let mut buf = [0u8; 64];
-        assert_eq!(reader.try_read(&mut buf), 5);
+        assert_eq!(read_chunk(&mut reader, &mut buf), 5);
+        assert_eq!(&buf[..5], b"hello");
         assert!(reader.pipe.is_empty(), "这一读须把管道读空，否则测不到 TOCTOU 的那一半");
 
         assert!(
@@ -422,6 +444,7 @@ mod tests {
         assert_eq!(reader.try_read(&mut buf), 0);
         tx.send(b"world".to_vec()).unwrap();
         assert!(readable_arrived(&poller, KEY), "重新注册的 waker 失效，后续输出会卡住");
-        assert_eq!(reader.try_read(&mut buf), 5);
+        assert_eq!(read_chunk(&mut reader, &mut buf), 5);
+        assert_eq!(&buf[..5], b"world");
     }
 }

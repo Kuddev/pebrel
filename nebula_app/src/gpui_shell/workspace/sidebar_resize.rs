@@ -61,7 +61,7 @@ impl NebulaWorkspace {
             || self.settings_open
             || self.reader_focus_active(cx)
             || self.tabs_position == nebula_settings::TabsPositionName::Top
-            || !nebula_settings::RuntimeSettings::load().panel_resize
+            || !crate::gpui_shell::config::panel_resize(cx)
         {
             return None;
         }

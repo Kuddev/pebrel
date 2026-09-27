@@ -154,6 +154,30 @@ class ComparisonTests(unittest.TestCase):
             errors = compare_reports([first, second], golden)
             self.assertTrue(any("tail_contains_marker" in error for error in errors))
 
+    def test_platform_golden_serves_every_architecture_of_a_family(self) -> None:
+        from conformance.harness import compare_platform_golden, stable_flat
+
+        report = {
+            "schema_version": 1,
+            "platform": "windows-x86_64",
+            "cases": {"boot": {"status": "passed", "duration_ms": 3}},
+            "summary": {"total": 1, "passed": 1, "failed": 0, "skipped": 0},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            golden = Path(directory)
+            (golden / "whitelist.json").write_text(
+                json.dumps({"volatile": {"cases.*.duration_ms": "timing"}, "cross_platform": {}}),
+                encoding="utf-8",
+            )
+            expected = stable_flat(report, golden)
+            self.assertEqual(expected["platform"], "windows")
+            (golden / "windows.json").write_text(json.dumps(expected), encoding="utf-8")
+            arm64 = json.loads(json.dumps(report))
+            arm64["platform"] = "windows-aarch64"
+            self.assertEqual(compare_platform_golden(arm64, golden), [])
+            arm64["cases"]["boot"]["status"] = "failed"
+            self.assertTrue(compare_platform_golden(arm64, golden))
+
 
 class ArchiveSafetyTests(unittest.TestCase):
     def test_new_portable_package_resolves_only_the_product_executable(self) -> None:

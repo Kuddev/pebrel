@@ -68,7 +68,11 @@ impl TextFileView {
                 let input = live.then(|| self.render_live_input(cx));
                 let spec = super::code_actions::CodeSpec {
                     source: source[structure.parts[*part].range.clone()].to_owned().into(),
-                    language: (!language.is_empty()).then(|| language.clone().into()),
+                    language: self
+                        .preview_code_languages
+                        .get(&(block, span.start))
+                        .cloned()
+                        .or_else(|| (!language.is_empty()).then(|| language.clone().into())),
                     span: Some((span.start, span.end)),
                 };
                 let part = *part;
@@ -153,6 +157,7 @@ impl TextFileView {
                         let check = check.clone();
                         Button::new(("markdown-task", item.range.start))
                             .ghost()
+                            .disabled(!self.preview_editable())
                             .size(px(24.0))
                             .p_0()
                             .flex_shrink_0()

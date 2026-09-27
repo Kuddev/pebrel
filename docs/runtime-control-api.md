@@ -45,7 +45,7 @@ CLI 路径由环境给出，调用方无需根据展示名称猜测文件名。
    还会绕开远端 pane 不得取用本地上下文的护栏。
 2. **幂等。** 在 Pebrel 的 pane 里再开一个 Pebrel 是常规操作（嵌套 shell、`wsl.exe`、隔离实例）。
    `PATH` 前置与 `WSLENV` 追加都按值判重，套多少层环境块都不增长。
-3. **WSL 透传。** `WSLENV` 里带 `PEBREL_CLI/p`、`PEBREL_BIN_DIR/p`——`/p` 让 WSL 把 Windows
+3. **WSL 透传。** `WSLENV` 里带 `PEBREL_CLI/p`、`PEBREL_BIN_DIR/p`、`PEBREL_HOOK_EXE/p`——`/p` 让 WSL 把 Windows
    路径翻成 `/mnt/...`，否则来宾 shell 拿到的是一个执行不了的 `D:\…` 字面量。合并以环境表里的
    现值为基准，因此与 `shell_detect::wsl_cwd_report_env` 的 cwd 上报条目互不覆盖。
 
@@ -104,6 +104,18 @@ generation 绑定（Codex 退出重开后不会把任务投给新会话），pan
 `--wait` 的基线取自提交后的那张快照。用它当 `after_seq` 才让随后的等待意味着"又静下来了"而
 不是"本来就是静的"，这正是把提交前的 idle 误判成"已完成"的那个经典竞态。`--no-submit` 与
 `--wait` 是逻辑矛盾（没提交等什么），由参数解析直接拒绝，不会执行一半再静默停下。
+
+发送/粘贴命令会在写入前校验等待超时，包括读取 stdin/文件粘贴内容之前。提交响应缺少
+有效的非零状态基线时，资源命令和旧 `ctl prompt/paste --wait` 都明确报错，不降级为
+可能立即匹配旧 idle 的无基线等待。超时只表示未确认结果，不代表输入没有送达；先读目标
+状态与输出，再决定是否重试，不能盲目重复投递。
+这些接口仍然等待 pane/Agent 的语义状态，不提供独立任务回合的关联回执；并发向同一
+Agent 投递时，状态结束不能单独证明某一条请求已完成。`settled` 也不等同于任务成功。
+
+已识别 Codex 的提交将文本、Right 粘贴结束边界和按当前键盘协议编码的 Enter 按顺序
+放在同一次 PTY 写入中；终端启用 bracketed paste 时同时使用粘贴包络。它不依赖首次
+屏幕重绘或固定延时来推断输入已经接收。普通 shell 保留回显屏障，`--no-submit` 不附加
+边界键或 Enter。此处的提交只说明已交给 PTY 输入链路，不是服务端模型请求成功的保证。
 
 `agent send` 与 `agent delegate` 的结果合同不同：前者只负责投递（可选同步等待），后者从
 `PEBREL_PANE_ID` 记录调用 Agent 的位置和会话身份，登记并提交成功后立即返回。目标 Agent 的
@@ -374,6 +386,8 @@ Shell/hook 结束事件归位；因此即使命令在 120ms Runtime pump 的两�
 - `exit_code_unavailable`：当前 Shell 没有提供可信的 OSC 133 exit code。
 - `ssh_not_ready`：SSH Pane 尚未进入可安全读写的 Ready 阶段，或连接已经失败。
 - `runtime_unavailable`：当前壳/生命周期没有该动作所需的真实 owner；不会伪造成功。
+- `submission_outcome_unknown`：CLI 的 Prompt、Paste 或委派请求遇到传输/响应解析失败；
+  输入可能已经送达。先读取目标状态与输出，不能直接当作“未发送”重试。
 - `timeout`：`pane.wait` 未在期限内观察到目标状态。`details` 会带上 `after_seq` 与最后
   观察到的 `observed_state_change_seq`，用于区分「Pane 一直没动」和「跃迁了但没到目标态」。
 

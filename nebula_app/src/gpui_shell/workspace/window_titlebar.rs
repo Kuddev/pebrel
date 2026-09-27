@@ -3,7 +3,7 @@ use super::*;
 fn title_bar_height(density: nebula_settings::DensityName) -> f32 {
     match density {
         nebula_settings::DensityName::Standard => 48.0,
-        nebula_settings::DensityName::Compact => 36.0,
+        nebula_settings::DensityName::Compact => 40.0,
     }
 }
 
@@ -84,6 +84,13 @@ pub(super) fn paint_pane_dividers(
     }
 }
 
+fn title_bar_frame() -> gpui::Div {
+    div().relative().flex_shrink_0().on_mouse_down(MouseButton::Left, |_, _, cx| {
+        // Window dragging owns this press; it must not anchor the document selection.
+        gpui_component::global_state::GlobalState::suppress_text_selection(cx);
+    })
+}
+
 impl NebulaWorkspace {
     pub(super) fn render_window_title_bar(
         &self,
@@ -93,12 +100,8 @@ impl NebulaWorkspace {
     ) -> gpui::Div {
         let top_tabs = self.tabs_position == nebula_settings::TabsPositionName::Top;
         let native_layout = crate::platform::window_chrome::layout(window);
-        let density = cx
-            .try_global::<crate::gpui_shell::config::Settings>()
-            .map(|settings| settings.density)
-            .unwrap_or_default();
         let bar = TitleBar::new()
-            .h(px(title_bar_height(density)))
+            .h(px(title_bar_height(self.density)))
             .when(!settings_active, |bar| bar.bg(gpui::transparent_black()).border_b_0())
             .when(settings_active, |bar| {
                 bar.border_b_1().border_color(crate::gpui_shell::theme::settings_hairline(cx))
@@ -106,19 +109,8 @@ impl NebulaWorkspace {
             .when(top_tabs && native_layout.is_none(), |bar| {
                 bar.pl(px(top_tabs::TOP_TAB_LEFT_INSET))
             })
-            .when(top_tabs, |bar| {
-                bar.child(self.render_top_title_bar(
-                    settings_active,
-                    window,
-                    cx,
-                ))
-            })
-            .when(!top_tabs, |bar| {
-                bar.child(self.render_sidebar_title_bar(
-                    settings_active,
-                    cx,
-                ))
-            });
+            .when(top_tabs, |bar| bar.child(self.render_top_title_bar(settings_active, window, cx)))
+            .when(!top_tabs, |bar| bar.child(self.render_sidebar_title_bar(settings_active, cx)));
 
         // AppKit owns both the control group and its geometry. Read the live
         // frames so system layout, resize and full-screen transitions agree.
@@ -128,23 +120,67 @@ impl NebulaWorkspace {
             bar
         };
 
-        div()
-            .relative()
-            .flex_shrink_0()
+        title_bar_frame()
+            .debug_selector(|| "workspace-titlebar".to_owned())
             .when(!settings_active, |title| title.child(self.titlebar_background.element()))
             .child(bar)
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod tests {
     use super::*;
+    use gpui::{Modifiers, TestAppContext, point};
+    use gpui_component::{
+        Root, WindowExt,
+        text::{TextView, TextViewState},
+    };
+
+    struct DocumentWindow(Entity<TextViewState>);
+
+    impl Render for DocumentWindow {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            v_flex().size_full().child(title_bar_frame().child(TitleBar::new().h(px(48.0)))).child(
+                div()
+                    .debug_selector(|| "titlebar-selection-document".to_owned())
+                    .child(TextView::new(&self.0).selectable(true)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn title_bar_drag_does_not_anchor_document_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let text = cx.new(|cx| TextViewState::markdown("Document text remains selectable", cx));
+            let view = cx.new(|_| DocumentWindow(text));
+            Root::new(view, window, cx)
+        });
+        let text = cx.debug_bounds("titlebar-selection-document").unwrap();
+        cx.simulate_mouse_down(point(px(140.0), px(24.0)), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(text.center(), Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_move(text.center(), None, Modifiers::default());
+        assert!(cx.update(|window, cx| window.selected_text(cx).is_empty()));
+
+        // The same reader must still support ordinary text dragging afterwards.
+        let start = point(text.left() + px(1.0), text.top() + px(10.0));
+        let end = point(start.x + px(80.0), start.y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+        assert!(!cx.update(|window, cx| window.selected_text(cx).is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::title_bar_height;
+    use nebula_settings::DensityName;
 
     #[test]
-    fn compact_title_bar_reduces_spacing_without_clipping_tabs() {
-        assert_eq!(title_bar_height(nebula_settings::DensityName::Standard), 48.0);
-        let compact = title_bar_height(nebula_settings::DensityName::Compact);
-        assert_eq!(compact, 36.0);
-        assert!(compact >= top_tabs::TOP_TAB_H);
+    fn compact_title_bar_retains_space_around_controls() {
+        assert_eq!(title_bar_height(DensityName::Standard), 48.0);
+        assert_eq!(title_bar_height(DensityName::Compact), 40.0);
+        assert!(title_bar_height(DensityName::Compact) >= 32.0 + 2.0 * 4.0);
     }
 }

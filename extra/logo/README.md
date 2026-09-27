@@ -92,6 +92,34 @@ by Git and are not required by the asset tests.
 
 ## Third-Party Logo Assets
 
+### Agents settings vectors
+
+The Agents settings page renders 24 logical pixel SVG marks rather than enlarging
+the sidebar PNG textures. Claude, Kimi and Oh My Pi reuse the SVG sources below;
+Cursor and Copilot reuse the existing settings icons. OpenAI, OpenCode, Pi and
+Grok use `nebula_app/assets/icons/nebula-agent-{openai,opencode,pi,grok}.svg`,
+retrieved from the fixed npm package `@lobehub/icons-static-svg` 1.95.0:
+`https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/{name}.svg`.
+These four sources are unchanged except for a final newline, under the collection's
+[MIT license](LICENSE-lobe-icons). Product trademarks belong to their owners.
+GPUI renders the SVG alpha masks using theme ink, with orange for Claude and
+purple for Oh My Pi; sidebar PNG presentation is independent.
+
+### Cursor and GitHub Copilot settings icons
+
+`nebula_app/assets/icons/nebula-agent-cursor.svg` and
+`nebula_app/assets/icons/nebula-agent-copilot.svg` use the monochrome marks from
+`@lobehub/icons-static-svg` 1.95.0, retrieved on 2026-09-20:
+
+- Cursor: https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/cursor.svg
+- GitHub Copilot: https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@1.95.0/icons/githubcopilot.svg
+- License: [MIT](LICENSE-lobe-icons), copyright LobeHub.
+
+Only the unused title, CSS sizing attributes and explicit closing path tags were
+removed. The viewBox and path geometry are unchanged. The two embedded SVGs total
+2,393 bytes; the other settings icons reuse the sidebar's existing small textures.
+These marks identify the installed tools and do not imply endorsement.
+
 ### Claude Code and Trae CLI
 
 `ai_claude.svg` and `ai_trae.svg` are vector masters from LobeHub's icon

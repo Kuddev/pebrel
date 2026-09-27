@@ -166,6 +166,60 @@ fn normal_tool_hooks_inside_a_codex_subagent_do_not_change_the_primary_turn() {
 }
 
 #[test]
+fn codex_native_hooks_resume_the_transcript_thread_not_the_runtime_group() {
+    const THREAD: &str = "0199a213-c2a4-7cf5-8f6b-d746fbb6e86c";
+    for root in [r"C:\Users\user\.codex\sessions", "/home/user/.codex/sessions"] {
+        let transcript = format!("{root}/2026/09/21/rollout-2026-09-21T10-00-00-{THREAD}.jsonl");
+        for name in ["SessionStart", "UserPromptSubmit", "Stop"] {
+            let event = native(
+                "full",
+                None,
+                json!({
+                    "hook_event_name": name,
+                    "session_id": "runtime-group-with-no-rollout",
+                    "transcript_path": transcript,
+                }),
+            );
+            assert_eq!(event.session_id.as_deref(), Some(THREAD));
+            assert_eq!(event.session_file.as_deref(), Some(transcript.as_str()));
+            let target = crate::session::AgentSession {
+                source: event.source,
+                session_id: event.session_id,
+                session_file: event.session_file,
+            };
+            assert_eq!(target.resume_command(), Some(format!("codex resume {THREAD}")));
+        }
+    }
+    for transcript in [Value::Null, json!("relative/rollout-invalid.jsonl"), json!(42)] {
+        let event = native(
+            "full",
+            None,
+            json!({
+                "hook_event_name": "SessionStart", "session_id": "ephemeral",
+                "transcript_path": transcript,
+                "session_file": format!("/sessions/rollout-date-{THREAD}.jsonl"),
+            }),
+        );
+        assert!(event.session_id.is_none(), "an ephemeral group must not become a resume ID");
+    }
+    let legacy = codex("SessionStart", "older-native-id", None);
+    assert_eq!(legacy.session_id.as_deref(), Some("older-native-id"));
+}
+
+#[test]
+fn claude_transcript_is_retained_without_changing_its_native_session_id() {
+    let event = parse_remote_envelope(
+        b"nebula-hook/1 source=claude\n{\"hook_event_name\":\"SessionStart\",\"session_id\":\"claude-id\",\"transcript_path\":\"/home/user/.claude/projects/project/claude-id.jsonl\"}",
+        Some(91),
+    ).unwrap();
+    assert_eq!(event.session_id.as_deref(), Some("claude-id"));
+    assert_eq!(
+        event.session_file.as_deref(),
+        Some("/home/user/.claude/projects/project/claude-id.jsonl")
+    );
+}
+
+#[test]
 fn codex_user_questions_are_structured_attention_and_prose_in_tools_is_not() {
     let groups = installation::codex_groups("helper", None, CodexHookMode::Full);
     assert_eq!(groups["PreToolUse"][0]["matcher"], "^request_user_input$");

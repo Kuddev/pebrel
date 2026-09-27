@@ -77,7 +77,7 @@ pub fn capabilities_for(source: &str) -> AiHookCapabilities {
             bridge_sequence: true,
             serialized_delivery: true,
         },
-        "pi" => AiHookCapabilities {
+        "pi" | "omp" => AiHookCapabilities {
             lifecycle: true,
             attention_events: false,
             attention_context: false,
@@ -95,10 +95,18 @@ pub fn capabilities_for(source: &str) -> AiHookCapabilities {
             bridge_sequence: false,
             serialized_delivery: false,
         },
-        "kimi" => AiHookCapabilities {
+        "kimi" | "copilot" | "grok" => AiHookCapabilities {
             lifecycle: true,
             attention_events: true,
             attention_context: true,
+            background_tasks: false,
+            bridge_sequence: false,
+            serialized_delivery: false,
+        },
+        "cursor" => AiHookCapabilities {
+            lifecycle: true,
+            attention_events: false,
+            attention_context: false,
             background_tasks: false,
             bridge_sequence: false,
             serialized_delivery: false,
@@ -262,9 +270,8 @@ pub struct AiHookEvent {
     /// Human text when the event carries one (claude's notification message,
     /// codex's last assistant message).
     pub message: Option<String>,
-    /// CLI 自己的会话身份：claude hook 载荷的 `session_id`、codex notify 的
-    /// `thread-id`（即 rollout 文件名尾部的 uuid，`codex resume` 认它）。
-    /// 冷恢复接续对话的唯一事实源——文件系统扫描只能靠 mtime 猜。
+    /// Native resumable conversation identity. Codex uses its transcript's
+    /// thread UUID or legacy notify's `thread-id`, not a hook session/group ID.
     pub session_id: Option<String>,
     /// Exact native file and owner lifetime used by durable session recovery.
     pub session_file: Option<String>,

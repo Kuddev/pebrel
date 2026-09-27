@@ -45,6 +45,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
     // -- 标签页 --
     (Action::CreateNewTab, "新建标签页", "New tab"),
     (Action::CloseTab, "关闭标签页 / 分屏", "Close tab / pane"),
+    (Action::RenameTab, "重命名标签页", "Rename tab"),
     (Action::SelectNextTab, "下一个标签页", "Next tab"),
     (Action::SelectPreviousTab, "上一个标签页", "Previous tab"),
     // -- 窗格 --
@@ -74,7 +75,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
 /// `usize` 是本组行数；区间连续覆盖全部可编辑行（含第 0 行快速终端）。
 pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
     ("全局", "Global", 6),
-    ("标签页", "Tabs", 4),
+    ("标签页", "Tabs", 5),
     ("窗格", "Panes", 7),
     ("侧栏面板", "Side panels", 2),
     ("终端", "Terminal", 9),
@@ -86,6 +87,63 @@ pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
     ("启动 Profile N", "Launch Profile N", "Ctrl+Shift+1..9"),
     ("贴入 AI 修复建议", "Paste AI fix suggestion", "Ctrl+."),
 ];
+
+/// macOS 的 ⌘ 命令键别名：`(存储写法, 动作)`。
+///
+/// GPUI 壳在配置表之外**追加**一整套 ⌘ 绑定：配置表的 macOS 段只覆盖其中
+/// 一半，另一半（⌘K、⌘D、⌘⇧P…）是壳自己加的。这张表是那套绑定的唯一权威：
+/// `init()` 按它注册静态绑定，解绑与恢复按它写回 `keybind=` 行。留在表外
+/// 就成了影子绑定——`clear_action` 不知道它，于是出现「⌘K 解绑后仍然弹出
+/// Shell 选择器」（#238）。
+///
+/// 表里的写法会写进设置文件，超级键写 `cmd`（macOS 的读法）。历史配置和
+/// 录制结果仍可使用 `win` / `super`；GPUI 适配层按解析后的按键规范化，
+/// 覆盖与恢复默认不依赖这些别名或修饰键顺序的逐字相等。
+///
+/// 这张表只进 [`default_shortcuts`]（解绑/恢复口径），不进 `effective_combo`
+/// 的键帽反查：设置页仍按配置表的 Ctrl 键显示。
+///
+/// 别名表是共享数据；实际注册由平台层入口限定为 macOS，便于跨平台核验分派。
+pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
+    ("cmd+t", Action::CreateNewTab),
+    ("cmd+n", Action::CreateNewWindow),
+    // ⌘W 关标签页是 GPUI 壳的实际行为；配置表的 macOS 段把 ⌘W 记作 Quit，
+    // 这里必须压过它，否则解绑恢复会把 ⌘W 还给退出。
+    ("cmd+w", Action::CloseTab),
+    ("shift+cmd+p", Action::ToggleCommandPalette),
+    ("cmd+k", Action::ToggleShellPicker),
+    ("shift+cmd+f", Action::ToggleFilesPanel),
+    ("cmd+d", Action::SplitRight),
+    ("shift+cmd+d", Action::SplitDown),
+    ("shift+cmd+enter", Action::ToggleZoom),
+    ("alt+cmd+left", Action::FocusPaneLeft),
+    ("alt+cmd+right", Action::FocusPaneRight),
+    ("alt+cmd+up", Action::FocusPaneUp),
+    ("alt+cmd+down", Action::FocusPaneDown),
+    ("shift+cmd+]", Action::SelectNextTab),
+    ("shift+cmd+[", Action::SelectPreviousTab),
+    ("shift+cmd+g", Action::ToggleGitPanel),
+    ("cmd+plus", Action::IncreaseFontSize),
+    ("cmd+=", Action::IncreaseFontSize),
+    ("cmd+minus", Action::DecreaseFontSize),
+    ("cmd+digit0", Action::ResetFontSize),
+    ("cmd+c", Action::Copy),
+    ("cmd+v", Action::Paste),
+    ("ctrl+cmd+f", Action::ToggleFullscreen),
+    ("shift+cmd+o", Action::OpenQuickJump),
+    ("cmd+q", Action::Quit),
+];
+
+pub(crate) fn action_label(
+    row: &(Action, &'static str, &'static str),
+    language: super::UiLanguage,
+) -> &'static str {
+    if row.0 == Action::RenameTab {
+        language.text(crate::i18n::Message::CommonRenameTab)
+    } else {
+        language.pick(row.1, row.2)
+    }
+}
 
 #[cfg(test)]
 mod group_tests {
@@ -106,13 +164,40 @@ fn cached_defaults() -> &'static [KeyBinding] {
 }
 
 pub(crate) fn default_shortcuts() -> Vec<(String, Action)> {
-    cached_defaults()
+    let mut shortcuts: Vec<(String, Action)> = cached_defaults()
         .iter()
         .filter_map(|binding| {
             display_combo(binding.mods, &binding.trigger)
                 .map(|combo| (combo, binding.action.clone()))
         })
-        .collect()
+        .collect();
+    // macOS 的 ⌘ 键也算默认键：`clear_action` / `reset_action` 按这份表决定要
+    // 解掉、要还回哪些键，不带上它就会漏掉 ⌘ 那一半（#238）。
+    #[cfg(target_os = "macos")]
+    {
+        let mut extra: Vec<(String, Action)> = Vec::new();
+        for (combo, action) in MACOS_COMMAND_ALIASES {
+            let parsed = parse_combo(combo);
+            // 配置表已经给了同一动作的同一个键（⌘T、⌘C、⌘Q…）就不重复追加：
+            // 解绑会把每条 combo 都写进设置文件，重复条目只会多留一行废话。
+            let covered = shortcuts
+                .iter()
+                .chain(extra.iter())
+                .any(|(known, candidate)| candidate == action && parse_combo(known) == parsed);
+            if !covered {
+                extra.push(((*combo).to_owned(), action.clone()));
+            }
+        }
+        shortcuts.extend(extra);
+    }
+    shortcuts
+}
+
+/// Editing one action moves its shortcut: old keys pass through to the terminal.
+/// Keep explicit bindings for other actions so the editor can report conflicts.
+pub(crate) fn rebind_action(raw: &mut Vec<(String, String)>, action: &Action, combo: String) {
+    clear_action(raw, action);
+    raw.push((combo, action_storage_name(action)));
 }
 
 /// Preserve the existing keybind format: ReceiveChar explicitly passes a key
@@ -316,7 +401,10 @@ pub(crate) fn mods_prefix(mods: ModifiersState) -> String {
         out.push_str("Alt+");
     }
     if mods.super_key() {
-        out.push_str("Win+");
+        // macOS 的超级键是 ⌘。键帽必须写 Cmd+，否则设置页会出现
+        // `Ctrl+Win+F`（全屏）、`Win+F`（搜索）这类用户认不出的组合（#238）。
+        // 存储侧不受影响：`win+` / `super+` / `cmd+` 同等解析。
+        out.push_str(if cfg!(target_os = "macos") { "Cmd+" } else { "Win+" });
     }
     out
 }
@@ -575,6 +663,56 @@ pub(crate) fn gpui_mods_prefix(modifiers: &::gpui::Modifiers) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn rename_binding_moves_persists_clears_and_restores() {
+        use super::*;
+        let action = Action::RenameTab;
+        assert_eq!(effective_combo(&action, &[]), Some(("F2".into(), false)));
+        let mut raw = Vec::new();
+        rebind_action(&mut raw, &action, "ctrl+alt+r".into());
+        let saved = nebula_settings::apply_keybinds("theme=nord\n", &raw);
+        let mut restored = nebula_settings::keybind_pairs_from_text(&saved);
+        let bindings = build_bindings(&restored);
+        assert_eq!(effective_combo(&action, &bindings), Some(("Ctrl+Alt+R".into(), true)));
+        let (mods, trigger) = parse_combo("f2").unwrap();
+        let f2 = bindings.iter().find(|b| b.mods == mods && b.trigger == trigger).unwrap();
+        assert_eq!(f2.action, Action::ReceiveChar, "the old default must reach the CLI");
+        clear_action(&mut restored, &action);
+        assert_eq!(effective_combo(&action, &build_bindings(&restored)), None);
+        reset_action(&mut restored, &action);
+        assert_eq!(
+            effective_combo(&action, &build_bindings(&restored)),
+            Some(("F2".into(), false))
+        );
+    }
+
+    #[test]
+    fn rename_rebinding_preserves_explicit_ownership_of_the_old_key() {
+        use super::*;
+        let mut raw = vec![("f2".into(), "CreateNewTab".into())];
+        rebind_action(&mut raw, &Action::RenameTab, "ctrl+alt+r".into());
+        assert_eq!(raw[0], ("f2".into(), "CreateNewTab".into()));
+        assert!(
+            !raw.iter()
+                .any(|(key, action)| key.eq_ignore_ascii_case("f2") && action == "ReceiveChar")
+        );
+    }
+
+    #[test]
+    fn rename_is_editable_and_localized_in_every_language() {
+        use super::*;
+        let row =
+            EDITABLE_ACTIONS.iter().find(|(action, ..)| *action == Action::RenameTab).unwrap();
+        for language in super::super::UiLanguage::ALL {
+            assert_eq!(
+                action_label(row, *language),
+                language.text(crate::i18n::Message::CommonRenameTab)
+            );
+            assert!(!action_label(row, *language).is_empty());
+        }
+        assert_eq!(action_label(row, super::super::UiLanguage::ZhCn), "重命名标签页");
+    }
+
+    #[test]
     fn clearing_ctrl_k_survives_persistence_and_restore_is_explicit() {
         use super::*;
         let action = Action::ToggleShellPicker;
@@ -735,5 +873,63 @@ mod tests {
                 "default table is missing {combo} → {action:?}"
             );
         }
+    }
+
+    /// 超级键键帽随平台渲染：macOS 是 ⌘，其它平台是 Win。
+    #[test]
+    fn super_modifier_renders_per_platform() {
+        let expected = if cfg!(target_os = "macos") { "Cmd+" } else { "Win+" };
+        assert_eq!(mods_prefix(ModifiersState::SUPER), expected);
+        assert_eq!(
+            mods_prefix(ModifiersState::CONTROL | ModifiersState::SUPER),
+            format!("Ctrl+{expected}")
+        );
+    }
+
+    /// 别名条目要能在存储格式里往返：`clear_action` 把表里的写法逐字写进
+    /// 设置文件，解析层必须读回同一个组合。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_command_aliases_round_trip_through_storage() {
+        for (combo, _) in MACOS_COMMAND_ALIASES {
+            let (mods, key) = parse_combo(combo).unwrap_or_else(|| panic!("{combo} 解析失败"));
+            assert!(mods.super_key(), "{combo} 必须是 ⌘ 组合");
+            let canonical =
+                canonical_combo(mods, &key).unwrap_or_else(|| panic!("{combo} 无法写成存储格式"));
+            assert_eq!(parse_combo(&canonical), Some((mods, key)), "{combo} 存储往返不一致");
+        }
+    }
+
+    /// #238：macOS 上 Shell 选择器除了配置表的 Ctrl+K 还有一条壳自带的
+    /// ⌘K。解绑必须把两条都解掉，否则静态默认绑定继续抢键，用户看到的就是
+    /// 「解绑了但 ⌘K 照样弹面板」。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn clearing_releases_the_macos_command_alias() {
+        let action = Action::ToggleShellPicker;
+        // 设置页仍按配置表的 Ctrl+K 展示：别名只进解绑口径，不进键帽反查。
+        assert_eq!(effective_combo(&action, &[]), Some(("Ctrl+K".to_owned(), false)));
+        let mut raw = Vec::new();
+        clear_action(&mut raw, &action);
+        // 解绑使用表里的写法；旧配置和录制结果的等价拼写由 GPUI 层规范化。
+        assert!(
+            raw.iter().any(|(combo, _)| combo == "cmd+k"),
+            "⌘K 必须按表里的写法逐字写回，实际 {raw:?}"
+        );
+        // Ctrl+K 来自配置表、⌘K 来自别名表，两条都要落成 ReceiveChar。
+        for combo in ["ctrl+k", "cmd+k"] {
+            let parsed = parse_combo(combo);
+            assert!(
+                raw.iter().any(|(candidate, name)| parse_combo(candidate) == parsed
+                    && parse_action(name) == Some(Action::ReceiveChar)),
+                "{combo} 必须落成 ReceiveChar，否则运行时解不掉静态默认绑定"
+            );
+        }
+        assert_eq!(effective_combo(&action, &build_bindings(&raw)), None, "解绑后不应再有有效键");
+        reset_action(&mut raw, &action);
+        assert!(
+            effective_combo(&action, &build_bindings(&raw)).is_some(),
+            "恢复要把两组默认键都还回来"
+        );
     }
 }

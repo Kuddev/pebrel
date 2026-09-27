@@ -11,7 +11,7 @@ fn open(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("structured.md");
     std::fs::write(&path, source).unwrap();
-    let (view, window) = tests::open(path, cx);
+    let (view, window) = tests::open_live(path, cx);
     (directory, view, window)
 }
 

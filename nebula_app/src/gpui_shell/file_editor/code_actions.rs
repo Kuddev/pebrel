@@ -260,6 +260,7 @@ fn render_language_picker(
     cx: &mut App,
 ) -> impl IntoElement {
     let colors = code_ui_colors(cx);
+    let current_selector = current.clone();
     let picker = div()
         .id("markdown-language-picker")
         .debug_selector(|| "markdown-language-picker".to_owned())
@@ -287,7 +288,12 @@ fn render_language_picker(
                 // the latter remains discoverable through focus-visible.
                 .focus_visible(|trigger| trigger.border_1().border_color(colors.accent))
                 .hover(move |trigger| trigger.bg(colors.hover))
-                .child(div().flex_none().child(current))
+                .child(
+                    div()
+                        .debug_selector(move || format!("markdown-language-current-{current_selector}"))
+                        .flex_none()
+                        .child(current),
+                )
                 .child(
                     div()
                         .w(px(16.0))
@@ -306,25 +312,34 @@ fn render_language_picker(
     if !open {
         return picker;
     }
+    let viewport = window.viewport_size();
+    let popup_width = px(224.0).min((viewport.width - px(16.0)).max(px(1.0)));
+    let popup_height = px(280.0).min((viewport.height - px(16.0)).max(px(1.0)));
+    // List 的 max_h 只约束结果列表，搜索框和外层边距需要单独留出空间。
+    let rows_height = (popup_height - px(48.0)).max(px(0.0));
     picker.child(
         deferred(
-            anchored().snap_to_window_with_margin(px(8.0)).child(
-                div()
-                    .id("markdown-language-popup")
-                    .debug_selector(|| "markdown-language-popup".to_owned())
-                    .occlude()
-                    .w(px(224.0))
-                    .max_h(px(280.0))
-                    .bg(colors.popup)
-                    .text_color(colors.ink)
-                    .border_1()
-                    .border_color(colors.line)
-                    .rounded(px(6.0))
-                    .shadow_lg()
-                    .p(px(6.0))
-                    .child(
-                        div().debug_selector(|| "markdown-language-search".to_owned()).child(
-                            List::new(&list)
+            anchored()
+                .offset(gpui::point(px(0.0), px(28.0)))
+                .snap_to_window_with_margin(px(8.0))
+                .child(
+                    div()
+                        .id("markdown-language-popup")
+                        .debug_selector(|| "markdown-language-popup".to_owned())
+                        .occlude()
+                        .w(popup_width)
+                        .max_h(popup_height)
+                        .overflow_hidden()
+                        .bg(colors.popup)
+                        .text_color(colors.ink)
+                        .border_1()
+                        .border_color(colors.line)
+                        .rounded(px(6.0))
+                        .shadow_lg()
+                        .p(px(6.0))
+                        .child(
+                            div().debug_selector(|| "markdown-language-search".to_owned()).child(
+                                List::new(&list)
                                     // Small also shrinks the query field. The
                                     // approved prototype gives the search
                                     // field and every menu row independent
@@ -332,14 +347,14 @@ fn render_language_picker(
                                     .with_size(Size::Medium)
                                     .search_placeholder(search_placeholder)
                                     .scrollbar_visible(false)
-                                    .max_h(px(264.0))
+                                    .max_h(rows_height)
                                     .text_color(colors.ink),
+                            ),
+                        )
+                        .on_mouse_down_out(
+                            window.listener_for(&state, CodeLanguage::close_from_outside),
                         ),
-                    )
-                    .on_mouse_down_out(
-                        window.listener_for(&state, CodeLanguage::close_from_outside),
-                    ),
-            ),
+                ),
         )
         .with_priority(1),
     )
@@ -383,11 +398,18 @@ pub(super) fn extensions(
 pub(super) fn render(
     owner: gpui::WeakEntity<TextFileView>,
     block: usize,
-    code: CodeSpec,
+    mut code: CodeSpec,
     hover_group: SharedString,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
+    if let Some((start, _)) = code.span
+        && let Some(language) = owner
+            .upgrade()
+            .and_then(|view| view.read(cx).preview_code_languages.get(&(block, start)).cloned())
+    {
+        code.language = Some(language);
+    }
     render_with_input(owner, block, code, hover_group, None, window, cx)
 }
 
@@ -406,7 +428,7 @@ pub(super) fn render_with_input(
     let current = code
         .language
         .clone()
-        .filter(|value| !matches!(value.as_ref(), "text" | "plaintext"))
+        .filter(|value| !matches!(value.as_ref(), "" | "text" | "plaintext"))
         .unwrap_or_else(|| plain.clone());
     let current_for_state = current.clone();
     let span = code.span;
@@ -441,8 +463,13 @@ pub(super) fn render_with_input(
                             .map(|item| item.name.clone());
                         if let Some(choice) = choice {
                             if let Some((start, end)) = state.span {
-                                let choice =
-                                    if choice == state.plain { "" } else { choice.as_ref() };
+                                let choice = if choice == state.plain
+                                    || matches!(choice.as_ref(), "text" | "plaintext")
+                                {
+                                    ""
+                                } else {
+                                    choice.as_ref()
+                                };
                                 let _ = owner.update(cx, |view, cx| {
                                     view.set_preview_language(block, start, end, choice, window, cx)
                                 });

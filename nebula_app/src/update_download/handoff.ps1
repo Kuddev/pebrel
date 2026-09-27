@@ -67,6 +67,30 @@ function Check-UnpreparedProcesses {
     }
 }
 
+function Wait-RuntimeHelperFiles {
+    # New helpers have a bounded lifetime, but can still be draining as the
+    # application exits. Check before setup copies any file. Old stuck helpers
+    # remain a visible failure; never terminate processes by their image name.
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    $helpers = @('runtime\pebrel-hook.exe', 'pebrel-hook.exe',
+        'runtime\nebula-hook.exe', 'nebula-hook.exe')
+    while ($true) {
+        $busy = $null
+        foreach ($relative in $helpers) {
+            $path = Join-Path $installation $relative
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            try {
+                $probe = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open,
+                    [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+                $probe.Dispose()
+            } catch { $busy = $_.Exception }
+        }
+        if (-not $busy) { return }
+        if ([DateTime]::UtcNow -ge $deadline) { throw $busy }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 try {
     if ((Get-Item -LiteralPath $PlanPath).Length -gt 1048576) { throw 'Update plan exceeds limit' }
     $plan = Get-Content -LiteralPath $PlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -133,6 +157,7 @@ try {
     Check-UnpreparedProcesses
     # No Restart Manager process-name shutdown: every participant has already
     # saved and exited. DIR reuses this validated installation without a chooser.
+    Wait-RuntimeHelperFiles
     $setupLog = Join-Path $transaction 'installer.log'
     $arguments = '/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCLOSEAPPLICATIONS /NORESTARTAPPLICATIONS' +
         ' /DIR="' + $installation + '" /LOG="' + $setupLog + '"'
@@ -144,9 +169,9 @@ try {
         throw 'Installed application did not report the expected version'
     }
     $installedDigest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
-    if ($plan.version -eq $plan.original_version -and $installedDigest -eq $originalDigest) {
-        throw 'Same-version installation did not replace the application binary'
-    }
+    # A repair can replace a previously locked helper while leaving pebrel.exe
+    # byte-identical. Setup success plus the expected version is authoritative;
+    # a changed main-executable hash is not a same-version success requirement.
     Write-State 'result.json' @{
         transaction = $plan.transaction; success = $true; version = $plan.version
         executable_sha256 = $installedDigest

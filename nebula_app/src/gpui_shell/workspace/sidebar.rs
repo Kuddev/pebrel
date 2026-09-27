@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::Message;
 
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
 const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
@@ -186,6 +187,8 @@ impl NebulaWorkspace {
     }
 
     fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let row_height = tab_scroll::tab_row_height(self.density);
+        let row_pitch = self.tab_row_pitch();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         // 数量 chip 数字：旧壳独用 ink_faint（比 ink_dim 再暗一档），chip 背
@@ -231,6 +234,7 @@ impl NebulaWorkspace {
                     is_settings,
                     activity,
                     logo_image,
+                    logo_pending,
                     program_glyph,
                     shell_tag,
                     color: tab_color,
@@ -328,10 +332,10 @@ impl NebulaWorkspace {
                 let (dragged, shift) = match drag {
                     Some((src, _, _)) if ix == src => (true, 0.0),
                     Some((src, tgt, _)) if src < tgt && ix > src && ix <= tgt => {
-                        (false, -TAB_ROW_PITCH)
+                        (false, -row_pitch)
                     },
                     Some((src, tgt, _)) if src > tgt && ix >= tgt && ix < src => {
-                        (false, TAB_ROW_PITCH)
+                        (false, row_pitch)
                     },
                     _ => (false, 0.0),
                 };
@@ -357,7 +361,7 @@ impl NebulaWorkspace {
                 .overflow_hidden()
                 .gap_2()
                 .px_2()
-                .h(px(TAB_ROW_H))
+                .h(px(row_height))
                 .items_center()
                 // 旧壳 pill 圆角 = UI_CORNER_RADIUS_LOGICAL(8)，rounded_md(6)
                 // 偏小一圈，选中水洗的轮廓形状会不一样。
@@ -387,7 +391,7 @@ impl NebulaWorkspace {
                             press_x: f32::from(event.position.x),
                             press_y: f32::from(event.position.y),
                             axis: TabDragAxis::Vertical,
-                            pitch: TAB_ROW_PITCH,
+                            pitch: row_pitch,
                             offset: 0.0,
                             active: false,
                             dock: None,
@@ -413,7 +417,7 @@ impl NebulaWorkspace {
                             .left(px(4.0))
                             .top(px(7.0))
                             .w(px(2.5))
-                            .h(px(TAB_ROW_H - 14.0))
+                            .h(px(row_height - 14.0))
                             .rounded_full()
                             .bg(color),
                     )
@@ -444,7 +448,7 @@ impl NebulaWorkspace {
                 .when_some(program_glyph, |row, glyph| {
                     row.child(
                         div()
-                            .w(px(TAB_LABEL_ICON_W))
+                            .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
                             .flex_shrink_0()
                             .font_family(symbol_family.clone())
                             .text_size(px(label_px))
@@ -619,7 +623,7 @@ impl NebulaWorkspace {
             // 仍是旧壳的 8px。
             .px_2()
             .pb_2()
-            .gap_2()
+            .gap(px(tab_scroll::tab_row_gap(self.density)))
             // 待命阶段（未过阈值）的指针跟踪；激活后由根部罩层独占接管。
             .on_mouse_move(cx.listener(|this, event, window, cx| {
                 this.update_tab_drag(event, window, cx);
@@ -629,7 +633,7 @@ impl NebulaWorkspace {
                     .id("sidebar-tabs-toggle")
                     .group(header_group.clone())
                     .w_full()
-                    .h(px(34.0))
+                    .h(px(row_height))
                     .pb_1()
                     // 旧壳标题文字从 panel_x + 16px 起；侧栏根已有 8px
                     // padding，这里再补 8px，箭头不会贴住左边缘。
@@ -865,6 +869,7 @@ impl NebulaWorkspace {
         let settings_active_bg = cx.theme().sidebar_accent;
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
+        let language = crate::gpui_shell::config::ui_language(cx);
         h_flex()
             .size_full()
             .items_center()
@@ -887,7 +892,7 @@ impl NebulaWorkspace {
                             // Ghost 的全局 selected 使用 hover_strong，静态底比
                             // 旧壳亮一档；仅此按钮覆写回旧壳 surface。
                             .when(sidebar_visible, |button| button.bg(secondary))
-                            .tooltip("折叠/展开侧边栏 (Ctrl+Shift+B)")
+                            .tooltip(language.text(Message::ChromeToggleSidebar))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.reader_focus_active(cx) {
                                     this.clear_reader_focus(cx);
@@ -906,7 +911,7 @@ impl NebulaWorkspace {
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
                             })
-                            .tooltip("设置 (Ctrl+,)")
+                            .tooltip(language.text(Message::ChromeSettingsShortcut))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_settings(window, cx);
                             })),
@@ -924,7 +929,7 @@ impl NebulaWorkspace {
                             )
                             .ghost()
                             .selected(self.command_manager_open)
-                            .tooltip("命令列表")
+                            .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),
@@ -964,7 +969,7 @@ impl NebulaWorkspace {
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
-        let TabPresentation { title, logo_image, program_glyph, pane_count, .. } =
+        let TabPresentation { title, logo_image, logo_pending, program_glyph, pane_count, .. } =
             self.tab_presentation(self.active, cx, dark);
         slot.child(
             h_flex()
@@ -986,6 +991,7 @@ impl NebulaWorkspace {
                 .when_some(program_glyph, |row, glyph| {
                     row.child(
                         div()
+                            .when(logo_pending, |slot| slot.w(px(TAB_LABEL_ICON_SIZE)))
                             .flex_shrink_0()
                             .font_family(symbol_family)
                             .text_size(px(label_px))
@@ -1038,7 +1044,7 @@ mod tests {
                     .id("status-probe-row")
                     .debug_selector(|| "status-probe-row".to_owned())
                     .w(px(200.0))
-                    .h(px(TAB_ROW_H))
+                    .h(px(tab_scroll::tab_row_height(nebula_settings::DensityName::Standard)))
                     .px_2()
                     .overflow_hidden()
                     .child(div().flex_1())

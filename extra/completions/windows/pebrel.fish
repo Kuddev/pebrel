@@ -521,7 +521,7 @@ complete -c pebrel -n "__fish_pebrel_using_subcommand notify-test" -s h -l help 
 complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l ssh -d 'Install or remove hooks on an SSH host (alias or user@host)' -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l wsl -d 'Install or remove hooks in a WSL distribution\'s own user configuration' -r
 complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l wsl-user -d 'WSL user; defaults to that distribution\'s configured user' -r
-complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l remove -d 'Remove Pebrel\'s hooks from claude\'s settings.json instead of installing them'
+complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -l remove -d 'Remove Pebrel-managed hooks for every supported agent and preserve other integrations. Without this flag, enable Claude Code and Codex plus agents explicitly enabled in settings'
 complete -c pebrel -n "__fish_pebrel_using_subcommand setup-ai" -s h -l help -d 'Print help'
 complete -c pebrel -n "__fish_pebrel_using_subcommand ssh" -s h -l help -d 'Print help'
 complete -c pebrel -n "__fish_pebrel_using_subcommand help; and not __fish_seen_subcommand_from ctl env window tab pane agent migrate config notify-test setup-ai ssh help" -f -a "ctl" -d 'Agent-oriented terminal control: split panes, run commands, start Codex/Claude, send prompts, wait for state changes, and read verified terminal output'

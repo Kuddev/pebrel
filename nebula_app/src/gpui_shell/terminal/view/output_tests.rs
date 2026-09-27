@@ -5,6 +5,73 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[gpui::test]
+fn runtime_submission_codex_prompt_does_not_depend_on_a_repaint(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.running_program = Some("codex".into());
+        view.runtime_prompt("继续".into(), true, cx).unwrap();
+        assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
+            if bytes.as_ref() == "继续\x1b[C\r".as_bytes()));
+        assert!(view.pending_runtime_submit.is_none());
+        assert_eq!(view.runtime_task_state(), crate::runtime_api::RuntimeTaskState::Running);
+        view.process_event(TermEvent::Wakeup, cx);
+        assert!(receiver.try_recv().is_err(), "a later repaint must not send Enter twice");
+    });
+}
+
+#[gpui::test]
+fn runtime_submission_codex_paste_and_no_submit_preserve_their_contracts(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.running_program = Some("codex".into());
+        view.runtime_prompt("draft".into(), false, cx).unwrap();
+        assert!(
+            matches!(receiver.try_recv().unwrap(), Msg::Input(bytes) if bytes.as_ref() == b"draft")
+        );
+        feed(view, b"\x1b[?2004h");
+        view.runtime_paste("first\nsecond".into(), true, InputOrigin::Program, cx).unwrap();
+        assert!(matches!(receiver.try_recv().unwrap(), Msg::Input(bytes)
+            if bytes.as_ref() == b"\x1b[200~first\rsecond\x1b[201~\x1b[C\r"));
+        assert!(view.pending_runtime_submit.is_none());
+    });
+}
+
+#[gpui::test]
+fn working_directory_copy_preserves_prompt_selection_and_utf8(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    let prompt = "    ~    15:30:27  ";
+    view.update(window, |view, cx| {
+        view.process_event(TermEvent::CwdReport("/home/用户/目录 with spaces".into()), cx);
+        feed(view, prompt.as_bytes());
+        let mut term = view.session.as_ref().unwrap().term.lock();
+        term.selection = Some(Selection::new(
+            SelectionType::Lines,
+            TermPoint::new(Line(0), Column(0)),
+            Side::Left,
+        ));
+    });
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let selected = view.session.as_ref().unwrap().term.lock().selection_to_string();
+            assert!(selected.as_deref().unwrap().contains(prompt));
+            assert!(view.copy_working_directory(window, cx));
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("/home/用户/目录 with spaces".into())
+            );
+            assert_eq!(view.session.as_ref().unwrap().term.lock().selection_to_string(), selected);
+            assert!(view.copy_selection(false, window, cx));
+            assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), selected);
+            for unavailable in ["", "~", "relative/path", "/bad\npath"] {
+                view.cwd = unavailable.into();
+                assert!(!view.copy_working_directory(window, cx));
+                assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), selected);
+            }
+        });
+    });
+}
+
+#[gpui::test]
 fn hidden_output_keeps_the_latest_grid_without_notifying_observers(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     window.run_until_parked();

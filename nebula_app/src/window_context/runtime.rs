@@ -391,10 +391,16 @@ impl WindowContext {
                 "the pane is still committing previous runtime input",
             ));
         }
-        let recognized_agent = submit && runtime_agent(pane).is_some();
+        let agent = runtime_agent(pane);
+        let recognized_agent = submit && agent.is_some();
+        let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         let mode = *pane.terminal.lock().mode();
-        let mut bytes = crate::input::terminal_input::build_runtime_text_sequence(&text, mode);
-        if submit {
+        let mut bytes = if codex_submit {
+            crate::input::terminal_input::build_runtime_codex_submission(&text, mode)
+        } else {
+            crate::input::terminal_input::build_runtime_text_sequence(&text, mode)
+        };
+        if submit && !codex_submit {
             let submit_bytes =
                 runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
             if text.is_empty() {
@@ -475,7 +481,10 @@ impl WindowContext {
         let mut bytes = b"\x1b[200~".to_vec();
         bytes.extend_from_slice(normalized.replace("\x1b[201~", "").as_bytes());
         bytes.extend_from_slice(b"\x1b[201~");
-        if submit {
+        let codex_submit = submit && runtime_agent(pane).is_some_and(|agent| agent.kind == "codex");
+        if codex_submit {
+            bytes = crate::input::terminal_input::build_runtime_codex_submission(&text, mode);
+        } else if submit {
             let submit_bytes =
                 runtime_key_sequence(pane, RuntimeKey::Enter, RuntimeKeyModifiers::default(), 1)?;
             pane.nebula_state.runtime_submit_barrier =

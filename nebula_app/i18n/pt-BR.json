@@ -45,6 +45,8 @@
     }
   },
   "common": {
+    "link_command_click": "Command+clique esquerdo para abrir",
+    "link_ctrl_click": "Ctrl+clique esquerdo para abrir",
     "settings": "Configurações",
     "language": "Idioma",
     "about": "Sobre",
@@ -73,6 +75,7 @@
     "delete": "Excluir",
     "edit": "Editar",
     "rename": "Renomear",
+    "rename_tab": "Renomear aba",
     "copy": "Copiar",
     "paste": "Colar",
     "cut": "Recortar",
@@ -104,6 +107,7 @@
     "new_window": "Nova janela",
     "close_tab": "Fechar aba",
     "duplicate_tab": "Duplicar aba",
+    "copy_working_directory": "Copiar diretório de trabalho",
     "terminal": "Terminal",
     "connect": "Conectar",
     "disconnect": "Desconectar",
@@ -173,5 +177,15 @@
     "copied_lines": "{lines} linhas copiadas para a área de transferência",
     "paste_lines": "Colar {lines} linhas?",
     "sent_to": "Enviado para {target}"
+  },
+  "tab_menu": {
+    "fork_ai_session": "Bifurcar sessão de IA",
+    "move_to_new_window": "Mover para nova janela",
+    "export_as_workspace": "Exportar como espaço de trabalho…",
+    "split_left_right": "Dividir lado a lado",
+    "split_top_bottom": "Dividir em cima e embaixo",
+    "move_left": "Mover para a esquerda",
+    "move_right": "Mover para a direita",
+    "tab_color": "Cor da aba"
   }
 }

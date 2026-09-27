@@ -612,9 +612,12 @@ mod interaction_tests {
     ) {
         cx.update(|cx| {
             gpui_component::init(cx);
-            cx.set_global(crate::gpui_shell::config::Settings::load(
-                nebula_settings::ThemeName::Nord,
-            ));
+            let mut settings =
+                crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord);
+            // This layout fixture controls its font chain; installed/user
+            // preferences must not decide its expected field contents.
+            settings.font_family = REQUIRED_FONT_FAMILY.to_owned();
+            cx.set_global(settings);
         });
         let mut pane = None;
         let (_, cx) = cx.add_window_view(|window, cx| {
@@ -642,7 +645,11 @@ mod interaction_tests {
         );
         assert_eq!(
             pane.read_with(cx, |pane, cx| pane.font_family_cjk_input.read(cx).value().to_string()),
-            REQUIRED_FONT_FAMILY
+            pane.read_with(cx, |pane, _| pane
+                .runtime
+                .font_family_cjk
+                .clone()
+                .unwrap_or_else(|| REQUIRED_FONT_FAMILY.to_owned()))
         );
         let bounds =
             cx.debug_bounds("font-picker-chevron").expect("font field exposes a dropdown arrow");

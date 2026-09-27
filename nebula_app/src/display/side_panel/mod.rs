@@ -1408,6 +1408,11 @@ impl SidePanel {
         if self.search.trim().is_empty() {
             return false;
         }
+        self.browse_directory(path, guest_path)
+    }
+
+    /// Directory selection and typed paths share the existing window-local root transition.
+    pub(crate) fn browse_directory(&mut self, path: PathBuf, guest_path: Option<String>) -> bool {
         if let Some(guest) = guest_path {
             let Some(distro) = self.file_wsl_root().map(|root| root.distro.clone()) else {
                 return false;

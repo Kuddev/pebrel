@@ -1,0 +1,8 @@
+# 这些现有夹具共享真实设置文件；进程内 Mutex 在 nextest 多进程模型下不再互斥。
+# 只还原该夹具组的串行合同，其余测试继续使用 runner 的并行度。
+[test-groups]
+theme-studio = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(gpui_shell::settings_pane::theme_studio_tests::)'
+test-group = 'theme-studio'

@@ -470,6 +470,18 @@ pub fn highlighted_at<T>(
     point: Point,
     mouse_mods: ModifiersState,
 ) -> Option<HintMatch> {
+    highlighted_at_with_mouse_override(term, config, point, mouse_mods, false)
+}
+
+/// Allow a shell's explicit link gesture to override application mouse reporting.
+/// Configured hint modifiers and the mouse-enabled flag are still respected.
+pub fn highlighted_at_with_mouse_override<T>(
+    term: &Term<T>,
+    config: &UiConfig,
+    point: Point,
+    mouse_mods: ModifiersState,
+    override_mouse_mode: bool,
+) -> Option<HintMatch> {
     let mouse_mode = term.mode().intersects(TermMode::MOUSE_MODE);
 
     config.hints.enabled.iter().find_map(|hint| {
@@ -477,7 +489,9 @@ pub fn highlighted_at<T>(
         let highlight = hint.mouse.is_some_and(|mouse| {
             mouse.enabled
                 && mouse_mods.contains(mouse.mods.0)
-                && (!mouse_mode || mouse_mods.contains(ModifiersState::SHIFT))
+                && (!mouse_mode
+                    || override_mouse_mode
+                    || mouse_mods.contains(ModifiersState::SHIFT))
         });
         if !highlight {
             return None;
@@ -585,9 +599,45 @@ impl<'a, T> HintPostProcessor<'a, T> {
         let mut iter = self.term.grid().iter_from(*regex_match.start());
 
         let mut c = iter.cell().c;
+        let mut start = *regex_match.start();
+        let end = *regex_match.end();
+        if start == self.term.line_search_left(start) && c.is_ascii_alphanumeric() {
+            let mut prefix = self.term.grid().iter_from(start);
+            let mut at = false;
+            loop {
+                let ch = prefix.cell().c;
+                if ch == ':' && at {
+                    if let Some(next) = prefix.next()
+                        && next.c == '/'
+                    {
+                        start = next.point;
+                        iter = self.term.grid().iter_from(start);
+                        c = iter.cell().c;
+                    }
+                    break;
+                }
+                if !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '@'))
+                    || prefix.point() >= end
+                {
+                    break;
+                }
+                at |= ch == '@';
+                if prefix.next().is_none() {
+                    break;
+                }
+            }
+        }
+        // Quoted local paths have an explicit boundary and may contain spaces,
+        // punctuation and parentheses. Keep the target, not its shell quotes.
+        if matches!(c, '\'' | '"') && start < end && self.term.grid()[end].c == c {
+            let inner_start = start.add(self.term, Boundary::Grid, 1);
+            let inner_end = end.sub(self.term, Boundary::Grid, 1);
+            if inner_start <= inner_end {
+                return Some(inner_start..=inner_end);
+            }
+        }
 
         // Truncate uneven number of brackets.
-        let end = *regex_match.end();
         let mut open_parents = 0;
         let mut open_brackets = 0;
         loop {
@@ -624,7 +674,14 @@ impl<'a, T> HintPostProcessor<'a, T> {
         }
 
         // Truncate trailing characters which are likely to be delimiters.
-        let start = *regex_match.start();
+        // A default Bash/WSL prompt has no space between its cwd and $/#.
+        // Only trim that suffix in a user@host:~/... prompt; '$' is otherwise
+        // legal in paths and URLs, and OSC 8 targets bypass these heuristics.
+        if matches!(c, '$' | '#') && self.is_shell_prompt_path(start, iter.point()) {
+            if let Some(indexed) = iter.prev() {
+                c = indexed.cell.c;
+            }
+        }
         while iter.point() != start {
             if !matches!(
                 c,
@@ -658,6 +715,32 @@ impl<'a, T> HintPostProcessor<'a, T> {
         }
 
         if start > iter.point() { None } else { Some(start..=iter.point()) }
+    }
+
+    fn is_shell_prompt_path(&self, start: Point, end: Point) -> bool {
+        if !matches!(self.term.grid()[start].c, '~' | '/') {
+            return false;
+        }
+        let line_start = self.term.line_search_left(start);
+        if start == line_start {
+            return false;
+        }
+        let mut after = self.term.grid().iter_from(end);
+        if after.next().is_some_and(|cell| !cell.c.is_whitespace()) {
+            return false;
+        }
+        let before = start.sub(self.term, Boundary::Grid, 1);
+        let prefix = self.term.bounds_to_string(line_start, before);
+        let Some(prefix) = prefix.split_whitespace().next_back() else { return false };
+        let Some((user, host)) = prefix.strip_suffix(':').and_then(|s| s.rsplit_once('@')) else {
+            return false;
+        };
+        !user.is_empty()
+            && !host.is_empty()
+            && user
+                .chars()
+                .chain(host.chars())
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
     }
 
     /// Loop over submatches until a non-empty post-processed match is found.
@@ -704,6 +787,65 @@ mod tests {
     use nebula_terminal::vte::ansi::Handler;
 
     use super::*;
+
+    #[test]
+    fn shell_prompt_symbols_are_not_part_of_clickable_home_paths() {
+        for (text, expected) in [
+            ("alice@workstation:/mnt/d/project$ ", "/mnt/d/project"),
+            ("root@host:/root# ", "/root"),
+            ("user@host:/# ", "/"),
+            ("alice@workstation:~/.codex$ ", "~/.codex"),
+            ("root@host:~/work# ", "~/work"),
+            ("alice@workstation:~/工作文档$ echo test", "~/工作文档"),
+            ("~/cost$ ", "~/cost$"),
+            ("~/repo# ", "~/repo#"),
+            ("https://example.com/cost$ ", "https://example.com/cost$"),
+            ("user@host:~/price$usd ", "~/price$usd"),
+        ] {
+            let term = mock_term(text);
+            let config = UiConfig::default();
+            let matches = visible_clickable_matches(&term, &config);
+            assert_eq!(matches.len(), 1, "{text}: {matches:?}");
+            assert_eq!(term.bounds_to_string(*matches[0].start(), *matches[0].end()), expected);
+            let end = *matches[0].end();
+            let hit = highlighted_at(&term, &config, end, ModifiersState::CONTROL).unwrap();
+            assert_eq!(hit.text(&term).unwrap().as_ref(), expected);
+            assert!(
+                highlighted_at(
+                    &term,
+                    &config,
+                    end.add(&term, Boundary::Grid, 1),
+                    ModifiersState::CONTROL
+                )
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_paths_keep_spaces_and_literal_punctuation_in_hover_and_click_targets() {
+        for (text, expected) in [
+            (
+                r#"& "C:\Program Files\Example Tools\probe.exe" pr view"#,
+                r"C:\Program Files\Example Tools\probe.exe",
+            ),
+            ("open 'D:/My Documents/开始 菜单 (1).md' now", "D:/My Documents/开始 菜单 (1).md"),
+            ("cat '~/cost$'", "~/cost$"),
+            (r#"open "\\server\my share\report.txt" now"#, r"\\server\my share\report.txt"),
+        ] {
+            let term = mock_term(text);
+            let config = UiConfig::default();
+            let matches = visible_clickable_matches(&term, &config);
+            assert_eq!(matches.len(), 1, "{text}: {matches:?}");
+            let start = *matches[0].start();
+            let end = *matches[0].end();
+            assert_eq!(term.bounds_to_string(start, end), expected);
+            for point in [start, end] {
+                let hit = highlighted_at(&term, &config, point, ModifiersState::CONTROL).unwrap();
+                assert_eq!(hit.text(&term).unwrap().as_ref(), expected);
+            }
+        }
+    }
 
     #[test]
     fn hint_label_generation() {

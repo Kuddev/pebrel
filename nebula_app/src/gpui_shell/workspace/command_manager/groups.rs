@@ -13,6 +13,12 @@ pub(in crate::gpui_shell::workspace) struct GroupMenu {
 }
 
 #[derive(Clone)]
+pub(super) enum ManagerRow {
+    Command(crate::saved_commands::SavedCommand),
+    Folder { id: String, name: String, count: usize },
+}
+
+#[derive(Clone)]
 pub(super) struct CommandDrag {
     id: String,
     name: String,
@@ -55,21 +61,100 @@ impl NebulaWorkspace {
         groups
     }
 
-    pub(super) fn visible_command_groups(
-        &self,
-        commands: &[crate::saved_commands::SavedCommand],
-        cx: &App,
-    ) -> Vec<(Option<String>, String)> {
-        let searching = !self.command_manager_input.read(cx).value().trim().is_empty();
-        self.command_groups(cx)
+    pub(super) fn command_manager_rows(&self, cx: &App) -> Vec<ManagerRow> {
+        let input = self.command_manager_input.read(cx).value();
+        let query = input.trim();
+        if query.len() > MAX_SEARCH_BYTES {
+            return Vec::new();
+        }
+        let mut rows = self
+            .filtered_saved_commands(cx)
             .into_iter()
-            .filter(|(group, _)| {
-                !searching
-                    || commands.iter().any(|command| {
-                        self.saved_commands.group_for(&command.id) == group.as_deref()
+            .map(ManagerRow::Command)
+            .collect::<Vec<_>>();
+        if self.command_manager_group.is_none() {
+            let available = self.available_saved_commands(cx);
+            let mut search = nebula_completions::command_search::CommandQuery::new(query);
+            for (id, name) in self.command_groups(cx) {
+                let Some(id) = id else { continue };
+                if !query.is_empty() && search.score_fields(&[&name]).is_none() {
+                    continue;
+                }
+                let count = available
+                    .iter()
+                    .filter(|command| {
+                        self.saved_commands.group_for(&command.id) == Some(id.as_str())
                     })
-            })
-            .collect()
+                    .count();
+                rows.push(ManagerRow::Folder { id, name, count });
+            }
+        }
+        rows
+    }
+
+    pub(super) fn enter_command_group(
+        &mut self,
+        id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if id.as_ref().is_some_and(|id| {
+            !self.command_groups(cx).iter().any(|(group, _)| group.as_ref() == Some(id))
+        }) {
+            return;
+        }
+        self.command_manager_group = id;
+        self.command_group_menu = None;
+        self.command_manager_selected = 0;
+        self.command_manager_scroll.scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        self.command_manager_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn render_command_group_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let name = self
+            .command_groups(cx)
+            .into_iter()
+            .find(|(group, _)| *group == self.command_manager_group)
+            .map(|(_, name)| name)
+            .unwrap_or_default();
+        let hover = cx.theme().list_hover;
+        h_flex()
+            .id("saved-command-group-back")
+            .debug_selector(|| "saved-command-group-back".into())
+            .w_full()
+            .h(px(GROUP_NAV_HEIGHT))
+            .flex_shrink_0()
+            .px_3()
+            .gap_2()
+            .items_center()
+            .text_sm()
+            .cursor_pointer()
+            .hover(move |row| row.bg(hover))
+            .active(move |row| row.bg(hover))
+            .role(gpui::Role::Button)
+            .aria_label(language.text(Message::CommandsBackToRoot))
+            .on_click(cx.listener(|this, _, window, cx| this.enter_command_group(None, window, cx)))
+            .drag_over::<CommandDrag>(move |row, _, _, _| row.bg(hover))
+            .on_drop(cx.listener(|this, command: &CommandDrag, window, cx| {
+                cx.stop_propagation();
+                this.move_command_to_group(&command.id, None, window, cx);
+            }))
+            .child(Icon::new(IconName::ChevronLeft).xsmall())
+            .child(
+                div()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(language.text(Message::CommandsRoot)),
+            )
+            .child(
+                Icon::new(IconName::ChevronRight).xsmall().text_color(cx.theme().muted_foreground),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(name))
+            .into_any_element()
     }
 
     pub(super) fn sort_command_groups(
@@ -85,21 +170,6 @@ impl NebulaWorkspace {
         });
     }
 
-    pub(super) fn command_scroll_index(
-        &self,
-        commands: &[crate::saved_commands::SavedCommand],
-        cx: &App,
-    ) -> usize {
-        let Some(command) = commands.get(self.command_manager_selected) else { return 0 };
-        let headers = self
-            .visible_command_groups(commands, cx)
-            .iter()
-            .position(|(group, _)| group.as_deref() == self.saved_commands.group_for(&command.id))
-            .unwrap_or(0)
-            + 1;
-        self.command_manager_selected + headers
-    }
-
     fn finish_group_change(
         &mut self,
         result: std::io::Result<()>,
@@ -110,7 +180,7 @@ impl NebulaWorkspace {
         match result {
             Ok(()) => {
                 self.command_manager_selected = 0;
-                self.command_manager_scroll.scroll_to_item(0);
+                self.command_manager_scroll.scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 cx.notify();
                 true
             },
@@ -137,41 +207,81 @@ impl NebulaWorkspace {
         self.finish_group_change(result, window, cx);
     }
 
-    pub(super) fn render_command_group_header(
+    pub(super) fn render_command_folder(
         &self,
-        id: Option<String>,
+        index: usize,
+        id: String,
         name: String,
+        count: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let hover = cx.theme().list_hover;
-        let selected = cx.theme().list_active;
-        let delete_id = id.clone().filter(|id| id != BUILTIN_GROUP_ID);
+        let active = cx.theme().list_active;
+        let muted = cx.theme().muted_foreground;
+        let selected = index == self.command_manager_selected;
+        let delete_id = (id != BUILTIN_GROUP_ID).then(|| id.clone());
+        let click_id = id.clone();
         let language = crate::gpui_shell::config::ui_language(cx);
         h_flex()
-            .id(SharedString::from(format!(
-                "command-group-{}",
-                id.as_deref().unwrap_or("ungrouped")
-            )))
+            .id(SharedString::from(format!("command-group-{id}")))
             .debug_selector({
                 let id = id.clone();
-                move || format!("command-group-{}", id.as_deref().unwrap_or("ungrouped")).into()
+                move || format!("command-group-{id}")
             })
             .w_full()
-            .h(px(GROUP_HEADER_HEIGHT))
+            .h(px(ROW_HEIGHT))
             .flex_shrink_0()
             .items_center()
-            .gap_2()
+            .gap(px(crate::display::ui::tokens::space::XS))
             .px_2()
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
+            .pr(px(18.0))
             .rounded_md()
-            .drag_over::<CommandDrag>(move |style, _, _, _| style.bg(selected))
+            .cursor_pointer()
+            .role(gpui::Role::Button)
+            .aria_label(name.clone())
+            .when(selected, |row| row.bg(active))
+            .when(!selected, |row| row.hover(move |row| row.bg(hover)))
+            .active(move |row| row.bg(active))
+            .drag_over::<CommandDrag>(move |row, _, _, _| row.bg(active))
             .on_drop(cx.listener(move |this, command: &CommandDrag, window, cx| {
                 cx.stop_propagation();
-                this.move_command_to_group(&command.id, id.as_deref(), window, cx);
+                this.move_command_to_group(&command.id, Some(&id), window, cx);
             }))
-            .child(Icon::new(IconName::Folder).xsmall())
-            .child(div().flex_1().truncate().child(name))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.enter_command_group(Some(click_id.clone()), window, cx);
+            }))
+            .child(
+                div()
+                    .debug_selector(move || format!("command-group-icon-{index}"))
+                    .size(px(ROW_ICON_SLOT))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(Icon::new(IconName::Folder).size(px(ROW_ICON_SIZE)).text_color(muted)),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(crate::display::ui::tokens::space::XXS))
+                    .child(
+                        div()
+                            .debug_selector(move || format!("command-group-label-{index}"))
+                            .truncate()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(name),
+                    )
+                    .child(
+                        div().text_size(px(11.0)).text_color(muted).child(
+                            language.format(
+                                Message::CommandsGroupCount,
+                                &[("count", &count.to_string())],
+                            ),
+                        ),
+                    ),
+            )
             .when_some(delete_id, |row, id| {
                 row.child(
                     Button::new(SharedString::from(format!("delete-command-group-{id}")))
@@ -186,7 +296,7 @@ impl NebulaWorkspace {
                         })),
                 )
             })
-            .hover(move |style| style.bg(hover))
+            .child(Icon::new(IconName::ChevronRight).xsmall().text_color(muted))
             .into_any_element()
     }
 

@@ -4,12 +4,12 @@ use gpui::{
     TestAppContext, Window, div, point, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Root, Theme, ThemeMode, WindowExt as _,
+    ActiveTheme as _, Colorize as _, Root, Theme, ThemeMode, WindowExt as _,
     text::{TextView, TextViewState},
 };
 use nebula_settings::ThemeName;
 
-use super::{ResolvedTheme, apply_skin_tokens, chrome_theme, wash};
+use super::{ResolvedTheme, apply_skin_tokens, wash};
 
 fn apply_reader_theme(name: ThemeName, cx: &mut App) {
     let chrome = ResolvedTheme::builtin(name, None);
@@ -25,22 +25,32 @@ fn apply_reader_theme(name: ThemeName, cx: &mut App) {
 }
 
 #[gpui::test]
-fn text_selection_theme_preserves_rgb_and_caps_overlay_alpha(cx: &mut TestAppContext) {
+fn text_selection_and_search_matches_stay_distinct_from_the_document(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
         for name in ThemeName::BUILTIN {
-            let chrome = chrome_theme(name);
+            let chrome = ResolvedTheme::builtin(name, None);
             let original = wash(chrome.skin().accent_soft);
             apply_reader_theme(name, cx);
 
             let theme = cx.theme();
             let selection = theme.selection;
-            assert_eq!(
-                (selection.h, selection.s, selection.l),
-                (original.h, original.s, original.l)
-            );
-            assert_eq!(selection.a, original.a.min(0.3), "{name:?}");
-            assert!(selection.a > 0.0, "{name:?}");
+            assert!(selection.a > 0.0 && selection.a <= 0.3, "{name:?}");
+            let document = theme.highlight_theme.style.editor_background.unwrap();
+            let active_line = theme.highlight_theme.style.editor_active_line.unwrap();
+            assert!(active_line.a <= 0.08, "the caret row must not hide the wallpaper");
+            assert!(theme.highlight_theme.style.editor_gutter_background.is_none());
+            // Input paints inactive matches after desaturating the selection;
+            // active matches receive a second layer. Check the visible result
+            // both on the page and on the caret row, including light themes.
+            for base in [document, document.blend(active_line), theme.background] {
+                let selected = base.blend(selection);
+                let matched = base.blend(selection.saturation(0.1));
+                for overlay in [selected, matched] {
+                    assert!(contrast(base, overlay) >= 1.2, "{name:?}: highlight blends into page");
+                }
+                assert!(contrast(matched, matched.blend(selection)) > 1.05, "{name:?}");
+            }
             assert_eq!(theme.tokens.selection.color, selection, "{name:?}");
             assert_eq!(theme.tokens.selection.background, selection.into(), "{name:?}");
             // Solid selection surfaces for lists are not text overlays.
@@ -49,7 +59,94 @@ fn text_selection_theme_preserves_rgb_and_caps_overlay_alpha(cx: &mut TestAppCon
     });
 }
 
+fn contrast(left: gpui::Hsla, right: gpui::Hsla) -> f64 {
+    let rgb = |color: gpui::Hsla| {
+        let color: gpui::Rgba = color.into();
+        crate::display::color::Rgb::new(
+            (color.r * 255.0).round() as u8,
+            (color.g * 255.0).round() as u8,
+            (color.b * 255.0).round() as u8,
+        )
+    };
+    rgb(left).contrast(*rgb(right))
+}
+
+#[gpui::test]
+fn editor_surfaces_follow_a_custom_document_palette(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        for name in [ThemeName::MintLight, ThemeName::Nord] {
+            let mut definition = nebula_settings::ThemeDefinition::from_builtin(name);
+            definition.terminal.background =
+                if name == ThemeName::Nord { [24, 32, 45] } else { [245, 248, 242] };
+            let expected = definition.terminal.background;
+            let chrome = ResolvedTheme::custom(definition, None, None);
+            Theme::change(
+                if chrome.is_light() { ThemeMode::Light } else { ThemeMode::Dark },
+                None,
+                cx,
+            );
+            apply_skin_tokens(&chrome, cx);
+            let style = &cx.theme().highlight_theme.style;
+            assert_eq!(
+                style.editor_background,
+                Some(super::to_hsla(expected[0], expected[1], expected[2]))
+            );
+            assert!(style.editor_gutter_background.is_none());
+            let background = style.editor_background.unwrap();
+            assert!(contrast(background, background.blend(cx.theme().selection)) >= 1.2);
+        }
+    });
+}
+
 const SELECTED_TEXT: &str = "alpha beta gamma delta";
+
+#[gpui::test]
+fn source_editor_keeps_find_and_copy_usable_when_the_theme_changes(cx: &mut TestAppContext) {
+    use crate::gpui_shell::file_editor::TextFileView;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.txt");
+    let source = "alpha beta\nalpha gamma\n";
+    std::fs::write(&path, source).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::gpui_shell::file_editor::init(cx);
+        crate::gpui_shell::math_view::register(cx);
+        apply_reader_theme(ThemeName::MintLight, cx);
+    });
+    let mut file = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| TextFileView::new(path, window, cx));
+        file = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let content = cx.debug_bounds("file-source-content").unwrap();
+    cx.simulate_click(content.origin + point(px(100.0), px(20.0)), Modifiers::default());
+    let modifier = if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    cx.simulate_keystrokes(&format!("{modifier}-f"));
+    cx.simulate_input("alpha");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        apply_reader_theme(ThemeName::Nord, cx);
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("escape");
+    cx.simulate_click(content.origin + point(px(100.0), px(20.0)), Modifiers::default());
+    cx.simulate_keystrokes(&format!("{modifier}-a {modifier}-c"));
+    cx.run_until_parked();
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), source);
+    assert!(!file.unwrap().read_with(cx, |view, _| view.is_dirty()));
+}
 
 struct ReaderSelectionFixture {
     text: Entity<TextViewState>,

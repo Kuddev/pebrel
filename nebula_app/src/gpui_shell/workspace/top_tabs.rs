@@ -1,4 +1,4 @@
-//! 48px 自定义标题栏里的横向标签布局。
+//! 自定义标题栏里的横向标签布局。
 //!
 //! 这里只负责同一组 workspace tab 的第二种呈现；激活、关闭、重命名、排序
 //! 与 dock 都调用 `NebulaWorkspace` 既有动作，不维护平行状态。
@@ -16,13 +16,13 @@ use gpui_component::menu::PopupMenuItem;
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::SidebarActivity;
+use crate::i18n::{Message, UiLanguage};
 
 use super::{
     NebulaWorkspace, NewWindow, OpenSettings, TAB_LABEL_ICON_SIZE, TAB_LABEL_ICON_W, TabDrag,
     TabDragAxis, TabPresentation, ToggleShellPicker, pane_header, title_bar_panel_controls,
 };
 
-pub(super) const TOP_TAB_H: f32 = 34.0;
 /// 与顶部模式正文卡片的 `px_2` 左边距同源，让首个 tab 和终端左缘对齐。
 pub(super) const TOP_TAB_LEFT_INSET: f32 = 8.0;
 /// 单个 tab 的最小宽。WT 的 TabView 同一条取舍：标签**不压到读不出来**，
@@ -88,30 +88,34 @@ fn horizontal_wheel_delta(x: f32, y: f32) -> f32 {
 /// 顶部加号的生产调用点与鼠标测试共用同一个元素构造，避免测试只证明
 /// `title_bar_panel_controls` 本身，却漏掉真实按钮没有接入它。
 pub(super) fn top_new_tab_control(
+    language: UiLanguage,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Div {
     title_bar_panel_controls().h_auto().child(
         Button::new("top-new-tab")
             .icon(IconName::Plus)
             .ghost()
-            .tooltip("新建终端 (Ctrl+Shift+T)")
+            .tooltip(language.text(Message::ChromeNewTerminalCtrlShiftT))
             .on_click(on_click),
     )
 }
 
 /// “更多”入口的生产按钮与几何探针共用同一个构造，避免测试用近似尺寸替代。
-pub(super) fn top_tabs_menu_button(settings_active: bool) -> Button {
+pub(super) fn top_tabs_menu_button(settings_active: bool, language: UiLanguage) -> Button {
     Button::new("top-tabs-menu")
         .icon(IconName::EllipsisVertical)
         .ghost()
         .selected(settings_active)
-        .tooltip("更多")
+        .tooltip(language.text(Message::ChromeMore))
 }
 
-/// 紧邻 TabView 的操作按钮占满同一条 34px 行，再在槽内居中 32px 按钮。
+/// 紧邻 TabView 的操作按钮占满同一条标签行，再在槽内居中 32px 按钮。
 /// 外层仍贴标题栏底边，tab 与正文相接的既有布局不变。
-pub(super) fn top_tab_action_slot(child: impl gpui::IntoElement) -> gpui::Div {
-    h_flex().h(px(TOP_TAB_H)).items_center().child(child)
+pub(super) fn top_tab_action_slot(
+    density: nebula_settings::DensityName,
+    child: impl gpui::IntoElement,
+) -> gpui::Div {
+    h_flex().h(px(super::tab_scroll::tab_row_height(density))).items_center().child(child)
 }
 
 impl NebulaWorkspace {
@@ -128,6 +132,8 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let row_height = super::tab_scroll::tab_row_height(self.density);
+        let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
@@ -177,6 +183,7 @@ impl NebulaWorkspace {
                     is_settings,
                     activity,
                     logo_image,
+                    logo_pending,
                     program_glyph,
                     shell_tag,
                     color,
@@ -272,7 +279,7 @@ impl NebulaWorkspace {
                     .group(hover_group.clone())
                     .relative()
                     .w(px(tab_w))
-                    .h(px(TOP_TAB_H))
+                    .h(px(row_height))
                     .flex_shrink_0()
                     .min_w_0()
                     .overflow_hidden()
@@ -380,7 +387,7 @@ impl NebulaWorkspace {
                     .when_some(program_glyph, |row, glyph| {
                         row.child(
                             div()
-                                .w(px(TAB_LABEL_ICON_W))
+                                .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
                                 .flex_shrink_0()
                                 .font_family(symbol_family.clone())
                                 .text_size(px(label_px))
@@ -548,14 +555,14 @@ impl NebulaWorkspace {
                     // 看不见的入口——tab 一多，用户根本不知道右边还有东西。
                     .when(overflow, |bar| {
                         bar.child(
-                            div().h(px(TOP_TAB_H)).flex().items_center().child(
+                            div().h(px(row_height)).flex().items_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-prev")
                                         .icon(IconName::ChevronLeft)
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_start(scroll_x))
-                                        .tooltip("向左翻标签")
+                                        .tooltip(language.text(Message::ChromeScrollTabsLeft))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 -1.0,
@@ -576,7 +583,7 @@ impl NebulaWorkspace {
                             .w(px(tab_viewport_w))
                             .flex_shrink(1.0)
                             .min_w_0()
-                            .h(px(TOP_TAB_H))
+                            .h(px(row_height))
                             .overflow_hidden()
                             // 待命拖拽在越过 4px 前由此接收移动；激活后根罩层接管。
                             .on_mouse_move(cx.listener(|this, event, window, cx| {
@@ -596,14 +603,14 @@ impl NebulaWorkspace {
                     )
                     .when(overflow, |bar| {
                         bar.child(
-                            div().h(px(TOP_TAB_H)).flex().items_center().child(
+                            div().h(px(row_height)).flex().items_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-next")
                                         .icon(IconName::ChevronRight)
                                         .ghost()
                                         .xsmall()
                                         .disabled(at_strip_end(scroll_x, strip_w, tab_viewport_w))
-                                        .tooltip("向右翻标签")
+                                        .tooltip(language.text(Message::ChromeScrollTabsRight))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.nudge_top_tabs(
                                                 1.0,
@@ -618,7 +625,7 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        top_tab_action_slot(top_new_tab_control(cx.listener(
+                        top_tab_action_slot(self.density, top_new_tab_control(language, cx.listener(
                             |this, _, window, cx| {
                                 this.add_terminal(window, cx);
                             },
@@ -626,7 +633,8 @@ impl NebulaWorkspace {
                     )
                     .child(
                         top_tab_action_slot(
-                            top_tabs_menu_button(settings_active).dropdown_menu_with_anchor(
+                            self.density,
+                            top_tabs_menu_button(settings_active, language).dropdown_menu_with_anchor(
                                 gpui::Anchor::TopRight,
                                 move |menu, _, _| {
                                     let shell_picker = menu_workspace.clone();
@@ -634,7 +642,7 @@ impl NebulaWorkspace {
                                     let settings = menu_workspace.clone();
                                     menu.external_link_icon(false)
                                         .item(
-                                            PopupMenuItem::new("新建窗口")
+                                            PopupMenuItem::new(language.text(Message::CommonNewWindow))
                                                 .icon(IconName::Plus)
                                                 .action(Box::new(NewWindow))
                                                 .on_click(move |_, _, cx| {
@@ -648,7 +656,7 @@ impl NebulaWorkspace {
                                                 }),
                                         )
                                         .item(
-                                            PopupMenuItem::new("选择终端")
+                                            PopupMenuItem::new(language.text(Message::ChromeSelectTerminal))
                                                 .icon(IconName::SquareTerminal)
                                                 .action(Box::new(ToggleShellPicker))
                                                 .on_click(move |_, window, cx| {
@@ -661,7 +669,7 @@ impl NebulaWorkspace {
                                         )
                                         .separator()
                                         .item(
-                                            PopupMenuItem::new("设置")
+                                            PopupMenuItem::new(language.text(Message::CommonSettings))
                                                 .icon(IconName::Settings)
                                                 .action(Box::new(OpenSettings))
                                                 .on_click(move |_, window, cx| {
@@ -691,7 +699,7 @@ impl NebulaWorkspace {
                             )
                             .ghost()
                             .selected(self.command_manager_open)
-                            .tooltip("命令列表")
+                            .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),

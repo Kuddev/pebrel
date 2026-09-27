@@ -30,7 +30,7 @@ impl TextFileView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.loading || self.document.as_ref().is_none_or(|document| document.read_only) {
+        if !self.preview_editable() {
             return;
         }
         self.update_live_edit(window, cx);

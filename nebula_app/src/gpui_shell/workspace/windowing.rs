@@ -6,6 +6,8 @@
 
 mod shutdown;
 pub(crate) use shutdown::{quit_all, quit_for_update};
+mod startup_geometry;
+pub(super) use startup_geometry::prepare_initial_grid;
 
 #[cfg(windows)]
 mod quick_window;
@@ -416,10 +418,16 @@ pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App)
     });
 }
 
-fn workspace_window_options(cx: &mut App, focus: bool, role: WindowRole) -> WindowOptions {
+fn workspace_window_options(
+    cx: &mut App,
+    focus: bool,
+    role: WindowRole,
+    sidebar_width: f32,
+) -> WindowOptions {
     match role {
         WindowRole::Regular => {
-            let preferred = size(px(1080.0), px(720.0));
+            let preferred = startup_geometry::preferred_size(cx, sidebar_width)
+                .unwrap_or_else(|| size(px(1080.0), px(720.0)));
             let bounds = cx.primary_display().map_or_else(
                 || Bounds::centered(None, preferred, cx),
                 |display| {
@@ -499,14 +507,16 @@ fn open_workspace_window(
     role: WindowRole,
 ) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {
     let (runtime_window_id, runtime_hub) = allocate_window(cx);
+    let runtime = nebula_settings::RuntimeSettings::load();
     let start_hidden = shell_events.is_some()
         && matches!(startup, WorkspaceStartup::RestoreOrDefault)
-        && crate::platform::startup::start_hidden(&nebula_settings::RuntimeSettings::load());
-    let mut options = workspace_window_options(cx, focus, role);
+        && crate::platform::startup::start_hidden(&runtime);
+    let mut options = workspace_window_options(cx, focus, role, runtime.sidebar_width);
     if start_hidden {
         options.show = false;
         options.focus = false;
     }
+    let deferred_show = crate::platform::startup::first_frame::defer_show(&mut options);
     let workspace_slot = Rc::new(RefCell::new(None));
     let hwnd_slot = Rc::new(RefCell::new(0isize));
     let workspace_out = workspace_slot.clone();
@@ -557,6 +567,9 @@ fn open_workspace_window(
         role,
     });
     crate::gpui_shell::wallpaper::refresh(cx);
+    if deferred_show {
+        crate::platform::startup::first_frame::present_then_show(handle, cx);
+    }
     Ok((runtime_window_id, workspace))
 }
 

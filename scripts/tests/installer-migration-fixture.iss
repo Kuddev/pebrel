@@ -1,4 +1,4 @@
-#ifndef FixtureRoot
+﻿#ifndef FixtureRoot
   #error FixtureRoot must point at an isolated directory under the workspace tmp directory.
 #endif
 #define MigrationFixture
@@ -14,6 +14,11 @@ PrivilegesRequired=lowest
 OutputBaseFilename=installer-migration-fixture
 Compression=none
 SetupLogging=no
+
+[CustomMessages]
+OpenInPebrelWsl=Open in Pebrel (WSL)
+WslMenuConflict=Preserved an edited or foreign submenu: %1.
+WslMenuRegistrationFailed=Unable to register the WSL context submenu.
 
 [Code]
 #include "..\installer-migration.iss"
@@ -180,6 +185,69 @@ begin
   Check(FileExists(NewLink), 'shortcut pointing at another program is preserved');
 end;
 
+procedure CheckContextMenus(Root: string);
+var
+  RegistryRoot, ShellRoot, Executable, Value, Menu, ForeignCommand: string;
+  Distros, Names: TArrayOfString;
+  Index: Integer;
+  Failed: Boolean;
+begin
+  RegistryRoot := 'Software\PebrelTestFixtures\' + ExtractFileName(Root);
+  Executable := Root + '\Program Files\pebrel.exe';
+  ForeignCommand := '"D:\other\pebrel.exe" --gpui --shell "wsl:Other" --working-directory "%1"';
+  try
+    for Index := 0 to 1 do begin
+      ShellRoot := RegistryRoot + '\root' + IntToStr(Index);
+      Menu := ShellRoot + '\PebrelWslMenu';
+      Check(RegWriteStringValue(HKCU, ShellRoot + '\Pebrel\command', '', 'ordinary-open'), 'seed ordinary entry');
+      Check(RegWriteStringValue(HKCU, ShellRoot + '\PebrelWslForeign\command', '', ForeignCommand), 'seed foreign entry');
+      Check(RegWriteStringValue(HKCU, ShellRoot + '\PebrelWsl0\command', '',
+        '"' + Executable + '" --gpui --shell "wsl:Old" --working-directory "%1"'), 'seed old flat entry');
+      SetArrayLength(Distros, 3);
+      Distros[0] := 'Debian';
+      Distros[1] := 'Ubuntu Test';
+      Distros[2] := '开发环境';
+      if Index = 0 then Value := '%1' else Value := '%V';
+      RegisterWslContextMenuAt(ShellRoot, Executable, Value, Distros);
+      Check(not RegKeyExists(HKCU, ShellRoot + '\PebrelWsl0'), 'migrate old flat entry');
+      Check(RegGetSubkeyNames(HKCU, ShellRoot, Names) and (GetArrayLength(Names) = 3), 'only normal, cascade and foreign roots remain');
+      Check(RegGetSubkeyNames(HKCU, Menu + '\shell', Names) and (GetArrayLength(Names) = 3), 'three distros live inside cascade');
+      Check(RegQueryStringValue(HKCU, Menu, 'SubCommands', Value) and (Value = ''), 'enable static cascade');
+      Check(RegQueryStringValue(HKCU, Menu + '\shell\PebrelWsl1\command', '', Value), 'child command exists');
+      if Index = 0 then
+        Check(Value = '"' + Executable + '" --gpui --shell "wsl:Ubuntu Test" --working-directory "%1"', 'selected directory argv')
+      else
+        Check(Value = '"' + Executable + '" --gpui --shell "wsl:Ubuntu Test" --working-directory "%V"', 'background directory argv');
+      Check(RegQueryStringValue(HKCU, Menu + '\shell\PebrelWsl2', 'MUIVerb', Value) and (Value = '开发环境'), 'Unicode label retained');
+      RegisterWslContextMenuAt(ShellRoot, Executable, '%1', Distros);
+      Check(RegGetSubkeyNames(HKCU, Menu + '\shell', Names) and (GetArrayLength(Names) = 3), 'repeat registration has no duplicates');
+      SetArrayLength(Distros, 1);
+      RegisterWslContextMenuAt(ShellRoot, Executable, '%1', Distros);
+      Check(RegGetSubkeyNames(HKCU, Menu + '\shell', Names) and (GetArrayLength(Names) = 1), 'removed distros leave no stale entries');
+      Check(RegWriteStringValue(HKCU, Menu + '\shell\Custom\command', '', ForeignCommand), 'seed edited submenu');
+      Failed := False;
+      try
+        RegisterWslContextMenuAt(ShellRoot, Executable, '%1', Distros);
+      except
+        Failed := True;
+      end;
+      Check(Failed and RegKeyExists(HKCU, Menu + '\shell\Custom'), 'edited submenu is not overwritten');
+      RemoveOwnedWslContextMenusAt(ShellRoot, Executable);
+      Check(RegKeyExists(HKCU, Menu + '\shell\Custom'), 'uninstall preserves edited subtree');
+      Check(RegDeleteKeyIncludingSubkeys(HKCU, Menu + '\shell\Custom'), 'remove fixture edit');
+      RemoveOwnedWslContextMenusAt(ShellRoot, 'D:\other\install.exe');
+      Check(RegKeyExists(HKCU, Menu), 'other installation cannot remove this menu');
+      SetArrayLength(Distros, 0);
+      RegisterWslContextMenuAt(ShellRoot, Executable, '%1', Distros);
+      Check(not RegKeyExists(HKCU, Menu), 'zero distros removes empty cascade');
+      Check(RegQueryStringValue(HKCU, ShellRoot + '\PebrelWslForeign\command', '', Value) and (Value = ForeignCommand), 'foreign entry preserved');
+      Check(RegQueryStringValue(HKCU, ShellRoot + '\Pebrel\command', '', Value) and (Value = 'ordinary-open'), 'ordinary entry preserved');
+    end;
+  finally
+    RegDeleteKeyIncludingSubkeys(HKCU, RegistryRoot);
+  end;
+end;
+
 function InitializeSetup: Boolean;
 var
   Root, Report: string;
@@ -190,6 +258,7 @@ begin
     CheckPayloadMigration(Root);
     CheckFailures(Root);
     CheckShortcuts(Root);
+    CheckContextMenus(Root);
     Report := 'PASS: ' + IntToStr(Checks) + ' migration checks';
   except
     Report := 'FAIL: ' + GetExceptionMessage;
