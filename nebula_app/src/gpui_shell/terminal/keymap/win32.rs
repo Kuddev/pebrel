@@ -75,7 +75,7 @@ pub(super) fn virtual_key_of(key: &str) -> Option<u16> {
 /// Tab=0x09、Backspace=0x08）：OpenConsole 1.22 的 VT 翻译层会丢弃 uChar=0
 /// 的 VK_ESCAPE，于是读字节流的那类应用（Claude Code）收不到 Esc。修饰键与
 /// 功能键保持 0，与真实键盘一致。逐条同旧壳 `control_char_fallback`。
-fn unicode_char_of(ks: &Keystroke, scan_code: u32) -> u16 {
+fn unicode_char_of(ks: &Keystroke, virtual_key: u16, scan_code: u32) -> u16 {
     // 平台已经判出文本的（含 Ctrl 变体）以它为准，与 WM_CHAR 语义一致。
     // `key_char` 若是 NUL，当作没文本：真实键盘的 Esc 不会写出 U+0000。
     if let Some(text) = ks.key_char.as_deref() {
@@ -88,7 +88,8 @@ fn unicode_char_of(ks: &Keystroke, scan_code: u32) -> u16 {
     }
     match ks.key.as_str() {
         "escape" => 0x1b,
-        "enter" => crate::platform::keyboard::enter_character(
+        "enter" => crate::platform::keyboard::native_character(
+            virtual_key,
             scan_code,
             ks.modifiers.shift,
             ks.modifiers.control,
@@ -106,6 +107,24 @@ fn unicode_char_of(ks: &Keystroke, scan_code: u32) -> u16 {
             }
         },
         "space" => b' ' as u16,
+        // GPUI 丢弃 Ctrl+字母的 C0 文本；Win32 记录必须恢复它，adb 等字节流
+        // 应用才能收到 Ctrl+C。只补缺失文本，不把 AltGr 等组合合成为控制字符。
+        _ if ks.key_char.is_none()
+            && ks.modifiers.control
+            && !ks.modifiers.alt
+            && !ks.modifiers.platform
+            && !ks.modifiers.function
+            && matches!(virtual_key, 0x41..=0x5a) =>
+        {
+            let character = crate::platform::keyboard::native_character(
+                virtual_key,
+                scan_code,
+                ks.modifiers.shift,
+                ks.modifiers.control,
+                ks.modifiers.alt,
+            );
+            if character <= 0x1f { character } else { 0 }
+        },
         _ => 0,
     }
 }
@@ -140,7 +159,7 @@ pub(super) fn win32_input_record(ks: &Keystroke, key_down: bool) -> Option<Vec<u
             "\x1b[{};{};{};{key_down};{};1_",
             vk,
             scan_code,
-            unicode_char_of(ks, scan_code),
+            unicode_char_of(ks, vk, scan_code),
             control_key_state
         )
         .into_bytes(),
