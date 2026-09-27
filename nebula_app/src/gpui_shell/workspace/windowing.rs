@@ -197,6 +197,7 @@ struct DetachedTerminalTab {
 }
 
 pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeHub) {
+    crate::platform::shutdown_watch::install();
     cx.set_global(WindowRegistry {
         next_window_id: 1,
         activation_sequence: 1,

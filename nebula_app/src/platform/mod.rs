@@ -33,6 +33,7 @@ pub(crate) mod process;
 pub(crate) mod process_snapshot;
 pub mod shell;
 pub mod shell_integration;
+pub(crate) mod shutdown_watch;
 pub(crate) mod ssh_agent;
 pub mod startup;
 pub(crate) mod update_installation;
