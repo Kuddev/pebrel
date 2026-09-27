@@ -203,6 +203,7 @@ fn broadcast_mark(side: f32, color: Hsla) -> impl IntoElement {
 /// 一个 pane 的标题信息：图标（AI 品牌图 / Nerd Font 字位）+ 一行标题。
 struct PaneTitle {
     logo: Option<std::sync::Arc<gpui::RenderImage>>,
+    logo_pending: bool,
     glyph: Option<&'static str>,
     text: SharedString,
 }
@@ -216,10 +217,9 @@ impl NebulaWorkspace {
             .running_program
             .clone()
             .or_else(|| view.ai_session.as_ref().map(|identity| identity.source.clone()));
-        let logo = program
-            .as_deref()
-            .and_then(crate::display::ai_logo_for_program)
-            .and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
+        let brand_logo = program.as_deref().and_then(crate::display::ai_logo_for_program);
+        let logo = brand_logo.and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
+        let logo_pending = brand_logo.is_some() && logo.is_none();
         let glyph = program
             .as_deref()
             .filter(|_| logo.is_none())
@@ -230,7 +230,7 @@ impl NebulaWorkspace {
             (None, Some(destination)) => SharedString::from(destination.clone()),
             (None, None) => SharedString::from(view.tab_label()),
         };
-        PaneTitle { logo, glyph, text }
+        PaneTitle { logo, logo_pending, glyph, text }
     }
 
     /// 一个 pane 的标题条。左区整条是切焦点的命中区，右区三枚按钮各自
@@ -264,7 +264,7 @@ impl NebulaWorkspace {
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let title_px = label_px * 0.78;
-        let PaneTitle { logo, glyph, text } = self.pane_title(view, cx, dark);
+        let PaneTitle { logo, logo_pending, glyph, text } = self.pane_title(view, cx, dark);
         let group: SharedString = format!("pane-header-{pane_id}").into();
         let icon_ink = if focused { ink } else { muted };
 
@@ -332,6 +332,7 @@ impl NebulaWorkspace {
                     .when_some(glyph, |grip, glyph| {
                         grip.child(
                             div()
+                                .when(logo_pending, |slot| slot.w(px(title_px)))
                                 .flex_shrink_0()
                                 .font_family(symbol_family)
                                 .text_size(px(title_px))
