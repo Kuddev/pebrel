@@ -34,6 +34,9 @@ pub(super) fn prepare(gui_launch: bool, explicit_config: bool) -> io::Result<Lau
     let Some(data) = data_directory(&executable, super::super::dirs::home_dir().as_deref()) else {
         return Ok(Launch::Installed);
     };
+    if is_translocated(&executable) {
+        return Err(io::Error::other(language().text(Message::StartupPortableTranslocated)));
+    }
     let marked = data.join(MARKER).try_exists()?;
     if !marked {
         // CLI commands never prompt. Once enabled, they discover the same adjacent data.
@@ -61,10 +64,11 @@ pub(super) fn prepare(gui_launch: bool, explicit_config: bool) -> io::Result<Lau
             other => return Ok(other),
         }
     }
-    if executable.components().any(|part| part.as_os_str() == "AppTranslocation") {
-        return Err(io::Error::other(language().text(Message::StartupPortableTranslocated)));
-    }
     activate(&data)
+}
+
+fn is_translocated(executable: &Path) -> bool {
+    executable.components().any(|part| part.as_os_str() == "AppTranslocation")
 }
 
 fn selected_launch(result: rfd::MessageDialogResult, language: UiLanguage) -> Launch {
@@ -176,6 +180,16 @@ mod tests {
                 Some(Path::new(folder).join("Pebrel Data"))
             );
         }
+    }
+
+    #[test]
+    fn translocation_detection_uses_exact_path_component() {
+        assert!(is_translocated(Path::new(
+            "/private/var/folders/AppTranslocation/UUID/d/Pebrel.app/Contents/MacOS/pebrel"
+        )));
+        assert!(!is_translocated(Path::new(
+            "/Volumes/AppTranslocation Backup/Pebrel.app/Contents/MacOS/pebrel"
+        )));
     }
 
     #[test]

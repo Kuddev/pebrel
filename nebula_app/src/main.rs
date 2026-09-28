@@ -207,7 +207,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         Ok(true) => {},
         Ok(false) => return Ok(()),
         Err(error) => {
-            platform::startup::report_error(&error, options.subcommands.is_none());
+            platform::startup::report_error(
+                &error,
+                options.subcommands.is_none() && !options.daemon,
+            );
             return Err(error.into());
         },
     }
