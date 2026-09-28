@@ -131,7 +131,13 @@ compile check into a claim that UI tests or a packaged application were run.
 on `main`, together with Code Owner approval; see the
 [activation checklist](docs/project-constraints.md#server-side-activation).
 Draft and ready pull requests both run all five native platforms and both macOS
-release-profile compile checks. The required lint job validates the event and
+release-profile compile checks. Each macOS native job also runs its release check
+on the same runner, reusing the checkout, toolchain and source downloads while
+keeping the two compiled workloads in their existing separate caches. The two
+`Release workspace (<os>)` contexts are lightweight Linux result checks: they
+require this run's entire native matrix to succeed, not a previous run's result.
+The release compilation itself still runs natively on each Mac architecture.
+The required lint job validates the event and
 selects the matrix before requesting platform runners. Every required check must
 succeed before merging. Marking a draft ready without changing its commits does
 not repeat the matrix; source updates and reopen events run it again. Native CI
@@ -155,7 +161,7 @@ feature work; there is no routine `--skip-architecture` option.
 
 - 先读架构图、工程合同和决策记录；按职责拆分，不按行号切片。
 - 一个 PR 只做一件事；改动超过 1500 行源码（不计文档、lockfile、资源）`pr-size` 会失败，请拆分。
-- Draft 和 Ready PR 都先运行必需的格式检查和矩阵规划，再执行五平台原生测试及两项 macOS release 编译检查；十项必需检查全绿才能合并。提速使用共享缓存与并行测试，不省略平台或 doctest。
+- Draft 和 Ready PR 都先运行必需的格式检查和矩阵规划，再执行五平台原生测试及两项 macOS release 编译检查；每个 Mac 在同一 runner 完成两类检查，原有 release 检查名称由轻量结果汇总保留。十项必需检查全绿才能合并，不省略平台或 doctest。
 - 2000 行是现有仓库的防灾上限，800 行只提示审查，不是“大厂标准”。
 - 普通功能 PR 不得增加存量债务；有问题的规则可以修订，但要有反例、测试和维护者审批。
 - 新增核心抽象、依赖方向、持久化或线程模型改变要先说明设计，不强迫每个小修复写 ADR。

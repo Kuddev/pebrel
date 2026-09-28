@@ -232,6 +232,7 @@ impl NebulaWorkspace {
                     is_settings,
                     activity,
                     logo_image,
+                    logo_pending,
                     program_glyph,
                     shell_tag,
                     color: tab_color,
@@ -445,7 +446,7 @@ impl NebulaWorkspace {
                 .when_some(program_glyph, |row, glyph| {
                     row.child(
                         div()
-                            .w(px(TAB_LABEL_ICON_W))
+                            .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
                             .flex_shrink_0()
                             .font_family(symbol_family.clone())
                             .text_size(px(label_px))
@@ -966,7 +967,7 @@ impl NebulaWorkspace {
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
-        let TabPresentation { title, logo_image, program_glyph, pane_count, .. } =
+        let TabPresentation { title, logo_image, logo_pending, program_glyph, pane_count, .. } =
             self.tab_presentation(self.active, cx, dark);
         slot.child(
             h_flex()
@@ -988,6 +989,7 @@ impl NebulaWorkspace {
                 .when_some(program_glyph, |row, glyph| {
                     row.child(
                         div()
+                            .when(logo_pending, |slot| slot.w(px(TAB_LABEL_ICON_SIZE)))
                             .flex_shrink_0()
                             .font_family(symbol_family)
                             .text_size(px(label_px))
