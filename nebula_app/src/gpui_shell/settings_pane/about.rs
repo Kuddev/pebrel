@@ -78,6 +78,7 @@ impl SettingsPane {
     }
 
     fn save_update_release_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = crate::gpui_shell::config::ui_language(cx);
         let raw = self.update_release_input.read(cx).value();
         match crate::update_check::normalize_setting(&raw) {
             Some(value) => {
