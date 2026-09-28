@@ -13,10 +13,10 @@
 
 ## Evidence
 
-- [显示快照与校验](../../../../nebula_terminal/src/grid/snapshot.rs)覆盖主屏、Unicode 重排、容量和控制数据拒绝。
+- [显示快照与校验](../../../../nebula_terminal/src/grid/snapshot.rs)覆盖 Unicode 重排、容量和控制数据拒绝；备用屏活动时读取主屏由第二项随采集接入。
 - [有界输出存储](../../../../nebula_app/src/recent_output/storage.rs)复用原子文件写入。
 - [发布生命周期](../../../../nebula_app/src/recent_output/storage/lifecycle.rs)的回归测试覆盖两代交接、失败重试和发布回调内失效。
-- [本机会话引用](../../../../nebula_app/src/session/local_output.rs)验证引用只随自动恢复格式保存，损坏引用不破坏布局恢复。
+- 本机会话引用（`session/local_output.rs`）随第二项的逐 pane 采集交付；本项存储测试以普通文件代替会话，只验证发布回调的提交语义。
 
 ## Decision
 

@@ -203,7 +203,6 @@ impl NebulaWorkspace {
                 launch: Some(launch),
                 layout: Some(layout),
                 active_pane,
-                output_refs: Vec::new(),
             });
         }
         Session::new(active_out, tabs)
