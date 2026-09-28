@@ -210,21 +210,17 @@ impl NebulaWorkspace {
                         program: Some("Pebrel".into()),
                         body: "Foreground system notification review".into(),
                     };
-                    if view
-                        .update(cx, |_, cx| {
-                            cx.emit(
-                                crate::gpui_shell::terminal::view::TerminalViewEvent::Notification(
-                                    notification,
-                                ),
-                            );
-                        })
-                        .is_ok()
+                    view.update(cx, |_, cx| {
+                        cx.emit(
+                            crate::gpui_shell::terminal::view::TerminalViewEvent::Notification(
+                                notification,
+                            ),
+                        );
+                    });
+                    if let Err(error) =
+                        std::fs::write(std::path::PathBuf::from(marker), b"notification queued")
                     {
-                        if let Err(error) =
-                            std::fs::write(std::path::PathBuf::from(marker), b"notification queued")
-                        {
-                            log::warn!("UI review notification capture marker failed: {error}");
-                        }
+                        log::warn!("UI review notification capture marker failed: {error}");
                     }
                 }
             }
