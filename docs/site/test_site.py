@@ -45,6 +45,11 @@ class SiteTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.temp.name)
+        cls.stale_page = cls.root / 'obsolete' / 'index.html'
+        cls.stale_page.parent.mkdir()
+        cls.stale_page.write_text('stale output')
+        (cls.root / 'build-info.json').write_text('{}')
+        (cls.root / '.nojekyll').touch()
         cls.report = build(cls.root, 'https://example.org/pebrel/')
         cls.documents = {
             path.resolve(): Document(path.read_text())
@@ -54,6 +59,22 @@ class SiteTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.temp.cleanup()
+
+    def test_build_removes_stale_output(self):
+        self.assertFalse(self.stale_page.exists())
+
+    def test_build_preserves_unrelated_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            sentinel = output / 'user-data.txt'
+            sentinel.write_text('keep')
+            with self.assertRaisesRegex(ValueError, 'not a generated site'):
+                build(output, '')
+            self.assertEqual(sentinel.read_text(), 'keep')
+
+    def test_build_does_not_remove_source_directories(self):
+        with self.assertRaisesRegex(ValueError, 'overlaps repository sources'):
+            build(HERE, '')
 
     def test_internal_links_and_fragments(self):
         for path, document in self.documents.items():

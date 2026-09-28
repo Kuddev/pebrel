@@ -123,6 +123,28 @@ def build(destination: Path, base_url: str) -> dict:
     if len(slugs) != len(set(slugs)):
         raise ValueError("Duplicate page slug")
     template = Template((HERE / "template.html").read_text())
+    destination = destination.resolve()
+    screenshots = REPO / "docs" / "screenshots"
+    if destination != HERE / "dist" and (
+        REPO.is_relative_to(destination)
+        or any(
+            source == destination
+            or source.is_relative_to(destination)
+            or destination.is_relative_to(source)
+            for source in (HERE, screenshots)
+        )
+    ):
+        raise ValueError("Output directory overlaps repository sources")
+    if destination.exists():
+        if not destination.is_dir():
+            raise ValueError("Output path is not a directory")
+        generated_site = (
+            (destination / "build-info.json").is_file()
+            and (destination / ".nojekyll").is_file()
+        )
+        if any(destination.iterdir()) and not generated_site:
+            raise ValueError("Refusing to replace an output directory that is not a generated site")
+        shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(REPO / "LICENSE", destination / "LICENSE")
     shutil.copy2(HERE / "third-party-notices.txt", destination / "third-party-notices.txt")

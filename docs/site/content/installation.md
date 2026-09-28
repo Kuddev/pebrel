@@ -4,11 +4,11 @@
 
 | 电脑 | 选择的包 | 系统要求 |
 | --- | --- | --- |
-| Windows，Intel / AMD 64 位处理器 | `windows-x64-setup.exe` 或 `windows-x64.zip` | Windows 10 1809+ / Windows 11 |
-| Windows，ARM 处理器 | `windows-arm64.zip` | 使用 ARM64 对应包 |
-| Mac，Apple 芯片 | `macos-arm64-preview.dmg` | 构建目标为 macOS 14+ |
-| Mac，Intel 处理器 | `macos-x64-preview.dmg` | 构建目标为 macOS 14+ |
-| Linux，Intel / AMD 64 位处理器 | `linux-x64-preview.deb`、`.AppImage` 或 `.tar.gz` | glibc 2.35+ |
+| Windows，Intel / AMD 64 位处理器 | `Pebrel-v1.9.1-windows-x64-setup.exe` 或 `Pebrel-v1.9.1-windows-x64.zip` | Windows 10 1809+ / Windows 11 |
+| Windows，ARM 处理器 | `Pebrel-v1.9.1-windows-arm64.zip` | 使用 ARM64 对应包 |
+| Mac，Apple 芯片 | `Pebrel-v1.9.1-macos-arm64-preview.dmg` | 构建目标为 macOS 14+ |
+| Mac，Intel 处理器 | `Pebrel-v1.9.1-macos-x64-preview.dmg` | 构建目标为 macOS 14+ |
+| Linux，Intel / AMD 64 位处理器 | `Pebrel-v1.9.1-linux-x64-preview.deb`、`Pebrel-v1.9.1-linux-x64-preview.AppImage` 或 `Pebrel-v1.9.1-linux-x64-preview.tar.gz` | glibc 2.35+ |
 
 在 Mac 的 **苹果菜单 → 关于本机** 中可以查看芯片类型。`x64` 指 64 位 Intel / AMD，不是 32 位 x86。macOS 和 Linux 当前提供 Preview 包；macOS 构建目标为 14+，发布 CI 在 macOS 15 上验证。
 
@@ -16,14 +16,14 @@
 
 ### 使用安装程序
 
-1. 下载名称以 `windows-x64-setup.exe` 结尾的文件。
+1. 下载 `Pebrel-v1.9.1-windows-x64-setup.exe`。
 2. 运行安装程序，按页面提示选择安装位置并完成安装。
 3. 从开始菜单或安装完成后的入口启动 Pebrel。
 4. 看到终端提示符后，输入 `echo Hello, Pebrel` 检查运行情况。
 
 ### 使用便携版
 
-1. 下载对应架构的 ZIP 文件。
+1. 下载 `Pebrel-v1.9.1-windows-x64.zip` 或 `Pebrel-v1.9.1-windows-arm64.zip`。
 2. **完整解压**到一个可写目录。
 3. 进入解压后的目录，运行 `pebrel.exe`。
 
@@ -31,7 +31,7 @@
 
 ## macOS
 
-1. 下载 Apple Silicon（arm64）或 Intel（x64）对应的 DMG。
+1. 下载 Apple Silicon 的 `Pebrel-v1.9.1-macos-arm64-preview.dmg` 或 Intel 的 `Pebrel-v1.9.1-macos-x64-preview.dmg`。
 2. 打开 DMG，将 **Pebrel** 拖入 **Applications／应用程序**。
 3. 弹出 DMG，然后从“应用程序”启动 Pebrel。
 
@@ -62,7 +62,7 @@ chmod +x Pebrel-v1.9.1-linux-x64-preview.AppImage
 
 ### TAR.GZ 便携包
 
-将下载包解压，进入其中的目录后运行 `./AppRun`。保留解压后的完整目录，启动器需要读取随包资源。
+解压 `Pebrel-v1.9.1-linux-x64-preview.tar.gz`，进入其中的目录后运行 `./AppRun`。保留解压后的完整目录，启动器需要读取随包资源。
 
 ## 平台功能差异
 
