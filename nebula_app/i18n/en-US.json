@@ -6,6 +6,19 @@
     "turn_incomplete": "Response incomplete. Check the terminal before continuing.",
     "turn_ended": "Turn ended. Check the terminal for the result."
   },
+  "startup": {
+    "portable": {
+      "title": "Portable mode",
+      "description": "Pebrel is outside Applications. Store its data beside the app in {path}?",
+      "enable": "Use portable mode",
+      "normal": "Use normal mode",
+      "quit": "Quit",
+      "translocated": "Pebrel is running from a temporary macOS location. Move the app to a trusted folder and reopen it.",
+      "write_failed": "Could not use the portable data folder {path}: {error}",
+      "linked_directory": "The portable data folder or its temporary folder is a symbolic link.",
+      "error_title": "Pebrel could not start"
+    }
+  },
   "language": {
     "self_name": "English",
     "system": "Follow system",

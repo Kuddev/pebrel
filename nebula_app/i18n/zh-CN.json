@@ -6,6 +6,19 @@
     "turn_incomplete": "回复未完成，请查看终端后再继续。",
     "turn_ended": "回合已结束，请查看终端中的结果。"
   },
+  "startup": {
+    "portable": {
+      "title": "便携模式",
+      "description": "Pebrel 位于“应用程序”文件夹之外。是否将数据保存在应用旁的 {path}？",
+      "enable": "使用便携模式",
+      "normal": "使用普通模式",
+      "quit": "退出",
+      "translocated": "Pebrel 正在从 macOS 临时转译位置运行。请将应用移到可信文件夹后重新打开。",
+      "write_failed": "无法使用便携数据文件夹 {path}：{error}",
+      "linked_directory": "便携数据文件夹或其临时文件夹是符号链接。",
+      "error_title": "Pebrel 无法启动"
+    }
+  },
   "language": {
     "self_name": "简体中文",
     "system": "跟随系统",
