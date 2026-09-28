@@ -1,8 +1,10 @@
 # 这些现有夹具共享真实设置文件；进程内 Mutex 在 nextest 多进程模型下不再互斥。
 # 只还原该夹具组的串行合同，其余测试继续使用 runner 的并行度。
+# 入组判据只有一个：测试会让产品把设置写回真实设置路径。Ctrl+滚轮夹具同样如此
+# （`gpui_shell::settings_fixture` 里那把进程内锁在 nextest 下不跨进程互斥）。
 [test-groups]
 theme-studio = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'test(gpui_shell::settings_pane::theme_studio_tests::)'
+filter = 'test(gpui_shell::settings_pane::theme_studio_tests::) or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll) or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)'
 test-group = 'theme-studio'

@@ -860,9 +860,12 @@ impl TerminalView {
         // 旧壳 `mouse_wheel_input`：Ctrl+滚轮先于一切滚动消费者，一步 1
         // 逻辑像素，钳在 4–64。设置页步进会写盘；这里同样写 `font_size=`，
         // 让下次启动跟上（旧壳只在其它设置落盘时顺便带走当前字号）。
+        // 开关关闭时手势仍被整体消费：既不缩放，也不回落给下面的滚动逻辑。
         if event.modifiers.control && !event.modifiers.alt && delta_y != 0.0 {
-            let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
-            self.zoom_font_size(step, cx);
+            if crate::gpui_shell::config::ctrl_wheel_font_zoom(cx) {
+                let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
+                self.zoom_font_size(step, cx);
+            }
             cx.stop_propagation();
             return;
         }
