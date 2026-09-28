@@ -326,3 +326,70 @@ fn explicit_link_gesture_respects_disabled_hints_and_required_modifiers(cx: &mut
     window.simulate_mouse_up(position, MouseButton::Left, modifiers);
     assert_eq!(clipboard(&mut window).as_deref(), Some("https://example.com"));
 }
+
+/// 真实终端元素 + 可回滚的历史，滚轮手势才有可观察的落点。
+fn terminal_with_history(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
+    let (probe, mut cx) = open(cx);
+    let terminal = probe.read_with(&cx, |probe, _| probe.terminal.clone());
+    terminal.update(&mut cx, |view, cx| {
+        let (session, _receiver) = session::test_session();
+        view.session = Some(session);
+        let mut history = Vec::new();
+        for line in 0..200 {
+            history.extend_from_slice(format!("history-{line}\r\n").as_bytes());
+        }
+        super::super::startup_tests::feed(view, &history);
+        cx.notify();
+    });
+    draw(&mut cx);
+    (terminal, cx)
+}
+
+/// 走真实命中区域派发滚轮：`control` 决定是否按 Ctrl+滚轮解释。
+fn wheel_over_terminal(cx: &mut VisualTestContext, delta_y: f32, control: bool) {
+    let position = cx.debug_bounds("mouse-terminal").unwrap().center();
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta_y))),
+        modifiers: Modifiers { control, ..Modifiers::default() },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll(cx: &mut TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    // 缩放会写 `font_size=`：与 theme studio 夹具同一把锁，并原样恢复用户的设置文件。
+    let _fixture_guard = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    let (terminal, mut cx) = terminal_with_history(cx);
+    // 从中间字号起步，让 ±1 步远离 4–64 的钳位边界。
+    cx.update(|_, cx| {
+        let settings = cx.global_mut::<Settings>();
+        settings.font_size_px = 15.0;
+        settings.ctrl_wheel_font_zoom = true;
+    });
+
+    // 开启（默认）：Ctrl+滚轮仍然放大字号，且不移动终端回滚位置。
+    wheel_over_terminal(&mut cx, 60.0, true);
+    let zoomed = terminal.read_with(&cx, |view, _| view.font_size);
+    assert!(zoomed > px(15.0), "Ctrl+滚轮应放大字号，实际 {zoomed:?}");
+    assert_eq!(terminal.read_with(&cx, |view, _| view.scroll_state().0), 0);
+
+    // 关闭：放大方向的手势既不改变字号，也不被当成普通滚动消费掉。
+    cx.update(|_, cx| cx.global_mut::<Settings>().ctrl_wheel_font_zoom = false);
+    wheel_over_terminal(&mut cx, 60.0, true);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.font_size), zoomed);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.scroll_state().0), 0);
+    // 缩小方向同样被整体吞掉。
+    wheel_over_terminal(&mut cx, -60.0, true);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.font_size), zoomed);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.scroll_state().0), 0);
+
+    // 关闭开关只影响 Ctrl+滚轮：普通滚轮照旧滚动。
+    wheel_over_terminal(&mut cx, 60.0, false);
+    assert!(terminal.read_with(&cx, |view, _| view.scroll_state().0) > 0);
+}
