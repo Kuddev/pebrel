@@ -595,11 +595,17 @@ mod tests {
         assert_eq!(encode(&keystroke("a"), &mode), None);
         assert_eq!(encode(&keystroke("1"), &mode), None);
         assert_eq!(encode(&keystroke("space"), &mode), None);
+        assert_eq!(encode(&keystroke("/"), &mode), None);
         // Ctrl+C 仍走记录，不能为了 IME 把快捷键也放掉。
         let mut ctrl_c = keystroke("c");
         ctrl_c.modifiers.control = true;
         assert!(encode(&ctrl_c, &mode).is_some());
         assert!(encode(&keystroke("escape"), &mode).is_some());
+
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::VkKeyScanW;
+        let slash = Keystroke::parse("ctrl-/").unwrap();
+        let vk = unsafe { VkKeyScanW(b'/' as u16) } as u16 & 0xff;
+        assert!(encode(&slash, &mode).unwrap().starts_with(format!("\x1b[{vk};").as_bytes()));
     }
 
     /// 普通空格与字母使用同一文本输入路径：英语布局最终提交 `" "`，IME
