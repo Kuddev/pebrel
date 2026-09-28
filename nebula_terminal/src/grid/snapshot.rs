@@ -2,13 +2,15 @@
 
 use super::{Dimensions, Grid};
 use crate::index::{Column, Line};
-use crate::term::cell::Cell;
+use crate::term::cell::{Cell, Flags};
 
 #[cfg(feature = "serde")]
 mod serialization;
 
 // 解码后的防灾上限；持久化层还须独立限制每条记录的编码字节数。
 const MAX_SNAPSHOT_CELLS: usize = 262_144;
+const WIDE_FLAGS: Flags =
+    Flags::WIDE_CHAR.union(Flags::WIDE_CHAR_SPACER).union(Flags::LEADING_WIDE_CHAR_SPACER);
 
 #[derive(Clone, Debug, Default)]
 pub struct DisplaySnapshot {
@@ -24,7 +26,7 @@ impl DisplaySnapshot {
         let start = range.start.0.max(-(grid.history_size() as i32));
         let start =
             start.max(end.saturating_sub((max_cells / columns).min(i32::MAX as usize) as i32));
-        let rows = (start..end)
+        let rows: Vec<Vec<Cell>> = (start..end)
             .map(|line| {
                 (0..columns)
                     .map(|column| {
@@ -35,7 +37,39 @@ impl DisplaySnapshot {
                     .collect()
             })
             .collect();
-        Self { columns, rows }
+        let mut snapshot = Self { columns, rows };
+        snapshot.sanitize_wide_flags();
+        snapshot
+    }
+
+    /// 删半个宽字符等编辑或外部文件会留下孤立标志；只清理副本，不动活终端。
+    fn sanitize_wide_flags(&mut self) {
+        for line in (0..self.rows.len()).rev() {
+            for column in (0..self.rows[line].len()).rev() {
+                let row = &self.rows[line];
+                let is = |cell: Option<&Cell>, flags| {
+                    cell.is_some_and(|cell| cell.flags & WIDE_FLAGS == flags)
+                };
+                let valid = match row[column].flags & WIDE_FLAGS {
+                    Flags::WIDE_CHAR => is(row.get(column + 1), Flags::WIDE_CHAR_SPACER),
+                    Flags::WIDE_CHAR_SPACER => {
+                        is(column.checked_sub(1).and_then(|c| row.get(c)), Flags::WIDE_CHAR)
+                    },
+                    Flags::LEADING_WIDE_CHAR_SPACER => {
+                        column + 1 == self.columns
+                            && row[column].flags.contains(Flags::WRAPLINE)
+                            && self
+                                .rows
+                                .get(line + 1)
+                                .is_none_or(|next| is(next.first(), Flags::WIDE_CHAR))
+                    },
+                    flags => flags.is_empty(),
+                };
+                if !valid {
+                    self.rows[line][column].flags.remove(WIDE_FLAGS);
+                }
+            }
+        }
     }
 
     fn validate(&self) -> Result<(), &'static str> {
@@ -177,6 +211,53 @@ mod tests {
         };
         let value = serde_json::to_value(&snapshot).unwrap();
         assert!(serde_json::from_value::<DisplaySnapshot>(value).is_err());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn decoding_stops_at_budget_before_reading_malformed_tail() {
+        let one = DisplaySnapshot { columns: 1, rows: vec![vec![Cell::default()]] };
+        let cell = serde_json::to_value(&one).unwrap()["rows"][0][0].to_string();
+        let cell = cell.trim_end_matches('}');
+        let chars = |n| "\"a\",".repeat(n);
+        let half = format!(r#"{cell},"combining":[{}"a"]}}"#, chars(131_071));
+        for input in [
+            format!(r#"{{"columns":1,"rows":[{}"bad"]}}"#, "[],".repeat(262_145)),
+            format!(r#"{{"columns":1,"rows":[[{}"bad"]]}}"#, format!("{cell}}},").repeat(262_145)),
+            format!(r#"{{"columns":1,"rows":[[{cell},"combining":[{}"bad"]}}]]}}"#, chars(262_145)),
+            format!(r#"{{"columns":3,"rows":[[{half},{half},{cell},"combining":["a"]}},"bad"]]}}"#),
+        ] {
+            let error = serde_json::from_str::<DisplaySnapshot>(&input).unwrap_err();
+            assert!(error.to_string().contains("decode budget"), "{error}");
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn strips_orphan_wide_flags_from_files_and_edited_screens() {
+        let flags = [Flags::WIDE_CHAR_SPACER, Flags::WIDE_CHAR | Flags::WIDE_CHAR_SPACER];
+        let malformed = DisplaySnapshot {
+            columns: 2,
+            rows: vec![flags.map(|flags| Cell { flags, ..Cell::default() }).to_vec()],
+        };
+        let decoded: DisplaySnapshot =
+            serde_json::from_value(serde_json::to_value(&malformed).unwrap()).unwrap();
+        assert!(decoded.rows[0].iter().all(|cell| !cell.flags.intersects(WIDE_FLAGS)));
+        for edit in ["", "\x1b[1;6H\x1b[P", "\x1b[1;5H\x1b[@", "\x1b[1;6H\x1b[K"] {
+            for columns in [3, 5, 12] {
+                let mut source = Term::new(Config::default(), &TermSize::new(8, 3), VoidListener);
+                let mut parser: ansi::Processor = ansi::Processor::new();
+                parser.advance(&mut source, format!("abcd中文e\u{301}\r\n{edit}").as_bytes());
+                source.resize(TermSize::new(columns, 3));
+                let snapshot = DisplaySnapshot::capture(source.grid(), Line(-10)..Line(3), 100);
+                let mut copy = snapshot.clone();
+                copy.sanitize_wide_flags();
+                assert_eq!(format!("{copy:?}"), format!("{snapshot:?}"), "{edit:?} {columns}");
+                let json = serde_json::to_value(&snapshot).unwrap();
+                let rows_first = format!(r#"{{"rows":{},"columns":{columns}}}"#, json["rows"]);
+                serde_json::from_str::<DisplaySnapshot>(&rows_first).unwrap();
+            }
+        }
     }
 
     #[test]

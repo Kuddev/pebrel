@@ -415,29 +415,18 @@ mod tests {
     fn invalidation_inside_publication_reports_durable_session_and_keeps_old_reference() {
         let (dir, path, store) = store_fixture();
         let session_path = dir.path().join("session.json");
-        let mut old_session = crate::session::Session::new(
-            0,
-            vec![crate::session::TabSession::single("C:/test".into(), None, None)],
-        );
-        old_session.tabs[0].output_refs = vec!["old".into()];
         archive("old").write_to(&path).unwrap();
-        crate::session::save_local_to(&session_path, &old_session).unwrap();
-
-        let mut new_session = old_session.clone();
-        new_session.tabs[0].output_refs = vec!["new".into()];
+        std::fs::write(&session_path, "old").unwrap();
         let generation = store.next_generation();
         let published = store
             .save_referenced(generation, &archive("new"), Some(&["old".into()]), || {
-                crate::session::save_local_to(&session_path, &new_session)?;
+                std::fs::write(&session_path, "new")?;
                 store.next_generation();
                 Ok(())
             })
             .unwrap();
         assert!(published, "a written session cannot be reported as cancelled");
-        assert_eq!(
-            crate::session::load_local_from(&session_path).unwrap().tabs[0].output_refs,
-            ["new"]
-        );
+        assert_eq!(std::fs::read_to_string(&session_path).unwrap(), "new");
         let mut staged = Archive::read_from(&path).unwrap();
         assert!(staged.take_records("old").is_some());
         assert!(staged.take_records("new").is_some());
@@ -456,21 +445,38 @@ mod tests {
         );
         assert!(!session_path.exists());
         let before = std::fs::read(&path).unwrap();
-        let session = crate::session::Session::new(
-            0,
-            vec![crate::session::TabSession::single("C:/test".into(), None, None)],
-        );
         assert!(
             store
-                .publish_without_output(generation, || {
-                    crate::session::save_local_to(&session_path, &session)
-                })
+                .publish_without_output(generation, || std::fs::write(&session_path, "no refs"))
                 .unwrap()
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
-        assert!(
-            crate::session::load_local_from(&session_path).unwrap().tabs[0].output_refs.is_empty()
-        );
+        assert_eq!(std::fs::read_to_string(&session_path).unwrap(), "no refs");
+    }
+
+    #[test]
+    fn clear_queued_during_publication_runs_after_it_and_stays_cleared() {
+        let (_dir, path, ref store) = store_fixture();
+        let old = store.next_generation();
+        let (entered, resume) = (std::sync::Barrier::new(2), std::sync::Barrier::new(2));
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                store.save_and_publish(old, &archive("old"), || {
+                    entered.wait();
+                    resume.wait();
+                    Ok(())
+                })
+            });
+            entered.wait();
+            // The UI invalidates without taking the disk writer lock.
+            let clear = store.next_generation();
+            let second = scope.spawn(move || store.clear(clear));
+            resume.wait();
+            assert!(first.join().unwrap().unwrap(), "published session is durable");
+            assert!(second.join().unwrap().unwrap());
+        });
+        assert!(!path.exists());
+        assert!(!store.save(old, &archive("old")).unwrap());
     }
 
     #[test]
