@@ -117,7 +117,9 @@
       "loading": "正在枚举系统字体…",
       "no_matches": "没有匹配的字体",
       "expand": "展开字体列表",
-      "collapse": "收起字体列表"
+      "collapse": "收起字体列表",
+      "ctrl_wheel_zoom": "Ctrl+滚轮调整字号",
+      "ctrl_wheel_zoom_description": "按住 Ctrl 在终端上滚动即可调整字号。关闭后该手势被完全忽略：既不改变字号，也不滚动终端；Ctrl+=、Ctrl+-、Ctrl+0 快捷键不受影响。"
     },
     "keymap": {
       "conflict": "{combo} 同时绑定了「{first}」与「{second}」——只有排前面的「{first}」会触发",
