@@ -100,10 +100,7 @@ pub(super) fn configured() -> Result<ReleaseSource, String> {
     let settings = nebula_settings::RuntimeSettings::load();
     let language = settings.language;
     ReleaseSource::parse(&settings.update_release_url).ok_or_else(|| {
-        LanguagePreference::from(language)
-            .resolved()
-            .text(Message::UpdateSourceInvalid)
-            .to_owned()
+        LanguagePreference::from(language).resolved().text(Message::UpdateSourceInvalid).to_owned()
     })
 }
 
