@@ -63,7 +63,8 @@ jobs:
             scripts.tests.test_stable_release \
             scripts.tests.test_ci_cache \
             scripts.tests.test_platform_cfg \
-            scripts.tests.test_pr_size_workflow -v
+            scripts.tests.test_pr_size_workflow \
+            scripts.tests.test_copilot_review_workflow -v
       - name: Check platform cfg budget before native jobs
         run: python3 scripts/check_platform_cfg.py
       - name: Plan native validation
