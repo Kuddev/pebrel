@@ -346,8 +346,8 @@ impl TerminalView {
             bell_flash_epoch: 0,
         };
         // 出生即把亮暗种进 Term：`Term::color_scheme_dark` 的默认值是「暗」，
-        // 浅色主题下启动的 pane 如果不种，第一个 DECSET 2031 的订阅方会拿到
-        // 一个错的初值，而且在用户下一次改主题之前都纠不回来。
+        // 浅色主题下启动的 pane 如果不种，第一次真实的亮暗翻转会被
+        // `set_color_scheme` 的同值去重吞掉，订阅方漏收第一条通知。
         if let Some(session) = &view.session {
             session.term.lock().set_color_scheme(view.palette.is_dark());
         }
