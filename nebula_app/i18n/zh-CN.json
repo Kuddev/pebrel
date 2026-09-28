@@ -786,7 +786,7 @@
     "delete_active_body": "此主题正在使用。删除后将切换回它的基础主题。",
     "delete_confirm": "删除主题",
     "delete_error": "无法删除主题：{error}",
-    "delete_settings_error": "主题已删除，但无法清除正在使用的主题设置：{error}",
+    "delete_settings_error": "无法先停用当前主题，因此没有删除该主题：{error}",
     "text_original": "原主题文字",
     "text_cool": "推荐冷色文字",
     "text_warm": "推荐暖色文字",

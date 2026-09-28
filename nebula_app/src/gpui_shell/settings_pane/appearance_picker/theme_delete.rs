@@ -1,8 +1,10 @@
 use super::*;
 
 struct ThemeDeleteResult {
+    deleted: bool,
     preference_revision: Option<crate::theme_library::preferences::PreferenceRevision>,
     preference_error: Option<String>,
+    deletion_error: Option<String>,
 }
 
 impl SettingsPane {
@@ -69,7 +71,7 @@ impl SettingsPane {
             return;
         };
         let Some(id) = document.id().map(str::to_owned) else { return };
-        let revision = document.revision();
+        let document_revision = document.revision();
         let fallback = definition.base;
         let was_active = self.runtime.custom_theme.as_deref() == Some(id.as_str());
         if let Some(picker) = self.appearance_picker.as_mut() {
@@ -81,29 +83,56 @@ impl SettingsPane {
         cx.spawn(async move |this, cx| {
             let result = executor
                 .spawn(async move {
-                    crate::theme_library::ThemeLibraryStore::default()
-                        .delete(&id, revision)
-                        .map_err(|error| error.to_string())?;
+                    let store = crate::theme_library::ThemeLibraryStore::default();
                     if !was_active {
+                        store.delete(&id, document_revision).map_err(|error| error.to_string())?;
                         return Ok::<ThemeDeleteResult, String>(ThemeDeleteResult {
+                            deleted: true,
                             preference_revision: None,
                             preference_error: None,
+                            deletion_error: None,
                         });
                     }
                     let mut updates =
                         crate::gpui_shell::theme::theme_card_persist_updates(fallback).to_vec();
                     updates.push(("custom_theme", String::new()));
                     updates.push(("theme_foreground", String::new()));
-                    let (preference_revision, preference_error) = match preference_revision {
+                    let preference_revision = match preference_revision {
                         Ok(revision) => {
                             match crate::theme_library::preferences::save(&revision, &updates) {
-                                Ok(next) => (Some(next), None),
-                                Err(error) => (None, Some(error.to_string())),
+                                Ok(next) => next,
+                                Err(error) => {
+                                    return Ok(ThemeDeleteResult {
+                                        deleted: false,
+                                        preference_revision: None,
+                                        preference_error: Some(error.to_string()),
+                                        deletion_error: None,
+                                    });
+                                },
                             }
                         },
-                        Err(error) => (None, Some(error)),
+                        Err(error) => {
+                            return Ok(ThemeDeleteResult {
+                                deleted: false,
+                                preference_revision: None,
+                                preference_error: Some(error),
+                                deletion_error: None,
+                            });
+                        },
                     };
-                    Ok(ThemeDeleteResult { preference_revision, preference_error })
+                    // Publish the fallback before removing the active source. A
+                    // stale settings revision therefore leaves the theme file
+                    // untouched. If deletion then loses its own revision race,
+                    // the newer document remains available and only the active
+                    // selection changes to the already-persisted fallback.
+                    let deletion_error =
+                        store.delete(&id, document_revision).err().map(|error| error.to_string());
+                    Ok(ThemeDeleteResult {
+                        deleted: deletion_error.is_none(),
+                        preference_revision: Some(preference_revision),
+                        preference_error: None,
+                        deletion_error,
+                    })
                 })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -155,53 +184,79 @@ impl SettingsPane {
             },
         };
 
-        let active_custom_id = (!was_active).then(|| self.runtime.custom_theme.clone()).flatten();
+        let fallback_persisted = was_active && outcome.preference_revision.is_some();
+        let active_custom_id =
+            if fallback_persisted { None } else { self.runtime.custom_theme.clone() };
         let active_builtin = self.runtime.theme;
-        let active_foreground = if was_active { None } else { self.runtime.theme_foreground };
+        let active_foreground =
+            if fallback_persisted { None } else { self.runtime.theme_foreground };
         if let Some(picker) = self.appearance_picker.as_mut() {
             picker.apply_busy = false;
-            if let Some(index) =
-                picker.custom_themes.iter().position(|document| document.id() == Some(id))
-            {
-                picker.custom_themes.remove(index);
-            }
-            picker.custom_definitions = picker
-                .custom_themes
-                .iter()
-                .filter_map(|document| document.definition().ok())
-                .collect();
-            picker.filter = 0;
-            let restored = active_custom_id
-                .as_deref()
-                .and_then(|active_id| {
-                    picker
-                        .custom_themes
-                        .iter()
-                        .position(|document| document.id() == Some(active_id))
-                        .map(AppearanceSelection::Custom)
-                })
-                .unwrap_or(AppearanceSelection::Theme(if was_active {
-                    fallback
-                } else {
-                    active_builtin
-                }));
-            picker.draft = restored;
-            picker.initial_draft = restored;
-            picker.foreground_override = active_foreground;
-            picker.initial_foreground_override = active_foreground;
-            picker.draft_touched = false;
-            picker.options =
-                picker.choices().into_iter().map(|choice| (choice, cx.focus_handle())).collect();
             if let Some(revision) = outcome.preference_revision.clone() {
                 picker.preference_revision = Ok(revision);
             }
-            picker.error = outcome.preference_error.as_ref().map(|error| {
-                crate::gpui_shell::config::ui_language(cx)
-                    .format(Message::ThemePickerDeleteSettingsError, &[("error", error)])
-            });
+            if outcome.deleted {
+                if let Some(index) =
+                    picker.custom_themes.iter().position(|document| document.id() == Some(id))
+                {
+                    picker.custom_themes.remove(index);
+                }
+                picker.custom_definitions = picker
+                    .custom_themes
+                    .iter()
+                    .filter_map(|document| document.definition().ok())
+                    .collect();
+                picker.filter = 0;
+                let restored = active_custom_id
+                    .as_deref()
+                    .and_then(|active_id| {
+                        picker
+                            .custom_themes
+                            .iter()
+                            .position(|document| document.id() == Some(active_id))
+                            .map(AppearanceSelection::Custom)
+                    })
+                    .unwrap_or(AppearanceSelection::Theme(if fallback_persisted {
+                        fallback
+                    } else {
+                        active_builtin
+                    }));
+                picker.draft = restored;
+                picker.initial_draft = restored;
+                picker.foreground_override = active_foreground;
+                picker.initial_foreground_override = active_foreground;
+                picker.draft_touched = false;
+                picker.options = picker
+                    .choices()
+                    .into_iter()
+                    .map(|choice| (choice, cx.focus_handle()))
+                    .collect();
+            } else if fallback_persisted {
+                // Preference publication succeeded but a competing library edit
+                // won the document revision race. Keep that newer document and
+                // align the open picker with the fallback that is now active.
+                let restored = AppearanceSelection::Theme(fallback);
+                picker.draft = restored;
+                picker.initial_draft = restored;
+                picker.foreground_override = None;
+                picker.initial_foreground_override = None;
+                picker.draft_touched = false;
+            }
+            let language = crate::gpui_shell::config::ui_language(cx);
+            picker.error = outcome
+                .preference_error
+                .as_ref()
+                .map(|error| {
+                    language.format(Message::ThemePickerDeleteSettingsError, &[("error", error)])
+                })
+                .or_else(|| {
+                    outcome.deletion_error.as_ref().map(|error| {
+                        language.format(Message::ThemePickerDeleteError, &[("error", error)])
+                    })
+                });
         }
 
-        if was_active && outcome.preference_error.is_none() {
+        if fallback_persisted {
             let mut updates =
                 crate::gpui_shell::theme::theme_card_persist_updates(fallback).to_vec();
             updates.push(("custom_theme", String::new()));

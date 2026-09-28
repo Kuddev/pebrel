@@ -786,7 +786,7 @@
     "delete_active_body": "This theme is currently in use. Deleting it switches back to its base theme.",
     "delete_confirm": "Delete theme",
     "delete_error": "Could not delete the theme: {error}",
-    "delete_settings_error": "The theme was deleted, but its active setting could not be cleared: {error}",
+    "delete_settings_error": "Could not switch away from the active theme, so it was not deleted: {error}",
     "text_original": "Theme text color",
     "text_cool": "Cool text color",
     "text_warm": "Warm text color",

@@ -7,7 +7,7 @@
 use super::appearance_picker::AppearanceSelection;
 use super::*;
 use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
-use crate::theme_library::{ThemeDocument, ThemeFormat, ThemeLibraryStore};
+use crate::theme_library::{RevisionPrecondition, ThemeDocument, ThemeFormat, ThemeLibraryStore};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, size};
 use gpui_component::Root;
 use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
@@ -948,6 +948,108 @@ fn active_custom_theme_can_be_deleted_and_falls_back_to_its_base_theme(cx: &mut 
         assert_eq!(picker.draft, AppearanceSelection::Theme(fallback));
         assert_eq!(picker.initial_draft, AppearanceSelection::Theme(fallback));
         assert!(picker.error.is_none());
+    });
+    click("cancel-appearance-picker", &mut window);
+}
+
+#[gpui::test]
+fn active_custom_theme_delete_preserves_source_when_settings_revision_is_stale(
+    cx: &mut TestAppContext,
+) {
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS)
+        .expect("write isolated stale preference settings");
+    let mut theme_cleanup = CustomThemeCleanup::default();
+    let source_name = format!("Delete stale settings native test {}", std::process::id());
+    let source = ThemeLibraryStore::default()
+        .import(&transfer_fixture_document("delete-stale-settings"), Some(&source_name))
+        .expect("create active custom theme");
+    theme_cleanup.track(&source);
+    let source_id = source.id().expect("custom source id").to_owned();
+
+    let (pane, mut window) = open_settings(cx);
+    click("open-theme-picker", &mut window);
+    select_custom_theme(&source_id, &pane, &mut window);
+    click("apply-appearance-picker", &mut window);
+    assert_eq!(runtime_snapshot().custom_theme.as_deref(), Some(source_id.as_str()));
+
+    click("open-theme-picker", &mut window);
+    wait_for_custom_theme_load(&pane, &mut window);
+    let externally_changed = format!(
+        "{}theme_delete_external_marker=1\n",
+        std::fs::read_to_string(nebula_settings::settings_path())
+            .expect("read active theme settings")
+    );
+    std::fs::write(nebula_settings::settings_path(), &externally_changed)
+        .expect("simulate another settings writer");
+    click("delete-custom-theme", &mut window);
+    click("confirm-dialog-ok", &mut window);
+
+    assert_eq!(
+        std::fs::read_to_string(nebula_settings::settings_path()).unwrap(),
+        externally_changed,
+        "the stale picker must not overwrite the competing settings write"
+    );
+    assert!(ThemeLibraryStore::default().load(&source_id).is_ok());
+    assert_eq!(runtime_snapshot().custom_theme.as_deref(), Some(source_id.as_str()));
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().expect("theme picker remains open");
+        assert!(matches!(picker.draft, AppearanceSelection::Custom(_)));
+        assert!(picker.error.is_some());
+        assert!(!picker.apply_busy);
+    });
+    click("cancel-appearance-picker", &mut window);
+}
+
+#[gpui::test]
+fn active_custom_theme_delete_keeps_newer_document_after_library_revision_conflict(
+    cx: &mut TestAppContext,
+) {
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS)
+        .expect("write isolated stale library settings");
+    let mut theme_cleanup = CustomThemeCleanup::default();
+    let source_name = format!("Delete stale library native test {}", std::process::id());
+    let source = ThemeLibraryStore::default()
+        .import(&transfer_fixture_document("delete-stale-library"), Some(&source_name))
+        .expect("create active custom theme");
+    theme_cleanup.track(&source);
+    let source_id = source.id().expect("custom source id").to_owned();
+    let fallback = source.definition().expect("source definition").base;
+
+    let (pane, mut window) = open_settings(cx);
+    click("open-theme-picker", &mut window);
+    select_custom_theme(&source_id, &pane, &mut window);
+    click("apply-appearance-picker", &mut window);
+    click("open-theme-picker", &mut window);
+    wait_for_custom_theme_load(&pane, &mut window);
+
+    let newer_name = format!("Newer competing theme {}", std::process::id());
+    let newer = ThemeLibraryStore::default()
+        .save(
+            &source.with_name(newer_name.clone()).expect("rename competing document"),
+            RevisionPrecondition::Exact(source.revision()),
+        )
+        .expect("simulate a competing theme edit");
+    click("delete-custom-theme", &mut window);
+    click("confirm-dialog-ok", &mut window);
+
+    let retained = ThemeLibraryStore::default()
+        .load(&source_id)
+        .expect("newer theme document must survive the stale delete");
+    assert_eq!(retained.revision(), newer.revision());
+    assert_eq!(retained.name(), newer_name);
+    let runtime = runtime_snapshot();
+    assert_eq!(runtime.custom_theme, None);
+    assert_eq!(runtime.theme, fallback);
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().expect("theme picker remains open");
+        assert_eq!(picker.draft, AppearanceSelection::Theme(fallback));
+        assert_eq!(picker.initial_draft, AppearanceSelection::Theme(fallback));
+        assert!(picker.error.is_some());
+        assert!(!picker.apply_busy);
     });
     click("cancel-appearance-picker", &mut window);
 }

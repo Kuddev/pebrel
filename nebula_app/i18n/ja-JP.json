@@ -12,9 +12,6 @@
     "zh_cn": "简体中文",
     "en_us": "English"
   },
-  "theme_picker": {
-    "edit_custom": "テーマを編集"
-  },
   "settings": {
     "scrolling": {
       "history": "スクロールバックの行数",
@@ -709,6 +706,8 @@
   "theme_editor": {
     "title": "テーマのカスタマイズ",
     "description": "既存のテーマをもとに、自分好みの配色に調整できます。",
+    "edit_title": "テーマを編集",
+    "edit_description": "保存済みのテーマを調整します。保存すると同じテーマが更新されます。",
     "template": "テンプレート",
     "name": "テーマ名",
     "background": "背景",
@@ -742,6 +741,7 @@
     "save_error": "テーマを保存できませんでした: {error}",
     "use_template": "テンプレートとして使用",
     "saved": "カスタムテーマに保存しました",
+    "updated": "テーマを更新しました",
     "preview_only": "変更は適用するまでこのプレビューにのみ反映されます。",
     "advanced_hide": "詳細設定を隠す",
     "ansi": "ANSI 16 色",
@@ -764,6 +764,7 @@
     "live_preview": "ライブプレビュー",
     "selected_line": "選択中のテキスト行",
     "based_on": "{name} をもとにしています。元のテーマは変更されません。",
+    "editing_existing": "{name} を編集中です。保存するとこのテーマが更新されます。",
     "editing_status": "テーマの下書き",
     "editing_unchanged": "現在の設定から変更はありません",
     "editing_changed": "プレビューには保存されていない変更が含まれています",
@@ -776,6 +777,14 @@
     "dark": "ダーク",
     "custom": "カスタム",
     "customize": "テーマのカスタマイズ",
+    "edit_custom": "テーマを編集",
+    "delete_custom": "選択したテーマを削除",
+    "delete_title": "{name} を削除しますか？",
+    "delete_body": "保存済みのカスタムテーマを完全に削除します。",
+    "delete_active_body": "このテーマは現在使用中です。削除すると元のテーマに戻ります。",
+    "delete_confirm": "テーマを削除",
+    "delete_error": "テーマを削除できませんでした: {error}",
+    "delete_settings_error": "現在のテーマから切り替えられなかったため、テーマは削除されませんでした: {error}",
     "text_original": "テーマの文字色",
     "text_cool": "寒色系の文字色",
     "text_warm": "暖色系の文字色",
