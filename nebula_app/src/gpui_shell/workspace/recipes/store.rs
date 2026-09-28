@@ -150,6 +150,7 @@ mod tests {
             axis: SplitAxis::TopBottom,
             ratio_permille: 370,
             first: Box::new(LayoutSession::Pane {
+                custom_name: None,
                 launch: None,
                 cwd: "D:/api".into(),
                 agent: Some(AgentSession {
@@ -159,6 +160,7 @@ mod tests {
                 }),
             }),
             second: Box::new(LayoutSession::Pane {
+                custom_name: None,
                 launch: None,
                 cwd: "D:/web".into(),
                 agent: None,
