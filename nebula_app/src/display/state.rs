@@ -108,7 +108,7 @@ impl NebulaShell {
         }
     }
 
-    pub(super) fn settings_value(self) -> &'static str {
+    pub(crate) fn settings_value(self) -> &'static str {
         match self {
             Self::PowerShell => "powershell",
             Self::Bash => "bash",

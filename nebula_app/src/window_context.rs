@@ -1104,11 +1104,7 @@ impl WindowContext {
                 return;
             };
             let shell_id = self.display.nebula_shell_id.clone().unwrap_or_else(|| {
-                match self.display.nebula_shell {
-                    crate::display::NebulaShell::PowerShell => "powershell".into(),
-                    crate::display::NebulaShell::Bash => "bash".into(),
-                    crate::display::NebulaShell::Cmd => "cmd".into(),
-                }
+                self.display.nebula_shell.settings_value().into()
             });
             let launch = match crate::ssh::build_pane_launch(&shell_id, &exe, &host) {
                 Ok(launch) => launch,
