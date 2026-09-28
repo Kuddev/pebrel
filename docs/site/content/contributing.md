@@ -86,7 +86,7 @@ PR 描述至少应包含：
 
 ## CI 会检查什么
 
-Ready PR 会运行完整的原生平台矩阵；Draft 会省略部分较慢的平台任务。核心检查包括架构合同、格式与矩阵规划、源码规模，以及 Linux、Windows 和 macOS 的相应测试/编译任务。
+Draft 和 Ready PR 都会运行完整的五平台原生测试矩阵及两项 macOS release 编译检查。核心检查还包括架构合同、格式与矩阵规划和源码规模。
 
 来自 fork 的首次贡献可能在 GitHub Actions 中显示等待维护者批准。这是 GitHub 的安全边界，不应通过提高 token 权限或改用不安全触发方式绕过。
 
