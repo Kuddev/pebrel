@@ -376,8 +376,12 @@ settings files.
   Foreground changes affect the preview and are saved with explicit application.
   Back returns to the preserved theme picker selection and filter; it confirms
   discarding editor changes before returning. Cancel, close and Escape separately
-  exit the workflow and confirm before discarding a changed draft. Saving alone
-  writes an independent library copy while leaving the active snapshot unchanged.
+  exit the workflow and confirm before discarding a changed draft. Creating from a
+  template writes an independent library copy; editing a saved custom theme retains
+  its stable identity and revision-checks the replacement. Save and apply returns to
+  the terminal so the same theme can be reopened and refined. Deletion is confirmed;
+  deleting the active custom theme clears its overrides and selects its built-in
+  fallback, while a competing settings write is reported instead of overwritten.
   Font selection and color palettes belong to the editor draft, with component
   popovers above the editor surface. Text and numeric inputs use a focusable
   underline; inherited cursor color presentation follows foreground edits.

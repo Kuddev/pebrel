@@ -5,6 +5,9 @@
     "zh_cn": "简体中文",
     "en_us": "English"
   },
+  "theme_picker": {
+    "edit_custom": "Editar tema"
+  },
   "settings": {
     "sidebar": {
       "application": "Aplicativo",

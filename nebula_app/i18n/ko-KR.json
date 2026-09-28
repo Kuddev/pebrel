@@ -5,6 +5,9 @@
     "zh_cn": "简体中文",
     "en_us": "English"
   },
+  "theme_picker": {
+    "edit_custom": "테마 편집"
+  },
   "settings": {
     "sidebar": {
       "application": "애플리케이션",
