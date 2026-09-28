@@ -1035,6 +1035,8 @@ pub struct RuntimeSettings {
     /// Start the first window hidden when a system tray is available and enabled.
     pub silent_start: bool,
     pub restore_session: bool,
+    /// 仅本机有界命令输出；会话恢复关闭时不采集、不持久化。
+    pub save_command_output: bool,
     pub resume_ai: bool,
     /// 常驻系统托盘图标。
     pub tray: bool,
@@ -1122,6 +1124,10 @@ pub const MIN_PANE_CARD_GUTTER: f32 = 0.0;
 pub const MAX_PANE_CARD_GUTTER: f32 = 32.0;
 pub const MAX_PANE_CARD_DIVIDER: f32 = 4.0;
 impl RuntimeSettings {
+    pub fn command_output_enabled(&self) -> bool {
+        self.restore_session && self.save_command_output
+    }
+
     pub fn load() -> Self {
         Self::from_raw(&RawSettings::load())
     }
@@ -1216,6 +1222,7 @@ impl RuntimeSettings {
             keep_session: raw.bool_on("keep_session").unwrap_or(false),
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
+            save_command_output: raw.bool_on("save_command_output").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
@@ -1567,6 +1574,20 @@ mod tests {
         assert_eq!(settings.ssh_proxy_mode, ProxyModeName::Off);
         assert_eq!(settings.quick_terminal_hotkey, DEFAULT_QUICK_TERMINAL_HOTKEY);
         assert_eq!(settings.bell, BellModeName::Both);
+    }
+
+    #[test]
+    fn recent_output_is_saved_only_when_both_recovery_switches_are_enabled() {
+        for (raw, enabled) in [
+            ("", true),
+            ("save_command_output=0", false),
+            ("restore_session=0", false),
+            ("restore_session=0\nsave_command_output=1", false),
+            ("restore_session=1\nsave_command_output=1", true),
+        ] {
+            let settings = RuntimeSettings::from_raw(&RawSettings::from_text(raw));
+            assert_eq!(settings.command_output_enabled(), enabled, "{raw}");
+        }
     }
 
     #[test]

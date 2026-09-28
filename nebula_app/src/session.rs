@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::display::color::Rgb;
 
 mod identity;
+mod local_output;
 mod window_layout;
 pub(crate) use identity::codex_rollout_id;
 pub use window_layout::WindowLayout;
@@ -206,12 +207,23 @@ pub struct TabSession {
     /// v4: focused leaf as a depth-first index into `layout`.
     #[serde(default)]
     pub active_pane: usize,
+    /// 本机 sidecar 的逐叶引用；共享工作区序列化始终排除。
+    #[serde(skip)]
+    pub(crate) output_refs: Vec<String>,
 }
 
 impl TabSession {
     /// A v3-shaped tab: one pane at `cwd`, default shell.
     pub fn single(cwd: String, custom_name: Option<String>, color: Option<Rgb>) -> Self {
-        Self { cwd, custom_name, color, launch: None, layout: None, active_pane: 0 }
+        Self {
+            cwd,
+            custom_name,
+            color,
+            launch: None,
+            layout: None,
+            active_pane: 0,
+            output_refs: Vec::new(),
+        }
     }
 }
 
@@ -268,7 +280,7 @@ impl Session {
 
 /// `%APPDATA%\Nebula\session.json` (or the `.config` fallback), next to the
 /// settings and history files.
-fn session_path() -> PathBuf {
+pub(crate) fn session_path() -> PathBuf {
     crate::display::nebula_data_dir().join("session.json")
 }
 
@@ -285,7 +297,11 @@ fn parse(data: &str) -> Option<Session> {
 
 /// Load the previous session, if any and version-compatible.
 pub fn load() -> Option<Session> {
-    load_from(&session_path())
+    load_local_from(&session_path())
+}
+
+pub(crate) fn load_local_from(path: &Path) -> Option<Session> {
+    local_output::parse(&std::fs::read_to_string(path).ok()?)
 }
 
 /// An update must not replace an unreadable workspace with an empty snapshot.
@@ -297,7 +313,7 @@ pub(crate) fn load_update_windows() -> std::io::Result<Vec<Session>> {
         },
         Err(error) => return Err(error),
     };
-    let session = parse(&data).ok_or_else(|| {
+    let session = local_output::parse(&data).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid saved workspace")
     })?;
     session.into_update_windows()
@@ -318,8 +334,12 @@ pub fn save(session: &Session) {
 }
 
 pub(crate) fn try_save(session: &Session) -> std::io::Result<()> {
-    let json = serde_json::to_string(session).map_err(std::io::Error::other)?;
-    crate::atomic_file::write(&session_path(), json.as_bytes())
+    save_local_to(&session_path(), session)
+}
+
+pub(crate) fn save_local_to(path: &Path, session: &Session) -> std::io::Result<()> {
+    let json = local_output::encode(session).map_err(std::io::Error::other)?;
+    crate::atomic_file::write(path, json.as_bytes())
 }
 
 /// Write a session as a named workspace file. Pretty-printed — workspace
