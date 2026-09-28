@@ -80,7 +80,7 @@ impl SettingsPane {
     fn save_update_release_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let raw = self.update_release_input.read(cx).value();
         match crate::update_check::normalize_setting(&raw) {
-            Ok(value) => {
+            Some(value) => {
                 self.update_release_input
                     .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
                 if value != self.runtime.update_release_url {
@@ -91,11 +91,11 @@ impl SettingsPane {
                     self.about_last_checked = None;
                 }
             },
-            Err(error) => crate::gpui_shell::toast::toast(
+            None => crate::gpui_shell::toast::toast(
                 window,
                 cx,
                 crate::gpui_shell::toast::ToastKind::Warning,
-                error,
+                language.text(crate::i18n::Message::UpdateSourceInvalid).to_owned(),
             ),
         }
         cx.notify();

@@ -1,4 +1,5 @@
 use super::{RELEASES_PAGE, UpdateAsset};
+use crate::i18n::{LanguagePreference, Message};
 
 const GITHUB: &str = "https://github.com/";
 const OFFICIAL: &str = "Kuddev/pebrel";
@@ -14,16 +15,14 @@ impl ReleaseSource {
         Self { repo: OFFICIAL.into(), tag: None }
     }
 
-    fn parse(value: &str) -> Result<Self, String> {
+    fn parse(value: &str) -> Option<Self> {
         let value = value.trim().trim_end_matches('/');
         if value.is_empty() {
-            return Ok(Self::official());
+            return Some(Self::official());
         }
-        let path = value
-            .strip_prefix(GITHUB)
-            .ok_or_else(|| "自定义更新地址必须使用 https://github.com".to_owned())?;
+        let path = value.strip_prefix(GITHUB)?;
         if path.contains('?') || path.contains('#') {
-            return Err("自定义更新地址不能包含查询参数或片段".into());
+            return None;
         }
         let (repo_path, tag) = if let Some(repo) = path.strip_suffix("/releases/latest") {
             (repo, None)
@@ -32,19 +31,17 @@ impl ReleaseSource {
         } else if let Some((repo, tag)) = path.split_once("/releases/tag/") {
             (repo, Some(tag))
         } else {
-            return Err("请填写 GitHub Releases 或 releases/tag/<tag> 地址".into());
+            return None;
         };
-        let Some((owner, repo)) = repo_path.split_once('/') else {
-            return Err("GitHub Release 地址无效".into());
-        };
+        let (owner, repo) = repo_path.split_once('/')?;
         if repo.contains('/')
             || !component(owner)
             || !component(repo)
             || tag.is_some_and(|tag| !tag_name(tag))
         {
-            return Err("GitHub Release 地址无效".into());
+            return None;
         }
-        Ok(Self { repo: format!("{owner}/{repo}"), tag: tag.map(str::to_owned) })
+        Some(Self { repo: format!("{owner}/{repo}"), tag: tag.map(str::to_owned) })
     }
 
     pub(super) fn is_default(&self) -> bool {
@@ -100,12 +97,19 @@ fn tag_name(value: &str) -> bool {
 }
 
 pub(super) fn configured() -> Result<ReleaseSource, String> {
-    ReleaseSource::parse(&nebula_settings::RuntimeSettings::load().update_release_url)
+    let settings = nebula_settings::RuntimeSettings::load();
+    let language = settings.language;
+    ReleaseSource::parse(&settings.update_release_url).ok_or_else(|| {
+        LanguagePreference::from(language)
+            .resolved()
+            .text(Message::UpdateSourceInvalid)
+            .to_owned()
+    })
 }
 
-pub(crate) fn normalize_setting(value: &str) -> Result<String, String> {
+pub(crate) fn normalize_setting(value: &str) -> Option<String> {
     let source = ReleaseSource::parse(value)?;
-    Ok(if source.is_default() { String::new() } else { source.page() })
+    Some(if source.is_default() { String::new() } else { source.page() })
 }
 
 pub(crate) fn release_page() -> String {
@@ -137,7 +141,7 @@ mod tests {
             normalize_setting("https://github.com/acme/pebrel/releases/latest").unwrap(),
             "https://github.com/acme/pebrel/releases"
         );
-        assert!(normalize_setting("https://example.com/acme/pebrel/releases").is_err());
+        assert!(normalize_setting("https://example.com/acme/pebrel/releases").is_none());
 
         let source =
             ReleaseSource::parse("https://github.com/acme/pebrel/releases/tag/v2.0.0-beta.1")
