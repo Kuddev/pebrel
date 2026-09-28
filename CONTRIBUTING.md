@@ -144,10 +144,18 @@ not repeat the matrix; source updates and reopen events run it again. Native CI
 uses pinned `cargo-nextest` for unit and
 integration tests, followed by `cargo test --doc` with the same workspace features;
 the production feature graph and release workspace are still checked separately.
-PRs restore Cargo caches without uploading merge-ref snapshots. The default branch
+Native-test PR jobs restore Cargo caches without uploading merge-ref snapshots. The default branch
 publishes reusable snapshots per dependency/toolchain configuration; a cache hit
 never skips current-commit tests. Downloads are shared between architectures of
 the same OS, while compiled targets remain isolated by architecture and SDK.
+
+Auxiliary UI screenshots must not add a second automatic upstream PR build matrix.
+Keep contributor-owned screenshot builds and publication in the source fork;
+upstream capture needs an explicitly requested run and read-only target-cache
+restoration. Screenshot evidence must identify its source commit and does not
+replace native regression tests. The registered upstream screenshot workflow is
+disabled as recorded in the [cache ownership decision](architecture/notes/scripts/ci/2026-09-28-upstream-screenshot-cache-ownership.md).
+
 Local hooks are convenient, but bypassable; they are not the enforcement boundary.
 Submitting a workflow or `CODEOWNERS` file does not configure server-side rules.
 
@@ -162,6 +170,7 @@ feature work; there is no routine `--skip-architecture` option.
 - 先读架构图、工程合同和决策记录；按职责拆分，不按行号切片。
 - 一个 PR 只做一件事；改动超过 1500 行源码（不计文档、lockfile、资源）`pr-size` 会失败，请拆分。
 - Draft 和 Ready PR 都先运行必需的格式检查和矩阵规划，再执行五平台原生测试及两项 macOS release 编译检查；每个 Mac 在同一 runner 完成两类检查，原有 release 检查名称由轻量结果汇总保留。十项必需检查全绿才能合并，不省略平台或 doctest。
+- 附加截图留在贡献者 fork 中生成；上游按需执行，不重复自动跑整套截图构建，也不上传 PR 专属的大型编译缓存。截图与原生回归测试不能互相替代。
 - 2000 行是现有仓库的防灾上限，800 行只提示审查，不是“大厂标准”。
 - 普通功能 PR 不得增加存量债务；有问题的规则可以修订，但要有反例、测试和维护者审批。
 - 新增核心抽象、依赖方向、持久化或线程模型改变要先说明设计，不强迫每个小修复写 ADR。

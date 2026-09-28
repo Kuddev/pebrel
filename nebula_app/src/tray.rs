@@ -341,29 +341,20 @@ mod win {
         }
     }
 
-    fn show_menu(hwnd: windows_sys::Win32::Foundation::HWND) {
-        use windows_sys::Win32::Foundation::POINT;
+    fn build_menu(
+        agents: &[TrayAgent],
+        include_quit: bool,
+    ) -> windows_sys::Win32::UI::WindowsAndMessaging::HMENU {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_GRAYED, MF_SEPARATOR,
-            MF_STRING, SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-            TrackPopupMenu, WM_NULL,
+            AppendMenuW, CreatePopupMenu, MF_SEPARATOR, MF_STRING,
         };
 
-        // 菜单期间用快照：TrackPopupMenu 是模态泵，STATE 可能被 1 Hz 更新，
-        // 命令 id 必须映射回打开菜单那一刻的清单。
-        let agents = state().agents.clone();
-
-        // SAFETY: 菜单句柄本函数创建/销毁；文案缓冲活过 AppendMenuW（菜单
-        // 复制内容）。SetForegroundWindow + WM_NULL 是 TrackPopupMenu 在
-        // 托盘场景的官方仪式（否则菜单点外部不收合）。
+        // 构建与模态展示分开，回归测试才能检查真实 HMENU，而不启动托盘线程。
+        // SAFETY: 文案缓冲活过 AppendMenuW（菜单复制内容）；调用方负责销毁菜单。
         unsafe {
             let menu = CreatePopupMenu();
             if menu.is_null() {
-                return;
-            }
-            if agents.is_empty() {
-                let text = wide("没有正在运行的 agent");
-                AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, text.as_ptr());
+                return menu;
             }
             for (index, agent) in agents.iter().enumerate() {
                 // 状态点进文案：菜单不画自定义图形，实心/空心圈已经把
@@ -373,16 +364,40 @@ mod win {
                 let text = wide(&format!("{mark}{}{suffix}", agent.label));
                 AppendMenuW(menu, MF_STRING, MENU_AGENT_BASE + index, text.as_ptr());
             }
-            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+            // 没有 agent 时整组都不存在，避免空提示或孤立分隔线占据菜单顶部。
+            if !agents.is_empty() {
+                AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+            }
             let show = wide(&format!("显示 {}", crate::brand::NAME));
             AppendMenuW(menu, MF_STRING, MENU_SHOW, show.as_ptr());
             // 旧壳没有托盘「退出」：真退出是 window+detached 都空。GPUI hide
             // 之后可能只剩托盘，所以只在 GPUI 回调路径上加这一项。
-            if GPUI_COMMAND.get().is_some() {
+            if include_quit {
                 let quit = wide(&format!("退出 {}", crate::brand::NAME));
                 AppendMenuW(menu, MF_STRING, MENU_QUIT, quit.as_ptr());
             }
+            menu
+        }
+    }
 
+    fn show_menu(hwnd: windows_sys::Win32::Foundation::HWND) {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DestroyMenu, GetCursorPos, SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD,
+            TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+        };
+
+        // 菜单期间用快照：TrackPopupMenu 是模态泵，STATE 可能被 1 Hz 更新，
+        // 命令 id 必须映射回打开菜单那一刻的清单。
+        let agents = state().agents.clone();
+
+        // SAFETY: 菜单由本函数持有/销毁。SetForegroundWindow + WM_NULL 保留
+        // TrackPopupMenu 在托盘场景中点外部收合的行为。
+        unsafe {
+            let menu = build_menu(&agents, GPUI_COMMAND.get().is_some());
+            if menu.is_null() {
+                return;
+            }
             let mut point = POINT { x: 0, y: 0 };
             GetCursorPos(&mut point);
             SetForegroundWindow(hwnd);
@@ -641,5 +656,81 @@ mod win {
             cursor += 1;
         }
         tip[cursor] = 0;
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DestroyMenu, GetMenuItemCount, GetMenuItemID, GetMenuState, GetMenuStringW, HMENU,
+            MF_BYPOSITION, MF_GRAYED, MF_SEPARATOR,
+        };
+
+        struct Menu(HMENU);
+
+        impl Drop for Menu {
+            fn drop(&mut self) {
+                // SAFETY: 测试独占此菜单，断言失败时也要释放原生句柄。
+                unsafe { DestroyMenu(self.0) };
+            }
+        }
+
+        #[test]
+        fn native_tray_menu_omits_empty_agent_group_and_preserves_commands() {
+            let agents = [
+                TrayAgent {
+                    window: winit::window::WindowId::dummy(),
+                    pane: 11,
+                    label: "Codex".into(),
+                    needs_attention: false,
+                },
+                TrayAgent {
+                    window: winit::window::WindowId::dummy(),
+                    pane: 22,
+                    label: "Claude".into(),
+                    needs_attention: true,
+                },
+            ];
+            // 两条菜单路径都覆盖空/非空；不修改进程级回调或真实托盘状态。
+            for include_quit in [false, true] {
+                for entries in [&[][..], &agents[..]] {
+                    let menu = Menu(build_menu(entries, include_quit));
+                    assert!(!menu.0.is_null());
+                    let show_index = if entries.is_empty() { 0 } else { 3 };
+                    // SAFETY: 句柄有效，索引受构建的菜单长度约束，字符缓冲可写。
+                    unsafe {
+                        assert_eq!(
+                            GetMenuItemCount(menu.0),
+                            show_index + 1 + i32::from(include_quit)
+                        );
+                        assert_eq!(GetMenuItemID(menu.0, show_index), MENU_SHOW as u32);
+                        assert_eq!(
+                            GetMenuState(menu.0, 0, MF_BYPOSITION) & (MF_SEPARATOR | MF_GRAYED),
+                            0
+                        );
+                        if include_quit {
+                            assert_eq!(GetMenuItemID(menu.0, show_index + 1), MENU_QUIT as u32);
+                        }
+                        if !entries.is_empty() {
+                            assert_eq!(GetMenuItemID(menu.0, 0), MENU_AGENT_BASE as u32);
+                            assert_eq!(GetMenuItemID(menu.0, 1), (MENU_AGENT_BASE + 1) as u32);
+                            assert_ne!(GetMenuState(menu.0, 2, MF_BYPOSITION) & MF_SEPARATOR, 0);
+                            let mut text = [0u16; 128];
+                            let count = GetMenuStringW(
+                                menu.0,
+                                1,
+                                text.as_mut_ptr(),
+                                text.len() as i32,
+                                MF_BYPOSITION,
+                            );
+                            assert_eq!(
+                                String::from_utf16(&text[..count as usize]).unwrap(),
+                                "● Claude — 等待输入"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }
