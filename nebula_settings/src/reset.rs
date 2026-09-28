@@ -16,6 +16,7 @@ const RESET_KEYS: &[&str] = &[
     "ui_font_family",
     "ui_font_size",
     "font_size",
+    "ctrl_wheel_font_zoom",
     "ligatures",
     "cursor_shape",
     "cursor_blink",
@@ -167,6 +168,15 @@ mod tests {
         let restored = default_settings_text(original);
         assert_eq!(restored, "custom_data=keep\n");
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ai_toasts);
+    }
+
+    #[test]
+    fn resetting_preferences_reenables_ctrl_wheel_font_zoom_without_erasing_other_data() {
+        let original = "ctrl_wheel_font_zoom=0\ncustom_data=keep\n";
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(original)).ctrl_wheel_font_zoom);
+        let restored = default_settings_text(original);
+        assert_eq!(restored, "custom_data=keep\n");
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ctrl_wheel_font_zoom);
     }
 
     #[test]

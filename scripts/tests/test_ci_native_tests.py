@@ -174,13 +174,15 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
-    def test_nextest_preserves_only_the_existing_shared_theme_fixture_mutex(self):
+    def test_nextest_serializes_only_fixtures_that_write_the_real_settings_file(self):
         root = Path(__file__).resolve().parents[2]
         config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
         self.assertEqual(config["profile"]["default"], {
             "overrides": [{
-                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)",
+                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)"
+                          " or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll)"
+                          " or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)",
                 "test-group": "theme-studio",
             }],
         })

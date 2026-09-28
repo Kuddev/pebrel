@@ -117,7 +117,9 @@
       "loading": "Enumerating system fonts...",
       "no_matches": "No matching fonts",
       "expand": "Show font list",
-      "collapse": "Hide font list"
+      "collapse": "Hide font list",
+      "ctrl_wheel_zoom": "Ctrl+wheel font zoom",
+      "ctrl_wheel_zoom_description": "Hold Ctrl and scroll over the terminal to change its font size. Turned off, the Ctrl+wheel gesture is ignored completely: it neither resizes text nor scrolls the terminal. Ctrl+=, Ctrl+- and Ctrl+0 still work."
     },
     "keymap": {
       "conflict": "{combo} is assigned to both \"{first}\" and \"{second}\"; only the earlier \"{first}\" action will run.",
