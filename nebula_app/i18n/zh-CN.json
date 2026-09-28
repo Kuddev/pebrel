@@ -833,6 +833,7 @@
     "auto_download": "在后台预下载更新",
     "source_label": "自定义更新地址",
     "source_invalid": "请输入 HTTPS GitHub Releases 地址；在末尾添加 /tag/<tag> 可选择指定版本。",
+    "source_asset_mismatch": "更新安装包与所选更新源不匹配，请重新检查更新。",
     "source_placeholder": "留空 = 官方源 · https://github.com/owner/repo/releases",
     "stop_download": "停止下载",
     "skip_version": "跳过此版本",

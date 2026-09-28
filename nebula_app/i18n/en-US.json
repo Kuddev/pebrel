@@ -833,6 +833,7 @@
     "auto_download": "Download updates in the background",
     "source_label": "Custom release source",
     "source_invalid": "Enter an HTTPS GitHub Releases URL; add /tag/<tag> to select a specific release.",
+    "source_asset_mismatch": "The update package does not match the selected release source. Check for updates again.",
     "source_placeholder": "Blank = official · https://github.com/owner/repo/releases",
     "stop_download": "Stop download",
     "skip_version": "Skip version",

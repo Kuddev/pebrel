@@ -114,10 +114,12 @@ pub(crate) fn release_page() -> String {
 }
 
 pub(crate) fn validate_asset_url(asset: &UpdateAsset) -> Result<(), String> {
-    configured()?
-        .accepts(asset)
-        .then_some(())
-        .ok_or_else(|| "release 安装包 URL 不属于当前更新源".into())
+    configured()?.accepts(asset).then_some(()).ok_or_else(|| {
+        LanguagePreference::from(nebula_settings::RuntimeSettings::load().language)
+            .resolved()
+            .text(Message::UpdateSourceAssetMismatch)
+            .to_owned()
+    })
 }
 
 #[cfg(test)]
