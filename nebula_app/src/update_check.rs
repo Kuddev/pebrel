@@ -232,10 +232,8 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
         if !release_source_is_current(source_generation) {
             return;
         }
-        let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable {
-            result,
-            source_generation,
-        });
+        let _ = sender
+            .send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable { result, source_generation });
     });
     if let Err(error) = spawned {
         log::debug!("update-check: GPUI thread spawn failed: {error}");
