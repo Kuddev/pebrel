@@ -7,6 +7,13 @@ fn title_bar_height(density: nebula_settings::DensityName) -> f32 {
     }
 }
 
+pub(super) fn effective_title_bar_height(
+    density: nebula_settings::DensityName,
+    native_layout: Option<(f32, f32)>,
+) -> f32 {
+    native_layout.map_or_else(|| title_bar_height(density), |(height, _)| height)
+}
+
 /// Prepaint records the actual pane column before any titlebar paint runs. Keep
 /// this cell for the workspace lifetime, so resizing and panel animations do not
 /// allocate a new shared slot or duplicate the body's layout calculations.
@@ -100,8 +107,9 @@ impl NebulaWorkspace {
     ) -> gpui::Div {
         let top_tabs = self.tabs_position == nebula_settings::TabsPositionName::Top;
         let native_layout = crate::platform::window_chrome::layout(window);
+        let title_bar_height = effective_title_bar_height(self.density, native_layout);
         let bar = TitleBar::new()
-            .h(px(title_bar_height(self.density)))
+            .h(px(title_bar_height))
             .when(!settings_active, |bar| bar.bg(gpui::transparent_black()).border_b_0())
             .when(settings_active, |bar| {
                 bar.border_b_1().border_color(crate::gpui_shell::theme::settings_hairline(cx))
@@ -114,11 +122,7 @@ impl NebulaWorkspace {
 
         // AppKit owns both the control group and its geometry. Read the live
         // frames so system layout, resize and full-screen transitions agree.
-        let bar = if let Some((height, inset)) = native_layout {
-            bar.h(px(height)).pl(px(inset))
-        } else {
-            bar
-        };
+        let bar = if let Some((_, inset)) = native_layout { bar.pl(px(inset)) } else { bar };
 
         title_bar_frame()
             .debug_selector(|| "workspace-titlebar".to_owned())
@@ -174,13 +178,16 @@ mod tests {
 
 #[cfg(test)]
 mod density_tests {
-    use super::title_bar_height;
+    use super::{effective_title_bar_height, title_bar_height};
     use nebula_settings::DensityName;
 
     #[test]
     fn compact_title_bar_retains_space_around_controls() {
         assert_eq!(title_bar_height(DensityName::Standard), 48.0);
         assert_eq!(title_bar_height(DensityName::Compact), 40.0);
+        assert_eq!(effective_title_bar_height(DensityName::Standard, None), 48.0);
+        assert_eq!(effective_title_bar_height(DensityName::Compact, None), 40.0);
+        assert_eq!(effective_title_bar_height(DensityName::Compact, Some((34.0, 7.0))), 34.0);
         assert!(title_bar_height(DensityName::Compact) >= 32.0 + 2.0 * 4.0);
     }
 }
