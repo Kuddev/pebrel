@@ -67,6 +67,16 @@ impl SettingsPane {
             .child(value)
     }
 
+    pub(super) fn invalidate_update_source(&mut self) {
+        self.about_update_seq = self.about_update_seq.wrapping_add(1);
+        crate::update_check::invalidate_release_source();
+        self.about_update = AboutUpdateState::Idle;
+        self.about_last_checked = None;
+        if let Some(asset) = crate::update_download::cached_asset() {
+            crate::update_download::cancel(&asset);
+        }
+    }
+
     fn save_update_release_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let raw = self.update_release_input.read(cx).value();
         match crate::update_check::normalize_setting(&raw) {
@@ -74,14 +84,12 @@ impl SettingsPane {
                 self.update_release_input
                     .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
                 if value != self.runtime.update_release_url {
-                    self.about_update_seq = self.about_update_seq.wrapping_add(1);
                     self.persist(&[("update_release_url", value)], cx);
-                    if let Some(asset) = crate::update_download::cached_asset() {
-                        crate::update_download::cancel(&asset);
-                    }
+                    self.invalidate_update_source();
+                } else {
+                    self.about_update = AboutUpdateState::Idle;
+                    self.about_last_checked = None;
                 }
-                self.about_update = AboutUpdateState::Idle;
-                self.about_last_checked = None;
             },
             Err(error) => crate::gpui_shell::toast::toast(
                 window,
@@ -288,11 +296,7 @@ impl SettingsPane {
                 div().text_color(muted).child(last_checked),
                 cx,
             ));
-        let release_page = if self.runtime.update_release_url.is_empty() {
-            crate::update_check::RELEASES_PAGE.to_owned()
-        } else {
-            self.runtime.update_release_url.clone()
-        };
+        let release_page = crate::update_check::release_page();
         let actions = v_flex()
             .flex_1()
             .min_w(px(280.0))

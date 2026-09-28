@@ -70,7 +70,10 @@ pub(crate) enum GpuiShellEvent {
     TrayQuit,
     MuxAttach,
     RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
-    UpdateAvailable(crate::update_check::UpdateCheckResult),
+    UpdateAvailable {
+        result: crate::update_check::UpdateCheckResult,
+        source_generation: u64,
+    },
     SshPrompt(std::sync::Arc<crate::ssh_prompt::Prompt>),
 }
 

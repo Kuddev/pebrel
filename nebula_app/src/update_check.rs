@@ -5,7 +5,7 @@
 //! GitHub outage all degrade to "no banner", never to an error the user sees.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,19 @@ pub(crate) use source::{normalize_setting, release_page, validate_asset_url};
 pub(crate) mod test_source;
 
 static UPDATE_STATE_LOCK: Mutex<()> = Mutex::new(());
+static RELEASE_SOURCE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn release_source_generation() -> u64 {
+    RELEASE_SOURCE_GENERATION.load(Ordering::SeqCst)
+}
+
+pub(crate) fn release_source_is_current(generation: u64) -> bool {
+    release_source_generation() == generation
+}
+
+pub(crate) fn invalidate_release_source() {
+    RELEASE_SOURCE_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
 
 /// 自动提示状态独立于通用设置文件，避免后台版本检查改写用户设置正文。
 /// 字段按版本生效，新版本不会继承旧版本的延迟或跳过选择。
@@ -133,6 +146,7 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
     let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
         // 等窗口与首个会话安顿好再查，别和启动抢磁盘/网络。
         std::thread::sleep(Duration::from_secs(12));
+        let source_generation = release_source_generation();
         let release = match fetch_latest_release() {
             Ok(release) => release,
             Err(error) => {
@@ -147,6 +161,9 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
             return;
         }
         let text = format!("Pebrel v{latest} 已发布（当前 v{current}），下载：{}", release_page());
+        if !release_source_is_current(source_generation) {
+            return;
+        }
         let _ = proxy.send_event(Event::new(
             EventType::Message(Message::new(text, MessageType::Warning)),
             None,
@@ -166,6 +183,7 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
         return;
     }
     let spawned = std::thread::Builder::new().name("update-check-gpui".into()).spawn(move || {
+        let cached_source_generation = release_source_generation();
         crate::update_download::hydrate();
         if let Some(asset) = crate::update_download::cached_asset() {
             let failed = matches!(
@@ -179,14 +197,15 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
                             &update_state_path(),
                         )))
             {
-                let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable(
-                    UpdateCheckResult {
+                let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable {
+                    result: UpdateCheckResult {
                         current: env!("CARGO_PKG_VERSION").into(),
                         latest: asset.version.clone(),
                         update_available: true,
                         asset: Some(asset),
                     },
-                ));
+                    source_generation: cached_source_generation,
+                });
             }
         }
         if !nebula_settings::RuntimeSettings::load().auto_check_updates {
@@ -194,6 +213,7 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
         }
         // 对齐旧壳：首屏和首个终端会话稳定后再联网。
         std::thread::sleep(Duration::from_secs(12));
+        let source_generation = release_source_generation();
         let result = match check_now() {
             Ok(result) => result,
             Err(error) => {
@@ -209,7 +229,13 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
             log::debug!("update-check: automatic prompt suppressed for v{}", result.latest);
             return;
         }
-        let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable(result));
+        if !release_source_is_current(source_generation) {
+            return;
+        }
+        let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable {
+            result,
+            source_generation,
+        });
     });
     if let Err(error) = spawned {
         log::debug!("update-check: GPUI thread spawn failed: {error}");
@@ -431,6 +457,13 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalidating_the_release_source_rejects_an_in_flight_result() {
+        let generation = super::release_source_generation();
+        super::invalidate_release_source();
+        assert!(!super::release_source_is_current(generation));
+    }
+
     #[test]
     fn release_check_uses_the_resolved_proxy_for_an_unresolvable_target() {
         use crate::update_proxy::test_support::{Server, response};

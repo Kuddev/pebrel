@@ -902,7 +902,10 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
                 }
             },
             GpuiShellEvent::RuntimeControl(dispatch) => dispatch_runtime(dispatch, cx),
-            GpuiShellEvent::UpdateAvailable(result) => {
+            GpuiShellEvent::UpdateAvailable { result, source_generation } => {
+                if !crate::update_check::release_source_is_current(source_generation) {
+                    continue;
+                }
                 let Some(entry) = entries_by_mru(cx).into_iter().next() else { continue };
                 let _ = entry.handle.update(cx, move |_, window, cx| {
                     super::show_update_notification(result, window, cx);
