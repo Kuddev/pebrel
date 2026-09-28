@@ -113,6 +113,13 @@ impl SettingsPane {
             .primary()
             .disabled(checking)
             .on_click(cx.listener(|this, _, window, cx| this.check_for_updates(window, cx)));
+        // 你不一定要装,也可能只想看看发布说明——发布页按钮独立于「检查/下载」。
+        let releases_button = NebulaButton::new("about-open-releases-page")
+            .label(language.pick("打开发布页面", "Open releases page"))
+            .outline()
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.open_url(crate::update_check::RELEASES_PAGE);
+            }));
 
         let status_badge = h_flex()
             .min_w_0()
@@ -170,27 +177,31 @@ impl SettingsPane {
                                 .child(status_badge),
                         ),
                 )
-                .child(v_flex().gap_2().flex_shrink_0().child(update_button).when_some(
-                    cached_update,
-                    |actions, asset| {
-                        actions.child(
-                            Button::new("about-cached-update")
-                                .label(language.text(crate::i18n::Message::UpdateViewDetails))
-                                .on_click(move |_, window, cx| {
-                                    crate::gpui_shell::workspace::open_update_dialog(
-                                        crate::update_check::UpdateCheckResult {
-                                            current: env!("CARGO_PKG_VERSION").into(),
-                                            latest: asset.version.clone(),
-                                            update_available: true,
-                                            asset: Some(asset.clone()),
-                                        },
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                        )
-                    },
-                ));
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .flex_shrink_0()
+                        .child(update_button)
+                        .when_some(cached_update, |actions, asset| {
+                            actions.child(
+                                Button::new("about-cached-update")
+                                    .label(language.text(crate::i18n::Message::UpdateViewDetails))
+                                    .on_click(move |_, window, cx| {
+                                        crate::gpui_shell::workspace::open_update_dialog(
+                                            crate::update_check::UpdateCheckResult {
+                                                current: env!("CARGO_PKG_VERSION").into(),
+                                                latest: asset.version.clone(),
+                                                update_available: true,
+                                                asset: Some(asset.clone()),
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    }),
+                            )
+                        })
+                        .child(releases_button),
+                );
 
         let auto_update_switch =
             crate::gpui_shell::widgets::NebulaSwitch::new("auto-check-updates")
