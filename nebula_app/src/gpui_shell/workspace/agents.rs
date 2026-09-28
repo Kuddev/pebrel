@@ -196,15 +196,37 @@ impl NebulaWorkspace {
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             #[cfg(feature = "gpui-test-support")]
-            if std::env::var_os("PEBREL_UI_REVIEW_FOREGROUND_NOTIFICATION").is_some() {
-                executor.timer(Duration::from_secs(2)).await;
-                crate::notify::deliver_gpui(
-                    &crate::notify::Notification::Text {
+            if let Some(marker) = std::env::var_os("PEBREL_UI_REVIEW_FOREGROUND_NOTIFICATION") {
+                executor.timer(Duration::from_secs(12)).await;
+                if let Ok(Some(view)) = this.update(cx, |workspace, _| {
+                    workspace.tabs.iter().find_map(|tab| match tab {
+                        WorkspaceTab::Terminal { panes, .. } => {
+                            panes.first().map(|pane| pane.view.clone())
+                        }
+                        _ => None,
+                    })
+                }) {
+                    let notification = crate::notify::Notification::Text {
                         program: Some("Pebrel".into()),
                         body: "Foreground system notification review".into(),
-                    },
-                    0,
-                );
+                    };
+                    if view
+                        .update(cx, |_, cx| {
+                            cx.emit(
+                                crate::gpui_shell::terminal::view::TerminalViewEvent::Notification(
+                                    notification,
+                                ),
+                            );
+                        })
+                        .is_ok()
+                    {
+                        if let Err(error) =
+                            std::fs::write(std::path::PathBuf::from(marker), b"notification queued")
+                        {
+                            log::warn!("UI review notification capture marker failed: {error}");
+                        }
+                    }
+                }
             }
             loop {
                 let Ok(views) = this.update(cx, |workspace, _| {

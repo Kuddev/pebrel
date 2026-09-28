@@ -1,11 +1,12 @@
 name: UI review screenshots
 
 on:
-  workflow_dispatch:
   push:
     branches: ["codex/macos-system-notifications"]
-  pull_request:
-    types: [opened, synchronize, reopened]
+    paths:
+      - nebula_app/src/gpui_shell/workspace/agents.rs
+      - nebula_app/src/gpui_shell/workspace/notifications.rs
+      - nebula_app/src/platform/capabilities.rs
 
 permissions:
   contents: read
@@ -224,7 +225,7 @@ jobs:
             <key>CFBundlePackageType</key><string>APPL</string>
           </dict></plist>
           PLIST
-            export PEBREL_UI_REVIEW_FOREGROUND_NOTIFICATION=1
+            export PEBREL_UI_REVIEW_FOREGROUND_NOTIFICATION="$qa/foreground-notification.ready"
             app="$bundle/Contents/MacOS/pebrel"
           fi
           "$app" --working-directory "$PWD" >"$qa/pebrel.stdout.log" 2>"$qa/pebrel.stderr.log" &
@@ -329,7 +330,16 @@ jobs:
               screencapture -x "$qa/01-ssh-ports-regression.png"
               ;;
             notification)
-              sleep 3
+              notification_ready="$qa/foreground-notification.ready"
+              for _ in $(seq 1 40); do
+                if [[ -f "$notification_ready" ]]; then break; fi
+                sleep 0.5
+              done
+              if [[ ! -f "$notification_ready" ]]; then
+                echo "Timed out waiting for the foreground notification." >&2
+                exit 1
+              fi
+              sleep 1
               screencapture -x "$qa/01-foreground-system-notification.png"
               ;;
             *)
@@ -375,7 +385,7 @@ jobs:
 
   publish-evidence:
     name: Publish UI evidence
-    if: always() && github.repository == 'WilliamWang1721/pebrel' && github.event_name == 'push'
+    if: success() && github.repository == 'WilliamWang1721/pebrel' && github.event_name == 'push'
     needs: native-ui
     runs-on: ubuntu-22.04
     concurrency:
@@ -389,13 +399,11 @@ jobs:
           persist-credentials: true
 
       - uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           name: ui-review-windows
           path: ${{ runner.temp }}/ui-review-evidence/windows
 
       - uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           name: ui-review-macos
           path: ${{ runner.temp }}/ui-review-evidence/macos
