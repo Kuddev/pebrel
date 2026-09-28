@@ -977,6 +977,9 @@ pub struct RuntimeSettings {
     /// **逻辑像素**（旧壳写盘语义：设置页 spinner 与 Ctrl+滚轮缩放持久化时
     /// 已除以 scale factor）。`None` = 跟随 nebula.toml 的 `font.size`（pt）。
     pub font_size_px: Option<f32>,
+    /// Ctrl+滚轮缩放终端字号。默认开启以保留既有行为；关闭时该手势被整体
+    /// 消费：既不缩放，也不回落成普通滚动。不影响普通滚轮与键盘字号快捷键。
+    pub ctrl_wheel_font_zoom: bool,
     /// Enabled by default; explicit theme mode follows the selected theme.
     pub ligatures: Ligatures,
     pub cursor_shape: Option<CursorShapeName>,
@@ -1149,6 +1152,7 @@ impl RuntimeSettings {
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
+            ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
             ligatures: raw
                 .value("ligatures")
                 .and_then(Ligatures::from_settings)
@@ -1611,6 +1615,22 @@ mod tests {
         let enabled = apply_updates(&disabled, &[("ai_toasts", "1".to_owned())]);
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).ai_toasts);
         assert_eq!(enabled.matches("ai_toasts=").count(), 1);
+    }
+
+    #[test]
+    fn ctrl_wheel_font_zoom_defaults_on_and_accepts_all_boolean_spellings() {
+        assert!(RuntimeSettings::from_raw(&RawSettings::default()).ctrl_wheel_font_zoom);
+        for value in ["", "invalid", "1", "true", "YES", "On"] {
+            let raw = RawSettings::from_text(&format!("ctrl_wheel_font_zoom={value}\n"));
+            assert!(RuntimeSettings::from_raw(&raw).ctrl_wheel_font_zoom, "{value:?}");
+        }
+        for value in ["0", "false", "NO", "Off"] {
+            let raw = RawSettings::from_text(&format!("ctrl_wheel_font_zoom={value}\n"));
+            let settings = RuntimeSettings::from_raw(&raw);
+            assert!(!settings.ctrl_wheel_font_zoom, "{value:?}");
+            assert_eq!(settings.bell, BellModeName::Both);
+            assert!(settings.font_size_px.is_none());
+        }
     }
 
     #[test]

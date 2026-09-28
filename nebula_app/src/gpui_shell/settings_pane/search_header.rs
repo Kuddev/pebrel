@@ -204,4 +204,13 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn ctrl_wheel_zoom_search_opens_the_terminal_appearance_controls() {
+        for query in ["滚轮", "ctrl wheel", "zoom"] {
+            for language in [crate::display::UiLanguage::ZhCn, crate::display::UiLanguage::EnUs] {
+                assert_eq!(matching_sections(query, language), vec![1], "{query}");
+            }
+        }
+    }
 }

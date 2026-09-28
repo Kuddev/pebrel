@@ -5,6 +5,7 @@
 //! global palette so a test cannot pass by only exercising a state callback.
 
 use super::*;
+use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 use crate::theme_library::{ThemeDocument, ThemeFormat, ThemeLibraryStore};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, size};
 use gpui_component::Root;
@@ -12,15 +13,6 @@ use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
 const TEST_SETTINGS: &str =
     "theme=Nord\nfollow_system_theme=0\napp_icon=graphite-violet\nfont_size=15\n";
-
-// These rendered fixtures share the real settings path and theme library.
-// Readers must hold the same guard as Save/Apply tests so their before/after
-// snapshots cannot observe another fixture's writes or restoration cleanup.
-// Only this fixture group is serialized; the rest of the native suite stays parallel.
-fn lock_theme_studio() -> std::sync::MutexGuard<'static, ()> {
-    static FIXTURES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    FIXTURES.lock().unwrap_or_else(|error| error.into_inner())
-}
 
 #[derive(Clone, Debug, PartialEq)]
 struct RuntimeSnapshot {
@@ -288,31 +280,6 @@ fn custom_theme_ids() -> Vec<String> {
 
 fn custom_theme_documents() -> Vec<ThemeDocument> {
     ThemeLibraryStore::default().list().expect("list native theme library").custom
-}
-
-struct SettingsBytesGuard {
-    path: std::path::PathBuf,
-    bytes: Option<Vec<u8>>,
-}
-
-impl SettingsBytesGuard {
-    fn capture() -> Self {
-        let path = nebula_settings::settings_path();
-        Self { bytes: std::fs::read(&path).ok(), path }
-    }
-}
-
-impl Drop for SettingsBytesGuard {
-    fn drop(&mut self) {
-        match &self.bytes {
-            Some(bytes) => {
-                let _ = std::fs::write(&self.path, bytes);
-            },
-            None => {
-                let _ = std::fs::remove_file(&self.path);
-            },
-        }
-    }
 }
 
 #[derive(Default)]
