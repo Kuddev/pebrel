@@ -94,6 +94,7 @@ impl TerminalView {
                 cwd.clone().unwrap_or_else(|| destination.clone())
             },
         };
+        let mut launched_program = String::new();
         let (
             ssh_destination,
             initial_title,
@@ -107,6 +108,9 @@ impl TerminalView {
                 // 显式 launch（会话恢复/创建时冻结）优先；只有旧会话没有
                 // 身份时才回退当前设置。这正是共享 v4 的 Default 语义。
                 let effective = launch_shell.or(shell);
+                if let Some(shell) = effective.as_ref() {
+                    launched_program = shell.program().to_owned();
+                }
                 // 补齐要知道这个 pane 面对**哪台机器**：`wsl.exe -d <发行版>`
                 // 启动的 tab，文件系统和命令集都在来宾里，本进程的 `std::fs`
                 // 和 PATH 描述的是另一台机器。
@@ -172,18 +176,12 @@ impl TerminalView {
                 let runtime = nebula_settings::RuntimeSettings::load();
                 if runtime.fetch && !is_ssh {
                     use nebula_terminal::event::Notify as _;
-                    let id = intro_shell_name
-                        .as_deref()
-                        .or(runtime.shell.as_deref())
-                        .unwrap_or_default()
-                        .to_ascii_lowercase();
-                    // Unix 没有 PowerShell 版欢迎脚本：一律走 fastfetch 回退链。
-                    let intro_shell = if !cfg!(windows) || id.contains("wsl") || id.contains("bash")
-                    {
-                        crate::display::NebulaShell::Bash
-                    } else {
-                        crate::display::NebulaShell::PowerShell
-                    };
+                    // 以这次实际启动的程序为准。cmd 不能收 PowerShell 的 Clear-Host。
+                    let intro_shell = crate::window_context::welcome::intro_shell_from_hints(&[
+                        launched_program.as_str(),
+                        intro_shell_name.as_deref().unwrap_or(""),
+                        runtime.shell.as_deref().unwrap_or(""),
+                    ]);
                     let notifier =
                         nebula_terminal::event_loop::Notifier(session.notifier.0.clone());
                     notifier.notify(

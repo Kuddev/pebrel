@@ -109,6 +109,40 @@ fn nebula_fastfetch_text(narrow: bool) -> String {
     text
 }
 
+/// 欢迎屏按真正启动的程序选命令，不能只看设置里的默认 shell。
+/// 否则 cmd 标签会收到 PowerShell 的 `Clear-Host`。
+pub(crate) fn intro_shell_from_hints(hints: &[&str]) -> crate::display::NebulaShell {
+    for hint in hints {
+        let id = hint.trim().to_ascii_lowercase();
+        if id.is_empty() {
+            continue;
+        }
+        let file = id.rsplit(['\\', '/']).next().unwrap_or(id.as_str());
+        if file == "cmd" || file == "cmd.exe" || id == "cmd" || id.contains("cmd.exe") {
+            return crate::display::NebulaShell::Cmd;
+        }
+        if file == "pwsh"
+            || file == "pwsh.exe"
+            || file == "powershell"
+            || file == "powershell.exe"
+            || id == "powershell"
+            || id == "pwsh"
+            || id == "ps"
+            || id.contains("powershell")
+        {
+            return crate::display::NebulaShell::PowerShell;
+        }
+        if id.contains("wsl") || file.contains("bash") || id == "bash" || id.contains("git-bash") {
+            return crate::display::NebulaShell::Bash;
+        }
+    }
+    if cfg!(windows) {
+        crate::display::NebulaShell::PowerShell
+    } else {
+        crate::display::NebulaShell::Bash
+    }
+}
+
 #[cfg(windows)]
 fn nebula_fastfetch_script_path(narrow: bool) -> Option<std::path::PathBuf> {
     static WIDE: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
@@ -159,14 +193,72 @@ pub(crate) fn nebula_fastfetch_intro_command_for(columns: usize, shell: NebulaSh
         return b"clear; if command -v fastfetch >/dev/null 2>&1; then fastfetch; else printf '\\033[36mPebrel\\033[0m\\n'; uname -a; fi\n".to_vec();
     }
 
-    // 新 tab 必须秒出：所有系统信息在 Rust 侧一次性缓存；交给 PowerShell 的
-    // 只有执行一个纯输出脚本，避免把 ANSI/Logo 当成用户输入逐行解析。
+    // 新 tab 必须秒出：所有系统信息在 Rust 侧一次性缓存。
+    // cmd 的 `type` 按系统 ANSI 代码页（中文环境是 GBK）解释文件，UTF-8 的
+    // 颜色码和图标会变成乱码。改由 powershell.exe 在当前控制台里执行同一份
+    // 脚本，[Console]::Write 直接写 Unicode。
     let narrow = columns < 132;
+    if shell == NebulaShell::Cmd {
+        return match nebula_fastfetch_script_path(narrow) {
+            Some(path) => format!(
+                "cls & \"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File \"{}\"\r",
+                path.display()
+            )
+            .into_bytes(),
+            None => b"cls\r".to_vec(),
+        };
+    }
     match nebula_fastfetch_script_path(narrow) {
         Some(path) => {
             format!("Clear-Host; & {}\r", powershell_single_quoted_path(&path)).into_bytes()
         },
         None => b"Clear-Host\r".to_vec(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::intro_shell_from_hints;
+    use crate::display::NebulaShell;
+
+    #[test]
+    fn intro_follows_the_launched_program_not_the_default_shell() {
+        assert_eq!(
+            intro_shell_from_hints(&[
+                r"C:\Windows\System32\cmd.exe",
+                "命令提示符 CMD",
+                "powershell",
+            ]),
+            NebulaShell::Cmd
+        );
+        assert_eq!(
+            intro_shell_from_hints(&[r"C:\Program Files\PowerShell\7\pwsh.exe", "", "cmd"]),
+            NebulaShell::PowerShell
+        );
+        assert_eq!(
+            intro_shell_from_hints(&[
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "",
+                "",
+            ]),
+            NebulaShell::PowerShell
+        );
+        assert_eq!(intro_shell_from_hints(&["wsl.exe", "", "powershell"]), NebulaShell::Bash);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cmd_intro_is_not_a_powershell_command() {
+        let command = String::from_utf8(super::nebula_fastfetch_intro_command_for(
+            80,
+            NebulaShell::Cmd,
+        ))
+        .unwrap();
+        assert!(command.contains("cls"));
+        assert!(command.contains("powershell.exe"));
+        assert!(command.contains("-File"));
+        assert!(!command.contains("Clear-Host"));
+        assert!(!command.contains("type "));
     }
 }
 

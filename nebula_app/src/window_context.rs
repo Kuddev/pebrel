@@ -1107,6 +1107,7 @@ impl WindowContext {
                 match self.display.nebula_shell {
                     crate::display::NebulaShell::PowerShell => "powershell".into(),
                     crate::display::NebulaShell::Bash => "bash".into(),
+                    crate::display::NebulaShell::Cmd => "cmd".into(),
                 }
             });
             let launch = match crate::ssh::build_pane_launch(&shell_id, &exe, &host) {

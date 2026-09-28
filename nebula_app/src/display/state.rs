@@ -96,6 +96,7 @@ pub enum NebulaShell {
     #[default]
     PowerShell,
     Bash,
+    Cmd,
 }
 
 impl NebulaShell {
@@ -103,6 +104,7 @@ impl NebulaShell {
         match self {
             Self::PowerShell => "PowerShell",
             Self::Bash => "Bash",
+            Self::Cmd => "CMD",
         }
     }
 
@@ -110,6 +112,7 @@ impl NebulaShell {
         match self {
             Self::PowerShell => "powershell",
             Self::Bash => "bash",
+            Self::Cmd => "cmd",
         }
     }
 
@@ -117,6 +120,7 @@ impl NebulaShell {
         match value.trim().to_ascii_lowercase().as_str() {
             "powershell" | "pwsh" | "ps" => Some(Self::PowerShell),
             "bash" | "git-bash" | "gitbash" | "wsl" => Some(Self::Bash),
+            "cmd" => Some(Self::Cmd),
             _ => None,
         }
     }
