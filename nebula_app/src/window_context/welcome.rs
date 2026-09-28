@@ -249,11 +249,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn cmd_intro_is_not_a_powershell_command() {
-        let command = String::from_utf8(super::nebula_fastfetch_intro_command_for(
-            80,
-            NebulaShell::Cmd,
-        ))
-        .unwrap();
+        let command =
+            String::from_utf8(super::nebula_fastfetch_intro_command_for(80, NebulaShell::Cmd))
+                .unwrap();
         assert!(command.contains("cls"));
         assert!(command.contains("powershell.exe"));
         assert!(command.contains("-File"));
