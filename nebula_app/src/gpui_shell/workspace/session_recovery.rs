@@ -82,6 +82,7 @@ impl NebulaWorkspace {
         use crate::session::{LaunchSession, LayoutSession};
 
         let layout = tab.layout.clone().unwrap_or(LayoutSession::Pane {
+            custom_name: None,
             launch: None,
             cwd: tab.cwd.clone(),
             agent: None,
@@ -92,7 +93,7 @@ impl NebulaWorkspace {
         let grid = self.initial_grid;
         let mut panes: Vec<TerminalPane> = Vec::new();
         for (index, leaf) in layout.leaves().into_iter().enumerate() {
-            let LayoutSession::Pane { cwd, agent, launch } = leaf else { continue };
+            let LayoutSession::Pane { cwd, agent, launch, custom_name } = leaf else { continue };
             let mut launch_session = launch.clone().unwrap_or_else(|| {
                 if index == 0 {
                     saved_launch.clone()
@@ -107,7 +108,8 @@ impl NebulaWorkspace {
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);
             let local_cwd = if guest_directory { None } else { crate::session::valid_dir(cwd) };
             let launch = Self::terminal_launch_from_session(&launch_session, local_cwd);
-            let pane = self.new_pane(grid, launch, None, window, cx);
+            let mut pane = self.new_pane(grid, launch, None, window, cx);
+            pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);
             if !matches!(launch_session, LaunchSession::Default) {
                 pane.view.update(cx, |view, _| view.session_launch = launch_session);
             }
@@ -169,13 +171,23 @@ impl NebulaWorkspace {
             if ix == self.active {
                 active_out = tabs.len();
             }
-            let leaf_data = |id: u64| -> (String, Option<AgentSession>, Option<LaunchSession>) {
+            let leaf_data = |id: u64| -> (
+                String,
+                Option<AgentSession>,
+                Option<LaunchSession>,
+                Option<String>,
+            ) {
                 let Some(pane) = panes.iter().find(|pane| pane.id == id) else {
-                    return (String::new(), None, None);
+                    return (String::new(), None, None, None);
                 };
                 let view = pane.view.read(cx);
                 let agent = view.session_agent();
-                (view.cwd.clone(), agent, Some(view.session_launch.clone()))
+                (
+                    view.cwd.clone(),
+                    agent,
+                    Some(view.session_launch.clone()),
+                    pane.custom_name.clone(),
+                )
             };
             let layout = crate::gpui_shell::session_restore::layout_from_tree(tree, &leaf_data);
             let cwd = panes

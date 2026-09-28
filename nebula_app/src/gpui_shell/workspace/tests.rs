@@ -922,6 +922,7 @@ mod boot_breaker_tests {
             color: None,
             launch: Some(launch.clone()),
             layout: Some(LayoutSession::Pane {
+                custom_name: None,
                 cwd: String::new(),
                 agent: Some(saved.clone()),
                 launch: Some(launch),

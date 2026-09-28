@@ -963,6 +963,7 @@
   },
   "workspace": {
     "pane": {
+      "rename_hint": "双击重命名；Enter 或点击外部保存，Esc 取消。清空恢复自动标题，重新编辑可撤销已保存的名称。",
       "stop_broadcast_input": "关闭广播输入",
       "broadcast_input_tooltip": "广播输入到本标签全部分栏",
       "close": "关闭此分栏",
