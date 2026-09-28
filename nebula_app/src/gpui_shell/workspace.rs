@@ -65,6 +65,10 @@ mod quick_jump;
 mod quick_terminal;
 mod recipes;
 mod remote_files;
+mod rename;
+#[cfg(test)]
+use rename::apply_cancel_rename;
+use rename::{PaneRename, TabRename, apply_commit_rename};
 mod residency;
 mod send_to_chat;
 mod session_persistence;
@@ -177,6 +181,9 @@ pub fn init(cx: &mut App) {
 /// （AI hook 的 `NEBULA_PANE_ID` 同源），全工作区唯一、终生不复用。
 struct TerminalPane {
     id: u64,
+    custom_name: Option<String>,
+    /// Recent committed names; follows the live pane without retaining window-bound inputs.
+    name_history: Vec<Option<String>>,
     view: Entity<TerminalView>,
     _subscription: Subscription,
 }
@@ -621,33 +628,13 @@ struct TabMeta {
     has_bell: bool,
 }
 
-/// 侧栏行内重命名的活动状态（旧壳 `nebula_tab_rename` 同形态：被编辑的那
-/// 一行原地变输入框，而不是弹一个对话框）。Enter 提交；Esc / 失焦取消
-/// （对照 `input/chrome.rs` 点在框外 = `CancelRename`）；提交空串 = 恢复
-/// 自动标签名。
-struct TabRename {
-    ix: usize,
-    input: Entity<InputState>,
-    _subscription: Subscription,
-}
-
-/// 旧壳 `TabRequest::CommitRename`（`window_context.rs` ~871-880）：
-/// trim；空串 → `custom_name = None`（恢复自动名）；非空 → `Some(trimmed)`。
-fn apply_commit_rename(meta: &mut TabMeta, buffer: &str) {
-    let trimmed = buffer.trim();
-    meta.custom_name = if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) };
-}
-
-/// 旧壳 `TabRequest::CancelRename`（`window_context.rs` ~896-901）：
-/// 丢掉重命名缓冲，`custom_name` 保持进入编辑前的值。
-fn apply_cancel_rename(_meta: &mut TabMeta) {}
-
 pub struct NebulaWorkspace {
     tabs: Vec<WorkspaceTab>,
     /// 与 `tabs` 同下标的用户元数据，见 [`TabMeta`]。
     tab_meta: Vec<TabMeta>,
     /// 正在行内重命名的标签，见 [`TabRename`]。
     tab_rename: Option<TabRename>,
+    pane_rename: Option<PaneRename>,
     next_pane_id: u64,
     active: usize,
     /// Window-level Settings surface. It intentionally lives outside `tabs`:
@@ -841,6 +828,10 @@ impl NebulaWorkspace {
         if ix >= self.tabs.len() {
             return None;
         }
+        if self.pane_rename.as_ref().is_some_and(|edit| self.tab_of_pane(edit.pane_id) == Some(ix))
+        {
+            self.pane_rename = None;
+        }
         let tab = self.tabs.remove(ix);
         // 长度不齐时（理论上不会）宁可给默认元数据，也不要 panic。
         let meta =
@@ -945,6 +936,7 @@ impl NebulaWorkspace {
             tabs: Vec::new(),
             tab_meta: Vec::new(),
             tab_rename: None,
+            pane_rename: None,
             // 首窗仍从 1 起，保持既有 runtime/测试身份；后续窗口用高 32 位
             // 分区，AI hook 只有 pane id 时也不会撞到另一窗口的同号 pane。
             next_pane_id: runtime_window_id
@@ -1216,7 +1208,13 @@ impl NebulaWorkspace {
         if let Some(command) = command {
             view.update(cx, |view, cx| view.run_command(command, cx));
         }
-        TerminalPane { id: pane_id, view, _subscription: subscription }
+        TerminalPane {
+            id: pane_id,
+            custom_name: None,
+            name_history: Vec::new(),
+            view,
+            _subscription: subscription,
+        }
     }
 
     /// 现网格（聚焦终端）或开窗反推的目标网格：让新 pane 的 PTY 出生即
@@ -1363,6 +1361,8 @@ impl NebulaWorkspace {
     ) {
         let Some(WorkspaceTab::Terminal { panes, .. }) = self.tabs.get(tab_ix) else { return };
         let Some(old) = panes.iter().find(|pane| pane.id == pane_id) else { return };
+        let custom_name = old.custom_name.clone();
+        let name_history = old.name_history.clone();
         let (grid, remote_cwd) = {
             let view = old.view.read(cx);
             if view.ssh_destination.as_deref() != Some(destination.as_str()) {
@@ -1378,7 +1378,10 @@ impl NebulaWorkspace {
             destination: destination.clone(),
             cwd: remote_cwd,
         };
-        let replacement = self.new_pane(grid, launch, None, window, cx);
+        let mut replacement = self.new_pane(grid, launch, None, window, cx);
+        replacement.custom_name = custom_name;
+        replacement.name_history = name_history;
+        self.forget_pane_rename(pane_id);
         let replacement_id = replacement.id;
         let old = {
             let Some(WorkspaceTab::Terminal { panes, tree, focused, .. }) =
@@ -1505,6 +1508,18 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(edit) = self.pane_rename.as_ref()
+            && self.tab_of_pane(edit.pane_id) == Some(tab_ix)
+            && let Some(WorkspaceTab::Terminal { panes, .. }) = self.tabs.get(tab_ix)
+            && panes.iter().any(|pane| pane.id == pane_id)
+        {
+            if edit.pane_id == pane_id {
+                self.pane_rename = None;
+            } else if panes.len() == 2 {
+                // The survivor's header disappears when the split collapses.
+                self.commit_pane_rename(false, window, cx);
+            }
+        }
         let outcome = match self.tabs.get_mut(tab_ix) {
             Some(WorkspaceTab::Terminal { tree, .. }) => tree.remove_leaf(pane_id),
             _ => return,
@@ -1537,7 +1552,9 @@ impl NebulaWorkspace {
                 self.pane_bounds.borrow_mut().remove(&pane_id);
                 self.mark_structural_resize(tab_ix, cx);
                 if tab_ix == self.active {
-                    self.focus_active(window, cx);
+                    if self.pane_rename.is_none() {
+                        self.focus_active(window, cx);
+                    }
                     self.sync_side_panel_to_active(true, cx);
                 }
                 cx.notify();
@@ -2344,81 +2361,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    /// 进入行内重命名：对照旧壳 `TabRequest::BeginRename`
-    /// （`window_context.rs` ~854-868）。预填 `custom_name`，否则
-    /// `chrome_tab_label`（cwd 末级，不含分屏后缀）。已在编辑别的行时丢掉
-    /// 前一次缓冲（不提交），与旧壳覆盖 `nebula_tab_rename` 同合同。
-    fn begin_rename(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix >= self.tabs.len() {
-            return;
-        }
-        // 覆盖前一次编辑：只丢缓冲，不走 Commit（否则会把当时显示的目录名
-        // 冻成 custom_name）。不要调用 `cancel_rename`——它会 `focus_active`
-        // 把焦点延迟抢回终端，紧接着的输入框 focus 会被下一帧冲掉。
-        let _ = self.tab_rename.take();
-        let current = self.meta(ix).custom_name.unwrap_or_else(|| self.rename_prefill(ix, cx));
-        let input = cx.new(|cx| InputState::new(window, cx));
-        let subscription = cx.subscribe_in(
-            &input,
-            window,
-            |this: &mut Self, _: &Entity<InputState>, event: &InputEvent, window, cx| {
-                match event {
-                    InputEvent::PressEnter { .. } => this.commit_rename(window, cx),
-                    // 点在框外 = CancelRename（`input/chrome.rs` ~359-368），
-                    // 不是 Commit。Blur 提交会把自动目录名冻成 custom_name。
-                    InputEvent::Blur => this.cancel_rename(window, cx),
-                    _ => {},
-                }
-            },
-        );
-        // 旧壳 `nebula_tab_rename_select_all = true`：set_value 后全选再 focus。
-        // `InputState::select_all` 是 `pub(super)`，对外走公开的 `SelectAll` action。
-        input.update(cx, |state, cx| {
-            state.set_value(current, window, cx);
-            state.focus(window, cx);
-        });
-        self.tab_rename = Some(TabRename { ix, input, _subscription: subscription });
-        cx.on_next_frame(window, |this, window, cx| {
-            let Some(rename) = this.tab_rename.as_ref() else { return };
-            if !rename.input.read(cx).focus_handle(cx).is_focused(window) {
-                return;
-            }
-            window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
-        });
-        cx.notify();
-    }
-
-    /// BeginRename 预填：有 custom 用 custom，否则终端用聚焦 pane 的
-    /// `tab_label()`（cwd 末级，对齐 `chrome_tab_label`），其它 tab 用标题。
-    fn rename_prefill(&self, ix: usize, cx: &App) -> String {
-        match self.tabs.get(ix) {
-            Some(tab @ WorkspaceTab::Terminal { .. }) => tab
-                .focused_view()
-                .map(|view| view.read(cx).tab_label())
-                .unwrap_or_else(|| self.tab_title(ix, cx).to_string()),
-            _ => self.tab_title(ix, cx).to_string(),
-        }
-    }
-
-    fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(rename) = self.tab_rename.take() else { return };
-        let name = rename.input.read(cx).value();
-        if let Some(meta) = self.tab_meta.get_mut(rename.ix) {
-            apply_commit_rename(meta, &name);
-        }
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-
-    fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(rename) = self.tab_rename.take() else { return };
-        if let Some(meta) = self.tab_meta.get_mut(rename.ix) {
-            apply_cancel_rename(meta);
-        }
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-
     /// 标签色标：同色再点一次即取消（旧壳菜单里选中的那枚色块 = 当前色）。
     fn set_tab_color(&mut self, ix: usize, color: Option<Rgb>, cx: &mut Context<Self>) {
         if let Some(meta) = self.tab_meta.get_mut(ix) {
@@ -2539,6 +2481,7 @@ impl NebulaWorkspace {
                     pane.id,
                     ordinal,
                     &pane.view,
+                    pane.custom_name.as_deref(),
                     true,
                     *zoomed,
                     *broadcast,
@@ -2604,7 +2547,16 @@ impl NebulaWorkspace {
                 let ordinal = order.iter().position(|other| *other == id).map_or(1, |at| at + 1);
                 let header = pane.map(|pane| {
                     self.render_pane_header(
-                        tab_ix, id, ordinal, &pane.view, is_focused, false, broadcast, corners, cx,
+                        tab_ix,
+                        id,
+                        ordinal,
+                        &pane.view,
+                        pane.custom_name.as_deref(),
+                        is_focused,
+                        false,
+                        broadcast,
+                        corners,
+                        cx,
                     )
                 });
                 // 布局：标题条固定高 + 终端吃剩余。canvas 探针仍量**整个叶子**
