@@ -117,7 +117,9 @@
       "loading": "Enumerating system fonts...",
       "no_matches": "No matching fonts",
       "expand": "Show font list",
-      "collapse": "Hide font list"
+      "collapse": "Hide font list",
+      "ctrl_wheel_zoom": "Ctrl+wheel font zoom",
+      "ctrl_wheel_zoom_description": "Hold Ctrl and scroll over the terminal to change its font size. Turned off, the Ctrl+wheel gesture is ignored completely: it neither resizes text nor scrolls the terminal. Ctrl+=, Ctrl+- and Ctrl+0 still work."
     },
     "keymap": {
       "conflict": "{combo} is assigned to both \"{first}\" and \"{second}\"; only the earlier \"{first}\" action will run.",
@@ -620,19 +622,6 @@
     "auth_password": "Password",
     "auth_key": "Private key",
     "auth_interactive": "Interactive sign-in"
-  },
-  "startup": {
-    "portable": {
-      "title": "Run Pebrel in portable mode?",
-      "description": "Pebrel is outside the Applications folder. Portable mode stores Pebrel settings, sessions, history, imported fonts and temporary files here:\n{path}\n\nMove Pebrel.app and Pebrel Data together after quitting Pebrel. The first launch uses separate settings; use Backup to import existing settings. Shells, external tools, SSH keys and system credentials still belong to this Mac.",
-      "enable": "Portable mode",
-      "normal": "Normal mode",
-      "quit": "Quit",
-      "error_title": "Pebrel could not start",
-      "translocated": "macOS is running Pebrel from a temporary security location. Quit Pebrel, move Pebrel.app to your intended writable folder using Finder, and open it again.",
-      "linked_directory": "Portable data and temporary folders cannot be symbolic links.",
-      "write_failed": "Cannot use the portable data folder:\n{path}\n\n{error}\n\nMove Pebrel.app and Pebrel Data to a writable folder and try again. Pebrel has not switched to this Mac’s settings."
-    }
   },
   "vcs": {
     "changes": "Changes",
