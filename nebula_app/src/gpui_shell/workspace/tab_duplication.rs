@@ -103,8 +103,7 @@ pub(super) fn new_tab_launch(
 ) -> (LaunchSession, Option<std::path::PathBuf>) {
     let same_guest =
         wsl_program_args(&launch).zip(focused).is_some_and(|((program, args), focused)| {
-            let own_directory = args.first().is_some_and(|arg| arg == "~")
-                || args.iter().any(|arg| arg == "--cd" || arg.starts_with("--cd="))
+            let own_directory = crate::shell_detect::wsl_launch_chooses_directory(program, args)
                 || matches!(&launch, LaunchSession::Profile { cwd: Some(_), .. });
             !own_directory
                 && crate::shell_detect::wsl_spawn_distro(program, args)
@@ -492,6 +491,23 @@ mod tests {
         let (launch, _) = new_tab_launch(profile, guest("Ubuntu"), "/tmp", || None);
         let LaunchSession::Profile { args, .. } = launch else { panic!("profile identity lost") };
         assert_eq!(args, ["--cd", "/tmp", "-d", "Ubuntu"]);
+    }
+
+    #[test]
+    fn new_tab_guest_command_cd_is_not_the_launch_directory() {
+        // `--cd` after `-e` belongs to the guest tool, not to WSL's start directory.
+        let tool = LaunchSession::Shell {
+            name: "tool".into(),
+            program: "wsl.exe".into(),
+            args: ["-d", "Ubuntu", "-e", "tool", "--cd", "/tool-dir"].map(String::from).to_vec(),
+        };
+        let (launch, cwd) = new_tab_launch(tool, guest("Ubuntu"), "/home/dev/app", || None);
+        assert!(cwd.is_none());
+        let LaunchSession::Shell { args, .. } = launch else { panic!("shell identity lost") };
+        assert_eq!(
+            args,
+            ["--cd", "/home/dev/app", "-d", "Ubuntu", "-e", "tool", "--cd", "/tool-dir"]
+        );
     }
 
     #[test]

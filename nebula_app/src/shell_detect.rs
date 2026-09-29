@@ -543,6 +543,8 @@ struct WslOptions<'a> {
     /// Any distribution selector appeared (including `--distribution-id`,
     /// `--system` and an empty name): this launch does not follow the default.
     selects_distribution: bool,
+    /// The launch picks its own start directory: a leading `~`, `--cd` or `--cd=`.
+    chooses_directory: bool,
     /// The guest command's program (after `--` / `-e` / `--exec`, or the first
     /// non-option argument); `None` starts the guest's login shell.
     command: Option<&'a str>,
@@ -555,9 +557,10 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
     fn non_empty(value: &str) -> Option<&str> {
         (!value.is_empty()).then_some(value)
     }
-    let mut options = WslOptions::default();
     // A leading `~` means "start in the home directory" and does not end the options.
-    let mut index = usize::from(args.first().is_some_and(|arg| arg == "~"));
+    let home = args.first().is_some_and(|arg| arg == "~");
+    let mut options = WslOptions { chooses_directory: home, ..WslOptions::default() };
+    let mut index = usize::from(home);
     while let Some(arg) = args.get(index) {
         let value = args.get(index + 1).map(String::as_str).and_then(non_empty);
         index += 2;
@@ -568,7 +571,8 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
             },
             "-u" | "--user" => options.user = value,
             "--distribution-id" => options.selects_distribution = true,
-            "--cd" | "--shell-type" => {},
+            "--cd" => options.chooses_directory = true,
+            "--shell-type" => {},
             "--" | "-e" | "--exec" => {
                 options.command = value;
                 break;
@@ -582,10 +586,9 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
                     options.selects_distribution = true;
                 } else if let Some(user) = option.strip_prefix("--user=") {
                     options.user = non_empty(user);
-                } else if !["--cd=", "--shell-type="]
-                    .iter()
-                    .any(|prefix| option.starts_with(prefix))
-                {
+                } else if option.starts_with("--cd=") {
+                    options.chooses_directory = true;
+                } else if !option.starts_with("--shell-type=") {
                     options.command = Some(option);
                     break;
                 }
@@ -649,6 +652,12 @@ pub fn wsl_launch_user<'a>(program: &str, args: &'a [String]) -> Option<&'a str>
 pub fn wsl_guest_cwd(cwd: &str) -> Option<&str> {
     let trimmed = cwd.trim();
     trimmed.starts_with('/').then_some(trimmed)
+}
+
+/// Whether a WSL launch picks its own start directory (a leading `~`, `--cd`
+/// or `--cd=` in WSL's option region). A guest command's `--cd` does not count.
+pub fn wsl_launch_chooses_directory(program: &str, args: &[String]) -> bool {
+    is_wsl_launcher(program) && wsl_options(args).chooses_directory
 }
 
 /// Set the WSL guest cwd without changing its distribution, user or command.
