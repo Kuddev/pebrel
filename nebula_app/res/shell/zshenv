@@ -3,13 +3,27 @@ if [[ ${NEBULA_ZDOTDIR_WAS_SET:-0} == 1 ]]; then
 else
     unset ZDOTDIR
 fi
+# zsh's own newuser check ran before this file, so it saw the bootstrap. Repeat it
+# where zsh runs it: after the global zshenv, before the user's startup files.
+if [[ ! -e ${ZDOTDIR:-$HOME}/.zshenv && ! -e ${ZDOTDIR:-$HOME}/.zprofile &&
+      ! -e ${ZDOTDIR:-$HOME}/.zshrc && ! -e ${ZDOTDIR:-$HOME}/.zlogin ]]; then
+    _nebula_newuser=1
+fi
 if [[ -r ${ZDOTDIR-$HOME}/.zshenv ]]; then
     source "${ZDOTDIR-$HOME}/.zshenv"
 fi
 if [[ -o rcs && -o interactive ]]; then
-    export NEBULA_ZDOTDIR_WAS_SET=${+ZDOTDIR}
-    export NEBULA_ORIGINAL_ZDOTDIR=${ZDOTDIR-}
+    # Only this shell reads them; programs the user's rc files exec must not inherit them.
+    NEBULA_ZDOTDIR_WAS_SET=${+ZDOTDIR}
+    NEBULA_ORIGINAL_ZDOTDIR=${ZDOTDIR-}
+    typeset +x NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
     export ZDOTDIR=$NEBULA_ZSH_INTEGRATION
+    # Ubuntu's global zshrc runs compinit while ZDOTDIR still names this
+    # bootstrap, which would put .zcompdump here; .zshrc runs it for the user.
+    # The marker value tells .zshrc whether the user's .zprofile set it since.
+    if [[ -z ${skip_global_compinit-} ]]; then
+        skip_global_compinit=nebula-bootstrap
+    fi
 else
-    unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
+    unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION _nebula_newuser
 fi

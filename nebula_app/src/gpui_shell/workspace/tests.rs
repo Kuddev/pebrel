@@ -737,8 +737,22 @@ fn wsl_file_tree_terminal_changes_directory_without_forcing_bash() {
     };
 
     assert_eq!(program, "wsl.exe");
-    assert_eq!(args, ["-d", "Ubuntu", "--cd", "/home/user/project"]);
+    assert_eq!(args, ["--cd", "/home/user/project", "-d", "Ubuntu"]);
     assert!(!args.iter().any(|arg| arg == "--exec" || arg.eq_ignore_ascii_case("bash")));
+
+    let at = |path: &str| {
+        let launch = super::file_tree::wsl_terminal_launch_at(
+            String::new(),
+            "wsl.exe".to_owned(),
+            "Ubuntu".to_owned(),
+            path.to_owned(),
+        );
+        let crate::session::LaunchSession::Shell { args, .. } = launch else { unreachable!() };
+        args
+    };
+    // Raw command lines keep a spaced path whole; one wsl.exe cannot receive stays out.
+    assert_eq!(at("/home/user/my project"), ["--cd", "\"/home/user/my project\"", "-d", "Ubuntu"]);
+    assert_eq!(at("/tmp/i\" touch /tmp/x #"), ["-d", "Ubuntu"]);
 }
 
 #[test]

@@ -59,15 +59,17 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
     Ok(())
 }
 
+const ZSH_FILES: [(&str, &str); 3] = [
+    (".zshenv", include_str!("../../res/shell/zshenv")),
+    (".zprofile", include_str!("../../res/shell/zprofile")),
+    (".zshrc", include_str!("../../res/shell/zshrc")),
+];
+
 /// The zsh bootstrap shared by local zsh and WSL guests: restore the user's
 /// `ZDOTDIR`, source their own startup files, then install the precmd reports.
 fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(directory)?;
-    for (name, content) in [
-        (".zshenv", include_str!("../../res/shell/zshenv")),
-        (".zprofile", include_str!("../../res/shell/zprofile")),
-        (".zshrc", include_str!("../../res/shell/zshrc")),
-    ] {
+    for (name, content) in ZSH_FILES {
         let content = if name == ".zshrc" {
             format!("{content}\n{}", tty::connection_shell())
         } else {
@@ -84,28 +86,41 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
 /// `WSLENV` `/p`), see [`crate::shell_detect::wsl_cwd_report_env`]. Kept apart
 /// from the local-zsh directory so the two integrations never rewrite each other.
 ///
-/// `Ok(None)` off Windows and when the data directory is not on a local drive
+/// `None` off Windows and when the data directory is not on a local drive
 /// letter: a UNC or redirected path is not automounted in the guest, and a
 /// `ZDOTDIR` the guest cannot read would also skip the user's own startup files.
 /// The files are written once per process; spawns never replace a file that a
-/// starting guest zsh may be reading.
-pub(crate) fn wsl_zsh_directory() -> std::io::Result<Option<std::path::PathBuf>> {
+/// starting guest zsh may be reading. A failed first write is cached, so it warns
+/// once instead of retrying on every spawn. A bootstrap file deleted while the
+/// process runs is rewritten, or the directory is withheld from that spawn with
+/// a warning: a `ZDOTDIR` missing one of them would silently skip the matching
+/// user file.
+pub(crate) fn wsl_zsh_directory() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        static PREPARED: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-        if let Some(directory) = PREPARED.get() {
-            return Ok(Some(directory.clone()));
+        static PREPARED: std::sync::OnceLock<Option<std::path::PathBuf>> =
+            std::sync::OnceLock::new();
+        let prepare = |directory: std::path::PathBuf| match write_zsh_files(&directory) {
+            Ok(()) => Some(directory),
+            Err(error) => {
+                log::warn!("Could not prepare WSL zsh integration: {error}");
+                None
+            },
+        };
+        let directory = PREPARED
+            .get_or_init(|| {
+                let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
+                is_local_drive_path(&directory).then_some(directory).and_then(prepare)
+            })
+            .clone()?;
+        if ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()) {
+            return Some(directory);
         }
-        let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
-        if !is_local_drive_path(&directory) {
-            return Ok(None);
-        }
-        write_zsh_files(&directory)?;
-        Ok(Some(PREPARED.get_or_init(|| directory).clone()))
+        prepare(directory)
     }
     #[cfg(not(windows))]
     {
-        Ok(None)
+        None
     }
 }
 

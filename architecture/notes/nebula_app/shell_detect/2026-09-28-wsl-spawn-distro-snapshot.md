@@ -21,28 +21,63 @@ completion context already resolved that value at spawn for history scoping
 (`completion_context::launch_environment`). Each view keeps its own spawn-time
 `session_launch`; split panes can differ from the first pane of a tab.
 
+Review of the first cut found that the helpers disagreed on where WSL's options
+end. `wsl_launch_distro` scanned the whole argv, so `wsl -e tool -d x` named the
+guest command's `x`. `--distribution=Debian` and `--system` fell through to the
+registry default. Explicit shell arguments are joined raw
+(`tty::Options::escape_args` is `false`), so an injected `--cd /home/a b` split
+into a directory plus a guest command; a directory name from a cloned repository
+could thus run a guest command on split, duplicate or fork. `runtime_exec`, the WSL hook setup and a
+PTY-default `shell=wsl` pane still read launch arguments without the snapshot.
+
 ## Decision
 
 `shell_detect::wsl_spawn_distro` returns the explicit distribution or the
 registry default. It is called once per spawn, and completion scoping reuses
-the same value. `--distribution-id` resolves to `None` rather than to the
-default. `TerminalView` snapshots the value as `wsl_distro`. The workspace WSL
-location and prompt-path links read the focused pane's snapshot instead of the
-tab launch. `wsl_launch_distro` keeps its explicit-only semantics for
-launch-argument rewriting. `is_wsl_launcher` is the single WSL program detector
-for the snapshot, the cwd report environment and argument rewriting.
+the same value. `--distribution-id` and `--system` resolve to `None` rather than
+to the default. `TerminalView` snapshots the value as `wsl_distro`. The
+workspace WSL location, prompt-path links and the pane's `PaneExecContext`
+(`with_spawn_distro`) read the focused pane's snapshot instead of the tab
+launch. A PTY-default WSL pane spawns the snapshotted `wsl.exe` explicitly, so
+it gets the same guest environment. `wsl_launch_distro` keeps its explicit-only
+semantics for launch-argument rewriting.
+
+One parser, `shell_detect::wsl_options`, reads WSL's option region for the
+distribution, user, distribution selection and guest command. It stops at `--`,
+`-e`/`--exec` or the first argument it does not know. It tolerates the `=` forms
+that `wsl_args_with_directory` already preserved, although `wsl.exe` itself
+rejects them. `is_wsl_launcher` is the single WSL program detector for the
+snapshot, the cwd report environment, argument rewriting, `runtime_exec` and WSL
+hook setup.
+
+An injected guest cwd is encoded for `wsl.exe`'s own command-line splitting,
+not the CRT's (`shell_detect::wsl_raw_arg`). Measured on WSL 2 on 2026-09-29:
+`wsl.exe` pairs `"` and keeps every backslash literal, so a CRT `\"` ends the
+quote and the rest of the path runs as a guest command. A path with whitespace
+is wrapped in quotes; a path containing `"` has no encoding and is not
+injected, so the copy starts without `--cd`.
 
 Copies of a pane follow its snapshot:
 
 - **Split and duplicate** insert `-d <snapshot>` into a bare launch, after a
   leading `~`. A later default change therefore cannot move the copy to another
-  guest.
+  guest. The pinned argument is part of the copy's persisted launch, so a
+  restored copy stays in that guest while the restored original follows the
+  default again.
 - **A WSL pane without a guest cwd** (fish, or before the first prompt) splits
-  into the same guest rather than the host default shell.
+  into the same guest rather than the host default shell, replaying its spawn:
+  the launch's own `--cd` or `~` still wins over the spawn-time host directory.
 - **A new default-shell tab** inherits the guest cwd only when it targets the
   same distribution and explicit user, and does not choose its own directory.
-  Otherwise it receives only a `/mnt/<drive>` host directory; a UNC probe would
-  block the UI thread.
+- **A duplicate or AI-session fork** uses the tab's identity, which may differ
+  from the focused pane's; the guest cwd follows only into the same
+  distribution and user. A pane without a snapshot qualifies when the identity
+  is its own launch apart from the directory.
+- **Relative prompt paths** resolve against the guest cwd mapped into the
+  snapshotted distribution, like absolute ones.
+- **Otherwise** a WSL pane's guest path yields only a `/mnt/<drive>` host
+  directory, even without a snapshot; Windows would resolve `/` against the
+  current drive, and a UNC probe would block the UI thread.
 
 ## Rejected alternatives
 
@@ -50,8 +85,15 @@ Copies of a pane follow its snapshot:
   change would silently retarget a running pane — the guess the old rule forbade.
 - Rewrite bare launches to `-d <default>`: changes persisted launch identity and
   restore semantics for users who intentionally follow the default.
-- Ask the guest for `WSL_DISTRO_NAME` via OSC: needs a new protocol and does not
-  cover shells without the report integration.
+- Take the identity from the guest's `WSL_DISTRO_NAME`: the bash and zsh
+  reports already carry it in the `pebrel_shell` token, which completion uses
+  to fill an empty distribution. It arrives only at the first prompt, which is
+  after a split made before it, and never from shells without the integration,
+  so it could supplement the snapshot but not replace it.
+- CRT quoting (`escape_args`, or the PTY's escaper on the injected value):
+  `wsl.exe` does not parse `\"`, so a directory name containing `"` would still
+  inject a guest command, as the first cut of this fix did. `escape_args` would
+  also quote profile and persisted arguments that follow the raw convention.
 - Drop the guest command (`-e htop`) when splitting: it would also drop
   shell-selecting commands such as `--exec zsh -l`, so splits keep the pane's
   command as duplicates do.
@@ -60,18 +102,24 @@ Copies of a pane follow its snapshot:
 
 A default change between the registry read and `wsl.exe` start could still
 mismatch; the window is the same spawn call. Restored panes resolve again at
-their own spawn. SSH and host panes have no snapshot. A `--distribution-id` pane
-has no WSL location until the id is mapped to a name. Splitting a pane whose
-launch runs a guest command runs that command again.
+their own spawn. SSH and host panes have no snapshot. A `--distribution-id` or `--system`
+pane has no WSL location until the id is mapped to a name, and its commands run
+without a distribution argument. Splitting a pane whose launch runs a guest
+command runs that command again. A distribution renamed or re-imported under
+another name after spawn leaves pinned copies pointing at the old name.
 
 ## Validation
 
-- **Registry-free unit tests.** Explicit, bare, id-based and non-WSL
-  resolution, with an injected default.
-- **Launch rewriting.** Pinning and the `~` marker.
-- **Pane snapshot.** Prompt-path mapping from the snapshot.
-- **Split and new-tab launches.** Guest cwd, no guest cwd, another user and a
-  profile directory.
+- **Registry-free unit tests.** Explicit, `=`-form, bare, id-based, `--system`
+  and non-WSL resolution, with an injected default, and guest-command
+  arguments that must not count as WSL options.
+- **Launch rewriting.** Pinning, the `~` marker, quoting of spaced paths with
+  literal backslashes, refusal of paths containing `"` and `--distribution-id`.
+  The encoding was checked against a real `wsl.exe`, which is not automated.
+- **Pane snapshot.** Prompt-path mapping and the exec context from the snapshot.
+- **Split, duplicate and new-tab launches.** Guest cwd, no guest cwd, the
+  launch's own `--cd`, another distribution or user, a host shell and a profile
+  directory.
 - **Not automated.** Interactive file-tree following.
 
 ## Supersedes

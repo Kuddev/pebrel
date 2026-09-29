@@ -63,7 +63,9 @@ class ShellIntegrationTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.home = Path(self.temporary.name)
 
-    def start(self, shell: str, rc: str = "", original_zdotdir: Path | None = None) -> ShellSession:
+    def start(self, shell: str, rc: str = "", original_zdotdir: Path | None = None,
+              user_files: bool = True, global_rcs: bool = False, profile: str = "",
+              marker: bytes = b"\x1b]133;A\x07") -> ShellSession:
         program = shutil.which(shell)
         if not program:
             self.skipTest(f"{shell} is not installed; native CI must run this case")
@@ -76,24 +78,26 @@ class ShellIntegrationTests(unittest.TestCase):
         else:
             dotfiles = original_zdotdir or self.home
             dotfiles.mkdir(exist_ok=True)
-            (dotfiles / ".zshenv").write_text(
-                '[[ -n $NEBULA_TEST_ZSH_MODULE_DIR ]] && module_path=("$NEBULA_TEST_ZSH_MODULE_DIR" $module_path)\n'
-                "export NEBULA_PROFILE_TEST=env\n", encoding="utf-8")
-            (dotfiles / ".zprofile").write_text("NEBULA_PROFILE_TEST+=:profile\n", encoding="utf-8")
-            (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST+=:rc\n" + rc, encoding="utf-8")
-            (dotfiles / ".zlogin").write_text("NEBULA_PROFILE_TEST+=:login\n", encoding="utf-8")
+            if user_files:
+                (dotfiles / ".zshenv").write_text(
+                    '[[ -n $NEBULA_TEST_ZSH_MODULE_DIR ]] && module_path=("$NEBULA_TEST_ZSH_MODULE_DIR" $module_path)\n'
+                    "export NEBULA_PROFILE_TEST=env\n", encoding="utf-8")
+                (dotfiles / ".zprofile").write_text("NEBULA_PROFILE_TEST+=:profile\n" + profile,
+                                                    encoding="utf-8")
+                (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST+=:rc\n" + rc, encoding="utf-8")
+                (dotfiles / ".zlogin").write_text("NEBULA_PROFILE_TEST+=:login\n", encoding="utf-8")
             wrapper = self.home / "integration"
             wrapper.mkdir()
             for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
                 shutil.copyfile(SCRIPTS / source, wrapper / target)
-            args = ["-d", "-l", "-i"]
+            args = ["-l", "-i"] if global_rcs else ["-d", "-l", "-i"]
             env = {"ZDOTDIR": str(wrapper), "NEBULA_ZSH_INTEGRATION": str(wrapper),
                    "NEBULA_ZDOTDIR_WAS_SET": "1" if original_zdotdir else "0"}
             if original_zdotdir:
                 env["NEBULA_ORIGINAL_ZDOTDIR"] = str(original_zdotdir)
         session = ShellSession(program, self.home, args, env)
         self.addCleanup(session.close)
-        session.wait(b"\x1b]133;A\x07")
+        session.wait(marker)
         return session
 
     def check_protocol(self, shell: str) -> None:
@@ -115,6 +119,8 @@ class ShellIntegrationTests(unittest.TestCase):
         session = self.start("zsh")
         session.command('print -r -- "RCS=$options[rcs] GLOBAL_RCS=$options[globalrcs]"',
                         b"RCS=on GLOBAL_RCS=off")
+        # Without global rc files no system compinit runs, so the bootstrap adds none.
+        session.command('print -r -- "COMPINIT=${+functions[compdef]}_END"', b"COMPINIT=0_END")
 
     def zsh_color_state(self, rc: str) -> bytes:
         session = self.start("zsh", rc)
@@ -256,6 +262,54 @@ class ShellIntegrationTests(unittest.TestCase):
         environment = dict(line.split("=", 1) for line in result.stdout.splitlines()[1:] if "=" in line)
         self.assertEqual(environment.get("ZDOTDIR"), str(dotfiles))
         self.assertFalse([name for name in environment if name.startswith("NEBULA_")])
+
+    def test_zsh_user_rc_programs_do_not_inherit_bootstrap_variables(self) -> None:
+        # A terminal multiplexer exec'd from a user rc file must not carry the bootstrap state along.
+        session = self.start("zsh", 'print -r -- "RC_ENV=$(env | grep -cE "^NEBULA_(Z|ORIGINAL_Z)")_END"\n')
+        self.assertIn(b"RC_ENV=0_END", session.output)
+        session.command('print -r -- "LEFT=${+NEBULA_ZSH_INTEGRATION}_END"', b"LEFT=0_END")
+
+    def require_ubuntu_global_zshrc(self) -> None:
+        try:
+            os_release = Path("/etc/os-release").read_text(encoding="utf-8")
+            global_rc = Path("/etc/zsh/zshrc").read_text(encoding="utf-8")
+        except OSError:
+            self.skipTest("requires an Ubuntu global zshrc")
+        if "ubuntu" not in os_release or "skip_global_compinit" not in global_rc:
+            self.skipTest("requires an Ubuntu global zshrc")
+
+    def test_zsh_global_compinit_keeps_its_dump_out_of_the_bootstrap(self) -> None:
+        # Ubuntu's /etc/zsh/zshrc runs compinit while ZDOTDIR still names the bootstrap.
+        self.require_ubuntu_global_zshrc()
+        session = self.start("zsh", global_rcs=True)
+        session.command('print -r -- "COMPINIT=${+functions[compdef]}_END"', b"COMPINIT=1_END")
+        self.assertEqual(sorted(path.name for path in (self.home / "integration").iterdir()),
+                         [".zprofile", ".zshenv", ".zshrc"])
+        self.assertTrue(list(self.home.glob(".zcompdump*")), "the dump belongs to the user")
+
+    def test_zsh_profile_can_still_skip_the_global_compinit(self) -> None:
+        # Ubuntu reads skip_global_compinit after ~/.zprofile on a login shell.
+        self.require_ubuntu_global_zshrc()
+        session = self.start("zsh", global_rcs=True, profile="skip_global_compinit=1\n")
+        session.command('print -r -- "COMPINIT=${+functions[compdef]}_END"', b"COMPINIT=0_END")
+        self.assertFalse(list(self.home.glob(".zcompdump*")))
+
+    def test_zsh_offers_the_newuser_wizard_when_the_user_has_no_startup_files(self) -> None:
+        # zsh's own check only saw the bootstrap's files.
+        probe = subprocess.run([shutil.which("zsh") or "zsh", "-f", "-c",
+                                "autoload -U +X zsh-newuser-install 2>/dev/null"],
+                               env={"PATH": os.environ["PATH"], **{name: os.environ[name]
+                                    for name in ("FPATH",) if name in os.environ}})
+        if probe.returncode != 0 or os.geteuid() == 0:
+            self.skipTest("requires zsh-newuser-install as a non-root user")
+        self.start("zsh", user_files=False, marker=b"zsh-newuser-install")
+
+    def test_zsh_newuser_check_happens_before_the_user_zshenv_moves_zdotdir(self) -> None:
+        # Native zsh checks $HOME, where this ~/.zshenv exists; the XDG directory is empty.
+        (self.home / ".config/zsh").mkdir(parents=True)
+        (self.home / ".zshenv").write_text('export ZDOTDIR="$HOME/.config/zsh"\n', encoding="utf-8")
+        session = self.start("zsh", user_files=False)
+        self.assertNotIn(b"zsh-newuser-install", session.output)
 
     def test_zsh_preserves_precmd_hooks_after_failure(self) -> None:
         session = self.start("zsh", """

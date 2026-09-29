@@ -132,11 +132,9 @@ impl TerminalView {
                 // 补齐要知道这个 pane 面对**哪台机器**：`wsl.exe -d <发行版>`
                 // 启动的 tab，文件系统和命令集都在来宾里，本进程的 `std::fs`
                 // 和 PATH 描述的是另一台机器。
-                let suggest_env = match (&effective, &wsl_distro) {
-                    (Some(_), Some(distro)) => {
-                        crate::display::SuggestEnv::Wsl { distro: distro.clone() }
-                    },
-                    _ => effective
+                let suggest_env = match &wsl_distro {
+                    Some(distro) => crate::display::SuggestEnv::Wsl { distro: distro.clone() },
+                    None => effective
                         .as_ref()
                         .map(|shell| {
                             crate::completion_context::launch_environment(
@@ -154,13 +152,22 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(effective, pane_id, cwd);
+                // A PTY-default WSL (runtime `shell=wsl`) spawns the snapshotted
+                // `wsl.exe` explicitly so it receives the same guest environment.
+                // Other PTY defaults keep the engine path and its argument escaping.
+                let spawn_shell = effective.or_else(|| {
+                    snapshot_shell
+                        .clone()
+                        .filter(|shell| crate::shell_detect::is_wsl_launcher(shell.program()))
+                });
+                let options = session::local_options(spawn_shell, pane_id, cwd);
                 let history_cwd = startup_history_directory(&options, &suggest_env);
                 completion_cwd = history_cwd
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
+                let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options)
+                    .with_spawn_distro(wsl_distro.as_deref());
                 let spawned = session::spawn(initial, term_config, options);
                 if spawned.is_ok()
                     && let Some(cwd) = history_cwd

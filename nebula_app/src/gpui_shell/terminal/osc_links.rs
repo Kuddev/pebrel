@@ -170,6 +170,21 @@ fn wsl_absolute_target(text: &str, wsl_distro: Option<&str>) -> Option<String> {
     Some(crate::shell_detect::wsl_unc_path(distro, text).to_string_lossy().into_owned())
 }
 
+/// Base for relative link targets. A WSL pane's guest cwd maps into its
+/// distribution like an absolute prompt path; the opener resolves it off the UI
+/// thread. Only other panes fall back to the host-visible cwd, since Windows
+/// would resolve a guest `/home/x` against the current drive.
+pub(super) fn link_base_directory(
+    cwd: &str,
+    wsl_distro: Option<&str>,
+    host_cwd: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    match (wsl_distro, crate::shell_detect::wsl_guest_cwd(cwd)) {
+        (Some(distro), Some(guest)) => Some(crate::shell_detect::wsl_unc_path(distro, guest)),
+        _ => host_cwd(),
+    }
+}
+
 #[cfg(test)]
 mod path_tests {
     use super::*;
@@ -185,6 +200,18 @@ mod path_tests {
         assert!(wsl_absolute_target("https://example.com", distro).is_none());
         // SSH and host panes have no WSL snapshot.
         assert!(wsl_absolute_target("/home/user", None).is_none());
+    }
+
+    #[test]
+    fn relative_prompt_paths_resolve_in_the_guest_cwd() {
+        let host = || Some(std::path::PathBuf::from(r"D:\host"));
+        assert_eq!(
+            link_base_directory("/home/dev/app", Some("Debian"), || panic!("no host probe")),
+            Some(std::path::PathBuf::from(r"\\wsl.localhost\Debian\home\dev\app"))
+        );
+        // A host-form cwd (before the first guest report) and host panes keep the host path.
+        assert_eq!(link_base_directory(r"D:\host", Some("Debian"), host), host());
+        assert_eq!(link_base_directory("/home/dev", None, host), host());
     }
 }
 

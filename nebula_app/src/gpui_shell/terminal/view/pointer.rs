@@ -184,7 +184,11 @@ impl TerminalView {
             hover.hint.text(&*term).map(|t| t.into_owned())
         };
         let Some(text) = text else { return };
-        let cwd = self.local_cwd();
+        let cwd = super::super::osc_links::link_base_directory(
+            &self.cwd,
+            self.wsl_distro.as_deref(),
+            || self.local_cwd(),
+        );
         super::super::osc_links::open_hint_match(
             &hover.hint,
             &text,

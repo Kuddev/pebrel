@@ -3,6 +3,23 @@ if [[ $NEBULA_ZDOTDIR_WAS_SET == 1 ]]; then
 else
     unset ZDOTDIR
 fi
+if [[ ${skip_global_compinit-} == nebula-bootstrap ]]; then
+    unset skip_global_compinit
+    # Ubuntu's /etc/zsh/zshrc condition, now with the user's own dump directory;
+    # the global rc only ran when GLOBAL_RCS was still set.
+    if [[ -o globalrcs && -r /etc/os-release ]] &&
+        (( ${${(@f)"$(</etc/os-release)"}[(I)ID*=*ubuntu]} )); then
+        autoload -U compinit
+        compinit
+    fi
+fi
+if (( ${+_nebula_newuser} )); then
+    unset _nebula_newuser
+    if functions zsh-newuser-install >/dev/null 2>&1 ||
+        autoload -U +X zsh-newuser-install 2>/dev/null; then
+        zsh-newuser-install
+    fi
+fi
 if [[ -r ${ZDOTDIR-$HOME}/.zshrc ]]; then
     source "${ZDOTDIR-$HOME}/.zshrc"
 fi

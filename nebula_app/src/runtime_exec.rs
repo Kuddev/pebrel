@@ -94,7 +94,7 @@ impl PaneExecContext {
         let location = options
             .shell
             .as_ref()
-            .filter(|shell| is_wsl_program(shell.program()))
+            .filter(|shell| crate::shell_detect::is_wsl_launcher(shell.program()))
             .map_or(ExecLocation::Host, |shell| ExecLocation::Wsl {
                 distro: crate::shell_detect::wsl_launch_distro(shell.program(), shell.args())
                     .map(str::to_owned),
@@ -112,6 +112,18 @@ impl PaneExecContext {
         }
     }
 
+    /// Pin a bare WSL launch to the pane's spawn-time distribution snapshot, so
+    /// commands run where the file tree, Git view and prompt links point instead
+    /// of following a later default change.
+    pub(crate) fn with_spawn_distro(mut self, snapshot: Option<&str>) -> Self {
+        if let (ExecLocation::Wsl { distro: distro @ None, .. }, Some(snapshot)) =
+            (&mut self.location, snapshot)
+        {
+            *distro = Some(snapshot.to_owned());
+        }
+        self
+    }
+
     #[cfg(test)]
     fn host(cwd: PathBuf) -> Self {
         Self {
@@ -121,13 +133,6 @@ impl PaneExecContext {
             fallback_cwd: Some(cwd),
         }
     }
-}
-
-fn is_wsl_program(program: &str) -> bool {
-    Path::new(program)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .is_some_and(|stem| stem.eq_ignore_ascii_case("wsl"))
 }
 
 #[derive(Debug)]
@@ -403,6 +408,14 @@ mod tests {
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), None);
         options.shell = Some(nebula_terminal::tty::Shell::new("wsl.exe".into(), Vec::new()));
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), Some(None));
+        // The pane's spawn snapshot fills a bare launch; it never overrides an explicit one.
+        let pinned = PaneExecContext::from_pty_options(&options).with_spawn_distro(Some("Ubuntu"));
+        assert_eq!(pinned.wsl_distribution(), Some(Some("Ubuntu")));
+        options.shell = Some(nebula_terminal::tty::Shell::new(
+            r"C:\Program Files\WSL\wsl.exe".into(),
+            vec!["-e".into(), "tool".into(), "-d".into(), "guest-arg".into()],
+        ));
+        assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), Some(None));
         options.shell = Some(nebula_terminal::tty::Shell::new(
             "wsl.exe".into(),
             vec!["--distribution".into(), "Debian".into(), "--user".into(), "hello".into()],
@@ -412,6 +425,11 @@ mod tests {
             Some(Some("Debian"))
         );
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_user(), Some("hello"));
+        let explicit =
+            PaneExecContext::from_pty_options(&options).with_spawn_distro(Some("Ubuntu"));
+        assert_eq!(explicit.wsl_distribution(), Some(Some("Debian")));
+        let host = PaneExecContext::from_pty_options(&Default::default());
+        assert_eq!(host.with_spawn_distro(Some("Ubuntu")).wsl_distribution(), None);
     }
 
     #[test]

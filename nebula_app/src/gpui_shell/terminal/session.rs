@@ -172,13 +172,8 @@ fn wsl_zsh_integration(program: &str) -> Option<String> {
     if !crate::shell_detect::is_wsl_launcher(program) {
         return None;
     }
-    match crate::platform::shell_integration::wsl_zsh_directory() {
-        Ok(directory) => directory.map(|directory| directory.to_string_lossy().into_owned()),
-        Err(error) => {
-            log::warn!("Could not prepare WSL zsh integration: {error}");
-            None
-        },
-    }
+    crate::platform::shell_integration::wsl_zsh_directory()
+        .map(|directory| directory.to_string_lossy().into_owned())
 }
 
 pub fn spawn(
