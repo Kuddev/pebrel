@@ -11,9 +11,20 @@ def main():
         raise ValueError("invalid channel token")
     root = str(Path(__file__).resolve().parent)
     env = os.environ.copy()
+    env.pop("PEBREL_PROMPT_PLATFORM", None)
+    if sys.platform == "darwin":
+        prompt_platform = "macos"
+    elif sys.platform.startswith(("win", "cygwin")):
+        prompt_platform = "windows"
+    elif sys.platform.startswith("linux"):
+        prompt_platform = "linux"
+    else:
+        prompt_platform = ""
     env.update(PEBREL_REMOTE_HOOK_TOKEN=token, NEBULA_REMOTE_HOOK_TOKEN=token,
                PEBREL_PANE_REMOTE="1", NEBULA_PANE_REMOTE="1", PEBREL_REMOTE_SESSION="1",
                PEBREL_HOOK_EXE=root + "/pebrel-hook", NEBULA_HOOK_EXE=root + "/pebrel-hook")
+    if prompt_platform:
+        env["PEBREL_PROMPT_PLATFORM"] = prompt_platform
     shell = env.get("SHELL") or "/bin/sh"
     name = os.path.basename(shell)
     if name == "bash":

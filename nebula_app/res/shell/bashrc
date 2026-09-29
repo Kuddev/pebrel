@@ -99,10 +99,12 @@ _nebula_precmd() {
         if [[ ${PS1-} != "$__pebrel_ssh_prompt_last_ps1" ]]; then
             __pebrel_ssh_prompt_enabled=0
         else
-            local branch='' git_prefix='' git_suffix='' leading_newline='' prompt_icon=''
-            if [[ ${PEBREL_PROMPT_PLATFORM:-} == macos ]]; then
-                prompt_icon=''
-            fi
+            local branch='' git_prefix='' git_suffix='' leading_newline='' prompt_icon=''
+            case ${PEBREL_PROMPT_PLATFORM:-} in
+                windows) prompt_icon='' ;;
+                macos) prompt_icon='' ;;
+                linux) prompt_icon='' ;;
+            esac
             branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
             if [[ -n $branch ]]; then
                 git_prefix=' '
