@@ -15,6 +15,7 @@ pub(crate) mod ai_session_identity;
 pub mod capabilities;
 pub mod credentials;
 pub mod dirs;
+pub(crate) mod distribution;
 pub(crate) mod elevation;
 pub(crate) mod environment;
 pub(crate) mod file_drag;

@@ -40,6 +40,9 @@ _pebrel() {
             pebrel,pane)
                 cmd="pebrel__pane"
                 ;;
+            pebrel,plugin)
+                cmd="pebrel__plugin"
+                ;;
             pebrel,setup-ai)
                 cmd="pebrel__setup__ai"
                 ;;
@@ -328,6 +331,9 @@ _pebrel() {
             pebrel__help,pane)
                 cmd="pebrel__help__pane"
                 ;;
+            pebrel__help,plugin)
+                cmd="pebrel__help__plugin"
+                ;;
             pebrel__help,setup-ai)
                 cmd="pebrel__help__setup__ai"
                 ;;
@@ -484,6 +490,12 @@ _pebrel() {
             pebrel__help__pane,zoom)
                 cmd="pebrel__help__pane__zoom"
                 ;;
+            pebrel__help__plugin,check)
+                cmd="pebrel__help__plugin__check"
+                ;;
+            pebrel__help__plugin,run)
+                cmd="pebrel__help__plugin__run"
+                ;;
             pebrel__help__tab,close)
                 cmd="pebrel__help__tab__close"
                 ;;
@@ -556,6 +568,24 @@ _pebrel() {
             pebrel__pane__help,zoom)
                 cmd="pebrel__pane__help__zoom"
                 ;;
+            pebrel__plugin,check)
+                cmd="pebrel__plugin__check"
+                ;;
+            pebrel__plugin,help)
+                cmd="pebrel__plugin__help"
+                ;;
+            pebrel__plugin,run)
+                cmd="pebrel__plugin__run"
+                ;;
+            pebrel__plugin__help,check)
+                cmd="pebrel__plugin__help__check"
+                ;;
+            pebrel__plugin__help,help)
+                cmd="pebrel__plugin__help__help"
+                ;;
+            pebrel__plugin__help,run)
+                cmd="pebrel__plugin__help__run"
+                ;;
             pebrel__tab,close)
                 cmd="pebrel__tab__close"
                 ;;
@@ -599,7 +629,7 @@ _pebrel() {
 
     case "${cmd}" in
         pebrel)
-            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --config-file --daemon --working-directory --shell --hold --command --title --class --option --help --version ctl env window tab pane agent migrate config notify-test setup-ai ssh help"
+            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --config-file --daemon --working-directory --shell --hold --command --title --class --option --help --version ctl env window tab pane agent migrate config plugin notify-test setup-ai ssh help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2503,7 +2533,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help)
-            opts="ctl env window tab pane agent migrate config notify-test setup-ai ssh help"
+            opts="ctl env window tab pane agent migrate config plugin notify-test setup-ai ssh help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3300,6 +3330,48 @@ _pebrel() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        pebrel__help__plugin)
+            opts="check run"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__plugin__check)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__plugin__run)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         pebrel__help__setup__ai)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -3865,6 +3937,112 @@ _pebrel() {
                     return 0
                     ;;
                 --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --timeout-ms)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__plugin)
+            opts="-h --pretty --help check run help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__plugin__check)
+            opts="-h --pretty --help <PATH>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__plugin__help)
+            opts="check run help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__plugin__help__check)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__plugin__help__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__plugin__help__run)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__plugin__run)
+            opts="-h --args --timeout-ms --pretty --help <PATH> <COMMAND>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --args)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

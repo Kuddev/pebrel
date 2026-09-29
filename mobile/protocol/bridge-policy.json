@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "read": [
+    "runtime.describe",
+    "runtime.snapshot",
+    "events.subscribe",
+    "pane.read",
+    "pane.screen.subscribe",
+    "pane.screen.ack",
+    "pane.screen.unsubscribe",
+    "git.status",
+    "git.diff",
+    "git.history",
+    "tab.read",
+    "conversation.read"
+  ],
+  "input": [
+    "pane.prompt",
+    "pane.send_key",
+    "git.stage",
+    "git.unstage",
+    "git.commit",
+    "git.fetch",
+    "git.pull",
+    "git.push",
+    "tab.new",
+    "tab.open",
+    "tab.close",
+    "tab.focus",
+    "conversation.send",
+    "conversation.choose",
+    "conversation.key"
+  ],
+  "maxRequestBytes": 40960,
+  "maxFrameBytes": 2097152,
+  "maxPending": 16
+}

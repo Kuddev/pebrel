@@ -137,7 +137,7 @@ pub(super) fn handle_legacy(
 }
 
 pub(super) fn runtime_description() -> Value {
-    json!({
+    let mut description = json!({
         "app_version": env!("VERSION"),
         "protocol": PROTOCOL_NAME,
         "protocol_version": PROTOCOL_VERSION,
@@ -175,7 +175,9 @@ pub(super) fn runtime_description() -> Value {
             "pane.send_key",
             "pane.run",
             "pane.exec",
-            "pane.wait"
+            "pane.wait",
+            "git.status", "git.diff", "git.history",
+            "git.stage", "git.unstage", "git.commit", "git.fetch", "git.pull", "git.push"
         ],
         // Additive params cannot be detected from `capabilities`: an older
         // build ignores an unknown `after_seq` and still races. Clients that
@@ -195,6 +197,7 @@ pub(super) fn runtime_description() -> Value {
             ,"cli.paste_sources"
             ,"layout.typed_mutations"
             ,"pane.exec.non_tty"
+            ,"pane.read.screen.v1"
         ],
         // 环境契约：pane 里的进程靠这些变量发现自己和控制面，不必扫进程或猜
         // 端口。写进 describe 是为了让外部客户端能**探测**契约而不是硬编码变量
@@ -217,7 +220,26 @@ pub(super) fn runtime_description() -> Value {
             "pane": ["list", "read", "send", "paste", "wait", "exec", "close", "zoom", "resize"],
             "agent": ["list", "send", "delegate", "paste", "read", "wait"]
         }
-    })
+    });
+    if cfg!(feature = "gpui-shell") {
+        description["capabilities"].as_array_mut().expect("capabilities array").extend(
+            [
+                "tab.focus",
+                "tab.open",
+                "tab.read",
+                "conversation.read",
+                "conversation.send",
+                "conversation.choose",
+                "conversation.key",
+            ]
+            .map(|method| json!(method)),
+        );
+        description["features"]
+            .as_array_mut()
+            .expect("features array")
+            .push(json!("tab.identity_and_read"));
+    }
+    description
 }
 
 pub(super) fn subscribe_connection(

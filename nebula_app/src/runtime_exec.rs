@@ -7,14 +7,15 @@
 use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::runtime_api::{ApiError, RuntimeDispatch};
+use crate::platform::process::{ProcessGroup, configure_process_group};
+use crate::runtime_api::{ApiError, RuntimeCommand, RuntimeDispatch};
 
 #[derive(Clone, Debug)]
 enum ExecLocation {
@@ -35,6 +36,35 @@ pub(crate) struct PaneExecContext {
 }
 
 impl PaneExecContext {
+    pub(crate) fn for_git(mut self) -> Self {
+        // 手机没有凭据交互通道；保留宿主 SSH/credential 配置，但不弹出凭据窗口。
+        let vars = [
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("GCM_INTERACTIVE", "never"),
+            ("SSH_ASKPASS_REQUIRE", "never"),
+        ];
+        if matches!(self.location, ExecLocation::Wsl { .. }) {
+            let mut forwarded = self
+                .env
+                .get("WSLENV")
+                .cloned()
+                .or_else(|| std::env::var("WSLENV").ok())
+                .unwrap_or_default();
+            for (key, _) in vars {
+                if !forwarded.split(':').any(|entry| entry.split('/').next() == Some(key)) {
+                    if !forwarded.is_empty() {
+                        forwarded.push(':');
+                    }
+                    forwarded.push_str(key);
+                    forwarded.push_str("/u");
+                }
+            }
+            self.env.insert("WSLENV".into(), forwarded);
+        }
+        self.env.extend(vars.map(|(key, value)| (key.into(), value.into())));
+        self
+    }
+
     pub(crate) fn shell_program(&self) -> Option<&str> {
         self.shell_program.as_deref()
     }
@@ -226,17 +256,22 @@ fn build_command(
     Ok((command, execution))
 }
 
-pub(crate) fn spawn(
-    dispatch: Arc<RuntimeDispatch>,
-    context: PaneExecContext,
-    cwd: String,
-    argv: Vec<String>,
-    timeout_ms: u64,
-    max_output_bytes: usize,
-) {
+pub(crate) fn spawn(dispatch: Arc<RuntimeDispatch>, context: PaneExecContext, cwd: String) {
     let worker_dispatch = dispatch.clone();
     let result = std::thread::Builder::new().name("nebula-pane-exec".to_owned()).spawn(move || {
-        worker_dispatch.respond(execute(context, cwd, argv, timeout_ms, max_output_bytes));
+        let result = match &worker_dispatch.command {
+            RuntimeCommand::Exec { argv, timeout_ms, max_output_bytes, .. } => {
+                execute(context, cwd, argv.clone(), *timeout_ms, *max_output_bytes)
+            },
+            RuntimeCommand::Git { request, .. } => {
+                crate::runtime_api::git::execute(context, cwd, request)
+            },
+            _ => Err(ApiError::new(
+                "invalid_runtime_command",
+                "command does not own a process worker",
+            )),
+        };
+        worker_dispatch.respond(result);
     });
     if let Err(error) = result {
         dispatch.respond(Err(ApiError::new(
@@ -356,131 +391,6 @@ fn join_capture(
                 format!("failed to read pane.exec {stream}: {error}"),
             )
         })
-}
-
-#[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt as _;
-    command.process_group(0);
-}
-
-/// Windows：`pane.exec` 的子进程绝不允许弹出控制台窗口。
-///
-/// Pebrel 自己是 `windows_subsystem = "windows"` 的 GUI 进程（见 `main.rs`），
-/// **没有控制台**可给子进程继承；不抑制的话 Windows 会给每条 exec 命令分配一个
-/// 新控制台，而默认终端应用是 Windows Terminal 的机器上那就是**弹一整扇窗口**
-/// （同 [`crate::ssh_session`] 里 `ssh.exe -G` 那条注释说的现象）。
-///
-/// exec 的 stdin 是 null、stdout/stderr 走管道，从头到尾没有交互，也就不需要
-/// 控制台——和 wsl/git 那些 spawn 用 `CREATE_NO_WINDOW` 是同一条规矩。
-#[cfg(windows)]
-fn configure_process_group(command: &mut Command) {
-    crate::platform::process::hidden_command(command);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn configure_process_group(_: &mut Command) {}
-
-struct ProcessGroup {
-    #[cfg(windows)]
-    job: windows_sys::Win32::Foundation::HANDLE,
-    #[cfg(unix)]
-    process_group: i32,
-}
-
-impl ProcessGroup {
-    fn attach(child: &Child) -> io::Result<Self> {
-        #[cfg(windows)]
-        {
-            use std::mem::{size_of, zeroed};
-            use std::os::windows::io::AsRawHandle as _;
-            use std::ptr;
-            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-            use windows_sys::Win32::System::JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-                SetInformationJobObject,
-            };
-
-            // SAFETY: all pointers reference initialized POD values for the duration of each
-            // call. The returned job handle is owned by ProcessGroup and closed exactly once.
-            unsafe {
-                let job = CreateJobObjectW(ptr::null(), ptr::null());
-                if job.is_null() {
-                    return Err(io::Error::last_os_error());
-                }
-                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                if SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    (&raw const limits).cast(),
-                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                ) == 0
-                {
-                    let error = io::Error::last_os_error();
-                    CloseHandle(job);
-                    return Err(error);
-                }
-                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
-                    let error = io::Error::last_os_error();
-                    CloseHandle(job);
-                    return Err(error);
-                }
-                return Ok(Self { job });
-            }
-        }
-        #[cfg(unix)]
-        {
-            Ok(Self { process_group: child.id() as i32 })
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = child;
-            Ok(Self {})
-        }
-    }
-
-    fn terminate(&self, child: &mut Child) {
-        #[cfg(windows)]
-        unsafe {
-            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
-            let _ = TerminateJobObject(self.job, 1);
-        }
-        #[cfg(unix)]
-        unsafe {
-            let _ = libc::kill(-self.process_group, libc::SIGKILL);
-        }
-        let _ = child.kill();
-    }
-
-    fn finish(self) {
-        #[cfg(unix)]
-        unsafe {
-            let _ = libc::kill(-self.process_group, libc::SIGKILL);
-        }
-        // Windows uses JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE in Drop.
-    }
-}
-
-impl Drop for ProcessGroup {
-    fn drop(&mut self) {
-        #[cfg(windows)]
-        {
-            // SAFETY: `job` is the live handle created and exclusively owned by this guard.
-            unsafe {
-                let _ = windows_sys::Win32::Foundation::CloseHandle(self.job);
-            }
-        }
-        #[cfg(unix)]
-        {
-            // A reader-thread creation failure must not leave the child tree
-            // alive with one inherited pipe still open.
-            unsafe {
-                let _ = libc::kill(-self.process_group, libc::SIGKILL);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

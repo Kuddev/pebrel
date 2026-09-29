@@ -1,4 +1,4 @@
-//! 多协议远程备份：把 [`crate::encrypted_backup`] 的加密归档（NEBUBAK1，
+//! 多协议远程备份：把 [`crate::encrypted_backup`] 的加密归档（PEBRBAK1，
 //! Argon2id + AES-256-GCM，服务器只见密文）推到远端，或取回最新一份恢复。
 //!
 //! 协议后端：
@@ -17,7 +17,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use log::warn;
 
+mod listing;
 pub(crate) mod preferences;
+pub(crate) use listing::Snapshot;
 
 /// 远程备份配置文件（位于 `nebula_data_dir()`），独立于 `nebula_sync.txt`：
 /// 备份管道自身的配置不该被备份恢复覆盖到不可用。
@@ -26,7 +28,6 @@ const CONFIG_FILE: &str = "pebrel_backup.txt";
 /// 归档文件名：`pebrel-backup-YYYYMMDD-HHMMSS.nbk`（UTC）。前后缀是列表
 /// 过滤的安全边界——清理绝不会碰远端目录里不带这两段的文件。
 const ARCHIVE_PREFIX: &str = "pebrel-backup-";
-const LEGACY_ARCHIVE_PREFIX: &str = "nebula-backup-";
 const ARCHIVE_SUFFIX: &str = ".nbk";
 
 /// 每个远端保留的归档份数。
@@ -34,9 +35,9 @@ pub(crate) const KEEP_ARCHIVES: usize = 10;
 
 /// Windows 凭据管理器条目（与 `sync.rs` 的通用 DPAPI 存取同一后端）。
 #[cfg(windows)]
-const WEBDAV_PASSWORD_TARGET: &str = "Nebula Backup WebDAV Password";
+const WEBDAV_PASSWORD_TARGET: &str = "Pebrel Backup WebDAV Password";
 #[cfg(windows)]
-const S3_SECRET_TARGET: &str = "Nebula Backup S3 Secret Key";
+const S3_SECRET_TARGET: &str = "Pebrel Backup S3 Secret Key";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackupProtocol {
@@ -277,7 +278,7 @@ pub fn store_s3_secret(_access_key: &str, _secret: &str) -> Result<(), String> {
 }
 
 fn webdav_password() -> Option<String> {
-    for name in ["PEBREL_BACKUP_WEBDAV_PASSWORD", "NEBULA_BACKUP_WEBDAV_PASSWORD"] {
+    for name in ["PEBREL_BACKUP_WEBDAV_PASSWORD"] {
         if let Ok(password) = std::env::var(name) {
             if !password.trim().is_empty() {
                 return Some(password.trim().to_owned());
@@ -294,7 +295,7 @@ fn webdav_password() -> Option<String> {
 }
 
 fn s3_secret() -> Option<String> {
-    for name in ["PEBREL_BACKUP_S3_SECRET", "NEBULA_BACKUP_S3_SECRET"] {
+    for name in ["PEBREL_BACKUP_S3_SECRET"] {
         if let Ok(secret) = std::env::var(name) {
             if !secret.trim().is_empty() {
                 return Some(secret.trim().to_owned());
@@ -361,10 +362,7 @@ fn is_archive_name(name: &str) -> bool {
 }
 
 fn archive_timestamp(name: &str) -> Option<&str> {
-    let timestamp = name
-        .strip_prefix(ARCHIVE_PREFIX)
-        .or_else(|| name.strip_prefix(LEGACY_ARCHIVE_PREFIX))?
-        .strip_suffix(ARCHIVE_SUFFIX)?;
+    let timestamp = name.strip_prefix(ARCHIVE_PREFIX)?.strip_suffix(ARCHIVE_SUFFIX)?;
     (timestamp.len() == 15
         && timestamp
             .bytes()
@@ -386,7 +384,10 @@ fn sort_archives(names: &mut [String]) {
 trait Backend {
     fn put(&self, name: &str, bytes: &[u8]) -> Result<(), String>;
     fn get(&self, name: &str) -> Result<Vec<u8>, String>;
-    fn list(&self) -> Result<Vec<String>, String>;
+    fn list_details(&self) -> Result<Vec<Snapshot>, String>;
+    fn list(&self) -> Result<Vec<String>, String> {
+        self.list_details().map(|entries| entries.into_iter().map(|entry| entry.name).collect())
+    }
     fn delete(&self, name: &str) -> Result<(), String>;
     /// 状态行里的目的地描述（不含凭据）。
     fn describe(&self) -> String;
@@ -394,6 +395,13 @@ trait Backend {
 
 /// 校验配置完整性并组装后端。缺什么直接说清楚缺什么，绝不半配置上路。
 fn backend(cfg: &BackupRemoteConfig) -> Result<Box<dyn Backend>, String> {
+    backend_with_secret(cfg, None)
+}
+
+fn backend_with_secret(
+    cfg: &BackupRemoteConfig,
+    secret: Option<&str>,
+) -> Result<Box<dyn Backend>, String> {
     match cfg.protocol {
         BackupProtocol::Off => Err("未启用远程备份：先在设置 → 备份里选择协议".to_owned()),
         BackupProtocol::Folder => {
@@ -418,7 +426,9 @@ fn backend(cfg: &BackupRemoteConfig) -> Result<Box<dyn Backend>, String> {
             if username.is_empty() {
                 return Err("未配置 WebDAV 用户名".to_owned());
             }
-            let password = webdav_password()
+            let password = secret
+                .map(str::to_owned)
+                .or_else(webdav_password)
                 .ok_or("缺少 WebDAV 密码：在设置里输入或设 PEBREL_BACKUP_WEBDAV_PASSWORD")?;
             Ok(Box::new(WebDavBackend { url, username, password }))
         },
@@ -449,7 +459,9 @@ fn backend(cfg: &BackupRemoteConfig) -> Result<Box<dyn Backend>, String> {
             if access_key.is_empty() {
                 return Err("未配置 S3 Access Key".to_owned());
             }
-            let secret_key = s3_secret()
+            let secret_key = secret
+                .map(str::to_owned)
+                .or_else(s3_secret)
                 .ok_or("缺少 S3 Secret Key：在设置里输入或设 PEBREL_BACKUP_S3_SECRET")?;
             Ok(Box::new(S3Backend { endpoint, region, bucket, prefix, access_key, secret_key }))
         },
@@ -484,6 +496,13 @@ pub fn push(packet: &[u8]) -> Result<String, String> {
 }
 
 pub(crate) fn push_to(cfg: &BackupRemoteConfig, packet: &[u8]) -> Result<String, String> {
+    push_snapshot(cfg, packet).map(|(_, message)| message)
+}
+
+pub(crate) fn push_snapshot(
+    cfg: &BackupRemoteConfig,
+    packet: &[u8],
+) -> Result<(Snapshot, String), String> {
     let backend = backend(cfg)?;
     let name = archive_name(now_unix());
     backend.put(&name, packet)?;
@@ -498,7 +517,20 @@ pub(crate) fn push_to(cfg: &BackupRemoteConfig, packet: &[u8]) -> Result<String,
             message.push_str("；旧份清理失败（详见日志）");
         },
     }
-    Ok(message)
+    Ok((Snapshot { name, bytes: Some(packet.len() as u64) }, message))
+}
+
+/// 配置草稿的连接检查不先写入凭据；取消抽屉不会改变正在使用的存储账号。
+pub(crate) fn snapshot_details(
+    cfg: &BackupRemoteConfig,
+    secret: Option<&str>,
+) -> Result<Vec<Snapshot>, String> {
+    let mut entries = backend_with_secret(cfg, secret)?.list_details()?;
+    entries.retain(|entry| is_archive_name(&entry.name));
+    entries
+        .sort_by(|left, right| archive_timestamp(&right.name).cmp(&archive_timestamp(&left.name)));
+    entries.dedup_by(|left, right| left.name == right.name);
+    Ok(entries)
 }
 
 /// 取回远端最新一份归档：`(归档名, 密文字节)`。阻塞，跑在后台线程。
@@ -561,20 +593,20 @@ impl Backend for FolderBackend {
         std::fs::read(self.root.join(name)).map_err(|err| format!("读取备份失败：{err}"))
     }
 
-    fn list(&self) -> Result<Vec<String>, String> {
-        let entries = match std::fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(format!("读取备份目录失败：{err}")),
-        };
-        let mut names = Vec::new();
+    fn list_details(&self) -> Result<Vec<Snapshot>, String> {
+        let entries =
+            std::fs::read_dir(&self.root).map_err(|err| format!("读取备份目录失败：{err}"))?;
+        let mut snapshots = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|err| format!("读取备份目录失败：{err}"))?;
-            if entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
-                names.push(entry.file_name().to_string_lossy().into_owned());
+            if entry.file_type().map_err(|err| err.to_string())?.is_file() {
+                snapshots.push(Snapshot {
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                    bytes: Some(entry.metadata().map_err(|err| err.to_string())?.len()),
+                });
             }
         }
-        Ok(names)
+        Ok(snapshots)
     }
 
     fn delete(&self, name: &str) -> Result<(), String> {
@@ -674,27 +706,25 @@ impl Backend for WebDavBackend {
         }
     }
 
-    fn list(&self) -> Result<Vec<String>, String> {
+    fn list_details(&self) -> Result<Vec<Snapshot>, String> {
         let request = ureq::http::Request::builder()
             .method("PROPFIND")
             .uri(format!("{}/", self.url))
             .header("Authorization", self.auth())
             .header("Depth", "1")
             .header("Content-Type", "application/xml")
-            .body(r#"<?xml version="1.0"?><propfind xmlns="DAV:"><prop><displayname/></prop></propfind>"#.to_owned())
+            .body(r#"<?xml version="1.0"?><propfind xmlns="DAV:"><prop><getcontentlength/></prop></propfind>"#.to_owned())
             .map_err(|err| format!("构造列表请求失败：{err}"))?;
         let mut response =
             http_agent().run(request).map_err(|err| format!("列出远端失败：{err}"))?;
         match response.status().as_u16() {
             207 | 200 => {},
-            // 目录还不存在 = 还没有任何备份。
-            404 => return Ok(Vec::new()),
             401 | 403 => return Err("认证失败：检查 WebDAV 用户名/密码".to_owned()),
             status => return Err(format!("列出远端失败：HTTP {status}")),
         }
         let body =
             response.body_mut().read_to_vec().map_err(|err| format!("读取列表失败：{err}"))?;
-        Ok(propfind_archive_names(&String::from_utf8_lossy(&body)))
+        Ok(listing::webdav(&String::from_utf8_lossy(&body)))
     }
 
     fn delete(&self, name: &str) -> Result<(), String> {
@@ -716,26 +746,7 @@ impl Backend for WebDavBackend {
     }
 }
 
-/// 从 PROPFIND 的多状态 XML 里挑出我们的归档名。不引 XML 解析器：只认
-/// `…href>…</…` 文本段里以归档前后缀命名的最后一段路径。归档名是纯 ASCII
-/// `[0-9a-z.-]`，URL 编码对它是恒等变换，直接比对安全。
-fn propfind_archive_names(xml: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut rest = xml;
-    while let Some(open) = rest.find("href>") {
-        rest = &rest[open + "href>".len()..];
-        let Some(close) = rest.find('<') else { break };
-        let href = rest[..close].trim().trim_end_matches('/');
-        let name = href.rsplit('/').next().unwrap_or_default();
-        if is_archive_name(name) && !names.iter().any(|seen| seen == name) {
-            names.push(name.to_owned());
-        }
-        rest = &rest[close..];
-    }
-    names
-}
-
-// ---- 后端：S3 兼容（SigV4） ----
+// ---- 后端：S3 ----
 
 struct S3Backend {
     /// `https://host[:port]`，已去尾部斜杠。
@@ -842,32 +853,16 @@ impl Backend for S3Backend {
         }
     }
 
-    fn list(&self) -> Result<Vec<String>, String> {
+    fn list_details(&self) -> Result<Vec<Snapshot>, String> {
         let path = format!("/{}/", self.bucket);
-        let mut names = Vec::new();
-        for prefix in [ARCHIVE_PREFIX, LEGACY_ARCHIVE_PREFIX] {
-            let prefix = self.key(prefix);
-            let (status, body) =
-                self.request("GET", &path, &[("list-type", "2"), ("prefix", &prefix)], &[])?;
-            match status {
-                200 => {},
-                403 => return Err("认证失败：检查 S3 Access Key / Secret Key / 区域".to_owned()),
-                _ => return Err(format!("列出远端失败：{}", Self::explain(status, &body))),
-            }
-            let text = String::from_utf8_lossy(&body);
-            let mut rest: &str = &text;
-            while let Some(open) = rest.find("<Key>") {
-                rest = &rest[open + "<Key>".len()..];
-                let Some(close) = rest.find("</Key>") else { break };
-                let key = &rest[..close];
-                let name = key.rsplit('/').next().unwrap_or_default();
-                if is_archive_name(name) && !names.iter().any(|seen| seen == name) {
-                    names.push(name.to_owned());
-                }
-                rest = &rest[close..];
-            }
+        let prefix = self.key(ARCHIVE_PREFIX);
+        let (status, body) =
+            self.request("GET", &path, &[("list-type", "2"), ("prefix", &prefix)], &[])?;
+        match status {
+            200 => Ok(listing::s3(&String::from_utf8_lossy(&body))),
+            403 => Err("认证失败：检查 S3 Access Key / Secret Key / 区域".into()),
+            _ => Err(format!("列出远端失败：{}", Self::explain(status, &body))),
         }
-        Ok(names)
     }
 
     fn delete(&self, name: &str) -> Result<(), String> {
@@ -1039,15 +1034,16 @@ impl Backend for SftpBackend {
         })
     }
 
-    fn list(&self) -> Result<Vec<String>, String> {
+    fn list_details(&self) -> Result<Vec<Snapshot>, String> {
         let path = self.path.clone();
         self.run(|sftp| async move {
-            let entries = match sftp.read_dir(path).await {
-                Ok(entries) => entries,
-                // 目录还不存在 = 还没有任何备份。
-                Err(_) => return Ok(Vec::new()),
-            };
-            Ok(entries.into_iter().map(|entry| entry.file_name()).collect())
+            // 检查连接必须读到真实目录，权限和路径错误都需要就地反馈。
+            let entries =
+                sftp.read_dir(path).await.map_err(|err| format!("读取备份目录失败：{err}"))?;
+            Ok(entries
+                .into_iter()
+                .map(|entry| Snapshot { name: entry.file_name(), bytes: entry.metadata().size })
+                .collect())
         })
     }
 
@@ -1087,25 +1083,25 @@ mod tests {
 
     #[test]
     fn archive_filter_rejects_foreign_files() {
-        assert!(is_archive_name("nebula-backup-20260813-051900.nbk"));
+        assert!(!is_archive_name("nebula-backup-20260813-051900.nbk"));
         assert!(is_archive_name("pebrel-backup-20260813-051900.nbk"));
-        assert!(!is_archive_name("nebula-backup-.nbk"));
+        assert!(!is_archive_name("pebrel-backup-.nbk"));
         assert!(!is_archive_name("photo.png"));
-        assert!(!is_archive_name("nebula-backup-20260813-051900.nbk.tmp"));
+        assert!(!is_archive_name("pebrel-backup-20260813-051900.nbk.tmp"));
         assert!(!is_archive_name("other-backup-20260813.nbk"));
         assert!(!is_archive_name("pebrel-backup-../keep.nbk"));
     }
 
     #[test]
-    fn mixed_brand_archives_are_ordered_by_timestamp_for_restore_and_retention() {
+    fn archives_are_ordered_by_timestamp_for_restore_and_retention() {
         let mut names = vec![
             "pebrel-backup-20260810-010000.nbk".to_owned(),
-            "nebula-backup-20260813-010000.nbk".to_owned(),
+            "pebrel-backup-20260813-010000.nbk".to_owned(),
             "pebrel-backup-20260812-010000.nbk".to_owned(),
         ];
         sort_archives(&mut names);
         assert_eq!(names[0], "pebrel-backup-20260810-010000.nbk");
-        assert_eq!(names[2], "nebula-backup-20260813-010000.nbk");
+        assert_eq!(names[2], "pebrel-backup-20260813-010000.nbk");
     }
 
     #[test]
@@ -1172,8 +1168,8 @@ mod tests {
         assert_eq!(sigv4_uri_encode("a b/c~d", true), "a%20b%2Fc~d");
         // 查询串键排序 + 空值保留等号。
         assert_eq!(
-            sigv4_canonical_query(&[("prefix", "nebula-backup-"), ("list-type", "2")]),
-            "list-type=2&prefix=nebula-backup-"
+            sigv4_canonical_query(&[("prefix", "pebrel-backup-"), ("list-type", "2")]),
+            "list-type=2&prefix=pebrel-backup-"
         );
         assert_eq!(sigv4_canonical_query(&[("lifecycle", "")]), "lifecycle=");
         assert_eq!(sigv4_timestamp(1_369_353_600), "20130524T000000Z");
@@ -1184,16 +1180,22 @@ mod tests {
         let xml = r#"<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:">
   <d:response><d:href>/dav/nebula/</d:href></d:response>
-  <d:response><d:href>/dav/nebula/nebula-backup-20260813-051900.nbk</d:href></d:response>
-  <d:response><d:href>/dav/nebula/nebula-backup-20260812-231000.nbk</d:href></d:response>
+  <d:response><d:href>/dav/nebula/pebrel-backup-20260813-051900.nbk</d:href></d:response>
+  <d:response><d:href>/dav/nebula/pebrel-backup-20260812-231000.nbk</d:href></d:response>
   <d:response><d:href>/dav/nebula/notes.txt</d:href></d:response>
-  <D:response xmlns:D="DAV:"><D:href>/dav/nebula/nebula-backup-20260812-231000.nbk</D:href></D:response>
+  <D:response xmlns:D="DAV:"><D:href>/dav/nebula/pebrel-backup-20260812-231000.nbk</D:href></D:response>
 </d:multistatus>"#;
         assert_eq!(
-            propfind_archive_names(xml),
+            listing::webdav(xml)
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>(),
             vec![
-                "nebula-backup-20260813-051900.nbk".to_owned(),
-                "nebula-backup-20260812-231000.nbk".to_owned(),
+                "pebrel-backup-20260813-051900.nbk".to_owned(),
+                "pebrel-backup-20260812-231000.nbk".to_owned(),
             ]
         );
     }
@@ -1224,8 +1226,13 @@ mod tests {
         fn get(&self, _name: &str) -> Result<Vec<u8>, String> {
             Ok(Vec::new())
         }
-        fn list(&self) -> Result<Vec<String>, String> {
-            Ok(self.0.borrow().clone())
+        fn list_details(&self) -> Result<Vec<Snapshot>, String> {
+            Ok(self
+                .0
+                .borrow()
+                .iter()
+                .map(|name| Snapshot { name: name.clone(), bytes: Some(0) })
+                .collect())
         }
         fn delete(&self, name: &str) -> Result<(), String> {
             self.0.borrow_mut().retain(|kept| kept != name);
@@ -1239,7 +1246,7 @@ mod tests {
     #[test]
     fn prune_keeps_newest_archives_and_ignores_foreign_files() {
         let names: Vec<String> = (0..13)
-            .map(|hour| format!("nebula-backup-202608{:02}-000000.nbk", hour + 1))
+            .map(|hour| format!("pebrel-backup-202608{:02}-000000.nbk", hour + 1))
             .chain(["keep-me.txt".to_owned()])
             .collect();
         let backend = MemoryBackend(std::cell::RefCell::new(names));

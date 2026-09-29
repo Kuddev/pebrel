@@ -165,6 +165,9 @@ pub fn run_shell(
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
     }
+    if runtime_server.is_some() {
+        crate::mobile_connection::resume_saved();
+    }
     let _runtime_server = runtime_server;
     let _acrylic = crate::platform::acrylic::RunGuard::default();
     // GPUI 默认只有 macOS 在最后一扇窗关掉后仍驻留（Dock 里留个没有窗口的

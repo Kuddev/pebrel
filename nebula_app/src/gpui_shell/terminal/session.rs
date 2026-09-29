@@ -25,6 +25,7 @@ use nebula_terminal::tty::EventedPty as _;
 pub struct EventProxy {
     events: super::event_mailbox::EventSender,
     stages: UnboundedSender<crate::ssh_session::SshStage>,
+    remote_reader: Arc<std::sync::Mutex<Option<crate::ssh_session::TranscriptReader>>>,
 }
 
 impl EventListener for EventProxy {
@@ -34,6 +35,11 @@ impl EventListener for EventProxy {
 }
 
 impl crate::ssh_session::SshEventHost for EventProxy {
+    fn ssh_transcript_reader(&self, reader: Option<crate::ssh_session::TranscriptReader>) {
+        if let Ok(mut current) = self.remote_reader.lock() {
+            *current = reader;
+        }
+    }
     fn ssh_stage(&self, stage: crate::ssh_session::SshStage) {
         let _ = self.stages.unbounded_send(stage);
     }
@@ -67,6 +73,7 @@ pub struct TerminalSession {
     /// PTY 直系 shell PID；关闭确认沿用旧壳 `busy_child(shell_pid)` 判据。
     /// SSH 没有本地 shell 进程，固定为 0。
     pub shell_pid: u32,
+    pub(super) remote_reader: Arc<std::sync::Mutex<Option<crate::ssh_session::TranscriptReader>>>,
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -85,7 +92,7 @@ pub(super) fn test_session_with_events() -> (
 ) {
     let (events, event_rx) = super::event_mailbox::channel();
     let (stages, _) = unbounded();
-    let proxy = EventProxy { events, stages };
+    let proxy = EventProxy { events, stages, remote_reader: Default::default() };
     let term =
         Term::new(Config::default(), &GridSize { columns: 80, screen_lines: 24 }, proxy.clone());
     let (sender, receiver) = nebula_terminal::event_loop::EventLoopSender::standalone().unwrap();
@@ -95,6 +102,7 @@ pub(super) fn test_session_with_events() -> (
             notifier: Notifier(sender),
             native_prompt: proxy.events.native_prompt.clone(),
             shell_pid: 0,
+            remote_reader: proxy.remote_reader.clone(),
         },
         receiver,
         event_rx,
@@ -169,7 +177,7 @@ pub fn spawn(
 ) -> std::io::Result<SpawnedSession> {
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx };
+    let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -185,6 +193,7 @@ pub fn spawn(
     // 用于 resize 锚定问题的字节级取证。
     let record = std::env::var_os("NEBULA_PTY_RECORD").is_some();
     let native_prompt = proxy.events.native_prompt.clone();
+    let remote_reader = proxy.remote_reader.clone();
     let mut event_loop =
         EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
     if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
@@ -193,7 +202,7 @@ pub fn spawn(
     let notifier = Notifier(event_loop.channel());
     let _io_thread = event_loop.spawn();
 
-    Ok((TerminalSession { term, notifier, native_prompt, shell_pid }, rx, stage_rx))
+    Ok((TerminalSession { term, notifier, native_prompt, shell_pid, remote_reader }, rx, stage_rx))
 }
 
 /// 启动一个 SSH 直连会话（russh，与旧壳 `create_ssh_pane` 同一业务层）：
@@ -208,7 +217,7 @@ pub fn spawn_ssh(
     let term_config = crate::ssh_session::terminal_config(term_config);
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx };
+    let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -216,6 +225,7 @@ pub fn spawn_ssh(
     };
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
     let native_prompt = proxy.events.native_prompt.clone();
+    let remote_reader = proxy.remote_reader.clone();
     let sender = crate::ssh_session::spawn_session_at(
         destination,
         initial_remote_cwd,
@@ -225,7 +235,13 @@ pub fn spawn_ssh(
     )?;
 
     Ok((
-        TerminalSession { term, notifier: Notifier(sender), native_prompt, shell_pid: 0 },
+        TerminalSession {
+            term,
+            notifier: Notifier(sender),
+            native_prompt,
+            shell_pid: 0,
+            remote_reader,
+        },
         rx,
         stage_rx,
     ))

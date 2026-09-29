@@ -815,7 +815,7 @@ pub(crate) fn read_git(root: &Path) -> Option<GitInfo> {
 /// 宿主 git 要读 WSL 仓库，只能经 `\\wsl.localhost\…` UNC，而那条路依赖 9P
 /// 文件重定向——实测在 WSL 2.7.8 + Windows 22631 上完全不可达（见
 /// [`crate::shell_detect::wsl_unc_cwd`]）。来宾里的 git 反而什么都不缺：
-/// 输出格式与宿主 `git status --porcelain -b` 逐字相同，所以解析与宿主
+/// 输出格式与宿主 `git status --porcelain=v2 -z` 相同，所以解析与宿主
 /// 路径完全共用 [`collect_git_info`]，没有第二套解析要维护。
 ///
 /// 也不需要 `safe.directory`：来宾里的仓库属于来宾用户自己，不会触发
@@ -864,43 +864,20 @@ pub(crate) fn run_git(
 /// 宿主与 WSL 来宾两条运行路径共用的 porcelain 解析。`run` 收一组 git 参数、
 /// 回 stdout（失败即 `None`）。
 pub(crate) fn collect_git_info(run: impl Fn(&[&str]) -> Option<String>) -> Option<GitInfo> {
-    // `-b --porcelain` yields `## branch...upstream [ahead N]` + one `XY path`
-    // per change, X = index (staged) status, Y = worktree status.
-    let status = run(&["status", "--porcelain", "-b"])?;
-    let mut info = GitInfo::default();
-    for line in status.lines() {
-        if let Some(head) = line.strip_prefix("## ") {
-            // `main...origin/main [ahead 1]` → `main`; detached prints as-is.
-            info.branch = head.split("...").next().unwrap_or(head).to_string();
-            if let Some(idx) = head.find("ahead ") {
-                info.ahead = head[idx + 6..]
-                    .chars()
-                    .take_while(char::is_ascii_digit)
-                    .collect::<String>()
-                    .parse()
-                    .unwrap_or(0);
-            }
-        } else if line.len() > 3 {
-            let x = line.as_bytes()[0] as char;
-            let y = line.as_bytes()[1] as char;
-            let path = line[3..].trim().to_string();
-            if x == '?' || y == '?' {
-                info.unstaged.push(('?', path));
-                continue;
-            }
-            // Collect merge conflicts in their own group. The path
-            // also stays in staged/unstaged below so the legacy view keeps
-            // rendering it untouched.
-            if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
-                info.conflicts.push(('U', path.clone()));
-            }
-            // One file can be in BOTH lists (partially staged).
-            if x != ' ' {
-                info.staged.push((x, path.clone()));
-            }
-            if y != ' ' {
-                info.unstaged.push((y, path));
-            }
+    use crate::git_worktree::status::{STATUS_ARGS, parse_status};
+    let status = parse_status(&run(STATUS_ARGS)?).ok()?;
+    let mut info =
+        GitInfo { branch: status.branch, ahead: status.ahead as _, ..GitInfo::default() };
+    for entry in status.entries {
+        if entry.conflict {
+            info.conflicts.push(('U', entry.path.clone()));
+        }
+        // 部分暂存的同一文件仍在两组中出现；路径始终使用 Git 的原始身份。
+        if entry.staged() {
+            info.staged.push((entry.index, entry.path.clone()));
+        }
+        if entry.unstaged() {
+            info.unstaged.push((entry.worktree, entry.path));
         }
     }
 

@@ -1121,6 +1121,72 @@ esac
     ;;
 esac
 ;;
+(plugin)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_pebrel__plugin_commands" \
+"*::: :->plugin" \
+&& ret=0
+
+    case $state in
+    (plugin)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-plugin-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':path:_files' \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+'--args=[JSON object overriding this command'\''s default parameters]:ARGS:_default' \
+'--timeout-ms=[]:TIMEOUT_MS:_default' \
+'--pretty[Pretty-print the JSON result]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':path:_files' \
+':command:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_pebrel__plugin__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-plugin-help-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (notify-test)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -1468,6 +1534,30 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(plugin)
+_arguments "${_arguments_options[@]}" : \
+":: :_pebrel__help__plugin_commands" \
+"*::: :->plugin" \
+&& ret=0
+
+    case $state in
+    (plugin)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-help-plugin-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (notify-test)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1504,6 +1594,7 @@ _pebrel_commands() {
 'agent:Inspect and drive the AI agents running in panes\: list, send, read, wait' \
 'migrate:Migrate the configuration file' \
 'config:Validate or create the Pebrel configuration' \
+'plugin:Check or invoke a local plugin package without starting a GUI or plugin daemon' \
 'notify-test:Test system notification (toast) delivery' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
 'ssh:SSH with Pebrel shell integration bootstrapped on the remote host, so tab icons / spinner / cwd track the program running over the connection (claude, vim, cargo…). All arguments are forwarded to the system \`ssh\`' \
@@ -2052,6 +2143,7 @@ _pebrel__help_commands() {
 'agent:Inspect and drive the AI agents running in panes\: list, send, read, wait' \
 'migrate:Migrate the configuration file' \
 'config:Validate or create the Pebrel configuration' \
+'plugin:Check or invoke a local plugin package without starting a GUI or plugin daemon' \
 'notify-test:Test system notification (toast) delivery' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
 'ssh:SSH with Pebrel shell integration bootstrapped on the remote host, so tab icons / spinner / cwd track the program running over the connection (claude, vim, cargo…). All arguments are forwarded to the system \`ssh\`' \
@@ -2391,6 +2483,24 @@ _pebrel__help__pane__zoom_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help pane zoom commands' commands "$@"
 }
+(( $+functions[_pebrel__help__plugin_commands] )) ||
+_pebrel__help__plugin_commands() {
+    local commands; commands=(
+'check:Validate package metadata and entry paths without executing Lua' \
+'run:Invoke one declared native or Lua command; no resident plugin is started' \
+    )
+    _describe -t commands 'pebrel help plugin commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__check_commands] )) ||
+_pebrel__help__plugin__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin check commands' commands "$@"
+}
+(( $+functions[_pebrel__help__plugin__run_commands] )) ||
+_pebrel__help__plugin__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help plugin run commands' commands "$@"
+}
 (( $+functions[_pebrel__help__setup-ai_commands] )) ||
 _pebrel__help__setup-ai_commands() {
     local commands; commands=()
@@ -2573,6 +2683,49 @@ _pebrel__pane__wait_commands() {
 _pebrel__pane__zoom_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel pane zoom commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin_commands] )) ||
+_pebrel__plugin_commands() {
+    local commands; commands=(
+'check:Validate package metadata and entry paths without executing Lua' \
+'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'pebrel plugin commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__check_commands] )) ||
+_pebrel__plugin__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin check commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help_commands] )) ||
+_pebrel__plugin__help_commands() {
+    local commands; commands=(
+'check:Validate package metadata and entry paths without executing Lua' \
+'run:Invoke one declared native or Lua command; no resident plugin is started' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'pebrel plugin help commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__check_commands] )) ||
+_pebrel__plugin__help__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help check commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__help_commands] )) ||
+_pebrel__plugin__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help help commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__help__run_commands] )) ||
+_pebrel__plugin__help__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin help run commands' commands "$@"
+}
+(( $+functions[_pebrel__plugin__run_commands] )) ||
+_pebrel__plugin__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel plugin run commands' commands "$@"
 }
 (( $+functions[_pebrel__setup-ai_commands] )) ||
 _pebrel__setup-ai_commands() {

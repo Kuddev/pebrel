@@ -1,0 +1,4 @@
+<resources>
+    <string name="computer_remove_title">Remove computer</string>
+    <string name="computer_remove_hint">Remove %1$s and its saved connection credentials from this phone? Tasks on the computer will keep running. This does not uninstall the relay service.</string>
+</resources>
