@@ -187,7 +187,12 @@ fn ssh_bash_prompt_preserves_custom_prompts_and_renders_git_branch_as_literal_te
                 .find(|path| std::path::Path::new(path).is_file())
                 .map(Into::into)
         })
-        .or_else(|| (!cfg!(windows)).then(|| "bash".into()));
+        .or_else(|| {
+            let candidate: std::path::PathBuf = "bash".into();
+            let output = Command::new(&candidate).arg("--version").output().ok()?;
+            let version = String::from_utf8_lossy(&output.stdout);
+            (output.status.success() && version.contains("GNU bash")).then_some(candidate)
+        });
     let Some(bash) = bash else {
         eprintln!("skipping Bash runtime check because no native Bash is installed");
         return;
