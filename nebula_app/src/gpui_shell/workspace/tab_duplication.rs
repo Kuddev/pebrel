@@ -345,7 +345,8 @@ mod tests {
     fn split_of_wsl_pane_without_guest_cwd_stays_in_the_guest() {
         let session = wsl("Ubuntu");
         // fish or a split before the first prompt: the pane still reports a host cwd.
-        let host = std::env::temp_dir();
+        // A Windows host path, as WSL panes report; a Unix temp dir would read as a guest path.
+        let host = std::path::PathBuf::from(r"C:\Users\dev\project");
         let (cwd, args) = split_args(&session, &host.to_string_lossy(), Some(host.clone()));
         assert_eq!(cwd, Some(host.clone()));
         assert_eq!(args, ["-d", "Ubuntu"]);
