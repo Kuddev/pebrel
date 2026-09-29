@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::grid::{self, GridCell};
 use crate::index::Column;
+use crate::inline_image::ImageCell;
 use crate::vte::ansi::{Color, Hyperlink as VteHyperlink, NamedColor};
 
 bitflags! {
@@ -120,12 +121,79 @@ impl ResetDiscriminant<Color> for Cell {
 /// This storage is reserved for cell attributes which are rarely set. This allows reducing the
 /// allocation required ahead of time for every cell, with some additional overhead when the extra
 /// storage is actually required.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CellExtra(Extra);
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum Extra {
+    Text(TextExtra),
+    // Image tiles can share text attributes without making CellExtra recursive.
+    Image { tile: ImageCell, text: Option<Arc<TextExtra>> },
+}
+
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct CellExtra {
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize), serde(rename = "CellExtra"))]
+struct TextExtra {
     zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
+}
+
+impl TextExtra {
+    fn is_empty(&self) -> bool {
+        self.zerowidth.is_empty() && self.underline_color.is_none() && self.hyperlink.is_none()
+    }
+}
+
+impl Default for CellExtra {
+    fn default() -> Self {
+        Self(Extra::Text(TextExtra::default()))
+    }
+}
+
+impl CellExtra {
+    #[inline]
+    fn text(&self) -> &TextExtra {
+        static EMPTY: TextExtra =
+            TextExtra { zerowidth: Vec::new(), underline_color: None, hyperlink: None };
+        match &self.0 {
+            Extra::Text(text) => text,
+            Extra::Image { text: Some(text), .. } => text,
+            Extra::Image { text: None, .. } => &EMPTY,
+        }
+    }
+
+    #[inline]
+    fn text_mut(&mut self) -> &mut TextExtra {
+        match &mut self.0 {
+            Extra::Text(text) => text,
+            Extra::Image { text, .. } => Arc::make_mut(text.get_or_insert_with(Default::default)),
+        }
+    }
+
+    fn prune_empty_text(&mut self) {
+        if let Extra::Image { text, .. } = &mut self.0 {
+            if text.as_ref().is_some_and(|text| text.is_empty()) {
+                *text = None;
+            }
+        }
+    }
+}
+
+// Keep the existing struct-shaped snapshot format; transient image metadata
+// remains omitted, including for tiles which also contain text attributes.
+#[cfg(feature = "serde")]
+impl Serialize for CellExtra {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.text().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for CellExtra {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        TextExtra::deserialize(deserializer).map(|text| Self(Extra::Text(text)))
+    }
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -156,22 +224,23 @@ impl Cell {
     /// Zerowidth characters stored in this cell.
     #[inline]
     pub fn zerowidth(&self) -> Option<&[char]> {
-        self.extra.as_ref().map(|extra| extra.zerowidth.as_slice())
+        self.extra.as_ref().map(|extra| extra.text().zerowidth.as_slice())
     }
 
     /// Write a new zerowidth character to this cell.
     #[inline]
     pub fn push_zerowidth(&mut self, character: char) {
         let extra = self.extra.get_or_insert(Default::default());
-        Arc::make_mut(extra).zerowidth.push(character);
+        Arc::make_mut(extra).text_mut().zerowidth.push(character);
     }
 
     /// Remove all wide char data from a cell.
     #[inline(never)]
     pub fn clear_wide(&mut self) {
         self.flags.remove(Flags::WIDE_CHAR);
+        self.discard();
         if let Some(extra) = self.extra.as_mut() {
-            Arc::make_mut(extra).zerowidth = Vec::new();
+            Arc::make_mut(extra).text_mut().zerowidth = Vec::new();
         }
         self.c = ' ';
     }
@@ -180,48 +249,90 @@ impl Cell {
     pub fn set_underline_color(&mut self, color: Option<Color>) {
         // If we reset color and we don't have zerowidth we should drop extra storage.
         if color.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.hyperlink.is_none())
+            && self.image().is_none()
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.text().zerowidth.is_empty() && extra.text().hyperlink.is_none()
+            })
         {
             self.extra = None;
         } else {
             let extra = self.extra.get_or_insert(Default::default());
-            Arc::make_mut(extra).underline_color = color;
+            let extra = Arc::make_mut(extra);
+            extra.text_mut().underline_color = color;
+            extra.prune_empty_text();
         }
     }
 
     /// Underline color stored in this cell.
     #[inline]
     pub fn underline_color(&self) -> Option<Color> {
-        self.extra.as_ref()?.underline_color
+        self.extra.as_ref()?.text().underline_color
     }
 
     /// Set hyperlink.
     pub fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         let should_drop = hyperlink.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.underline_color.is_none());
+            && self.image().is_none()
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.text().zerowidth.is_empty() && extra.text().underline_color.is_none()
+            });
 
         if should_drop {
             self.extra = None;
         } else {
             let extra = self.extra.get_or_insert(Default::default());
-            Arc::make_mut(extra).hyperlink = hyperlink;
+            let extra = Arc::make_mut(extra);
+            extra.text_mut().hyperlink = hyperlink;
+            extra.prune_empty_text();
         }
     }
 
     /// Hyperlink stored in this cell.
     #[inline]
     pub fn hyperlink(&self) -> Option<Hyperlink> {
-        self.extra.as_ref()?.hyperlink.clone()
+        self.extra.as_ref()?.text().hyperlink.clone()
+    }
+
+    #[inline]
+    pub fn image(&self) -> Option<&ImageCell> {
+        match &self.extra.as_ref()?.0 {
+            Extra::Image { tile, .. } => Some(tile),
+            Extra::Text(_) => None,
+        }
+    }
+
+    pub fn set_image(&mut self, image: ImageCell) {
+        if self.image().is_some() {
+            if let Extra::Image { tile, .. } = &mut Arc::make_mut(self.extra.as_mut().unwrap()).0 {
+                *tile = image;
+            }
+        } else {
+            let text = self.extra.take().and_then(|extra| match Arc::unwrap_or_clone(extra).0 {
+                Extra::Text(text) => (!text.is_empty()).then(|| Arc::new(text)),
+                Extra::Image { .. } => unreachable!("existing image was handled above"),
+            });
+            self.extra = Some(Arc::new(CellExtra(Extra::Image { tile: image, text })));
+        }
     }
 }
 
 impl GridCell for Cell {
+    #[inline]
+    fn discard(&mut self) {
+        if let Some(CellExtra(Extra::Image { text, .. })) = self.extra.as_deref() {
+            if text.is_none() {
+                // Image-only cached rows retain no empty allocation, including
+                // when another cell shares this owner: no COW clone is needed.
+                self.extra = None;
+            } else {
+                let extra = Arc::make_mut(self.extra.as_mut().unwrap());
+                if let Extra::Image { text, .. } = &mut extra.0 {
+                    extra.0 = Extra::Text(Arc::unwrap_or_clone(text.take().unwrap()));
+                }
+            }
+        }
+    }
+
     #[inline]
     fn is_empty(&self) -> bool {
         (self.c == ' ' || self.c == '\t')
@@ -235,7 +346,8 @@ impl GridCell for Cell {
                     | Flags::WIDE_CHAR_SPACER
                     | Flags::LEADING_WIDE_CHAR_SPACER,
             )
-            && self.extra.as_ref().map(|extra| extra.zerowidth.is_empty()) != Some(false)
+            && self.extra.as_ref().map(|extra| extra.text().zerowidth.is_empty()) != Some(false)
+            && self.image().is_none()
     }
 
     #[inline]
@@ -277,7 +389,7 @@ impl LineLength for grid::Row<Cell> {
 
         for (index, cell) in self[..].iter().rev().enumerate() {
             if cell.c != ' '
-                || cell.extra.as_ref().map(|extra| extra.zerowidth.is_empty()) == Some(false)
+                || cell.extra.as_ref().map(|extra| extra.text().zerowidth.is_empty()) == Some(false)
             {
                 length = Column(self.len() - index);
                 break;

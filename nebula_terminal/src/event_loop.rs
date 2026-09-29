@@ -165,6 +165,9 @@ pub struct StreamProcessor {
     cwd_sniffer: crate::osc_cwd::CwdSniffer,
     window_size: Option<WindowSize>,
     remote_hook_token: Option<String>,
+    // The stream owns unreplayed payloads: disconnecting drops them even if
+    // the pane retains its Term. The Term only holds weak replay entries.
+    pending_images: Vec<Arc<crate::term::PendingImage>>,
 }
 
 impl StreamProcessor {
@@ -187,6 +190,7 @@ impl StreamProcessor {
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
         terminal.cancel_redraw_anchor();
         self.parser.stop_sync(terminal);
+        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
     }
 
     fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
@@ -240,29 +244,25 @@ impl StreamProcessor {
                     terminal.nebula_add_prompt_mark();
                 },
                 OscEvent::PromptInput => terminal.nebula_mark_prompt_input(),
-                OscEvent::InlineImage { data, width, height } => {
-                    let (cell_w, cell_h) = self.window_size.map_or((9.0, 20.0), |ws| {
-                        (f32::from(ws.cell_width), f32::from(ws.cell_height))
+                OscEvent::InlineImage { data, width, height, options } => {
+                    let viewport = self.window_size.unwrap_or(WindowSize {
+                        num_cols: terminal.columns() as u16,
+                        num_lines: terminal.screen_lines() as u16,
+                        cell_width: 9,
+                        cell_height: 20,
                     });
-                    let max_w = terminal.columns() as f32 * cell_w;
-                    let scale = (max_w / width as f32).min(1.0);
-                    let disp_w = width as f32 * scale;
-                    let disp_h = height as f32 * scale;
-                    let rows = (disp_h / cell_h).ceil().max(1.0) as usize;
-                    let abs_line = terminal.nebula_cursor_abs_line();
-                    for _ in 0..=rows {
-                        self.advance(terminal, b"\r\n");
+                    if let Some((marker, image)) =
+                        terminal.nebula_queue_inline_image(data, width, height, options, viewport)
+                    {
+                        self.pending_images.push(image);
+                        self.advance(terminal, marker.as_bytes());
+                        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
                     }
-                    event_proxy.send_event(Event::InlineImage {
-                        data: std::sync::Arc::new(data),
-                        abs_line,
-                        width: disp_w,
-                        height: disp_h,
-                    });
                 },
             }
         }
         self.advance(terminal, &bytes[advanced..]);
+        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
     }
 }
 

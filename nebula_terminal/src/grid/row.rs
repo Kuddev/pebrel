@@ -152,6 +152,15 @@ impl<T: Default> Row<T> {
 
 #[allow(clippy::len_without_is_empty)]
 impl<T> Row<T> {
+    pub(super) fn discard(&mut self)
+    where
+        T: GridCell,
+    {
+        for cell in &mut self.inner[..self.occ] {
+            cell.discard();
+        }
+    }
+
     #[inline]
     pub fn from_vec(vec: Vec<T>, occ: usize) -> Row<T> {
         Row { inner: vec, occ }

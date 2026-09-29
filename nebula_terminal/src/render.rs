@@ -18,6 +18,7 @@
 pub mod boxdraw;
 
 use crate::event::{EventListener, WindowSize};
+use crate::inline_image::{ImageRun, push_image_run};
 use crate::term::cell::Flags;
 use crate::term::color::Colors;
 use crate::term::{Term, point_to_viewport_from};
@@ -253,6 +254,7 @@ pub struct RenderSnapshot {
     pub segments: Vec<TextSegment>,
     /// Cells routed to built-in geometry; disjoint from `segments`.
     pub box_glyphs: Vec<BoxGlyph>,
+    pub image_runs: Vec<ImageRun>,
     pub cursor: Option<CursorSnapshot>,
 }
 
@@ -263,6 +265,19 @@ pub struct SnapshotConfig {
 
 impl RenderSnapshot {
     pub fn capture<T: EventListener>(term: &Term<T>, cfg: &SnapshotConfig) -> Self {
+        if term.grid().may_have_transient_content() {
+            Self::capture_grid::<T, true>(term, cfg)
+        } else {
+            Self::capture_grid::<T, false>(term, cfg)
+        }
+    }
+
+    // Select once per snapshot so the no-image loop contains no image lookup
+    // or per-cell guard. Both paths share the same text/selection implementation.
+    fn capture_grid<T: EventListener, const IMAGES: bool>(
+        term: &Term<T>,
+        cfg: &SnapshotConfig,
+    ) -> Self {
         let rows = cfg.rows as usize;
         let cols = cfg.cols as usize;
         let content = term.renderable_content_with_viewport(rows, cols);
@@ -281,6 +296,7 @@ impl RenderSnapshot {
             selection_runs: Vec::new(),
             segments: Vec::new(),
             box_glyphs: Vec::new(),
+            image_runs: Vec::new(),
             cursor: None,
         };
 
@@ -319,6 +335,9 @@ impl RenderSnapshot {
                 continue;
             }
             let (row, col) = (row as u16, col as u16);
+            if IMAGES && let Some(tile) = indexed.cell.image() {
+                push_image_run(&mut snap.image_runs, row, col, tile);
+            }
             let flags = indexed.cell.flags;
             let bold = flags.intersects(Flags::BOLD);
             let mut fg = indexed.cell.fg;
@@ -367,7 +386,7 @@ impl RenderSnapshot {
                 continue;
             }
             if c == ' '
-                && indexed.cell.extra.is_none()
+                && indexed.cell.zerowidth().is_none_or(|chars| chars.is_empty())
                 && !flags.intersects(Flags::ALL_UNDERLINES | Flags::STRIKEOUT)
             {
                 continue;

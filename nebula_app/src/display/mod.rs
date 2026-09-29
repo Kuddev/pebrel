@@ -67,6 +67,7 @@ pub mod content;
 pub mod cursor;
 pub mod hint;
 pub mod image_viewer;
+mod inline_image;
 mod input_state;
 pub mod ui;
 pub mod window;
@@ -1065,7 +1066,7 @@ pub struct Display {
     /// `draw_pane` (grid lock + pane viewport at hand) and drawn in one
     /// full-window pass in `present_frame` — mid-pane GL viewport swaps are
     /// fragile, one batched pass is not.
-    nebula_frame_images: Vec<(u64, std::sync::Arc<Vec<u8>>, (u32, u32), (f32, f32, f32, f32))>,
+    nebula_frame_images: Vec<inline_image::ImageDraw>,
 
     /// Theme currently painted. In automatic mode this is the light/dark
     /// member resolved from `nebula_theme_preference` and the system state.
@@ -8007,9 +8008,7 @@ impl Display {
         let cursor = content.cursor();
 
         let cursor_point = terminal.grid().cursor.point;
-        // Anchors for OSC 1337 inline images (absolute-line bookkeeping).
-        let grid_scrolled_out = terminal.grid().scrolled_out();
-        let image_anchor = grid_scrolled_out + terminal.grid().history_size();
+        let frame_images = inline_image::capture(&terminal, &mut pane_state.inline_images, &view);
         // Ghost text is suppressed on the alt screen (vim/less/etc.).
         let alt_screen = terminal.mode().contains(TermMode::ALT_SCREEN);
         let total_lines = terminal.grid().total_lines();
@@ -8115,32 +8114,7 @@ impl Display {
             self.validate_hint_highlights(viewport_origin, term_damage_full, &term_damage_lines);
         }
 
-        // OSC 1337 inline images: prune rows that scrolled out of history for
-        // good, then collect the ones visible in this pane's viewport for the
-        // single full-window draw pass in `present_frame`.
-        if !pane_state.inline_images.is_empty() {
-            let cell_h = view.cell_height();
-            pane_state.inline_images.retain(|img| {
-                let rows = (img.height / cell_h).ceil().max(1.0) as usize;
-                img.abs_line + rows >= grid_scrolled_out
-            });
-            let top_abs = (image_anchor as i64 + viewport_origin.0 as i64) as f32;
-            for img in &pane_state.inline_images {
-                let y = view.padding_y() + (img.abs_line as f32 - top_abs) * cell_h;
-                // Cull images entirely outside this pane's band.
-                if y + img.height <= view.padding_y() - cell_h
-                    || y >= view.padding_y() + view.height()
-                {
-                    continue;
-                }
-                self.nebula_frame_images.push((
-                    img.id,
-                    img.rgba.clone(),
-                    (img.px_w, img.px_h),
-                    (view.padding_x(), y, img.width, img.height),
-                ));
-            }
-        }
+        self.nebula_frame_images.extend(frame_images);
 
         // Refresh the inline ghost-text suggestion. On Windows the input is read
         // off the grid (screen truth, never desyncs); elsewhere the tracked
@@ -9679,8 +9653,15 @@ impl Display {
         if !self.nebula_frame_images.is_empty() {
             let size = self.size_info;
             let images = std::mem::take(&mut self.nebula_frame_images);
-            for (id, rgba, px, rect) in &images {
-                self.renderer.draw_inline_image(&size, *id, rgba, *px, *rect);
+            for image in &images {
+                self.renderer.draw_inline_image_clipped(
+                    &size,
+                    image.id,
+                    &image.rgba,
+                    image.pixels,
+                    image.bounds,
+                    Some(image.clip),
+                );
             }
         }
 

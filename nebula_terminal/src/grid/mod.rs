@@ -7,7 +7,7 @@ use std::ops::{Bound, Deref, Index, IndexMut, Range, RangeBounds};
 use serde::{Deserialize, Serialize};
 
 use crate::index::{Column, Line, Point};
-use crate::term::cell::{Flags, ResetDiscriminant};
+use crate::term::cell::{Cell, Flags, ResetDiscriminant};
 use crate::vte::ansi::{CharsetIndex, StandardCharset};
 
 pub mod resize;
@@ -25,6 +25,10 @@ pub trait GridCell: Sized {
 
     /// Perform an opinionated cell reset based on a template cell.
     fn reset(&mut self, template: &Self);
+
+    /// Release transient content when a row leaves the logical grid, even
+    /// when its text allocation remains in the ring's reusable row cache.
+    fn discard(&mut self) {}
 
     fn flags(&self) -> &Flags;
     fn flags_mut(&mut self) -> &mut Flags;
@@ -401,6 +405,17 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 }
 
 impl<T> Grid<T> {
+    /// Raw mutable access can introduce transient content without using the
+    /// protocol insertion path. Keep cleanup enabled even after a later reset.
+    pub(crate) fn track_transient_content(&mut self) -> &mut Self {
+        self.raw.may_have_transient_content = true;
+        self
+    }
+
+    pub(crate) fn may_have_transient_content(&self) -> bool {
+        self.raw.may_have_transient_content
+    }
+
     /// Reset a visible region within the grid.
     pub fn reset_region<D, R: RangeBounds<Line>>(&mut self, bounds: R)
     where
@@ -428,7 +443,10 @@ impl<T> Grid<T> {
     }
 
     #[inline]
-    pub fn clear_history(&mut self) {
+    pub fn clear_history(&mut self)
+    where
+        T: GridCell,
+    {
         // Explicitly purge all lines from history.
         self.scrolled_out += self.history_size();
         self.raw.shrink_lines(self.history_size());
@@ -648,6 +666,25 @@ impl<T> Deref for Indexed<T> {
     #[inline]
     fn deref(&self) -> &T {
         &self.cell
+    }
+}
+
+impl Grid<Cell> {
+    /// Alternate-screen entry copies the cursor, including an image template
+    /// supplied through raw mutable access, without moving the source grid.
+    pub(crate) fn copy_cursor_from(&mut self, source: &Self) {
+        if source.cursor.template.image().is_some() {
+            self.track_transient_content();
+        }
+        self.cursor = source.cursor.clone();
+    }
+
+    /// Only `Term` owns these initially empty grids without exposing mutable
+    /// cells. Public constructors, clones and deserialization stay conservative.
+    pub(crate) fn new_for_terminal(lines: usize, columns: usize, history: usize) -> Self {
+        let mut grid = Self::new(lines, columns, history);
+        grid.raw.may_have_transient_content = false;
+        grid
     }
 }
 

@@ -188,13 +188,10 @@ impl NebulaConfirm {
     }
 }
 
-/// One OSC 1337 image anchored to an absolute terminal-grid row.
+/// Decoded pixels for a grid-owned OSC 1337 image.
 #[derive(Debug, Clone)]
 pub struct NebulaInlineImage {
-    pub id: u64,
-    pub abs_line: usize,
-    pub width: f32,
-    pub height: f32,
+    pub placement: nebula_terminal::inline_image::ImagePlacement,
     pub rgba: Arc<Vec<u8>>,
     pub px_w: u32,
     pub px_h: u32,

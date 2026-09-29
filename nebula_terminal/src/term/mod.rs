@@ -31,6 +31,8 @@ pub mod cell;
 mod clear;
 pub mod color;
 mod damage;
+mod inline_image;
+pub(crate) use inline_image::PendingImage;
 mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
@@ -38,6 +40,7 @@ mod prompt;
 mod redraw_anchor;
 mod renderable;
 pub mod search;
+mod title;
 
 use damage::TermDamageState;
 pub use damage::{LineDamageBounds, TermDamage, TermDamageIterator};
@@ -160,6 +163,7 @@ pub fn viewport_to_point_from(origin: Line, point: Point<usize>) -> Point {
 }
 
 pub struct Term<T> {
+    pending_images: inline_image::PendingImages,
     redraw_anchor: redraw_anchor::RedrawAnchor,
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
@@ -368,8 +372,8 @@ impl<T> Term<T> {
         let num_lines = dimensions.screen_lines();
 
         let history_size = config.scrolling_history;
-        let mut grid = Grid::new(num_lines, num_cols, history_size);
-        let mut inactive_grid = Grid::new(num_lines, num_cols, 0);
+        let mut grid = Grid::new_for_terminal(num_lines, num_cols, history_size);
+        let mut inactive_grid = Grid::new_for_terminal(num_lines, num_cols, 0);
 
         // Keep the grid's logical rows reversible on both in-box and side-loaded
         // ConPTY. The host has a private buffer, while the terminal grid remains
@@ -386,6 +390,7 @@ impl<T> Term<T> {
         let damage = TermDamageState::new(num_cols, num_lines);
 
         Term {
+            pending_images: Default::default(),
             redraw_anchor: Default::default(),
             inactive_grid,
             scroll_region,
@@ -727,7 +732,7 @@ impl<T> Term<T> {
 
     /// Mutable access to the raw grid data structure.
     pub fn grid_mut(&mut self) -> &mut Grid<Cell> {
-        &mut self.grid
+        self.grid.track_transient_content()
     }
 
     /// Resize terminal to new dimensions.
@@ -813,7 +818,7 @@ impl<T> Term<T> {
         self.cancel_redraw_anchor();
         if !self.mode.contains(TermMode::ALT_SCREEN) {
             // Set alt screen cursor to the current primary screen cursor.
-            self.inactive_grid.cursor = self.grid.cursor.clone();
+            self.inactive_grid.copy_cursor_from(&self.grid);
 
             // Drop information about the primary screens saved cursor.
             self.grid.saved_cursor = self.grid.cursor.clone();
@@ -2342,40 +2347,17 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn set_title(&mut self, title: Option<String>) {
-        trace!("Setting title to '{title:?}'");
-
-        self.title.clone_from(&title);
-
-        let title_event = match title {
-            Some(title) => Event::Title(title),
-            None => Event::ResetTitle,
-        };
-
-        self.event_proxy.send_event(title_event);
+        self.apply_title(title);
     }
 
     #[inline]
     fn push_title(&mut self) {
-        trace!("Pushing '{:?}' onto title stack", self.title);
-
-        if self.title_stack.len() >= TITLE_STACK_MAX_DEPTH {
-            let removed = self.title_stack.remove(0);
-            trace!(
-                "Removing '{removed:?}' from bottom of title stack that exceeds its maximum depth"
-            );
-        }
-
-        self.title_stack.push(self.title.clone());
+        self.save_title();
     }
 
     #[inline]
     fn pop_title(&mut self) {
-        trace!("Attempting to pop title from stack...");
-
-        if let Some(popped) = self.title_stack.pop() {
-            trace!("Title '{popped:?}' popped from stack");
-            self.set_title(popped);
-        }
+        self.restore_title();
     }
 
     #[inline]

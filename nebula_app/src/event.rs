@@ -2894,21 +2894,15 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                             *self.ctx.dirty = true;
                         }
                     },
-                    TerminalEvent::InlineImage { data, abs_line, width, height } => {
+                    TerminalEvent::InlineImage { data, placement } => {
                         // Decode off the PTY thread (here, on the UI loop) and
                         // anchor the pixels to the pane. Textures upload lazily
                         // on first draw.
                         match crate::renderer::image::decode_png_bytes(&data) {
                             Ok((px_w, px_h, rgba)) => {
-                                use std::sync::atomic::{AtomicU64, Ordering};
-                                static NEXT_INLINE_IMAGE_ID: AtomicU64 = AtomicU64::new(1);
-                                let id = NEXT_INLINE_IMAGE_ID.fetch_add(1, Ordering::Relaxed);
                                 let images = &mut self.ctx.nebula_state.inline_images;
                                 images.push(crate::display::NebulaInlineImage {
-                                    id,
-                                    abs_line,
-                                    width,
-                                    height,
+                                    placement,
                                     rgba: std::sync::Arc::new(rgba),
                                     px_w,
                                     px_h,
