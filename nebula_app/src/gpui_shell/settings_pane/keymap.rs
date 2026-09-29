@@ -12,6 +12,27 @@
 
 use super::*;
 
+/// A bare printable key (Enter/space/letters/digits/backspace without
+/// modifiers) bound to a workspace-level action swallows normal typing. The
+/// editor asks for confirmation before assigning one; the real fix for a
+/// swallowed key lives in workspace/keyboard_bindings (Unbind). Tool keys
+/// (F1-F24, arrows, home/end, pageup/pagedown, escape, tab) produce no text
+/// input and need no guard.
+pub(super) fn bare_printable_key_needs_guard(combo: &str) -> bool {
+    let Some((mods, _)) = crate::display::keymap::parse_combo(combo) else { return false };
+    if !mods.is_empty() {
+        return false;
+    }
+    const GUARD_EXEMPT: &[&str] =
+        &["escape", "tab", "up", "down", "left", "right", "home", "end", "pageup", "pagedown"];
+    let name = combo.trim().to_ascii_lowercase();
+    // F1-F24 style function keys produce no text input; exempt them too.
+    if name.starts_with('f') && name.len() > 1 && name[1..].parse::<u32>().is_ok() {
+        return false;
+    }
+    !GUARD_EXEMPT.contains(&name.as_str())
+}
+
 impl SettingsPane {
     fn keymap_query(&self, cx: &App) -> String {
         let query = self.settings_search_input.read(cx).value().trim().to_lowercase();
@@ -133,6 +154,7 @@ impl SettingsPane {
     pub(super) fn handle_keymap_capture(
         &mut self,
         keystroke: &gpui::Keystroke,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(row) = self.keymap_capture else { return };
@@ -146,7 +168,7 @@ impl SettingsPane {
                 self.keymap_clear_custom(row, cx);
             },
             crate::display::keymap::CaptureOutcome::Bind(combo) => {
-                self.keymap_assign(row, combo, cx);
+                self.keymap_assign(row, combo, window, cx, false);
             },
             crate::display::keymap::CaptureOutcome::Pending => {},
         }
@@ -155,10 +177,53 @@ impl SettingsPane {
     /// 捕获完成：一个动作只保留一条自定义绑定，但同一 combo 可以同时归属
     /// 多个动作。冲突不再靠静默注销旧动作来“解决”，而是由
     /// `keymap_clashes` 标记双方并显示警告条，让用户自己决定改哪一行。
-    fn keymap_assign(&mut self, row: usize, combo: String, cx: &mut Context<Self>) {
+    fn keymap_assign(
+        &mut self,
+        row: usize,
+        combo: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        skip_bare_key_guard: bool,
+    ) {
         use crate::display::keymap;
         self.keymap_capture = None;
         self.keymap_capture_preview.clear();
+        // Guard: binding a bare printable key (Enter/space/letters/digits) to a
+        // workspace-level action swallows normal typing from then on. Ask once;
+        // confirming replays the assignment with the guard skipped.
+        if !skip_bare_key_guard && bare_printable_key_needs_guard(&combo) {
+            let language = crate::gpui_shell::config::ui_language(cx);
+            let pane = cx.entity().downgrade();
+            let description = match language.pick("zh", "en") {
+                "zh" => format!(
+                    "{combo} 是正常输入键(没有 Ctrl/Alt 等修饰),绑定后它不再能作为文本输入。要仍然绑定吗?"
+                ),
+                _ => format!(
+                    "'{combo}' has no modifiers; binding it makes the key unusable for normal typing. Bind anyway?"
+                ),
+            };
+            window.open_dialog(cx, move |dialog, window, _cx| {
+                let pane = pane.clone();
+                let combo = combo.clone();
+                confirm_dialog(
+                    dialog,
+                    window,
+                    language.pick("绑定裸键?", "Bind a bare key?"),
+                    description.as_str(),
+                    language.pick("仍然绑定", "Bind anyway"),
+                    language.text(crate::i18n::Message::CommonCancel),
+                    ButtonVariant::Danger,
+                )
+                .on_ok(move |_, window, cx| {
+                    let _ = pane.update(cx, |this, cx| {
+                        this.keymap_assign(row, combo.clone(), window, cx, true)
+                    });
+                    true
+                })
+            });
+            cx.notify();
+            return;
+        }
         if row == keymap::QUICK_TERMINAL_ROW {
             self.persist(&[("quick_terminal_hotkey", combo)], cx);
             return;
@@ -465,5 +530,26 @@ impl SettingsPane {
                     .text_color(cx.theme().muted_foreground)
                     .child(language.tr("settings.keymap.help")),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bare_printable_key_needs_guard;
+
+    #[test]
+    fn bare_printable_guard_catches_letters_enter_space_but_not_function_keys() {
+        for combo in ["enter", "space", "a", "f", "1", "backspace", "delete"] {
+            assert!(bare_printable_key_needs_guard(combo), "{combo} should need the guard");
+        }
+        for combo in [
+            "f1", "f12", "escape", "tab", "up", "down", "left", "right", "home", "end", "pageup",
+            "pagedown",
+        ] {
+            assert!(!bare_printable_key_needs_guard(combo), "{combo} must not raise the guard");
+        }
+        for combo in ["ctrl+enter", "alt+1", "win+space", "shift+f5"] {
+            assert!(!bare_printable_key_needs_guard(combo), "{combo} has modifiers");
+        }
     }
 }
