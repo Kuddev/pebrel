@@ -174,6 +174,114 @@ fn terminal_action_respects_opt_out_and_rejects_edited_owned_assets() {
     assert!(edited.raw(".zshrc").unwrap().is_none(), "planning must not partially mutate files");
 }
 
+#[test]
+fn ssh_bash_prompt_preserves_custom_prompts_and_renders_git_branch_as_literal_text() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let bash = std::env::var_os("NEBULA_BASH").map(std::path::PathBuf::from).unwrap_or_else(|| {
+        [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+            .unwrap_or("bash")
+            .into()
+    });
+    let run = |ps1: &str, git_branch: bool| {
+        let mut child = Command::new(&bash)
+            .args(["--noprofile", "--norc", "-s"])
+            .env("BASH_ENV", "/dev/null")
+            .env("HOME", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Bash is required for the SSH prompt regression");
+        let bashrc = include_str!("../../../res/shell/bashrc");
+        let mut script =
+            format!("PEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPS1='{ps1}'\n{bashrc}\n");
+        if git_branch {
+            script.push_str("git() { printf '%s\\n' '$(printf${IFS}PEBREL_REVIEW_MARKER)'; }\n");
+        }
+        script.push_str("eval \"$PROMPT_COMMAND\" || exit 90\n");
+        if git_branch {
+            script.push_str(
+                "[[ ${__pebrel_ssh_prompt_enabled:-0} == 1 && $PS1 == *''* ]] || exit 91\nrendered=${PS1@P}\n[[ $rendered == *'$(printf${IFS}PEBREL_REVIEW_MARKER)'* ]] || exit 92\n",
+            );
+        } else {
+            script.push_str(
+                "[[ ${__pebrel_ssh_prompt_enabled:-0} != 1 && $PS1 == '[dev] \\u@\\h:\\w\\$ ' ]] || exit 93\n",
+            );
+        }
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    let default = run(r"\u@\h:\w\$ ", true);
+    assert!(
+        default.status.success(),
+        "default SSH Bash prompt failed: {}",
+        String::from_utf8_lossy(&default.stderr)
+    );
+    let custom = run(r"[dev] \u@\h:\w\$ ", false);
+    assert!(
+        custom.status.success(),
+        "custom SSH Bash prompt failed: {}",
+        String::from_utf8_lossy(&custom.stderr)
+    );
+}
+
+#[test]
+fn ssh_zsh_prompt_styles_the_stock_prompt_and_preserves_custom_prompts() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    if Command::new("zsh").arg("--version").output().is_err() {
+        eprintln!("skipping Zsh runtime check because zsh is not installed");
+        return;
+    }
+    let run = |prompt: &str, git_branch: bool| {
+        let mut child = Command::new("zsh")
+            .args(["-f", "-s"])
+            .env("HOME", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("zsh was found before the prompt regression");
+        let zshrc = include_str!("../../../res/shell/zshrc");
+        let mut script = String::from(
+            "HOME=/dev/null\nNEBULA_ZDOTDIR_WAS_SET=0\nPEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nsetopt PROMPT_SUBST\nPROMPT='",
+        );
+        script.push_str(prompt);
+        script.push_str("'\n");
+        script.push_str(zshrc);
+        if git_branch {
+            script.push_str(
+                "\ngit() { print -r -- '$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'; }\n_nebula_precmd\nrendered=$(print -P -- \"$PROMPT\")\n[[ $rendered == *'$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'* ]] || exit 92\n",
+            );
+        } else {
+            script.push_str(
+                "\n_nebula_precmd\n[[ ${__pebrel_ssh_prompt_enabled:-0} != 1 && $PROMPT == '[dev] %m%# ' ]] || exit 93\n",
+            );
+        }
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    let default = run("%m%# ", true);
+    assert!(
+        default.status.success(),
+        "default SSH Zsh prompt failed: {}",
+        String::from_utf8_lossy(&default.stderr)
+    );
+    let custom = run("[dev] %m%# ", false);
+    assert!(
+        custom.status.success(),
+        "custom SSH Zsh prompt failed: {}",
+        String::from_utf8_lossy(&custom.stderr)
+    );
+}
+
 /// Cross-language acceptance driver: the supplied snapshot must come from an
 /// isolated SSH test account. It exports production plans, not a second policy.
 #[test]

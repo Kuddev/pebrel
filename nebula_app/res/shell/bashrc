@@ -34,9 +34,16 @@ fi
 
 # Keep this visual prompt scoped to Pebrel's temporary SSH shell, and only
 # replace Bash's default prompt. User prompt frameworks remain in control.
+__pebrel_default_bash_prompt=0
+case ${PS1-} in
+    '\u@\h:\w\$ '|'${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '|\
+    '\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '|\
+    '${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ ')
+        __pebrel_default_bash_prompt=1 ;;
+esac
 if [[ ${PEBREL_REMOTE_SESSION:-0} == 1 && ${PEBREL_REMOTE_POWERLINE:-1} == 1 \
     && -z ${STARSHIP_SHELL:-} && -z ${POSH_SHELL:-} \
-    && ${PS1-} == *'\u@\h'*':'*'\w'* ]]; then
+    && $__pebrel_default_bash_prompt == 1 ]]; then
     __pebrel_ssh_prompt_enabled=1
     __pebrel_ssh_prompt_last_ps1=$PS1
     if ! declare -F clear >/dev/null && ! alias clear >/dev/null 2>&1; then
@@ -92,16 +99,21 @@ _nebula_precmd() {
         if [[ ${PS1-} != "$__pebrel_ssh_prompt_last_ps1" ]]; then
             __pebrel_ssh_prompt_enabled=0
         else
-            local branch='' git_segment='' leading_newline=''
+            local branch='' git_prefix='' git_suffix='' leading_newline=''
             branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
             if [[ -n $branch ]]; then
-                git_segment=" \\[\\e[38;5;6m\\] $branch  \\[\\e[0m\\]"
+                git_prefix=' '
+                git_suffix='  '
             fi
             if [[ ${__pebrel_ssh_prompt_count:-0} -gt 0 ]]; then
                 leading_newline='\n'
             fi
             __pebrel_ssh_prompt_count=$(( ${__pebrel_ssh_prompt_count:-0} + 1 ))
-            PS1="$leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\]  \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  $git_segment \\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
+            __pebrel_ssh_prompt_leading_newline=$leading_newline
+            __pebrel_ssh_git_prefix=$git_prefix
+            __pebrel_ssh_git_branch=$branch
+            __pebrel_ssh_git_suffix=$git_suffix
+            PS1="$__pebrel_ssh_prompt_leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\]  \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  \\[\\e[38;5;6m\\]\${__pebrel_ssh_git_prefix}\${__pebrel_ssh_git_branch}\${__pebrel_ssh_git_suffix}\\[\\e[0m\\]\\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
             __pebrel_ssh_prompt_last_ps1=$PS1
         fi
     fi

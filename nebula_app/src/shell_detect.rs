@@ -677,12 +677,12 @@ pub fn wsl_cwd_report_env(
         return Vec::new();
     }
     // `$PWD` 而不是 `$(pwd)` 生成 cwd；shell token 只在第一个提示符编码一次。
-    // Powerline 开关只在默认提示符第一次出现时读取；Git 分支每次提示符刷新，
+    // Powerline 开关只在识别到精确默认提示符时读取；Git 分支每次提示符刷新，
     // 与 Windows 一样放在路径和时钟之间。
     // 初始提示符多发的 D 无害：Runtime submit barrier 会拒绝错配尚未提交的命令。
     const REPORT: &str = r#"__nebula_status=$?; if [ -z "${__pebrel_shell_token:-}" ]; then __pebrel_shell_token=$(printf '%s' "wsl|${WSL_DISTRO_NAME:-}|bash:${HOSTNAME:-wsl}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n');
 __PEBREL_CONNECTION_HOOK__
-fi; if [[ -z ${__pebrel_wsl_prompt_installed:-} && -z ${STARSHIP_SHELL:-} && -z ${POSH_SHELL:-} && ${PS1-} == *'\u@\h'*':'*'\w'* ]]; then
+fi; __pebrel_wsl_default_prompt=0; case ${PS1-} in '\u@\h:\w\$ '| '${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '|'\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '| '${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ ') __pebrel_wsl_default_prompt=1 ;; esac; if [[ -z ${__pebrel_wsl_prompt_installed:-} && -z ${STARSHIP_SHELL:-} && -z ${POSH_SHELL:-} && $__pebrel_wsl_default_prompt == 1 ]]; then
     __pebrel_settings_root=${PEBREL_CONFIG_DIR:-${APPDATA:+$APPDATA/Pebrel}}
     __pebrel_settings_file=${__pebrel_settings_root:+$__pebrel_settings_root/pebrel_settings.txt}
     if [[ -n $__pebrel_settings_file && ! -r $__pebrel_settings_file && -r $__pebrel_settings_root/nebula_settings.txt ]]; then
@@ -711,16 +711,18 @@ fi; if [[ -z ${__pebrel_wsl_prompt_installed:-} && -z ${STARSHIP_SHELL:-} && -z 
 fi; if [[ ${__pebrel_wsl_prompt_managed:-} == 1 ]]; then
     if [[ $PS1 == "$__pebrel_wsl_prompt_last_ps1" ]]; then
         __pebrel_git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || __pebrel_git_branch=
-        __pebrel_git_segment=
+        __pebrel_git_prefix=
+        __pebrel_git_suffix=
         __pebrel_wsl_leading_newline=
         if [[ ${__pebrel_wsl_prompt_count:-0} -gt 0 ]]; then
-            __pebrel_wsl_leading_newline='\n'
+            __pebrel_wsl_leading_newline=$'\n'
         fi
         __pebrel_wsl_prompt_count=$(( ${__pebrel_wsl_prompt_count:-0} + 1 ))
         if [[ -n $__pebrel_git_branch ]]; then
-            __pebrel_git_segment=" \[\e[38;5;6m\] $__pebrel_git_branch  \[\e[0m\]"
+            __pebrel_git_prefix=' '
+            __pebrel_git_suffix='  '
         fi
-        PS1="$__pebrel_wsl_leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\]  \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  $__pebrel_git_segment \\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
+        PS1="$__pebrel_wsl_leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\]  \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  \\[\\e[38;5;6m\\]\${__pebrel_git_prefix}\${__pebrel_git_branch}\${__pebrel_git_suffix}\\[\\e[0m\\]\\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
         __pebrel_wsl_prompt_last_ps1=$PS1
     else
         __pebrel_wsl_prompt_managed=0
@@ -1207,12 +1209,14 @@ test "$token" = "$__pebrel_shell_token" || exit 96
         let default_prompt = run(
             r"\u@\h:\w\$ ",
             false,
-            r#"[[ "$PS1" == '\[\e[38;5;4m\]'* ]] || exit 91
-[[ "$PS1" != '\n'* ]] || exit 92
-[[ "$PS1" == *''* ]] || exit 93
+            r#"rendered=${PS1@P}
+[[ "$rendered" == *''* ]] || exit 91
+[[ "$rendered" != $'\n'* ]] || exit 92
+[[ "$rendered" == *''* ]] || exit 93
 eval "$PROMPT_COMMAND" || exit 94
-[[ "$PS1" == '\n\[\e[38;5;4m\]'* ]] || exit 95
-[[ "$PS1" == *''* ]] || exit 96"#,
+rendered=${PS1@P}
+[[ "$rendered" == $'\n'*''* ]] || exit 95
+[[ "$rendered" == *''* ]] || exit 96"#,
         );
         assert!(
             default_prompt.status.success(),
@@ -1221,9 +1225,9 @@ eval "$PROMPT_COMMAND" || exit 94
         );
 
         let custom_prompt = run(
-            "custom> ",
+            r"[dev] \u@\h:\w\$ ",
             false,
-            r#"[[ "$PS1" == 'custom> ' ]] || exit 97
+            r#"[[ "$PS1" == '[dev] \u@\h:\w\$ ' ]] || exit 97
 [[ ${__pebrel_wsl_prompt_managed:-0} != 1 ]] || exit 98"#,
         );
         assert!(
@@ -1242,6 +1246,25 @@ eval "$PROMPT_COMMAND" || exit 94
             starship_prompt.status.success(),
             "Starship-managed prompt was changed: {}",
             String::from_utf8_lossy(&starship_prompt.stderr)
+        );
+
+        let literal_branch = run(
+            r"\u@\h:\w\$ ",
+            false,
+            r#"git() { printf '%s\n' '$(printf${IFS}PEBREL_REVIEW_MARKER)'; }
+PS1='\u@\h:\w\$ '
+__pebrel_wsl_prompt_installed=1
+__pebrel_wsl_prompt_managed=1
+__pebrel_wsl_prompt_last_ps1=$PS1
+__pebrel_wsl_prompt_count=0
+eval "$PROMPT_COMMAND" || exit 101
+rendered=${PS1@P}
+[[ "$rendered" == *'$(printf${IFS}PEBREL_REVIEW_MARKER)'* ]] || exit 102"#,
+        );
+        assert!(
+            literal_branch.status.success(),
+            "git branch text was expanded as shell code: {}",
+            String::from_utf8_lossy(&literal_branch.stderr)
         );
     }
 
