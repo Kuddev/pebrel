@@ -41,7 +41,14 @@ pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<Stri
         }
         let bootstrap = snapshot.bootstrap(token)?;
         let powerline = if nebula_settings::RuntimeSettings::load().powerline { 1 } else { 0 };
-        Ok::<_, SessionError>(Some(format!("PEBREL_REMOTE_POWERLINE={powerline} {bootstrap}")))
+        let platform = match crate::platform::Platform::current() {
+            crate::platform::Platform::MacOS => "macos",
+            crate::platform::Platform::Windows => "windows",
+            crate::platform::Platform::Linux => "linux",
+        };
+        Ok::<_, SessionError>(Some(format!(
+            "PEBREL_PROMPT_PLATFORM={platform} PEBREL_REMOTE_POWERLINE={powerline} {bootstrap}"
+        )))
     })
     .await;
     match result {

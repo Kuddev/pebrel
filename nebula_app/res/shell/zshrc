@@ -57,7 +57,10 @@ _nebula_precmd() {
         if [[ ${PROMPT-} != "$__pebrel_ssh_prompt_last" ]]; then
             __pebrel_ssh_prompt_enabled=0
         else
-            local branch='' git_segment='' leading_newline='' newlines=$'\n\n' psvar_index
+            local branch='' git_segment='' leading_newline='' newlines=$'\n\n' psvar_index prompt_icon=''
+            if [[ ${PEBREL_PROMPT_PLATFORM:-} == macos ]]; then
+                prompt_icon=''
+            fi
             branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
             if [[ -n $branch ]]; then
                 # `%v` inserts the branch after prompt substitution, so branch
@@ -70,7 +73,7 @@ _nebula_precmd() {
                 leading_newline=$'\n'
             fi
             __pebrel_ssh_prompt_count=$(( ${__pebrel_ssh_prompt_count:-0} + 1 ))
-            PROMPT="${leading_newline}%F{4}%K{4}%F{0}  %f%k%F{4}%f  %~  ${git_segment} %F{6} %D{%H:%M:%S}  %f${newlines}%F{5}❯%f "
+            PROMPT="${leading_newline}%F{4}%K{4}%F{0} ${prompt_icon} %f%k%F{4}%f  %~  ${git_segment} %F{6} %D{%H:%M:%S}  %f${newlines}%F{5}❯%f "
             __pebrel_ssh_prompt_last=$PROMPT
         fi
     fi

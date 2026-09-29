@@ -99,7 +99,10 @@ _nebula_precmd() {
         if [[ ${PS1-} != "$__pebrel_ssh_prompt_last_ps1" ]]; then
             __pebrel_ssh_prompt_enabled=0
         else
-            local branch='' git_prefix='' git_suffix='' leading_newline=''
+            local branch='' git_prefix='' git_suffix='' leading_newline='' prompt_icon=''
+            if [[ ${PEBREL_PROMPT_PLATFORM:-} == macos ]]; then
+                prompt_icon=''
+            fi
             branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
             if [[ -n $branch ]]; then
                 git_prefix=' '
@@ -113,7 +116,7 @@ _nebula_precmd() {
             __pebrel_ssh_git_prefix=$git_prefix
             __pebrel_ssh_git_branch=$branch
             __pebrel_ssh_git_suffix=$git_suffix
-            PS1="$__pebrel_ssh_prompt_leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\]  \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  \\[\\e[38;5;6m\\]\${__pebrel_ssh_git_prefix}\${__pebrel_ssh_git_branch}\${__pebrel_ssh_git_suffix}\\[\\e[0m\\]\\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
+            PS1="$__pebrel_ssh_prompt_leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\] $prompt_icon \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  \\[\\e[38;5;6m\\]\${__pebrel_ssh_git_prefix}\${__pebrel_ssh_git_branch}\${__pebrel_ssh_git_suffix}\\[\\e[0m\\]\\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
             __pebrel_ssh_prompt_last_ps1=$PS1
         fi
     fi
