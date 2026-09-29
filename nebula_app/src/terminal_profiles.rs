@@ -109,6 +109,31 @@ impl TerminalProfiles {
             .collect()
     }
 
+    /// Insert a user-created profile, replacing any existing entry with the same id.
+    ///
+    /// Deliberately *not* [`Self::upsert`]: that one collapses by command, which
+    /// is right for the import path (one row per shell executable) but wrong
+    /// here. Two quick-launch entries may legitimately run the same `wsl.exe`
+    /// against different project directories, and a command-keyed store can
+    /// only hold one of them.
+    pub(crate) fn add(&mut self, profile: TerminalProfile) -> io::Result<()> {
+        validate(&profile)?;
+        self.profiles.retain(|existing| existing.id != profile.id);
+        self.profiles.push(profile);
+        Ok(())
+    }
+
+    /// Drop the profile with this id. Returns whether one was removed.
+    ///
+    /// Keyed by `id` for the same reason [`Self::add`] is: a command is not a
+    /// unique key here. `id` is also what the launcher row and the sidebar row
+    /// both carry, so it is the only handle the UI has.
+    pub(crate) fn remove(&mut self, id: &str) -> bool {
+        let before = self.profiles.len();
+        self.profiles.retain(|profile| profile.id != id);
+        self.profiles.len() != before
+    }
+
     /// Replace the profile for the same command, or append a new command.
     pub(crate) fn upsert(&mut self, profile: TerminalProfile) -> io::Result<()> {
         validate(&profile)?;
@@ -367,6 +392,83 @@ mod tests {
 
         assert_eq!(profiles.profiles().len(), 1);
         assert_eq!(profiles.profiles()[0].name, "replacement");
+    }
+
+    /// 两个项目入口共用同一个 `wsl.exe` 是这个存储必须支持的形状：
+    /// 导入路径按命令去重，但用户手建的项目入口不是「一台 shell」而是
+    /// 「一个目录」，两者可以指向同一个可执行文件。
+    #[test]
+    fn add_keeps_two_entries_that_share_one_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let command = temp.path().join("wsl.exe");
+        #[cfg(windows)]
+        write_pe(&command, TEST_MACHINE);
+        #[cfg(not(windows))]
+        std::fs::write(&command, b"").unwrap();
+
+        let mut profiles = TerminalProfiles::default();
+        let mut a = profile(command.clone(), "project a");
+        a.id = "a".into();
+        let mut b = profile(command.clone(), "project b");
+        b.id = "b".into();
+        profiles.add(a).unwrap();
+        profiles.add(b).unwrap();
+
+        assert_eq!(profiles.profiles().len(), 2);
+        assert_eq!(profiles.profiles()[0].name, "project a");
+        assert_eq!(profiles.profiles()[1].name, "project b");
+    }
+
+    #[test]
+    fn add_replaces_the_same_id_and_remove_is_keyed_by_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let command = temp.path().join("pwsh.exe");
+        #[cfg(windows)]
+        write_pe(&command, TEST_MACHINE);
+        #[cfg(not(windows))]
+        std::fs::write(&command, b"").unwrap();
+
+        let mut profiles = TerminalProfiles::default();
+        let mut first = profile(command.clone(), "first");
+        first.id = "one".into();
+        profiles.add(first).unwrap();
+
+        // 同 id 再添加 = 改名/改目录，而不是多出一行。
+        let mut renamed = profile(command.clone(), "renamed");
+        renamed.id = "one".into();
+        profiles.add(renamed).unwrap();
+        assert_eq!(profiles.profiles().len(), 1);
+        assert_eq!(profiles.profiles()[0].name, "renamed");
+
+        assert!(profiles.remove("one"));
+        assert!(profiles.profiles().is_empty());
+        assert!(!profiles.remove("one"), "再删一次应返回 false");
+    }
+
+    /// 删除后落盘、再读回来仍是删掉的状态 —— 覆盖 save/load 与 remove 的组合。
+    #[test]
+    fn remove_survives_a_save_load_roundtrip() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("profiles.json");
+        let command = temp.path().join("pwsh.exe");
+        #[cfg(windows)]
+        write_pe(&command, TEST_MACHINE);
+        #[cfg(not(windows))]
+        std::fs::write(&command, b"").unwrap();
+
+        let mut profiles = TerminalProfiles::default();
+        let mut keep = profile(command.clone(), "keep");
+        keep.id = "keep".into();
+        let mut drop = profile(command.clone(), "drop");
+        drop.id = "drop".into();
+        profiles.add(keep).unwrap();
+        profiles.add(drop).unwrap();
+        assert!(profiles.remove("drop"));
+        profiles.save_to(&path).unwrap();
+
+        let reloaded = TerminalProfiles::load_from(&path).unwrap();
+        assert_eq!(reloaded.profiles().len(), 1);
+        assert_eq!(reloaded.profiles()[0].name, "keep");
     }
 
     fn profile(command: std::path::PathBuf, name: &str) -> TerminalProfile {

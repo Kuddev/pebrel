@@ -93,13 +93,6 @@ struct SshRow {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LauncherFilter {
-    All,
-    Ssh,
-    Shell,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LauncherGroup {
     Recommended,
     Shell,
@@ -116,22 +109,8 @@ impl LauncherGroup {
     }
 }
 
-impl LauncherFilter {
-    pub(crate) fn label(self, language: super::UiLanguage) -> &'static str {
-        match self {
-            Self::All => language.pick("全部", "All"),
-            Self::Ssh => "SSH",
-            Self::Shell => "Shell",
-        }
-    }
-
-    fn next(self, delta: i32) -> Self {
-        const FILTERS: [LauncherFilter; 3] =
-            [LauncherFilter::All, LauncherFilter::Ssh, LauncherFilter::Shell];
-        let index = FILTERS.iter().position(|filter| *filter == self).unwrap_or(0) as i32;
-        FILTERS[(index + delta).rem_euclid(FILTERS.len() as i32) as usize]
-    }
-}
+mod launcher_filter;
+pub use launcher_filter::LauncherFilter;
 
 /// 命令面板只负责展示目录；候选的匹配与 frecency 排序由共享目录服务完成，
 /// 避免 UI 再维护一套会逐渐分叉的目录搜索规则。
@@ -2986,7 +2965,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_filters_cycle_all_ssh_shell_and_reset_selection() {
+    fn launcher_filters_cycle_all_ssh_shell_profiles_and_reset_selection() {
         let mut palette = CommandPalette::new();
         palette.set_shell_menu(
             &[shell("PowerShell", "powershell", "powershell.exe")],
@@ -3006,10 +2985,13 @@ mod tests {
         assert!(palette.cycle_launcher_filter(1));
         assert_eq!(palette.launcher_filter(), LauncherFilter::Shell);
         assert_eq!(palette.visible(10).0[0].label, "PowerShell");
+        // 配置档是第 4 栏，不再被 Shell 吞掉——点 Shell 看到的是一台 shell。
+        assert!(palette.cycle_launcher_filter(1));
+        assert_eq!(palette.launcher_filter(), LauncherFilter::Profiles);
         assert!(palette.cycle_launcher_filter(1));
         assert_eq!(palette.launcher_filter(), LauncherFilter::All);
         assert!(palette.cycle_launcher_filter(-1));
-        assert_eq!(palette.launcher_filter(), LauncherFilter::Shell);
+        assert_eq!(palette.launcher_filter(), LauncherFilter::Profiles);
     }
 
     #[test]
