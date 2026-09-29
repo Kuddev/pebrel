@@ -26,8 +26,9 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Bounds, Context, Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, ObjectFit, ParentElement as _, SharedString, Styled as _,
-    StyledImage as _, Window, canvas, div, img, px, size,
+    KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, canvas, div, img, px,
+    size,
 };
 use nebula_split::{SplitDirection, SplitTree};
 
@@ -242,6 +243,7 @@ impl NebulaWorkspace {
         pane_id: u64,
         ordinal: usize,
         view: &Entity<TerminalView>,
+        custom_name: Option<&str>,
         focused: bool,
         zoomed: bool,
         broadcast: bool,
@@ -254,6 +256,7 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let ink = if focused { theme.foreground } else { muted };
         let accent = theme.primary;
+        let editor_bg = theme.background;
         // 聚焦 pane 的标题条比正文亮一档，失焦的贴回卡底——veil 只盖终端区，
         // 标题条自己用色阶表达焦点（把标题也压暗 30% 会让四个 pane 的标题
         // 全都糊成一片灰）。
@@ -265,6 +268,13 @@ impl NebulaWorkspace {
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let title_px = label_px * 0.78;
         let PaneTitle { logo, logo_pending, glyph, text } = self.pane_title(view, cx, dark);
+        let automatic_title = text.clone();
+        let text = custom_name.map(SharedString::from).unwrap_or(text);
+        let renaming = self
+            .pane_rename
+            .as_ref()
+            .filter(|edit| edit.pane_id == pane_id)
+            .map(|edit| edit.input.clone());
         let group: SharedString = format!("pane-header-{pane_id}").into();
         let icon_ink = if focused { ink } else { muted };
 
@@ -296,6 +306,7 @@ impl NebulaWorkspace {
                 // 整条：挂整条的话按住广播/关闭键再手抖 4px 就会把 pane 拖出去。
                 h_flex()
                     .id(("pane-header-grip", pane_id as usize))
+                    .debug_selector(move || format!("pane-header-grip-{pane_id}"))
                     .flex_1()
                     .min_w_0()
                     .h_full()
@@ -310,6 +321,10 @@ impl NebulaWorkspace {
                             this.begin_pane_drag(tab_ix, pane_id, event.position, cx);
                         }),
                     )
+                    .on_double_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.begin_pane_rename(pane_id, automatic_title.clone(), window, cx);
+                    }))
                     .child(
                         // 序号：与 tab 上的数量胶囊同一份 pane_order 次序，
                         // "这是第 2 个"在标题条和标签栏上指的是同一个 pane。
@@ -340,8 +355,44 @@ impl NebulaWorkspace {
                                 .child(glyph),
                         )
                     })
-                    .child(
-                        div()
+                    .child(match renaming {
+                        Some(input) => div()
+                            .id(("pane-title-editor", pane_id as usize))
+                            .debug_selector(move || format!("pane-title-editor-{pane_id}"))
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_mouse_down_out(cx.listener(move |this, _, window, cx| {
+                                if this.pane_rename.as_ref().is_some_and(|edit| edit.pane_id == pane_id) {
+                                    this.commit_pane_rename(false, window, cx);
+                                }
+                            }))
+                            .on_double_click(|_, _, cx| cx.stop_propagation())
+                            .capture_action(cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
+                                this.restore_pane_name(false, window, cx);
+                            }))
+                            .capture_action(cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
+                                this.restore_pane_name(true, window, cx);
+                            }))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if event.keystroke.key == "escape" {
+                                    cx.stop_propagation();
+                                    this.cancel_pane_rename(true, window, cx);
+                                }
+                            }))
+                            .child(gpui::Styled::h(
+                                Input::new(&input).small().w_full().py_0()
+                                    .focus_bordered(false).border_1().border_color(accent)
+                                    .bg(editor_bg).rounded(px(3.0))
+                                    .text_color(ink).text_size(px(title_px)).font_family(chrome_family.clone()),
+                                px(PANE_HEADER_H - 4.0),
+                            ))
+                            .into_any_element(),
+                        None => div()
+                            .id(("pane-title", pane_id as usize))
                             .flex_1()
                             .min_w_0()
                             .truncate()
@@ -349,8 +400,11 @@ impl NebulaWorkspace {
                             .text_size(px(title_px))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(ink)
-                            .child(text),
-                    ),
+                            .tooltip(move |window, cx| super::tab_presentation::tooltip(
+                                language.text(Message::WorkspacePaneRenameHint).into(), window, cx))
+                            .child(text)
+                            .into_any_element(),
+                    }),
             )
             .child(
                 h_flex()
