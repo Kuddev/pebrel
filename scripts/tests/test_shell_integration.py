@@ -12,6 +12,20 @@ import unittest
 from urllib.parse import quote
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "nebula_app/res/shell"
+# Hosted runners ship group/world-writable fpath directories; a native compinit would
+# stop at compaudit's prompt there too. Drop what compaudit rejects (the directory,
+# its parent, its .zwc digest or a file inside it) before the login shell's compinit.
+SECURE_FPATH_PROFILE = """autoload -Uz compaudit
+_insecure=(${(f)"$(compaudit 2>/dev/null)"})
+_kept=()
+for _dir in $fpath; do
+    (( ${_insecure[(Ie)$_dir]} || ${_insecure[(Ie)${_dir:h}]} || ${_insecure[(Ie)$_dir.zwc]} )) && continue
+    for _entry in $_insecure; do [[ ${_entry:h} == $_dir ]] && continue 2; done
+    _kept+=($_dir)
+done
+fpath=($_kept)
+unset _insecure _kept _dir _entry
+"""
 
 
 class ShellSession:
@@ -281,7 +295,7 @@ class ShellIntegrationTests(unittest.TestCase):
     def test_zsh_global_compinit_keeps_its_dump_out_of_the_bootstrap(self) -> None:
         # Ubuntu's /etc/zsh/zshrc runs compinit while ZDOTDIR still names the bootstrap.
         self.require_ubuntu_global_zshrc()
-        session = self.start("zsh", global_rcs=True)
+        session = self.start("zsh", global_rcs=True, profile=SECURE_FPATH_PROFILE)
         session.command('print -r -- "COMPINIT=${+functions[compdef]}_END"', b"COMPINIT=1_END")
         self.assertEqual(sorted(path.name for path in (self.home / "integration").iterdir()),
                          [".zprofile", ".zshenv", ".zshrc"])
