@@ -1,0 +1,21 @@
+<resources>
+    <plurals name="background_live_sessions">
+        <item quantity="one">%1$d 个活动会话</item>
+        <item quantity="other">%1$d 个活动会话</item>
+    </plurals>
+    <string name="notification_exit">退出</string>
+    <string name="notification_acquire_wakelock">获取唤醒锁</string>
+    <string name="notification_release_wakelock">释放唤醒锁</string>
+    <string name="notification_wakelock_active">唤醒锁已持有</string>
+    <string name="shared_storage_title">本地终端存储</string>
+    <string name="shared_storage_required">本地终端需要共享存储权限。</string>
+    <string name="shared_storage_explanation">授予权限后，Pebrel 会将本地终端启动在 /storage/emulated/0/Pebrel，并把该目录作为 HOME。请授予权限后继续；拒绝时不会改用应用私有数据目录。</string>
+    <string name="shared_storage_all_files_explanation">Android 需要你为 Pebrel 共享目录授予一次“所有文件访问权限”。</string>
+    <string name="shared_storage_grant">授予共享存储权限</string>
+    <string name="shared_storage_open_settings">打开应用设置</string>
+    <string name="shared_storage_ready">本地终端使用共享存储。</string>
+    <string name="shared_storage_location">本地终端 HOME：%1$s</string>
+    <string name="shared_storage_unavailable">共享存储不可用。请挂载外部存储后重试。</string>
+    <string name="shared_storage_directory_error">Pebrel 无法创建共享存储目录。请检查存储权限后重试。</string>
+    <string name="shared_storage_check_again">重新检查</string>
+</resources>

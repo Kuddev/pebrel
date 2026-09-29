@@ -109,6 +109,8 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         RuntimeCommand::Focus { .. } => RuntimeWindowPolicy::Focus,
         RuntimeCommand::NewWindow { .. } => RuntimeWindowPolicy::CreateWithoutActivation,
         RuntimeCommand::Snapshot
+        | RuntimeCommand::Conversation { .. }
+        | RuntimeCommand::Tab { .. }
         | RuntimeCommand::CloseWindow { .. }
         | RuntimeCommand::NewTab { .. }
         | RuntimeCommand::CloseTab { .. }
@@ -125,6 +127,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::SendKey { .. }
         | RuntimeCommand::Run { .. }
         | RuntimeCommand::Exec { .. }
+        | RuntimeCommand::Git { .. }
         | RuntimeCommand::AgentStart { .. }
         | RuntimeCommand::AgentFork { .. }
         | RuntimeCommand::AgentPrompt { .. }
@@ -831,6 +834,10 @@ fn entry_with_pane(pane_id: u64, cx: &mut App) -> Option<WindowEntry> {
 fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, ApiError> {
     let runtime_hub = cx.global::<WindowRegistry>().runtime_hub.clone();
     let (window_id, pane_id) = match command {
+        RuntimeCommand::Conversation { window_id, pane_id, .. } => {
+            (Some(*window_id), Some(*pane_id))
+        },
+        RuntimeCommand::Tab { window_id, .. } => (Some(*window_id), None),
         RuntimeCommand::Focus { window_id, pane_id }
         | RuntimeCommand::Split { window_id, pane_id, .. }
         | RuntimeCommand::AgentStart { window_id, pane_id, .. } => (*window_id, *pane_id),
@@ -848,7 +855,8 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
         | RuntimeCommand::Procs { window_id, pane_id }
         | RuntimeCommand::SendKey { window_id, pane_id, .. }
         | RuntimeCommand::Run { window_id, pane_id, .. }
-        | RuntimeCommand::Exec { window_id, pane_id, .. } => (*window_id, Some(*pane_id)),
+        | RuntimeCommand::Exec { window_id, pane_id, .. }
+        | RuntimeCommand::Git { window_id, pane_id, .. } => (*window_id, Some(*pane_id)),
         RuntimeCommand::AgentFork { window_id, source_pane_id, .. } => {
             (*window_id, *source_pane_id)
         },
@@ -1054,9 +1062,7 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
         _ => {},
     }
 
-    if let RuntimeCommand::Exec { pane_id, argv, timeout_ms, max_output_bytes, .. } =
-        &dispatch.command
-    {
+    if let Some((window_id, pane_id)) = dispatch.command.execution_target() {
         let entry = match route_entry(&dispatch.command, cx) {
             Ok(entry) => entry,
             Err(error) => {
@@ -1071,15 +1077,12 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             )));
             return;
         };
-        match workspace.read(cx).runtime_exec_context(*pane_id, cx) {
-            Ok((context, cwd)) => crate::runtime_exec::spawn(
-                dispatch.clone(),
-                context,
-                cwd,
-                argv.clone(),
-                *timeout_ms,
-                *max_output_bytes,
-            ),
+        let prepared = workspace
+            .read(cx)
+            .runtime_window_requested(window_id)
+            .and_then(|()| workspace.read(cx).runtime_exec_context(pane_id, cx));
+        match prepared {
+            Ok((context, cwd)) => crate::runtime_exec::spawn(dispatch.clone(), context, cwd),
             Err(error) => dispatch.respond(Err(error)),
         }
         return;
@@ -1110,6 +1113,12 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             return;
         },
     };
+    if super::runtime_tabs::dispatch_read(&dispatch, &entry.workspace, cx) {
+        return;
+    }
+    if super::runtime_conversation::dispatch_read(&dispatch, &entry.workspace, cx) {
+        return;
+    }
     let command = dispatch.command.clone();
     let workspace = entry.workspace.clone();
     let result = entry.handle.update(cx, move |_, window, cx| {
@@ -1913,7 +1922,7 @@ mod tests {
                 text: "paste".to_owned(),
                 submit: false,
             },
-            RuntimeCommand::ReadPane { window_id: Some(1), pane_id: 2, lines: 20 },
+            RuntimeCommand::ReadPane { window_id: Some(1), pane_id: 2, lines: 20, screen: false },
             RuntimeCommand::Procs { window_id: Some(1), pane_id: 2 },
             RuntimeCommand::SendKey {
                 window_id: Some(1),

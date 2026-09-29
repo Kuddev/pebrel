@@ -305,6 +305,8 @@ pub enum Subcommands {
     Migrate(MigrateOptions),
     /// Validate or create the Pebrel configuration.
     Config(ConfigOptions),
+    /// Check or invoke a local plugin package without starting a GUI or plugin daemon.
+    Plugin(crate::plugins::cli::Options),
     /// Test system notification (toast) delivery.
     #[cfg(windows)]
     NotifyTest,
@@ -1546,6 +1548,55 @@ mod tests {
                 })
             }))
         ));
+    }
+
+    #[test]
+    fn parses_plugin_commands_without_selecting_the_gui() {
+        use crate::plugins::cli::Command;
+        let check =
+            Options::try_parse_from(["pebrel", "plugin", "check", "sample", "--pretty"]).unwrap();
+        assert!(matches!(
+            check.subcommands,
+            Some(Subcommands::Plugin(crate::plugins::cli::Options {
+                command: Command::Check { .. },
+                pretty: true
+            }))
+        ));
+        let run = Options::try_parse_from([
+            "pebrel",
+            "plugin",
+            "run",
+            "sample",
+            "summary",
+            "--args",
+            "{\"label\":\"中文\"}",
+            "--timeout-ms",
+            "1000",
+        ])
+        .unwrap();
+        #[cfg(feature = "gpui-shell")]
+        assert!(!crate::wants_gpui_shell(&run));
+        assert!(matches!(
+            run.subcommands,
+            Some(Subcommands::Plugin(crate::plugins::cli::Options {
+                command: Command::Run { .. },
+                ..
+            }))
+        ));
+        for timeout in ["0", "30001"] {
+            assert!(
+                Options::try_parse_from([
+                    "pebrel",
+                    "plugin",
+                    "run",
+                    "sample",
+                    "summary",
+                    "--timeout-ms",
+                    timeout
+                ])
+                .is_err()
+            );
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
 from scripts.stable_release import (
     STABLE_SHA256_PLACEHOLDER,
@@ -23,6 +24,11 @@ VERSION = "1.6.0"
 
 
 def write_fake_asset(path: Path) -> None:
+    if path.suffix == ".apk":
+        with zipfile.ZipFile(path, "w") as apk:
+            apk.writestr("AndroidManifest.xml", "fixture")
+            apk.writestr("classes.dex", b"fixture" + b"\0" * MIN_ASSET_SIZE)
+        return
     if path.suffix == ".exe":
         header = b"MZ" + b"\0" * 6
     elif path.suffix == ".zip":
@@ -101,7 +107,8 @@ class StableReleaseTests(unittest.TestCase):
         self.assertIn("tools/i18n-contract/Cargo.toml", shared)
         self.assertNotIn("continue-on-error", shared)
         aggregate = workflow.split("\n  aggregate:\n", 1)[1].split("\n  publish:\n", 1)[0]
-        self.assertIn("needs: [prepare, linux, macos, windows, windows-arm64]", aggregate)
+        self.assertIn("needs: [prepare, linux, macos, windows, windows-arm64, android]", aggregate)
+        self.assertIn("--verify-evidence", aggregate)
         self.assertIn("windows_arm64=True", aggregate)
         arm = workflow.split("\n  windows-arm64:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
         for required in ("runs-on: windows-11-arm", "host: aarch64-pc-windows-msvc",
@@ -142,7 +149,7 @@ class StableReleaseTests(unittest.TestCase):
             with self.subTest(version=version):
                 names = expected_asset_names(version)
                 parsed = tuple(map(int, version.split('.')))
-                self.assertEqual(len(names), 9 if parsed >= (1, 9, 2) else 8 if parsed >= (1, 9, 0) else 7)
+                self.assertEqual(len(names), 10 if parsed >= (2, 0, 0) else 9 if parsed >= (1, 9, 2) else 8 if parsed >= (1, 9, 0) else 7)
                 self.assertIn(f"Pebrel-v{version}-windows-x64-setup.exe", names)
                 self.assertNotIn(f"NebulaTerminal-{version}-windows-x64-setup.exe", names)
 
@@ -156,6 +163,27 @@ class StableReleaseTests(unittest.TestCase):
             self.assertEqual(len(validate_assets(root, version)), 8)
             (root / "Pebrel-v1.9.0-windows-arm64.zip").unlink()
             with self.assertRaisesRegex(StableReleaseError, "missing: Pebrel-v1.9.0-windows-arm64.zip"):
+                validate_assets(root, version)
+
+    def test_20_requires_valid_android_apk_without_changing_historical_assets(self) -> None:
+        for version in ("1.9.0", "1.9.1", "1.9.2", "1.10.0"):
+            self.assertFalse(any(name.endswith(".apk") for name in expected_asset_names(version)))
+        version = "2.0.0"
+        name = "Pebrel-v2.0.0-android-universal-preview.apk"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in expected_asset_names(version):
+                write_fake_asset(root / asset)
+            self.assertEqual(len(validate_assets(root, version)), 10)
+            (root / name).unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing: " + name):
+                validate_assets(root, version)
+            (root / name).write_bytes(b"PK\x03\x04" + b"x" * MIN_ASSET_SIZE)
+            with self.assertRaisesRegex(StableReleaseError, "invalid ZIP structure"):
+                validate_assets(root, version)
+            with zipfile.ZipFile(root / name, "w") as apk:
+                apk.writestr("not-an-app", b"x" * MIN_ASSET_SIZE)
+            with self.assertRaisesRegex(StableReleaseError, "manifest or DEX"):
                 validate_assets(root, version)
 
     def test_post_191_requires_native_windows_arm64_installer(self) -> None:

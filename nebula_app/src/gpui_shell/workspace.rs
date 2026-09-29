@@ -70,6 +70,8 @@ mod rename;
 use rename::apply_cancel_rename;
 use rename::{PaneRename, TabRename, apply_commit_rename};
 mod residency;
+mod runtime_conversation;
+mod runtime_tabs;
 mod send_to_chat;
 mod session_persistence;
 mod session_recovery;
@@ -85,6 +87,7 @@ mod tab_drag;
 mod tab_duplication;
 mod tab_menu;
 mod tab_presentation;
+use tab_presentation::TabMeta;
 use tab_presentation::TabPresentation;
 mod tab_scroll;
 mod top_tabs;
@@ -601,31 +604,6 @@ fn ssh_host_icon_ids(data_dir: &Path) -> std::collections::HashMap<String, Strin
     crate::ssh_profiles::SshProfiles::load(&data_dir.join("ssh_profiles.json"))
         .map(|profiles| profiles.icons())
         .unwrap_or_default()
-}
-
-/// 标签的用户可编辑元数据：重命名与色标（旧壳 `TabEntry::custom_name` /
-/// `custom_color` 的对应物，字段与共享 session v4 的 `TabSession` 同名同义，
-/// 所以导出/恢复不需要转换层）。
-///
-/// 与 `tabs` **同下标**。长度必须一致，所以增删移三种结构性改动只允许走
-/// `insert_tab_at` / `remove_tab_at` / `move_tab`——别处直接 `self.tabs.push`
-/// 会让色条和名字错位到邻居身上。
-#[derive(Clone, Debug, Default)]
-struct TabMeta {
-    /// 用户重命名过的标签名；`None` = 跟着 cwd/文件名自动走。
-    custom_name: Option<String>,
-    /// 色标（右键菜单的标签颜色）；`None` = 不画色条。
-    color: Option<Rgb>,
-    /// 本 Tab 创建时实际采用的 shell 短标。默认 shell 是“新建时参数”，
-    /// 不是全局实时主题；设置改变后既有 PTY 不会换进程，这个标签也不能
-    /// 跟着全局值漂移。非终端 Tab 为 `None`。
-    shell_tag: Option<SharedString>,
-    /// 与旧壳 `TabEntry::launch` 同义：保存“这个 Tab 创建时实际采用什么
-    /// 启动方式”。共享 session v4 已有完整 schema，GPUI 只需把它保留下来，
-    /// 不能在快照时把所有本地 Tab 都降级成 `None`。
-    launch: Option<crate::session::LaunchSession>,
-    /// 后台 tab 响过 BEL（旧壳 `has_bell`）。激活即清。
-    has_bell: bool,
 }
 
 pub struct NebulaWorkspace {

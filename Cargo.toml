@@ -9,6 +9,7 @@ members = [
     "nebula_gpui",
     "nebula_settings",
     "nebula_split",
+    "mobile/link",
 ]
 resolver = "2"
 

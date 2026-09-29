@@ -545,10 +545,8 @@ impl SettingsPane {
         subscriptions.push(cx.intercept_keystrokes(appearance_interceptor));
 
         let settings_search_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(language.pick(
-                "搜索全部设置，例如「字号」「透明度」「更新」",
-                "Search all settings, e.g. font, opacity, update",
-            ))
+            InputState::new(window, cx)
+                .placeholder(language.text(crate::i18n::Message::CommonSearchSettings))
         });
         subscriptions.push(cx.subscribe_in(
             &settings_search_input,
@@ -573,6 +571,7 @@ impl SettingsPane {
             launch_at_login: crate::platform::startup::launch_at_login(),
             active_section: 1,
             agents: agents::AgentSettingsState::new(cx),
+            mobile: mobile::MobileState::new(window, cx),
             appearance_picker: None,
             appearance_picker_seq: 0,
             theme_editor: None,

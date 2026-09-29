@@ -141,6 +141,7 @@ impl NebulaWorkspace {
             at,
             WorkspaceTab::Terminal { panes, tree, focused, zoomed: false, broadcast: false },
             TabMeta {
+                runtime_id: Default::default(),
                 custom_name: tab.custom_name.clone(),
                 color: tab.color,
                 shell_tag: Self::launch_shell_tag(&saved_launch),
