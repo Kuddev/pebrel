@@ -32,7 +32,6 @@ use gpui::{
     SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Subscription,
     Window, canvas, div, ease_out_quint, fill, img, px, relative, size,
 };
-use image::Frame;
 
 use crate::display::color::Rgb;
 use crate::gpui_shell::code_tab::CodeTabViewEvent;
@@ -58,6 +57,7 @@ mod documents;
 mod file_tree;
 mod key_actions;
 mod launcher_menu;
+mod logos;
 mod notifications;
 mod palette;
 mod pane_header;
@@ -65,6 +65,10 @@ mod quick_jump;
 mod quick_terminal;
 mod recipes;
 mod remote_files;
+mod rename;
+#[cfg(test)]
+use rename::apply_cancel_rename;
+use rename::{PaneRename, TabRename, apply_commit_rename};
 mod residency;
 mod send_to_chat;
 mod session_persistence;
@@ -177,6 +181,9 @@ pub fn init(cx: &mut App) {
 /// （AI hook 的 `NEBULA_PANE_ID` 同源），全工作区唯一、终生不复用。
 struct TerminalPane {
     id: u64,
+    custom_name: Option<String>,
+    /// Recent committed names; follows the live pane without retaining window-bound inputs.
+    name_history: Vec<Option<String>>,
     view: Entity<TerminalView>,
     _subscription: Subscription,
 }
@@ -263,46 +270,6 @@ struct SplitDrag {
 type SplitBoundsStore = Rc<RefCell<HashMap<(usize, Vec<bool>), Bounds<Pixels>>>>;
 /// 键：pane id（方向导航要拿所有叶子的屏幕矩形算最近邻）。
 type PaneBoundsStore = Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>;
-
-fn decode_sidebar_logo(
-    logo: crate::display::AiLogo,
-    dark: bool,
-    target_size: u32,
-) -> Option<Arc<RenderImage>> {
-    let mut rgba = image::load_from_memory(logo.png(dark)).ok()?.into_rgba8();
-    logo.tint_pixels(&mut rgba, if dark { [236, 239, 245] } else { [35, 40, 50] });
-    // 直接复用旧壳的 Lanczos3 物理像素预缩放与 alpha 质量中心校正。
-    // 先 tint 再缩放，避免 1024px 原图在 GPUI paint 阶段临时压到十几个
-    // 逻辑像素时产生灰边、锯齿与非整数 DPI 采样。
-    let (prepared, width, height) = crate::display::prepare_ai_logo_texture(
-        rgba.as_raw(),
-        rgba.width(),
-        rgba.height(),
-        target_size,
-    );
-    let mut rgba = image::RgbaImage::from_raw(width, height, prepared)?;
-    // GPUI 的原始帧使用 BGRA；与壁纸解码走同一通道转换。
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-    Some(Arc::new(RenderImage::new([Frame::new(rgba)])))
-}
-
-fn sidebar_logo_images(
-    target_size: u32,
-) -> HashMap<(crate::display::AiLogo, bool), Arc<RenderImage>> {
-    use crate::display::AiLogo;
-
-    let mut images = HashMap::new();
-    for logo in AiLogo::ALL {
-        for dark in [false, true] {
-            if let Some(image) = decode_sidebar_logo(logo, dark, target_size) {
-                images.insert((logo, dark), image);
-            }
-        }
-    }
-    images
-}
 
 /// GPUI `Bounds` → `nebula_split::Rect`（同为窗口逻辑像素坐标系）。
 fn to_split_rect(bounds: &Bounds<Pixels>) -> nebula_split::Rect {
@@ -661,33 +628,13 @@ struct TabMeta {
     has_bell: bool,
 }
 
-/// 侧栏行内重命名的活动状态（旧壳 `nebula_tab_rename` 同形态：被编辑的那
-/// 一行原地变输入框，而不是弹一个对话框）。Enter 提交；Esc / 失焦取消
-/// （对照 `input/chrome.rs` 点在框外 = `CancelRename`）；提交空串 = 恢复
-/// 自动标签名。
-struct TabRename {
-    ix: usize,
-    input: Entity<InputState>,
-    _subscription: Subscription,
-}
-
-/// 旧壳 `TabRequest::CommitRename`（`window_context.rs` ~871-880）：
-/// trim；空串 → `custom_name = None`（恢复自动名）；非空 → `Some(trimmed)`。
-fn apply_commit_rename(meta: &mut TabMeta, buffer: &str) {
-    let trimmed = buffer.trim();
-    meta.custom_name = if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) };
-}
-
-/// 旧壳 `TabRequest::CancelRename`（`window_context.rs` ~896-901）：
-/// 丢掉重命名缓冲，`custom_name` 保持进入编辑前的值。
-fn apply_cancel_rename(_meta: &mut TabMeta) {}
-
 pub struct NebulaWorkspace {
     tabs: Vec<WorkspaceTab>,
     /// 与 `tabs` 同下标的用户元数据，见 [`TabMeta`]。
     tab_meta: Vec<TabMeta>,
     /// 正在行内重命名的标签，见 [`TabRename`]。
     tab_rename: Option<TabRename>,
+    pane_rename: Option<PaneRename>,
     next_pane_id: u64,
     active: usize,
     /// Window-level Settings surface. It intentionally lives outside `tabs`:
@@ -822,6 +769,7 @@ pub struct NebulaWorkspace {
     sidebar_logo_images: HashMap<(crate::display::AiLogo, bool), Arc<RenderImage>>,
     /// 品牌图缓存对应的整数物理像素边长；窗口跨 DPI 显示器时据此重建。
     sidebar_logo_target_px: u32,
+    sidebar_logo_load: logos::LogoLoad,
     /// 跟随系统深浅：OS 外观切换的监听（旧壳 ThemeChanged 的对应物）。
     _appearance_sub: Subscription,
     /// spinner 在窗口失焦时冻结为静态状态；重新聚焦后由一次 render 恢复按需帧循环。
@@ -880,6 +828,10 @@ impl NebulaWorkspace {
         if ix >= self.tabs.len() {
             return None;
         }
+        if self.pane_rename.as_ref().is_some_and(|edit| self.tab_of_pane(edit.pane_id) == Some(ix))
+        {
+            self.pane_rename = None;
+        }
         let tab = self.tabs.remove(ix);
         // 长度不齐时（理论上不会）宁可给默认元数据，也不要 panic。
         let meta =
@@ -919,7 +871,7 @@ impl NebulaWorkspace {
             })
             .detach();
         }
-        let initial_grid = Self::prepare_initial_grid(
+        let initial_grid = windowing::prepare_initial_grid(
             window,
             cx,
             sidebar_width,
@@ -980,12 +932,11 @@ impl NebulaWorkspace {
             cx.subscribe_in(&command_manager_input, window, Self::on_command_manager_input_event);
         let file_tree_search_subscription =
             cx.subscribe_in(&file_tree_search_input, window, Self::on_file_tree_search_event);
-        let sidebar_logo_target_px =
-            (TAB_LABEL_ICON_SIZE * window.scale_factor()).round().max(1.0) as u32;
         let mut this = Self {
             tabs: Vec::new(),
             tab_meta: Vec::new(),
             tab_rename: None,
+            pane_rename: None,
             // 首窗仍从 1 起，保持既有 runtime/测试身份；后续窗口用高 32 位
             // 分区，AI hook 只有 pane id 时也不会撞到另一窗口的同号 pane。
             next_pane_id: runtime_window_id
@@ -1060,8 +1011,9 @@ impl NebulaWorkspace {
             remote_files_scroll: gpui::UniformListScrollHandle::new(),
             tab_menu: None,
             selection_context_menu: None,
-            sidebar_logo_images: sidebar_logo_images(sidebar_logo_target_px),
-            sidebar_logo_target_px,
+            sidebar_logo_images: HashMap::new(),
+            sidebar_logo_target_px: 0,
+            sidebar_logo_load: logos::LogoLoad::default(),
             _appearance_sub: appearance_sub,
             spinner_window_active,
             _spinner_activation_sub: spinner_activation_sub,
@@ -1131,53 +1083,6 @@ impl NebulaWorkspace {
                 .unwrap_or(true)
         });
         this
-    }
-
-    /// 默认窗口尺寸 = 旧壳默认画布 116×30 的反推（`display` 的
-    /// `Dimensions` 默认值）。画布按配置基准字号定形；持久化缩放只参与
-    /// 随后的实际行列反推，不能把缩放后的 116 列全加到启动窗宽上。
-    /// 布局链横向：网格 + 侧栏 + 卡缝 p_2×2(16) +
-    /// 终端水平内边距 24；纵向：网格 + 标题栏 34（gpui-component
-    /// TITLE_BAR_HEIGHT）+ 卡缝 16 + 终端垂直内边距 16。各加 2px 余量让
-    /// 浮点 floor 不缩行列；放不下的屏幕按 95% 工作区收拢（网格随之变小，
-    /// 与旧壳"开不下就小"同义）。
-    fn prepare_initial_grid(
-        window: &mut Window,
-        cx: &mut App,
-        sidebar_width: f32,
-        fit_window_to_default_grid: bool,
-    ) -> (u16, u16) {
-        let (cell_w, line_h) = TerminalView::cell_metrics(window, cx);
-        let (startup_cell_w, startup_line_h) = TerminalView::startup_cell_metrics(window, cx);
-        // 标签栏位置只改变 chrome 内部布局，不能改变产品的默认外窗几何。
-        // 顶栏模式仍保留与侧栏模式相同的横向预算，让两种模式启动时宽高一致。
-        let chrome_w = sidebar_width + 16.0 + 24.0 + 2.0;
-        let chrome_h = 34.0 + 16.0 + 16.0 + 2.0;
-        let (w, h) = if fit_window_to_default_grid {
-            let mut w = f32::from(TerminalView::DEFAULT_GRID_COLUMNS) * f32::from(startup_cell_w)
-                + chrome_w;
-            let mut h =
-                f32::from(TerminalView::DEFAULT_GRID_LINES) * f32::from(startup_line_h) + chrome_h;
-            if let Some(display) = cx.primary_display() {
-                let bounds = display.bounds().size;
-                w = w.min(f32::from(bounds.width) * 0.95);
-                h = h.min(f32::from(bounds.height) * 0.95);
-            }
-            window.resize(size(px(w), px(h)));
-            (w, h)
-        } else {
-            // 快速终端的 WindowOptions 已经给出目标显示器全宽和 40% 高度。
-            // 再排队一次普通网格 resize 会与原生滑入竞争，首帧 DComp 表面只
-            // 覆盖旧宽度，右侧因此变黑。
-            let bounds = window.bounds().size;
-            (f32::from(bounds.width), f32::from(bounds.height))
-        };
-        // 反推收拢后的目标网格：终端 spawn 直接用它，出生即最终几何，
-        // 启动路径零 ConPTY resize（resize 竞态会打乱 shell 首屏输出的
-        // 坐标缓存，参见 set_layout 的启动稳定闸）。
-        let cols = ((w - chrome_w) / f32::from(cell_w) + 0.001).floor().max(2.0) as u16;
-        let rows = ((h - chrome_h) / f32::from(line_h) + 0.001).floor().max(2.0) as u16;
-        (cols, rows)
     }
 
     /// `LaunchSession::Default` 的口语短标。
@@ -1303,7 +1208,13 @@ impl NebulaWorkspace {
         if let Some(command) = command {
             view.update(cx, |view, cx| view.run_command(command, cx));
         }
-        TerminalPane { id: pane_id, view, _subscription: subscription }
+        TerminalPane {
+            id: pane_id,
+            custom_name: None,
+            name_history: Vec::new(),
+            view,
+            _subscription: subscription,
+        }
     }
 
     /// 现网格（聚焦终端）或开窗反推的目标网格：让新 pane 的 PTY 出生即
@@ -1450,6 +1361,8 @@ impl NebulaWorkspace {
     ) {
         let Some(WorkspaceTab::Terminal { panes, .. }) = self.tabs.get(tab_ix) else { return };
         let Some(old) = panes.iter().find(|pane| pane.id == pane_id) else { return };
+        let custom_name = old.custom_name.clone();
+        let name_history = old.name_history.clone();
         let (grid, remote_cwd) = {
             let view = old.view.read(cx);
             if view.ssh_destination.as_deref() != Some(destination.as_str()) {
@@ -1465,7 +1378,10 @@ impl NebulaWorkspace {
             destination: destination.clone(),
             cwd: remote_cwd,
         };
-        let replacement = self.new_pane(grid, launch, None, window, cx);
+        let mut replacement = self.new_pane(grid, launch, None, window, cx);
+        replacement.custom_name = custom_name;
+        replacement.name_history = name_history;
+        self.forget_pane_rename(pane_id);
         let replacement_id = replacement.id;
         let old = {
             let Some(WorkspaceTab::Terminal { panes, tree, focused, .. }) =
@@ -1592,6 +1508,18 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(edit) = self.pane_rename.as_ref()
+            && self.tab_of_pane(edit.pane_id) == Some(tab_ix)
+            && let Some(WorkspaceTab::Terminal { panes, .. }) = self.tabs.get(tab_ix)
+            && panes.iter().any(|pane| pane.id == pane_id)
+        {
+            if edit.pane_id == pane_id {
+                self.pane_rename = None;
+            } else if panes.len() == 2 {
+                // The survivor's header disappears when the split collapses.
+                self.commit_pane_rename(false, window, cx);
+            }
+        }
         let outcome = match self.tabs.get_mut(tab_ix) {
             Some(WorkspaceTab::Terminal { tree, .. }) => tree.remove_leaf(pane_id),
             _ => return,
@@ -1624,7 +1552,9 @@ impl NebulaWorkspace {
                 self.pane_bounds.borrow_mut().remove(&pane_id);
                 self.mark_structural_resize(tab_ix, cx);
                 if tab_ix == self.active {
-                    self.focus_active(window, cx);
+                    if self.pane_rename.is_none() {
+                        self.focus_active(window, cx);
+                    }
                     self.sync_side_panel_to_active(true, cx);
                 }
                 cx.notify();
@@ -2431,81 +2361,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    /// 进入行内重命名：对照旧壳 `TabRequest::BeginRename`
-    /// （`window_context.rs` ~854-868）。预填 `custom_name`，否则
-    /// `chrome_tab_label`（cwd 末级，不含分屏后缀）。已在编辑别的行时丢掉
-    /// 前一次缓冲（不提交），与旧壳覆盖 `nebula_tab_rename` 同合同。
-    fn begin_rename(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix >= self.tabs.len() {
-            return;
-        }
-        // 覆盖前一次编辑：只丢缓冲，不走 Commit（否则会把当时显示的目录名
-        // 冻成 custom_name）。不要调用 `cancel_rename`——它会 `focus_active`
-        // 把焦点延迟抢回终端，紧接着的输入框 focus 会被下一帧冲掉。
-        let _ = self.tab_rename.take();
-        let current = self.meta(ix).custom_name.unwrap_or_else(|| self.rename_prefill(ix, cx));
-        let input = cx.new(|cx| InputState::new(window, cx));
-        let subscription = cx.subscribe_in(
-            &input,
-            window,
-            |this: &mut Self, _: &Entity<InputState>, event: &InputEvent, window, cx| {
-                match event {
-                    InputEvent::PressEnter { .. } => this.commit_rename(window, cx),
-                    // 点在框外 = CancelRename（`input/chrome.rs` ~359-368），
-                    // 不是 Commit。Blur 提交会把自动目录名冻成 custom_name。
-                    InputEvent::Blur => this.cancel_rename(window, cx),
-                    _ => {},
-                }
-            },
-        );
-        // 旧壳 `nebula_tab_rename_select_all = true`：set_value 后全选再 focus。
-        // `InputState::select_all` 是 `pub(super)`，对外走公开的 `SelectAll` action。
-        input.update(cx, |state, cx| {
-            state.set_value(current, window, cx);
-            state.focus(window, cx);
-        });
-        self.tab_rename = Some(TabRename { ix, input, _subscription: subscription });
-        cx.on_next_frame(window, |this, window, cx| {
-            let Some(rename) = this.tab_rename.as_ref() else { return };
-            if !rename.input.read(cx).focus_handle(cx).is_focused(window) {
-                return;
-            }
-            window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
-        });
-        cx.notify();
-    }
-
-    /// BeginRename 预填：有 custom 用 custom，否则终端用聚焦 pane 的
-    /// `tab_label()`（cwd 末级，对齐 `chrome_tab_label`），其它 tab 用标题。
-    fn rename_prefill(&self, ix: usize, cx: &App) -> String {
-        match self.tabs.get(ix) {
-            Some(tab @ WorkspaceTab::Terminal { .. }) => tab
-                .focused_view()
-                .map(|view| view.read(cx).tab_label())
-                .unwrap_or_else(|| self.tab_title(ix, cx).to_string()),
-            _ => self.tab_title(ix, cx).to_string(),
-        }
-    }
-
-    fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(rename) = self.tab_rename.take() else { return };
-        let name = rename.input.read(cx).value();
-        if let Some(meta) = self.tab_meta.get_mut(rename.ix) {
-            apply_commit_rename(meta, &name);
-        }
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-
-    fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(rename) = self.tab_rename.take() else { return };
-        if let Some(meta) = self.tab_meta.get_mut(rename.ix) {
-            apply_cancel_rename(meta);
-        }
-        self.focus_active(window, cx);
-        cx.notify();
-    }
-
     /// 标签色标：同色再点一次即取消（旧壳菜单里选中的那枚色块 = 当前色）。
     fn set_tab_color(&mut self, ix: usize, color: Option<Rgb>, cx: &mut Context<Self>) {
         if let Some(meta) = self.tab_meta.get_mut(ix) {
@@ -2626,6 +2481,7 @@ impl NebulaWorkspace {
                     pane.id,
                     ordinal,
                     &pane.view,
+                    pane.custom_name.as_deref(),
                     true,
                     *zoomed,
                     *broadcast,
@@ -2691,7 +2547,16 @@ impl NebulaWorkspace {
                 let ordinal = order.iter().position(|other| *other == id).map_or(1, |at| at + 1);
                 let header = pane.map(|pane| {
                     self.render_pane_header(
-                        tab_ix, id, ordinal, &pane.view, is_focused, false, broadcast, corners, cx,
+                        tab_ix,
+                        id,
+                        ordinal,
+                        &pane.view,
+                        pane.custom_name.as_deref(),
+                        is_focused,
+                        false,
+                        broadcast,
+                        corners,
+                        cx,
                     )
                 });
                 // 布局：标题条固定高 + 终端吃剩余。canvas 探针仍量**整个叶子**
@@ -3047,10 +2912,10 @@ impl Render for NebulaWorkspace {
         let draw_file_divider = self.side_panel.open;
         let sidebar_logo_target_px =
             (TAB_LABEL_ICON_SIZE * window.scale_factor()).round().max(1.0) as u32;
-        if sidebar_logo_target_px != self.sidebar_logo_target_px {
+        if let Some(images) = logos::poll_sidebar_logo_images(self, sidebar_logo_target_px, cx) {
             // GPUI 窗口可跨不同 DPI 的显示器；原纹理只在整数物理像素尺寸
             // 变化时重建，普通 render 不重复解码 PNG。
-            self.sidebar_logo_images = sidebar_logo_images(sidebar_logo_target_px);
+            self.sidebar_logo_images = images;
             self.sidebar_logo_target_px = sidebar_logo_target_px;
         }
         // Some tab-open/restore paths assign `active` directly. Clear a focus

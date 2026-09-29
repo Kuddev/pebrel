@@ -11,7 +11,7 @@ on:
   push:
     branches: [main]
   # Include docs, catalogs, assets and workflow edits: every PR gets test results.
-  # 草稿已跑完整矩阵，转为 Ready 而没有新提交时不重复申请七个原生 runner。
+  # 草稿已跑完整矩阵，转为 Ready 而没有新提交时不重复申请五个原生 runner。
   pull_request:
     types: [opened, synchronize, reopened]
   merge_group:
@@ -63,7 +63,8 @@ jobs:
             scripts.tests.test_stable_release \
             scripts.tests.test_ci_cache \
             scripts.tests.test_platform_cfg \
-            scripts.tests.test_pr_size_workflow -v
+            scripts.tests.test_pr_size_workflow \
+            scripts.tests.test_copilot_review_workflow -v
       - name: Check platform cfg budget before native jobs
         run: python3 scripts/check_platform_cfg.py
       - name: Plan native validation
@@ -145,6 +146,18 @@ jobs:
           # PR merge-ref 缓存不与其他 PR 共享；只由默认分支维护可复用的依赖快照。
           revision: dependencies-v1
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+      # 构建前计算两类缓存身份，避免生成文件进入 hashFiles 后改变原有缓存键。
+      # release 保留独立产物路径，但不重复恢复同一份源码下载。
+      - name: Restore macOS release workload
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        uses: ./.github/actions/rust-cache
+        id: macos-release-cache
+        with:
+          key: native-release-check
+          target: target/release
+          revision: dependencies-v1
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          restore-downloads: "false"
       - name: Prepare pinned Windows console runtime
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -163,6 +176,7 @@ jobs:
       - name: Check the release workspace
         if: ${{ !cancelled() && runner.os != 'macOS' }}
         run: cargo check --locked --workspace --release
+      # Mac 原生快照先于 release 检查保存，避免后者失败或取消丢掉已验证的编译结果。
       - name: Save compiled workload
         if: ${{ success() && steps.rust-cache.outputs.save-enabled == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -171,6 +185,15 @@ jobs:
             target/ci
             ${{ runner.os != 'macOS' && 'target/release' || '' }}
           key: ${{ steps.rust-cache.outputs.cache-key }}
+      - name: Check macOS release workspace
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: cargo check --locked --workspace --release --timings
+      - name: Save macOS release workload
+        if: ${{ success() && steps.macos-release-cache.outputs.save-enabled == 'true' && steps.macos-release-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/release
+          key: ${{ steps.macos-release-cache.outputs.cache-key }}
       - name: Upload native compilation timings
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -181,60 +204,26 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-  # The release check has no dependency on the test executable. Keeping it in
-  # the Intel test job added 11m33s after a 22m29s test/compile step in run
-  # 34856491552. Both jobs remain part of this reusable workflow's result, so
-  # the stable release aggregation still requires every check to succeed.
+  # 保留服务端已有的必需检查名称，但不为结果汇总再申请稀缺的 macOS runner。
+  # 只接受本轮完整原生矩阵成功；上游失败或跳过时不能把汇总直接标绿。
   macos-release-check:
-    needs: lint
-    if: ${{ inputs.windows_diagnostics_run == '' }}
+    needs: [lint, native-tests]
+    if: ${{ !cancelled() && inputs.windows_diagnostics_run == '' }}
     name: Release workspace (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.lint.outputs.release_matrix) }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
-    env:
-      PYTHONUTF8: "1"
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: "1"
-      RUST_TOOLCHAIN: "1.97.1"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Require the AppKit SDK used by this PR
+      - name: Require this run's native and release checks
+        shell: python
+        env:
+          NATIVE_RESULT: ${{ needs.native-tests.result }}
         run: |
-          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
-          test "${sdk_version%%.*}" -ge 26
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.97.1"
-      - uses: ./.github/actions/rust-cache
-        id: rust-cache
-        with:
-          key: native-release-check
-          target: target/release
-          revision: dependencies-v1
-          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-      - name: Check the release workspace
-        run: cargo check --locked --workspace --release --timings
-      - name: Save compiled workload
-        if: ${{ success() && steps.rust-cache.outputs.save-enabled == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: target/release
-          key: ${{ steps.rust-cache.outputs.cache-key }}
-      - name: Upload release check compilation timings
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-check-timings-${{ matrix.os }}
-          path: target/cargo-timings
-          if-no-files-found: warn
-          compression-level: 0
-          retention-days: 14
+          import os
+          result = os.environ["NATIVE_RESULT"]
+          if result != "success":
+              raise SystemExit("Native validation did not succeed: " + result)
+          print("Both macOS release checks passed in the native matrix.")

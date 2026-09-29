@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import re
 from pathlib import Path
+import sys
+import textwrap
 import tomllib
 import unittest
 from unittest.mock import patch
@@ -43,11 +46,13 @@ class NativeSuiteTests(unittest.TestCase):
         platform_step = lint.split("Check platform cfg budget before native jobs", 1)[1].split("      - name:", 1)[0]
         self.assertNotIn("continue-on-error", platform_step)
         self.assertNotIn("--update", platform_step)
-        for job, output in (("native-tests", "native_matrix"),
-                            ("macos-release-check", "release_matrix")):
+        for job, output, needs in (
+            ("native-tests", "native_matrix", "needs: lint"),
+            ("macos-release-check", "release_matrix", "needs: [lint, native-tests]"),
+        ):
             body = workflow.split(f"\n  {job}:\n", 1)[1]
             body = re.split(r"\n  [a-z][a-z-]*:\n", body, maxsplit=1)[0]
-            self.assertIn("needs: lint", body)
+            self.assertIn(needs, body)
             self.assertIn(f"fromJSON(needs.lint.outputs.{output})", body)
             self.assertNotIn("pull_request.draft", body)
             self.assertNotIn("matrix.tier", body)
@@ -169,13 +174,15 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
-    def test_nextest_preserves_only_the_existing_shared_theme_fixture_mutex(self):
+    def test_nextest_serializes_only_fixtures_that_write_the_real_settings_file(self):
         root = Path(__file__).resolve().parents[2]
         config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
         self.assertEqual(config["profile"]["default"], {
             "overrides": [{
-                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)",
+                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)"
+                          " or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll)"
+                          " or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)",
                 "test-group": "theme-studio",
             }],
         })
@@ -183,15 +190,59 @@ class NativeSuiteTests(unittest.TestCase):
     def test_native_caches_are_default_branch_snapshots_not_per_pr_uploads(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
-        for job in ("native-tests", "macos-release-check"):
-            body = workflow.split(f"\n  {job}:\n", 1)[1]
-            body = re.split(r"\n  [a-z][a-z-]*:\n", body, maxsplit=1)[0]
-            self.assertIn("revision: dependencies-v1", body)
-            self.assertIn("save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}", body)
-            save = body.split("- name: Save compiled workload", 1)[1].split("      - name:", 1)[0]
-            self.assertIn("success() && steps.rust-cache.outputs.save-enabled == 'true'", save)
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  macos-release-check:\n", 1)[0]
+        for cache_id, save_name in (("rust-cache", "Save compiled workload"),
+                                   ("macos-release-cache", "Save macOS release workload")):
+            cache = native.split(f"id: {cache_id}\n", 1)[1].split("\n      - ", 1)[0]
+            self.assertIn("revision: dependencies-v1", cache)
+            self.assertIn("save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}", cache)
+            save = native.split(f"- name: {save_name}", 1)[1].split("\n      - ", 1)[0]
+            self.assertIn(f"success() && steps.{cache_id}.outputs.save-enabled == 'true'", save)
             self.assertNotIn("always()", save)
-            self.assertIn("steps.rust-cache.outputs.cache-hit != 'true'", save)
+            self.assertIn(f"steps.{cache_id}.outputs.cache-hit != 'true'", save)
+        self.assertLess(native.index("Test complete workspace"), native.index("Save compiled workload"))
+        self.assertLess(native.index("Restore macOS release workload"), native.index("Test complete workspace"))
+        self.assertLess(native.index("Save compiled workload"), native.index("Check macOS release workspace"))
+        release_cache = native.split("- name: Restore macOS release workload", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("key: native-release-check", release_cache)
+        self.assertIn("target: target/release", release_cache)
+        self.assertIn('restore-downloads: "false"', release_cache)
+
+    def test_macos_release_compilation_reuses_the_native_runner(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  macos-release-check:\n", 1)[0]
+        release = native.split("- name: Check macOS release workspace", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("if: ${{ !cancelled() && runner.os == 'macOS' }}", release)
+        self.assertIn("run: cargo check --locked --workspace --release --timings", release)
+        self.assertNotIn("continue-on-error", native)
+        self.assertLess(native.index("Require the AppKit SDK"), native.index("Check macOS release workspace"))
+        self.assertLess(native.index("Restore macOS release workload"), native.index("Check macOS release workspace"))
+        self.assertLess(native.index("Check macOS release workspace"), native.index("Save macOS release workload"))
+
+    def test_release_required_contexts_reject_failed_or_missing_native_results(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
+        report = workflow.split("\n  macos-release-check:\n", 1)[1]
+        self.assertIn("needs: [lint, native-tests]", report)
+        self.assertIn("if: ${{ !cancelled() && inputs.windows_diagnostics_run == '' }}", report)
+        self.assertIn("name: Release workspace (${{ matrix.os }})", report)
+        self.assertIn("fromJSON(needs.lint.outputs.release_matrix)", report)
+        self.assertIn("runs-on: ubuntu-24.04", report)
+        self.assertIn("shell: python", report)
+        self.assertIn("NATIVE_RESULT: ${{ needs.native-tests.result }}", report)
+        self.assertNotIn("uses:", report)
+        self.assertNotIn("continue-on-error", report)
+        script = textwrap.dedent(report.split("        run: |\n", 1)[1])
+        for result in ("success", "failure", "cancelled", "skipped", "", "success\n"):
+            with self.subTest(result=result):
+                completed = subprocess.run(
+                    [sys.executable, "-c", script],
+                    env={**os.environ, "NATIVE_RESULT": result},
+                    capture_output=True, text=True, encoding="utf-8", check=False,
+                )
+                self.assertEqual(completed.returncode, 0 if result == "success" else 1,
+                                 completed.stderr)
 
     def test_fast_test_profile_preserves_runtime_checks_and_resets_named_overrides(self):
         root = Path(__file__).resolve().parents[2]

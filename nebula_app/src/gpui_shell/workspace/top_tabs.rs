@@ -180,6 +180,7 @@ impl NebulaWorkspace {
                     is_settings,
                     activity,
                     logo_image,
+                    logo_pending,
                     program_glyph,
                     shell_tag,
                     color,
@@ -383,7 +384,7 @@ impl NebulaWorkspace {
                     .when_some(program_glyph, |row, glyph| {
                         row.child(
                             div()
-                                .w(px(TAB_LABEL_ICON_W))
+                                .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
                                 .flex_shrink_0()
                                 .font_family(symbol_family.clone())
                                 .text_size(px(label_px))

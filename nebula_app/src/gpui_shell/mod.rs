@@ -37,6 +37,8 @@ pub mod network_settings;
 pub mod prelude;
 mod scientific_render;
 pub mod session_restore;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) mod settings_fixture;
 pub mod settings_pane;
 pub mod ssh_hosts;
 pub mod ssh_settings;
@@ -223,13 +225,11 @@ fn init(cx: &mut App) {
 }
 
 fn register_bundled_fonts(cx: &App) {
-    // GPUI resolves a family through the system collection first and silently
-    // falls back when it is absent. Add Maple before any component/window can
-    // resolve a font so the default remains the same private face as winit.
-    if let Err(error) = cx.text_system().add_fonts(vec![
-        Cow::Borrowed(crate::font_install::REQUIRED_FONT_BYTES),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MapleMono-NF-CN-Regular.ttf")),
-    ]) {
+    // 在组件解析字体前注册默认 Normal 字体，保持原有字形与中文/图标兜底。
+    // 其他 Maple 变体走系统或导入字体，避免再内嵌一套完整的中文与图标字库。
+    if let Err(error) =
+        cx.text_system().add_fonts(vec![Cow::Borrowed(crate::font_install::REQUIRED_FONT_BYTES)])
+    {
         try_write_stderr(format_args!(
             "[nebula:gpui] failed to register bundled Maple font: {error}"
         ));
