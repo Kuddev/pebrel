@@ -117,6 +117,29 @@ impl Target {
 /// Called during local PTY preparation. Guest I/O belongs to one setup worker;
 /// the caller checks the local preference and prepares the pane environment.
 pub(crate) fn prepare(options: &mut tty::Options) {
+    // PowerShell can start WSL as a child with `wsl`/`wsl.exe`. Pass the guest
+    // prompt integration into that child while preserving existing WSLENV
+    // entries, including the pane's agent identity added earlier.
+    let powershell_parent = match options.shell.as_ref() {
+        None => true, // The Windows default shell is PowerShell.
+        Some(shell) => matches!(
+            crate::display::extract_program(shell.program()).as_deref(),
+            Some("powershell" | "pwsh")
+        ),
+    };
+    if powershell_parent {
+        let current_wslenv = options
+            .env
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("WSLENV"))
+            .map(|(_, value)| value.as_str());
+        let additions = crate::shell_detect::wsl_cwd_report_env("wsl.exe", &[], current_wslenv);
+        for (name, value) in additions {
+            options.env.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
+            options.env.insert(name, value);
+        }
+    }
+
     let Some(target) = options.shell.as_ref().and_then(Target::from_shell) else { return };
     if nebula_settings::RawSettings::load().bool_on("ai_hooks") == Some(false) {
         return;
