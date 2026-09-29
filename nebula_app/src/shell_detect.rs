@@ -1209,14 +1209,13 @@ test "$token" = "$__pebrel_shell_token" || exit 96
         let default_prompt = run(
             r"\u@\h:\w\$ ",
             false,
-            r#"rendered=${PS1@P}
-[[ "$rendered" == *''* ]] || exit 91
-[[ "$rendered" != $'\n'* ]] || exit 92
-[[ "$rendered" == *''* ]] || exit 93
-eval "$PROMPT_COMMAND" || exit 94
-rendered=${PS1@P}
-[[ "$rendered" == $'\n'*''* ]] || exit 95
-[[ "$rendered" == *''* ]] || exit 96"#,
+            r#"[[ "$PS1" == *''* ]] || exit 91
+[[ "$PS1" != $'\n'* ]] || exit 92
+[[ "$PS1" == *''* ]] || exit 93
+[[ "$PS1" == *'${__pebrel_git_branch}'* ]] || exit 94
+eval "$PROMPT_COMMAND" || exit 95
+[[ "$PS1" == $'\n'*''* ]] || exit 96
+[[ "$PS1" == *''* ]] || exit 97"#,
         );
         assert!(
             default_prompt.status.success(),
@@ -1258,8 +1257,8 @@ __pebrel_wsl_prompt_managed=1
 __pebrel_wsl_prompt_last_ps1=$PS1
 __pebrel_wsl_prompt_count=0
 eval "$PROMPT_COMMAND" || exit 101
-rendered=${PS1@P}
-[[ "$rendered" == *'$(printf${IFS}PEBREL_REVIEW_MARKER)'* ]] || exit 102"#,
+[[ ${__pebrel_git_branch:-} == '$(printf${IFS}PEBREL_REVIEW_MARKER)' ]] || exit 102
+[[ "$PS1" == *'${__pebrel_git_branch}'* ]] || exit 103"#,
         );
         assert!(
             literal_branch.status.success(),

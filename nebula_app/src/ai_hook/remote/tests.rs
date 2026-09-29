@@ -198,18 +198,19 @@ fn ssh_bash_prompt_preserves_custom_prompts_and_renders_git_branch_as_literal_te
             .expect("Bash is required for the SSH prompt regression");
         let bashrc = include_str!("../../../res/shell/bashrc");
         let mut script =
-            format!("PEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPS1='{ps1}'\n{bashrc}\n");
+            format!("PEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPS1='{ps1}'\n");
         if git_branch {
             script.push_str("git() { printf '%s\\n' '$(printf${IFS}PEBREL_REVIEW_MARKER)'; }\n");
         }
+        script.push_str(bashrc);
         script.push_str("eval \"$PROMPT_COMMAND\" || exit 90\n");
         if git_branch {
             script.push_str(
-                "[[ ${__pebrel_ssh_prompt_enabled:-0} == 1 && $PS1 == *''* ]] || exit 91\nrendered=${PS1@P}\n[[ $rendered == *'$(printf${IFS}PEBREL_REVIEW_MARKER)'* ]] || exit 92\n",
+                "[[ ${__pebrel_ssh_prompt_enabled:-0} == 1 && $PS1 == *''* ]] || exit 91\n[[ ${__pebrel_ssh_git_branch:-} == '$(printf${IFS}PEBREL_REVIEW_MARKER)' ]] || exit 92\n[[ $PS1 == *'${__pebrel_ssh_git_branch}'* ]] || exit 93\n[[ $PS1 != *'$(printf${IFS}PEBREL_REVIEW_MARKER)'* ]] || exit 94\n",
             );
         } else {
             script.push_str(
-                "[[ ${__pebrel_ssh_prompt_enabled:-0} != 1 && $PS1 == '[dev] \\u@\\h:\\w\\$ ' ]] || exit 93\n",
+                "[[ ${__pebrel_ssh_prompt_enabled:-0} != 1 && $PS1 == '[dev] \\u@\\h:\\w\\$ ' ]] || exit 95\n",
             );
         }
         child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
