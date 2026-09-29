@@ -86,6 +86,9 @@ impl SessionPersistence {
             session.clean_exit = matches!(reason, SaveReason::WindowClose | SaveReason::Quit);
         }
         self.latest = Some(session.clone());
+        // 关机路径(系统关机时进程收不到 close 事件,回不到 gpui 消息泵)
+        // 只能从这份镜像落盘。
+        crate::platform::shutdown_watch::note_latest(&session);
         if self.saved.as_ref() == Some(&session) {
             self.quitting |= reason == SaveReason::Quit;
             return Ok(());
