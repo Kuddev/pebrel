@@ -6,8 +6,10 @@ fi
 if [[ -r ${ZDOTDIR-$HOME}/.zshenv ]]; then
     source "${ZDOTDIR-$HOME}/.zshenv"
 fi
-NEBULA_ZDOTDIR_WAS_SET=${+ZDOTDIR}
-NEBULA_ORIGINAL_ZDOTDIR=${ZDOTDIR-}
-if [[ -o rcs ]]; then
+if [[ -o rcs && -o interactive ]]; then
+    export NEBULA_ZDOTDIR_WAS_SET=${+ZDOTDIR}
+    export NEBULA_ORIGINAL_ZDOTDIR=${ZDOTDIR-}
     export ZDOTDIR=$NEBULA_ZSH_INTEGRATION
+else
+    unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
 fi

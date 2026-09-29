@@ -148,28 +148,25 @@ pub(super) fn open_hint_match(
     hint: &HintMatch,
     text: &str,
     cwd: Option<&std::path::Path>,
-    launch: &crate::session::LaunchSession,
+    wsl_distro: Option<&str>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let target = (hint.hyperlink().is_none()
         && hint.action() == &HintAction::Command(default_hint_command()))
-        .then(|| wsl_absolute_target(text, launch))
+        .then(|| wsl_absolute_target(text, wsl_distro))
         .flatten();
     let text = target.as_deref().unwrap_or(text);
     dispatch_hint_action(hint.action(), hint.hyperlink().is_some(), text, cwd, window, cx);
 }
 
-fn wsl_absolute_target(text: &str, launch: &crate::session::LaunchSession) -> Option<String> {
+/// `wsl_distro` is the pane's spawn-time snapshot, so bare `wsl` and a WSL
+/// default shell resolve prompt paths in the distribution they actually run.
+fn wsl_absolute_target(text: &str, wsl_distro: Option<&str>) -> Option<String> {
     if !text.starts_with('/') || text.starts_with("//") {
         return None;
     }
-    let (program, args) = match launch {
-        crate::session::LaunchSession::Shell { program, args, .. } => (program, args),
-        crate::session::LaunchSession::Profile { command, args, .. } => (command, args),
-        _ => return None,
-    };
-    let distro = crate::shell_detect::wsl_launch_distro(program, args)?;
+    let distro = wsl_distro?;
     Some(crate::shell_detect::wsl_unc_path(distro, text).to_string_lossy().into_owned())
 }
 
@@ -179,27 +176,15 @@ mod path_tests {
 
     #[test]
     fn absolute_prompt_paths_use_the_owning_wsl_distribution() {
-        let launch = crate::session::LaunchSession::Shell {
-            name: "Debian".into(),
-            program: "wsl.exe".into(),
-            args: vec!["-d".into(), "Debian".into()],
-        };
+        let distro = Some("Debian");
         assert_eq!(
-            wsl_absolute_target("/mnt/d/project", &launch).as_deref(),
+            wsl_absolute_target("/mnt/d/project", distro).as_deref(),
             Some(r"\\wsl.localhost\Debian\mnt\d\project")
         );
-        assert!(wsl_absolute_target("//example.com/file", &launch).is_none());
-        assert!(wsl_absolute_target("https://example.com", &launch).is_none());
-        assert!(
-            wsl_absolute_target(
-                "/home/user",
-                &crate::session::LaunchSession::Ssh { host: "remote".into() }
-            )
-            .is_none()
-        );
-        assert!(
-            wsl_absolute_target("/home/user", &crate::session::LaunchSession::Default).is_none()
-        );
+        assert!(wsl_absolute_target("//example.com/file", distro).is_none());
+        assert!(wsl_absolute_target("https://example.com", distro).is_none());
+        // SSH and host panes have no WSL snapshot.
+        assert!(wsl_absolute_target("/home/user", None).is_none());
     }
 }
 

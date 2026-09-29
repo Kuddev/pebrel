@@ -114,6 +114,7 @@ impl TerminalView {
             suggest_env,
             exec_context,
             session_launch,
+            wsl_distro,
             spawned,
         ) = match launch {
             TerminalLaunch::Local { cwd, shell: launch_shell, shell_name } => {
@@ -121,16 +122,30 @@ impl TerminalView {
                 // 身份时才回退当前设置。这正是共享 v4 的 Default 语义。
                 let effective = launch_shell.or(shell);
                 startup_intro = accepts_startup_intro(effective.as_ref());
+                let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
+                // The WSL distribution is resolved once, at spawn: completion
+                // scoping and the pane identity (file tree, Git, prompt paths)
+                // must name the same guest.
+                let wsl_distro = snapshot_shell.as_ref().and_then(|shell| {
+                    crate::shell_detect::wsl_spawn_distro(shell.program(), shell.args())
+                });
                 // 补齐要知道这个 pane 面对**哪台机器**：`wsl.exe -d <发行版>`
                 // 启动的 tab，文件系统和命令集都在来宾里，本进程的 `std::fs`
                 // 和 PATH 描述的是另一台机器。
-                let suggest_env = effective
-                    .as_ref()
-                    .map(|shell| {
-                        crate::completion_context::launch_environment(shell.program(), shell.args())
-                    })
-                    .unwrap_or_default();
-                let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
+                let suggest_env = match (&effective, &wsl_distro) {
+                    (Some(_), Some(distro)) => {
+                        crate::display::SuggestEnv::Wsl { distro: distro.clone() }
+                    },
+                    _ => effective
+                        .as_ref()
+                        .map(|shell| {
+                            crate::completion_context::launch_environment(
+                                shell.program(),
+                                shell.args(),
+                            )
+                        })
+                        .unwrap_or_default(),
+                };
                 let session_launch = snapshot_shell.as_ref().map_or(
                     crate::session::LaunchSession::Default,
                     |shell| crate::session::LaunchSession::Shell {
@@ -166,6 +181,7 @@ impl TerminalView {
                     suggest_env,
                     Some(exec_context),
                     session_launch,
+                    wsl_distro,
                     spawned,
                 )
             },
@@ -176,6 +192,7 @@ impl TerminalView {
                 crate::display::SuggestEnv::Ssh { destination: destination.clone() },
                 None,
                 crate::session::LaunchSession::Ssh { host: destination.clone() },
+                None,
                 session::spawn_ssh(destination, cwd, initial, term_config),
             ),
         };
@@ -298,6 +315,7 @@ impl TerminalView {
             pending_shell_command: None,
             recovery: startup_command::SessionRecovery::default(),
             session_launch,
+            wsl_distro,
             inline_images: super::super::inline_image::InlineImageStore::default(),
             image_paste: image_paste::ImagePasteState::default(),
             path_drop: path_drop::PathDropState::default(),

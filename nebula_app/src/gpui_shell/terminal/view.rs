@@ -333,6 +333,9 @@ pub struct TerminalView {
     pending_shell_command: Option<startup_command::PendingShellCommand>,
     recovery: startup_command::SessionRecovery,
     pub(crate) session_launch: crate::session::LaunchSession,
+    /// WSL 发行版，spawn 时按 [`crate::shell_detect::wsl_spawn_distro`] 快照：
+    /// 裸 `wsl` / 默认 shell 也有确定的来宾身份，事后改默认发行版不会串台。
+    pub(crate) wsl_distro: Option<String>,
     /// OSC 1337 图片的串行后台解码队列和有界像素缓存。图片不进入字符网格，
     /// 只用事件携带的绝对行锚定到对应的 scrollback 位置。
     pub(super) inline_images: super::inline_image::InlineImageStore,

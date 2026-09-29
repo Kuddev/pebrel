@@ -29,19 +29,7 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
     match name {
         "zsh" => {
             let directory = root.join("zsh");
-            std::fs::create_dir_all(&directory)?;
-            for (name, content) in [
-                (".zshenv", include_str!("../../res/shell/zshenv")),
-                (".zprofile", include_str!("../../res/shell/zprofile")),
-                (".zshrc", include_str!("../../res/shell/zshrc")),
-            ] {
-                let content = if name == ".zshrc" {
-                    format!("{content}\n{}", tty::connection_shell())
-                } else {
-                    content.to_owned()
-                };
-                crate::atomic_file::write(&directory.join(name), content.as_bytes())?;
-            }
+            write_zsh_files(&directory)?;
             if let Some(original) = std::env::var_os("ZDOTDIR") {
                 options.env.insert(
                     "NEBULA_ORIGINAL_ZDOTDIR".into(),
@@ -71,12 +59,120 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The zsh bootstrap shared by local zsh and WSL guests: restore the user's
+/// `ZDOTDIR`, source their own startup files, then install the precmd reports.
+fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    for (name, content) in [
+        (".zshenv", include_str!("../../res/shell/zshenv")),
+        (".zprofile", include_str!("../../res/shell/zprofile")),
+        (".zshrc", include_str!("../../res/shell/zshrc")),
+    ] {
+        let content = if name == ".zshrc" {
+            format!("{content}\n{}", tty::connection_shell())
+        } else {
+            content.to_owned()
+        };
+        // A guest zsh treats CR as part of each command; checkout bytes must not leak in.
+        let content = content.replace("\r\n", "\n");
+        crate::atomic_file::write(&directory.join(name), content.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Host directory that a WSL guest zsh uses as `ZDOTDIR` (translated through
+/// `WSLENV` `/p`), see [`crate::shell_detect::wsl_cwd_report_env`]. Kept apart
+/// from the local-zsh directory so the two integrations never rewrite each other.
+///
+/// `Ok(None)` off Windows and when the data directory is not on a local drive
+/// letter: a UNC or redirected path is not automounted in the guest, and a
+/// `ZDOTDIR` the guest cannot read would also skip the user's own startup files.
+/// The files are written once per process; spawns never replace a file that a
+/// starting guest zsh may be reading.
+pub(crate) fn wsl_zsh_directory() -> std::io::Result<Option<std::path::PathBuf>> {
+    #[cfg(windows)]
+    {
+        static PREPARED: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        if let Some(directory) = PREPARED.get() {
+            return Ok(Some(directory.clone()));
+        }
+        let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
+        if !is_local_drive_path(&directory) {
+            return Ok(None);
+        }
+        write_zsh_files(&directory)?;
+        Ok(Some(PREPARED.get_or_init(|| directory).clone()))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+/// `D:\…` or `\\?\D:\…` on a fixed disk. UNC shares, mapped network drives and
+/// relative paths are not automounted into the guest.
+#[cfg(windows)]
+fn is_local_drive_path(path: &std::path::Path) -> bool {
+    use std::path::{Component, Prefix};
+    // `DRIVE_FIXED` lives in a `windows` feature this crate does not enable.
+    const DRIVE_FIXED: u32 = 3;
+    let letter = match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => letter,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let root: Vec<u16> = format!("{}:\\", char::from(letter)).encode_utf16().chain([0]).collect();
+    // SAFETY: `root` is a NUL-terminated UTF-16 string that outlives the call.
+    let kind = unsafe {
+        windows::Win32::Storage::FileSystem::GetDriveTypeW(windows::core::PCWSTR(root.as_ptr()))
+    };
+    kind == DRIVE_FIXED
+}
+
 #[cfg(unix)]
 fn supports(name: &str, args: &[String]) -> bool {
     match name {
         "zsh" => args.iter().all(|arg| matches!(arg.as_str(), "-l" | "--login" | "-i")),
         "bash" => !cfg!(target_os = "macos") && args.is_empty(),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod zsh_file_tests {
+    #[test]
+    fn zsh_bootstrap_is_posix_text_and_chains_the_user_rc() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        // The second write covers replacing an existing bootstrap.
+        for _ in 0..2 {
+            super::write_zsh_files(directory.path()).expect("write zsh bootstrap");
+        }
+        for name in [".zshenv", ".zprofile", ".zshrc"] {
+            let content = std::fs::read_to_string(directory.path().join(name)).expect(name);
+            assert!(!content.contains('\r'), "{name} must not carry CR into the guest");
+            assert!(
+                content.contains(&format!("${{ZDOTDIR-$HOME}}/{name}")),
+                "{name} chains user file"
+            );
+        }
+        let env = std::fs::read_to_string(directory.path().join(".zshenv")).unwrap();
+        assert!(
+            env.contains("-o rcs && -o interactive"),
+            "`zsh -c` must not export the bootstrap ZDOTDIR to its children"
+        );
+        let rc = std::fs::read_to_string(directory.path().join(".zshrc")).unwrap();
+        assert!(rc.contains("]7;file://"), "zsh integration reports OSC 7 cwd");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_bootstrap_needs_a_guest_visible_drive() {
+        let system = std::env::var_os("SystemRoot").expect("SystemRoot");
+        assert!(super::is_local_drive_path(std::path::Path::new(&system)));
+        assert!(!super::is_local_drive_path(std::path::Path::new(r"\\server\share\Pebrel")));
+        assert!(!super::is_local_drive_path(std::path::Path::new(r"relative\Pebrel")));
     }
 }
 

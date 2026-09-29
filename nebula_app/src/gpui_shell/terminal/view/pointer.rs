@@ -189,7 +189,7 @@ impl TerminalView {
             &hover.hint,
             &text,
             cwd.as_deref(),
-            &self.session_launch,
+            self.wsl_distro.as_deref(),
             window,
             cx,
         );

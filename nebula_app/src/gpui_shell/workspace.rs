@@ -1138,14 +1138,13 @@ impl NebulaWorkspace {
     fn add_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // 旧壳合同（window_context `spawn_tab` 一族）：新 tab 的 cwd 先取
         // 设置页的「启动目录」（存在且是目录才算数），否则继承聚焦 pane
-        // 的本地 cwd——`startup_directory=` 因此在两壳有同一效果。
-        let cwd = Self::startup_directory().or_else(|| {
-            self.tabs
-                .get(self.active)
-                .and_then(WorkspaceTab::focused_view)
-                .and_then(|view| view.read(cx).local_cwd())
-        });
-        self.add_terminal_at(cwd, None, window, cx);
+        // 的 cwd——`startup_directory=` 因此在两壳有同一效果。WSL 来宾目录
+        // 见 `tab_duplication::new_tab_launch`。
+        let (launch, cwd) = match Self::startup_directory() {
+            Some(dir) => (shell_launch::configured_local_launch(cx), Some(dir)),
+            None => self.new_tab_from_focused(cx),
+        };
+        self.add_terminal_with(launch, cwd, None, window, cx);
     }
 
     /// 设置页「启动目录」：非空且确实存在的目录才生效（旧壳同判定）。
@@ -1405,18 +1404,13 @@ impl NebulaWorkspace {
                 "the focused pane is missing from the active split tree",
             ));
         };
-        let (cols, rows, cwd) = {
+        let (cols, rows, launch) = {
             let view = anchor.view.read(cx);
-            (view.grid_cols() as u16, view.grid_rows() as u16, view.local_cwd())
+            (view.grid_cols() as u16, view.grid_rows() as u16, tab_duplication::pane_split(view))
         };
         let grid = match direction {
             SplitDirection::LeftRight => ((cols / 2).max(2), rows.max(2)),
             SplitDirection::TopBottom => (cols.max(2), (rows / 2).max(2)),
-        };
-        let launch = crate::gpui_shell::terminal::view::TerminalLaunch::Local {
-            cwd,
-            shell: None,
-            shell_name: None,
         };
         let pane = self.new_pane(grid, launch, None, window, cx);
         let new_id = pane.id;
@@ -1780,18 +1774,16 @@ impl NebulaWorkspace {
         view.read(cx).local_cwd()
     }
 
-    /// 聚焦 tab 所在的 WSL 发行版 + 来宾目录；不是 WSL、或发行版无从确定
-    /// （裸 `wsl` 启动）时为 `None`。Git 视图拿它在来宾里直接跑 git，不经
-    /// 任何 UNC 映射，所以宿主看不见 WSL 文件系统时依然有效。
+    /// The focused pane's WSL distribution and guest directory; `None` outside
+    /// WSL. The Git view runs git inside the guest with it, without any UNC
+    /// mapping, so it still works when the host cannot see the WSL file system.
+    /// The identity is the pane's spawn snapshot, not the tab-level launch; see
+    /// `architecture/notes/nebula_app/shell_detect/`.
     fn active_wsl_cwd(&self, cx: &App) -> Option<crate::shell_detect::WslCwd> {
-        let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)?;
-        let raw = view.read(cx).cwd.clone();
-        let Some(crate::session::LaunchSession::Shell { program, args, .. }) =
-            self.meta(self.active).launch
-        else {
-            return None;
-        };
-        crate::shell_detect::wsl_cwd(&raw, &program, &args)
+        let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)?.read(cx);
+        let distro = view.wsl_distro.clone()?;
+        let guest = crate::shell_detect::wsl_guest_cwd(&view.cwd)?;
+        Some(crate::shell_detect::WslCwd { distro, guest: guest.to_owned() })
     }
 
     /// 抽屉这一帧该跟随的位置。WSL 先分流：只有 `/mnt/<盘>` 映射到宿主盘，

@@ -194,10 +194,7 @@ pub(crate) fn launch_environment(program: &str, args: &[String]) -> SuggestEnv {
     let program_name = program.rsplit(['/', '\\']).next().unwrap_or(program);
     match crate::display::extract_program(program_name).as_deref() {
         Some("wsl") => {
-            let distro = crate::shell_detect::wsl_launch_distro(program, args)
-                .map(str::to_owned)
-                .or_else(crate::platform::shell::default_wsl_distro)
-                .unwrap_or_default();
+            let distro = crate::shell_detect::wsl_spawn_distro(program, args).unwrap_or_default();
             SuggestEnv::Wsl { distro }
         },
         Some("ssh") => {

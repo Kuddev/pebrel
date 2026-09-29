@@ -231,6 +231,32 @@ class ShellIntegrationTests(unittest.TestCase):
         session.command('printf "PROFILE=%s ZDOTDIR=%s_END\\n" "$NEBULA_PROFILE_TEST" "$ZDOTDIR"',
                         f"PROFILE=env:profile:rc:login ZDOTDIR={directory}_END".encode())
 
+    def test_non_interactive_zsh_does_not_leak_the_bootstrap_zdotdir(self) -> None:
+        # WSL shape: `wsl <cmd>` runs `zsh -c`, the host cannot know the guest ZDOTDIR,
+        # and the user's ~/.zshenv moves ZDOTDIR (XDG layout).
+        program = shutil.which("zsh")
+        if not program:
+            self.skipTest("zsh is not installed; native CI must run this case")
+        dotfiles = self.home / ".config/zsh"
+        dotfiles.mkdir(parents=True)
+        (self.home / ".zshenv").write_text('export ZDOTDIR="$HOME/.config/zsh"\n', encoding="utf-8")
+        (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST=rc\n", encoding="utf-8")
+        wrapper = self.home / "integration"
+        wrapper.mkdir()
+        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
+            shutil.copyfile(SCRIPTS / source, wrapper / target)
+        nested = 'zsh -i -c \'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} ZDOTDIR=$ZDOTDIR"\'; env'
+        result = subprocess.run(
+            [program, "-c", nested], cwd=self.home, capture_output=True, text=True, check=True,
+            env={"PATH": os.environ["PATH"], "HOME": str(self.home), "TERM": "dumb",
+                 "ZDOTDIR": str(wrapper), "NEBULA_ZSH_INTEGRATION": str(wrapper),
+                 "NEBULA_ZDOTDIR_WAS_SET": "0"},
+        )
+        self.assertIn(f"RC=rc ZDOTDIR={dotfiles}", result.stdout)
+        environment = dict(line.split("=", 1) for line in result.stdout.splitlines()[1:] if "=" in line)
+        self.assertEqual(environment.get("ZDOTDIR"), str(dotfiles))
+        self.assertFalse([name for name in environment if name.startswith("NEBULA_")])
+
     def test_zsh_preserves_precmd_hooks_after_failure(self) -> None:
         session = self.start("zsh", """
 typeset -gi user_prompt_count=0
