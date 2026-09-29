@@ -363,10 +363,6 @@ fn dock_tree(target: SplitTree<u64>, source: SplitTree<u64>, nav: SplitNav) -> S
     target.joined(source, nav)
 }
 
-/// 侧栏 tab 行高与行距（与 `render_sidebar` 的 `h(px(TAB_ROW_H))`、
-/// `gap_2`(8px) 同源）；受约束拖拽按此步距换算让位槽位。
-pub(super) const TAB_ROW_H: f32 = 34.0;
-pub(super) const TAB_ROW_PITCH: f32 = TAB_ROW_H + 8.0;
 /// 右侧抽屉槽位宽度 = 抽屉自身宽度。抽屉贴满右侧整条竖带（上下右都不留卡缝，
 /// 左侧直接抵住终端卡），所以槽位里不再有额外的卡缝要算进来。
 
@@ -628,8 +624,9 @@ pub struct NebulaWorkspace {
     sidebar_collapsed: bool,
     /// 只折叠 TABS 分区，不影响整个左栏；与旧壳分区标题的 chevron 同义。
     tabs_section_collapsed: bool,
-    /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进 48px 标题栏。
+    /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进标题栏。
     tabs_position: nebula_settings::TabsPositionName,
+    density: nebula_settings::DensityName,
     /// 运行时持久化的侧栏逻辑宽；布局、初始窗口和折叠动画必须同源。
     sidebar_width: f32,
     /// 首次手动切换后才启用折叠动画：启动帧保持静止落位（旧壳同感，
@@ -930,6 +927,7 @@ impl NebulaWorkspace {
             sidebar_collapsed: false,
             tabs_section_collapsed: false,
             tabs_position: runtime.tabs_position,
+            density: runtime.density,
             sidebar_width,
             sidebar_fold_armed: false,
             tabs_fold_armed: false,
@@ -1139,6 +1137,8 @@ impl NebulaWorkspace {
         crate::gpui_shell::apply_app_icon(runtime.app_icon, cx);
         self.sidebar_width = runtime.sidebar_width;
         self.tabs_position = runtime.tabs_position;
+        self.density = runtime.density;
+        self.reveal_active_tab();
         self.sync_settings_layout();
         self.sidebar_resizing = None;
         self.reveal_if_tray_disabled(cx);
