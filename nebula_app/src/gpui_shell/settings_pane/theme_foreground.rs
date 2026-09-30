@@ -20,10 +20,10 @@ use std::rc::Rc;
 
 use super::*;
 
-const SV_H: f32 = 132.0;
-const HUE_H: f32 = 16.0;
+const SV_H: f32 = 156.0;
+const HUE_H: f32 = 12.0;
 const GAP: f32 = 8.0;
-const SWATCH_SIZE: f32 = 28.0;
+const SWATCH_SIZE: f32 = 44.0;
 
 /// The same stable recommendation order used by the original foreground dialog.
 pub(super) const FOREGROUND_SWATCHES: [[u8; 3]; 10] = [
@@ -236,7 +236,16 @@ impl SettingsPane {
                 language.text(Message::ThemePickerCancel),
                 ButtonVariant::Primary,
             )
-            .margin_top(px(((f32::from(window.viewport_size().height) - 560.0) * 0.5).max(16.0)))
+            .w(px(340.0).min(window.viewport_size().width - px(32.0)))
+            .p(px(20.0))
+            .rounded(px(8.0))
+            .title(
+                div()
+                    .text_size(px(16.0))
+                    .font_semibold()
+                    .child(language.text(Message::ThemePickerColorTitle)),
+            )
+            .margin_top(px(((f32::from(window.viewport_size().height) - 480.0) * 0.5).max(16.0)))
             .max_h(px((f32::from(window.viewport_size().height) - 32.0).max(120.0)))
             .content(move |content, window, cx| {
                 if let Some(pane) = pane_for_content.upgrade() {
@@ -312,7 +321,7 @@ impl SettingsPane {
             .debug_selector(|| "theme-foreground-sv".to_owned())
             .w_full()
             .h(px(SV_H))
-            .rounded(px(7.0))
+            .rounded(px(4.0))
             .overflow_hidden()
             .cursor_pointer()
             .track_focus(&sv_focus.clone().tab_stop(true))
@@ -367,7 +376,7 @@ impl SettingsPane {
                         });
                     },
                     move |bounds, _, window, _| {
-                        background_color::paint_sv(window, bounds, hsv.0, hsv.1, hsv.2);
+                        paint_foreground_sv(window, bounds, hsv);
                     },
                 )
                 .size_full(),
@@ -379,7 +388,7 @@ impl SettingsPane {
             .debug_selector(|| "theme-foreground-hue".to_owned())
             .w_full()
             .h(px(HUE_H))
-            .rounded(px(7.0))
+            .rounded(px(0.0))
             .overflow_hidden()
             .cursor_pointer()
             .track_focus(&hue_focus.clone().tab_stop(true))
@@ -434,7 +443,7 @@ impl SettingsPane {
                         });
                     },
                     move |bounds, _, window, _| {
-                        background_color::paint_hue(window, bounds, hsv.0);
+                        paint_foreground_hue(window, bounds, hsv.0);
                     },
                 )
                 .size_full(),
@@ -479,7 +488,7 @@ impl SettingsPane {
 
         let pane_for_cells = pane.clone();
         let focused_swatch = palette_focus.iter().position(|focus| focus.is_focused(window));
-        let swatches = h_flex().w_full().flex_wrap().gap(px(GAP)).children(
+        let swatches = h_flex().w_full().flex_wrap().justify_between().gap(px(GAP)).children(
             FOREGROUND_SWATCHES.iter().copied().enumerate().map(move |(index, color)| {
                 let pane = pane_for_cells.clone();
                 let focus = palette_focus[index].clone();
@@ -493,7 +502,8 @@ impl SettingsPane {
                     .id(SharedString::from(format!("theme-foreground-palette-{index}")))
                     .debug_selector(move || format!("theme-foreground-palette-{index}"))
                     .size(px(SWATCH_SIZE))
-                    .rounded_full()
+                    .rounded(px(6.0))
+                    .p(px(4.0))
                     .track_focus(&focus.clone().tab_stop(true))
                     .role(Role::RadioButton)
                     .aria_label(label.clone())
@@ -503,7 +513,13 @@ impl SettingsPane {
                     .when(focused_swatch == Some(index), |cell| {
                         cell.border_color(gpui::rgb(0xffffff))
                     })
-                    .bg(super::rgb_hsla(color[0], color[1], color[2]))
+                    .hover(move |cell| cell.border_color(dialog_accent_color))
+                    .child(
+                        div()
+                            .size_full()
+                            .rounded(px(3.0))
+                            .bg(super::rgb_hsla(color[0], color[1], color[2])),
+                    )
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click({
@@ -532,32 +548,42 @@ impl SettingsPane {
             .w_full()
             .gap(px(12.0))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(panel)
             .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(dialog_text_color)
-                    .child(language.text(Message::ThemePickerColorHint)),
-            )
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(dialog_text_color)
-                    .child(language.text(Message::ThemePickerTextSuggestion)),
-            )
-            .child(
-                div()
+                h_flex()
                     .id("theme-foreground-hex")
                     .debug_selector(|| "theme-foreground-hex".to_owned())
                     .w_full()
-                    .border_b_1()
+                    .h(px(36.0))
+                    .gap(px(8.0))
+                    .px(px(8.0))
+                    .rounded(px(4.0))
+                    .border_1()
                     .border_color(if input.focus_handle(dialog_cx).is_focused(window) {
                         dialog_accent_color
                     } else {
                         dialog_border_color
                     })
                     .child(
+                        div()
+                            .size(px(20.0))
+                            .flex_shrink_0()
+                            .rounded(px(3.0))
+                            .border_1()
+                            .border_color(dialog_border_color)
+                            .bg(super::rgb_hsla(current[0], current[1], current[2])),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(dialog_text_color.opacity(0.7))
+                            .child("HEX"),
+                    )
+                    .child(
                         Input::new(&input)
-                            .w_full()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(32.0))
                             .appearance(false)
                             .bordered(false)
                             .focus_bordered(false),
@@ -571,8 +597,14 @@ impl SettingsPane {
                         .child(language.text(Message::ThemePickerInvalidColor)),
                 )
             })
-            .child(panel)
-            .child(swatches);
+            .child(swatches)
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .line_height(gpui::relative(1.6))
+                    .text_color(dialog_text_color.opacity(0.75))
+                    .child(language.text(Message::ThemePickerColorHint)),
+            );
 
         body
     }
@@ -739,4 +771,99 @@ impl SettingsPane {
     pub(super) fn invalidate_theme_foreground_picker(&mut self) {
         self.theme_foreground_picker.invalidate();
     }
+}
+
+/// 用连续 sRGB 渐变表示 HSV，替代离散色块；数据换算仍复用现有 HSV 实现。
+pub(super) fn paint_foreground_sv(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    hsv: (f32, f32, f32),
+) {
+    let hue = crate::display::hsv_to_rgb(hsv.0, 1.0, 1.0);
+    let hue = super::rgb_hsla(hue.r, hue.g, hue.b);
+    let white = gpui::rgb(0xffffff);
+    let black = gpui::Hsla::from(gpui::rgb(0x000000));
+    window.paint_quad(
+        gpui::fill(
+            bounds,
+            gpui::linear_gradient(
+                90.0,
+                gpui::linear_color_stop(white, 0.0),
+                gpui::linear_color_stop(hue, 1.0),
+            ),
+        )
+        .corner_radii(px(4.0)),
+    );
+    window.paint_quad(
+        gpui::fill(
+            bounds,
+            gpui::linear_gradient(
+                180.0,
+                gpui::linear_color_stop(black.opacity(0.0), 0.0),
+                gpui::linear_color_stop(black, 1.0),
+            ),
+        )
+        .corner_radii(px(4.0)),
+    );
+    let x = (f32::from(bounds.size.width) * hsv.1)
+        .clamp(6.0, f32::from(bounds.size.width).max(12.0) - 6.0);
+    let y = (f32::from(bounds.size.height) * (1.0 - hsv.2))
+        .clamp(6.0, f32::from(bounds.size.height).max(12.0) - 6.0);
+    let center = bounds.origin + gpui::point(px(x), px(y));
+    let picked = crate::display::hsv_to_rgb(hsv.0, hsv.1, hsv.2);
+    let picked = super::rgb_hsla(picked.r, picked.g, picked.b);
+    for (radius, ink) in [(6.0, black.opacity(0.75)), (4.8, white.into()), (3.2, picked)] {
+        window.paint_quad(
+            gpui::fill(
+                Bounds::new(
+                    center - gpui::point(px(radius), px(radius)),
+                    gpui::size(px(radius * 2.0), px(radius * 2.0)),
+                ),
+                ink,
+            )
+            .corner_radii(px(radius)),
+        );
+    }
+}
+
+pub(super) fn paint_foreground_hue(window: &mut Window, bounds: Bounds<Pixels>, hue: f32) {
+    let color = |h: f32| {
+        let rgb = crate::display::hsv_to_rgb(h.rem_euclid(360.0), 1.0, 1.0);
+        super::rgb_hsla(rgb.r, rgb.g, rgb.b)
+    };
+    let width = bounds.size.width / 6.0;
+    for index in 0..6 {
+        let part = Bounds::new(
+            bounds.origin + gpui::point(width * index as f32, px(0.0)),
+            gpui::size(width + px(0.25), bounds.size.height),
+        );
+        window.paint_quad(gpui::fill(
+            part,
+            gpui::linear_gradient(
+                90.0,
+                gpui::linear_color_stop(color(index as f32 * 60.0), 0.0),
+                gpui::linear_color_stop(color((index + 1) as f32 * 60.0), 1.0),
+            ),
+        ));
+    }
+    let x = (bounds.size.width * (hue.rem_euclid(360.0) / 360.0))
+        .max(px(2.0))
+        .min(bounds.size.width - px(2.0));
+    window.paint_quad(
+        gpui::fill(
+            Bounds::new(
+                bounds.origin + gpui::point(x - px(2.0), px(0.0)),
+                gpui::size(px(4.0), bounds.size.height),
+            ),
+            gpui::rgb(0xffffff),
+        )
+        .corner_radii(px(1.0)),
+    );
+    window.paint_quad(gpui::fill(
+        Bounds::new(
+            bounds.origin + gpui::point(x - px(1.0), px(1.0)),
+            gpui::size(px(2.0), bounds.size.height - px(2.0)),
+        ),
+        gpui::rgb(0x20242c),
+    ));
 }

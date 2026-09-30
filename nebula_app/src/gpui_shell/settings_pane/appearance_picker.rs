@@ -591,6 +591,7 @@ impl SettingsPane {
     ) -> gpui::AnyElement {
         let picker = self.appearance_picker.as_ref().unwrap();
         let selected = choice == picker.draft;
+        let theme_card = choice.is_theme();
         let visible = picker.choices();
         let tab_choice = visible
             .iter()
@@ -599,6 +600,7 @@ impl SettingsPane {
             .or_else(|| visible.first().copied())
             .unwrap_or(picker.draft);
         let focus = &picker.options.iter().find(|(option, _)| *option == choice).unwrap().1;
+        let focused = focus.is_focused(window);
         let colors = AppearanceColors::current(cx);
         let language = crate::gpui_shell::config::ui_language(cx);
         let label = picker.choice_label(choice, language);
@@ -610,15 +612,23 @@ impl SettingsPane {
             .aria_toggled(if selected { Toggled::True } else { Toggled::False })
             .w(px(width))
             .flex_shrink_0()
-            .rounded(px(8.0))
+            .rounded(px(if theme_card { 6.0 } else { 8.0 }))
             .border_1()
-            .border_color(if selected || focus.is_focused(window) {
+            .border_color(if selected || focused {
                 colors.primary
             } else {
                 gpui::transparent_black()
             })
             .when(selected, |option| option.bg(colors.subtle))
-            .hover(move |option| option.bg(colors.subtle))
+            .hover(move |option| {
+                let option = option.bg(colors.subtle);
+                if theme_card && !selected && !focused {
+                    option.border_color(colors.control)
+                } else {
+                    option
+                }
+            })
+            .when(theme_card, |option| option.active(move |style| style.bg(colors.selected)))
             .cursor_pointer()
             .child(content)
             .on_click(cx.listener(move |this, _, window, cx| {
