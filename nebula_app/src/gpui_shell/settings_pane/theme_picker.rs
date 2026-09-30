@@ -334,6 +334,25 @@ impl SettingsPane {
                         .unwrap_or_else(div),
                     AppearanceSelection::Icon(_) => div(),
                 };
+                // 自定义主题卡的垃圾簋:删除确认且不丢“选中”的排选。
+                let delete_button = match choice {
+                    AppearanceSelection::Custom(index)
+                        if picker.custom_themes.get(index).is_some() =>
+                    {
+                        Some(
+                            gpui_component::button::Button::new(("theme-custom-delete", index))
+                                .icon(IconName::Delete)
+                                .ghost()
+                                .xsmall()
+                                .tooltip(language.pick("删除", "Delete"))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.prompt_delete_custom_theme(index, window, cx);
+                                })),
+                        )
+                    },
+                    _ => None,
+                };
                 let content =
                     v_flex().w_full().p(px(if compact { 6.0 } else { 8.0 })).child(sample).child(
                         h_flex()
@@ -345,9 +364,15 @@ impl SettingsPane {
                             .when(selected, |caption| caption.font_semibold())
                             .child(div().truncate().child(picker.choice_label(choice, language)))
                             .child(
-                                Icon::new(IconName::Check)
-                                    .size(px(12.0))
-                                    .when(!selected, |icon| icon.invisible()),
+                                h_flex()
+                                    .gap(px(3.0))
+                                    .items_center()
+                                    .when_some(delete_button, |row, button| row.child(button))
+                                    .child(
+                                        Icon::new(IconName::Check)
+                                            .size(px(12.0))
+                                            .when(!selected, |icon| icon.invisible()),
+                                    ),
                             ),
                     );
                 self.appearance_option(choice, option_width, content, window, cx)

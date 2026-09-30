@@ -280,6 +280,130 @@ impl SettingsPane {
         cx.notify();
     }
 
+    /// 重新进入主题选择器时已拉过一次列表；删除后另起一轮,seq 防窜代。
+    fn reload_custom_themes(&mut self, cx: &mut Context<Self>) {
+        self.appearance_picker_seq = self.appearance_picker_seq.wrapping_add(1);
+        let load_seq = self.appearance_picker_seq;
+        let Some(picker) = self.appearance_picker.as_mut() else { return };
+        picker.custom_load_seq = load_seq;
+        picker.custom_loading = true;
+        picker.custom_load_error = None;
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let (result, revision) = executor
+                .spawn(async move {
+                    let revision = crate::theme_library::preferences::load()
+                        .map_err(|error| error.to_string());
+                    let result = crate::theme_library::ThemeLibraryStore::default()
+                        .list()
+                        .map(|snapshot| snapshot.custom)
+                        .map_err(|error| error.to_string());
+                    (result, revision)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.finish_custom_theme_load(load_seq, result, revision, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// 主题卡上的删除按钮:确认后现有乐观锁通道落库;被删的是使用中主题时,
+    /// 按选择器语义同回默认(clear custom_theme preference),再重拉列表。
+    pub(super) fn prompt_delete_custom_theme(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document) =
+            self.appearance_picker.as_ref().and_then(|picker| picker.custom_themes.get(index))
+        else {
+            return;
+        };
+        let Some(id) = document.id().map(ToOwned::to_owned) else { return };
+        let revision = document.revision();
+        let name = document.name().to_owned();
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let description = if language.pick("zh", "en") == "zh" {
+            format!("删除自定义主题「{name}」后无法恢复。若正在使用,会同时回到默认主题。")
+        } else {
+            format!("Delete the custom theme “{name}”? This cannot be undone.")
+        };
+        let pane = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, window, _cx| {
+            let pane = pane.clone();
+            let id = id.clone();
+            confirm_dialog(
+                dialog,
+                window,
+                language.pick("删除主题?", "Delete theme?"),
+                description.as_str(),
+                language.pick("删除", "Delete"),
+                language.text(Message::CommonCancel),
+                ButtonVariant::Danger,
+            )
+            .on_ok(move |_, window, cx| {
+                let _ = pane.update(cx, |this, cx| {
+                    this.confirm_delete_custom_theme(id.clone(), revision, window, cx)
+                });
+                true
+            })
+        });
+        cx.notify();
+    }
+
+    fn confirm_delete_custom_theme(
+        &mut self,
+        id: String,
+        expected_revision: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let was_active = self.runtime.custom_theme.as_deref() == Some(id.as_str());
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let result = executor
+                .spawn(async move {
+                    crate::theme_library::ThemeLibraryStore::default()
+                        .delete(&id, expected_revision)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => {
+                    if was_active {
+                        this.clear_active_custom_theme(window, cx);
+                    }
+                    this.reload_custom_themes(cx);
+                },
+                Err(error) => {
+                    crate::gpui_shell::toast::toast(
+                        window,
+                        cx,
+                        crate::display::ToastKind::Warning,
+                        language.format(Message::ThemeEditorLibraryError, &[("error", &error)]),
+                    );
+                },
+            });
+        })
+        .detach();
+    }
+
+    /// 使用中主题被删除:恢复到默认(clear custom_theme preference,与选择内置主题同路)。
+    fn clear_active_custom_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let updates = [("custom_theme", String::new())];
+        if let Err(error) = self.try_persist_checked(&updates, cx) {
+            crate::gpui_shell::toast::toast(
+                window,
+                cx,
+                crate::display::ToastKind::Warning,
+                error.to_string(),
+            );
+        }
+    }
+
     fn finish_custom_theme_load(
         &mut self,
         sequence: u64,
