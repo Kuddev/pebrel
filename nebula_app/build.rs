@@ -31,6 +31,14 @@ fn main() {
     // 时设置），否则会往 Mach-O/ELF 里嵌 .rc 资源、给 Unix 包部署 ConPTY。
     #[cfg(windows)]
     if env::var_os("CARGO_CFG_WINDOWS").is_some() {
+        // GPUI constructs the settings overlays on the Windows UI thread. In
+        // an unoptimized build the theme picker/editor element trees can use
+        // more than MSVC's 1 MiB default stack and Windows terminates the app
+        // with STATUS_STACK_OVERFLOW before Rust can produce a backtrace.
+        // `/STACK` reserves virtual address space; pages are still committed
+        // on demand, so this also leaves safe headroom for future dialogs.
+        println!("cargo:rustc-link-arg-bin=pebrel=/STACK:8388608");
+
         // Re-embed the icon whenever the .ico OR .rc changes. `embed_resource`
         // emits a rerun-if-changed for the .rc only, which pins Cargo to that
         // file and makes it silently skip .ico-only updates — leaving the stale

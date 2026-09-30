@@ -329,6 +329,17 @@ impl SettingsPane {
         let height = (f32::from(viewport.height) - 48.0).min(760.0).max(280.0);
         let save_busy = editor.save_busy;
         let dirty = editor.dirty();
+        let editing_existing = editor.editing_existing();
+        let title = language.text(if editing_existing {
+            Message::ThemeEditorEditTitle
+        } else {
+            Message::ThemeEditorTitle
+        });
+        let description = language.text(if editing_existing {
+            Message::ThemeEditorEditDescription
+        } else {
+            Message::ThemeEditorDescription
+        });
         let preview = self.theme_editor_preview(editor, colors, language, compact, cx);
         let common =
             self.theme_editor_common_fields(editor, language, colors, save_busy, window, cx);
@@ -374,7 +385,7 @@ impl SettingsPane {
             .id("theme-editor-dialog")
             .debug_selector(|| "theme-editor-dialog".to_owned())
             .role(Role::Dialog)
-            .aria_label(language.text(Message::ThemeEditorTitle))
+            .aria_label(title)
             .w(px(width))
             .h(px(height))
             .max_h(px(f32::from(viewport.height) - 28.0))
@@ -419,17 +430,12 @@ impl SettingsPane {
                             .child(
                                 v_flex()
                                     .gap(px(3.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(19.0))
-                                            .font_semibold()
-                                            .child(language.text(Message::ThemeEditorTitle)),
-                                    )
+                                    .child(div().text_size(px(19.0)).font_semibold().child(title))
                                     .child(
                                         div()
                                             .text_size(px(11.0))
                                             .text_color(colors.secondary)
-                                            .child(language.text(Message::ThemeEditorDescription)),
+                                            .child(description),
                                     ),
                             ),
                     )
@@ -504,7 +510,11 @@ impl SettingsPane {
                         .pb(px(8.0))
                         .text_size(px(11.0))
                         .text_color(cx.theme().success)
-                        .child(language.text(Message::ThemeEditorSaved)),
+                        .child(language.text(if editing_existing {
+                            Message::ThemeEditorUpdated
+                        } else {
+                            Message::ThemeEditorSaved
+                        })),
                 )
             })
             .child(
@@ -707,7 +717,14 @@ impl SettingsPane {
                             ),
                     )
                     .child(div().text_size(px(10.5)).text_color(colors.secondary).child(
-                        language.format(Message::ThemeEditorBasedOn, &[("name", &source_name)]),
+                        language.format(
+                            if editor.editing_existing() {
+                                Message::ThemeEditorEditingExisting
+                            } else {
+                                Message::ThemeEditorBasedOn
+                            },
+                            &[("name", &source_name)],
+                        ),
                     )),
             )
             .child(field(

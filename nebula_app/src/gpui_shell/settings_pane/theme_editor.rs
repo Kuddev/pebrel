@@ -58,8 +58,8 @@ pub(super) struct ThemeEditor {
     /// save; later saves retain the new copy's id and revision for optimistic
     /// conflict detection.
     source_document: Option<ThemeDocument>,
-    /// The first save always forks the source, including custom templates, so
-    /// Save only cannot alter an existing theme or the active runtime snapshot.
+    /// Template/import workflows fork their source. Explicit edit mode clears
+    /// this flag so saving retains the selected custom theme's stable identity.
     pub(super) fork_source: bool,
     /// Imported documents retain their vendor fields for the draft, but must
     /// always become a new library snapshot on save, even if their envelope
@@ -103,6 +103,10 @@ pub(super) struct ThemeEditor {
 }
 
 impl ThemeEditor {
+    pub(super) fn editing_existing(&self) -> bool {
+        self.source_document.is_some() && !self.fork_source && !self.source_is_import
+    }
+
     fn dirty(&self) -> bool {
         self.source_is_import
             || self.draft != self.baseline
@@ -348,6 +352,25 @@ impl SettingsPane {
     }
 
     pub(super) fn open_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_theme_editor_with_mode(true, window, cx);
+    }
+
+    pub(super) fn edit_selected_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(
+            self.appearance_picker.as_ref().map(|picker| picker.draft),
+            Some(AppearanceSelection::Custom(_))
+        ) {
+            return;
+        }
+        self.open_theme_editor_with_mode(false, window, cx);
+    }
+
+    fn open_theme_editor_with_mode(
+        &mut self,
+        fork_source: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .appearance_picker
             .as_ref()
@@ -380,10 +403,13 @@ impl SettingsPane {
             .as_ref()
             .and_then(|document| document.definition().ok())
             .unwrap_or_else(|| ThemeDefinition::from_builtin(template));
-        let original_name = baseline.name.clone();
-        baseline.name = language.format(Message::ThemeEditorNewName, &[("name", &original_name)]);
-        if baseline.validate().is_err() {
-            baseline.name = original_name;
+        if fork_source || selected_source.is_none() {
+            let original_name = baseline.name.clone();
+            baseline.name =
+                language.format(Message::ThemeEditorNewName, &[("name", &original_name)]);
+            if baseline.validate().is_err() {
+                baseline.name = original_name;
+            }
         }
         let mut draft = baseline.clone();
         if let Some(foreground) = foreground_override {
@@ -504,7 +530,7 @@ impl SettingsPane {
             baseline,
             draft,
             source_document: selected_source.clone(),
-            fork_source: true,
+            fork_source,
             source_is_import: false,
             template,
             templates,

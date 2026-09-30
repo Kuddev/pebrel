@@ -4,6 +4,12 @@ use gpui::accesskit::{Role, Toggled};
 use gpui_component::FocusTrapElement as _;
 use nebula_settings::AppIconName;
 
+mod theme_delete;
+
+fn theme_action_icon(path: &'static str) -> Icon {
+    Icon::new(Icon::empty()).path(path)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AppearanceSelection {
     Theme(ThemeName),
@@ -695,6 +701,138 @@ impl SettingsPane {
             })
     }
 
+    /// Keep the footer in a separate stack frame. In an unoptimized Windows
+    /// build the fully generic modal element became large enough that opening
+    /// an active custom theme exhausted the executable's 1 MiB main-thread
+    /// stack before GPUI could paint the dialog.
+    fn appearance_picker_footer(
+        &self,
+        picker: &AppearancePicker,
+        draft: AppearanceSelection,
+        padding: f32,
+        compact: bool,
+        colors: AppearanceColors,
+        language: crate::display::UiLanguage,
+        apply_label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let leading = if draft.is_theme() {
+            let custom_selected = matches!(draft, AppearanceSelection::Custom(_));
+            h_flex()
+                .gap(px(4.0))
+                .child(
+                    Button::new("customize-theme")
+                        .debug_selector(|| "customize-theme".to_owned())
+                        .icon(IconName::Plus)
+                        .label(language.text(Message::ThemePickerCustomize))
+                        .disabled(picker.apply_busy || picker.custom_loading)
+                        .ghost()
+                        .h(px(31.0))
+                        .px(px(if compact { 8.0 } else { 10.0 }))
+                        .text_size(px(if compact { 10.0 } else { 11.0 }))
+                        .rounded_full()
+                        .text_color(colors.primary)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_theme_editor(window, cx);
+                        })),
+                )
+                .when(custom_selected, |actions| {
+                    actions
+                        .child(
+                            Button::new("edit-custom-theme")
+                                .debug_selector(|| "edit-custom-theme".to_owned())
+                                .icon(theme_action_icon(crate::gpui_shell::assets::nav::PENCIL))
+                                .when(!compact, |button| {
+                                    button.label(language.text(Message::ThemePickerEditCustom))
+                                })
+                                .disabled(picker.apply_busy || picker.custom_loading)
+                                .ghost()
+                                .h(px(31.0))
+                                .px(px(8.0))
+                                .rounded_full()
+                                .tooltip(language.text(Message::ThemePickerEditCustom))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.edit_selected_theme(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("delete-custom-theme")
+                                .debug_selector(|| "delete-custom-theme".to_owned())
+                                .icon(theme_action_icon(crate::gpui_shell::assets::nav::TRASH))
+                                .disabled(picker.apply_busy || picker.custom_loading)
+                                .ghost()
+                                .size(px(31.0))
+                                .rounded_full()
+                                .text_color(cx.theme().danger)
+                                .tooltip(language.text(Message::ThemePickerDeleteCustom))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_delete_selected_theme(window, cx);
+                                })),
+                        )
+                })
+                .into_any_element()
+        } else {
+            h_flex()
+                .min_w_0()
+                .gap(px(7.0))
+                .text_size(px(if compact { 10.0 } else { 11.0 }))
+                .child(
+                    div()
+                        .text_color(colors.secondary)
+                        .child(language.text(Message::ThemePickerSelected)),
+                )
+                .child(div().font_medium().truncate().child(draft.label(language)))
+                .into_any_element()
+        };
+
+        h_flex()
+            .px(px(padding))
+            .py(px(17.0))
+            .gap(px(9.0))
+            .justify_between()
+            .flex_shrink_0()
+            .border_t_1()
+            .border_color(colors.line)
+            .child(leading)
+            .child(
+                h_flex()
+                    .gap(px(8.0))
+                    .flex_shrink_0()
+                    .child(
+                        Button::new("cancel-appearance-picker")
+                            .debug_selector(|| "cancel-appearance-picker".to_owned())
+                            .label(language.text(Message::ThemePickerCancel))
+                            .h(px(33.0))
+                            .px(px(if compact { 11.0 } else { 16.0 }))
+                            .text_size(px(12.0))
+                            .rounded(px(6.0))
+                            .bg(colors.surface)
+                            .border_color(colors.control)
+                            .text_color(colors.ink)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_appearance_picker(window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("apply-appearance-picker")
+                            .debug_selector(|| "apply-appearance-picker".to_owned())
+                            .label(apply_label)
+                            .h(px(33.0))
+                            .px(px(if compact { 11.0 } else { 16.0 }))
+                            .text_size(px(12.0))
+                            .rounded(px(6.0))
+                            .bg(colors.primary)
+                            .border_color(colors.primary)
+                            .text_color(colors.on_primary)
+                            .disabled(picker.apply_busy || picker.custom_loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.apply_appearance_selection(window, cx)
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn appearance_picker_modal(
         &self,
         window: &Window,
@@ -733,6 +871,16 @@ impl SettingsPane {
         } else {
             language.text(Message::ThemePickerApplyIcon)
         };
+        let footer = self.appearance_picker_footer(
+            picker,
+            draft,
+            padding,
+            compact,
+            colors,
+            language,
+            apply_label,
+            cx,
+        );
         let dialog = v_flex()
             .id("appearance-picker-dialog")
             .debug_selector(|| "appearance-picker-dialog".to_owned())
@@ -806,81 +954,7 @@ impl SettingsPane {
                         .child(error),
                 )
             })
-            .child(
-                h_flex()
-                    .px(px(padding))
-                    .py(px(17.0))
-                    .gap(px(9.0))
-                    .justify_between()
-                    .flex_shrink_0()
-                    .border_t_1()
-                    .border_color(colors.line)
-                    .child(if draft.is_theme() {
-                        Button::new("customize-theme")
-                            .debug_selector(|| "customize-theme".to_owned())
-                            .icon(IconName::Plus)
-                            .label(language.text(Message::ThemePickerCustomize))
-                            .disabled(picker.apply_busy || picker.custom_loading)
-                            .ghost()
-                            .h(px(31.0))
-                            .px(px(if compact { 8.0 } else { 10.0 }))
-                            .text_size(px(if compact { 10.0 } else { 11.0 }))
-                            .rounded_full()
-                            .text_color(colors.primary)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_theme_editor(window, cx);
-                            }))
-                            .into_any_element()
-                    } else {
-                        h_flex()
-                            .min_w_0()
-                            .gap(px(7.0))
-                            .text_size(px(if compact { 10.0 } else { 11.0 }))
-                            .child(
-                                div()
-                                    .text_color(colors.secondary)
-                                    .child(language.text(Message::ThemePickerSelected)),
-                            )
-                            .child(div().font_medium().truncate().child(draft.label(language)))
-                            .into_any_element()
-                    })
-                    .child(
-                        h_flex()
-                            .gap(px(8.0))
-                            .flex_shrink_0()
-                            .child(
-                                Button::new("cancel-appearance-picker")
-                                    .debug_selector(|| "cancel-appearance-picker".to_owned())
-                                    .label(language.text(Message::ThemePickerCancel))
-                                    .h(px(33.0))
-                                    .px(px(if compact { 11.0 } else { 16.0 }))
-                                    .text_size(px(12.0))
-                                    .rounded(px(6.0))
-                                    .bg(colors.surface)
-                                    .border_color(colors.control)
-                                    .text_color(colors.ink)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.close_appearance_picker(window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("apply-appearance-picker")
-                                    .debug_selector(|| "apply-appearance-picker".to_owned())
-                                    .label(apply_label)
-                                    .h(px(33.0))
-                                    .px(px(if compact { 11.0 } else { 16.0 }))
-                                    .text_size(px(12.0))
-                                    .rounded(px(6.0))
-                                    .bg(colors.primary)
-                                    .border_color(colors.primary)
-                                    .text_color(colors.on_primary)
-                                    .disabled(picker.apply_busy || picker.custom_loading)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.apply_appearance_selection(window, cx)
-                                    })),
-                            ),
-                    ),
-            )
+            .child(footer)
             .focus_trap("appearance-picker-focus-trap", &focus);
         Some(
             deferred(

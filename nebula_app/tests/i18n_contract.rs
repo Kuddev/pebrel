@@ -117,3 +117,44 @@ fn vcs_messages_follow_resolved_english_and_fall_back_for_partial_locales() {
     assert_eq!(i18n::UiLanguage::FrFr.tr("vcs.changes"), "Changes");
     assert_eq!(english.tr_args("vcs.refresh_status", &[("vcs", "Git")]), "Refresh Git status");
 }
+
+#[test]
+fn theme_crud_controls_follow_the_resolved_interface_language() {
+    use i18n::{Message, UiLanguage};
+
+    for (message, english, chinese) in [
+        (Message::ThemePickerEditCustom, "Edit theme", "编辑主题"),
+        (Message::ThemePickerDeleteCustom, "Delete selected theme", "删除所选主题"),
+        (Message::ThemeEditorEditTitle, "Edit theme", "编辑主题"),
+        (Message::ThemeEditorSaveOnly, "Save only", "仅保存"),
+        (Message::ThemeEditorApply, "Save and apply", "保存并应用"),
+        (Message::ThemeEditorUpdated, "Theme updated", "主题已更新"),
+        (Message::ThemePickerDeleteConfirm, "Delete theme", "删除主题"),
+    ] {
+        assert_eq!(UiLanguage::EnUs.text(message), english);
+        assert_eq!(UiLanguage::ZhCn.text(message), chinese);
+    }
+
+    for (language, label) in [
+        (UiLanguage::ZhTw, "編輯主題"),
+        (UiLanguage::FrFr, "Modifier le thème"),
+        (UiLanguage::DeDe, "Design bearbeiten"),
+        (UiLanguage::EsEs, "Editar tema"),
+        (UiLanguage::PtBr, "Editar tema"),
+        (UiLanguage::ItIt, "Modifica tema"),
+        (UiLanguage::RuRu, "Редактировать тему"),
+        (UiLanguage::JaJp, "テーマを編集"),
+        (UiLanguage::KoKr, "테마 편집"),
+    ] {
+        assert_eq!(language.text(Message::ThemePickerEditCustom), label);
+    }
+
+    assert_eq!(
+        UiLanguage::EnUs.format(Message::ThemePickerDeleteTitle, &[("name", "Glass")]),
+        "Delete Glass?"
+    );
+    assert_eq!(
+        UiLanguage::ZhCn.format(Message::ThemePickerDeleteTitle, &[("name", "玻璃")]),
+        "删除玻璃？"
+    );
+}
