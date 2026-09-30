@@ -89,6 +89,8 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
 /// `None` off Windows and when the data directory is not on a local drive
 /// letter: a UNC or redirected path is not automounted in the guest, and a
 /// `ZDOTDIR` the guest cannot read would also skip the user's own startup files.
+/// Whether a given guest user can actually read it, and whether the launch starts
+/// zsh at all, is the guest's answer (`super::wsl_guest_shell`), not a host guess.
 /// The files are written once per process; spawns never replace a file that a
 /// starting guest zsh may be reading. A failed first write is cached, so it warns
 /// once instead of retrying on every spawn. A bootstrap file deleted while the

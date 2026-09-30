@@ -339,6 +339,40 @@ precmd_functions=(_user_precmd)
         self.assertIn(b"\x1b]133;D;7\x07", output)
         session.command("true", b"USER_PRECMD_3_STATUS=0_END")
 
+    def test_wsl_guest_probe_reports_the_login_shell_and_bootstrap_readability(self) -> None:
+        # The host runs this once per guest before handing zsh the bootstrap as
+        # ZDOTDIR: `wsl.exe --exec sh -s` with the script on stdin and the bootstrap
+        # directory translated into NEBULA_ZSH_INTEGRATION.
+        import pwd
+
+        def probe(bootstrap: str) -> dict[str, str]:
+            result = subprocess.run(
+                ["sh", "-s"], input=(SCRIPTS / "wsl-guest-probe.sh").read_text(encoding="utf-8"),
+                capture_output=True, text=True, check=True, cwd=self.home,
+                env={"PATH": os.environ["PATH"], "HOME": str(self.home),
+                     "NEBULA_ZSH_INTEGRATION": bootstrap, "SHELL": "/bin/false"},
+            )
+            self.assertEqual(result.stderr, "")
+            lines = result.stdout.splitlines()
+            self.assertEqual(len(lines), 2, result.stdout)
+            return dict(line.split("=", 1) for line in lines)
+
+        wrapper = self.home / "integration dir"
+        wrapper.mkdir()
+        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
+            shutil.copyfile(SCRIPTS / source, wrapper / target)
+        answer = probe(str(wrapper))
+        self.assertEqual(answer["bootstrap"], "readable")
+        # The passwd entry, not $SHELL, names what `wsl.exe` starts for this user.
+        self.assertEqual(answer["shell"], pwd.getpwuid(os.getuid()).pw_shell)
+
+        (wrapper / ".zprofile").unlink()
+        self.assertEqual(probe(str(wrapper))["bootstrap"], "unreadable")
+        # Automount off or a failed `/p` translation leaves a path the guest cannot open.
+        self.assertEqual(probe(str(self.home / "missing"))["bootstrap"], "unreadable")
+        self.assertEqual(probe(r"C:\Users\me\AppData\Roaming\Pebrel\wsl-zsh")["bootstrap"], "unreadable")
+        self.assertEqual(probe("")["bootstrap"], "unreadable")
+
 
 if __name__ == "__main__":
     unittest.main()

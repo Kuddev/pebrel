@@ -147,10 +147,9 @@ pub(super) fn local_options(
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("WSLENV"))
             .map(|(_, value)| value.as_str());
-        let zsh_integration = wsl_zsh_integration(&program);
+        let zsh_integration = wsl_zsh_integration(&program, &args);
         let additions = crate::shell_detect::wsl_cwd_report_env(
             &program,
-            &args,
             current_wslenv,
             zsh_integration.as_deref(),
         );
@@ -166,14 +165,19 @@ pub(super) fn local_options(
     options
 }
 
-/// The host zsh startup directory for a WSL launch. A failed write only loses
-/// zsh's cwd reports; the guest still reads its own startup files.
-fn wsl_zsh_integration(program: &str) -> Option<String> {
+/// The host zsh startup directory for a WSL launch that the guest confirmed
+/// will start zsh and can read it (`platform::wsl_guest_shell`). A failed write,
+/// an unanswered probe, another login shell or an unreadable bootstrap only lose
+/// zsh's cwd reports; the guest keeps its own startup files and environment.
+fn wsl_zsh_integration(program: &str, args: &[String]) -> Option<String> {
     if !crate::shell_detect::is_wsl_launcher(program) {
         return None;
     }
-    crate::platform::shell_integration::wsl_zsh_directory()
-        .map(|directory| directory.to_string_lossy().into_owned())
+    let directory = crate::platform::shell_integration::wsl_zsh_directory()?;
+    crate::platform::wsl_guest_shell::takes_zsh_bootstrap(program, args, |target| {
+        crate::platform::wsl_guest_shell::verified(target, &directory)
+    })
+    .then(|| directory.to_string_lossy().into_owned())
 }
 
 pub fn spawn(
