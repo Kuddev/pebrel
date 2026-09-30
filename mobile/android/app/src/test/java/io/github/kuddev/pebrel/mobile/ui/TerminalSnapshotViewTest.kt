@@ -38,6 +38,85 @@ import java.io.File
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class TerminalSnapshotViewTest {
+    @Test fun doubleTapCopiesWordAndTripleTapCopiesOnlyItsVisualRow() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val view = TerminalSnapshotView(activity).apply {
+            setFont(Typeface.MONOSPACE, 20)
+            frame = TerminalFrame(arrayOf(row("alpha beta"), row("next line ")),
+                intArrayOf(10, 2, 0, 0, 0, this@TerminalSnapshotViewTest.background, red, 2))
+        }
+        activity.setContentView(view)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        view.layout(0, 0, 400, 160)
+        val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+        val width = Paint().apply { typeface = Typeface.MONOSPACE; textSize = 20 * view.resources.displayMetrics.scaledDensity }.measureText("M")
+        fun tap() {
+            val down = eventTime
+            touch(view, down, MotionEvent.ACTION_DOWN, width * 2.5f to 8f)
+            touch(view, down, MotionEvent.ACTION_UP, width * 2.5f to 8f)
+        }
+        tap(); tap()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(350))
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        assertEquals("alpha", clipboard.primaryClip?.getItemAt(0)?.text.toString())
+        eventTime += 500
+        tap(); tap(); tap()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(350))
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        assertEquals("alpha beta", clipboard.primaryClip?.getItemAt(0)?.text.toString())
+        activity.finish()
+    }
+
+    @Test fun liveSelectionSupportsWordLineAndTapAwayWithoutChangingTheFrame() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val frame = TerminalFrame(arrayOf(row("alpha beta"), row("next line ")), intArrayOf(10, 2, 0, 0, 0, background, red, 2))
+        val transport = object : SessionTransport {
+            override fun open(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) = Unit
+            override fun input() = ByteArrayInputStream(byteArrayOf())
+            override fun output() = ByteArrayOutputStream()
+            override fun resize(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) = Unit
+            override fun awaitExit() = 0
+            override fun close() = Unit
+        }
+        val session = TerminalSession(transport, TerminalCallbacks())
+        TerminalSession::class.java.getDeclaredField("frame").apply { isAccessible = true }.set(session, frame)
+        val live = GhosttyView(activity).apply { this.session = session }
+        activity.setContentView(live)
+        live.layout(0, 0, 800, 400)
+        fun metric(name: String) = GhosttyView::class.java.getDeclaredField(name).apply { isAccessible = true }.getFloat(live)
+        fun selected(): Any? {
+            val selection = GhosttyView::class.java.getDeclaredField("selection").apply { isAccessible = true }.get(live)
+            return selection.javaClass.getDeclaredMethod("selectedText").apply { isAccessible = true }.invoke(selection)
+        }
+        val x = metric("cellWidth") * 2.5f
+        val y = metric("cellHeight") * .4f
+        fun tap(px: Float = x, py: Float = y) {
+            val down = eventTime
+            touch(live, down, MotionEvent.ACTION_DOWN, px to py)
+            touch(live, down, MotionEvent.ACTION_UP, px to py)
+        }
+        fun pixels() = Bitmap.createBitmap(live.width, live.height, Bitmap.Config.ARGB_8888).also { live.draw(Canvas(it)) }
+        val unselected = pixels()
+        try {
+            tap(); tap()
+            assertEquals("alpha", selected())
+            pixels().let { image ->
+                assertFalse("selection must visibly highlight text", image.sameAs(unselected))
+                image.recycle()
+            }
+            tap()
+            assertEquals("alpha beta", selected())
+            eventTime += 500
+            tap(700f, 250f)
+            assertEquals("", selected())
+            assertSame(frame, session.frame)
+            pixels().let { image ->
+                assertTrue("dismissal must remove the painted highlight, not only the copy menu", image.sameAs(unselected))
+                image.recycle()
+            }
+        } finally { unselected.recycle(); live.session = null; session.finishIfRunning(); activity.finish() }
+    }
+
     private fun longPress(view: TerminalSnapshotView, x: Float, y: Float): Long {
         eventTime = android.os.SystemClock.uptimeMillis()
         val down = eventTime
@@ -164,6 +243,7 @@ class TerminalSnapshotViewTest {
         val down = eventTime
         touch(view, down, MotionEvent.ACTION_DOWN, 12f to 12f)
         touch(view, down, MotionEvent.ACTION_UP, 12f to 12f)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(350))
         assertTrue(view.hasFocus())
         assertTrue(view.onCheckIsTextEditor())
         val ime = checkNotNull(view.onCreateInputConnection(EditorInfo()))
@@ -350,7 +430,10 @@ class TerminalSnapshotViewTest {
     }
 
     @Test fun tuiModeSymbolsKeepBothPauseBarsAndThePlayTipInsideTheirCells() {
-        val bitmap = render(view(row("\u23f8\u23f5"), row("  ", fill = green)))
+        // 文本形式检查线条几何；默认/Emoji 形式的彩色背景由真实 Android 字体测试覆盖。
+        val text = TerminalRow("\u23f8\ufe0e\u23f5", intArrayOf(
+            0, 2, 1, red, background, 0, 2, 1, 1, red, background, 0))
+        val bitmap = render(view(text, row("  ", fill = green)))
         val fill = colorBounds(bitmap, green)
         val cw = fill.width() / 2f
         val ch = fill.height().toFloat()

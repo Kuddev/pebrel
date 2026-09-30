@@ -20,6 +20,13 @@ import kotlin.math.roundToInt
 /** A grid mirror with optional authorized input. Gestures never resize the PC PTY. */
 class TerminalSnapshotView(context: Context) : View(context) {
     private var inputGeneration = 0
+    private val taps = TerminalTapTracker(context)
+    private val scrollbar = TerminalScrollbar(this) { fraction ->
+        followInputCursor = false
+        offsetY = maxY() * fraction
+        followOutput = fraction >= .999f
+        invalidate()
+    }
     private var composingText = ""
     private var followInputCursor = false
     private var followOutput = true
@@ -181,6 +188,8 @@ class TerminalSnapshotView(context: Context) : View(context) {
         canvas.restoreToCount(checkpoint)
         selection.geometry(cellWidth, cellHeight, offsetX, offsetY)
         selection.draw(canvas)
+        scrollbar.update(maxY() + height, height.toFloat(), offsetY)
+        scrollbar.draw(canvas, frame.cursorColor)
     }
 
     private val scaling = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -212,20 +221,8 @@ class TerminalSnapshotView(context: Context) : View(context) {
 
     private val gestures: GestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(event: MotionEvent) = true
-        override fun onSingleTapUp(event: MotionEvent): Boolean = performClick()
-        override fun onDoubleTap(event: MotionEvent): Boolean {
-            zoom = 1f
-            metrics()
-            reproject()
-            offsetX = 0f
-            offsetY = 0f
-            followOutput = true
-            if (frame?.cursorVisible != true) offsetY = maxY()
-            revealCursor(false)
-            invalidate()
-            reportZoom(false)
-            return true
-        }
+        override fun onSingleTapConfirmed(event: MotionEvent): Boolean = performClick()
+        override fun onDoubleTap(event: MotionEvent) = true
         override fun onScroll(first: MotionEvent?, current: MotionEvent, dx: Float, dy: Float): Boolean {
             if (multiTouch) return true
             followInputCursor = false
@@ -237,6 +234,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
             return true
         }
         override fun onLongPress(event: MotionEvent) {
+            taps.reset()
             if (!multiTouch) renderedFrame?.let {
                 followInputCursor = false
                 selection.geometry(cellWidth, cellHeight, offsetX, offsetY)
@@ -246,6 +244,37 @@ class TerminalSnapshotView(context: Context) : View(context) {
     })
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (scrollbar.touch(event)) {
+            taps.reset()
+            selection.clear()
+            val cancel = MotionEvent.obtain(event)
+            cancel.action = MotionEvent.ACTION_CANCEL
+            gestures.onTouchEvent(cancel)
+            cancel.recycle()
+            return true
+        }
+        val count = taps.onTouch(event)
+        if (count >= 2) {
+            val cancel = MotionEvent.obtain(event)
+            cancel.action = MotionEvent.ACTION_CANCEL
+            gestures.onTouchEvent(cancel)
+            cancel.recycle()
+            renderedFrame?.let { current ->
+                val row = current.rows.getOrNull(((event.y + offsetY) / cellHeight).toInt())
+                val column = ((event.x + offsetX) / cellWidth).toInt().coerceIn(0, current.columns - 1)
+                val start = row?.cells?.getOrNull(column * 6) ?: 0
+                val length = row?.cells?.getOrNull(column * 6 + 1) ?: 0
+                val blank = row == null || row.text.substring(start, (start + length).coerceAtMost(row.text.length)).isBlank()
+                if (count == 2 && blank) resetZoom()
+                else {
+                    followInputCursor = false
+                    selection.geometry(cellWidth, cellHeight, offsetX, offsetY)
+                    selection.begin(current, event.x, event.y, line = count == 3, dragging = false)
+                }
+            }
+            parent?.requestDisallowInterceptTouchEvent(false)
+            return true
+        }
         if (event.actionMasked == MotionEvent.ACTION_DOWN) multiTouch = false
         if (event.pointerCount >= 2) multiTouch = true
         parent?.requestDisallowInterceptTouchEvent(true)
@@ -300,10 +329,22 @@ class TerminalSnapshotView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        scrollbar.cancel()
+        taps.reset()
         selection.clear()
         inputGeneration++
         composingText = ""
         super.onDetachedFromWindow()
+    }
+
+    private fun resetZoom() {
+        zoom = 1f
+        metrics(); reproject()
+        offsetX = 0f; offsetY = 0f
+        followOutput = true
+        if (frame?.cursorVisible != true) offsetY = maxY()
+        revealCursor(false)
+        invalidate(); reportZoom(false)
     }
 
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean =

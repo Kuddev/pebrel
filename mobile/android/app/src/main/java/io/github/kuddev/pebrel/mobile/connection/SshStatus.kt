@@ -9,7 +9,7 @@ import java.net.UnknownHostException
 
 enum class SshStage { NETWORK, VERIFYING, AUTHENTICATING, OPENING_SHELL }
 enum class SshFailureKind {
-    UNKNOWN_HOST, TIMEOUT, REFUSED, AUTH, HOST_KEY_CHANGED, TRUST_REJECTED, CHANNEL, NETWORK, CRYPTO, NEGOTIATION, UNKNOWN,
+    UNKNOWN_HOST, TIMEOUT, REFUSED, AUTH, HOST_KEY_CHANGED, TRUST_REJECTED, CHANNEL, NETWORK, CRYPTO, NEGOTIATION, UNKNOWN, KEY,
 }
 
 class SshFailure(val kind: SshFailureKind, cause: Exception) : IOException(kind.name, cause)

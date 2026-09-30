@@ -43,6 +43,7 @@ pub(crate) struct Options {
     pub port: u16,
     pub user: String,
     pub password: Zeroizing<Vec<u8>>,
+    pub private_key: Zeroizing<Vec<u8>>,
     pub fingerprint: String,
 }
 

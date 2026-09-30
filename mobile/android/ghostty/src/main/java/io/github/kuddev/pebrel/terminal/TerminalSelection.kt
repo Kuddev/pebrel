@@ -62,7 +62,7 @@ internal class TerminalSelection(
         offsetY = y
     }
 
-    fun begin(source: TerminalFrame, x: Float, y: Float): Boolean {
+    fun begin(source: TerminalFrame, x: Float, y: Float, line: Boolean = false, dragging: Boolean = true): Boolean {
         if (source.rows.isEmpty() || source.columns == 0) return false
         clear()
         frame = source
@@ -70,7 +70,10 @@ internal class TerminalSelection(
         val row = source.rows[rowIndex]
         var first = floor((x + offsetX) / cellWidth).toInt().coerceIn(0, source.columns - 1)
         var end = first + 1
-        if (row != null) {
+        if (line) {
+            first = 0
+            end = source.columns
+        } else if (row != null) {
             first = leading(row, first)
             end = (first + span(row, first)).coerceAtMost(source.columns)
             val kind = wordClass(row, first)
@@ -86,7 +89,7 @@ internal class TerminalSelection(
         anchor = Point(rowIndex, first)
         extent = Point(rowIndex, end)
         // 手指起点位于词中，手柄位于词尾；保留两者偏移，首个 MOVE 不应跳动选区。
-        beginDrag(false, x, y, precise = true)
+        if (dragging) beginDrag(false, x, y, precise = true)
         mode = view.startActionMode(actions, ActionMode.TYPE_FLOATING)
         if (mode == null) { clear(); return false }
         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -170,7 +173,11 @@ internal class TerminalSelection(
                 mode?.invalidateContentRect()
                 view.invalidate()
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { dragging = null; decided = false }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // 手柄外扩的命中区域便于拖动，但在该区域单击仍应退出选择。
+                if (event.actionMasked == MotionEvent.ACTION_UP && !decided && !preciseTouch) clear()
+                dragging = null; decided = false
+            }
         }
         return true
     }
