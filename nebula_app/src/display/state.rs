@@ -16,38 +16,7 @@ pub enum AcceptKey {
     Both,
 }
 
-/// How completion candidates surface while typing: as a single inline ghost
-/// remainder after the cursor, or as a floating list the user picks from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CompletionStyle {
-    #[default]
-    Inline,
-    Popup,
-}
-
-impl CompletionStyle {
-    pub(super) fn cycle(self) -> Self {
-        match self {
-            Self::Inline => Self::Popup,
-            Self::Popup => Self::Inline,
-        }
-    }
-
-    pub(super) fn settings_value(self) -> &'static str {
-        match self {
-            Self::Inline => "inline",
-            Self::Popup => "popup",
-        }
-    }
-
-    pub(super) fn from_settings(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "inline" | "ghost" => Some(Self::Inline),
-            "popup" | "menu" | "list" => Some(Self::Popup),
-            _ => None,
-        }
-    }
-}
+pub use nebula_settings::CompletionStyleName as CompletionStyle;
 
 /// Source of a popup completion candidate; drives the right-aligned tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +192,7 @@ pub struct NebulaPaneState {
     /// 这里，由拿得到异步上下文的壳去执行、回填，下一次重算就有候选了。
     pub pending_remote_dir: Option<String>,
     pub suggestion: String,
+    pub(crate) suggestion_edit: Option<NebulaCompletionItem>,
     pub(super) suggestion_key: String,
     /// Popup-style completion candidates for the current line. A non-empty list
     /// stays visible so users can discover completion without an extra action.
@@ -231,11 +201,14 @@ pub struct NebulaPaneState {
     pub completion_items: Vec<NebulaCompletionItem>,
     /// 用户尚未主动导航时不高亮任何候选；这保证 Enter 仍提交原始输入。
     pub completion_selected: Option<usize>,
+    /// 混合模式下由 Tab 打开；随当前提示行结束、接受或取消而释放。
+    pub(crate) completion_popup_requested: bool,
     /// 用户已接受或主动关闭弹窗的整行。只要屏幕行未变化，即使命令目录的
     /// 异步代次更新也不重新弹出；下一次真实输入会自然让行值失配并清除此项。
     pub(crate) completion_suppressed_line: Option<String>,
     pub line_buf: String,
     pub(crate) screen_line: String,
+    pub(super) completion_pending_input: Option<super::input_state::PendingEcho>,
     /// Shell prompt captured with the command submitted from this pane. It is
     /// retained while an Agent owns the foreground so WSL/SSH sessions without
     /// a reliable OSC 133;D can prove that the real shell prompt returned.
@@ -286,10 +259,71 @@ pub struct AiSessionIdentity {
 }
 
 impl NebulaPaneState {
+    pub(crate) fn request_completion_popup(&mut self) -> bool {
+        if self.completion_popup_requested {
+            return true;
+        }
+        if self.screen_line.is_empty() && self.line_buf.is_empty() {
+            return false;
+        }
+        self.completion_popup_requested = true;
+        self.completion_suppressed_line = None;
+        self.clear_completion_hints();
+        true
+    }
+
+    pub(crate) fn completion_popup_move(&mut self, delta: isize) {
+        let len = self.completion_items.len();
+        if len == 0 {
+            return;
+        }
+        self.completion_selected = Some(match self.completion_selected {
+            Some(current) => (current as isize + delta).rem_euclid(len as isize) as usize,
+            None => 0,
+        });
+    }
+
+    pub(crate) fn completion_popup_take(&mut self) -> Option<NebulaCompletionItem> {
+        let item = self.completion_items.get(self.completion_selected?)?.clone();
+        self.completion_items.clear();
+        self.completion_selected = None;
+        self.completion_popup_requested = false;
+        Some(item)
+    }
+
+    pub(crate) fn completion_popup_dismiss(&mut self) -> bool {
+        if self.completion_popup_requested {
+            // 手动列表取消后恢复灰字；清缓存同时作废尚未返回的候选。
+            self.completion_popup_requested = false;
+            self.clear_completion_hints();
+            return true;
+        }
+        if self.completion_items.is_empty() {
+            return false;
+        }
+        let line = if self.screen_line.is_empty() { &self.line_buf } else { &self.screen_line };
+        if !line.is_empty() {
+            self.completion_suppressed_line = Some(line.clone());
+        }
+        self.completion_items.clear();
+        self.completion_selected = None;
+        true
+    }
+
+    pub(crate) fn completion_query_matches(&self, key: &str) -> bool {
+        self.suggestion_key == key
+    }
+
+    pub(crate) fn begin_completion_query(&mut self, key: String) {
+        self.clear_completion_hints();
+        self.suggestion_key = key;
+    }
+
     /// Drop every completion hint (ghost remainder AND popup list) plus the
     /// recompute cache, so the next frame re-derives them from the new line.
     pub(crate) fn clear_completion_hints(&mut self) {
         self.suggestion.clear();
+        self.suggestion_edit = None;
         self.suggestion_key.clear();
         self.completion_items.clear();
         self.completion_selected = None;

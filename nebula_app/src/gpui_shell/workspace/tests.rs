@@ -77,7 +77,7 @@ mod title_bar_panel_control_tests {
     }
 
     #[derive(Default)]
-    struct TopTabGeometryProbe;
+    struct TopTabGeometryProbe(nebula_settings::DensityName);
 
     impl Render for TopTabGeometryProbe {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -89,9 +89,10 @@ mod title_bar_panel_control_tests {
                     div()
                         .debug_selector(|| "top-tab-geometry-probe".to_owned())
                         .w(px(160.0))
-                        .h(px(super::top_tabs::TOP_TAB_H)),
+                        .h(px(super::tab_scroll::tab_row_height(self.0))),
                 )
                 .child(super::top_tabs::top_tab_action_slot(
+                    self.0,
                     super::top_tabs::top_new_tab_control(
                         crate::i18n::UiLanguage::EnUs,
                         |_, _, _| {},
@@ -99,6 +100,7 @@ mod title_bar_panel_control_tests {
                     .debug_selector(|| "top-new-tab-geometry-probe".to_owned()),
                 ))
                 .child(super::top_tabs::top_tab_action_slot(
+                    self.0,
                     h_flex().debug_selector(|| "top-tabs-menu-geometry-probe".to_owned()).child(
                         super::top_tabs::top_tabs_menu_button(false, crate::i18n::UiLanguage::EnUs),
                     ),
@@ -113,16 +115,27 @@ mod title_bar_panel_control_tests {
     #[gpui::test]
     fn top_tab_action_buttons_share_the_tab_vertical_center(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
-        let (_, cx) = cx.add_window_view(|_, _| TopTabGeometryProbe);
-        let tab = cx.debug_bounds("top-tab-geometry-probe").expect("tab bounds");
-        let new_tab = cx.debug_bounds("top-new-tab-geometry-probe").expect("new-tab bounds");
-        let menu = cx.debug_bounds("top-tabs-menu-geometry-probe").expect("menu bounds");
+        let (probe, cx) = cx.add_window_view(|_, _| TopTabGeometryProbe::default());
+        for (density, height) in [
+            (nebula_settings::DensityName::Standard, 34.0),
+            (nebula_settings::DensityName::Compact, 32.0),
+            (nebula_settings::DensityName::Standard, 34.0),
+        ] {
+            probe.update(cx, |probe, cx| {
+                probe.0 = density;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let tab = cx.debug_bounds("top-tab-geometry-probe").expect("tab bounds");
+            let new_tab = cx.debug_bounds("top-new-tab-geometry-probe").expect("new-tab bounds");
+            let menu = cx.debug_bounds("top-tabs-menu-geometry-probe").expect("menu bounds");
 
-        assert_eq!(f32::from(tab.size.height), 34.0);
-        assert_eq!(f32::from(new_tab.size.height), 32.0);
-        assert_eq!(f32::from(menu.size.height), 32.0);
-        assert_eq!(vertical_center(new_tab), vertical_center(tab));
-        assert_eq!(vertical_center(menu), vertical_center(tab));
+            assert_eq!(f32::from(tab.size.height), height);
+            assert_eq!(f32::from(new_tab.size.height), 32.0);
+            assert_eq!(f32::from(menu.size.height), 32.0);
+            assert_eq!(vertical_center(new_tab), vertical_center(tab));
+            assert_eq!(vertical_center(menu), vertical_center(tab));
+        }
     }
 }
 

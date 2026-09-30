@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+pub(crate) mod conversation;
 pub mod document;
 
 pub const MAX_ANSWER_BYTES: usize = 128 * 1024;

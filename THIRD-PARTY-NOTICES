@@ -42,7 +42,7 @@ The bundled conpty.dll and OpenConsole.exe come from the Windows
 Terminal project (github.com/microsoft/terminal), distributed under the
 MIT License.
 
-The Windows ARM64 CI runtime is pinned to the Microsoft.Windows.Console.ConPTY
+The Windows x64 and ARM64 runtimes are pinned to the Microsoft.Windows.Console.ConPTY
 NuGet package 1.24.260710001 from Microsoft. Archive and individual redistributable
 hashes, architecture and source URL are verified by scripts/prepare-windows-runtime.ps1.
 

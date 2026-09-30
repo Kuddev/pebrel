@@ -2,6 +2,22 @@
 
 use super::*;
 
+pub(in crate::gpui_shell::workspace) fn observe_window_bounds(
+    id: u64,
+    window: &mut Window,
+    cx: &mut Context<NebulaWorkspace>,
+) {
+    let mut icon_scale = window.scale_factor();
+    cx.observe_window_bounds(window, move |_, window, cx| {
+        quick_terminal_bounds_changed(id, window, cx);
+        if icon_scale != window.scale_factor() {
+            icon_scale = window.scale_factor();
+            crate::gpui_shell::set_native_window_icon(window);
+        }
+    })
+    .detach();
+}
+
 /// Animation coordinates must never be mistaken for a user's window placement.
 pub(in crate::gpui_shell::workspace) fn quick_terminal_bounds_changed(
     id: u64,
@@ -37,21 +53,9 @@ pub(in crate::gpui_shell::workspace) fn quick_terminal_bounds_changed(
     }
 }
 
-pub(super) fn persist_quick_size(cx: &mut App) {
-    let Some(size) = cx.global::<WindowRegistry>().quick_size_dirty else { return };
-    match nebula_settings::persist_keys(&[
-        ("quick_terminal_width", size.width.to_string()),
-        ("quick_terminal_height", size.height.to_string()),
-    ]) {
-        Ok(()) => cx.global_mut::<WindowRegistry>().quick_size_dirty = None,
-        Err(error) => log::warn!("could not save quick terminal size: {error}"),
-    }
-}
-
 /// 快速终端是独立窗口，不占用普通工作区的 MRU、runtime 路由或 session 恢复槽。
 /// 三态仍与旧壳一致：隐藏时显示并聚焦；可见但在后台时只聚焦；只有可见且
 /// 已在前台时才向上收起。
-#[cfg(windows)]
 pub(crate) fn toggle_quick_terminal_window(cx: &mut App) {
     prune_entries(cx);
     if nebula_settings::RuntimeSettings::load().quick_terminal_mode
@@ -124,26 +128,10 @@ pub(crate) fn toggle_quick_terminal_window(cx: &mut App) {
     start_quick_terminal_animation(cx);
 }
 
-#[cfg(windows)]
 fn quick_terminal_anchor_hwnd(cx: &mut App) -> isize {
     entries_by_mru(cx).into_iter().next().map_or(0, |entry| entry.native_hwnd)
 }
 
-#[cfg(windows)]
-pub(super) fn quick_terminal_anchor_display(
-    cx: &mut App,
-) -> Option<(gpui::DisplayId, Bounds<gpui::Pixels>)> {
-    let entry = entries_by_mru(cx).into_iter().next()?;
-    entry
-        .handle
-        .update(cx, |_, window, cx| {
-            window.display(cx).map(|display| (display.id(), display.bounds()))
-        })
-        .ok()
-        .flatten()
-}
-
-#[cfg(windows)]
 fn open_quick_terminal_window(cx: &mut App) {
     persist_quick_size(cx);
     let anchor_hwnd = quick_terminal_anchor_hwnd(cx);
@@ -207,7 +195,6 @@ fn open_quick_terminal_window(cx: &mut App) {
     start_quick_terminal_animation(cx);
 }
 
-#[cfg(windows)]
 fn start_quick_terminal_animation(cx: &mut App) {
     let (generation, handle) = {
         let Some(quick) = cx.global_mut::<WindowRegistry>().quick_terminal.as_mut() else {
@@ -223,7 +210,6 @@ fn start_quick_terminal_animation(cx: &mut App) {
     });
 }
 
-#[cfg(windows)]
 fn quick_terminal_animation_frame(generation: u64, window: &mut Window, cx: &mut App) {
     if quick_terminal_animation_tick(generation, window, cx) {
         window.on_next_frame(move |window, cx| {
@@ -232,7 +218,6 @@ fn quick_terminal_animation_frame(generation: u64, window: &mut Window, cx: &mut
     }
 }
 
-#[cfg(windows)]
 fn quick_terminal_animation_tick(generation: u64, window: &mut Window, cx: &mut App) -> bool {
     prune_entries(cx);
     let frame = {

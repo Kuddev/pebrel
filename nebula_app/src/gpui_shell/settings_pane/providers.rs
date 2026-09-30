@@ -1,5 +1,7 @@
 use super::*;
 
+mod key;
+
 impl SettingsPane {
     pub(super) fn active_provider_index(&self) -> Option<usize> {
         self.provider_store
@@ -77,6 +79,9 @@ impl SettingsPane {
     }
 
     pub(super) fn delete_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.provider_key_task.is_some() {
+            return;
+        }
         let Some(index) = self.active_provider_index() else { return };
         if self.provider_store.providers.len() <= 1 {
             self.provider_status = Some(ProviderStatus::AtLeastOneRequired);
@@ -112,22 +117,6 @@ impl SettingsPane {
         self.provider_codex_confirm = None;
         if let Err(error) = crate::ai_providers::save(&self.provider_store) {
             self.provider_status = Some(ProviderStatus::Error(error.to_string()));
-        }
-        cx.notify();
-    }
-
-    pub(super) fn prompt_provider_key(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.active_provider_index() else { return };
-        let provider = &mut self.provider_store.providers[index];
-        match crate::ai_providers::prompt_and_store_api_key(provider) {
-            Ok(true) => {
-                self.provider_status = Some(ProviderStatus::ApiKeySaved);
-                if let Err(error) = crate::ai_providers::save(&self.provider_store) {
-                    self.provider_status = Some(ProviderStatus::Error(error.to_string()));
-                }
-            },
-            Ok(false) => {},
-            Err(error) => self.provider_status = Some(ProviderStatus::Error(error.to_string())),
         }
         cx.notify();
     }
@@ -319,8 +308,9 @@ impl SettingsPane {
                                     } else {
                                         language.pick("设置…", "Set...")
                                     })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.prompt_provider_key(cx);
+                                    .disabled(self.provider_key_task.is_some())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.prompt_provider_key(window, cx);
                                     })),
                             ),
                         cx,

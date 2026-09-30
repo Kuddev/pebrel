@@ -142,7 +142,7 @@ pub fn confirm_dialog(
                     Button::new("confirm-cancel")
                         .debug_selector(|| "confirm-dialog-cancel".to_owned())
                         .flex_1()
-                        .label(cancel_text.clone())
+                        .label(format!("{cancel_text}  ⎋"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(CancelDialog), cx);
                         }),
@@ -151,7 +151,7 @@ pub fn confirm_dialog(
                     Button::new("confirm-ok")
                         .debug_selector(|| "confirm-dialog-ok".to_owned())
                         .flex_1()
-                        .label(ok_text.clone())
+                        .label(format!("{ok_text}  ↵"))
                         .with_variant(ok_variant)
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(ConfirmDialog), cx);

@@ -11,7 +11,6 @@ import os
 import plistlib
 import re
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -20,6 +19,8 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Any, Callable
+
+from . import posix_process
 
 PROTOCOL_NAME = "nebula.runtime"
 PROTOCOL_VERSION = 1
@@ -513,8 +514,8 @@ class ConformanceContext:
         deadline = started + self.startup_timeout
         last_error = "runtime.port has not appeared"
         while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                code = self.process.returncode
+            code = self._poll_process()
+            if code is not None:
                 self.stop(force=True)
                 raise ConformanceError(f"Nebula exited during startup with code {code}")
             if self.port_file.is_file():
@@ -552,6 +553,18 @@ class ConformanceContext:
             time.sleep(0.05)
         self.stop(force=True)
         raise ConformanceError(f"Nebula runtime did not become ready: {last_error}")
+
+    def _poll_process(self) -> int | None:
+        assert self.process is not None
+        if os.name == "posix":
+            return posix_process.poll_exit(self.process)
+        return self.process.poll()
+
+    def _wait_process(self, timeout: float) -> int:
+        assert self.process is not None
+        if os.name == "posix":
+            return posix_process.wait_exit(self.process, timeout)
+        return self.process.wait(timeout=timeout)
 
     def _spawn_process(self, command: list[str], env: dict[str, str]) -> subprocess.Popen[bytes]:
         options = {
@@ -602,20 +615,7 @@ class ConformanceContext:
                     process.wait(timeout=max(0, deadline - time.monotonic()))
                 self._windows_job.close()
             elif process is not None:
-                # An AppImage launcher forks the application. Its private
-                # group remains ours even after the launcher itself exits.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.wait(timeout=timeout)
+                posix_process.stop_group(process, force=force, timeout=timeout)
         finally:
             self._close_log()
         # Preserve ownership if cleanup fails, so a caller can retry and the
@@ -916,7 +916,7 @@ class ConformanceContext:
             # response is observed. The owned process exit is authoritative.
             pass
         try:
-            process.wait(timeout=max(0, deadline - time.monotonic()))
+            self._wait_process(timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired as error:
             raise ConformanceError(f"window.close did not exit within {timeout:.1f}s") from error
         self.stop(force=True, timeout=max(0, deadline - time.monotonic()))

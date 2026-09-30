@@ -5,8 +5,8 @@
 //! 绘制计划、把覆盖掩码交给格子绘制循环跳过源格、按计划用
 //! `math_view` 的位图管线上屏。
 //!
-//! 与旧壳 `draw_pane` 相同的门控：vi 模式 / 存在选区时整帧不覆盖（源码可
-//! 正常选择复制）。备用屏幕程序可能把光标留在静态内容末行，因此不能把
+//! 普通拖选保留公式与投影，选区始终指向底层源码。Vi、矩形和语义选择
+//! 继续显示源码，以保留它们按源列编辑的语义。备用屏幕程序可能把光标留在静态内容末行，因此不能把
 //! 那一行当作正在编辑而排除。围栏过滤与前景色走同一条
 //! `scan_visible(..., rendered_cells)`
 //! 合同：从 term 网格构造等价 cell 列表（`bg_alpha` = 非默认 ANSI 背景或
@@ -19,6 +19,7 @@ use nebula_terminal::Term;
 use nebula_terminal::event::EventListener;
 use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::{Column, Line, Point, Side};
+use nebula_terminal::selection::{SelectionRange, SelectionType};
 use nebula_terminal::term::TermMode;
 use nebula_terminal::term::cell::Flags;
 use nebula_terminal::vte::ansi::{Color, NamedColor};
@@ -48,6 +49,7 @@ pub struct PlannedFormula {
     /// 本条公式盖住的源格跨度 `(行, 起, 止)`：位图预检剔除公式之后要按存活
     /// 的公式重建掩码。
     spans: Vec<(usize, usize, usize)>,
+    selected: bool,
 }
 
 /// 扫描/fit 已通过、等待位图预检的公式。预检只依赖公式内容、字号和颜色，
@@ -65,11 +67,20 @@ pub struct PendingMathFrame {
     size: SizeInfo,
     pixels_per_point: f32,
     reflow_inline: bool,
+    selection: Option<SelectionRange>,
+    viewport_origin: Line,
 }
 
 impl PendingMathFrame {
     fn empty(size: SizeInfo, pixels_per_point: f32) -> Self {
-        Self { candidates: Vec::new(), size, pixels_per_point, reflow_inline: false }
+        Self {
+            candidates: Vec::new(),
+            size,
+            pixels_per_point,
+            reflow_inline: false,
+            selection: None,
+            viewport_origin: Line(0),
+        }
     }
 }
 
@@ -211,11 +222,15 @@ impl MathOverlay {
         pixels_per_point: f32,
     ) -> PendingMathFrame {
         let alt_screen = term.mode().contains(TermMode::ALT_SCREEN);
-        // Vi 模式与有效选择由终端自身接管，避免覆盖层遮住光标或选区。
-        // 空选区 `to_range` 为 None，不会因为鼠标按下残留的零宽 Selection
-        // 把公式关掉。
+        let selection = term.selection.as_ref().and_then(|selection| selection.to_range(term));
+        // Rectangular/semantic selection depends on source-column expansion.
+        // Ordinary drags already use the shared formula boundary hit mapping;
+        // clearing that mapping mid-drag would move the text under the pointer.
         if term.mode().intersects(TermMode::VI)
-            || term.selection.as_ref().and_then(|selection| selection.to_range(term)).is_some()
+            || (selection.is_some()
+                && term.selection.as_ref().is_some_and(|selection| {
+                    matches!(selection.ty, SelectionType::Block | SelectionType::Semantic)
+                }))
         {
             return self.clear_frame(size, pixels_per_point);
         }
@@ -269,6 +284,8 @@ impl MathOverlay {
             pixels_per_point,
             // 与旧壳一致：TUI/备用屏继续拥有固定列坐标，但公式覆盖本身仍可用。
             reflow_inline: !alt_screen,
+            selection,
+            viewport_origin: origin,
         }
     }
 
@@ -361,6 +378,15 @@ impl MathOverlay {
                 source: candidate.overlay.source_arc(),
                 plan: candidate.plan,
                 spans: candidate.overlay.covered_spans().collect(),
+                selected: pending.selection.is_some_and(|selection| {
+                    candidate.overlay.covered_spans().any(|(row, start, end)| {
+                        let line = pending.viewport_origin + row;
+                        line >= selection.start.line
+                            && line <= selection.end.line
+                            && (start..end)
+                                .any(|column| selection.contains(Point::new(line, Column(column))))
+                    })
+                }),
             })
             .collect();
         let spans: Vec<(usize, usize, usize)> =
@@ -468,6 +494,7 @@ pub fn paint_frame(
     origin: gpui::Point<Pixels>,
     cell: (f32, f32),
     pixels_per_point: f32,
+    selection_color: Rgba,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -546,6 +573,11 @@ pub fn paint_frame(
                 );
             }
         });
+        if formula.selected {
+            // Outline the selected formula as an object. Its existing bitmap
+            // and foreground stay intact, without a new raster/color cache key.
+            window.paint_quad(gpui::outline(clip, selection_color, gpui::BorderStyle::Solid));
+        }
     }
 }
 
@@ -747,21 +779,80 @@ mod tests {
     }
 
     #[test]
-    fn effective_selection_clears_existing_projection() {
+    fn ordinary_selection_preserves_projection_and_copies_the_formula_source() {
         let mut overlay = MathOverlay::default();
         let mut term = term_with(20, 4, &["$x^2$ suffix", "", "prompt"]);
         let source_suffix = 5;
         let projected = plan(&mut overlay, &term, 20, 4);
         assert!(projected.project_cell(0, source_suffix, 20).unwrap() < source_suffix);
 
-        let mut selection =
-            Selection::new(SelectionType::Simple, Point::new(Line(0), Column(0)), Side::Left);
-        selection.update(Point::new(Line(0), Column(2)), Side::Right);
+        let visual_suffix = projected.project_cell(0, source_suffix, 20).unwrap();
+        let (start, start_side) =
+            overlay.source_point(Point::new(Line(0), Column(0)), Side::Left, Line(0));
+        let (end, end_side) = overlay.source_point(
+            Point::new(Line(0), Column(visual_suffix - 1)),
+            Side::Right,
+            Line(0),
+        );
+        let mut selection = Selection::new(SelectionType::Simple, start, start_side);
+        selection.update(end, end_side);
         term.selection = Some(selection);
         let selected = plan(&mut overlay, &term, 20, 4);
 
-        assert!(selected.is_empty(), "source text must stay visible while selecting");
-        assert_eq!(selected.project_cell(0, source_suffix, 20), Some(source_suffix));
+        assert_eq!(term.selection_to_string().as_deref(), Some("$x^2$"));
+        assert!(!selected.is_empty());
+        assert_eq!(selected.project_cell(0, source_suffix, 20), Some(visual_suffix));
+        assert!(selected.formulas[0].selected);
+        assert_eq!(selected.formulas[0].source, projected.formulas[0].source);
+        assert_eq!(selected.formulas[0].plan.foreground, projected.formulas[0].plan.foreground);
+        assert_eq!(
+            selected.formulas[0].plan.fitted_pixel_size,
+            projected.formulas[0].plan.fitted_pixel_size
+        );
+    }
+
+    #[test]
+    fn source_column_selection_modes_keep_their_existing_source_view() {
+        for kind in [SelectionType::Block, SelectionType::Semantic] {
+            let mut overlay = MathOverlay::default();
+            let mut term = term_with(20, 4, &["$x^2$ suffix", "", "prompt"]);
+            assert!(!plan(&mut overlay, &term, 20, 4).is_empty());
+            let mut selection = Selection::new(kind, Point::new(Line(0), Column(0)), Side::Left);
+            selection.update(Point::new(Line(0), Column(2)), Side::Right);
+            term.selection = Some(selection);
+            let frame = plan(&mut overlay, &term, 20, 4);
+            assert!(frame.is_empty());
+            assert_eq!(frame.project_cell(0, 5, 20), Some(5));
+        }
+    }
+
+    #[test]
+    fn selecting_another_row_does_not_move_or_mark_a_formula() {
+        let mut overlay = MathOverlay::default();
+        let mut term = term_with(32, 4, &["$x^2$ suffix", "other text", "prompt"]);
+        let before = plan(&mut overlay, &term, 32, 4);
+        let mut selection =
+            Selection::new(SelectionType::Simple, Point::new(Line(1), Column(0)), Side::Left);
+        selection.update(Point::new(Line(1), Column(4)), Side::Right);
+        term.selection = Some(selection);
+        let after = plan(&mut overlay, &term, 32, 4);
+        assert!(!after.is_empty());
+        assert_eq!(after.project_cell(0, 5, 32), before.project_cell(0, 5, 32));
+        assert!(!after.formulas[0].selected);
+    }
+
+    #[test]
+    fn issue_119_inline_formula_bodies_produce_render_plans() {
+        for source in [
+            r"$\sigma(\mathbf{z} + c) = \sigma(\mathbf{z})$",
+            r"$\dfrac{\partial \sigma_i}{\partial z_j} = \sigma_i\delta_{ij} - \sigma_i\sigma_j$",
+        ] {
+            let mut overlay = MathOverlay::default();
+            let term = term_with(160, 4, &[source, "", "prompt"]);
+            let frame = plan(&mut overlay, &term, 160, 4);
+            assert_eq!(frame.formulas.len(), 1, "{source}");
+            assert_eq!(frame.formulas[0].source.as_ref(), &source[1..source.len() - 1]);
+        }
     }
 
     #[test]

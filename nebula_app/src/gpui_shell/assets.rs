@@ -1,6 +1,6 @@
 //! 本仓库自带的图标资源，叠在组件库资源之上。
 //!
-//! 只补 lucide 缺的那几个，不另起一套。
+//! 补充项目专用图标，并固定已确认原型所需的 Lucide 路径与描边。
 //!
 //! 试过"统一圆角外壳 + 内部挖空骨架"的自绘方案，实机否掉了：外壳吃掉大半视觉
 //! 重量后内部只剩 12×10px，20px 显示下无论画什么都糊成"方框里几个点"，反而
@@ -30,10 +30,19 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "layout-grid",
     "mouse-pointer",
     "sliders",
+    "backup-drive",
+    "backup-cloud",
+    "backup-globe",
+    "backup-database",
+    "backup-server",
+    "backup-folder",
+    "backup-lock",
+    "backup-check",
     "pin",
     "pencil",
     "trash-2",
     "refresh",
+    "phone",
     "vcs-changes",
     "vcs-history",
     "vcs-conflict",
@@ -101,10 +110,23 @@ pub mod nav {
     /// Lucide trash-2；删除保存命令不能借用表示 Backspace 的 `IconName::Delete`。
     pub const TRASH: &str = "icons/nebula-trash-2.svg";
     pub const REFRESH: &str = "icons/nebula-refresh.svg";
+    pub const PHONE: &str = "icons/nebula-phone.svg";
     /// IDEA Commit 工具窗口同语义的“基线 + 提交节点”：工作区变更入口。
     pub const VCS_CHANGES: &str = "icons/nebula-vcs-changes.svg";
     /// 带分叉节点的提交线路：版本历史入口。
     pub const VCS_HISTORY: &str = "icons/nebula-vcs-history.svg";
     /// 两侧分支汇入结果并在交点标出冲突：三栏冲突解决入口。
     pub const VCS_CONFLICT: &str = "icons/nebula-vcs-conflict.svg";
+}
+
+/// Backup icons share the approved settings prototype geometry.
+pub mod backup {
+    pub const DRIVE: &str = "icons/nebula-backup-drive.svg";
+    pub const CLOUD: &str = "icons/nebula-backup-cloud.svg";
+    pub const GLOBE: &str = "icons/nebula-backup-globe.svg";
+    pub const DATABASE: &str = "icons/nebula-backup-database.svg";
+    pub const SERVER: &str = "icons/nebula-backup-server.svg";
+    pub const FOLDER: &str = "icons/nebula-backup-folder.svg";
+    pub const LOCK: &str = "icons/nebula-backup-lock.svg";
+    pub const CHECK: &str = "icons/nebula-backup-check.svg";
 }

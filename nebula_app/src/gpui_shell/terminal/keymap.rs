@@ -86,8 +86,8 @@ fn ctrl_char(c: char) -> Option<u8> {
 
 /// ConPTY Win32 input mode 是否当家。
 ///
-/// 子进程请求的 Win32 记录是**回落**协议，不是与 kitty 并列的第二编码器：
-/// 一旦子进程要过 kitty 键盘标志，那份标志就是线上合同，压过 DECSET 9001
+/// 子进程请求的 Win32 记录是**回落**协议，不是与增强键盘协议并列的第二编码器：
+/// 一旦子进程请求过增强键盘标志，那份标志就是线上合同，压过 DECSET 9001
 /// （口径逐字同旧壳 `input::terminal_input::use_win32_input_mode`）。
 fn use_win32_input_mode(mode: &TermMode) -> bool {
     crate::input::terminal_input::use_win32_input_mode(*mode)
@@ -110,7 +110,7 @@ pub(super) fn encode_choice_text(text: &str, mode: &TermMode) -> Vec<u8> {
     bytes
 }
 
-/// 子进程是否请求过 kitty 键盘协议（三位标志任一）。kitty 是线上合同，
+/// 子进程是否请求过增强键盘协议（三位标志任一）。协商后的协议是线上合同，
 /// 压过 DECSET 9001——口径同旧壳 `input/terminal_input.rs`。
 fn kitty_keyboard_active(mode: &TermMode) -> bool {
     mode.intersects(
@@ -120,7 +120,7 @@ fn kitty_keyboard_active(mode: &TermMode) -> bool {
     )
 }
 
-/// 子进程要过 kitty 键盘标志时，Esc 必须是 `CSI 27u`，不是裸 `\x1b`。
+/// 子进程请求过增强键盘标志时，Esc 必须是 `CSI 27u`，不是裸 `\x1b`。
 /// 口径同旧壳 `kitty_disambiguate_escape_is_csi_27_u`。
 fn kitty_escape(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     if !kitty_keyboard_active(mode) || ks.key.as_str() != "escape" {
@@ -188,7 +188,7 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode, synthetic: bool) -> Option<Ve
     use winit::keyboard::{Key, KeyLocation, ModifiersState, NamedKey};
 
     let (logical_key, key_without_modifiers) = if ks.key == "enter" {
-        // 只有编码全部按键时，裸 Enter 才改用 CSI u。其余 kitty 模式下
+        // 只有编码全部按键时，裸 Enter 才改用 CSI u。其余增强键盘模式下
         // 保留 CR；带修饰的 Enter 复用共享编码器，覆盖 Shift/Ctrl/Alt。
         if !kitty_keyboard_active(mode)
             || !(preserves_enter_modifiers(ks, mode)
@@ -279,6 +279,24 @@ pub fn encode(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
     }
     let mods = &ks.modifiers;
 
+    // macOS supplies the layout/IME result in `key_char` while `key` is the
+    // logical key name. A plain printable key must stay on the text input
+    // path so commas, underscores, and non-ASCII IME commits are written
+    // exactly as AppKit produced them instead of being re-encoded as a
+    // terminal shortcut.
+    if !mods.shift
+        && !mods.control
+        && !mods.alt
+        && !mods.platform
+        && !mods.function
+        && ks
+            .key_char
+            .as_deref()
+            .is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control))
+    {
+        return None;
+    }
+
     #[cfg(windows)]
     if mods.control
         && mods.alt
@@ -320,8 +338,8 @@ pub fn encode(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
             });
         },
         "backspace" => {
-            // kitty 合同下带 Ctrl 的 Backspace 走 CSI u（127 = kitty 的 Backspace
-            // keysym）：pi 等 kitty 应用以此区分 ctrl+backspace 与普通退格；
+            // 增强键盘协议下带 Ctrl 的 Backspace 走 CSI u（127 = Backspace
+            // keysym）：pi 等协商了该协议的应用以此区分 ctrl+backspace 与普通退格；
             // 裸 \x08 会被当成单字符退格，删不了词。
             if kitty_keyboard_active(mode) && mods.control {
                 let param = modifier_param(ks);
@@ -615,7 +633,37 @@ mod tests {
         assert_eq!(encode(&keystroke("space"), &TermMode::default()), None);
     }
 
-    /// kitty 键盘标志是子进程明确要过的线上合同，压过 DECSET 9001
+    #[test]
+    fn plain_symbols_and_ime_text_stay_on_the_text_input_path() {
+        for (key, text) in [
+            ("_", "_"),
+            (",", ","),
+            ("/", "/"),
+            ("=", "="),
+            ("，", "，"),
+            ("中", "中"),
+            ("-", "_"),
+            ("1", "!"),
+            (",", "，"),
+            ("n", "你好"),
+        ] {
+            let key = Keystroke {
+                modifiers: gpui::Modifiers::default(),
+                key: key.to_owned(),
+                key_char: Some(text.to_owned()),
+            };
+            for mode in [
+                TermMode::default(),
+                pi_keyboard_mode(),
+                TermMode::WIN32_INPUT_MODE,
+                TermMode::WIN32_INPUT_MODE | pi_keyboard_mode(),
+            ] {
+                assert_eq!(encode(&key, &mode), None, "{key:?} {mode:?}");
+            }
+        }
+    }
+
+    /// 增强键盘标志是子进程明确要过的线上合同，压过 DECSET 9001
     /// （口径同旧壳 `use_win32_input_mode` / `kitty_disambiguate_escape_is_csi_27_u`）。
     #[test]
     fn kitty_flags_take_precedence_over_win32_records() {
@@ -648,7 +696,7 @@ mod tests {
         );
     }
 
-    /// kitty 键盘协议下 Ctrl+Backspace 必须是 CSI u（127 是 kitty 的
+    /// 增强键盘协议下 Ctrl+Backspace 必须是 CSI u（127 是协议定义的
     /// Backspace keysym，修饰参数 5=Ctrl）。pi 靠它识别 ctrl+backspace；
     /// 发裸 `\x08` 会被当成普通退格，只删一个字符。
     #[test]
@@ -659,7 +707,7 @@ mod tests {
         assert_eq!(encode(&ks, &mode), Some(b"\x1b[127;5u".to_vec()));
     }
 
-    /// kitty 的修饰参数约定（shift=1、alt=2、ctrl=4 从 1 起算）在
+    /// 增强键盘协议的修饰参数约定（shift=1、alt=2、ctrl=4 从 1 起算）在
     /// backspace 上同样成立。
     #[test]
     fn kitty_ctrl_alt_backspace_reports_both_modifiers() {
@@ -671,7 +719,7 @@ mod tests {
     }
 
     /// 传统 VT 路径 Ctrl+Backspace 出 `\x17`（Ctrl+W），托管 PowerShell
-    /// 把它绑成 BackwardKillWord；kitty 未开时不走 CSI u。
+    /// 把它绑成 BackwardKillWord；增强键盘协议未开时不走 CSI u。
     #[test]
     fn legacy_ctrl_backspace_emits_ctrl_w() {
         let mode = TermMode::default();
@@ -761,7 +809,7 @@ mod tests {
                     key.modifiers.control = control;
                     key.modifiers.alt = alt;
                     key.modifiers.platform = platform;
-                    // Even an OS-provided CR/LF cannot erase kitty's key identity.
+                    // Even an OS-provided CR/LF cannot erase the negotiated key identity.
                     for text in [None, Some("\r"), Some("\n")] {
                         key.key_char = text.map(str::to_owned);
                         let expected = if parameter != 1 {

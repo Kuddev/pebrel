@@ -82,6 +82,7 @@ impl DownloadJob {
 }
 
 pub(crate) fn begin(asset: &UpdateAsset) -> Result<Option<DownloadJob>, String> {
+    crate::platform::distribution::require_direct_update()?;
     validate_asset(asset)?;
     Ok(begin_download_session(asset))
 }
@@ -142,6 +143,9 @@ pub(crate) fn run(job: DownloadJob, language: UiLanguage) {
 /// Restore local update state without requiring a successful network check.
 /// Call once on a background executor; a user-started task always takes priority.
 pub(crate) fn hydrate() {
+    if crate::platform::distribution::current().externally_managed() {
+        return;
+    }
     let cached = handoff::failed_update()
         .map(|(asset, error)| (asset, DownloadStatus::InstallFailed(error)))
         .or_else(cache::load);
@@ -189,6 +193,7 @@ fn download_and_verify(
     language: UiLanguage,
     job: Option<&DownloadJob>,
 ) -> Result<(PathBuf, u64), String> {
+    crate::platform::distribution::require_direct_update()?;
     validate_asset(asset)?;
     let (partial_path, final_path) = download_paths(asset)?;
     let _download_lock = crate::atomic_file::try_lifetime_lock(&final_path)

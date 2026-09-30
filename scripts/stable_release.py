@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import zipfile
 
 if __package__:
     from scripts.preview_release import MIN_ASSET_SIZE, VERSION_PATTERN, sha256, write_atomic
@@ -49,6 +50,8 @@ def expected_asset_names(version: str) -> tuple[str, ...]:
     # 1.9.0 和 1.9.1 已公开发布且仅含 ARM64 ZIP，不能追溯要求不存在的安装器。
     if version_parts >= (1, 9, 2):
         names += (f"Pebrel-v{version}-windows-arm64-setup.exe",)
+    if version_parts >= (2, 0, 0):
+        names += (f"Pebrel-v{version}-android-universal-preview.apk",)
     # The old-name installer was retired from 1.7.0; retain historical manifests.
     if version_parts < (1, 7, 0):
         names += (f"NebulaTerminal-{version}-windows-x64-setup.exe",)
@@ -81,6 +84,15 @@ def _check_magic(path: Path) -> None:
         raise StableReleaseError(f"Windows installer has no PE header: {path.name}")
     if path.suffix == ".zip" and not header.startswith((b"PK\x03\x04", b"PK\x05\x06")):
         raise StableReleaseError(f"Windows ZIP has an invalid ZIP header: {path.name}")
+    if path.suffix == ".apk":
+        try:
+            with zipfile.ZipFile(path) as apk:
+                if not {"AndroidManifest.xml", "classes.dex"}.issubset(apk.namelist()):
+                    raise StableReleaseError(f"Android APK is missing its manifest or DEX: {path.name}")
+                if apk.testzip() is not None:
+                    raise StableReleaseError(f"Android APK has damaged ZIP entries: {path.name}")
+        except zipfile.BadZipFile as error:
+            raise StableReleaseError(f"Android APK has an invalid ZIP structure: {path.name}") from error
     if path.name.endswith(".AppImage") and not header.startswith(b"\x7fELF"):
         raise StableReleaseError(f"AppImage is not an ELF executable: {path.name}")
     if path.suffix == ".deb" and header != b"!<arch>\n":

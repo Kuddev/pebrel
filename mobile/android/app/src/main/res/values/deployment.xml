@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="deploy_done">Relay is ready</string>
+    <string name="deploy_pc_next">Save both configuration files to your PC beside the pairing helper. Start the helper on the PC to attach its Pebrel sessions, then connect here.</string>
+    <string name="deploy_save_pc">Save PC configuration</string>
+    <string name="deploy_save_phone">Save phone invitation</string>
+    <string name="deploy_copy_command">Copy PC startup command</string>
+    <string name="deploy_export_saved">File saved</string>
+    <string name="deploy_export_failed">Could not save the file. Choose a writable location and try again.</string>
+    <string name="deploy_command_copied">Startup command copied</string>
+    <string name="deploy_wait_hint">The server may need to download container images and request a certificate. Cancel closes the SSH operation; any service already started remains on your server.</string>
+    <string name="deploy_existing_host">Saved SSH host</string>
+    <string name="deploy_manual">Manual SSH</string>
+    <string name="deploy_choose_host">Choose SSH host</string>
+    <string name="deploy_domain">Public domain</string>
+    <string name="deploy_https_port">HTTPS port</string>
+    <string name="deploy_http_port">HTTP challenge port</string>
+    <string name="deploy_directory">Server installation directory</string>
+    <string name="deploy_requirements">Requires Linux, Docker with Compose, and an SSH account allowed to run Docker. Point this domain to the server. Public port 80 must reach the HTTP challenge port; open the HTTPS port as well. Existing unrelated directories are refused.</string>
+    <string name="deploy_start">Deploy and start</string>
+    <string name="deploy_validating">Checking configuration…</string>
+    <string name="deploy_prerequisites">Checking server requirements…</string>
+    <string name="deploy_uploading">Uploading relay source…</string>
+    <string name="deploy_initializing">Creating connection credentials…</string>
+    <string name="deploy_starting">Building and starting the service…</string>
+    <string name="deploy_health">Checking the HTTPS endpoint…</string>
+    <string name="deploy_invalid">Check the domain, ports and dedicated installation directory.</string>
+    <string name="deploy_docker_required">Docker with Compose must be installed and accessible to this SSH account.</string>
+    <string name="deploy_directory_conflict">This directory contains unrelated files or an unsupported deployment. Choose a new empty directory.</string>
+    <string name="deploy_health_failed">The service has not passed HTTPS verification. Check domain DNS, public ports and the server certificate, then retry.</string>
+    <string name="deploy_failed">Deployment did not finish. Check server access, available space and container downloads, then retry.</string>
+</resources>
