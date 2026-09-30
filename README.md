@@ -189,7 +189,7 @@ through the explicit `legacy-shell` feature.
 
 ## Contact
 
-Email: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 

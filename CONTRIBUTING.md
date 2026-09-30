@@ -37,6 +37,61 @@ problem in a rule is a reason to review the rule, not to conceal or ignore a fai
 No programming contribution is required to be useful. Clear reproduction steps,
 native-language review and accessibility feedback also help the project.
 
+## Commercial promotion policy
+
+PRs, Issues, and their comments must not be used for advertising, commercial
+promotion, or traffic solicitation. This includes promotional provider presets,
+referral links, signup incentives, and unrelated brand placement disguised as
+feature contributions or bug reports. Close any PR or Issue containing unauthorized
+promotion directly; no further maintainer confirmation is required. Apply this
+rule once the promotional content and lack of authorization are established.
+
+For commercial cooperation, sponsorship, or other business requests, email
+[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com). Do not negotiate
+commercial arrangements through PRs or Issues. Sponsor content explicitly approved
+by the maintainer is handled within that approval's scope; it does not authorize
+other promotional submissions.
+
+Review the actual user need and changed content. Necessary compatibility fixes,
+Agent integrations, and upstream attribution are not advertising merely because
+they name a service or product. A small diff, passing CI, or first-time contributor
+status does not establish a need for a provider addition or override this policy.
+
+Review the submission body, actual diff, attachments, and linked destinations,
+not just the title. Relevant provider integrations still require a demonstrated
+project need; a working endpoint or a vendor's own description is not approval.
+Verify any claimed sponsorship with a traceable maintainer decision. Record only
+the approval's scope in public, not private email or commercial terms.
+
+Once an unauthorized promotional submission is verified, close it with a brief
+policy link and email contact, without repeating promotional links or copy.
+Withdraw any mistaken approval and remove that change from pending integrations.
+If an unrelated account posts an advertisement under an otherwise legitimate PR
+or Issue, moderate that comment rather than closing the legitimate contribution.
+This is a content-review rule, not an automatic keyword/domain blacklist.
+
+严禁利用 PR、Issue 及其评论进行广告宣传、商业推广或引流，包括以功能贡献或
+问题反馈为名植入服务商推广、返利链接、注册优惠和无关品牌内容。核实属于未经授权的
+推广后，直接关闭对应 PR 或 Issue，无需再次向维护者确认。
+商业合作、赞助及其他商业需求须通过上述项目邮箱沟通，不得通过 PR 或 Issue 商业洽谈。
+经维护者明确批准的赞助内容按批准范围处理，不构成对其他推广提交的授权。
+审阅应核实真实用户需求及改动内容；必要的兼容修复、Agent 集成和上游署名不因包含
+品牌名称就被视为广告。改动小、CI 通过或首次贡献者身份均不能代替需求审查。
+
+审阅须检查正文、实际差异、附件及链接去向，而非只看标题；新增服务商即使接口可用，
+仍须有真实项目需求，服务商自述不等于维护者批准。声称已获赞助授权时，应核对可追溯的
+维护者决定；公开记录只说明批准范围，不披露私人邮件或商业条款。
+核实为未授权推广提交后直接关闭，简短引用规则及商业邮箱，不重复传播推广链接或文案。
+若此前误批，应撤销认可并从待合并集成中排除。无关账号在正常 PR 或 Issue 下发布广告时，
+处理该广告评论，不因此关闭正常贡献。本规则依赖内容审查，不使用关键词或域名一刀切。
+
+This section is the authoritative policy. Agent instructions, review guidance,
+and submission templates link here and summarize it for their audience.
+When changing the policy or contact address, update those summaries together.
+READMEs introduce the product and do not duplicate this policy. / 本节为规则的
+唯一权威说明；规则或联系邮箱变化时，同步检查代理指引、审阅约束和提交模板中的
+摘要与链接。README 用于项目介绍，不重复收录本规则。
+
 ## First code contribution
 
 1. Fork the existing `Kuddev/pebrel` repository and create your work branch from the

@@ -171,7 +171,7 @@ cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
 
 ## 联系方式
 
-邮箱：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
