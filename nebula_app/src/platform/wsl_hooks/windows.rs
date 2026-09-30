@@ -15,7 +15,7 @@ use serde_json::json;
 use crate::ai_hook::remote::{self, Action, Snapshot};
 
 const BUDGET: Duration = Duration::from_secs(8);
-const MAX_OUTPUT: u64 = 20 * 1024 * 1024;
+const MAX_OUTPUT: usize = 20 * 1024 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -53,7 +53,9 @@ impl Target {
     /// (both calls of an installation share one budget).
     fn exchange(&self, request: &[u8], deadline: Instant) -> Result<String, String> {
         let budget = deadline.saturating_duration_since(Instant::now());
-        crate::platform::process::run_bounded(&mut self.command(), request, budget, MAX_OUTPUT)
+        let read = crate::platform::process_output::read_with_input;
+        read(self.command(), request, budget, MAX_OUTPUT, &|| false)
+            .map(|output| String::from_utf8_lossy(&output).into_owned())
             .map_err(|error| format!("WSL hook setup {error}"))
     }
 

@@ -153,8 +153,8 @@ pub(super) fn local_options(
             &args,
             &crate::shell_detect::effective_wslenv(current_wslenv),
             crate::platform::wsl_guest_shell::verified,
-        );
-        let zsh = zsh.as_ref().map(|directory| directory.to_string_lossy());
+        )
+        .then(|| crate::platform::shell_integration::wsl_zsh_path().to_string_lossy().into_owned());
         let additions =
             crate::shell_detect::wsl_cwd_report_env(&program, current_wslenv, zsh.as_deref());
         for (name, value) in additions {

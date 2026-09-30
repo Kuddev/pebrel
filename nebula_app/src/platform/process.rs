@@ -20,8 +20,7 @@
 //! 那几处是**故意**要给用户看见窗口的。
 
 use std::io;
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Child, Command};
 
 /// `CREATE_NO_WINDOW` 的**唯一定义处**。
 ///
@@ -52,129 +51,6 @@ pub(crate) fn hidden_command_with(command: &mut Command, extra_flags: u32) -> &m
     #[cfg(not(windows))]
     let _ = extra_flags;
     command
-}
-
-/// Run a non-interactive child to completion with `input` on stdin, bounded by
-/// `budget` and by `max_output` bytes of stdout, and return that stdout.
-///
-/// Temporary files stand in for pipes, so no reader thread outlives a
-/// descendant that keeps a handle open. A child that overruns either bound is
-/// killed and reaped; one that fails, or overruns, yields an error rather than
-/// partial output. The caller supplies a hidden command (see [`hidden_command`])
-/// and runs this off the UI thread: it polls until the child exits.
-pub(crate) fn run_bounded(
-    command: &mut Command,
-    input: &[u8],
-    budget: Duration,
-    max_output: u64,
-) -> io::Result<String> {
-    use std::io::{Read as _, Seek as _, Write as _};
-
-    let mut stdin = tempfile::tempfile()?;
-    stdin.write_all(input)?;
-    stdin.rewind()?;
-    let mut output = tempfile::tempfile()?;
-    let mut child =
-        command.stdin(stdin).stdout(output.try_clone()?).stderr(Stdio::null()).spawn()?;
-    let deadline = Instant::now() + budget;
-    let status = loop {
-        // Every error past spawn, a failed stat included, still kills and reaps.
-        let overrun = if Instant::now() >= deadline {
-            Some(io::Error::other("exceeded its time budget"))
-        } else {
-            match output.metadata() {
-                Ok(metadata) if metadata.len() > max_output => {
-                    Some(io::Error::other("exceeded its output limit"))
-                },
-                Ok(_) => None,
-                Err(error) => Some(error),
-            }
-        };
-        let error = match (child.try_wait(), overrun) {
-            (Ok(Some(status)), _) => break status,
-            (Ok(None), None) => {
-                std::thread::sleep(Duration::from_millis(10));
-                continue;
-            },
-            (Ok(None), Some(error)) | (Err(error), _) => error,
-        };
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(error);
-    };
-    if !status.success() {
-        return Err(io::Error::other(format!("exited with {status}")));
-    }
-    if output.metadata()?.len() > max_output {
-        return Err(io::Error::other("exceeded its output limit"));
-    }
-    output.rewind()?;
-    let mut text = String::new();
-    output.take(max_output).read_to_string(&mut text)?;
-    Ok(text)
-}
-
-#[cfg(test)]
-mod run_bounded_tests {
-    use std::process::Command;
-    use std::time::{Duration, Instant};
-
-    use super::{hidden_command, run_bounded};
-
-    /// A shell running `script`: `cmd /c` on Windows, `sh -c` elsewhere.
-    fn shell(windows: &str, unix: &str) -> Command {
-        let mut command = if cfg!(windows) {
-            let mut command = Command::new("cmd.exe");
-            command.args(["/D", "/C", windows]);
-            command
-        } else {
-            let mut command = Command::new("sh");
-            command.args(["-c", unix]);
-            command
-        };
-        hidden_command(&mut command);
-        command
-    }
-
-    #[test]
-    fn returns_stdout_after_feeding_stdin() {
-        let echoed = run_bounded(
-            &mut shell("more", "cat"),
-            b"shell=/usr/bin/zsh\n",
-            Duration::from_secs(20),
-            1024,
-        )
-        .expect("the child echoes its input");
-        assert!(echoed.contains("shell=/usr/bin/zsh"), "{echoed:?}");
-    }
-
-    #[test]
-    fn failure_timeout_and_oversized_output_are_errors() {
-        let failed =
-            run_bounded(&mut shell("exit /b 7", "exit 7"), b"", Duration::from_secs(20), 64);
-        assert!(failed.unwrap_err().to_string().contains("exited with"));
-
-        let started = Instant::now();
-        let slow = run_bounded(
-            &mut shell("ping -n 30 127.0.0.1 >nul", "sleep 30"),
-            b"",
-            Duration::from_millis(300),
-            64,
-        );
-        assert!(slow.unwrap_err().to_string().contains("time budget"));
-        assert!(started.elapsed() < Duration::from_secs(20), "the child is killed, not awaited");
-
-        let loud = run_bounded(
-            &mut shell(
-                "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789",
-                "i=0; while [ $i -lt 200 ]; do echo 0123456789012345678901234567890123456789; i=$((i+1)); done",
-            ),
-            b"",
-            Duration::from_secs(20),
-            100,
-        );
-        assert!(loud.unwrap_err().to_string().contains("output limit"));
-    }
 }
 
 #[cfg(unix)]

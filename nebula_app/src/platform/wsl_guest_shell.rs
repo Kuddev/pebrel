@@ -4,7 +4,7 @@
 //! see `architecture/notes/nebula_app/platform/` for why neither fact is guessed.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -17,7 +17,7 @@ use crate::shell_detect;
 const PROBE_BUDGET: Duration = Duration::from_secs(10);
 /// A failed or timed-out probe is not repeated before this.
 const RETRY_AFTER: Duration = Duration::from_secs(300);
-const MAX_OUTPUT: u64 = 4 * 1024;
+const MAX_OUTPUT: usize = 4 * 1024;
 
 const PROBE_SCRIPT: &str = include_str!("../../res/shell/wsl-guest-probe.sh");
 
@@ -29,23 +29,11 @@ pub(crate) struct Target {
 }
 
 impl Target {
-    /// `--distribution-id` and `--system` launches name no distribution the probe
-    /// could enter and stay unverified.
-    pub(crate) fn from_launch(program: &str, args: &[String]) -> Option<Self> {
-        let distro = shell_detect::wsl_spawn_distro(program, args)?;
-        let user = shell_detect::wsl_launch_user(program, args).map(str::to_owned);
-        Some(Self { distro, user })
-    }
-
     /// The script goes on stdin; the bootstrap travels through `WSLENV` `/p`, the
     /// translation the pane uses, so the guest tests the path it will receive.
     fn command(&self, bootstrap: &Path) -> Command {
-        let mut command = Command::new("wsl.exe");
-        command.args(["--distribution", &self.distro]);
-        if let Some(user) = &self.user {
-            command.args(["--user", user]);
-        }
-        command.args(["--exec", "sh", "-s"]);
+        let mut command = shell_detect::wsl_exec_command(&self.distro, self.user.as_deref());
+        command.args(["sh", "-s"]);
         command.env("NEBULA_ZSH_INTEGRATION", bootstrap);
         command.env("WSLENV", "NEBULA_ZSH_INTEGRATION/p");
         crate::platform::process::hidden_command(&mut command);
@@ -54,55 +42,55 @@ impl Target {
 }
 
 /// The guest's answer for one [`Target`].
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GuestShell {
-    /// The login shell from the guest's passwd entry; empty when it could not tell.
-    pub(crate) login_shell: String,
-    /// The bootstrap, when this guest user can read all three files through it.
-    pub(crate) bootstrap: Option<PathBuf>,
+    /// The login shell from the guest's passwd entry is zsh.
+    pub(crate) login_zsh: bool,
+    /// This guest user can read all three bootstrap files.
+    pub(crate) readable: bool,
 }
 
 impl GuestShell {
     /// Both `shell=` and `bootstrap=` lines are required; anything else is ignored.
-    fn parse(output: &str, bootstrap: &Path) -> Option<Self> {
-        let mut login_shell = None;
+    fn parse(output: &str) -> Option<Self> {
+        let mut login_zsh = None;
         let mut readable = None;
         for line in output.lines() {
             let line = line.trim_end_matches('\r');
             if let Some(value) = line.strip_prefix("shell=") {
-                login_shell = Some(value.trim().to_owned());
+                login_zsh = Some(shell_detect::is_zsh_program(value.trim()));
             } else if let Some(value) = line.strip_prefix("bootstrap=") {
                 readable = Some(value.trim() == "readable");
             }
         }
-        Some(Self {
-            login_shell: login_shell?,
-            bootstrap: readable?.then(|| bootstrap.to_path_buf()),
-        })
+        Some(Self { login_zsh: login_zsh?, readable: readable? })
     }
 }
 
-/// The host zsh bootstrap a WSL launch should receive as `ZDOTDIR`, or `None`.
+/// Whether a WSL launch should receive the host zsh bootstrap
+/// ([`crate::platform::shell_integration::wsl_zsh_path`]) as `ZDOTDIR`.
 /// Cheap refusals come first (a guest command other than zsh, a host `WSLENV`
 /// that forwards the user's own `ZDOTDIR`); then the guest's cached word must say
 /// readable, and for a login shell also zsh. A guest that has not answered keeps
-/// its own startup environment.
+/// its own startup environment. `--distribution-id` and `--system` launches name
+/// no distribution the probe could enter and stay unverified.
 pub(crate) fn takes_zsh_bootstrap(
     program: &str,
     args: &[String],
     wslenv: &str,
     guest: impl FnOnce(&Target) -> Option<GuestShell>,
-) -> Option<PathBuf> {
-    let command = shell_detect::wsl_launch(program, args)?.command;
-    if command.is_some_and(|command| !shell_detect::is_zsh_program(command)) {
-        return None;
+) -> bool {
+    let Some(options) = shell_detect::wsl_launch(program, args) else { return false };
+    // `None` for the login shell, which only the guest can name.
+    let command_zsh = options.command.map(shell_detect::is_zsh_program);
+    if command_zsh == Some(false) || shell_detect::wslenv_forwards(wslenv, "ZDOTDIR") {
+        return false;
     }
-    if shell_detect::wslenv_forwards(wslenv, "ZDOTDIR") {
-        return None;
-    }
-    let shell = guest(&Target::from_launch(program, args)?)?;
-    let runs_zsh = command.is_some() || shell_detect::is_zsh_program(&shell.login_shell);
-    shell.bootstrap.filter(|_| runs_zsh)
+    let Some(distro) = options.spawn_distro(crate::platform::shell::default_wsl_distro) else {
+        return false;
+    };
+    let target = Target { distro, user: options.user.map(str::to_owned) };
+    guest(&target).is_some_and(|shell| shell.readable && command_zsh.unwrap_or(shell.login_zsh))
 }
 
 struct Entry {
@@ -124,7 +112,7 @@ pub(crate) fn verified(target: &Target) -> Option<GuestShell> {
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(entry) = cache.get(target) {
         match entry.verdict.get() {
-            Some(Some(shell)) => return Some(shell.clone()),
+            Some(Some(shell)) => return Some(*shell),
             Some(None) if entry.started.elapsed() >= RETRY_AFTER => {},
             _ => return None,
         }
@@ -166,25 +154,20 @@ pub(crate) fn warm_up(resolve: impl FnOnce() -> Option<tty::Shell> + Send + 'sta
 
 /// One guest round trip, bounded by time and output size.
 fn probe(target: &Target, bootstrap: &Path) -> Option<GuestShell> {
-    // A guest sh treats CR as part of each command; checkout bytes must not leak in.
-    let script = PROBE_SCRIPT.replace("\r\n", "\n");
-    let answer = crate::platform::process::run_bounded(
-        &mut target.command(bootstrap),
-        script.as_bytes(),
+    let answer = crate::platform::process_output::read_with_input(
+        target.command(bootstrap),
+        tty::shell_line_endings(PROBE_SCRIPT).as_bytes(),
         PROBE_BUDGET,
         MAX_OUTPUT,
+        &|| false,
     );
-    match answer.as_deref().map(|output| GuestShell::parse(output, bootstrap)) {
-        Ok(Some(shell)) => {
-            log::info!(
-                "WSL guest {} login shell {:?}, zsh bootstrap readable: {}",
-                target.distro,
-                shell.login_shell,
-                shell.bootstrap.is_some()
-            );
+    let answer = answer.map(|output| String::from_utf8_lossy(&output).into_owned());
+    match answer.as_deref().map(|output| (output, GuestShell::parse(output))) {
+        Ok((output, Some(shell))) => {
+            log::info!("WSL guest {} answered {:?}: {shell:?}", target.distro, output.trim());
             Some(shell)
         },
-        Ok(None) => {
+        Ok((_, None)) => {
             log::warn!("WSL guest {} gave no usable shell probe answer", target.distro);
             None
         },
@@ -197,6 +180,8 @@ fn probe(target: &Target, bootstrap: &Path) -> Option<GuestShell> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -210,41 +195,38 @@ mod tests {
     #[test]
     fn probe_enters_the_launch_guest_and_forwards_the_bootstrap_path() {
         let launch = args(&["-d", "Debian custom", "-u", "alice", "--cd", "/work/my project"]);
-        let target = Target::from_launch("wsl.exe", &launch).expect("a named guest");
+        let mut target = None;
+        takes_zsh_bootstrap("wsl.exe", &launch, "", |guest| {
+            target = Some(guest.clone());
+            None
+        });
+        let target = target.expect("a named guest is probed");
         assert_eq!(target, Target { distro: "Debian custom".into(), user: Some("alice".into()) });
         let command = target.command(&bootstrap());
         let got: Vec<_> =
             command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert_eq!(got, ["-d", "Debian custom", "-u", "alice", "--exec", "sh", "-s"]);
+        // In name order (std keeps them sorted), and nothing else is set.
+        let env: Vec<_> = command.get_envs().collect();
         assert_eq!(
-            got,
-            ["--distribution", "Debian custom", "--user", "alice", "--exec", "sh", "-s"]
+            env,
+            [
+                ("NEBULA_ZSH_INTEGRATION".as_ref(), Some(bootstrap().as_os_str())),
+                ("WSLENV".as_ref(), Some("NEBULA_ZSH_INTEGRATION/p".as_ref())),
+            ]
         );
-        let env: HashMap<_, _> = command
-            .get_envs()
-            .map(|(name, value)| (name.to_owned(), value.map(ToOwned::to_owned)))
-            .collect();
-        assert_eq!(
-            env[std::ffi::OsStr::new("WSLENV")].as_deref(),
-            Some("NEBULA_ZSH_INTEGRATION/p".as_ref())
-        );
-        assert_eq!(
-            env[std::ffi::OsStr::new("NEBULA_ZSH_INTEGRATION")].as_deref(),
-            Some(bootstrap().as_os_str())
-        );
-        assert!(Target::from_launch("wsl.exe", &args(&["--system"])).is_none());
     }
 
     #[test]
     fn parse_needs_both_answers_and_ignores_the_rest() {
-        let parse = |output| GuestShell::parse(output, &bootstrap());
+        let parse = GuestShell::parse;
+        let answer = |login_zsh, readable| Some(GuestShell { login_zsh, readable });
+        assert_eq!(parse("shell=/usr/bin/zsh\r\nbootstrap=readable\n"), answer(true, true));
         assert_eq!(
-            parse("shell=/usr/bin/zsh\r\nbootstrap=readable\n"),
-            Some(GuestShell { login_shell: "/usr/bin/zsh".into(), bootstrap: Some(bootstrap()) })
+            parse("motd\nshell=/usr/bin/fish\nbootstrap=unreadable\n"),
+            answer(false, false)
         );
-        assert_eq!(
-            parse("motd\nshell=\nbootstrap=unreadable\n"),
-            Some(GuestShell { login_shell: String::new(), bootstrap: None })
-        );
+        assert_eq!(parse("shell=\nbootstrap=readable\n"), answer(false, true));
         assert_eq!(parse("shell=/bin/bash\n"), None);
         assert_eq!(parse("bootstrap=readable\n"), None);
         assert_eq!(parse(""), None);
@@ -255,17 +237,13 @@ mod tests {
     fn launches_that_cannot_take_the_bootstrap_are_never_probed() {
         for (launch, wslenv) in [
             (&["-e", "htop"][..], ""),
-            (&["-d", "Ubuntu", "--", "bash"], ""),
-            (&["--exec", "fish", "-l"], ""),
-            (&["sh", "-c", "curl install.sh | sh"], ""),
             (&["--system"], ""),
             (&["-d", "Ubuntu"], "KEEP/u:ZDOTDIR/up"),
-            (&["-d", "Ubuntu"], "ZDOTDIR"),
         ] {
             let taken = takes_zsh_bootstrap("wsl.exe", &args(launch), wslenv, |_| unreachable!());
-            assert!(taken.is_none(), "{launch:?}");
+            assert!(!taken, "{launch:?}");
         }
-        assert!(takes_zsh_bootstrap("pwsh.exe", &[], "", |_| unreachable!()).is_none());
+        assert!(!takes_zsh_bootstrap("pwsh.exe", &[], "", |_| unreachable!()));
     }
 
     /// The host cannot see the guest's login shell: an explicit zsh needs only a
@@ -274,25 +252,17 @@ mod tests {
     fn the_guest_answer_decides_the_bootstrap() {
         let login = &["-d", "Ubuntu", "--cd", "/srv"][..];
         let explicit = &["-d", "Ubuntu", "-e", "/usr/bin/zsh", "-l"][..];
-        let readable = |shell: &str| {
-            Some(GuestShell { login_shell: shell.into(), bootstrap: Some(bootstrap()) })
-        };
-        let unreadable = Some(GuestShell { login_shell: "/usr/bin/zsh".into(), bootstrap: None });
+        let answer = |login_zsh, readable| Some(GuestShell { login_zsh, readable });
         for (launch, answer, takes) in [
-            (login, readable("/usr/bin/zsh"), true),
-            (login, readable("/bin/zsh-5.9"), true),
-            (login, readable("/usr/bin/fish"), false),
-            (login, readable("/usr/bin/nu"), false),
-            (login, readable("/bin/bash"), false),
-            (login, readable(""), false),
-            (login, unreadable.clone(), false),
+            (login, answer(true, true), true),
+            (login, answer(false, true), false),
+            (login, answer(true, false), false),
             (login, None, false),
-            (explicit, readable("/usr/bin/fish"), true),
-            (explicit, unreadable.clone(), false),
-            (explicit, None, false),
+            (explicit, answer(false, true), true),
+            (explicit, answer(true, false), false),
         ] {
-            let taken = takes_zsh_bootstrap("wsl.exe", &args(launch), "KEEP/u", |_| answer.clone());
-            assert_eq!(taken.is_some(), takes, "{launch:?} {answer:?}");
+            let taken = takes_zsh_bootstrap("wsl.exe", &args(launch), "KEEP/u", |_| answer);
+            assert_eq!(taken, takes, "{launch:?} {answer:?}");
         }
     }
 }

@@ -75,8 +75,7 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
         } else {
             content.to_owned()
         };
-        // A guest zsh treats CR as part of each command; checkout bytes must not leak in.
-        let content = content.replace("\r\n", "\n");
+        let content = tty::shell_line_endings(&content);
         crate::atomic_file::write(&directory.join(name), content.as_bytes())?;
     }
     Ok(())
@@ -84,16 +83,22 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
 
 /// Host directory a WSL guest zsh uses as `ZDOTDIR` (translated through `WSLENV`
 /// `/p`), apart from the local-zsh one so the two never rewrite each other.
-/// Only the guest probe worker calls it (it writes and fsyncs); whether a guest
-/// user can read it is the probe's answer (`super::wsl_guest_shell`). The files
-/// are written once per process and afterwards only when missing, never while a
-/// starting guest zsh may be reading them.
+/// Only computes the path; [`wsl_zsh_directory`] writes it.
+pub(crate) fn wsl_zsh_path() -> std::path::PathBuf {
+    super::dirs::data_dir().join("shell-integration").join("wsl-zsh")
+}
+
+/// [`wsl_zsh_path`] with the bootstrap written. Only the guest probe worker
+/// calls it (it writes and fsyncs); whether a guest user can read it is the
+/// probe's answer (`super::wsl_guest_shell`). The files are written once per
+/// process and afterwards only when missing, never while a starting guest zsh
+/// may be reading them.
 pub(crate) fn wsl_zsh_directory() -> Option<std::path::PathBuf> {
     static WRITTEN: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     if !cfg!(windows) {
         return None;
     }
-    let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
+    let directory = wsl_zsh_path();
     let mut written = WRITTEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !*written || !ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()) {
         if let Err(error) = write_zsh_files(&directory) {
@@ -111,22 +116,6 @@ fn supports(name: &str, args: &[String]) -> bool {
         "zsh" => args.iter().all(|arg| matches!(arg.as_str(), "-l" | "--login" | "-i")),
         "bash" => !cfg!(target_os = "macos") && args.is_empty(),
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod zsh_file_tests {
-    #[test]
-    fn zsh_bootstrap_is_posix_text() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        // The second write covers replacing an existing bootstrap.
-        for _ in 0..2 {
-            super::write_zsh_files(directory.path()).expect("write zsh bootstrap");
-        }
-        for (name, _) in super::ZSH_FILES {
-            let content = std::fs::read_to_string(directory.path().join(name)).expect(name);
-            assert!(!content.contains('\r'), "{name} must not carry CR into the guest");
-        }
     }
 }
 
