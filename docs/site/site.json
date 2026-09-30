@@ -370,7 +370,7 @@
           "sources": [
             "nebula_app/src/ai_hook/integrations.rs",
             "nebula_app/src/gpui_shell/settings_pane/agents.rs",
-            "nebula_app/src/ai_hook/win/settings.rs"
+            "nebula_app/src/ai_hook/local/settings.rs"
           ]
         },
         {
