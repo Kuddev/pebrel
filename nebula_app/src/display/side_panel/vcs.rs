@@ -831,7 +831,7 @@ pub(crate) fn read_git(root: &Path) -> Option<GitInfo> {
 pub(crate) fn read_git_wsl(located: &crate::shell_detect::WslCwd) -> Option<GitInfo> {
     let location = format!("{}:{}", located.distro, located.guest);
     collect_git_info(|args| {
-        let mut cmd = crate::shell_detect::wsl_exec_command(&located.distro);
+        let mut cmd = crate::shell_detect::wsl_exec_command(&located.distro, None);
         cmd.args(["git", "-C", &located.guest, "--no-optional-locks"]).args(args);
         run_git(cmd, args, &location, Some(WSL_COMMAND_TIMEOUT))
     })
