@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nebula_completions::Suggestion;
-use nebula_completions::command_context::{GitSwitchContext, ShellSyntax};
+use nebula_completions::semantic::{Context, Source};
 
 use crate::runtime_exec::PaneExecContext;
 
@@ -33,19 +33,19 @@ impl Cache {
     }
 }
 
-/// `Some(empty)` is a recognized branch position with no safe candidate, so path
-/// and unrelated history providers must not fill it with a different argument type.
+/// The application has already proven a branch argument and its execution scope.
 pub(crate) fn complete(
     cache: &Cache,
     execution: &PaneExecContext,
     cwd: &str,
-    line: &str,
-    syntax: ShellSyntax,
+    context: &Context,
     cancelled: &dyn Fn() -> bool,
-) -> Option<Vec<Suggestion>> {
-    let context = GitSwitchContext::parse(line, line.len(), syntax)?;
+) -> Vec<Suggestion> {
+    let Source::Branches { include_busy } = context.source else {
+        return Vec::new();
+    };
     if cwd.is_empty() || execution.wsl_distribution().is_some() || cancelled() {
-        return Some(Vec::new());
+        return Vec::new();
     }
     let key = format!("{cwd}\0{:?}", context.directories);
     let (generation, cached) = {
@@ -111,20 +111,19 @@ pub(crate) fn complete(
         }
         branches
     });
-    let mut candidates: Vec<_> = branches
-        .iter()
-        .take_while(|_| !cancelled())
-        .filter(|branch| context.include_busy || !branch.busy)
-        .filter_map(|branch| context.candidate(&branch.name))
-        .collect();
-    candidates.sort_by(|a, b| a.value.len().cmp(&b.value.len()).then(a.value.cmp(&b.value)));
-    candidates.truncate(256);
-    Some(candidates)
+    context.candidates(
+        branches
+            .iter()
+            .take_while(|_| !cancelled())
+            .filter(|branch| include_busy || !branch.busy)
+            .map(|branch| branch.name.as_str()),
+    )
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use nebula_completions::command_context::ShellSyntax;
 
     pub(crate) fn git(cwd: &std::path::Path, args: &[&str]) {
         let mut command = std::process::Command::new("git");
@@ -171,8 +170,10 @@ pub(crate) mod tests {
         let execution = PaneExecContext::from_pty_options(&options);
         let cache = Cache::default();
         git(repository.path(), &["pack-refs", "--all"]);
-        let query =
-            |line| complete(&cache, &execution, cwd, line, ShellSyntax::Posix, &|| false).unwrap();
+        let query = |line: &str| {
+            let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
+            complete(&cache, &execution, cwd, &context, &|| false)
+        };
         assert_eq!(query("git switch fe").len(), 2);
         git(repository.path(), &["branch", "feature/beta"]);
         assert_eq!(query("git switch fe").len(), 2, "prefix matching reuses the snapshot");
@@ -191,9 +192,14 @@ pub(crate) mod tests {
             "never fall back to the wrong repository"
         );
         assert!(
-            complete(&cache, &execution, cwd, "git switch fe", ShellSyntax::Posix, &|| true)
-                .unwrap()
-                .is_empty()
+            complete(
+                &cache,
+                &execution,
+                cwd,
+                &Context::parse("git switch fe", 13, ShellSyntax::Posix).unwrap(),
+                &|| true
+            )
+            .is_empty()
         );
     }
 }

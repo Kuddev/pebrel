@@ -16,6 +16,7 @@ pub mod completer;
 pub mod file;
 pub mod matcher;
 pub mod options;
+pub mod semantic;
 pub mod span;
 pub mod suggestion;
 

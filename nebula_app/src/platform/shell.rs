@@ -136,6 +136,12 @@ pub(crate) fn default_wsl_distro() -> Option<String> {
     }
 }
 
+/// Windows invokes the native npm launcher instead of depending on PowerShell script policy.
+#[cfg(test)]
+pub(crate) fn completion_qa_package_manager() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
+}
+
 /// Isolated native-shell fixture for completion acceptance on every desktop host.
 #[cfg(test)]
 pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal::tty::Shell {

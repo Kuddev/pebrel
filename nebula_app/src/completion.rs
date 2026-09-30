@@ -10,6 +10,10 @@ use crate::display::suggest_engine::{self, HistorySource, Input, SuggestSources}
 use crate::display::{CompletionStyle, SuggestEnv};
 use crate::nebula_history::{HistoryScope, NebulaHistory};
 use crate::runtime_exec::PaneExecContext;
+use nebula_completions::command_context::ShellSyntax;
+use nebula_completions::semantic::{Context as SemanticContext, Source};
+
+mod project_scripts;
 
 pub(crate) use suggest_engine::Candidates;
 
@@ -46,11 +50,13 @@ impl Cancellation {
 #[derive(Debug, Default)]
 pub(crate) struct Session {
     git: Arc<crate::git_completion::Cache>,
+    scripts: Arc<project_scripts::Cache>,
 }
 
 impl Session {
     pub(crate) fn invalidate(&self) {
         self.git.invalidate();
+        self.scripts.invalidate();
     }
 
     pub(crate) fn request(
@@ -61,15 +67,30 @@ impl Session {
         style: CompletionStyle,
         execution: Option<&PaneExecContext>,
     ) -> Request {
-        // 普通按键不复制启动环境；远端输入也不能获得宿主 Git 查询能力。
-        let git = if env.is_this_machine()
-            && matches!(line.split_whitespace().next(), Some("git" | "git.exe"))
+        let local =
+            env.is_this_machine() && execution.is_none_or(|e| e.wsl_distribution().is_none());
+        // 方言是输入事实；远端/嵌套 shell 未证明方言时只接受通用字面量。
+        let syntax = if local {
+            execution
+                .and_then(PaneExecContext::shell_program)
+                .map(ShellSyntax::for_program)
+                .unwrap_or_else(|| {
+                    ShellSyntax::for_program(&crate::platform::shell::default_shell_id())
+                })
+        } else {
+            ShellSyntax::Literal
+        };
+        let semantic = SemanticContext::parse(&line, line.len(), syntax);
+        // 只有需要本机 Git I/O 的请求才复制启动环境。
+        let git = if local
+            && semantic.as_ref().is_some_and(|c| matches!(c.source, Source::Branches { .. }))
         {
             execution.cloned().map(|execution| (self.git.clone(), execution))
         } else {
             None
         };
-        Request { cwd, env, line, style, git }
+        let scripts = local.then(|| self.scripts.clone());
+        Request { cwd, env, line, style, git, semantic, scripts }
     }
 }
 
@@ -80,6 +101,8 @@ pub(crate) struct Request {
     line: String,
     style: CompletionStyle,
     git: Option<(Arc<crate::git_completion::Cache>, PaneExecContext)>,
+    semantic: Option<SemanticContext>,
+    scripts: Option<Arc<project_scripts::Cache>>,
 }
 
 impl Request {
@@ -87,25 +110,47 @@ impl Request {
         if cancellation.is_cancelled() {
             return Candidates::default();
         }
-        let semantic = self.git.and_then(|(cache, execution)| {
-            use nebula_completions::command_context::ShellSyntax;
-            let syntax = match execution.shell_program() {
-                Some(program) => ShellSyntax::for_program(program),
-                None => ShellSyntax::for_program(&crate::platform::shell::default_shell_id()),
-            };
-            crate::git_completion::complete(
-                &cache,
-                &execution,
-                &self.cwd,
-                &self.line,
-                syntax,
-                &|| cancellation.is_cancelled(),
-            )
+        let semantic = self.semantic.as_ref().map(|context| match context.source {
+            Source::Words(_) | Source::Options => context.static_candidates(),
+            Source::Branches { .. } => {
+                self.git.as_ref().map_or_else(Vec::new, |(cache, execution)| {
+                    crate::git_completion::complete(cache, execution, &self.cwd, context, &|| {
+                        cancellation.is_cancelled()
+                    })
+                })
+            },
+            Source::ProjectScripts => self.scripts.as_ref().map_or_else(Vec::new, |cache| {
+                cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
+            }),
+            Source::None => Vec::new(),
         });
         if cancellation.is_cancelled() {
             return Candidates::default();
         }
-        if let Some(candidates) = semantic {
+        if let Some(mut candidates) = semantic {
+            // 历史只给仍然有效的语义候选提权，不能复活已删除的分支/脚本。
+            if !candidates.is_empty() {
+                let recent = shared()
+                    .history
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .hint_with_cancel(&self.env.history_scope(), &self.line, &|| {
+                        cancellation.is_cancelled()
+                    })
+                    .map(|suffix| format!("{}{suffix}", self.line));
+                if let Some(recent) = recent {
+                    if let Some(index) = candidates.iter().position(|candidate| {
+                        self.line.get(..candidate.span.start).is_some_and(|head| {
+                            recent.strip_prefix(head) == Some(candidate.value.as_str())
+                        })
+                    }) {
+                        candidates[..=index].rotate_right(1);
+                    }
+                }
+            }
+            if cancellation.is_cancelled() {
+                return Candidates::default();
+            }
             return suggest_engine::semantic_candidates(&self.line, self.style, candidates);
         }
         let sources = shared();
@@ -214,5 +259,84 @@ mod tests {
         ] {
             assert!(query(env).completion_items.is_empty());
         }
+    }
+
+    #[test]
+    fn semantic_requests_share_modes_and_never_read_a_foreign_project() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("package.json"),
+            r#"{"scripts":{"build:中文":"echo ok"}}"#,
+        )
+        .unwrap();
+        let session = Session::default();
+        let query = |env, line: &str, style| {
+            session
+                .request(directory.path().to_str().unwrap().into(), env, line.into(), style, None)
+                .calculate(&Cancellation::default())
+        };
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+            for (line, insert) in
+                [("npm run build:中", "文"), ("git sw", "itch"), ("git rebase --empty=k", "eep")]
+            {
+                let result = query(SuggestEnv::Local, line, style);
+                if style == CompletionStyle::Popup {
+                    assert_eq!(result.completion_items[0].insert, insert);
+                } else {
+                    assert_eq!(result.suggestion, insert);
+                }
+            }
+        }
+        for env in [
+            SuggestEnv::Wsl { distro: "semantic-isolation".into() },
+            SuggestEnv::Ssh { destination: "semantic-isolation.invalid".into() },
+            SuggestEnv::Shell { scope: HistoryScope::Ssh("nested-semantic.invalid".into()) },
+        ] {
+            assert!(
+                query(env.clone(), "npm run bu", CompletionStyle::Popup)
+                    .completion_items
+                    .is_empty()
+            );
+            assert_eq!(
+                query(env, "git sw", CompletionStyle::Popup).completion_items[0].insert,
+                "itch"
+            );
+        }
+        assert!(
+            query(SuggestEnv::Local, "git switch -c ", CompletionStyle::Popup)
+                .completion_items
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn semantic_history_only_promotes_candidates_in_the_current_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory.path().to_str().unwrap();
+        let manifest = directory.path().join("package.json");
+        std::fs::write(
+            &manifest,
+            r#"{"scripts":{"semantic-rank-a":"echo a","semantic-rank-z":"echo z"}}"#,
+        )
+        .unwrap();
+        let session = Session::default();
+        record_command(&HistoryScope::Local, "npm run semantic-rank-z", cwd);
+        let query = || {
+            session
+                .request(
+                    cwd.into(),
+                    SuggestEnv::Local,
+                    "npm run semantic-rank-".into(),
+                    CompletionStyle::Popup,
+                    None,
+                )
+                .calculate(&Cancellation::default())
+        };
+        assert_eq!(query().completion_items[0].insert, "z");
+        std::fs::write(&manifest, r#"{"scripts":{"semantic-rank-a":"echo a"}}"#).unwrap();
+        session.invalidate();
+        let result = query();
+        assert_eq!(result.completion_items.len(), 1);
+        assert_eq!(result.completion_items[0].insert, "a");
     }
 }

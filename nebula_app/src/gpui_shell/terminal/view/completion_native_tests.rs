@@ -40,7 +40,7 @@ async fn wait_for(
 }
 
 #[test]
-#[ignore = "requires a native desktop and fresh isolated PEBREL_COMPLETION_QA_DIR/config"]
+#[ignore = "requires a native desktop, Node/npm, and fresh isolated PEBREL_COMPLETION_QA_DIR/config"]
 fn git_completion_native_shell_end_to_end() {
     let output = PathBuf::from(std::env::var_os("PEBREL_COMPLETION_QA_DIR").expect("QA directory"));
     assert!(output.is_absolute());
@@ -50,9 +50,27 @@ fn git_completion_native_shell_end_to_end() {
     );
     assert!(!output.join("result.json").exists(), "use a fresh QA directory");
     let repository = crate::git_completion::tests::repository();
-    for branch in ["qa/inline", "qa/popup", "qa/hybrid", "qa/right"] {
+    for branch in
+        ["qa/inline", "qa/popup", "qa/hybrid", "qa/right", "qa/subcommand", "qa/option", "qa/value"]
+    {
         crate::git_completion::tests::git(repository.path(), &["branch", branch]);
     }
+    let scripts: serde_json::Map<_, _> = ["inline", "popup", "hybrid", "right"]
+        .into_iter()
+        .map(|mode| {
+            (
+                format!("qa:{mode}"),
+                serde_json::Value::String(format!(
+                    "node -e \"require('fs').writeFileSync('.qa-{mode}', 'executed')\""
+                )),
+            )
+        })
+        .collect();
+    std::fs::write(
+        repository.path().join("package.json"),
+        serde_json::to_vec(&serde_json::json!({"scripts": scripts})).unwrap(),
+    )
+    .unwrap();
     let shell = crate::platform::shell::completion_qa_shell(&output);
     let result = Arc::new(Mutex::new(None));
     let after = result.clone();
@@ -85,19 +103,29 @@ fn git_completion_native_shell_end_to_end() {
                 let mut previous = "main";
                 // Every case starts from a real prompt, types through EntityInputHandler,
                 // paints candidates, accepts through the keyboard handler, then executes.
-                for (mode, prefix, expected, branch, right) in [
-                    (crate::display::CompletionStyle::Inline, "git switch qa/in", "git switch qa/inline", "qa/inline", false),
-                    (crate::display::CompletionStyle::Popup, "git switch \"qa/po\"", "git switch \"qa/popup\"", "qa/popup", false),
-                    (crate::display::CompletionStyle::Hybrid, "git switch \"qa/hy", "git switch \"qa/hybrid\"", "qa/hybrid", false),
-                    (crate::display::CompletionStyle::Hybrid, "git switch qa/ri", "git switch qa/right", "qa/right", true),
+                for (mode, prefix, expected, suffix, branch, marker, right) in [
+                    (crate::display::CompletionStyle::Inline, "git switch qa/in", "git switch qa/inline", "", Some("qa/inline"), None, false),
+                    (crate::display::CompletionStyle::Popup, "git switch \"qa/po\"", "git switch \"qa/popup\"", "", Some("qa/popup"), None, false),
+                    (crate::display::CompletionStyle::Hybrid, "git switch \"qa/hy", "git switch \"qa/hybrid\"", "", Some("qa/hybrid"), None, false),
+                    (crate::display::CompletionStyle::Hybrid, "git switch qa/ri", "git switch qa/right", "", Some("qa/right"), None, true),
+                    (crate::display::CompletionStyle::Inline, "git sw", "git switch", " qa/subcommand", Some("qa/subcommand"), None, false),
+                    (crate::display::CompletionStyle::Popup, "git switch --qui", "git switch --quiet", " qa/option", Some("qa/option"), None, false),
+                    (crate::display::CompletionStyle::Hybrid, "git switch --conflict zd", "git switch --conflict zdiff3", " qa/value", Some("qa/value"), None, true),
+                    (crate::display::CompletionStyle::Inline, "npm run qa:in", "npm run qa:inline", "", None, Some(".qa-inline"), false),
+                    (crate::display::CompletionStyle::Popup, "npm run \"qa:po\"", "npm run \"qa:popup\"", "", None, Some(".qa-popup"), false),
+                    (crate::display::CompletionStyle::Hybrid, "npm run \"qa:hy", "npm run \"qa:hybrid\"", "", None, Some(".qa-hybrid"), false),
+                    (crate::display::CompletionStyle::Hybrid, "npm run qa:ri", "npm run qa:right", "", None, Some(".qa-right"), true),
                 ] {
+                    let launcher = format!("{} ", crate::platform::shell::completion_qa_package_manager());
+                    let prefix = prefix.replacen("npm ", &launcher, 1);
+                    let expected = expected.replacen("npm ", &launcher, 1);
                     wait_for(cx, window.into(), &terminal, |view| view.session.as_ref().is_some_and(|session| {
                         let term = session.term.lock();
                         crate::display::nebula_prompt_line_from_raw_grid(&term, term.grid().cursor.point, &view.suggest.line_buf, &view.suggest.suggest_env).is_some_and(|line| line.input.trim().is_empty())
                     })).await?;
                     cx.update_window(window.into(), |_, window, cx| terminal.update(cx, |view, cx| {
                         view.completion_style = mode;
-                        view.replace_text_in_range(None, prefix, window, cx);
+                        view.replace_text_in_range(None, &prefix, window, cx);
                     })).map_err(|error| error.to_string())?;
                     let start = std::time::Instant::now();
                     wait_for(cx, window.into(), &terminal, |view| if mode == crate::display::CompletionStyle::Popup { !view.suggest.completion_items.is_empty() } else { !view.suggest.suggestion.is_empty() }).await?;
@@ -122,12 +150,26 @@ fn git_completion_native_shell_end_to_end() {
                     if head.trim() != format!("ref: refs/heads/{previous}") {
                         return Err("accepting completion executed the command".to_owned());
                     }
+                    if marker.is_some_and(|name| repository.path().join(name).exists()) {
+                        return Err("accepting script completion executed project code".to_owned());
+                    }
+                    if !suffix.is_empty() {
+                        cx.update_window(window.into(), |_, window, cx| terminal.update(cx, |view, cx| {
+                            view.replace_text_in_range(None, suffix, window, cx);
+                        })).map_err(|error| error.to_string())?;
+                        wait_for(cx, window.into(), &terminal, |view| view.suggest.screen_line.trim() == format!("{expected}{suffix}")).await?;
+                    }
                     cx.update_window(window.into(), |_, window, cx| terminal.update(cx, |view, cx| {
                         view.on_key_down(&KeyDownEvent { keystroke: gpui::Keystroke::parse("enter").unwrap(), is_held: false, prefer_character_input: false }, window, cx);
                     })).map_err(|error| error.to_string())?;
-                    wait_for(cx, window.into(), &terminal, |_| std::fs::read_to_string(repository.path().join(".git/HEAD")).is_ok_and(|head| head.trim() == format!("ref: refs/heads/{branch}"))).await?;
-                    previous = branch;
-                    reports.push(serde_json::json!({"mode": format!("{mode:?}"), "input": prefix, "accepted": expected, "branch": branch, "candidate_ms": candidate_ms, "right": right}));
+                    if let Some(branch) = branch {
+                        wait_for(cx, window.into(), &terminal, |_| std::fs::read_to_string(repository.path().join(".git/HEAD")).is_ok_and(|head| head.trim() == format!("ref: refs/heads/{branch}"))).await?;
+                        previous = branch;
+                    }
+                    if let Some(marker) = marker {
+                        wait_for(cx, window.into(), &terminal, |_| std::fs::read_to_string(repository.path().join(marker)).is_ok_and(|text| text == "executed")).await?;
+                    }
+                    reports.push(serde_json::json!({"mode": format!("{mode:?}"), "input": prefix, "accepted": expected, "branch": branch, "script_marker": marker, "candidate_ms": candidate_ms, "right": right}));
                 }
                 Ok::<_, String>(reports)
             }.await;
