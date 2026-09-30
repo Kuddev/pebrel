@@ -119,9 +119,11 @@ initial directory. `wsl.exe` must keep launching the guest login shell; adding
 - **Limits.** Only Ubuntu's `skip_global_compinit` contract is repeated. A guest
   `/etc/zsh/zshenv` that assigns `ZDOTDIR` unconditionally makes the
   integration inert; one that assigns it when unset reads user files from `$HOME`.
-- **Stale verdict.** `chsh`, a changed mount or a bootstrap file deleted after
-  the probe is seen by the next Pebrel process; a failed write or probe logs one
-  warning and is retried after five minutes.
+- **Stale verdict.** `chsh` or a changed mount is seen by the next Pebrel
+  process. A bootstrap deleted after the probe is not noticed either: later zsh
+  panes of that guest skip the user's startup files until Pebrel restarts (the
+  spawn no longer stats the files on the UI thread). A failed write or probe
+  logs one warning and is retried after five minutes.
 
 ## Validation
 
