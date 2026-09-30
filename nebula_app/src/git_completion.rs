@@ -8,17 +8,28 @@ use nebula_completions::semantic::{Context, Source};
 
 use crate::runtime_exec::PaneExecContext;
 
+mod tracking;
+
 #[derive(Clone, Debug)]
 struct Reference {
     full_name: String,
     short_name: String,
     busy: bool,
+    commit: bool,
+    symbolic: bool,
+}
+
+#[derive(Debug, Default)]
+struct Repository {
+    references: Vec<Reference>,
+    guesses: Vec<String>,
+    guess_enabled: bool,
 }
 
 #[derive(Debug)]
 struct Snapshot {
     key: String,
-    references: Arc<[Reference]>,
+    repository: Arc<Repository>,
     fetched: Instant,
 }
 
@@ -63,101 +74,137 @@ pub(crate) fn complete(
                 .filter(|snapshot| {
                     snapshot.key == key && snapshot.fetched.elapsed() < Duration::from_secs(2)
                 })
-                .map(|snapshot| snapshot.references.clone()),
+                .map(|snapshot| snapshot.repository.clone()),
         )
     };
-    let references = cached.unwrap_or_else(|| {
-        let queried = (|| {
-            // 让 Git 处理引用重名，避免用户关闭歧义警告后生成指向错误对象的短名。
-            let mut argv = ["git", "-c", "core.warnAmbiguousRefs=true"].map(str::to_owned).to_vec();
-            for directory in &context.directories {
-                argv.extend(["-C".to_owned(), directory.clone()]);
-            }
-            // 一次快照供分支和修订参数复用；*objecttype 会剥离嵌套的附注标签。
-            argv.extend(
-                [
-                    "for-each-ref",
-                    "--format=%(refname)%00%(refname:short)%00%(symref)%00%(worktreepath)%00%(objecttype)%00%(*objecttype)",
-                    "refs/heads/", "refs/remotes/", "refs/tags/",
-                ].map(str::to_owned),
-            );
-            let (mut command, _) =
-                crate::runtime_exec::build_command(execution, cwd, &argv).ok()?;
-            command
-                .env("GIT_OPTIONAL_LOCKS", "0")
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .env("GIT_NO_LAZY_FETCH", "1")
-                // 较旧 Git 不认识 NO_LAZY_FETCH；空协议白名单也禁止按需拉取访问远端。
-                .env("GIT_ALLOW_PROTOCOL", "");
-            let bytes = crate::platform::process_output::read_cancellable(
-                command,
-                // CI 的真实 Windows 查询曾超过 750 ms；后台清理上限不能当作按键延迟预算。
-                // 输入变化仍由取消信号终止旧进程，正常查询完成后立即返回。
-                Duration::from_secs(3),
-                1024 * 1024,
-                cancelled,
-            )
-            .inspect_err(|error| {
-                log::debug!("Local Git completion query failed: {error}");
-                #[cfg(test)]
-                eprintln!("Local Git completion query failed: {error}");
-            })
-            .ok()?;
-            let text = std::str::from_utf8(&bytes).ok()?;
-            let references: Arc<[Reference]> = text
-                .lines()
-                .filter_map(|line| {
-                    let mut fields = line.split('\0');
-                    let [Some(full_name), Some(short_name), Some(symref), Some(worktree), Some(object_type), Some(peeled_type)] =
-                        std::array::from_fn(|_| fields.next())
-                    else {
-                        return None;
-                    };
-                    if fields.next().is_some() || short_name.is_empty()
-                        || full_name.chars().chain(short_name.chars()).any(char::is_control)
-                        || object_type != "commit" && peeled_type != "commit"
-                        || full_name.starts_with("refs/remotes/") && !symref.is_empty()
-                    {
-                        return None;
-                    }
-                    Some(Reference {
-                        full_name: full_name.to_owned(),
-                        short_name: short_name.to_owned(),
-                        busy: !worktree.is_empty(),
-                    })
-                })
-                .collect();
-            Some(references)
-        })();
-        let references = queried.unwrap_or_else(|| Arc::from([]));
+    let repository = cached.unwrap_or_else(|| {
+        let repository = Arc::new(query(execution, cwd, context, cancelled).unwrap_or_default());
         let mut state = cache.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // 提交命令可能已使快照失效，较早请求不能把旧仓库状态重新放回缓存。
         if !cancelled() && state.0 == generation {
-            state.1 = Some(Snapshot { key, references: references.clone(), fetched: Instant::now() });
+            state.1 =
+                Some(Snapshot { key, repository: repository.clone(), fetched: Instant::now() });
         }
-        references
+        repository
     });
-    context.candidates(
-        references
-            .iter()
-            .take_while(|_| !cancelled())
-            .filter(|reference| include_busy || !reference.busy)
-            .filter_map(|reference| {
-                let branch = reference.full_name.strip_prefix("refs/heads/");
-                if branches_only {
-                    branch
-                } else if context.value_prefix().starts_with("refs/") {
-                    Some(reference.full_name.as_str())
-                } else if branch.is_some()
-                    && matches!(context.source, Source::RevisionsAndPaths { .. })
-                {
-                    // 默认 checkout/switch 要保留分支语义；heads/name 会使 checkout 分离 HEAD。
-                    branch
-                } else {
-                    Some(reference.short_name.as_str())
-                }
-            }),
-    )
+    let references = repository
+        .references
+        .iter()
+        .filter(|r| r.commit && !r.symbolic && (include_busy || !r.busy))
+        .filter_map(|reference| {
+            let branch = reference.full_name.strip_prefix("refs/heads/");
+            if branches_only {
+                branch
+            } else if context.value_prefix().starts_with("refs/") {
+                Some(reference.full_name.as_str())
+            } else if branch.is_some() && matches!(context.source, Source::RevisionsAndPaths { .. })
+            {
+                // 默认 checkout 要保留分支语义；heads/name 会使 checkout 分离 HEAD。
+                branch
+            } else {
+                Some(reference.short_name.as_str())
+            }
+        });
+    let guess = context.guesses_branches(repository.guess_enabled);
+    let mut directory = std::path::PathBuf::from(cwd);
+    for change in &context.directories {
+        if !change.is_empty() {
+            directory.push(change);
+        }
+    }
+    let guesses = repository.guesses.iter().filter(|_| guess).map(String::as_str);
+    let mut candidates = context.candidates(references.chain(guesses).take_while(|_| !cancelled()));
+    if matches!(context.source, Source::RevisionsAndPaths { .. }) {
+        // 先匹配再检查文件重名：磁盘探测最多覆盖本次返回的 256 个候选。
+        candidates.retain(|candidate| {
+            !cancelled() && (repository.guesses.binary_search_by(|name| name.as_str().cmp(candidate.display_value())).is_err()
+                || matches!(std::fs::symlink_metadata(directory.join(candidate.display_value())), Err(error) if error.kind() == std::io::ErrorKind::NotFound))
+        });
+    }
+    if cancelled() { Vec::new() } else { candidates }
+}
+
+fn query(
+    execution: &PaneExecContext,
+    cwd: &str,
+    context: &Context,
+    cancelled: &dyn Fn() -> bool,
+) -> Option<Repository> {
+    // 两次元数据读取共用总预算；缓存命中及逐字筛选不再启动子进程。
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let stopped = || cancelled() || Instant::now() >= deadline;
+    let mut remaining = 1024 * 1024;
+    let mut read = |args: &[&str]| {
+        if stopped() {
+            return None;
+        }
+        let mut argv =
+            ["git", "-c", "core.warnAmbiguousRefs=true", "-c", "completion.snapshot=true"]
+                .map(str::to_owned)
+                .to_vec();
+        for directory in &context.directories {
+            argv.extend(["-C".to_owned(), directory.clone()]);
+        }
+        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let (mut command, _) = crate::runtime_exec::build_command(execution, cwd, &argv).ok()?;
+        command.env("GIT_OPTIONAL_LOCKS", "0").env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_NO_LAZY_FETCH", "1")
+            // 较旧 Git 不认识 NO_LAZY_FETCH；空协议白名单也禁止按需拉取访问远端。
+            .env("GIT_ALLOW_PROTOCOL", "");
+        let bytes = crate::platform::process_output::read_cancellable(
+            command,
+            deadline.saturating_duration_since(Instant::now()),
+            remaining,
+            &stopped,
+        )
+        .inspect_err(|error| log::debug!("Local Git completion query failed: {error}"))
+        .ok()?;
+        remaining -= bytes.len();
+        String::from_utf8(bytes).ok()
+    };
+    // 哨兵保证无相关配置也是成功的空结果；只读取所需键，不收集 URL、凭据等配置。
+    let config = tracking::Config::parse(&read(&[
+        "config",
+        "--null",
+        "--get-regexp",
+        "^(checkout\\.(guess|defaultremote)|remote\\..*\\.fetch|completion\\.snapshot)$",
+    ])?);
+    let text = read(&[
+        "for-each-ref",
+        "--format=%(refname)%00%(refname:short)%00%(symref)%00%(worktreepath)%00%(objecttype)%00%(*objecttype)",
+    ])?;
+    let references: Vec<_> = text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\0');
+            let [
+                Some(full_name),
+                Some(short_name),
+                Some(symref),
+                Some(worktree),
+                Some(object_type),
+                Some(peeled_type),
+            ] = std::array::from_fn(|_| fields.next())
+            else {
+                return None;
+            };
+            if fields.next().is_some()
+                || short_name.is_empty()
+                || full_name.chars().chain(short_name.chars()).any(char::is_control)
+            {
+                return None;
+            }
+            Some(Reference {
+                full_name: full_name.to_owned(),
+                short_name: short_name.to_owned(),
+                busy: !worktree.is_empty(),
+                commit: object_type == "commit" || peeled_type == "commit",
+                symbolic: !symref.is_empty(),
+            })
+        })
+        .collect();
+    let guesses = config.guesses(&references, &stopped);
+    (!stopped()).then_some(Repository { references, guesses, guess_enabled: config.guess })
 }
 
 #[cfg(test)]
@@ -166,6 +213,10 @@ pub(crate) mod tests {
     use nebula_completions::command_context::ShellSyntax;
 
     pub(crate) fn git(cwd: &std::path::Path, args: &[&str]) {
+        git_output(cwd, args);
+    }
+
+    pub(crate) fn git_output(cwd: &std::path::Path, args: &[&str]) -> String {
         let mut command = std::process::Command::new("git");
         command.current_dir(cwd).args(args);
         let output = crate::platform::process::hidden_command(&mut command).output().unwrap();
@@ -174,6 +225,7 @@ pub(crate) mod tests {
             "git {args:?}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        String::from_utf8(output.stdout).unwrap()
     }
 
     pub(crate) fn repository() -> tempfile::TempDir {
@@ -197,6 +249,124 @@ pub(crate) mod tests {
         git(directory.path(), &["branch", "feature/中文"]);
         git(directory.path(), &["branch", "feature/alpha"]);
         directory
+    }
+
+    #[test]
+    fn real_remote_guesses_follow_configuration_and_refspecs() {
+        let repository = repository();
+        let cwd = repository.path().to_str().unwrap();
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            working_directory: Some(repository.path().to_owned()),
+            ..Default::default()
+        });
+        let cache = Cache::default();
+        let values = |line: &str| {
+            let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
+            complete(&cache, &execution, cwd, &context, &|| false)
+                .into_iter()
+                .map(|s| s.value)
+                .collect::<Vec<_>>()
+        };
+        for remote in ["origin", "upstream"] {
+            git(
+                repository.path(),
+                &["remote", "add", remote, "https://example.invalid/completion"],
+            );
+        }
+        for name in [
+            "origin/discover/one",
+            "origin/discover/中文",
+            "origin/shared/topic",
+            "upstream/shared/topic",
+            "unknown/phantom",
+            "origin/tag-shadow",
+            "origin/excluded",
+        ] {
+            git(repository.path(), &["update-ref", &format!("refs/remotes/{name}"), "HEAD"]);
+        }
+        git(repository.path(), &["tag", "tag-shadow", "HEAD^{tree}"]);
+        git(repository.path(), &["config", "--add", "remote.origin.fetch", "^refs/heads/excluded"]);
+        assert_eq!(values("git switch discover/o"), ["discover/one"]);
+        assert_eq!(values("git switch discover/中"), ["discover/中文"]);
+        assert!(values("git switch shared/").is_empty());
+        assert!(values("git switch phantom").is_empty());
+        assert!(values("git switch tag-shadow").is_empty());
+        assert!(values("git switch excluded").is_empty());
+        assert!(values("git switch --no-track discover/").is_empty());
+        assert!(values("git switch --no-guess discover/").is_empty());
+        git(repository.path(), &["config", "checkout.defaultRemote", "upstream"]);
+        cache.invalidate();
+        assert_eq!(values("git switch shared/"), ["shared/topic"]);
+        // 执行补出的命令并核对 upstream，不能仅凭候选文本认定推断正确。
+        git(repository.path(), &["switch", "shared/topic"]);
+        let upstream =
+            git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"]);
+        assert_eq!(upstream.trim(), "refs/remotes/upstream/shared/topic");
+        git(repository.path(), &["switch", "main"]);
+        git(repository.path(), &["config", "checkout.guess", "false"]);
+        cache.invalidate();
+        assert!(values("git switch discover/").is_empty());
+        assert_eq!(values("git switch --guess discover/o"), ["discover/one"]);
+        git(repository.path(), &["config", "checkout.guess", "true"]);
+        cache.invalidate();
+        assert_eq!(values("git checkout discover/o"), ["discover/one", "origin/discover/one"]);
+        std::fs::create_dir(repository.path().join("discover")).unwrap();
+        std::fs::write(repository.path().join("discover/one"), "path collision").unwrap();
+        assert_eq!(values("git checkout discover/o"), ["origin/discover/one"]);
+        assert_eq!(values("git switch discover/o"), ["discover/one"]);
+
+        git(repository.path(), &["remote", "add", "custom", "https://example.invalid/custom"]);
+        git(
+            repository.path(),
+            &["config", "remote.custom.fetch", "+refs/heads/custom/*:refs/vendor/pre-*-post"],
+        );
+        git(repository.path(), &["update-ref", "refs/vendor/pre-中文-post", "HEAD"]);
+        git(
+            repository.path(),
+            &["config", "--add", "remote.custom.fetch", "refs/heads/exact:refs/vendor/single"],
+        );
+        git(repository.path(), &["update-ref", "refs/vendor/single", "HEAD"]);
+        git(
+            repository.path(),
+            &["config", "--add", "remote.custom.fetch", "refs/heads/ordered:refs/vendor/missing"],
+        );
+        git(
+            repository.path(),
+            &["config", "--add", "remote.custom.fetch", "refs/heads/ordered:refs/vendor/present"],
+        );
+        git(repository.path(), &["update-ref", "refs/vendor/present", "HEAD"]);
+        cache.invalidate();
+        assert_eq!(values("git switch custom/"), ["custom/中文"]);
+        assert_eq!(values("git switch exact"), ["exact"]);
+        assert!(values("git switch ordered").is_empty());
+        git(repository.path(), &["switch", "custom/中文"]);
+        git(repository.path(), &["switch", "main"]);
+        git(repository.path(), &["switch", "exact"]);
+        git(repository.path(), &["switch", "main"]);
+        git(
+            repository.path(),
+            &["update-ref", "refs/remotes/upstream/discover/one", "HEAD^{tree}"],
+        );
+        git(repository.path(), &["config", "--unset", "checkout.defaultRemote"]);
+        cache.invalidate();
+        assert!(
+            values("git switch discover/o").is_empty(),
+            "non-commit targets still make remote selection ambiguous"
+        );
+        git(repository.path(), &["config", "checkout.defaultRemote", "origin"]);
+        cache.invalidate();
+        assert_eq!(values("git switch discover/o"), ["discover/one"]);
+        for (value, expected) in
+            [("off", false), ("yes", true), ("0x1", true), ("0k", false), ("1M", true)]
+        {
+            git(repository.path(), &["config", "checkout.guess", value]);
+            cache.invalidate();
+            assert_eq!(!values("git switch discover/o").is_empty(), expected, "{value}");
+        }
+        git(repository.path(), &["pack-refs", "--all"]);
+        git(repository.path(), &["update-ref", "-d", "refs/remotes/origin/discover/中文"]);
+        cache.invalidate();
+        assert!(values("git switch discover/中").is_empty());
     }
 
     #[test]
