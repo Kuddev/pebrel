@@ -17,8 +17,6 @@
 //! 状态推送挂在既有的 1 Hz chrome 时钟（与会话自动保存同一节拍）：托盘是
 //! 环境信息面，秒级延迟无感，换来的是零新增定时器与天然去抖。
 
-#![cfg_attr(not(windows), allow(dead_code))]
-
 use winit::window::WindowId;
 
 /// GPUI 托盘动作：聚焦某个 pane，或真正退出驻留进程。
@@ -51,15 +49,9 @@ pub use win::{refresh_app_icon, set_enabled, shutdown, update};
 #[cfg(all(not(windows), feature = "legacy-shell"))]
 pub fn init(_proxy: winit::event_loop::EventLoopProxy<crate::event::Event>) {}
 #[cfg(not(windows))]
-pub fn init_gpui(_on_command: impl Fn(GpuiTrayCommand) + Send + Sync + 'static) {}
-#[cfg(not(windows))]
-pub fn set_enabled(_enabled: bool) {}
-#[cfg(not(windows))]
-pub fn update(_agents: Vec<TrayAgent>) {}
-#[cfg(not(windows))]
-pub fn shutdown() {}
-#[cfg(not(windows))]
-pub fn refresh_app_icon() {}
+pub use crate::platform::tray_native::{
+    init_gpui, refresh_app_icon, set_enabled, shutdown, update,
+};
 
 #[cfg(windows)]
 mod win {

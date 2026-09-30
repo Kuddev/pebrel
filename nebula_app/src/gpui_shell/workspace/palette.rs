@@ -35,7 +35,6 @@ impl NebulaWorkspace {
                 | PaletteAction::ToggleSidebar
                 | PaletteAction::OpenSettings
                 | PaletteAction::ToggleGhost
-                | PaletteAction::CycleAccept
                 | PaletteAction::CycleCompletionStyle
                 | PaletteAction::ToggleFilesPanel
                 | PaletteAction::OpenAiSessionPicker

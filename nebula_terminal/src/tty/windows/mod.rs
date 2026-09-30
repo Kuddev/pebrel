@@ -18,6 +18,9 @@ mod cmd_prompt;
 mod conpty;
 mod environment;
 
+#[cfg(test)]
+mod proxy_tests;
+
 use blocking::{UnblockedReader, UnblockedWriter};
 use conpty::Conpty as Backend;
 pub use environment::refresh_environment;
@@ -383,6 +386,9 @@ function global:Get-NebulaBoolSetting {
     }
 }
 
+"#,
+    include_str!("proxy.ps1"),
+    r#"
 # 用户自己的提示符（$PROFILE 里的 oh-my-posh / starship / 手写 prompt）是不是
 # 已经就位。判据只能看函数体：PowerShell 内置 prompt 固定引用
 # $executionContext.SessionState.Path.CurrentLocation；而 oh-my-posh 那一类是经
@@ -1103,7 +1109,7 @@ fn nebula_default_shell(settings: NebulaRuntimeSettings) -> Shell {
             powershell_integration_args(
                 vec![
                     "-NoLogo".to_owned(),
-                    // Match the native Windows terminal path: do not silently
+                    // Match the native console launch path: do not silently
                     // skip the user's $PROFILE. Nebula's integration script is
                     // appended after PowerShell finishes its normal startup.
                 ],
@@ -1155,6 +1161,17 @@ mod test {
     #[test]
     fn powershell_cat_defaults_to_utf8() {
         assert!(NEBULA_PROMPT_PS1.contains("PSDefaultParameterValues['Get-Content:Encoding']"));
+    }
+
+    #[test]
+    fn powershell_startup_uses_the_rust_http_proxy_marker() {
+        assert!(NEBULA_PROMPT_PS1.contains("$env:PEBREL_HTTP_PROXY"));
+        assert!(NEBULA_PROMPT_PS1.contains("$PSVersionTable.PSEdition"));
+        assert!(NEBULA_PROMPT_PS1.contains("[System.Net.WebRequest]::DefaultWebProxy"));
+        assert!(NEBULA_PROMPT_PS1.contains("Invoke-WebRequest"));
+        assert!(NEBULA_PROMPT_PS1.contains("${command}:Proxy"));
+        assert!(!NEBULA_PROMPT_PS1.contains("ssh_proxy_mode"));
+        assert!(!NEBULA_PROMPT_PS1.contains("ssh_proxy_url"));
     }
 
     /// gpui keymap 在传统 VT 路径把 Ctrl+Backspace 编成 \x17（Ctrl+W）；
@@ -1384,6 +1401,7 @@ foreach ($powerline in @($true, $false)) {
     if ($rendered -notlike '*test-branch*') { throw 'Missing branch' }
     if ($rendered -notlike "*$([char]27)]133;A*") { throw 'Missing prompt boundary' }
 }
+
 "#,
         );
     }

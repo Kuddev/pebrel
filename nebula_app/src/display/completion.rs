@@ -82,16 +82,22 @@ impl Display {
         state: &mut NebulaPaneState,
         line_override: Option<String>,
     ) {
+        if self.nebula_completion_style != super::CompletionStyle::Hybrid {
+            state.completion_popup_requested = false;
+        }
         suggest_engine::suggest_update(
             &suggest_engine::SuggestSources {
                 history: &self.nebula_history,
                 directories: &self.directory_history,
                 commands: &self.nebula_commands,
                 enabled: self.nebula_ghost_enabled,
-                style: self.nebula_completion_style,
+                style: self.nebula_completion_style.active_style(state.completion_popup_requested),
             },
             state,
             line_override,
         );
+        if state.completion_popup_requested && state.completion_selected.is_none() {
+            state.completion_popup_move(1);
+        }
     }
 }

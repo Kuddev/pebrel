@@ -739,8 +739,8 @@ impl TerminalView {
         true
     }
 
-    /// 右键行为：有选区直接复制，无选区直接粘贴。
-    /// Ctrl+右键保留选区菜单，供显式调用 Send to Chat。
+    /// Manual selection uses the context menu. Copy-on-select keeps quick
+    /// copy/paste, while Ctrl+right-click always requests the menu.
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -771,20 +771,17 @@ impl TerminalView {
             .as_ref()
             .and_then(|session| session.term.lock().selection_to_string())
             .filter(|text| !text.is_empty());
-        if let Some(text) = selected_text {
-            if event.modifiers.control {
-                cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
-                    position: event.position,
-                    text,
-                });
-            } else {
-                self.copy_selection(true, window, cx);
-            }
-            cx.stop_propagation();
+        if event.modifiers.control || !self.copy_on_select {
+            cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
+                position: event.position,
+                text: selected_text.unwrap_or_default(),
+            });
+        } else if selected_text.is_some() {
+            self.copy_selection(true, window, cx);
         } else {
             self.paste(window, cx);
-            cx.stop_propagation();
         }
+        cx.stop_propagation();
     }
 
     pub(super) fn on_right_up(

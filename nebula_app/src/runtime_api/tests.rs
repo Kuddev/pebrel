@@ -1,6 +1,85 @@
 use super::command::wait_state_matches;
 use super::*;
 
+#[test]
+fn conversation_mutations_require_current_identity_and_read_cannot_smuggle_input() {
+    let identity = json!({"kind":"codex","session_id":"thread","epoch":3});
+    let request = |method: &str, extra: Value| {
+        let mut params = json!({"window_id":1,"pane_id":2,"identity":identity});
+        params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        ApiRequest::new("token".into(), method, params)
+    };
+    assert!(RuntimeCommand::from_request(&request("conversation.read", json!({}))).is_ok());
+    assert!(
+        RuntimeCommand::from_request(&request("conversation.read", json!({"text":"echo bad"})))
+            .is_err()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.send",
+            json!({"text":"你好\nsecond line"})
+        ))
+        .is_ok()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.send",
+            json!({"text":"hello", "identity":{"kind":"codex","session_id":"thread"}})
+        ))
+        .is_err()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.choose",
+            json!({"prompt_id":"a".repeat(64),"option":0})
+        ))
+        .is_ok()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.choose",
+            json!({"prompt_id":"a".repeat(64),"option":9})
+        ))
+        .is_err()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request("conversation.key", json!({"key":"Ctrl+C"}))).is_ok()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request("conversation.key", json!({"key":"Enter"}))).is_err()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request("conversation.read", json!({"key":"Esc"}))).is_err()
+    );
+    assert!(
+        RuntimeCommand::from_request(&request(
+            "conversation.key",
+            json!({"key":"Esc", "identity":{"kind":"codex","session_id":"thread"}})
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn shared_tab_requests_require_identity_and_bounded_revisioned_reads() {
+    let id = tabs::TabId::default();
+    assert_ne!(id, tabs::TabId::default());
+    assert_eq!(id, id.clone());
+    let parse = |method, params| {
+        RuntimeCommand::from_request(&ApiRequest::new("token".into(), method, params))
+    };
+    assert!(matches!(
+        parse("tab.close", json!({"window_id": 7, "tab_id": id.0})).unwrap(),
+        RuntimeCommand::Tab { request: tabs::Request::Close { .. }, .. }
+    ));
+    assert!(parse("tab.read", json!({"window_id": 7, "tab_id": id.0, "limit": 65536})).is_ok());
+    assert!(parse("tab.read", json!({"window_id": 7, "tab_id": id.0, "offset": 1})).is_err());
+    assert!(parse("tab.read", json!({"window_id": 7, "tab_id": id.0, "limit": 65537})).is_err());
+    assert!(parse("tab.close", json!({"window_id": 0, "tab_id": id.0})).is_err());
+    assert!(parse("tab.close", json!({"window_id": 7, "tab_id": id.0, "tab_index": 1})).is_err());
+    assert!(parse("tab.focus", json!({"window_id": 7, "tab_id": "stale-index"})).is_err());
+}
+
 fn snapshot(state: RuntimeTaskState) -> RuntimeSnapshot {
     RuntimeSnapshot::new(
         0,
@@ -11,6 +90,8 @@ fn snapshot(state: RuntimeTaskState) -> RuntimeSnapshot {
             active_tab: 0,
             focused_pane_id: Some(3),
             tabs: vec![RuntimeTab {
+                tab_id: None,
+                file: None,
                 index: 0,
                 active: true,
                 label: "test".into(),
@@ -88,6 +169,8 @@ fn delegation_snapshot(
             focused_pane_id: Some(3),
             tabs: vec![
                 RuntimeTab {
+                    tab_id: None,
+                    file: None,
                     index: 0,
                     active: true,
                     label: "origin".into(),
@@ -105,6 +188,8 @@ fn delegation_snapshot(
                     )],
                 },
                 RuntimeTab {
+                    tab_id: None,
+                    file: None,
                     index: 1,
                     active: false,
                     label: "worker".into(),

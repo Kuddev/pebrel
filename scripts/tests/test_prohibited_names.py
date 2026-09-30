@@ -129,6 +129,42 @@ class ProhibitedNamesTests(unittest.TestCase):
         self.assertFalse(check_prohibited_names.prohibited_source_line("Cargo.toml", dependency))
         self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", dependency))
 
+    def test_mobile_build_and_session_references_preserve_their_interfaces(self) -> None:
+        cases = (
+            ("mobile/android/third_party/reader-build/package-lock.json", '"node_modules/@types/d3-contour": {'),
+            ("mobile/android/app/build.gradle.kts", 'implementation(project(":ghostty"))'),
+            ("mobile/android/settings.gradle.kts", 'include(":app", ":ghostty")'),
+            ("mobile/tools/generate_assets.py", 'root / "mobile/android/ghostty/UPSTREAM.json"'),
+            (".github/workflows/android-release.yml", "path: 'mobile/android/ghostty/build/upstream'"),
+            (".github/workflows/android-release.yml", "key: native-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json') }}"),
+            ("mobile/tools/generate_assets.py", 'notices / "Ghostty"'),
+            ("mobile/tools/test_apk_audit.py", '"assets/licenses/Ghostty/Ghostty-MIT.txt": b"fixture"'),
+            ("mobile/android/ghostty/src/main/cpp/bridge.h", '#include <ghostty/vt.h>'),
+            ("mobile/android/ghostty/UPSTREAM.json", '"project": "https://github.com/ghostty-org/ghostty",'),
+            ("mobile/ssh/licenses/SOURCE.json", '"url": "https://raw.githubusercontent.com/warp-tech/russh/revision/LICENSE.txt",'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'TMUX("tmux"), HERDR("herdr")'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.TMUX -> "exec tmux new-session -A -s \'pebrel\'"'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.HERDR -> "exec herdr"'),
+            ("mobile/android/app/src/androidTest/SshIntegrationTest.kt", '"tmux kill-session -t \'session\'" else "herdr session stop \'session\'"'),
+        )
+        for path, text in cases:
+            with self.subTest(path=path, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                # 合法引用仅保护自身，不能让同行追加的比较文案一起逃逸。
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with Ghostty'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+
+    def test_mobile_reference_paths_do_not_exempt_ordinary_mentions(self) -> None:
+        for path in (
+            "mobile/tools/generate_assets.py", "mobile/android/app/build.gradle.kts",
+            ".github/workflows/android-release.yml",
+            "mobile/android/ghostty/UPSTREAM.json", "mobile/ssh/licenses/SOURCE.json",
+            "mobile/android/app/src/main/java/connection/SshSessionMode.kt",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"description": "Inspired by Ghostty"'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"url": "https://example.invalid/ghostty"'))
+
     def test_staged_hook_configuration_is_not_exempt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
