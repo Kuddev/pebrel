@@ -12,6 +12,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(any(target_os = "macos", test))]
+mod macos;
 #[cfg(windows)]
 mod windows;
 
@@ -99,10 +101,15 @@ pub(crate) fn probe_codex_session(
         return probe_wsl(distro, context.wsl_user(), &pane_id, instance);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         let _ = shell_pid;
         return probe_local_proc(&pane_id, instance);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (pane_id, instance);
+        return macos::probe(shell_pid?);
     }
     #[cfg(windows)]
     {
@@ -245,37 +252,12 @@ fn wsl_probe_args(
 
 /// Bound the guest lookup by time and output size. A temporary file avoids a
 /// reader thread surviving when a descendant keeps the output handle open.
-fn run_probe_command(mut command: Command) -> Option<CodexSession> {
-    let mut output = tempfile::tempfile().ok()?;
-    command.stdin(Stdio::null()).stdout(output.try_clone().ok()?).stderr(Stdio::null());
-    let mut child = command.spawn().ok()?;
-    let deadline = Instant::now() + PROBE_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None)
-                if Instant::now() < deadline
-                    && output
-                        .metadata()
-                        .is_ok_and(|meta| meta.len() <= MAX_PROBE_OUTPUT as u64) =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            },
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            },
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            },
-        }
-    };
-    output.rewind().ok()?;
-    let output = read_bounded(output, MAX_PROBE_OUTPUT).ok()?;
-    status.success().then(|| parse_probe_context(&String::from_utf8_lossy(&output)))?
+fn run_probe_command(command: Command) -> Option<CodexSession> {
+    parse_probe_context(&String::from_utf8_lossy(&run_probe_output(command)?))
+}
+
+fn run_probe_output(command: Command) -> Option<Vec<u8>> {
+    super::process_output::read(command, PROBE_TIMEOUT, MAX_PROBE_OUTPUT).ok()
 }
 
 fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
@@ -294,7 +276,7 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut output = String::new();

@@ -59,6 +59,7 @@ use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
 
+mod animations;
 mod background_color_model;
 pub mod color;
 mod command_completion;
@@ -100,6 +101,8 @@ mod toast;
 pub(crate) fn quick_terminal_hotkey_from_settings(config: &UiConfig) -> String {
     settings::nebula_settings_load(config).quick_terminal_hotkey
 }
+
+use animations::WindowAnimations;
 
 pub use crate::i18n::{LanguagePreference, UiLanguage};
 pub use background_color_model::BgPickerPart;
@@ -184,8 +187,8 @@ pub(crate) fn caret_blink_on() -> bool {
 }
 #[cfg(feature = "gpui-shell")]
 pub(crate) use network_proxy_model::{
-    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, manual_proxy_parts,
-    manual_proxy_value,
+    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, compose_manual_proxy_url,
+    manual_proxy_parts, manual_proxy_value,
 };
 pub use settings::{NebulaSettingsSection, SettingsDropdown, SettingsHit, settings_hit};
 pub(crate) use settings::{NewTabPosition, SettingsOpacityTarget};
@@ -417,215 +420,6 @@ pub const SIDEBAR_COLLAPSE_AT: f32 = 120.0;
 /// 右抽屉的同款阈值：拖到比这更窄就关掉抽屉。两侧手势必须对称，否则
 /// 「左边拖到头会关、右边拖到头只是卡住」本身就是个 bug（用户 08-02 报）。
 pub const DRAWER_COLLAPSE_AT: f32 = 150.0;
-
-#[derive(Debug, Clone, Copy)]
-struct UiAnim {
-    spring: crate::motion::Spring,
-}
-
-impl UiAnim {
-    fn new(value: f32) -> Self {
-        Self { spring: crate::motion::Spring::new(value.clamp(0.0, 1.0)).with_response(0.14) }
-    }
-
-    fn value(self) -> f32 {
-        self.spring.value().clamp(0.0, 1.0)
-    }
-
-    fn visible(self, target_open: bool) -> bool {
-        target_open || self.value() > 0.004
-    }
-
-    fn animating_to(self, target: f32) -> bool {
-        (self.value() - target.clamp(0.0, 1.0)).abs() > 0.004 || self.spring.is_active()
-    }
-
-    fn step(&mut self, frame: crate::motion::Frame, target: f32) {
-        self.spring.set_target(target.clamp(0.0, 1.0), crate::motion::MotionPolicy::Full);
-        self.spring.step(frame);
-    }
-}
-
-/// Independent motion channels for one settings toggle. The reference HTML
-/// animates travel, active stretch, color and hover through different CSS
-/// transitions; keeping four Tweens per switch preserves that separation.
-#[derive(Debug, Clone, Copy)]
-struct SettingsToggleAnim {
-    position: crate::motion::Tween,
-    stretch: crate::motion::Tween,
-    color: crate::motion::Tween,
-    hover: crate::motion::Tween,
-}
-
-impl SettingsToggleAnim {
-    fn new(on: bool) -> Self {
-        let value = if on { 1.0 } else { 0.0 };
-        Self {
-            position: crate::motion::Tween::new(value),
-            stretch: crate::motion::Tween::new(0.0),
-            color: crate::motion::Tween::new(value),
-            hover: crate::motion::Tween::new(0.0),
-        }
-    }
-
-    fn step(&mut self, frame: crate::motion::Frame, on: bool, pressed: bool, hovered: bool) {
-        // The settings input commits the new boolean on mouse-down. The
-        // active selector therefore only changes the thumb geometry; it never
-        // hides the newly selected track or reverses an already-on switch.
-        let position = if on { if pressed { 16.0 / 24.0 } else { 1.0 } } else { 0.0 };
-        let color = if on { 1.0 } else { 0.0 };
-        let stretch = if pressed { 1.0 } else { 0.0 };
-        let hover = if hovered { 1.0 } else { 0.0 };
-        const POSITION: Duration = Duration::from_millis(400);
-        const STRETCH: Duration = Duration::from_millis(250);
-        const COLOR: Duration = Duration::from_millis(300);
-
-        if (self.position.target() - position).abs() > f32::EPSILON {
-            self.position.animate_to(
-                position,
-                POSITION,
-                crate::motion::Easing::LiquidToggle,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        if (self.stretch.target() - stretch).abs() > f32::EPSILON {
-            self.stretch.animate_to(
-                stretch,
-                STRETCH,
-                crate::motion::Easing::CssStandard,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        if (self.color.target() - color).abs() > f32::EPSILON {
-            self.color.animate_to(
-                color,
-                COLOR,
-                crate::motion::Easing::CssEase,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        if (self.hover.target() - hover).abs() > f32::EPSILON {
-            self.hover.animate_to(
-                hover,
-                COLOR,
-                crate::motion::Easing::CssEase,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        self.position.step(frame);
-        self.stretch.step(frame);
-        self.color.step(frame);
-        self.hover.step(frame);
-    }
-
-    fn value(self) -> ui::widgets::ToggleMotion {
-        ui::widgets::ToggleMotion {
-            // Do not clamp position: the supplied cubic-bezier deliberately
-            // crosses 0/1 to create the same brief elastic overshoot as CSS.
-            position: self.position.value(),
-            stretch: self.stretch.value().clamp(0.0, 1.0),
-            color: self.color.value().clamp(0.0, 1.0),
-            hover: self.hover.value().clamp(0.0, 1.0),
-        }
-    }
-
-    fn animating_to(self, on: bool, pressed: bool, hovered: bool) -> bool {
-        let position = if on { if pressed { 16.0 / 24.0 } else { 1.0 } } else { 0.0 };
-        let color = if on { 1.0 } else { 0.0 };
-        let stretch = if pressed { 1.0 } else { 0.0 };
-        let hover = if hovered { 1.0 } else { 0.0 };
-        [
-            (self.position, position),
-            (self.stretch, stretch),
-            (self.color, color),
-            (self.hover, hover),
-        ]
-        .into_iter()
-        .any(|(tween, target)| tween.is_active() || (tween.value() - target).abs() > 0.004)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct NebulaUiAnims {
-    clock: crate::motion::MotionClock,
-    frame: Option<crate::motion::Frame>,
-    /// Continuous sidebar-spinner phase in turns (`0.0..1.0`). Advancing it
-    /// from the shared monotonic frame delta avoids wall-clock jumps and needs
-    /// only four bytes per window.
-    spinner_phase: f32,
-    left_sidebar: UiAnim,
-    right_drawer: UiAnim,
-    ssh_editor: UiAnim,
-    settings_toggles: [SettingsToggleAnim; settings::SETTINGS_TOGGLE_COUNT],
-}
-
-impl NebulaUiAnims {
-    fn new() -> Self {
-        Self {
-            clock: crate::motion::MotionClock::default(),
-            frame: None,
-            spinner_phase: 0.0,
-            left_sidebar: UiAnim::new(1.0),
-            right_drawer: UiAnim::new(0.0),
-            ssh_editor: UiAnim::new(0.0),
-            settings_toggles: std::array::from_fn(|_| SettingsToggleAnim::new(false)),
-        }
-    }
-
-    fn step(
-        &mut self,
-        left_open: bool,
-        right_open: bool,
-        ssh_open: bool,
-        toggle_targets: [bool; settings::SETTINGS_TOGGLE_COUNT],
-        toggle_pressed: SettingsHit,
-        toggle_hover: SettingsHit,
-    ) {
-        let frame = self.clock.tick();
-        self.frame = Some(frame);
-        self.left_sidebar.step(frame, if left_open { 1.0 } else { 0.0 });
-        self.right_drawer.step(frame, if right_open { 1.0 } else { 0.0 });
-        self.ssh_editor.step(frame, if ssh_open { 1.0 } else { 0.0 });
-        for (index, (anim, target)) in
-            self.settings_toggles.iter_mut().zip(toggle_targets).enumerate()
-        {
-            let pressed = settings::settings_toggle_slot(toggle_pressed) == Some(index);
-            let hovered = settings::settings_toggle_slot(toggle_hover) == Some(index);
-            anim.step(frame, target, pressed, hovered);
-        }
-    }
-
-    fn frame(&mut self) -> crate::motion::Frame {
-        if let Some(frame) = self.frame {
-            frame
-        } else {
-            let frame = self.clock.tick();
-            self.frame = Some(frame);
-            frame
-        }
-    }
-
-    fn animating(
-        &self,
-        left_open: bool,
-        right_open: bool,
-        toggle_targets: [bool; settings::SETTINGS_TOGGLE_COUNT],
-        toggle_pressed: SettingsHit,
-        toggle_hover: SettingsHit,
-    ) -> bool {
-        self.left_sidebar.animating_to(if left_open { 1.0 } else { 0.0 })
-            || self.right_drawer.animating_to(if right_open { 1.0 } else { 0.0 })
-            || self.settings_toggles.iter().zip(toggle_targets).enumerate().any(
-                |(index, (anim, target))| {
-                    anim.animating_to(
-                        target,
-                        settings::settings_toggle_slot(toggle_pressed) == Some(index),
-                        settings::settings_toggle_slot(toggle_hover) == Some(index),
-                    )
-                },
-            )
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 struct ResizeHud {
@@ -1101,7 +895,7 @@ pub struct Display {
     pub nebula_sftp_panel: Option<sftp_panel::SftpPanel>,
     /// Shared chrome animation state. All sidebar/drawer transitions step here
     /// so easing/timing does not get scattered across render code.
-    nebula_ui_anims: NebulaUiAnims,
+    ui_animations: WindowAnimations,
     /// Active sidebar section inside the settings panel.
     nebula_settings_section: NebulaSettingsSection,
     nebula_chrome_hover: ChromeHit,
@@ -1859,7 +1653,7 @@ impl Display {
             nebula_detected_shells: None,
             nebula_side_panel: side_panel::SidePanel::new(),
             nebula_sftp_panel: None,
-            nebula_ui_anims: NebulaUiAnims::new(),
+            ui_animations: WindowAnimations::new(),
             nebula_settings_section: NebulaSettingsSection::default(),
             nebula_chrome_hover: ChromeHit::None,
             nebula_sidebar_scroll_drag: None,
@@ -2859,7 +2653,7 @@ impl Display {
         let grip = 4.0 * scale;
         if self.nebula_panel_resize
             && self.side_panel_visible()
-            && self.nebula_ui_anims.right_drawer.value() > 0.996
+            && self.ui_animations.drawer_progress() > 0.996
         {
             let (px, py, _, ph) = self.side_panel_layout().panel;
             if y >= py && y <= py + ph && (x - px).abs() <= grip {
@@ -3027,9 +2821,7 @@ impl Display {
             section: self.nebula_settings_section,
             hover: self.nebula_settings_hover,
             pressed: self.nebula_settings_pressed,
-            toggle_motion: std::array::from_fn(|index| {
-                self.nebula_ui_anims.settings_toggles[index].value()
-            }),
+            toggle_motion: self.ui_animations.toggle_motion(),
             theme: self.nebula_theme,
             follow_system_theme: self.nebula_follow_system_theme,
             ghost: self.nebula_ghost_enabled,
@@ -3774,13 +3566,7 @@ impl Display {
         self.pending_update.dirty = true;
     }
 
-    pub fn cycle_accept(&mut self) {
-        self.nebula_accept = self.nebula_accept.cycle();
-        self.persist_nebula_settings();
-        self.pending_update.dirty = true;
-    }
-
-    /// Flip between inline ghost and popup-list completion (palette /
+    /// Cycle the three completion modes (palette /
     /// keybinding path; the settings page goes through
     /// [`Self::set_completion_style_option`]).
     pub fn cycle_completion_style(&mut self) {
@@ -6617,7 +6403,7 @@ impl Display {
             reserve,
             reserve,
             scale,
-            self.nebula_ui_anims.right_drawer.value(),
+            self.ui_animations.drawer_progress(),
             self.drawer_w_visual(),
         )
     }
@@ -6851,32 +6637,32 @@ impl Display {
 
     pub fn step_chrome_anims(&mut self) {
         let toggle_targets = self.settings_toggle_targets();
-        self.nebula_ui_anims.step(
+        self.ui_animations.step(
             !self.nebula_sidebar_collapsed,
             self.nebula_side_panel.open,
             self.nebula_ssh_editor_open,
             toggle_targets,
-            self.nebula_settings_pressed,
-            self.nebula_settings_hover,
+            settings::settings_toggle_slot(self.nebula_settings_pressed),
+            settings::settings_toggle_slot(self.nebula_settings_hover),
         );
     }
 
     pub fn chrome_animating(&self) -> bool {
-        self.nebula_ui_anims.animating(
+        self.ui_animations.animating(
             !self.nebula_sidebar_collapsed,
             self.nebula_side_panel.open,
             self.settings_toggle_targets(),
-            self.nebula_settings_pressed,
-            self.nebula_settings_hover,
+            settings::settings_toggle_slot(self.nebula_settings_pressed),
+            settings::settings_toggle_slot(self.nebula_settings_hover),
         )
     }
 
     pub fn left_sidebar_progress(&self) -> f32 {
-        self.nebula_ui_anims.left_sidebar.value()
+        self.ui_animations.sidebar_progress()
     }
 
     pub fn left_sidebar_visible(&self) -> bool {
-        self.nebula_ui_anims.left_sidebar.visible(!self.nebula_sidebar_collapsed)
+        self.ui_animations.sidebar_visible(!self.nebula_sidebar_collapsed)
     }
 
     /// DPI 变化时按同一比例重标 UI 角色字号（等价于配置字号 × 新缩放）。
@@ -6994,7 +6780,7 @@ impl Display {
         let y = s(8.0 + 40.0) + seam;
         // Right edge follows the file/git drawer the same way: as it slides
         // in, the card cedes its width (drawer width + margin) plus the seam.
-        let dt = self.nebula_ui_anims.right_drawer.value().clamp(0.0, 1.0);
+        let dt = self.ui_animations.drawer_progress().clamp(0.0, 1.0);
         let drawer =
             dt * ((self.drawer_w_visual() * scale).min(self.size_info.width() * 0.42) + s(8.0));
         let w = (self.size_info.width() - drawer - seam - x).max(0.0);
@@ -7003,7 +6789,7 @@ impl Display {
     }
 
     pub fn side_panel_visible(&self) -> bool {
-        self.nebula_ui_anims.right_drawer.visible(self.nebula_side_panel.open)
+        self.ui_animations.drawer_visible(self.nebula_side_panel.open)
     }
 
     /// Sidebar content model for `chrome_tab_layout` — the single place the
@@ -8147,6 +7933,7 @@ impl Display {
         // `line_buf` is used. Only on the primary screen, never during vi/search
         // overlays.
         if alt_screen || vi_mode || search_state.regex().is_some() {
+            pane_state.completion_popup_requested = false;
             pane_state.clear_completion_hints();
         } else {
             #[cfg(windows)]
@@ -8173,6 +7960,7 @@ impl Display {
                     },
                     None => {
                         pane_state.screen_line.clear();
+                        pane_state.completion_popup_requested = false;
                         pane_state.clear_completion_hints();
                     },
                 }
@@ -8718,7 +8506,7 @@ impl Display {
         // wipes in from the divider instead of popping. Timestamp-derived, no
         // per-frame allocation (same discipline as the quick-terminal slide).
         if let Some(mut reveal) = self.nebula_split_reveal {
-            reveal.motion.step(self.nebula_ui_anims.frame());
+            reveal.motion.step(self.ui_animations.frame());
             let e = reveal.motion.value();
             if !reveal.motion.is_active() {
                 self.nebula_split_reveal = None;
@@ -9551,7 +9339,7 @@ impl Display {
         if !self.nebula_ssh_connect.contains_key(&pane) {
             return;
         }
-        let delta = self.nebula_ui_anims.frame().delta;
+        let delta = self.ui_animations.frame().delta;
         // 借用分离：绘制要同时摸 renderer 与 glyph_cache，先把状态摘出来。
         let mut states = std::mem::take(&mut self.nebula_ssh_connect);
         if let Some(state) = states.get_mut(&pane) {
@@ -9610,7 +9398,7 @@ impl Display {
 
     fn draw_resize_hud(&mut self) {
         let Some(mut hud) = self.nebula_resize_hud else { return };
-        hud.opacity.step(self.nebula_ui_anims.frame());
+        hud.opacity.step(self.ui_animations.frame());
         if !hud.opacity.is_active() {
             self.nebula_resize_hud = None;
             return;

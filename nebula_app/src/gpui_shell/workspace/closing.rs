@@ -78,7 +78,6 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        #[cfg(windows)]
         windowing::quick_terminal_bounds_changed(self.runtime_window_id, window, cx);
         if self.window_close_pending {
             return false;

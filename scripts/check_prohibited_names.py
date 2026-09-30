@@ -98,6 +98,68 @@ PROTOCOL_COMPATIBILITY_PATTERNS = (
     re.compile(r"\\x1bPtmux;"),
 )
 
+# 移动端的原生依赖路径和远端命令是构建/兼容接口；只剔除这些确切引用，
+# 同一行的其他文案仍须检查，不能按目录或整个源码文件豁免。
+MOBILE_BUILD_REFERENCE_PATTERNS = tuple(re.compile(pattern) for pattern in (
+    r"[\"']mobile/android/ghostty/(?:UPSTREAM\.json|build/upstream(?:/arm64-v8a/licenses)?)[\"']",
+    r"[\"']assets/licenses/Ghostty(?:/Ghostty-MIT\.txt|-UPSTREAM\.json)[\"']",
+    r"[\"'](?:licenses/)?Ghostty-(?:MIT\.txt|UPSTREAM\.json)[\"']",
+    r"(?<=notices / )[\"']Ghostty[\"']",
+    r"[\"']include/ghostty/vt\.h[\"']",
+))
+REMOTE_SESSION_PATTERNS = tuple(re.compile(pattern) for pattern in (
+    r"\bSshSessionMode\.(?:TMUX|HERDR)\b",
+    r"\b(?:exec )?tmux (?:new-session -A -s|kill-session -t) '[^'\n]+'",
+    r"\bexec herdr(?=[\"'\s])",
+    r"\bherdr session (?:attach|stop) '[^'\n]+'",
+    r"\bcommand -v (?:tmux|herdr)(?=\s+>)",
+    r"\bGet-Command herdr(?= -ErrorAction\b)",
+    r"\btmux (?:list-sessions|list-windows)(?= -[a-zA-Z]\b)",
+    r"\btmux (?:select-window -t|display-message -p -t|attach-session -t)(?= )",
+    r"\bherdr session list --json\b",
+    r"\bherdr session attach(?= \$\{psQuote\()",
+    r"\bherdr --session(?= \$\{(?:quote|psQuote)\()",
+))
+# 发现器的类型标签是线协议的一部分；只允许明确的构造/分派位置，
+# 不放行任意字符串字面量，更不能吞掉同行的说明、链接或比较文案。
+REMOTE_DISCOVERY_TAG_PATTERNS = tuple(re.compile(pattern) for pattern in (
+    r'\bdata\["(?:tmux|herdr)"\]',
+    r'\bRemoteSession\("(?:tmux|herdr)"(?=,)',
+    r'\bsession\.kind (?:==|!=) "(?:tmux|herdr)"',
+    r'^\s*"(?:tmux|herdr)"(?= ->)',
+    r'\bwarnings \+= "herdr"',
+    r"\[char\]30 \+ 'herdr'(?= \+ \[char\]10)",
+))
+
+
+def mobile_reference_remainder(path: str, text: str) -> str:
+    if path == "mobile/android/third_party/reader-build/package-lock.json":
+        # 图形算法依赖的完整包名不是同名终端产品；保留锁文件中的真实坐标。
+        text = re.sub(r"\bd3-contour\b", "", text)
+    if path.startswith("mobile/tools/") or path in {
+        "mobile/android/app/build.gradle.kts", ".github/workflows/android-release.yml",
+    }:
+        for pattern in MOBILE_BUILD_REFERENCE_PATTERNS:
+            text = pattern.sub("", text)
+    if path in {"mobile/android/settings.gradle.kts", "mobile/android/app/build.gradle.kts"}:
+        text = text.replace('\":ghostty\"', "")
+    if path == "mobile/android/ghostty/src/main/cpp/bridge.h":
+        text = re.sub(r"^\s*#include <ghostty/vt\.h>", "", text)
+    if path in {"mobile/android/ghostty/UPSTREAM.json", "mobile/ssh/licenses/SOURCE.json"}:
+        text = re.sub(
+            r'"(?:project|source_url|url)":\s*"https://(?:github\.com|codeload\.github\.com|raw\.githubusercontent\.com)/[^"\s]+"',
+            "", text,
+        )
+    if path.startswith("mobile/android/app/src/") and path.endswith(".kt"):
+        for pattern in REMOTE_SESSION_PATTERNS:
+            text = pattern.sub("", text)
+        if path.endswith("/connection/RemoteSessions.kt"):
+            for pattern in REMOTE_DISCOVERY_TAG_PATTERNS:
+                text = pattern.sub("", text)
+        if path.endswith("/connection/SshSessionMode.kt"):
+            text = text.replace('TMUX("tmux")', "").replace('HERDR("herdr")', "")
+    return text
+
 
 def git(*args: str) -> bytes:
     return subprocess.check_output(["git", "-c", "i18n.logOutputEncoding=utf-8", *args], stderr=subprocess.DEVNULL)
@@ -117,7 +179,7 @@ def source_without_allowed_occurrences(path: str, text: str) -> str:
             text = pattern.sub("", text)
     for pattern in PROTOCOL_COMPATIBILITY_PATTERNS:
         text = pattern.sub("", text)
-    return text
+    return mobile_reference_remainder(path, text)
 
 
 def prohibited_source_line(path: str, text: str) -> bool:

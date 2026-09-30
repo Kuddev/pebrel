@@ -1,0 +1,8 @@
+<resources>
+    <string name="refresh">Refresh</string>
+    <string name="remote_sessions">Persistent sessions</string>
+    <string name="remote_sessions_empty">No supported persistent sessions were found for this SSH account.</string>
+    <string name="remote_sessions_hint">Tap a session to see its windows or tabs. Opening one creates a separate connection; existing sessions stay open.</string>
+    <string name="remote_discovery_failed">Some session details could not be read. Check that the session manager is available to this SSH account, then refresh.</string>
+    <string name="remote_attach_target">Connect to: %1$s</string>
+</resources>

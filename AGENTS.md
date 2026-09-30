@@ -2,6 +2,7 @@
 
 ## 全局规则
 
+- 严禁利用 PR、Issue 及其评论进行广告宣传、商业推广或引流；核实任何未经授权的推广 PR 或 Issue 后直接关闭，无需再次确认。商业需求须通过项目邮箱沟通，已获批准的赞助按批准范围处理。完整范围、邮箱与审阅边界以 [贡献指南](CONTRIBUTING.md#commercial-promotion-policy) 为唯一权威说明；首次贡献者身份、改动小或 CI 通过不能代替需求审查。
 - 修改前阅读 `CONTRIBUTING.md`、`docs/architecture.md` 和 `docs/project-constraints.md`；新 UI 文案同时遵循 `docs/internationalization.md`。
 - 规则按目录分层：先遵守本文件，再读取目标文件路径上最近的 `AGENTS.md`。模块细节留在模块目录，不回填到根规则。
 - 行数预算与依赖方向由 `architecture/` 声明，使用 `python3 scripts/check_architecture.py --base <PR-base-commit>` 验证；800 行仅提示，2000 行是既有防灾上限。
