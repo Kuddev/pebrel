@@ -13,7 +13,9 @@ use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use serde::{Deserialize, Serialize};
 
-const MAGIC: &[u8; 8] = b"NEBUBAK1";
+pub(crate) mod recovery;
+
+const MAGIC: &[u8; 8] = b"PEBRBAK1";
 const ARCHIVE_VERSION: u32 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
@@ -69,7 +71,29 @@ impl BackupSelection {
         self.categories().next().is_none()
     }
 
-    fn categories(self) -> impl Iterator<Item = BackupCategory> {
+    pub(crate) fn set(&mut self, category: BackupCategory, enabled: bool) {
+        *match category {
+            BackupCategory::Appearance => &mut self.appearance,
+            BackupCategory::Config => &mut self.config,
+            BackupCategory::Ssh => &mut self.ssh,
+            BackupCategory::Sync => &mut self.sync,
+            BackupCategory::Assistant => &mut self.assistant,
+            BackupCategory::Session => &mut self.session,
+            BackupCategory::DirectoryHistory => &mut self.directory_history,
+            BackupCategory::CommandHistory => &mut self.command_history,
+            BackupCategory::Fonts => &mut self.fonts,
+        } = enabled;
+    }
+
+    pub(crate) fn from_categories(categories: impl IntoIterator<Item = BackupCategory>) -> Self {
+        let mut selection = Self { appearance: false, ..Self::default() };
+        for category in categories {
+            selection.set(category, true);
+        }
+        selection
+    }
+
+    pub(crate) fn categories(self) -> impl Iterator<Item = BackupCategory> {
         [
             (self.appearance, BackupCategory::Appearance),
             (self.config, BackupCategory::Config),
@@ -97,12 +121,36 @@ pub(crate) struct BackupEntry {
 pub(crate) struct BackupManifest {
     pub version: u32,
     pub categories: Vec<BackupCategory>,
+    pub device: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct BackupArchive {
     pub manifest: BackupManifest,
     pub entries: Vec<BackupEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CategorySummary {
+    pub category: BackupCategory,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+impl BackupArchive {
+    pub(crate) fn summary(&self) -> Vec<CategorySummary> {
+        self.manifest
+            .categories
+            .iter()
+            .map(|category| {
+                let entries = self.entries.iter().filter(|entry| entry.category == *category);
+                let (files, bytes) = entries.fold((0, 0), |(files, bytes), entry| {
+                    (files + 1, bytes + entry.bytes.len() as u64)
+                });
+                CategorySummary { category: *category, files, bytes }
+            })
+            .collect()
+    }
 }
 
 fn validate_passphrase(passphrase: &str) -> Result<(), String> {
@@ -122,7 +170,7 @@ fn derive_key(passphrase: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], String> {
     Ok(key)
 }
 
-/// Serialize and encrypt an archive as `NEBUBAK1 | salt | nonce | ciphertext`.
+/// Serialize and encrypt an archive as `PEBRBAK1 | salt | nonce | ciphertext`.
 pub(crate) fn seal(archive: &BackupArchive, passphrase: &str) -> Result<Vec<u8>, String> {
     validate_passphrase(passphrase)?;
     if archive.manifest.version != ARCHIVE_VERSION {
@@ -131,15 +179,20 @@ pub(crate) fn seal(archive: &BackupArchive, passphrase: &str) -> Result<Vec<u8>,
     validate_archive(archive)?;
     let plaintext =
         serde_json::to_vec(archive).map_err(|error| format!("serialize backup: {error}"))?;
+    encrypt_bytes(&plaintext, passphrase)
+}
+
+fn encrypt_bytes(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
+    validate_passphrase(passphrase)?;
     let mut salt = [0; SALT_LEN];
     let mut nonce = [0; NONCE_LEN];
     getrandom::fill(&mut salt).map_err(|error| format!("random salt: {error}"))?;
     getrandom::fill(&mut nonce).map_err(|error| format!("random nonce: {error}"))?;
-    let key = derive_key(passphrase, &salt)?;
-    let ciphertext = Aes256Gcm::new((&key).into())
+    let key = zeroize::Zeroizing::new(derive_key(passphrase, &salt)?);
+    let ciphertext = Aes256Gcm::new((&*key).into())
         .encrypt(
             &Nonce::try_from(&nonce[..]).map_err(|_| "invalid backup nonce".to_owned())?,
-            Payload { msg: &plaintext, aad: MAGIC },
+            Payload { msg: plaintext, aad: MAGIC },
         )
         .map_err(|_| "backup encryption failed".to_owned())?;
     let mut output = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN + ciphertext.len());
@@ -152,6 +205,14 @@ pub(crate) fn seal(archive: &BackupArchive, passphrase: &str) -> Result<Vec<u8>,
 
 /// Authenticate, decrypt, deserialize, and validate a complete archive.
 pub(crate) fn open(packet: &[u8], passphrase: &str) -> Result<BackupArchive, String> {
+    let plaintext = decrypt_bytes(packet, passphrase)?;
+    let archive: BackupArchive = serde_json::from_slice(&plaintext)
+        .map_err(|error| format!("invalid backup archive: {error}"))?;
+    validate_archive(&archive)?;
+    Ok(archive)
+}
+
+fn decrypt_bytes(packet: &[u8], passphrase: &str) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
     validate_passphrase(passphrase)?;
     let header_len = MAGIC.len() + SALT_LEN + NONCE_LEN;
     if packet.len() <= header_len || packet.get(..MAGIC.len()) != Some(MAGIC) {
@@ -159,17 +220,14 @@ pub(crate) fn open(packet: &[u8], passphrase: &str) -> Result<BackupArchive, Str
     }
     let salt = &packet[MAGIC.len()..MAGIC.len() + SALT_LEN];
     let nonce = &packet[MAGIC.len() + SALT_LEN..header_len];
-    let key = derive_key(passphrase, salt)?;
-    let plaintext = Aes256Gcm::new((&key).into())
+    let key = zeroize::Zeroizing::new(derive_key(passphrase, salt)?);
+    let plaintext = Aes256Gcm::new((&*key).into())
         .decrypt(
             &Nonce::try_from(nonce).map_err(|_| "invalid backup nonce".to_owned())?,
             Payload { msg: &packet[header_len..], aad: MAGIC },
         )
         .map_err(|_| "backup authentication failed".to_owned())?;
-    let archive: BackupArchive = serde_json::from_slice(&plaintext)
-        .map_err(|error| format!("invalid backup archive: {error}"))?;
-    validate_archive(&archive)?;
-    Ok(archive)
+    Ok(zeroize::Zeroizing::new(plaintext))
 }
 
 pub(crate) fn collect(selection: BackupSelection) -> Result<BackupArchive, String> {
@@ -219,6 +277,9 @@ fn collect_from(root: &Path, selection: BackupSelection) -> Result<BackupArchive
         manifest: BackupManifest {
             version: ARCHIVE_VERSION,
             categories: selection.categories().collect(),
+            device: std::env::var("COMPUTERNAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .unwrap_or_default(),
         },
         entries,
     })
@@ -347,7 +408,7 @@ fn restore_to(root: &Path, archive: &BackupArchive) -> Result<(), String> {
     let paths = archive
         .entries
         .iter()
-        .map(|entry| restore_path(root, nebula_settings::canonical_data_file_name(&entry.name)))
+        .map(|entry| restore_path(root, &entry.name))
         .collect::<Result<Vec<_>, _>>()?;
     for (entry, path) in archive.entries.iter().zip(paths) {
         crate::atomic_file::write(&path, &entry.bytes)
@@ -395,7 +456,7 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
     }
     let mut names = HashSet::new();
     for entry in &archive.entries {
-        let canonical = nebula_settings::canonical_data_file_name(&entry.name);
+        let canonical = entry.name.as_str();
         if !categories.contains(&entry.category) || !names.insert(canonical) {
             return Err("invalid or duplicate backup entry".to_owned());
         }
@@ -455,10 +516,14 @@ mod tests {
 
     fn archive() -> BackupArchive {
         BackupArchive {
-            manifest: BackupManifest { version: 1, categories: vec![BackupCategory::Appearance] },
+            manifest: BackupManifest {
+                version: 1,
+                categories: vec![BackupCategory::Appearance],
+                device: String::new(),
+            },
             entries: vec![BackupEntry {
                 category: BackupCategory::Appearance,
-                name: "nebula_settings.txt".into(),
+                name: "pebrel_settings.txt".into(),
                 bytes: b"theme=dark".to_vec(),
             }],
         }
@@ -477,13 +542,13 @@ mod tests {
     #[test]
     fn roundtrip_and_wrong_password_fail() {
         let packet = seal(&archive(), "correct horse").unwrap();
-        assert_eq!(&packet[..8], b"NEBUBAK1");
+        assert_eq!(&packet[..8], b"PEBRBAK1");
         assert_eq!(open(&packet, "correct horse").unwrap(), archive());
         assert!(open(&packet, "wrong horse").is_err());
     }
 
     #[test]
-    fn legacy_archive_restores_with_new_names_and_keeps_its_encryption_format() {
+    fn archive_restores_current_file_names() {
         let original = archive();
         let packet = seal(&original, "correct horse").unwrap();
         let restored = open(&packet, "correct horse").unwrap();
@@ -495,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_legacy_and_new_archive_names_are_rejected_before_writes() {
+    fn duplicate_archive_names_are_rejected_before_writes() {
         let mut archive = archive();
         let mut duplicate = archive.entries[0].clone();
         duplicate.name = "pebrel_settings.txt".into();
@@ -602,7 +667,11 @@ mod tests {
     fn invalid_terminal_profiles_json_is_rejected_before_restore() {
         let directory = tempdir().unwrap();
         let archive = BackupArchive {
-            manifest: BackupManifest { version: 1, categories: vec![BackupCategory::Config] },
+            manifest: BackupManifest {
+                version: 1,
+                categories: vec![BackupCategory::Config],
+                device: String::new(),
+            },
             entries: vec![
                 BackupEntry {
                     category: BackupCategory::Config,
@@ -625,7 +694,11 @@ mod tests {
     fn path_traversal_is_rejected_before_writes() {
         let directory = tempdir().unwrap();
         let archive = BackupArchive {
-            manifest: BackupManifest { version: 1, categories: vec![BackupCategory::Appearance] },
+            manifest: BackupManifest {
+                version: 1,
+                categories: vec![BackupCategory::Appearance],
+                device: String::new(),
+            },
             entries: vec![BackupEntry {
                 category: BackupCategory::Appearance,
                 name: "../outside".into(),

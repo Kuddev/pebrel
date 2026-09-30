@@ -106,6 +106,7 @@ jobs:
           python3 scripts/check_platform_cfg.py
           python3 -m unittest \
             scripts.tests.test_stable_release \
+            scripts.tests.test_android_release \
             scripts.tests.test_ci_native_tests \
             scripts.tests.test_preview_release \
             scripts.tests.test_macos_dmg \
@@ -156,7 +157,7 @@ jobs:
           target: target/release
           legacy-key: linux
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell --timings
+        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
       - name: Save compiled workload
         if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -293,7 +294,7 @@ jobs:
           target: target/release
           legacy-key: macos
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell --timings
+        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell --timings
       - name: Save compiled workload
         if: ${{ always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -460,7 +461,7 @@ jobs:
         shell: pwsh
         run: |
           & "$env:RUNNER_TEMP/prepare-windows-runtime.ps1" -Destination assets/windows/conhost
-          & "$env:RUNNER_TEMP/runtime-tests/windows-runtime.tests.ps1" -ArchivePath (Join-Path ([IO.Path]::GetTempPath()) 'pebrel-conpty-source-v1.5.0.zip')
+          & "$env:RUNNER_TEMP/runtime-tests/windows-runtime.tests.ps1" -ArchivePath (Join-Path ([IO.Path]::GetTempPath()) 'pebrel-conpty-source-1.24.260710001.nupkg')
       - name: Test workspace and native harness
         if: ${{ inputs.windows_only && inputs.source_commit == '' }}
         run: python scripts/ci_native_tests.py
@@ -584,7 +585,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/package-release.ps1 -Version $env:PACKAGE_VERSION -Architecture arm64 -OutputDirectory dist -TargetDirectory target
-          ./scripts/build-installer.ps1 -Version $env:PACKAGE_VERSION -Architecture arm64 -OutputDirectory dist -TargetDirectory target -SkipBuild -Force
+          ./scripts/build-installer.ps1 -Version $env:PACKAGE_VERSION -Architecture arm64 -OutputDirectory dist -TargetDirectory target -Force
       - name: Keep Windows PowerShell alive on the ARM64 runner image
         shell: pwsh
         run: ./scripts/conformance/windows_arm64_module_path.ps1
@@ -617,10 +618,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  android:
+    name: Android Preview
+    if: ${{ !inputs.windows_only }}
+    needs: prepare
+    uses: ./.github/workflows/android-release.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+
   aggregate:
     name: Verify stable assets and upload complete set
     if: ${{ !inputs.windows_only }}
-    needs: [prepare, linux, macos, windows, windows-arm64]
+    needs: [prepare, linux, macos, windows, windows-arm64, android]
     runs-on: ubuntu-22.04
     env:
       PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -649,6 +658,8 @@ jobs:
           from scripts.preview_release import validate_evidence
           validate_evidence(Path("stable-evidence"), os.environ["SOURCE_COMMIT"], windows_arm64=True)
           PY
+          python3 scripts/android_release.py --version "$PACKAGE_VERSION" --commit "$SOURCE_COMMIT" \
+            --output release-dist --report stable-evidence/android-report.json --verify-evidence
           python3 scripts/stable_release.py release-dist \
             --version "$PACKAGE_VERSION" \
             --mark-platform-previews \
@@ -717,7 +728,7 @@ jobs:
           gh release create "$tag" \
             release-dist/*.AppImage release-dist/*.deb release-dist/*.dmg \
             release-dist/*.tar.gz release-dist/*.zip release-dist/*-setup.exe \
-            release-dist/SHA256SUMS \
+            release-dist/*.apk release-dist/SHA256SUMS \
             --target "$GITHUB_SHA" --title "Pebrel $PACKAGE_VERSION" \
             --notes-file release-dist/RELEASE_NOTES.md
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >"$RUNNER_TEMP/stable-release.json"

@@ -10,6 +10,8 @@ pub(crate) fn report_error(error: &dyn std::fmt::Display, gui_launch: bool) {
 mod console;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod first_frame;
+#[cfg(any(unix, test))]
+mod login;
 
 /// Match GPUI's primary-monitor DPI query before a native window is created.
 /// Other platforms retain post-creation sizing until their display API exposes scale.
@@ -82,8 +84,8 @@ pub(crate) fn start_hidden(settings: &nebula_settings::RuntimeSettings) -> bool 
 pub(crate) fn launch_at_login() -> bool {
     #[cfg(windows)]
     return startup_shortcut().is_ok_and(|path| path.is_file());
-    #[cfg(not(windows))]
-    false
+    #[cfg(unix)]
+    return login::entry_path().is_ok_and(|path| path.is_file());
 }
 
 pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
@@ -121,10 +123,9 @@ pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
             result.map_err(std::io::Error::other)
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        let _ = enabled;
-        Err(std::io::ErrorKind::Unsupported.into())
+        login::set_enabled(enabled)
     }
 }
 

@@ -6,10 +6,9 @@ pub(super) const THEME_VALUES: [&str; ThemeName::BUILTIN.len()] = ThemeName::BUI
 pub(super) const REPOSITORY_URL: &str = "https://github.com/Kuddev/pebrel";
 pub(super) const BUG_REPORT_TEMPLATE: &str = "bug_report.yml";
 
-/// 左侧分区的稳定路由表。2026-08-28 产品裁定：默认 GPUI 导航收敛为常用项，
-/// 暂时隐藏“AI 供应商”和“备份”；页面实现与索引继续保留。后续恢复入口时只改
-/// [`HIDDEN_NAV_SECTIONS`]，不得删除或重排这里的条目。
-pub(super) const SECTION_IDS: [&str; 11] = [
+/// 稳定路由只追加；视觉顺序独立放在 NAV_GROUPS，避免旧入口指向另一页。
+pub(super) const MOBILE_SECTION: usize = 11;
+pub(super) const SECTION_IDS: [&str; 12] = [
     "application",
     "appearance",
     "profiles",
@@ -21,15 +20,16 @@ pub(super) const SECTION_IDS: [&str; 11] = [
     "advanced",
     "backup",
     "agents",
+    "mobile",
 ];
 
 /// Bilingual search aliases for the stable section routes. Search is a route
 /// finder, so a query such as "font", "opacity", or "更新" lands on the
 /// section that owns the control instead of merely filtering the current page.
-pub(super) const SECTION_SEARCH_TERMS: [&str; 11] = [
+pub(super) const SECTION_SEARCH_TERMS: [&str; 12] = [
     "application app 应用 update 更新 version 版本 github support 支持",
-    "appearance ligatures 连字 外观 theme 主题 custom 自定义 template 模板 import 导入 export 导出 font 字体 opacity 透明度 background 背景 cursor 光标 icon 图标 dim inactive panes 调暗非活动窗格 分屏变暗 scrollback scrolling speed history 回滚 滚动 速度 历史 滚轮 ctrl wheel zoom 缩放",
-    "profiles 配置文件 shell terminal 终端 completion 补全 startup 启动 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 duration timeout persistent auto-dismiss 时长 秒 常驻 自动关闭",
+    "appearance ligatures 连字 外观 theme 主题 custom 自定义 template 模板 import 导入 export 导出 font 字体 opacity 透明度 background 背景 cursor 光标 smooth motion 平滑 动画 icon 图标 dim inactive panes 调暗非活动窗格 分屏变暗 scrollback scrolling speed history 回滚 滚动 速度 历史 滚轮 ctrl wheel zoom 缩放",
+    "profiles 配置文件 shell terminal 终端 completion 补全 startup 启动 environment refresh path 环境变量 刷新 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 duration timeout persistent auto-dismiss 时长 秒 常驻 自动关闭",
     "providers provider ai 供应商 模型 api",
     "ssh host 主机 remote 远程 connection 连接",
     "network 网络 proxy 代理 connectivity 连接",
@@ -38,14 +38,19 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 11] = [
     "advanced 高级 session 会话 tray 托盘 restore 恢复 startup autostart login silent 自启动 静默启动 开机 登录",
     "backup cloud sync 云备份 云同步 云存储 备份 export 导出 restore 恢复 webdav s3 sftp 坚果云 123 123云盘 nextcloud synology 群晖 nas r2 minio snapshots 快照",
     "agents agent hook hooks 智能体 钩子 接入 claude codex opencode cursor kimi pi omp copilot grok",
+    "mobile phone android ios remote pairing qr lan relay 手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
 ];
 
-pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3, 9];
+// 暂时隐藏供应商入口，保留路由编号，避免其他设置入口发生偏移。
+pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
 
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
 /// 下标，不复制设置状态或路由。
-pub(super) const NAV_GROUPS: [(&str, &[usize]); 3] =
-    [("workspace", &[0, 1, 2, 10, 6, 7]), ("connections", &[3, 4, 5]), ("system", &[8, 9])];
+pub(super) const NAV_GROUPS: [(&str, &[usize]); 3] = [
+    ("workspace", &[0, 1, 2, 10, 6, 7]),
+    ("connections", &[3, 4, 5, MOBILE_SECTION]),
+    ("system", &[8, 9]),
+];
 
 pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) -> &'static str {
     match SECTION_IDS.get(index).copied() {
@@ -60,6 +65,7 @@ pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) 
         Some("advanced") => language.tr("settings.sidebar.advanced"),
         Some("backup") => language.tr("settings.sidebar.backup"),
         Some("agents") => language.text(crate::i18n::Message::SettingsSidebarAgents),
+        Some("mobile") => language.text(crate::i18n::Message::MobileTitle),
         _ => "",
     }
 }
@@ -76,7 +82,7 @@ pub(super) fn visible_nav_sections() -> impl Iterator<Item = usize> {
 }
 
 // 导航使用组件的小字号，与搜索菜单一致；尺寸是逻辑像素，由窗口统一处理 DPI。
-pub(super) const SETTINGS_NAV_WIDTH: f32 = 256.0;
+pub(super) const SETTINGS_NAV_WIDTH: f32 = 248.0;
 pub(super) const SETTINGS_NAV_ROW_HEIGHT: f32 = 34.0;
 pub(super) const SETTINGS_NAV_ICON_SIZE: f32 = 16.0;
 
@@ -118,8 +124,9 @@ pub(super) fn section_icon(index: usize) -> SharedString {
         6 => crate::gpui_shell::assets::nav::MOUSE_POINTER.into(),
         7 => crate::gpui_shell::assets::nav::KEYMAP.into(),
         8 => crate::gpui_shell::assets::nav::SLIDERS.into(),
-        9 => IconName::HardDrive.path(),
+        9 => crate::gpui_shell::assets::backup::DRIVE.into(),
         10 => IconName::Bot.path(),
+        MOBILE_SECTION => crate::gpui_shell::assets::nav::PHONE.into(),
         _ => IconName::Inbox.path(),
     }
 }

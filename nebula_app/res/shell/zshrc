@@ -6,6 +6,16 @@ fi
 if [[ -r ${ZDOTDIR-$HOME}/.zshrc ]]; then
     source "${ZDOTDIR-$HOME}/.zshrc"
 fi
+
+# BSD ls accepts CLICOLOR without -G. Supply missing defaults after the user's
+# rc file, preserving explicit values (including empty ones) and ls wrappers.
+# Do not impose BSD flags on a GNU ls selected through the user's PATH.
+if [[ "$OSTYPE" == darwin* && -z "$NO_COLOR" && "$TERM" != dumb ]]; then
+    : ${CLICOLOR=1}
+    : ${LSCOLORS=GxFxCxDxBxegedabagaced}
+    export CLICOLOR LSCOLORS
+fi
+
 unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
 
 __pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}zsh:${HOST:-localhost}:$$:$RANDOM" | base64 | tr -d '\r\n')

@@ -11,7 +11,7 @@
 //! - **接收方向**（`apply_broadcast_*`）：按**自己**的 term mode 重新编码后
 //!   直接写 PTY，**不再 emit**——这就是无环的全部保证。
 //!
-//! 为什么不直接转发发送方编码好的字节：app-cursor、bracketed-paste、kitty
+//! 为什么不直接转发发送方编码好的字节：app-cursor、bracketed-paste、增强
 //! 键盘协议都是 per-pane 的终端状态。一个 pane 开着 vim、旁边是普通 shell
 //! 时，同一个方向键的正确字节序列根本不同；照搬会往其中一个 pane 里灌乱码。
 
@@ -41,6 +41,7 @@ impl TerminalView {
         bytes: Vec<u8>,
         cx: &mut Context<Self>,
     ) {
+        self.cursor_animation.note_encoded_key(&keystroke, &bytes);
         cx.emit(TerminalViewEvent::UserInput(TerminalInput::Key(keystroke)));
         self.write_input(bytes, cx);
     }
@@ -70,6 +71,7 @@ impl TerminalView {
         let mode = self.term_mode();
         self.track_encoded_key(keystroke, &mode, cx);
         if let Some(bytes) = keymap::encode(keystroke, &mode) {
+            self.cursor_animation.note_encoded_key(keystroke, &bytes);
             self.write_input(bytes, cx);
         }
     }

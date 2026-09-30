@@ -246,6 +246,7 @@ pub(crate) fn suggest_update(
 ) {
     let line = line_override.unwrap_or_else(|| state.line_buf.clone());
     if !sources.enabled || line.is_empty() {
+        state.completion_popup_requested = false;
         state.clear_completion_hints();
         nebula_debug_log(format!(
             "suggest_skip enabled={} cwd={:?} line={:?} line_buf={:?}",
@@ -259,11 +260,7 @@ pub(crate) fn suggest_update(
     let command_generation = sources.commands.lock().map(|commands| commands.len()).unwrap_or(0);
     // 远端目录是异步拉回来的，那一刻 cwd 与行都没变——少了这个代际，拉到的
     // 条目要等用户再多打一个字符才会显形。
-    let remote_generation = crate::remote_dirs::generation();
-    let key = format!(
-        "{:?}\0{}\0{line}\0{command_generation}\0{remote_generation}",
-        state.suggest_env, state.cwd
-    );
+    let key = suggestion_key(state, &line, sources.style, command_generation);
     if state.completion_suppressed_line.as_deref() == Some(line.as_str()) {
         state.suggestion_key = key;
         state.suggestion.clear();
@@ -370,7 +367,8 @@ pub(crate) fn suggest_update(
 
     // Case-insensitive so `mor` completes `MoRealm` on Windows; prefer
     // directories for the common directory-changing commands.
-    let options = CompletionOptions { case_sensitive: false, ..CompletionOptions::default() };
+    let options =
+        CompletionOptions { case_sensitive: !cfg!(windows), ..CompletionOptions::default() };
     let want_dir = nebula_path_wants_directory(&line);
     let span = Span::new(0, token.len());
     let cwd = state.cwd.clone();
@@ -421,6 +419,21 @@ pub(crate) fn suggest_update(
     }
 }
 
+/// 输入、环境和后台数据代际共同标识候选；异步适配器也用它拒绝过期结果。
+pub(crate) fn suggestion_key(
+    state: &NebulaPaneState,
+    line: &str,
+    style: CompletionStyle,
+    command_generation: usize,
+) -> String {
+    format!(
+        "{:?}\0{}\0{line}\0{style:?}\0{command_generation}\0{}",
+        state.suggest_env,
+        state.cwd,
+        crate::remote_dirs::generation()
+    )
+}
+
 /// Cap ghost length so a long path/command can't spill into the chrome.
 fn clamp_ghost(rem: &str) -> String {
     rem.chars().take(NEBULA_GHOST_MAX).collect()
@@ -449,8 +462,12 @@ fn remote_path_matches(
     let Some(request) = crate::remote_dirs::path_request(token, &state.cwd) else {
         return Vec::new();
     };
+    let want_dir = nebula_path_wants_directory(line);
     match crate::remote_dirs::lookup(&state.suggest_env, &request.dir) {
-        Some(entries) => crate::remote_dirs::candidates(&request, &entries),
+        Some(entries) => crate::remote_dirs::candidates(&request, &entries)
+            .into_iter()
+            .filter(|(_, is_dir)| !want_dir || *is_dir)
+            .collect(),
         None => {
             state.pending_remote_dir = Some(request.dir);
             Vec::new()
@@ -586,8 +603,10 @@ fn suggest_collect(sources: &SuggestSources<'_>, state: &mut NebulaPaneState, li
         let absolute =
             token.starts_with(['/', '\\', '~']) || token.as_bytes().get(1) == Some(&b':');
         if absolute || !state.cwd.is_empty() {
-            let options =
-                CompletionOptions { case_sensitive: false, ..CompletionOptions::default() };
+            let options = CompletionOptions {
+                case_sensitive: !cfg!(windows),
+                ..CompletionOptions::default()
+            };
             let want_dir = nebula_path_wants_directory(line);
             let span = Span::new(0, token.len());
             let cwd = state.cwd.clone();
@@ -642,6 +661,58 @@ mod tests {
     use super::*;
     use crate::directory_history::DirectoryHistory;
     use crate::nebula_history::NebulaHistory;
+
+    #[test]
+    fn issue_353_current_directory_candidates_work_in_both_styles() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in ["apple", "banana", "orange"] {
+            std::fs::create_dir(temp.path().join(name)).unwrap();
+        }
+        for name in ["x.exe", "y.txt", "z.docx", "a.txt"] {
+            std::fs::write(temp.path().join(name), b"").unwrap();
+        }
+        let cwd = temp.path().to_str().unwrap();
+        let fixture = Fixture::new();
+        for (input, expected) in [
+            ("cd a", format!("pple{}", std::path::MAIN_SEPARATOR)),
+            ("cd b", format!("anana{}", std::path::MAIN_SEPARATOR)),
+            ("x", ".exe".into()),
+            ("y", ".txt".into()),
+        ] {
+            assert_eq!(fixture.ghost(SuggestEnv::Local, cwd, input), expected, "{input}");
+            assert!(fixture.popup(SuggestEnv::Local, cwd, input).contains(&expected), "{input}");
+        }
+        assert!(!fixture.popup(SuggestEnv::Local, cwd, "cd a").contains(&".txt".into()));
+    }
+
+    #[test]
+    fn remote_cd_candidates_exclude_files_in_both_styles() {
+        let env = SuggestEnv::Ssh { destination: "issue-353-cd-filter".into() };
+        crate::remote_dirs::finish_fetch(
+            &env,
+            "/issue-353",
+            Some(vec![
+                crate::remote_dirs::RemoteEntry { name: "a.txt".into(), is_dir: false },
+                crate::remote_dirs::RemoteEntry { name: "apple".into(), is_dir: true },
+            ]),
+        );
+        let fixture = Fixture::new();
+        assert_eq!(fixture.ghost(env.clone(), "/issue-353", "cd a"), "pple/");
+        assert_eq!(fixture.popup(env.clone(), "/issue-353", "cd a"), ["pple/"]);
+        assert!(fixture.popup(env, "/issue-353", "cat a").contains(&".txt".into()));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn local_posix_paths_preserve_case() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("Apple.txt"), b"").unwrap();
+        let fixture = Fixture::new();
+        let cwd = temp.path().to_str().unwrap();
+        assert!(fixture.ghost(SuggestEnv::Local, cwd, "cat a").is_empty());
+        assert!(fixture.popup(SuggestEnv::Local, cwd, "cat a").is_empty());
+        assert_eq!(fixture.ghost(SuggestEnv::Local, cwd, "cat A"), "pple.txt");
+    }
 
     #[test]
     fn changing_environment_invalidates_an_identical_input_cache() {

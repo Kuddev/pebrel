@@ -184,8 +184,8 @@ pub(crate) fn caret_blink_on() -> bool {
 }
 #[cfg(feature = "gpui-shell")]
 pub(crate) use network_proxy_model::{
-    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, manual_proxy_parts,
-    manual_proxy_value,
+    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, compose_manual_proxy_url,
+    manual_proxy_parts, manual_proxy_value,
 };
 pub use settings::{NebulaSettingsSection, SettingsDropdown, SettingsHit, settings_hit};
 pub(crate) use settings::{NewTabPosition, SettingsOpacityTarget};
@@ -3774,13 +3774,7 @@ impl Display {
         self.pending_update.dirty = true;
     }
 
-    pub fn cycle_accept(&mut self) {
-        self.nebula_accept = self.nebula_accept.cycle();
-        self.persist_nebula_settings();
-        self.pending_update.dirty = true;
-    }
-
-    /// Flip between inline ghost and popup-list completion (palette /
+    /// Cycle the three completion modes (palette /
     /// keybinding path; the settings page goes through
     /// [`Self::set_completion_style_option`]).
     pub fn cycle_completion_style(&mut self) {
@@ -8147,6 +8141,7 @@ impl Display {
         // `line_buf` is used. Only on the primary screen, never during vi/search
         // overlays.
         if alt_screen || vi_mode || search_state.regex().is_some() {
+            pane_state.completion_popup_requested = false;
             pane_state.clear_completion_hints();
         } else {
             #[cfg(windows)]
@@ -8173,6 +8168,7 @@ impl Display {
                     },
                     None => {
                         pane_state.screen_line.clear();
+                        pane_state.completion_popup_requested = false;
                         pane_state.clear_completion_hints();
                     },
                 }
