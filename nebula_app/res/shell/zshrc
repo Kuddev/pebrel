@@ -6,8 +6,7 @@ else
 fi
 if [[ ${skip_global_compinit-} == nebula-bootstrap ]]; then
     unset skip_global_compinit
-    # Ubuntu's /etc/zsh/zshrc condition, now with the user's own dump directory;
-    # the global rc only ran when GLOBAL_RCS was still set.
+    # Ubuntu's /etc/zsh/zshrc condition (it ran only under GLOBAL_RCS), with the user's dump.
     if [[ -o globalrcs && -r /etc/os-release ]] &&
         (( ${${(@f)"$(</etc/os-release)"}[(I)ID*=*ubuntu]} )); then
         autoload -U compinit

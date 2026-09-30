@@ -121,6 +121,20 @@ class ShellIntegrationTests(unittest.TestCase):
             shutil.copyfile(SCRIPTS / source, wrapper / target)
         return wrapper
 
+    def run_bootstrapped_zsh(self, *args: str, companions: bool = True, **extra: str) -> str:
+        # How a WSL guest starts zsh: the bootstrap as ZDOTDIR, with or without its companions.
+        program = shutil.which("zsh")
+        if not program:
+            self.skipTest("zsh is not installed; native CI must run this case")
+        wrapper = self.home / "integration"
+        if not wrapper.exists():
+            self.bootstrap("integration")
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.home), "TERM": "dumb", "ZDOTDIR": str(wrapper)}
+        if companions:
+            env |= {"NEBULA_ZSH_INTEGRATION": str(wrapper), "NEBULA_ZDOTDIR_WAS_SET": "0"}
+        return subprocess.run([program, *args], cwd=self.home, capture_output=True, text=True,
+                              check=True, env=env | extra).stdout
+
     def check_protocol(self, shell: str) -> None:
         session = self.start(shell)
         output = session.command("(exit 7)", b"\x1b]133;D;7\x07")
@@ -261,73 +275,48 @@ class ShellIntegrationTests(unittest.TestCase):
     def test_non_interactive_zsh_does_not_leak_the_bootstrap_zdotdir(self) -> None:
         # WSL shape: `wsl <cmd>` runs `zsh -c`, the host cannot know the guest ZDOTDIR,
         # and the user's ~/.zshenv moves ZDOTDIR (XDG layout).
-        program = shutil.which("zsh")
-        if not program:
-            self.skipTest("zsh is not installed; native CI must run this case")
         dotfiles = self.home / ".config/zsh"
         dotfiles.mkdir(parents=True)
         (self.home / ".zshenv").write_text('export ZDOTDIR="$HOME/.config/zsh"\n', encoding="utf-8")
         (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST=rc\n", encoding="utf-8")
-        wrapper = self.bootstrap("integration")
         nested = 'zsh -i -c \'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} ZDOTDIR=$ZDOTDIR"\'; env'
-        result = subprocess.run(
-            [program, "-c", nested], cwd=self.home, capture_output=True, text=True, check=True,
-            env={"PATH": os.environ["PATH"], "HOME": str(self.home), "TERM": "dumb",
-                 "ZDOTDIR": str(wrapper), "NEBULA_ZSH_INTEGRATION": str(wrapper),
-                 "NEBULA_ZDOTDIR_WAS_SET": "0"},
-        )
-        self.assertIn(f"RC=rc ZDOTDIR={dotfiles}", result.stdout)
-        environment = dict(line.split("=", 1) for line in result.stdout.splitlines()[1:] if "=" in line)
+        output = self.run_bootstrapped_zsh(
+            "-c", nested, WSLENV="KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu")
+        self.assertIn(f"RC=rc ZDOTDIR={dotfiles}", output)
+        environment = dict(line.split("=", 1) for line in output.splitlines()[1:] if "=" in line)
         self.assertEqual(environment.get("ZDOTDIR"), str(dotfiles))
+        self.assertEqual(environment.get("WSLENV"), "KEEP/u:PROMPT_COMMAND")
         self.assertFalse([name for name in environment if name.startswith("NEBULA_")])
 
     def test_zsh_started_during_the_bootstrap_window_still_loads_the_user_rc(self) -> None:
         # A global zshrc that execs a multiplexer starts zsh while the parent bootstrap still
         # exports ZDOTDIR but has unexported its companions.
-        program = shutil.which("zsh")
-        if not program:
-            self.skipTest("zsh is not installed; native CI must run this case")
         (self.home / ".zshrc").write_text("NEBULA_PROFILE_TEST=rc\n", encoding="utf-8")
-        wrapper = self.bootstrap("integration")
         for args in (["-d", "-i"], ["-d", "-l", "-i"]):
-            result = subprocess.run(
-                [program, *args, "-c", 'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} Z=${ZDOTDIR-unset}"'],
-                cwd=self.home, capture_output=True, text=True, check=True,
-                env={"PATH": os.environ["PATH"], "HOME": str(self.home), "TERM": "dumb",
-                     "ZDOTDIR": str(wrapper)},
-            )
-            self.assertIn("RC=rc Z=unset", result.stdout, args)
+            output = self.run_bootstrapped_zsh(
+                *args, "-c", 'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} Z=${ZDOTDIR-unset}"',
+                companions=False)
+            self.assertIn("RC=rc Z=unset", output, args)
 
     def test_zsh_bootstrap_forwards_nothing_to_nested_guests_and_keeps_zdotdir_unexported(self) -> None:
         # WSL forwards every variable WSLENV names to a nested wsl.exe regardless of
         # /u, so the bootstrap must drop its own entries. An XDG ~/.zshenv that sets
         # ZDOTDIR without export must leave child zsh reading ~/.zshenv.
-        program = shutil.which("zsh")
-        if not program:
-            self.skipTest("zsh is not installed; native CI must run this case")
         dotfiles = self.home / ".config/zsh"
         dotfiles.mkdir(parents=True)
         (self.home / ".zshenv").write_text(
             'ZDOTDIR="$HOME/.config/zsh"\nexport NEBULA_TEST_MARK=home-zshenv\n', encoding="utf-8")
         (dotfiles / ".zprofile").write_text("", encoding="utf-8")
         (dotfiles / ".zshrc").write_text("", encoding="utf-8")
-        wrapper = self.bootstrap("integration")
-        environment = {"PATH": os.environ["PATH"], "HOME": str(self.home), "TERM": "dumb",
-                       "ZDOTDIR": str(wrapper), "NEBULA_ZSH_INTEGRATION": str(wrapper),
-                       "NEBULA_ZDOTDIR_WAS_SET": "0",
-                       "WSLENV": "KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu"}
         interactive = ('typeset -p ZDOTDIR; print -r -- "WSLENV=$WSLENV"; '
                        "env -u NEBULA_TEST_MARK zsh -c 'print -r -- \"CHILD=${NEBULA_TEST_MARK-unset}\"'")
         for args in (["-d", "-l", "-i", "-c", interactive], ["-d", "-i", "-c", interactive]):
-            result = subprocess.run([program, *args], cwd=self.home, capture_output=True, text=True,
-                                    check=True, env=environment)
-            self.assertIn("WSLENV=KEEP/u:PROMPT_COMMAND\n", result.stdout, args)
-            self.assertIn(f"typeset ZDOTDIR={dotfiles}", result.stdout, args)
-            self.assertNotIn("export ZDOTDIR", result.stdout, args)
-            self.assertIn("CHILD=home-zshenv", result.stdout, args)
-        plain = subprocess.run([program, "-c", 'print -r -- "WSLENV=$WSLENV"'], cwd=self.home,
-                               capture_output=True, text=True, check=True, env=environment)
-        self.assertEqual(plain.stdout, "WSLENV=KEEP/u:PROMPT_COMMAND\n")
+            output = self.run_bootstrapped_zsh(
+                *args, WSLENV="KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu")
+            self.assertIn("WSLENV=KEEP/u:PROMPT_COMMAND\n", output, args)
+            self.assertIn(f"typeset ZDOTDIR={dotfiles}", output, args)
+            self.assertNotIn("export ZDOTDIR", output, args)
+            self.assertIn("CHILD=home-zshenv", output, args)
 
     def test_zsh_user_rc_programs_do_not_inherit_bootstrap_variables(self) -> None:
         # A terminal multiplexer exec'd from a user rc file must not carry the bootstrap state along.
