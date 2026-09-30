@@ -64,6 +64,45 @@ fn first_and_repeated_translation_lookups_allocate_nothing() {
 }
 
 #[test]
+fn translation_lookup_fits_a_small_stack() {
+    const CHILD: &str = "PEBREL_I18N_SMALL_STACK_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                for language in i18n::UiLanguage::ALL {
+                    assert!(
+                        !black_box(language).text(black_box(i18n::Message::VcsChanges)).is_empty()
+                    );
+                    assert!(!black_box(language).tr(black_box("vcs.changes")).is_empty());
+                    assert!(
+                        !black_box(language)
+                            .pick(black_box("紫罗兰"), black_box("Violet"))
+                            .is_empty()
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        return;
+    }
+    // A stack overflow aborts the process. Isolate the regression so a failure
+    // reports the child status instead of taking down the whole contract suite.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "translation_lookup_fits_a_small_stack", "--nocapture"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "translation lookup exceeded a 64 KiB stack: {}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn embedded_translations_stay_within_the_initial_payload_budget() {
     assert!(i18n::TRANSLATED_BYTES < 256 * 1024);
     assert!(i18n::MESSAGE_COUNT >= 200);

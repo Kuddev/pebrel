@@ -10,11 +10,13 @@
 //! * Built-in completers for files, directories, and static string lists.
 //! * `Span`, `Suggestion`, `SemanticSuggestion`, and `SuggestionKind` types.
 
+pub mod command_context;
 pub mod command_search;
 pub mod completer;
 pub mod file;
 pub mod matcher;
 pub mod options;
+pub mod semantic;
 pub mod span;
 pub mod suggestion;
 

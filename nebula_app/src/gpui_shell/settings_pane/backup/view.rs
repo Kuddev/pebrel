@@ -1,20 +1,25 @@
-//! Compact backup dashboard and configuration card based on the approved layout.
+//! 原型的阅读顺序：状态 → 存储 → 时间线；低频操作放在面板下面。
 use super::*;
-use crate::gpui_shell::widgets::NebulaSwitch;
-use gpui_component::menu::PopupMenuItem;
 
-fn card(cx: &App) -> gpui::Div {
+pub(super) fn panel(cx: &App) -> gpui::Div {
     v_flex()
         .w_full()
         .min_w_0()
-        .gap_4()
-        .p_4()
-        .rounded_lg()
+        .rounded(px(10.0))
         .border_1()
         .border_color(crate::gpui_shell::theme::settings_hairline(cx))
+        .overflow_hidden()
 }
 
-fn provider(config: &remote::BackupRemoteConfig) -> Message {
+pub(super) fn caption(text: impl Into<SharedString>, cx: &App) -> gpui::Div {
+    div()
+        .text_size(px(12.5))
+        .line_height(gpui::relative(1.6))
+        .text_color(cx.theme().muted_foreground)
+        .child(text.into())
+}
+
+pub(super) fn provider(config: &BackupRemoteConfig) -> Message {
     match config.protocol {
         BackupProtocol::Off => Message::CloudOff,
         BackupProtocol::Folder => Message::CloudFolder,
@@ -27,576 +32,426 @@ fn provider(config: &remote::BackupRemoteConfig) -> Message {
     }
 }
 
+pub(super) fn size_text(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn backup_time(name: &str) -> String {
+    name.strip_prefix("pebrel-backup-")
+        .and_then(|s| s.strip_suffix(".nbk"))
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y%m%d-%H%M%S").ok())
+        .map(|time| time.and_utc().with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| name.to_owned())
+}
+
 impl SettingsPane {
     pub(in crate::gpui_shell::settings_pane) fn section_backup(
         &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        self.initialize_backup(cx);
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let configuration = self.backup_ui.configuration;
-        let tabs =
-            gpui_component::button::ButtonGroup::new("cloud-tabs").small().outline().children(
-                [(false, Message::CloudSnapshots), (true, Message::CloudSettings)].into_iter().map(
-                    |(selected, title)| {
-                        Button::new(if selected {
-                            "cloud-tab-settings"
-                        } else {
-                            "cloud-tab-snapshots"
-                        })
-                        .debug_selector(move || {
-                            if selected { "cloud-tab-settings" } else { "cloud-tab-snapshots" }
-                                .into()
-                        })
-                        .label(language.text(title))
-                        .small()
-                        .h(px(28.0))
-                        .rounded(px(14.0))
-                        .selected(configuration == selected)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.backup_ui.configuration = selected;
-                            if !selected && !this.backup_ui.checked {
-                                this.refresh_backup_snapshots(cx);
-                            }
-                            cx.notify();
-                        }))
-                    },
-                ),
-            );
-        let body =
-            if configuration { self.backup_configuration(cx) } else { self.backup_dashboard(cx) };
+        self.initialize_backup(window, cx);
+        let l = crate::gpui_shell::config::ui_language(cx);
+        let off = self.backup_remote.protocol == BackupProtocol::Off;
         v_flex()
             .w_full()
-            .max_w(px(720.0))
-            .gap_4()
+            .max_w(px(700.0))
+            .gap_6()
+            .text_size(px(14.0))
             .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .flex_wrap()
+                v_flex()
+                    .gap_2()
+                    .mb_1()
                     .child(
                         div()
-                            .flex_1()
-                            .text_size(px(20.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(language.text(Message::CloudTitle)),
+                            .text_size(px(22.0))
+                            .font_semibold()
+                            .child(l.text(Message::BackupFlowTitle)),
                     )
-                    .child(tabs),
+                    .child(caption(l.text(Message::BackupFlowIntro), cx)),
             )
-            .child(body)
+            .when(self.backup_ui.undo.is_some(), |d| {
+                d.child(
+                    h_flex()
+                        .gap_3()
+                        .p_3()
+                        .rounded_md()
+                        .bg(cx.theme().muted)
+                        .flex_wrap()
+                        .child(div().flex_1().child(l.text(Message::BackupFlowRestored)))
+                        .child(
+                            Button::new("backup-undo")
+                                .label(l.text(Message::BackupFlowUndo))
+                                .ghost()
+                                .small()
+                                .disabled(self.backup_busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.undo_backup_restore(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("backup-dismiss-undo")
+                                .icon(IconName::Close)
+                                .ghost()
+                                .small()
+                                .disabled(self.backup_busy)
+                                .tooltip(l.text(Message::CommonClose))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.backup_ui.undo = None;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
+            .child(if off { self.backup_wizard(window, cx) } else { self.backup_dashboard(cx) })
+            .when(!off, |d| d.children(self.backup_status_view(cx)))
+            .when(!off, |d| d.child(self.backup_encryption_row(cx)))
+            .when(!off, |d| d.child(self.backup_file_rows(cx)))
     }
 
-    fn backup_status_view(&self, cx: &App) -> Option<gpui::Div> {
-        let language = crate::gpui_shell::config::ui_language(cx);
+    pub(super) fn backup_status_view(&self, cx: &App) -> Option<gpui::Div> {
+        let l = crate::gpui_shell::config::ui_language(cx);
         self.backup_status.as_ref().map(|status| {
             div()
-                .text_sm()
+                .text_size(px(13.0))
                 .text_color(if status.is_error() {
                     cx.theme().danger
                 } else {
                     cx.theme().muted_foreground
                 })
-                .child(status.text(language))
+                .child(status.text(l))
         })
     }
 
-    fn backup_connection_state(&self) -> Message {
-        if self.backup_ui.listing {
-            Message::CloudChecking
-        } else if self.backup_ui.list_error.is_some() {
-            Message::CloudUnreachable
-        } else if self.backup_ui.checked {
-            Message::CloudReachable
-        } else {
-            Message::CloudNotChecked
+    fn snapshot_meta(&self, entry: &Snapshot, cx: &App) -> String {
+        let l = crate::gpui_shell::config::ui_language(cx);
+        let size = entry.bytes.map(size_text).unwrap_or_else(|| "—".into());
+        match self.backup_ui.known.get(&entry.name) {
+            Some((count, device)) => l.format(
+                Message::BackupFlowSnapshotMeta,
+                &[("count", &count.to_string()), ("size", &size), ("device", device)],
+            ),
+            None => format!("{size} · {}", l.text(Message::CloudEncryptedArchive)),
         }
     }
 
     fn backup_dashboard(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let off = self.backup_remote.protocol == BackupProtocol::Off;
-        let busy = self.backup_busy || self.backup_ui.secret_busy;
-        let mut history = card(cx).child(
-            h_flex()
-                .gap_3()
-                .items_center()
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_1()
-                        .child(
-                            div()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child(language.text(Message::CloudSnapshots)),
-                        )
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
-                            language.format(
-                                Message::CloudRetention,
-                                &[("count", &remote::KEEP_ARCHIVES.to_string())],
-                            ),
-                        )),
-                )
-                .child(
-                    Button::new("cloud-refresh")
-                        .ghost()
-                        .size(px(28.0))
-                        .icon(Icon::default().path(crate::gpui_shell::assets::nav::REFRESH))
-                        .tooltip(language.text(Message::CloudRefresh))
-                        .disabled(off || self.backup_ui.listing || busy)
-                        .on_click(cx.listener(|this, _, _, cx| this.refresh_backup_snapshots(cx))),
-                ),
-        );
-        if self.backup_ui.snapshots.is_empty() {
-            history = history.child(
-                v_flex()
-                    .w_full()
-                    .py_6()
-                    .gap_2()
-                    .items_center()
-                    .text_center()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(Icon::new(IconName::FolderOpen).size(px(24.0)))
-                    .child(language.text(if self.backup_ui.checked {
-                        Message::CloudEmpty
+        let l = crate::gpui_shell::config::ui_language(cx);
+        let latest = self.backup_ui.snapshots.first();
+        let mut head = v_flex().flex_1().min_w_0().gap_2();
+        if let Some(entry) = latest {
+            head = head
+                .child(caption(l.text(Message::BackupFlowLastBackup), cx))
+                .child(div().text_size(px(28.0)).font_semibold().child(backup_time(&entry.name)))
+                .child(caption(self.snapshot_meta(entry, cx), cx));
+        } else {
+            head = head
+                .child(div().text_size(px(18.0)).font_semibold().child(l.text(
+                    if self.backup_ui.listing {
+                        Message::CloudChecking
                     } else {
-                        Message::CloudLoadHistory
-                    })),
-            );
+                        Message::BackupFlowEmpty
+                    },
+                )))
+                .child(caption(l.text(Message::BackupFlowEmptyHint), cx));
         }
-        for (index, name) in self.backup_ui.snapshots.iter().enumerate() {
-            let target = name.clone();
-            history = history.child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .py_3()
-                    .gap_3()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .size(px(8.0))
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .bg(cx.theme().muted_foreground),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(div().truncate().text_sm().child(name.clone()))
-                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
-                                language.text(if index == 0 {
-                                    Message::CloudLatest
-                                } else {
-                                    Message::CloudEncryptedArchive
-                                }),
-                            )),
-                    )
-                    .child(
-                        Button::new(("cloud-restore-version", index))
-                            .label(language.text(Message::CloudRestore))
-                            .small()
-                            .disabled(busy)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.confirm_backup_restore(
-                                    RestoreSource::Remote(Some(target.clone())),
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    ),
-            );
-        }
-        let connection = self.backup_connection_state();
-        v_flex()
-            .w_full()
-            .gap_5()
-            .child(
-                card(cx)
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .items_center()
-                            .flex_wrap()
-                            .child(Icon::new(IconName::Globe).size(px(20.0)))
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(160.0))
-                                    .gap_1()
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .flex_wrap()
-                                            .child(
-                                                div()
-                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    .child(
-                                                        language
-                                                            .text(provider(&self.backup_remote)),
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(language.text(connection)),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(language.text(Message::CloudEncryptedArchive)),
-                                    ),
+        let actions = h_flex()
+            .gap_2()
+            .flex_wrap()
+            .when_some(latest, |row, entry| {
+                let name = entry.name.clone();
+                row.child(
+                    Button::new("backup-restore-latest")
+                        .label(l.text(Message::CloudRestore))
+                        .small()
+                        .disabled(self.backup_busy)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_backup_restore(
+                                RestoreSource::Remote(name.clone()),
+                                window,
+                                cx,
                             )
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .flex_wrap()
-                                    .child(
-                                        Button::new("cloud-pull")
-                                            .label(language.text(Message::CloudRestoreLatest))
-                                            .small()
-                                            .disabled(off || busy)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.confirm_backup_restore(
-                                                    RestoreSource::Remote(None),
-                                                    window,
-                                                    cx,
-                                                )
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("cloud-push")
-                                            .label(language.text(Message::CloudBackupNow))
-                                            .small()
-                                            .primary()
-                                            .disabled(off || busy)
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.push_remote(cx)),
-                                            ),
-                                    ),
-                            ),
+                        })),
+                )
+            })
+            .child(
+                Button::new("backup-now")
+                    .debug_selector(|| "backup-now".into())
+                    .label(l.text(Message::CloudBackupNow))
+                    .primary()
+                    .small()
+                    .h(px(34.0))
+                    .disabled(
+                        self.backup_busy
+                            || self.backup_ui.listing
+                            || self.backup_ui.list_error.is_some(),
                     )
-                    .children(self.backup_status_view(cx))
-                    .children(self.backup_ui.list_error.as_ref().map(|error| {
-                        div().text_sm().text_color(cx.theme().danger).child(error.clone())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_backup_sheet(BackupSheet::Backup, window, cx)
                     })),
-            )
-            .child(history)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .flex_wrap()
-                    .child(
-                        Button::new("cloud-export-file")
-                            .label(language.text(Message::CloudExport))
-                            .small()
-                            .ghost()
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.export_backup(cx))),
-                    )
-                    .child(
-                        Button::new("cloud-import-file")
-                            .label(language.text(Message::CloudImport))
-                            .small()
-                            .ghost()
-                            .disabled(busy)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.restore_backup(window, cx)),
-                            ),
-                    ),
-            )
-    }
-
-    fn backup_configuration(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let busy = self.backup_busy || self.backup_ui.secret_busy;
-        let owner = cx.entity().downgrade();
-        let provider_menu = Button::new("cloud-provider")
-            .debug_selector(|| "cloud-provider".into())
-            .w(px(SETTINGS_SELECT_WIDTH))
-            .max_w_full()
-            .small()
-            .h(px(32.0))
-            .dropdown_caret(true)
-            .label(language.text(provider(&self.backup_remote)))
-            .disabled(busy)
-            .dropdown_menu(move |mut menu, _, _| {
-                for (protocol, nutstore, label) in [
-                    (BackupProtocol::WebDav, true, Message::CloudNutstore),
-                    (BackupProtocol::WebDav, false, Message::CloudWebdav),
-                    (BackupProtocol::S3, false, Message::CloudS3),
-                    (BackupProtocol::Sftp, false, Message::CloudSftp),
-                    (BackupProtocol::Folder, false, Message::CloudFolder),
-                    (BackupProtocol::Off, false, Message::CloudOff),
-                ] {
-                    let owner = owner.clone();
-                    menu = menu.item(PopupMenuItem::new(language.text(label)).on_click(
-                        move |_, window, cx| {
-                            let _ = owner.update(cx, |pane, cx| {
-                                pane.select_backup_protocol(protocol, nutstore, window, cx)
-                            });
-                        },
-                    ));
-                }
-                menu
-            });
-        let mut storage = card(cx)
-            .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .flex_wrap()
-                    .child(Icon::new(IconName::Globe).size(px(18.0)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(language.text(Message::CloudConfigure)),
-                    )
-                    .child(
-                        Button::new("cloud-scope-toggle")
-                            .debug_selector(|| "cloud-scope-toggle".into())
-                            .label(language.text(Message::CloudScope))
-                            .small()
-                            .ghost()
-                            .icon(if self.backup_ui.scope_open {
-                                IconName::ChevronUp
-                            } else {
-                                IconName::ChevronDown
-                            })
-                            .selected(self.backup_ui.scope_open)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.backup_ui.scope_open = !this.backup_ui.scope_open;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .items_start()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(language.text(Message::CloudProvider)),
-                    )
-                    .child(provider_menu),
             );
-        let fields: &[Message] = match self.backup_remote.protocol {
-            BackupProtocol::Off => &[],
-            BackupProtocol::Folder => &[Message::CloudFolderPath],
-            BackupProtocol::WebDav => &[Message::CloudAddress, Message::CloudUsername],
-            BackupProtocol::S3 => &[
-                Message::CloudS3Address,
-                Message::CloudRegion,
-                Message::CloudBucket,
-                Message::CloudAccessKey,
-            ],
-            BackupProtocol::Sftp => &[Message::CloudSshHost, Message::CloudRemotePath],
+        let path = match self.backup_remote.protocol {
+            BackupProtocol::Folder => self.backup_remote.folder_path.clone(),
+            BackupProtocol::WebDav => self.backup_remote.webdav_url.clone(),
+            BackupProtocol::S3 => {
+                format!("{} / {}", self.backup_remote.s3_endpoint, self.backup_remote.s3_bucket)
+            },
+            BackupProtocol::Sftp => {
+                format!("{}:{}", self.backup_remote.sftp_destination, self.backup_remote.sftp_path)
+            },
+            BackupProtocol::Off => String::new(),
         };
-        for (index, label) in fields.iter().enumerate() {
-            storage = storage.child(
-                v_flex()
-                    .w_full()
-                    .max_w(px(420.0))
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(language.text(*label)),
-                    )
-                    .child(
-                        Input::new(&self.backup_remote_inputs[index]).h(px(32.0)).disabled(busy),
-                    ),
-            );
-        }
-        if matches!(self.backup_remote.protocol, BackupProtocol::WebDav | BackupProtocol::S3) {
-            storage = storage.child(
-                v_flex()
-                    .w_full()
-                    .max_w(px(420.0))
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(div().text_xs().child(language.text(Message::CloudCredential)))
-                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
-                                language.text(if self.backup_ui.secret_ready == Some(true) {
-                                    Message::CloudCredentialSet
-                                } else {
-                                    Message::CloudCredentialNeeded
-                                }),
-                            )),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .flex_wrap()
-                            .child(div().flex_1().min_w(px(180.0)).child(
-                                Input::new(&self.backup_secret_input).h(px(32.0)).disabled(busy),
-                            ))
-                            .child(
-                                Button::new("cloud-store-secret")
-                                    .label(language.text(Message::CloudStoreCredential))
-                                    .small()
-                                    .disabled(busy)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.store_remote_secret(window, cx)
-                                    })),
-                            ),
-                    ),
-            );
-        }
-        if self.backup_ui.scope_open {
-            storage = storage.child(self.backup_scope(cx));
-        }
-        let save_label = match &self.backup_ui.save_result {
-            Some(Ok(())) => Message::CloudSaved,
-            Some(Err(_)) => Message::CloudSaveFailed,
-            None if self.backup_ui.save_revision > 0 => Message::CloudSaving,
-            None => Message::CloudAutoSave,
-        };
-        storage =
-            storage
+        let store =
+            v_flex()
+                .px_6()
+                .py_3()
+                .gap_2()
+                .border_t_1()
+                .border_color(cx.theme().border)
                 .child(
                     h_flex()
                         .gap_3()
                         .items_center()
                         .flex_wrap()
-                        .pt_3()
-                        .border_t_1()
-                        .border_color(cx.theme().border)
                         .child(
-                            Button::new("cloud-test")
-                                .label(language.text(Message::CloudTest))
+                            Icon::default()
+                                .path(super::setup::provider_icon(&self.backup_remote))
+                                .size(px(16.0)),
+                        )
+                        .child(div().font_medium().child(l.text(provider(&self.backup_remote))))
+                        .child(caption(path, cx).flex_1().min_w_0().truncate())
+                        .child(
+                            Button::new("backup-edit-storage")
+                                .label(l.text(Message::BackupFlowChange))
+                                .ghost()
                                 .small()
-                                .disabled(
-                                    busy || self.backup_ui.listing
-                                        || self.backup_remote.protocol == BackupProtocol::Off,
-                                )
+                                .disabled(self.backup_busy)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_backup_sheet(BackupSheet::Storage, window, cx)
+                                })),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(caption(
+                            l.text(if self.backup_ui.listing {
+                                Message::CloudChecking
+                            } else if self.backup_ui.list_error.is_some() {
+                                Message::BackupFlowConnectionFailed
+                            } else {
+                                Message::BackupFlowConnected
+                            }),
+                            cx,
+                        ))
+                        .child(
+                            Button::new("backup-refresh")
+                                .icon(IconName::Redo2)
+                                .ghost()
+                                .small()
+                                .tooltip(l.text(Message::CloudTest))
+                                .disabled(self.backup_busy || self.backup_ui.listing)
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.refresh_backup_snapshots(cx)),
                                 ),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(language.text(self.backup_connection_state())),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            div()
-                                .id("cloud-save-status")
-                                .debug_selector(|| "cloud-save-status".into())
-                                .text_xs()
-                                .text_color(if matches!(self.backup_ui.save_result, Some(Err(_))) {
-                                    cx.theme().danger
-                                } else {
-                                    cx.theme().muted_foreground
-                                })
-                                .child(language.text(save_label)),
                         ),
                 )
-                .when(matches!(self.backup_ui.save_result, Some(Err(_))), |card| {
-                    card.child(
-                        Button::new("cloud-retry-save")
-                            .label(language.text(Message::CloudRetrySave))
-                            .small()
-                            .on_click(cx.listener(|this, _, _, cx| this.queue_backup_save(cx))),
-                    )
-                })
-                .children(self.backup_status_view(cx))
                 .children(self.backup_ui.list_error.as_ref().map(|error| {
                     div().text_sm().text_color(cx.theme().danger).child(error.clone())
                 }));
+        let mut history =
+            v_flex().w_full().px_6().py_3().border_t_1().border_color(cx.theme().border);
+        for (index, entry) in self.backup_ui.snapshots.iter().enumerate() {
+            let name = entry.name.clone();
+            let device = self
+                .backup_ui
+                .known
+                .get(&name)
+                .map(|(_, d)| d.clone())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| l.text(Message::CloudEncryptedArchive).into());
+            history = history.child(
+                h_flex()
+                    .w_full()
+                    .min_h(px(42.0))
+                    .gap_3()
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(14.0))
+                            .h(px(42.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .left(px(6.0))
+                                    .w(px(1.0))
+                                    .bg(cx.theme().border),
+                            )
+                            .child(
+                                div()
+                                    .relative()
+                                    .size(px(8.0))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(if index == 0 {
+                                        cx.theme().primary
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .bg(if index == 0 {
+                                        cx.theme().primary
+                                    } else {
+                                        crate::gpui_shell::theme::settings_panel_bg(cx)
+                                    }),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_size(px(13.0)).child(backup_time(&name)))
+                            .when(index == 0, |r| {
+                                r.child(caption(l.text(Message::BackupFlowLatest), cx))
+                            }),
+                    )
+                    .child(caption(device, cx).flex_1().min_w_0().truncate())
+                    .child(caption(entry.bytes.map(size_text).unwrap_or_else(|| "—".into()), cx))
+                    .child(
+                        Button::new(("backup-restore", index))
+                            .label(l.text(Message::CloudRestore))
+                            .small()
+                            .ghost()
+                            .disabled(self.backup_busy)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_backup_restore(
+                                    RestoreSource::Remote(name.clone()),
+                                    window,
+                                    cx,
+                                )
+                            })),
+                    ),
+            );
+        }
+        history =
+            history.child(caption(l.text(Message::BackupFlowRetention), cx).pl(px(26.0)).py_3());
+        panel(cx)
+            .debug_selector(|| "backup-dashboard".into())
+            .child(h_flex().w_full().p_6().gap_4().flex_wrap().child(head).child(actions))
+            .child(store)
+            .when(latest.is_some(), |d| d.child(history))
+    }
+
+    fn backup_encryption_row(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let l = crate::gpui_shell::config::ui_language(cx);
+        let ready = cx.try_global::<BackupPassword>().is_some_and(|p| p.0.is_some());
         v_flex()
-            .w_full()
-            .gap_5()
+            .gap_3()
+            .child(div().font_semibold().child(l.text(Message::BackupFlowEncryption)))
             .child(
-                div()
-                    .id("cloud-storage-card")
-                    .debug_selector(|| "cloud-storage-card".into())
-                    .child(storage),
-            )
-            .child(
-                card(cx)
+                h_flex()
+                    .gap_4()
+                    .items_center()
+                    .flex_wrap()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
                     .child(
-                        div()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(language.text(Message::CloudPassphrase)),
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(180.0))
+                            .gap_1()
+                            .child(l.text(Message::CloudPassphrase))
+                            .child(caption(l.text(Message::BackupFlowPasswordHint), cx)),
                     )
+                    .child(caption(
+                        l.text(if ready {
+                            Message::BackupFlowPasswordReady
+                        } else {
+                            Message::BackupFlowPasswordMissing
+                        }),
+                        cx,
+                    ))
                     .child(
-                        div()
-                            .w_full()
-                            .max_w(px(420.0))
-                            .child(Input::new(&self.backup_pass_input).h(px(32.0)).disabled(busy)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(language.text(Message::CloudPassphraseHint)),
+                        Button::new("backup-password")
+                            .label(l.text(if ready {
+                                Message::BackupFlowClear
+                            } else {
+                                Message::BackupFlowEnter
+                            }))
+                            .small()
+                            .ghost()
+                            .disabled(self.backup_busy)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if ready {
+                                    cx.set_global(BackupPassword::default());
+                                    this.clear_backup_inputs(window, cx);
+                                    cx.notify();
+                                } else {
+                                    this.open_backup_sheet(BackupSheet::Password, window, cx);
+                                }
+                            })),
                     ),
             )
     }
 
-    fn backup_scope(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let selection = self.backup_selection;
-        let categories: [(Message, bool, fn(&mut crate::encrypted_backup::BackupSelection, bool));
-            9] = [
-            (Message::CloudAppearance, selection.appearance, |s, v| s.appearance = v),
-            (Message::CloudTerminal, selection.config, |s, v| s.config = v),
-            (Message::CloudHosts, selection.ssh, |s, v| s.ssh = v),
-            (Message::CloudSync, selection.sync, |s, v| s.sync = v),
-            (Message::CloudAssistant, selection.assistant, |s, v| s.assistant = v),
-            (Message::CloudSessions, selection.session, |s, v| s.session = v),
-            (Message::CloudDirectories, selection.directory_history, |s, v| {
-                s.directory_history = v
-            }),
-            (Message::CloudCommands, selection.command_history, |s, v| s.command_history = v),
-            (Message::CloudFonts, selection.fonts, |s, v| s.fonts = v),
-        ];
+    fn backup_file_rows(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let l = crate::gpui_shell::config::ui_language(cx);
         v_flex()
-            .w_full()
-            .gap_2()
-            .pt_3()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .debug_selector(|| "cloud-scope-options".into())
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(language.text(Message::CloudScopeHint)),
+            .gap_3()
+            .child(div().font_semibold().child(l.text(Message::BackupFlowFiles)))
+            .children(
+                [
+                    (true, Message::CloudExport, Message::BackupFlowExportHint),
+                    (false, Message::CloudImport, Message::BackupFlowImportHint),
+                ]
+                .into_iter()
+                .map(|(export, title, hint)| {
+                    h_flex()
+                        .gap_4()
+                        .items_center()
+                        .flex_wrap()
+                        .py_3()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w(px(180.0))
+                                .gap_1()
+                                .child(l.text(title))
+                                .child(caption(l.text(hint), cx)),
+                        )
+                        .child(
+                            Button::new(if export { "backup-export" } else { "backup-import" })
+                                .label(l.text(if export {
+                                    Message::CloudExport
+                                } else {
+                                    Message::BackupFlowChooseFile
+                                }))
+                                .small()
+                                .disabled(self.backup_busy)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    if export {
+                                        this.open_backup_sheet(BackupSheet::Export, window, cx);
+                                    } else {
+                                        this.restore_backup(window, cx);
+                                    }
+                                })),
+                        )
+                }),
             )
-            .children(categories.into_iter().enumerate().map(|(index, (label, checked, apply))| {
-                h_flex()
-                    .w_full()
-                    .gap_3()
-                    .items_center()
-                    .py_1()
-                    .child(div().flex_1().text_sm().child(language.text(label)))
-                    .child(
-                        NebulaSwitch::new(format!("cloud-scope-{index}"))
-                            .checked(checked)
-                            .disabled(self.backup_busy)
-                            .on_click(cx.listener(move |this, enabled: &bool, _, cx| {
-                                apply(&mut this.backup_selection, *enabled);
-                                this.queue_backup_save(cx);
-                            })),
-                    )
-            }))
     }
 }

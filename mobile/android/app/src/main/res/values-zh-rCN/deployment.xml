@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="deploy_done">中转服务已就绪</string>
+    <string name="deploy_pc_next">将两份配置文件保存到电脑的连接助手目录。在电脑上启动助手接入 Pebrel 会话，然后在此连接。</string>
+    <string name="deploy_save_pc">保存电脑配置</string>
+    <string name="deploy_save_phone">保存手机邀请</string>
+    <string name="deploy_copy_command">复制电脑启动命令</string>
+    <string name="deploy_export_saved">文件已保存</string>
+    <string name="deploy_export_failed">文件保存失败，请选择可写位置重试。</string>
+    <string name="deploy_command_copied">启动命令已复制</string>
+    <string name="deploy_wait_hint">服务器可能需要下载容器镜像并申请证书。取消会关闭 SSH 操作，已经启动的服务仍保留在服务器上。</string>
+    <string name="deploy_existing_host">已有 SSH 主机</string>
+    <string name="deploy_manual">手动配置 SSH</string>
+    <string name="deploy_choose_host">选择 SSH 主机</string>
+    <string name="deploy_domain">公网域名</string>
+    <string name="deploy_https_port">HTTPS 端口</string>
+    <string name="deploy_http_port">HTTP 验证端口</string>
+    <string name="deploy_directory">服务器安装目录</string>
+    <string name="deploy_requirements">需要 Linux、Docker 和 Compose，且 SSH 账户有权运行 Docker。域名需解析到该服务器，公网 80 端口需通向 HTTP 验证端口，同时开放 HTTPS 端口。不会覆盖已有的无关目录。</string>
+    <string name="deploy_start">部署并启动</string>
+    <string name="deploy_validating">正在检查配置…</string>
+    <string name="deploy_prerequisites">正在检查服务器环境…</string>
+    <string name="deploy_uploading">正在上传中转源码…</string>
+    <string name="deploy_initializing">正在生成连接凭据…</string>
+    <string name="deploy_starting">正在构建并启动服务…</string>
+    <string name="deploy_health">正在检查 HTTPS 服务…</string>
+    <string name="deploy_invalid">请检查域名、端口及专用安装目录。</string>
+    <string name="deploy_docker_required">请先安装 Docker 和 Compose，并允许该 SSH 账户使用 Docker。</string>
+    <string name="deploy_directory_conflict">该目录包含无关文件或不支持的部署，请选择新的空目录。</string>
+    <string name="deploy_health_failed">服务尚未通过 HTTPS 检查。请检查域名解析、公网端口及服务器证书后重试。</string>
+    <string name="deploy_failed">部署未完成。请检查服务器权限、剩余空间及容器下载后重试。</string>
+</resources>

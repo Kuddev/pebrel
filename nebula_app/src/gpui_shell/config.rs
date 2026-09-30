@@ -76,6 +76,7 @@ pub struct Settings {
     pub(crate) resolved_theme: Arc<crate::gpui_shell::theme::ResolvedTheme>,
     pub cursor_shape: Option<CursorShape>,
     pub cursor_blink: Option<bool>,
+    pub cursor_motion: nebula_settings::CursorMotion,
     /// 选区完成即复制（旧壳 `copy_on_select` 设置）。
     pub copy_on_select: bool,
     pub scrollback_lines: usize,
@@ -90,10 +91,9 @@ pub struct Settings {
     /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
     pub tab_close_visible: bool,
     pub tab_reveal: nebula_settings::TabRevealName,
-    /// 命令补全三设置（settings.txt 的 `ghost`/`accept`/`completion_style`），
+    /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
     /// 类型直接用旧壳 display 的语义枚举：接受键判定与样式分支两壳同源。
     pub ghost: bool,
-    pub accept: crate::display::AcceptKey,
     pub completion_style: crate::display::CompletionStyle,
     /// 单元格宽度取整方式；同一窗口宽度下必须与旧壳得到相同列数。
     pub cell_width_mode: nebula_settings::CellWidthModeName,
@@ -122,6 +122,12 @@ pub(crate) fn ui_language(cx: &App) -> UiLanguage {
 
 pub(crate) fn panel_resize(cx: &App) -> bool {
     cx.try_global::<Settings>().is_some_and(|settings| settings.panel_resize)
+}
+
+/// 只查询内存快照，避免动画渲染读盘；初始化前保持默认滑动行为。
+pub(crate) fn tab_reveal_instant(cx: &App) -> bool {
+    cx.try_global::<Settings>()
+        .is_some_and(|settings| settings.tab_reveal == nebula_settings::TabRevealName::Instant)
 }
 
 pub(crate) fn ctrl_wheel_font_zoom(cx: &App) -> bool {
@@ -286,6 +292,7 @@ impl Settings {
                 CursorShapeName::Hollow => CursorShape::HollowBlock,
             }),
             cursor_blink: runtime.cursor_blink,
+            cursor_motion: runtime.cursor_motion,
             copy_on_select: runtime.copy_on_select,
             scrollback_lines: runtime.scrollback_lines,
             scroll_speed: runtime.scroll_speed,
@@ -298,15 +305,7 @@ impl Settings {
             tab_close_visible: runtime.tab_close_visible,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,
-            accept: match runtime.accept.settings_value() {
-                "right" => crate::display::AcceptKey::Right,
-                "tab" => crate::display::AcceptKey::Tab,
-                _ => crate::display::AcceptKey::Both,
-            },
-            completion_style: match runtime.completion_style.settings_value() {
-                "popup" => crate::display::CompletionStyle::Popup,
-                _ => crate::display::CompletionStyle::Inline,
-            },
+            completion_style: runtime.completion_style,
             cell_width_mode: runtime.cell_width_mode,
             cjk_bold_regular: runtime.cjk_bold_regular,
             shell_id: runtime.shell.clone(),
@@ -468,6 +467,70 @@ fn rgba8(color: nebula_settings::Rgb8) -> gpui::Rgba {
 
 fn default_font_family() -> &'static str {
     crate::font_install::REQUIRED_FONT_FAMILY
+}
+
+/// `config.window.dimensions`：启动窗口的网格行列。
+///
+/// 单独驻留而不是并入 [`Settings`]，因为生命周期不同：`Settings` 随设置页写入
+/// 反复重载，启动网格按定义只在开窗时生效一次，而 Lua 配置求值不该出现在每次
+/// 保存设置的路径上。显式 `--config-file` 优先；否则复用主应用发现顺序（`pebrel.lua`
+/// 优先于 `pebrel.toml`，YAML 同路）和 `pebrel config check` 的同一解析器。
+#[derive(Default)]
+pub(crate) struct StartupWindow {
+    pub dimensions: Option<crate::config::window::Dimensions>,
+}
+
+impl Global for StartupWindow {}
+
+impl StartupWindow {
+    pub(crate) fn load(config_file: Option<PathBuf>) -> Self {
+        let source = match crate::config::source::discover(config_file) {
+            Ok(Some(source)) => source,
+            Ok(None) => return Self::default(),
+            Err(error) => {
+                super::try_write_stderr(format_args!(
+                    "[pebrel:gpui] failed to find window config: {error}"
+                ));
+                return Self::default();
+            },
+        };
+        match crate::config::load_source(&source) {
+            Ok(loaded) => Self::from_config(&loaded.config),
+            Err(error) => {
+                super::try_write_stderr(format_args!(
+                    "[pebrel:gpui] failed to read window config {}: {error}",
+                    source.primary_path.display()
+                ));
+                Self::default()
+            },
+        }
+    }
+
+    /// `dimensions()` 自带「行列必须同时非零」的旧壳合同。
+    fn from_config(config: &crate::config::UiConfig) -> Self {
+        Self { dimensions: config.window.dimensions() }
+    }
+}
+
+/// 启动网格行列（浮点，供 cell 宽度直接相乘）。
+///
+/// 配置了 `config.window.dimensions` 就按它定形，与旧壳 `window_size` 同合同
+/// （行列各钳到终端最小可用值）；未配置时用 `TerminalView` 的内建默认画布。
+pub(crate) fn startup_grid(cx: &App) -> (f32, f32) {
+    let builtin = || {
+        (
+            f32::from(super::terminal::view::TerminalView::DEFAULT_GRID_COLUMNS),
+            f32::from(super::terminal::view::TerminalView::DEFAULT_GRID_LINES),
+        )
+    };
+    let Some(dimensions) = cx.try_global::<StartupWindow>().and_then(|window| window.dimensions)
+    else {
+        return builtin();
+    };
+    (
+        dimensions.columns.max(nebula_terminal::term::MIN_COLUMNS) as f32,
+        dimensions.lines.max(nebula_terminal::term::MIN_SCREEN_LINES) as f32,
+    )
 }
 
 /// 查找配置文件；顺序与 `nebula_app::config::installed_config` 一致。
@@ -784,10 +847,11 @@ fn build_palette(raw: &RawColors) -> Palette {
 #[cfg(test)]
 mod tests {
     use super::{
-        RawColors, Settings, apply_resolved_theme, apply_theme, build_palette,
+        RawColors, Settings, StartupWindow, apply_resolved_theme, apply_theme, build_palette,
         effective_font_sizes, effective_theme_line_height, resolve_ui_language, rgba8,
-        runtime_background,
+        runtime_background, startup_grid,
     };
+    use crate::config::window::Dimensions;
     use crate::display::UiLanguage;
     use crate::gpui_shell::terminal::colors::Palette;
     use nebula_settings::{
@@ -803,6 +867,79 @@ mod tests {
     fn explicit_runtime_languages_resolve_without_reading_system_locale() {
         assert_eq!(resolve_ui_language(LanguagePref::ZhCn), UiLanguage::ZhCn);
         assert_eq!(resolve_ui_language(LanguagePref::EnUs), UiLanguage::EnUs);
+    }
+
+    #[test]
+    fn startup_window_uses_the_config_file_selected_by_cli() {
+        use clap::Parser as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("selected.lua");
+        std::fs::write(
+            &path,
+            "local pebrel = require 'pebrel'\n\
+             local config = pebrel.config_builder()\n\
+             config.window = { dimensions = { columns = 123, lines = 37 } }\n\
+             return config\n",
+        )
+        .unwrap();
+        let options = crate::cli::Options::try_parse_from([
+            "pebrel",
+            "--config-file",
+            path.to_str().unwrap(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            StartupWindow::load(options.config_file).dimensions,
+            Some(Dimensions { columns: 123, lines: 37 })
+        );
+    }
+
+    /// 用户写在 `pebrel.lua` 里的 `config.window.dimensions` 必须真的决定启动
+    /// 网格；过去它只被 `pebrel config check` 的同一套解析认下，壳从不读取。
+    #[test]
+    fn lua_window_dimensions_reach_the_startup_grid() {
+        use crate::config::lua::runtime::ReloadSignal;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pebrel.lua");
+        std::fs::write(
+            &path,
+            "local pebrel = require 'pebrel'\n\
+             local config = pebrel.config_builder()\n\
+             config.window = { dimensions = { columns = 155, lines = 43 } }\n\
+             return config\n",
+        )
+        .unwrap();
+        let loaded = crate::config::lua::load_lua_file(&path, ReloadSignal::default()).unwrap();
+
+        assert_eq!(
+            StartupWindow::from_config(&loaded.config).dimensions,
+            Some(Dimensions { columns: 155, lines: 43 })
+        );
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn startup_grid_follows_window_dimensions(cx: &mut gpui::TestAppContext) {
+        use crate::gpui_shell::terminal::view::TerminalView;
+
+        let builtin = (
+            f32::from(TerminalView::DEFAULT_GRID_COLUMNS),
+            f32::from(TerminalView::DEFAULT_GRID_LINES),
+        );
+        let configured = |columns: usize, lines: usize| StartupWindow {
+            dimensions: Some(Dimensions { columns, lines }),
+        };
+        cx.update(|cx| {
+            assert_eq!(startup_grid(cx), builtin);
+            cx.set_global(configured(155, 43));
+            assert_eq!(startup_grid(cx), (155.0, 43.0));
+            // 与旧壳 `window_size` 同合同：行列各钳到终端最小可用值。
+            cx.set_global(configured(1, 1));
+            assert_eq!(startup_grid(cx), (2.0, 1.0));
+        });
     }
 
     #[cfg(feature = "gpui-test-support")]

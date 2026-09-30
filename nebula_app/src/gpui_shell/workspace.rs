@@ -35,6 +35,7 @@ use gpui::{
 
 use crate::display::color::Rgb;
 use crate::gpui_shell::code_tab::CodeTabViewEvent;
+use crate::gpui_shell::config::tab_reveal_instant;
 use crate::gpui_shell::doc_tabs::DocTabViewEvent;
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::settings_pane::{SettingsPane, SettingsPaneEvent};
@@ -70,6 +71,8 @@ mod rename;
 use rename::apply_cancel_rename;
 use rename::{PaneRename, TabRename, apply_commit_rename};
 mod residency;
+mod runtime_conversation;
+mod runtime_tabs;
 mod send_to_chat;
 mod session_persistence;
 mod session_recovery;
@@ -85,6 +88,7 @@ mod tab_drag;
 mod tab_duplication;
 mod tab_menu;
 mod tab_presentation;
+use tab_presentation::TabMeta;
 use tab_presentation::TabPresentation;
 mod tab_scroll;
 mod top_tabs;
@@ -360,10 +364,6 @@ fn dock_tree(target: SplitTree<u64>, source: SplitTree<u64>, nav: SplitNav) -> S
     target.joined(source, nav)
 }
 
-/// 侧栏 tab 行高与行距（与 `render_sidebar` 的 `h(px(TAB_ROW_H))`、
-/// `gap_2`(8px) 同源）；受约束拖拽按此步距换算让位槽位。
-pub(super) const TAB_ROW_H: f32 = 34.0;
-pub(super) const TAB_ROW_PITCH: f32 = TAB_ROW_H + 8.0;
 /// 右侧抽屉槽位宽度 = 抽屉自身宽度。抽屉贴满右侧整条竖带（上下右都不留卡缝，
 /// 左侧直接抵住终端卡），所以槽位里不再有额外的卡缝要算进来。
 
@@ -603,31 +603,6 @@ fn ssh_host_icon_ids(data_dir: &Path) -> std::collections::HashMap<String, Strin
         .unwrap_or_default()
 }
 
-/// 标签的用户可编辑元数据：重命名与色标（旧壳 `TabEntry::custom_name` /
-/// `custom_color` 的对应物，字段与共享 session v4 的 `TabSession` 同名同义，
-/// 所以导出/恢复不需要转换层）。
-///
-/// 与 `tabs` **同下标**。长度必须一致，所以增删移三种结构性改动只允许走
-/// `insert_tab_at` / `remove_tab_at` / `move_tab`——别处直接 `self.tabs.push`
-/// 会让色条和名字错位到邻居身上。
-#[derive(Clone, Debug, Default)]
-struct TabMeta {
-    /// 用户重命名过的标签名；`None` = 跟着 cwd/文件名自动走。
-    custom_name: Option<String>,
-    /// 色标（右键菜单的标签颜色）；`None` = 不画色条。
-    color: Option<Rgb>,
-    /// 本 Tab 创建时实际采用的 shell 短标。默认 shell 是“新建时参数”，
-    /// 不是全局实时主题；设置改变后既有 PTY 不会换进程，这个标签也不能
-    /// 跟着全局值漂移。非终端 Tab 为 `None`。
-    shell_tag: Option<SharedString>,
-    /// 与旧壳 `TabEntry::launch` 同义：保存“这个 Tab 创建时实际采用什么
-    /// 启动方式”。共享 session v4 已有完整 schema，GPUI 只需把它保留下来，
-    /// 不能在快照时把所有本地 Tab 都降级成 `None`。
-    launch: Option<crate::session::LaunchSession>,
-    /// 后台 tab 响过 BEL（旧壳 `has_bell`）。激活即清。
-    has_bell: bool,
-}
-
 pub struct NebulaWorkspace {
     tabs: Vec<WorkspaceTab>,
     /// 与 `tabs` 同下标的用户元数据，见 [`TabMeta`]。
@@ -650,8 +625,9 @@ pub struct NebulaWorkspace {
     sidebar_collapsed: bool,
     /// 只折叠 TABS 分区，不影响整个左栏；与旧壳分区标题的 chevron 同义。
     tabs_section_collapsed: bool,
-    /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进 48px 标题栏。
+    /// 标签栏布局：默认沿用左侧栏；Top 将同一组 tab 放进标题栏。
     tabs_position: nebula_settings::TabsPositionName,
+    density: nebula_settings::DensityName,
     /// 运行时持久化的侧栏逻辑宽；布局、初始窗口和折叠动画必须同源。
     sidebar_width: f32,
     /// 首次手动切换后才启用折叠动画：启动帧保持静止落位（旧壳同感，
@@ -775,9 +751,9 @@ pub struct NebulaWorkspace {
     /// spinner 在窗口失焦时冻结为静态状态；重新聚焦后由一次 render 恢复按需帧循环。
     spinner_window_active: bool,
     _spinner_activation_sub: Subscription,
-    /// 本会话已注入的自定义键位 combo（gpui 绑定串）。键位表没有删除
-    /// API，撤销只能靠后注的 NoAction 盖掉；这份清单就是撤销的依据。
-    custom_keybinds_applied: Vec<String>,
+    /// 本会话已注入的自定义键位 (gpui 绑定串, 动作名)。键位表没有删除
+    /// API,撤销靠后注 `Unbind(动作名)` 精确收回该键;这份清单就是撤销的依据。
+    custom_keybinds_applied: Vec<(String, String)>,
     /// 侧栏「运行中」spinner 的相位（0..1，旧壳 `SPINNER_PERIOD` 800ms 一
     /// 圈）与上次帧时刻。侧栏和顶栏共用 GPUI 屏幕帧时钟。
     spinner_phase: f32,
@@ -859,18 +835,7 @@ impl NebulaWorkspace {
         // 文件变化拆成互相矛盾的 restore/resume 状态。
         let runtime = nebula_settings::RuntimeSettings::load();
         let sidebar_width = runtime.sidebar_width;
-        #[cfg(windows)]
-        {
-            let mut icon_scale = window.scale_factor();
-            cx.observe_window_bounds(window, move |_, window, cx| {
-                windowing::quick_terminal_bounds_changed(runtime_window_id, window, cx);
-                if icon_scale != window.scale_factor() {
-                    icon_scale = window.scale_factor();
-                    crate::gpui_shell::set_native_window_icon(window);
-                }
-            })
-            .detach();
-        }
+        windowing::observe_window_bounds(runtime_window_id, window, cx);
         let initial_grid = windowing::prepare_initial_grid(
             window,
             cx,
@@ -952,6 +917,7 @@ impl NebulaWorkspace {
             sidebar_collapsed: false,
             tabs_section_collapsed: false,
             tabs_position: runtime.tabs_position,
+            density: runtime.density,
             sidebar_width,
             sidebar_fold_armed: false,
             tabs_fold_armed: false,
@@ -1069,7 +1035,7 @@ impl NebulaWorkspace {
         if let Some(ai_events) = ai_events {
             Self::start_ai_hook_pump(ai_events, cx);
             // 全局热键是进程级单例，只在承载 ai-hook 泵的那扇初始窗口注册一次。
-            Self::start_quick_terminal_hotkey(cx);
+            Self::start_quick_terminal_hotkey(window, cx);
         }
         Self::start_agent_screen_watchdog(cx);
         if let Some(shell_events) = shell_events {
@@ -1161,7 +1127,9 @@ impl NebulaWorkspace {
         crate::gpui_shell::apply_app_icon(runtime.app_icon, cx);
         self.sidebar_width = runtime.sidebar_width;
         self.tabs_position = runtime.tabs_position;
-        self.sync_settings_layout();
+        self.density = runtime.density;
+        self.reveal_active_tab();
+        self.sync_settings_layout(tab_reveal_instant(cx));
         self.sidebar_resizing = None;
         self.reveal_if_tray_disabled(cx);
         cx.notify();
@@ -1868,52 +1836,6 @@ impl NebulaWorkspace {
         self.side_panel.sync_at(cwd, wsl) || cleared
     }
 
-    fn toggle_side_panel(
-        &mut self,
-        view: crate::display::side_panel::PanelView,
-        cx: &mut Context<Self>,
-    ) {
-        self.side_panel_anim_armed = true;
-        self.side_panel.toggle(view);
-        self.file_tree_menu = None;
-        if !self.side_panel.open {
-            cx.notify();
-            return;
-        }
-
-        self.sync_side_panel_to_active(true, cx);
-
-        // The shared model builds snapshots on a worker and exposes a cheap,
-        // throttled `sync`. GPUI polls only while the drawer is open; it does
-        // not move filesystem business logic into the render function.
-        if !self.side_panel_polling {
-            self.side_panel_polling = true;
-            let executor = cx.background_executor().clone();
-            cx.spawn(async move |this, cx| {
-                loop {
-                    executor.timer(Duration::from_millis(100)).await;
-                    let keep_polling = this
-                        .update(cx, |workspace, cx| {
-                            if !workspace.side_panel.open {
-                                workspace.side_panel_polling = false;
-                                return false;
-                            }
-                            if workspace.sync_side_panel_to_active(false, cx) {
-                                cx.notify();
-                            }
-                            true
-                        })
-                        .unwrap_or(false);
-                    if !keep_polling {
-                        break;
-                    }
-                }
-            })
-            .detach();
-        }
-        cx.notify();
-    }
-
     fn toggle_file_tree(&mut self, cx: &mut Context<Self>) {
         if self.active_document_section(cx).is_some() {
             self.details_panel.section = None;
@@ -2286,7 +2208,7 @@ impl NebulaWorkspace {
             },
             PaletteAction::ToggleSidebar => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
-                self.sidebar_fold_armed = true;
+                self.sidebar_fold_armed = !tab_reveal_instant(cx);
                 self.focus_active(window, cx);
             },
             PaletteAction::OpenSettings => self.open_settings(window, cx),
@@ -2305,24 +2227,9 @@ impl NebulaWorkspace {
                 self.apply_runtime_settings(cx);
                 self.focus_active(window, cx);
             },
-            PaletteAction::CycleAccept => {
-                let runtime = nebula_settings::RuntimeSettings::load();
-                let next = match runtime.accept.settings_value() {
-                    "right" => "tab",
-                    "tab" => "both",
-                    _ => "right",
-                };
-                let _ = nebula_settings::persist_keys(&[("accept", next.to_owned())]);
-                self.apply_runtime_settings(cx);
-                self.focus_active(window, cx);
-            },
             PaletteAction::CycleCompletionStyle => {
                 let runtime = nebula_settings::RuntimeSettings::load();
-                let next = if runtime.completion_style.settings_value() == "inline" {
-                    "popup"
-                } else {
-                    "inline"
-                };
+                let next = runtime.completion_style.cycle().settings_value();
                 let _ = nebula_settings::persist_keys(&[("completion_style", next.to_owned())]);
                 self.apply_runtime_settings(cx);
                 self.focus_active(window, cx);
@@ -3050,7 +2957,7 @@ impl Render for NebulaWorkspace {
                     return;
                 }
                 this.sidebar_collapsed = !this.sidebar_collapsed;
-                this.sidebar_fold_armed = true;
+                this.sidebar_fold_armed = !tab_reveal_instant(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &recipes::OpenLayoutRecipes, window, cx| {

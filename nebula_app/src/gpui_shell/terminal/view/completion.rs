@@ -5,12 +5,78 @@ use gpui::{AppContext as _, Context, EventEmitter as _};
 use nebula_terminal::term::TermMode;
 
 impl TerminalView {
+    pub(super) fn handle_completion_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        use crate::display::CompletionStyle;
+        let hybrid = self.completion_style == CompletionStyle::Hybrid;
+        if key == "escape" && hybrid && self.suggest.completion_popup_requested {
+            self.suggestion_task = None;
+            self.suggest.completion_popup_dismiss();
+            self.completion_viewport.clear();
+            return true;
+        }
+        if suggest::popup_active(&self.suggest) {
+            match key {
+                "tab" if !hybrid => {
+                    if self.suggest.completion_selected.is_none() {
+                        suggest::popup_move(&mut self.suggest, 1);
+                    }
+                    return self.accept_completion_popup(cx);
+                },
+                "tab" | "down" | "up" => {
+                    suggest::popup_move(&mut self.suggest, if key == "up" { -1 } else { 1 });
+                    let rows = self.completion_popup_geometry().map_or(8, |popup| popup.rows);
+                    self.completion_viewport.reveal(
+                        self.suggest.completion_selected,
+                        self.suggest.completion_items.len(),
+                        rows,
+                    );
+                    return true;
+                },
+                "escape" => {
+                    self.completion_viewport.clear();
+                    return suggest::popup_dismiss(&mut self.suggest);
+                },
+                "enter" | "right" => return self.accept_completion_popup(cx),
+                _ => {},
+            }
+        }
+        if key == "tab"
+            && hybrid
+            && self.ghost_enabled
+            && self.suggest_anchor.is_some()
+            && !self.suggest.screen_line.is_empty()
+        {
+            // Tab 请求只改变呈现，不向 PTY 写入；原有后台任务与过期检查继续负责候选。
+            self.suggest.request_completion_popup();
+            self.refresh_suggestion_from_snapshot(
+                Some(self.suggest.screen_line.clone()),
+                self.suggest_anchor,
+                cx,
+            );
+            return true;
+        }
+        if !self.suggest.suggestion.is_empty() && (key == "right" || key == "tab" && !hybrid) {
+            if let Some(item) = self.suggest.suggestion_edit.take() {
+                self.suggest.suggestion.clear();
+                return self.accept_completion_item(item, cx);
+            }
+            let ghost = std::mem::take(&mut self.suggest.suggestion);
+            for c in ghost.chars() {
+                crate::display::nebula_input_char(&mut self.suggest, c);
+            }
+            self.write_user_text(ghost.clone(), false, ghost.into_bytes(), cx);
+            return true;
+        }
+        false
+    }
+
     /// Enter 提交：从 grid 读回显真值（screen truth）记入共享历史，然后清
     /// 行镜像。读法与旧壳 `nebula_commit_line` 的 Windows 契约一致：无法证明
     /// 是提示符的 REPL 行或中线编辑读不到就宁缺毋滥——键击重构的
     /// line_buf 在光标移动/Tab 补全后就是拼接垃圾，不能进历史。Agent 已在
     /// 前台时保留最初 shell 提示符，内部交互的 Enter 不得覆盖退出证据。
     pub(super) fn commit_line(&mut self, cx: &mut Context<Self>) {
+        self.completion_session.invalidate();
         self.sync_native_prompt();
         let agent_active =
             self.running_program.as_deref().and_then(crate::ai_agents::AgentKind::parse).is_some();
@@ -27,7 +93,6 @@ impl TerminalView {
             return;
         }
         self.suggest.pending_command_prompt = None;
-        #[cfg(windows)]
         if let Some(session) = &self.session {
             let term = session.term.lock();
             if !term.mode().intersects(TermMode::ALT_SCREEN | TermMode::VI) {
@@ -141,51 +206,101 @@ impl TerminalView {
         &mut self,
         line: Option<String>,
         anchor: Option<(usize, usize)>,
+        cx: &mut Context<Self>,
     ) {
-        #[cfg(windows)]
+        if self.exited.is_some()
+            || !self.ghost_enabled
+            || self.session.is_none()
+            || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
         {
-            if self.exited.is_some()
-                || !self.ghost_enabled
-                || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
-            {
-                self.suggest_anchor = None;
-                self.suggest.clear_completion_hints();
-                self.completion_viewport.clear();
-                return;
-            }
-            if self.session.is_none() {
-                self.suggest_anchor = None;
-                self.suggest.clear_completion_hints();
-                self.completion_viewport.clear();
-                return;
-            }
-            match line {
-                Some(line) => {
-                    self.suggest_anchor = anchor;
-                    self.suggest.screen_line = line.clone();
-                    suggest::update(
-                        &mut self.suggest,
-                        Some(line),
-                        self.ghost_enabled,
-                        self.completion_style,
-                    );
-                    self.completion_viewport.update_query(
-                        &self.suggest.screen_line,
-                        self.suggest.completion_items.len(),
-                    );
-                },
-                None => {
-                    self.suggest_anchor = None;
-                    self.suggest.screen_line.clear();
-                    self.suggest.clear_completion_hints();
-                    self.completion_viewport.clear();
-                },
-            }
+            self.suggestion_task = None;
+            self.suggest_anchor = None;
+            self.suggest.completion_popup_requested = false;
+            self.suggest.clear_completion_hints();
+            self.completion_viewport.clear();
+            return;
         }
-        #[cfg(not(windows))]
+        if let Some(line) = line.as_deref()
+            && !self.suggest.completion_echo_ready(line)
         {
-            let _ = (line, anchor);
+            self.suggestion_task = None;
+            self.suggest_anchor = None;
+            self.completion_viewport.clear();
+            return;
         }
+        let Some(line) = line.filter(|line| !line.is_empty()) else {
+            self.suggestion_task = None;
+            self.suggest_anchor = None;
+            self.suggest.screen_line.clear();
+            self.suggest.completion_popup_requested = false;
+            self.suggest.clear_completion_hints();
+            self.completion_viewport.clear();
+            return;
+        };
+        self.suggest_anchor = anchor;
+        self.suggest.screen_line = line.clone();
+        let mode = self.completion_style;
+        let style = mode.active_style(self.suggest.completion_popup_requested);
+        let key = crate::completion::cache_key(
+            &self.suggest.cwd,
+            &self.suggest.suggest_env,
+            &line,
+            style,
+        );
+        if self.suggest.completion_query_matches(&key) {
+            return;
+        }
+        self.suggestion_task = None;
+        self.suggest.begin_completion_query(key.clone());
+        self.completion_viewport.update_query(&line, 0);
+        if self.suggest.completion_suppressed_line.as_deref() == Some(line.as_str()) {
+            return;
+        }
+        self.suggest.completion_suppressed_line = None;
+        let cwd = self.suggest.cwd.clone();
+        let env = self.suggest.suggest_env.clone();
+        let cancellation = suggest::Cancellation::default();
+        let worker_cancellation = cancellation.clone();
+        let request = self.completion_session.request(
+            cwd.clone(),
+            env.clone(),
+            line,
+            style,
+            self.exec_context.as_ref(),
+        );
+        // 本地目录也可能位于慢盘/网络挂载；扫描和历史首次加载都不能进入绘制回调。
+        let calculation =
+            cx.background_spawn(async move { request.calculate(&worker_cancellation) });
+        let task = cx.spawn(async move |this, cx| {
+            let result = calculation.await;
+            let _ = this.update(cx, |view, cx| {
+                // 按键、取消与 shell 切换都会使 key 或环境失效，旧结果不得回填。
+                if !view.suggest.completion_query_matches(&key)
+                    || view.suggest.cwd != cwd
+                    || view.suggest.suggest_env != env
+                    || view.completion_style != mode
+                    || mode.active_style(view.suggest.completion_popup_requested) != style
+                    || !view.ghost_enabled
+                    || view.exited.is_some()
+                {
+                    return;
+                }
+                view.suggest.suggestion = result.suggestion;
+                view.suggest.suggestion_edit = result.suggestion_edit;
+                view.suggest.completion_items = result.completion_items;
+                if view.suggest.completion_popup_requested
+                    && !view.suggest.completion_items.is_empty()
+                {
+                    view.suggest.completion_selected = Some(0);
+                }
+                view.suggest.pending_remote_dir = result.pending_remote_dir;
+                view.completion_viewport
+                    .update_query(&view.suggest.screen_line, view.suggest.completion_items.len());
+                view.drive_pending_remote_dir(cx);
+                cx.notify();
+            });
+        });
+        self.suggestion_task = Some(suggest::Pending::new(task, cancellation));
     }
 
     /// 补齐登记了一个还没缓存的来宾 / 远端目录时，去后台拉一次。

@@ -20,7 +20,7 @@
 //! 扇出用 [`TerminalView::apply_broadcast_key`] /
 //! [`TerminalView::apply_broadcast_text`]，它们**按接收方自己的 term mode 重新
 //! 编码**，且不再 emit——因此天然无环。照搬源 pane 已编码好的字节是错的：
-//! app-cursor / bracketed-paste / kitty 协议都是 per-pane 状态，一个 pane 开着
+//! app-cursor / bracketed-paste / 增强键盘协议都是 per-pane 状态，一个 pane 开着
 //! vim 的时候方向键序列跟旁边的 shell 根本不同。
 
 use gpui::prelude::FluentBuilder as _;

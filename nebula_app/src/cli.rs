@@ -162,6 +162,9 @@ fn parse_hex_or_decimal(input: &str) -> Option<u32> {
 /// Terminal specific cli options which can be passed to new windows via IPC.
 #[derive(Serialize, Deserialize, Args, Default, Debug, Clone, PartialEq, Eq)]
 pub struct TerminalOptions {
+    /// Open a directory supplied by the desktop file manager.
+    #[clap(value_name = "DIRECTORY", value_hint = ValueHint::DirPath, conflicts_with = "working_directory")]
+    pub directory: Option<PathBuf>,
     /// Start the shell in the specified working directory.
     #[clap(long, value_hint = ValueHint::FilePath)]
     pub working_directory: Option<PathBuf>,
@@ -215,7 +218,10 @@ impl TerminalOptions {
     /// Every shell-launching path resolves the directory through here so the
     /// repair applies whether the options came from the CLI or over IPC.
     pub fn resolved_working_directory(&self) -> Option<PathBuf> {
-        self.working_directory.clone().map(repair_context_menu_dir)
+        self.working_directory
+            .clone()
+            .or_else(|| self.directory.clone())
+            .map(repair_context_menu_dir)
     }
 
     /// Shell id requested on the command line, normalized: blank counts as absent.
@@ -305,12 +311,13 @@ pub enum Subcommands {
     Migrate(MigrateOptions),
     /// Validate or create the Pebrel configuration.
     Config(ConfigOptions),
+    /// Check or invoke a local plugin package without starting a GUI or plugin daemon.
+    Plugin(crate::plugins::cli::Options),
     /// Test system notification (toast) delivery.
     #[cfg(windows)]
     NotifyTest,
     /// Install (or --remove) AI hooks plus the Pebrel Runtime Skill for
     /// Codex and Claude Code.
-    #[cfg(windows)]
     SetupAi(SetupAiOptions),
     /// SSH with Pebrel shell integration bootstrapped on the remote host, so
     /// tab icons / spinner / cwd track the program running over the connection
@@ -910,7 +917,6 @@ impl ConfigLanguage {
 }
 
 /// Options for the `setup-ai` subcommand.
-#[cfg(windows)]
 #[derive(Args, Debug)]
 pub struct SetupAiOptions {
     /// Remove Pebrel-managed hooks for every supported agent and preserve
@@ -1549,6 +1555,55 @@ mod tests {
     }
 
     #[test]
+    fn parses_plugin_commands_without_selecting_the_gui() {
+        use crate::plugins::cli::Command;
+        let check =
+            Options::try_parse_from(["pebrel", "plugin", "check", "sample", "--pretty"]).unwrap();
+        assert!(matches!(
+            check.subcommands,
+            Some(Subcommands::Plugin(crate::plugins::cli::Options {
+                command: Command::Check { .. },
+                pretty: true
+            }))
+        ));
+        let run = Options::try_parse_from([
+            "pebrel",
+            "plugin",
+            "run",
+            "sample",
+            "summary",
+            "--args",
+            "{\"label\":\"中文\"}",
+            "--timeout-ms",
+            "1000",
+        ])
+        .unwrap();
+        #[cfg(feature = "gpui-shell")]
+        assert!(!crate::wants_gpui_shell(&run));
+        assert!(matches!(
+            run.subcommands,
+            Some(Subcommands::Plugin(crate::plugins::cli::Options {
+                command: Command::Run { .. },
+                ..
+            }))
+        ));
+        for timeout in ["0", "30001"] {
+            assert!(
+                Options::try_parse_from([
+                    "pebrel",
+                    "plugin",
+                    "run",
+                    "sample",
+                    "summary",
+                    "--timeout-ms",
+                    timeout
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn send_options_after_text_are_not_swallowed_by_the_positional() {
         let agent = Options::try_parse_from([
             "pebrel",
@@ -1796,6 +1851,27 @@ mod tests {
         assert!(
             Options::try_parse_from(["pebrel", "--gpui", "--shell", "pwsh", "-e", "cmd"]).is_err()
         );
+    }
+
+    #[test]
+    fn desktop_directory_keeps_command_and_subcommand_parsing() {
+        let options = Options::try_parse_from(["pebrel", "/tmp/a folder"]).unwrap();
+        assert_eq!(
+            options.window_options.terminal_options.resolved_working_directory(),
+            Some(PathBuf::from("/tmp/a folder"))
+        );
+        assert!(
+            Options::try_parse_from(["pebrel", "/tmp/a", "--working-directory", "/tmp/b"]).is_err()
+        );
+        let command = Options::try_parse_from(["pebrel", "-e", "sh", "-c", "echo ok"]).unwrap();
+        assert!(command.window_options.terminal_options.directory.is_none());
+        assert_eq!(command.window_options.terminal_options.command, ["sh", "-c", "echo ok"]);
+        assert!(
+            Options::try_parse_from(["pebrel", "config", "--help"]).unwrap_err().use_stderr()
+                == false
+        );
+        let legacy = serde_json::json!({"working_directory": null, "shell": null, "hold": false, "command": []});
+        assert!(serde_json::from_value::<TerminalOptions>(legacy).unwrap().directory.is_none());
     }
 
     /// 空白/空的 `--shell` 当作没给：脚本传了空串时不该去解析一个空 id，

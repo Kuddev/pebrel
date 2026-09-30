@@ -92,12 +92,21 @@ fn guard_base(executable: &Path) -> PathBuf {
 /// Called before starting any resident resources. The lock belongs to the exact
 /// installation; a copied test/portable application has a different identity.
 pub(crate) fn installation_in_progress() -> io::Result<bool> {
+    // 没有安装事务的平台不应在 /usr/bin 或 AppImage 只读挂载里创建安装锁。
+    if !crate::platform::CAPABILITIES.self_update_install {
+        return Ok(false);
+    }
+    // MSIX 包目录只读，外部渠道也不参与普通安装器事务，因此不创建旁置锁。
+    if crate::platform::distribution::current().externally_managed() {
+        return Ok(false);
+    }
     let executable = canonical(&std::env::current_exe()?)?;
     Ok(crate::atomic_file::try_lifetime_lock(&guard_base(&executable))?.is_none())
 }
 
 /// All verification and process waiting occurs on a background executor.
 pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
+    crate::platform::distribution::require_direct_update()?;
     if crate::platform::elevation::requires_isolation() {
         return Err(
             "Install updates from an ordinary Pebrel window so privileged sessions stay isolated"
@@ -305,6 +314,7 @@ pub(super) fn failure_unseen(prompt_state: &Path) -> bool {
 }
 
 pub(crate) fn schedule(asset: &UpdateAsset) -> Result<(), String> {
+    crate::platform::distribution::require_direct_update()?;
     if crate::platform::elevation::requires_isolation() {
         return Err("Schedule updates from an ordinary Pebrel window".into());
     }
@@ -323,6 +333,9 @@ pub(crate) fn schedule(asset: &UpdateAsset) -> Result<(), String> {
 /// Before resident resources/windows exist, apply an explicitly armed update.
 /// A failed attempt is disarmed and normal startup remains available.
 pub(crate) fn apply_scheduled() -> bool {
+    if crate::platform::distribution::current().externally_managed() {
+        return false;
+    }
     let path = nebula_settings::settings_dir().join("updates/install-next.json");
     let Some(asset) = read_json::<UpdateAsset>(&path) else {
         return false;

@@ -8,10 +8,12 @@ on:
         type: string
         default: ""
   workflow_call:
+  schedule:
+    - cron: "23 19 * * *"
   push:
     branches: [main]
-  # Include docs, catalogs, assets and workflow edits: every PR gets test results.
-  # 草稿已跑完整矩阵，转为 Ready 而没有新提交时不重复申请五个原生 runner。
+  # 所有 PR 都规划验证；轻量改动无需先申请原生 runner 再跳过步骤。
+  # 草稿与 Ready 使用相同策略，状态切换不重复验证同一提交。
   pull_request:
     types: [opened, synchronize, reopened]
   merge_group:
@@ -40,12 +42,14 @@ jobs:
     outputs:
       native_matrix: ${{ steps.matrix.outputs.native_matrix }}
       release_matrix: ${{ steps.matrix.outputs.release_matrix }}
+      check_matrix: ${{ steps.matrix.outputs.check_matrix }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97.1"
@@ -77,11 +81,11 @@ jobs:
             --output "$GITHUB_OUTPUT"
 
   # The required lint job validates the matrix before heavy runners are
-  # requested. Every PR, including a draft, requires the complete matrix.
+  # requested. Main, scheduled and release/manual callers retain the full matrix.
   native-tests:
     needs: lint
-    if: ${{ inputs.windows_diagnostics_run == '' }}
-    name: Tests (${{ matrix.os }})
+    if: ${{ inputs.windows_diagnostics_run == '' && needs.lint.outputs.native_matrix != '[]' }}
+    name: Native tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -204,26 +208,43 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-  # 保留服务端已有的必需检查名称，但不为结果汇总再申请稀缺的 macOS runner。
-  # 只接受本轮完整原生矩阵成功；上游失败或跳过时不能把汇总直接标绿。
-  macos-release-check:
+  # 保留服务端必需名称作为策略汇总，未选择的平台明确标注未执行。
+  # 任一已选择的原生任务失败、取消或意外跳过，都不能把汇总标绿。
+  native-checks:
     needs: [lint, native-tests]
-    if: ${{ !cancelled() && inputs.windows_diagnostics_run == '' }}
-    name: Release workspace (${{ matrix.os }})
+    if: ${{ always() && inputs.windows_diagnostics_run == '' && needs.lint.result == 'success' }}
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.lint.outputs.release_matrix) }}
+        include: ${{ fromJSON(needs.lint.outputs.check_matrix) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require this run's native and release checks
+      - name: Report this run's validation policy and results
         shell: python
         env:
           NATIVE_RESULT: ${{ needs.native-tests.result }}
+          NATIVE_MATRIX: ${{ needs.lint.outputs.native_matrix }}
+          CHECK_NAME: ${{ matrix.name }}
+          SCHEDULED: ${{ matrix.scheduled }}
         run: |
+          import json
           import os
+          from pathlib import Path
+          selected = json.loads(os.environ["NATIVE_MATRIX"])
           result = os.environ["NATIVE_RESULT"]
-          if result != "success":
+          expected = "success" if selected else "skipped"
+          if result != expected:
               raise SystemExit("Native validation did not succeed: " + result)
-          print("Both macOS release checks passed in the native matrix.")
+          scheduled = os.environ["SCHEDULED"]
+          if scheduled not in {"true", "false"} or (scheduled == "true" and not selected):
+              raise SystemExit("Invalid validation plan")
+          if scheduled == "true":
+              message = "Executed successfully in this run's native matrix."
+          else:
+              message = ("Not run: this PR's paths do not require this platform. "
+                         "Full validation remains enabled on main, daily and manual runs.")
+          print(message)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
+              summary.write("## " + os.environ["CHECK_NAME"] + "\n\n" + message + "\n")

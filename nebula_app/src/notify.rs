@@ -96,7 +96,7 @@ pub enum Notification {
     CommandDone { duration: Duration, program: Option<String> },
     /// Shell-reported nonzero exit status, including short failed commands.
     CommandFailed { duration: Duration, program: Option<String>, exit_code: i32 },
-    /// Free-text notification from a program (OSC 9, iTerm style). Claude
+    /// Free-text notification from a program (OSC 9). Claude
     /// Code emits these (with the turn's actual message) when its notif
     /// channel is `iterm2`/`iterm2_with_bell`. Carries the tracked program
     /// name so the toast is titled "claude" instead of "Pebrel".
