@@ -358,7 +358,7 @@
             "README.md",
             "nebula_app/src/ai_agents.rs",
             "nebula_app/src/gpui_shell/workspace/agents.rs",
-            "nebula_app/src/platform/agent_integrations.rs",
+            "nebula_app/src/ai_hook/integrations.rs",
             "nebula_app/src/gpui_shell/terminal/view.rs",
             "nebula_app/src/gpui_shell/terminal/view/agent_activity.rs"
           ]
@@ -368,7 +368,7 @@
           "title": "配置 Agent 集成",
           "description": "检测已安装的工具，配置可用集成并检查状态提示。",
           "sources": [
-            "nebula_app/src/platform/agent_integrations.rs",
+            "nebula_app/src/ai_hook/integrations.rs",
             "nebula_app/src/gpui_shell/settings_pane/agents.rs",
             "nebula_app/src/ai_hook/win/settings.rs"
           ]
