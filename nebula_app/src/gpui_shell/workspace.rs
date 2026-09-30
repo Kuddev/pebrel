@@ -1139,7 +1139,7 @@ impl NebulaWorkspace {
         // 旧壳合同（window_context `spawn_tab` 一族）：新 tab 的 cwd 先取
         // 设置页的「启动目录」（存在且是目录才算数），否则继承聚焦 pane
         // 的 cwd——`startup_directory=` 因此在两壳有同一效果。WSL 来宾目录
-        // 见 `tab_duplication::new_tab_launch`。
+        // 见 `tab_duplication::CopyKind::NewTab`。
         let (launch, cwd) = match Self::startup_directory() {
             Some(dir) => (shell_launch::configured_local_launch(cx), Some(dir)),
             None => self.new_tab_from_focused(cx),
@@ -1406,7 +1406,13 @@ impl NebulaWorkspace {
         };
         let (cols, rows, launch) = {
             let view = anchor.view.read(cx);
-            (view.grid_cols() as u16, view.grid_rows() as u16, tab_duplication::pane_split(view))
+            let (launch, cwd) = tab_duplication::copy_launch(
+                view.session_launch.clone(),
+                tab_duplication::CopyKind::Split,
+                tab_duplication::PaneOrigin::of(view),
+            );
+            let launch = Self::terminal_launch_from_session(&launch, cwd);
+            (view.grid_cols() as u16, view.grid_rows() as u16, launch)
         };
         let grid = match direction {
             SplitDirection::LeftRight => ((cols / 2).max(2), rows.max(2)),
@@ -1779,7 +1785,7 @@ impl NebulaWorkspace {
     /// 任何 UNC 映射，所以宿主看不见 WSL 文件系统时依然有效。
     fn active_wsl_cwd(&self, cx: &App) -> Option<crate::shell_detect::WslCwd> {
         let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)?.read(cx);
-        let distro = view.wsl_distro.clone()?;
+        let distro = view.wsl_distro()?.to_owned();
         let guest = crate::shell_detect::wsl_guest_cwd(&view.cwd)?;
         Some(crate::shell_detect::WslCwd { distro, guest: guest.to_owned() })
     }

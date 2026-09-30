@@ -350,15 +350,11 @@ impl NebulaWorkspace {
             ) => return,
         };
         // A WSL session continues in the same guest and directory, as a duplicate does.
-        let (launch_session, cwd) = {
-            let view = view.read(cx);
-            super::tab_duplication::duplicate_launch(
-                launch_session,
-                super::tab_duplication::focused_guest(view),
-                &view.cwd,
-                || super::tab_duplication::host_visible_cwd(view),
-            )
-        };
+        let (launch_session, cwd) = super::tab_duplication::copy_launch(
+            launch_session,
+            super::tab_duplication::CopyKind::Duplicate,
+            super::tab_duplication::PaneOrigin::of(view.read(cx)),
+        );
         let color = self.meta(ix).color;
         self.activate_tab(ix, window, cx);
 

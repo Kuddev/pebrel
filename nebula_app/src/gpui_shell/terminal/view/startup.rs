@@ -114,7 +114,6 @@ impl TerminalView {
             suggest_env,
             exec_context,
             session_launch,
-            wsl_distro,
             spawned,
         ) = match launch {
             TerminalLaunch::Local { cwd, shell: launch_shell, shell_name } => {
@@ -177,7 +176,6 @@ impl TerminalView {
                     suggest_env,
                     Some(exec_context),
                     session_launch,
-                    wsl_distro,
                     spawned,
                 )
             },
@@ -188,7 +186,6 @@ impl TerminalView {
                 crate::display::SuggestEnv::Ssh { destination: destination.clone() },
                 None,
                 crate::session::LaunchSession::Ssh { host: destination.clone() },
-                None,
                 session::spawn_ssh(destination, cwd, initial, term_config),
             ),
         };
@@ -311,7 +308,6 @@ impl TerminalView {
             pending_shell_command: None,
             recovery: startup_command::SessionRecovery::default(),
             session_launch,
-            wsl_distro,
             inline_images: super::super::inline_image::InlineImageStore::default(),
             image_paste: image_paste::ImagePasteState::default(),
             path_drop: path_drop::PathDropState::default(),
