@@ -35,6 +35,23 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CommandComposerTest {
+    @Test fun fileSymbolsUseDedicatedOutlineResources() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        assertNotEquals(fileSymbol("README.md", false), fileSymbol("README.unknown", false))
+        assertEquals(fileSymbol("readme.md", false), fileSymbol("/项目/README.MD", false))
+        assertNotEquals(fileSymbol("src", true), fileSymbol("src", false))
+        assertEquals(R.drawable.ic_file_md, fileSymbol("README", false))
+        assertEquals(R.drawable.ic_file_docker, fileSymbol("Dockerfile.dev", false))
+        assertEquals(R.drawable.ic_file_kt, fileSymbol("MainActivity.kt", false))
+        assertEquals(R.drawable.ic_file_go, fileSymbol("server.go", false))
+        assertEquals(R.drawable.ic_file_powershell, fileSymbol("build.ps1", false))
+        val types = listOf("README.md", "main.rs", "script.py", "config.json", "config.toml", "config.yaml", "notes.txt", "image.png", "archive.zip", "manual.pdf")
+        assertEquals(types.size, types.map { fileSymbol(it, false) }.distinct().size)
+        for (path in types) {
+            assertTrue(path, context.resources.getDrawable(fileSymbol(path, false), context.theme).intrinsicWidth > 0)
+        }
+    }
+
     @Test fun defaultComposerExposesShiftTabInTheNarrowShortcutMenu() {
         val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
         val repository = SessionRepository(context)
