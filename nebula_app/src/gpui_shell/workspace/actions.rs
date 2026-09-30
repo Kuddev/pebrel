@@ -5,6 +5,7 @@ gpui::actions!(
         NewWindow,
         CloseActiveTerminal,
         CloseWindow,
+        OpenAbout,
         HideApplication,
         HideOtherApplications,
         MinimizeWindow,

@@ -8,7 +8,7 @@ pub(super) fn init(cx: &mut App) {
     let text = |message| language.text(message);
     cx.set_menus([
         Menu::new("Pebrel").items([
-            MenuItem::action(format!("{} Pebrel", text(Message::CommonAbout)), OpenSettings),
+            MenuItem::action(format!("{} Pebrel", text(Message::CommonAbout)), OpenAbout),
             MenuItem::separator(),
             MenuItem::action(text(Message::CommonSettings), OpenSettings),
             MenuItem::separator(),

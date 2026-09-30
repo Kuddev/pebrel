@@ -32,7 +32,13 @@ mod macos_command_keys {
     #[test]
     fn command_close_and_quit_dispatch_to_distinct_actions() {
         use gpui::{KeyContext, Keymap, Keystroke};
-        let keymap = Keymap::new(macos_command_bindings());
+        let mut keymap = Keymap::new(macos_command_bindings());
+        keymap.add_bindings(
+            crate::display::keymap::default_shortcuts()
+                .into_iter()
+                .filter(|(_, action)| *action == crate::config::Action::Quit)
+                .filter_map(|(combo, action)| workspace_binding_in_context(&combo, &action, None)),
+        );
         for context in ["Root", crate::gpui_shell::terminal::KEY_CONTEXT] {
             let contexts = [KeyContext::parse(context).unwrap()];
             for combo in ["cmd-w", "cmd-shift-w", "cmd-q"] {

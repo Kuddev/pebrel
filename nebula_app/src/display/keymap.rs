@@ -182,6 +182,10 @@ pub(crate) fn default_shortcuts() -> Vec<(String, Action)> {
     // 解掉、要还回哪些键，不带上它就会漏掉 ⌘ 那一半（#238）。
     #[cfg(target_os = "macos")]
     {
+        // 原生关窗没有持久化 Action；恢复 Quit 不得把旧壳的 ⌘W 注入为退出应用。
+        if cfg!(feature = "gpui-shell") {
+            shortcuts.retain(|(combo, _)| parse_combo(combo) != parse_combo("cmd+w"));
+        }
         let mut extra: Vec<(String, Action)> = Vec::new();
         for (combo, action) in MACOS_COMMAND_ALIASES {
             let parsed = parse_combo(combo);

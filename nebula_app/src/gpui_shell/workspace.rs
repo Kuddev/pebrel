@@ -2924,6 +2924,12 @@ impl Render for NebulaWorkspace {
                     }
                 });
             }))
+            .on_action(cx.listener(|this, _: &OpenAbout, window, cx| {
+                this.open_settings(window, cx);
+                if let Some((view, _)) = &this.settings_surface {
+                    view.update(cx, |pane, cx| pane.show_application_home(window, cx));
+                }
+            }))
             .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
                 if this.should_close_window(window, cx) {
                     window.remove_window();
