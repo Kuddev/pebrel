@@ -345,11 +345,11 @@ precmd_functions=(_user_precmd)
         # directory translated into NEBULA_ZSH_INTEGRATION.
         import pwd
 
-        def probe(bootstrap: str) -> dict[str, str]:
+        def probe(bootstrap: str, path: str = os.environ["PATH"]) -> dict[str, str]:
             result = subprocess.run(
                 ["sh", "-s"], input=(SCRIPTS / "wsl-guest-probe.sh").read_text(encoding="utf-8"),
                 capture_output=True, text=True, check=True, cwd=self.home,
-                env={"PATH": os.environ["PATH"], "HOME": str(self.home),
+                env={"PATH": path, "HOME": str(self.home),
                      "NEBULA_ZSH_INTEGRATION": bootstrap, "SHELL": "/bin/false"},
             )
             self.assertEqual(result.stderr, "")
@@ -364,7 +364,20 @@ precmd_functions=(_user_precmd)
         answer = probe(str(wrapper))
         self.assertEqual(answer["bootstrap"], "readable")
         # The passwd entry, not $SHELL, names what `wsl.exe` starts for this user.
-        self.assertEqual(answer["shell"], pwd.getpwuid(os.getuid()).pw_shell)
+        # macOS keeps accounts in Directory Services and has no getent: there the
+        # script can only fall back to $SHELL, which is what the test set.
+        user = pwd.getpwuid(os.getuid())
+        in_passwd = any(line.startswith(f"{user.pw_name}:") for line in
+                        Path("/etc/passwd").read_text(encoding="utf-8", errors="replace").splitlines())
+        expected = user.pw_shell if shutil.which("getent") or in_passwd else "/bin/false"
+        self.assertEqual(answer["shell"], expected)
+        # A guest without getent (musl, busybox) still reads /etc/passwd.
+        fake_bin = self.home / "no-getent"
+        fake_bin.mkdir()
+        (fake_bin / "getent").write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+        (fake_bin / "getent").chmod(0o755)
+        without_getent = probe(str(wrapper), f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+        self.assertEqual(without_getent["shell"], user.pw_shell if in_passwd else "/bin/false")
 
         (wrapper / ".zprofile").unlink()
         self.assertEqual(probe(str(wrapper))["bootstrap"], "unreadable")
