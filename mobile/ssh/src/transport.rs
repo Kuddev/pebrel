@@ -75,6 +75,30 @@ async fn operate(owner: &Arc<Session>, worker: &mut Worker, mut options: Options
         Zeroizing::new(String::from_utf8(options.password.to_vec()).map_err(|_| Failure("AUTH"))?);
     options.password.zeroize();
     let auth = timeout(Duration::from_secs(15), async {
+        if !options.private_key.is_empty() {
+            let text = std::str::from_utf8(&options.private_key).map_err(|_| Failure("KEY"))?;
+            let key = russh::keys::decode_secret_key(
+                text,
+                (!password.is_empty()).then_some(password.as_str()),
+            )
+            .map_err(|_| Failure("KEY"))?;
+            options.private_key.zeroize();
+            let hash = if key.algorithm().is_rsa() {
+                client
+                    .best_supported_rsa_hash()
+                    .await?
+                    .unwrap_or(Some(russh::keys::HashAlg::Sha512))
+            } else {
+                None
+            };
+            // 用户明确选择密钥时不再尝试密码，避免失败后改变认证语义。
+            let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash);
+            return if client.authenticate_publickey(&options.user, key).await?.success() {
+                Ok(())
+            } else {
+                Err(Failure("AUTH"))
+            };
+        }
         if client.authenticate_none(&options.user).await?.success() {
             return Ok(());
         }

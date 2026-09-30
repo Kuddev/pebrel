@@ -24,6 +24,7 @@ data class TerminalPreferences(
     val pinchZoom: Boolean = true,
     val suggestions: Boolean = true,
     val directInput: Boolean = true,
+    val scrollbackLines: Int = 1000,
 ) {
     /** Preserve the persisted contract when callers pass a stale or unknown value. */
     fun normalized(): TerminalPreferences = copy(
@@ -33,6 +34,7 @@ data class TerminalPreferences(
             else -> TerminalPreferenceValues.MAPLE_FONT
         },
         fontSize = fontSize.coerceIn(TerminalPreferenceValues.MIN_FONT_SIZE, TerminalPreferenceValues.MAX_FONT_SIZE),
+        scrollbackLines = scrollbackLines.coerceIn(500, 5000),
         cursorStyle = when (cursorStyle) {
             TerminalPreferenceValues.BAR_CURSOR -> TerminalPreferenceValues.BAR_CURSOR
             TerminalPreferenceValues.UNDERLINE_CURSOR -> TerminalPreferenceValues.UNDERLINE_CURSOR
@@ -51,6 +53,8 @@ data class TerminalPreferences(
 
 /** Small UI preferences only. Session identity, credentials and terminal state remain elsewhere. */
 class DisplayPreferences(context: Context) {
+    private val memory = context.getSystemService(android.app.ActivityManager::class.java)
+    val maxScrollbackLines = if (memory.isLowRamDevice || memory.memoryClass <= 128) 1000 else 5000
     private val stored = context.getSharedPreferences("terminal_display", Context.MODE_PRIVATE)
     init {
         // Old previews persisted composer-first even when the user had never
@@ -68,7 +72,8 @@ class DisplayPreferences(context: Context) {
             pinchZoom = stored.getBoolean("pinch_zoom", true),
             suggestions = stored.getBoolean("suggestions", true),
             directInput = stored.getBoolean("direct_input", true),
-        ).normalized(),
+            scrollbackLines = stored.getInt("scrollback_lines", 1000),
+        ).normalized().let { it.copy(scrollbackLines = it.scrollbackLines.coerceAtMost(maxScrollbackLines)) },
     )
     val state = current.asStateFlow()
 
@@ -81,14 +86,15 @@ class DisplayPreferences(context: Context) {
     }
 
     fun update(value: TerminalPreferences) {
-        current.value = value.normalized()
+        current.value = value.normalized().let { it.copy(scrollbackLines = it.scrollbackLines.coerceAtMost(maxScrollbackLines)) }
         stored.edit().putString("font_family", current.value.fontFamily)
             .putInt("font_size", current.value.fontSize)
             .putString("cursor_style", current.value.cursorStyle)
             .putBoolean("cursor_blink", current.value.cursorBlink)
             .putBoolean("pinch_zoom", current.value.pinchZoom)
             .putBoolean("suggestions", current.value.suggestions)
-            .putBoolean("direct_input", current.value.directInput).apply()
+            .putBoolean("direct_input", current.value.directInput)
+            .putInt("scrollback_lines", current.value.scrollbackLines).apply()
     }
 
     fun update(transform: (TerminalPreferences) -> TerminalPreferences) {

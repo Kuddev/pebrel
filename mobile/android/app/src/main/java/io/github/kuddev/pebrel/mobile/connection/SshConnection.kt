@@ -13,6 +13,7 @@ data class HostProfile(
     val user: String, val fingerprint: String = "",
     val icon: String = "term", val group: String = "development",
     val sessionMode: SshSessionMode = SshSessionMode.SHELL, val sessionName: String = "",
+    val keyUri: String = "", val keyName: String = "",
 )
 
 /** Kotlin owns UI trust and lifetime; russh owns SSH negotiation and encrypted IO. */
@@ -21,6 +22,7 @@ class SshConnection(
     private val password: CharArray,
     private val verify: (HostProfile, String) -> Boolean,
     private val progress: (SshStage) -> Unit = {},
+    private val keySource: (() -> ByteArray)? = null,
 ) : Closeable {
     private val guard = Any()
     @Volatile private var opened: RusshSession? = null
@@ -28,18 +30,24 @@ class SshConnection(
     private fun session(): RusshSession = opened ?: throw NativeSshException("CLOSED")
 
     fun connect() {
+        var privateKey: ByteArray? = null
         try {
+            if (host.keyUri.isNotBlank()) {
+                privateKey = keySource?.invoke() ?: throw NativeSshException("KEY")
+                if (privateKey.isEmpty()) throw NativeSshException("KEY")
+            }
             val transport = synchronized(guard) {
                 if (closed) throw NativeSshException("CLOSED")
                 check(opened == null)
                 val endpoint = parseSshEndpoint(host.address, host.user)
-                RusshSession.create(endpoint.address, host.port, endpoint.user, password, host.fingerprint).also { opened = it }
+                RusshSession.create(endpoint.address, host.port, endpoint.user, password, host.fingerprint,
+                    privateKey ?: byteArrayOf()).also { opened = it }
             }
             transport.connect({ progress(SshStage.valueOf(it)) }, { fingerprint -> verify(host, fingerprint) })
         } catch (error: Exception) {
             close()
             throw SshFailure(classifySshFailure(error), error)
-        } finally { password.fill('\u0000') }
+        } finally { password.fill('\u0000'); privateKey?.fill(0) }
     }
 
     fun openShell(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) {

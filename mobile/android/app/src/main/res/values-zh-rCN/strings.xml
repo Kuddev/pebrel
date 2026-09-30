@@ -142,12 +142,12 @@
     <string name="session_ended_hint">会话已结束，仍可查看已有输出。</string>
     <string name="ssh_stage_network">正在连接服务器并协商加密通道…</string>
     <string name="ssh_stage_verifying">正在等待你确认服务器指纹…</string>
-    <string name="ssh_stage_auth">正在验证用户名和密码…</string>
+    <string name="ssh_stage_auth">正在验证登录凭据…</string>
     <string name="ssh_stage_shell">正在打开远程终端…</string>
     <string name="ssh_error_dns">无法解析主机地址，请检查地址和 DNS 网络连接。</string>
     <string name="ssh_error_timeout">服务器响应超时，请检查地址、端口和网络后重新连接。</string>
     <string name="ssh_error_refused">无法连接 SSH 端口，请检查 SSH 服务、端口和防火墙。</string>
-    <string name="ssh_error_auth">认证失败，请检查用户名、密码，以及服务器是否允许密码登录。</string>
+    <string name="ssh_error_auth">认证失败，请检查用户名、密码或密钥授权，以及服务器允许的登录方式。</string>
     <string name="ssh_error_host_key">主机指纹已变化，连接已阻止。请先核实服务器身份，再删除并重新添加此主机。</string>
     <string name="ssh_error_trust">未确认主机指纹或确认已超时，请重新连接并核对指纹。</string>
     <string name="ssh_error_channel">服务器未能打开终端通道，请检查此账号是否允许 Shell 访问。</string>
@@ -233,6 +233,7 @@
     <string name="sftp_symlink">符号链接</string>
     <string name="sftp_file">文件</string>
     <string name="sftp_file_actions">%1$s 的操作</string>
+    <string name="sftp_selected_count">已选 %1$d 项</string>
     <string name="sftp_empty">此文件夹为空。</string>
     <string name="sftp_more">加载更多文件</string>
     <string name="sftp_refresh">刷新</string>
