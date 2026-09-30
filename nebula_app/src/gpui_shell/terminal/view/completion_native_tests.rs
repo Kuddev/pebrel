@@ -80,6 +80,34 @@ fn git_completion_native_shell_end_to_end() {
         repository.path(),
         &["update-ref", "refs/remotes/origin/native-topic", "HEAD"],
     );
+    for remote in ["origin", "upstream", "custom"] {
+        crate::git_completion::tests::git(
+            repository.path(),
+            &["remote", "add", remote, "https://example.invalid/native-completion"],
+        );
+    }
+    for name in ["inline", "popup", "hybrid", "right", "checkout", "preferred"] {
+        crate::git_completion::tests::git(
+            repository.path(),
+            &["update-ref", &format!("refs/remotes/origin/auto/{name}"), "HEAD"],
+        );
+    }
+    crate::git_completion::tests::git(
+        repository.path(),
+        &["update-ref", "refs/remotes/upstream/auto/preferred", "HEAD"],
+    );
+    crate::git_completion::tests::git(
+        repository.path(),
+        &["config", "checkout.defaultRemote", "origin"],
+    );
+    crate::git_completion::tests::git(
+        repository.path(),
+        &["config", "remote.custom.fetch", "+refs/heads/custom/*:refs/vendor/pre-*-post"],
+    );
+    crate::git_completion::tests::git(
+        repository.path(),
+        &["update-ref", "refs/vendor/pre-native-post", "HEAD"],
+    );
     let revision = std::fs::read_to_string(repository.path().join(".git/refs/heads/main")).unwrap();
     let scripts: serde_json::Map<_, _> = ["inline", "popup", "hybrid", "right"]
         .into_iter()
@@ -150,6 +178,13 @@ fn git_completion_native_shell_end_to_end() {
                     (crate::display::CompletionStyle::Hybrid, "git switch -c qa/tag-hybrid \"release/hy", "git switch -c qa/tag-hybrid \"release/hybrid\"", "", Some("qa/tag-hybrid"), None, false),
                     (crate::display::CompletionStyle::Hybrid, "git switch -c qa/remote origin/native", "git switch -c qa/remote origin/native-topic", "", Some("qa/remote"), None, true),
                     (crate::display::CompletionStyle::Popup, "git switch --detach release/de", "git switch --detach release/detach", "", None, None, false),
+                    (crate::display::CompletionStyle::Inline, "git switch auto/in", "git switch auto/inline", "", Some("auto/inline"), None, false),
+                    (crate::display::CompletionStyle::Popup, "git switch \"auto/po\"", "git switch \"auto/popup\"", "", Some("auto/popup"), None, false),
+                    (crate::display::CompletionStyle::Hybrid, "git switch \"auto/hy", "git switch \"auto/hybrid\"", "", Some("auto/hybrid"), None, false),
+                    (crate::display::CompletionStyle::Hybrid, "git switch auto/ri", "git switch auto/right", "", Some("auto/right"), None, true),
+                    (crate::display::CompletionStyle::Popup, "git checkout auto/ch", "git checkout auto/checkout", "", Some("auto/checkout"), None, false),
+                    (crate::display::CompletionStyle::Inline, "git switch auto/pre", "git switch auto/preferred", "", Some("auto/preferred"), None, false),
+                    (crate::display::CompletionStyle::Hybrid, "git switch custom/na", "git switch custom/native", "", Some("custom/native"), None, true),
                 ] {
                     if prefix.starts_with("git checkout --") {
                         std::fs::write(repository.path().join(marker.unwrap()), "modified").map_err(|error| error.to_string())?;
@@ -209,6 +244,14 @@ fn git_completion_native_shell_end_to_end() {
                     }
                     if let Some(marker) = marker {
                         wait_for(cx, window.into(), &terminal, |_| std::fs::read_to_string(repository.path().join(marker)).is_ok_and(|text| text == "executed")).await?;
+                    }
+                    if let Some(branch) = branch.filter(|name| name.starts_with("auto/") || name.starts_with("custom/")) {
+                        let cwd = repository.path().to_owned();
+                        let upstream = cx.background_executor().spawn(async move {
+                            crate::git_completion::tests::git_output(&cwd, &["rev-parse", "--symbolic-full-name", &format!("{branch}@{{upstream}}")])
+                        }).await;
+                        let expected = if branch == "custom/native" { "refs/vendor/pre-native-post".to_owned() } else { format!("refs/remotes/origin/{branch}") };
+                        if upstream.trim() != expected { return Err(format!("wrong upstream: {upstream:?}, expected {expected:?}")); }
                     }
                     reports.push(serde_json::json!({"mode": format!("{mode:?}"), "input": prefix, "accepted": expected, "branch": branch, "script_marker": marker, "candidate_ms": candidate_ms, "right": right}));
                 }

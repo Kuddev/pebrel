@@ -61,6 +61,33 @@ fn branches_respect_argument_roles_directories_and_worktrees() {
 }
 
 #[test]
+fn automatic_branch_creation_respects_explicit_flags_in_each_shell() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        for (line, configured, expected) in [
+            ("git switch topic", true, true),
+            ("git checkout topic", true, true),
+            ("git switch topic", false, false),
+            ("git switch --guess topic", false, true),
+            ("git switch --guess --no-guess topic", true, false),
+            ("git checkout --no-guess --guess topic", false, true),
+            ("git switch --no-track --guess topic", true, false),
+            ("git checkout --no-track topic", true, false),
+            ("git switch --detach topic", true, false),
+            ("git switch -c new topic", true, false),
+            ("git checkout -b new topic", true, false),
+            ("git checkout -- topic", true, false),
+            ("git merge topic", true, false),
+        ] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().guesses_branches(configured),
+                expected,
+                "{syntax:?}: {line}"
+            );
+        }
+    }
+}
+
+#[test]
 fn paths_and_ambiguous_arguments_retain_directory_scope() {
     for line in ["git checkout -- src", "git checkout main -- src", "git checkout main src"] {
         assert_eq!(context(line).source, Source::Paths { directories_only: false });

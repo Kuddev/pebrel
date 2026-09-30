@@ -24,7 +24,10 @@ also expect application quit and common editing commands in the system menu.
 Use GPUI's native application menus. `cmd-q` calls the shared graceful quit path;
 `cmd-w` invokes the workspace close checks; terminal close moves to `cmd-shift-w`.
 The app menu exposes About, Settings, Services, Hide, Hide Others, and Quit, with
-File, Edit, View, and Window menus alongside it.
+File, Edit, View, and Window menus alongside it. About explicitly selects the
+Application home and clears Settings search. Quit reuses the global `QuitApp`
+action. The shared Command alias table moves terminal close to `cmd-shift-w`;
+restoring Quit cannot reinstate the legacy `cmd-w` application-quit binding.
 
 ## Rejected alternatives
 
@@ -42,10 +45,10 @@ format changes are introduced.
 
 ## Validation
 
-English and Simplified Chinese catalog IDs were compared and are aligned; both
-catalogs parse as JSON; `git diff --check` passes. `cargo check` could not run
-because `cargo` is unavailable in the current environment. Native macOS menu
-behavior has not been exercised in a running app.
+The production macOS keymap regression checks window close, tab close and Quit
+after restoring the configured Quit defaults. Architecture and whitespace checks
+pass against the current base. Pinned rustfmt passes; GitHub native compilation,
+workspace tests and macOS control acceptance remain required before readiness.
 
 ## Supersedes
 
