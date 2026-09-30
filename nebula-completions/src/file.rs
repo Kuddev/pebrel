@@ -334,7 +334,6 @@ pub fn surround_remove(partial: &str) -> String {
 /// * `options` — matching configuration.
 /// * `use_ls_colors` — whether to compute ANSI styles from `LS_COLORS`.
 /// * `ls_colors_env` — optional `LS_COLORS` environment variable value.
-#[allow(unused_variables)]
 pub fn complete_item(
     want_directory: bool,
     span: Span,
@@ -359,6 +358,7 @@ pub fn complete_item(
 /// Complete paths with cooperative cancellation between directory operations.
 /// Cancellation discards partial results; it cannot interrupt a pending OS read.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "color"), allow(unused_variables))]
 pub fn complete_item_with_cancel(
     want_directory: bool,
     span: Span,
