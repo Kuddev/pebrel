@@ -1,0 +1,14 @@
+<resources>
+    <string name="desktop_legacy_text">当前连接返回纯文本，不包含终端颜色和光标。</string>
+    <string name="terminal_loading">正在读取终端…</string>
+    <string name="terminal_waiting">等待终端输出</string>
+    <string name="terminal_latest_output">最新输出 ↓</string>
+    <string name="terminal_display_mode">显示方式</string>
+    <string name="terminal_color_grid">彩色终端网格</string>
+    <string name="terminal_plain_text">纯文本</string>
+    <string name="terminal_edit_command_short">编辑</string>
+    <string name="terminal_keyboard_short">键盘</string>
+    <string name="terminal_shortcuts_more">更多快捷键</string>
+    <string name="terminal_wrap_lines">按手机宽度自动换行</string>
+    <string name="desktop_snapshot_text">选择并复制屏幕文字</string>
+</resources>

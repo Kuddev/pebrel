@@ -37,6 +37,7 @@ use gpui::{
 };
 
 use crate::gpui_shell::prelude::*;
+use crate::i18n::Message;
 use crate::ssh_sftp::{
     SftpBrowseSession, SftpConflictPolicy, SftpController, SftpEntry, SftpEntryKind, SftpPhase,
     SftpSnapshot, SftpTransferOptions,
@@ -458,16 +459,17 @@ impl NebulaWorkspace {
         let muted = theme.muted_foreground;
         let foreground = theme.foreground;
         let drop_highlight = theme.accent.opacity(0.18);
+        let language = crate::gpui_shell::config::ui_language(cx);
         let rows = self.remote_rows();
         let row_count = rows.len();
         let destination = self.remote_browser.destination.clone();
         let path = if self.remote_browser.path.is_empty() {
-            "正在定位远端目录…".to_owned()
+            language.text(Message::RemoteLocating).to_owned()
         } else {
             self.remote_browser.path.clone()
         };
         let at_root = self.remote_browser.path == "/" || self.remote_browser.path.is_empty();
-        let notice = self.remote_notice();
+        let notice = self.remote_notice(language);
 
         v_flex()
             .h_full()
@@ -488,7 +490,7 @@ impl NebulaWorkspace {
                 this.drop_upload_paths(vec![file.local_path.clone()], None, window, cx);
             }))
             .child(div().px(px(TEXT_INSET)).text_xs().text_color(muted)
-                .child(workspace_ui_language().text(if crate::platform::file_drag::supported() {
+                .child(language.text(if crate::platform::file_drag::supported() {
                     crate::i18n::Message::TransferDragHint
                 } else { crate::i18n::Message::TransferUploadHint })))
             // 主机名单独一行：远端浏览器最危险的误操作是"以为在另一台机器上"，
@@ -527,7 +529,7 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(at_root)
-                            .tooltip("上一级")
+                            .tooltip(language.text(Message::RemoteParent))
                             .on_click(cx.listener(|this, _, _, cx| this.remote_parent(cx))),
                     )
                     .child(
@@ -537,7 +539,7 @@ impl NebulaWorkspace {
                             .icon(IconName::Redo2)
                             .ghost()
                             .xsmall()
-                            .tooltip("重新读取")
+                            .tooltip(language.text(Message::RemoteReread))
                             .on_click(cx.listener(|this, _, _, cx| this.remote_refresh(cx))),
                     ),
             )
@@ -553,7 +555,7 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(transfer_working)
-                            .tooltip("上传文件")
+                            .tooltip(language.text(Message::RemoteUploadFiles))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.remote_pick_upload_files(window, cx);
                             })),
@@ -564,7 +566,7 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(transfer_working)
-                            .tooltip("上传文件夹")
+                            .tooltip(language.text(Message::RemoteUploadFolder))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.remote_pick_upload_directory(window, cx);
                             })),
@@ -575,7 +577,7 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(!has_selection || transfer_working)
-                            .tooltip("下载到本地")
+                            .tooltip(language.text(Message::RemoteDownload))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.remote_pick_download_directory(window, cx);
                             })),
@@ -586,7 +588,7 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(!has_selection)
-                            .tooltip("复制远端项目")
+                            .tooltip(language.text(Message::RemoteCopyItem))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.remote_copy_selected(window, cx);
                             })),
@@ -597,13 +599,13 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .disabled(!has_clipboard || transfer_working)
-                            .tooltip("粘贴到当前远端目录")
+                            .tooltip(language.text(Message::RemotePasteHere))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.remote_paste(window, cx);
                             })),
                     )
                     .child(div().flex_1())
-                    .child(div().text_xs().text_color(muted).child("跳过未变"))
+                    .child(div().text_xs().text_color(muted).child(language.text(Message::RemoteSkipUnchanged)))
                     .child(skip_toggle),
             )
             .when_some(notice, |panel, text| {
@@ -657,10 +659,15 @@ impl NebulaWorkspace {
 
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let language = crate::gpui_shell::config::ui_language(cx);
         let is_working = snapshot.phase == SftpPhase::Working;
         let progress = snapshot.progress.clone();
         let label = progress.as_ref().map(|progress| progress.label.clone()).unwrap_or_else(|| {
-            if is_working { "正在准备传输…".to_owned() } else { "传输失败".to_owned() }
+            if is_working {
+                language.text(Message::RemotePreparing).to_owned()
+            } else {
+                language.text(Message::TransferFailed).to_owned()
+            }
         });
         let detail = if let Some(progress) = progress.as_ref() {
             format!(
@@ -701,7 +708,7 @@ impl NebulaWorkspace {
                                 .icon(IconName::CircleX)
                                 .ghost()
                                 .xsmall()
-                                .tooltip("取消传输")
+                                .tooltip(language.text(Message::RemoteCancel))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.remote_cancel_transfer(cx);
                                 })),
@@ -849,28 +856,32 @@ impl NebulaWorkspace {
     ///
     /// 三种情况必须分开说。"读不到"和"是空的"混为一谈，用户就不知道该重试
     /// 还是该换目录——这是空态里最常见也最误导人的一处偷懒。
-    fn remote_notice(&self) -> Option<String> {
+    fn remote_notice(&self, language: crate::display::UiLanguage) -> Option<String> {
         if let Some(error) = self.remote_browser.error.as_deref() {
-            return Some(format!("{error}（点右上角重新读取）"));
+            return Some(language.format(Message::RemoteErrorRetry, &[("error", error)]));
         }
         if self.remote_browser.preflighting {
-            return Some(
-                workspace_ui_language().text(crate::i18n::Message::TransferChecking).to_owned(),
-            );
+            return Some(language.text(crate::i18n::Message::TransferChecking).to_owned());
         }
         if let Some(snapshot) = self.remote_transfer_snapshot()
             && snapshot.phase == SftpPhase::Working
             && snapshot.destination != self.remote_browser.destination
         {
-            return Some(format!("另一主机正在传输：{}", snapshot.destination));
+            return Some(
+                language
+                    .format(Message::RemoteBusyOther, &[("destination", &snapshot.destination)]),
+            );
         }
         if self.remote_browser.loading {
-            return Some("正在读取远端目录…".to_owned());
+            return Some(language.text(Message::RemoteReading).to_owned());
         }
         if let Some(outcome) = self.remote_browser.last_outcome {
-            return Some(workspace_ui_language().text(outcome).to_owned());
+            return Some(language.text(outcome).to_owned());
         }
-        self.remote_browser.entries.is_empty().then(|| "此目录为空。".to_owned())
+        self.remote_browser
+            .entries
+            .is_empty()
+            .then(|| language.text(Message::RemoteEmpty).to_owned())
     }
 }
 

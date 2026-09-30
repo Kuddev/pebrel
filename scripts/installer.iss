@@ -1,9 +1,9 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "1.9.1"
+  #define AppVersion "2.0.0"
 #endif
 
 #ifndef NumericVersion
-  #define NumericVersion "1.9.1.0"
+  #define NumericVersion "2.0.0.0"
 #endif
 
 #ifndef Configuration
@@ -12,6 +12,10 @@
 
 #ifndef PackageBrand
   #define PackageBrand "Pebrel"
+#endif
+
+#ifndef Architecture
+  #define Architecture "x64"
 #endif
 
 #define RepoRoot ".."
@@ -50,13 +54,17 @@ DisableWelcomePage=no
 DisableDirPage=no
 DisableReadyPage=no
 PrivilegesRequired=lowest
+#if Architecture == "arm64"
+ArchitecturesAllowed=arm64
+#else
 ArchitecturesAllowed=x64compatible
+#endif
 MinVersion=10.0.17763
 LicenseFile={#RepoRoot}\LICENSE
 SetupIconFile={#RepoRoot}\nebula_app\windows\nebula.ico
 UninstallDisplayIcon={app}\pebrel.exe
 OutputDir={#RepoRoot}\dist
-OutputBaseFilename={#PackageBrand}-v{#AppVersion}-windows-x64-setup
+OutputBaseFilename={#PackageBrand}-v{#AppVersion}-windows-{#Architecture}-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

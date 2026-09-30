@@ -45,7 +45,7 @@ CLI 路径由环境给出，调用方无需根据展示名称猜测文件名。
    还会绕开远端 pane 不得取用本地上下文的护栏。
 2. **幂等。** 在 Pebrel 的 pane 里再开一个 Pebrel 是常规操作（嵌套 shell、`wsl.exe`、隔离实例）。
    `PATH` 前置与 `WSLENV` 追加都按值判重，套多少层环境块都不增长。
-3. **WSL 透传。** `WSLENV` 里带 `PEBREL_CLI/p`、`PEBREL_BIN_DIR/p`——`/p` 让 WSL 把 Windows
+3. **WSL 透传。** `WSLENV` 里带 `PEBREL_CLI/p`、`PEBREL_BIN_DIR/p`、`PEBREL_HOOK_EXE/p`——`/p` 让 WSL 把 Windows
    路径翻成 `/mnt/...`，否则来宾 shell 拿到的是一个执行不了的 `D:\…` 字面量。合并以环境表里的
    现值为基准，因此与 `shell_detect::wsl_cwd_report_env` 的 cwd 上报条目互不覆盖。
 
@@ -329,10 +329,10 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 SSH pane 只有进入 `Ready` 后允许读取或写入。解析、连接、认证、打开 Shell 或 Failed 阶段会
 返回 `ssh_not_ready`，避免把密码提示和连接错误屏误当成远端 Agent 的正常输出。
 
-默认 GPUI 产品当前只有一个 workspace window，稳定 `window_id` 为 1。该窗口上的
-snapshot/focus/tab.new/pane.split/pane.prompt/pane.read 都操作真实 workspace；GPUI 尚未建立
-第二个拥有独立 hook/runtime 接收器的 workspace，因此 `window.create` 明确返回
-`runtime_unavailable`，不会伪造一个新窗口 id。旧 winit 壳仍支持真实多窗口创建。
+GPUI 的进程级窗口分发器处理 `window.create`，为每个新 workspace 分配稳定的
+`window_id`，并返回首个 Pane 的 ID。Shell/AI 事件通过窗口注册表路由到对应 workspace，
+而不是为每个窗口复制事件接收器。`window.create` 创建可见窗口但不抢前台；显式
+`window.focus` 才激活窗口。旧 winit 壳也保留自己的多窗口创建路径。
 
 ## 等待语义与 `state_change_seq`
 

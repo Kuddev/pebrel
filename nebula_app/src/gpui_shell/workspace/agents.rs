@@ -370,6 +370,7 @@ impl NebulaWorkspace {
             at,
             tab,
             TabMeta {
+                runtime_id: Default::default(),
                 custom_name: agent.map(|agent| format!("{} 分叉", agent.display_name())),
                 color,
                 shell_tag,

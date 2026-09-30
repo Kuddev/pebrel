@@ -129,6 +129,7 @@ mod tests {
     fn sample_session() -> Session {
         let mut tab = TabSession::single("D:/work".into(), Some("Workspace".into()), None);
         tab.layout = Some(LayoutSession::Pane {
+            custom_name: None,
             launch: None,
             cwd: tab.cwd.clone(),
             agent: Some(AgentSession {

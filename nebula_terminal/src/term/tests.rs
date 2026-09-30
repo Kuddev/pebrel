@@ -69,22 +69,51 @@ fn keyboard_queries_follow_live_flags_after_replace_union_and_difference() {
     }
 }
 
-/// DECSET 2031 订阅的同一刻就要收到当前亮暗：规范里取初值靠
-/// `CSI ? 996 n`，但 vte 0.15 不把私有 DSR 路由给 handler，我们答不了那条
-/// 查询。订阅即回报是这个洞的替代品，掉了它 app 在下次换主题前无从得知。
+/// 订阅后续变化不等于查询当前配色，启用时应保持静默。
 #[test]
-fn decset_2031_reports_the_current_scheme_immediately() {
+fn decset_2031_subscribes_without_reporting_the_current_scheme() {
     let size = TermSize::new(5, 5);
     let events = WriteRecorder::default();
     let mut term = Term::new(Config::default(), &size, events.clone());
 
     term.set_private_mode(PrivateMode::Unknown(2031));
     assert!(term.mode().contains(TermMode::COLOR_SCHEME_UPDATES));
-    // 构造默认是暗底 → 1。
-    assert_eq!(events.take(), vec!["\x1b[?997;1n".to_owned()]);
+    assert!(events.take().is_empty());
 
     term.unset_private_mode(PrivateMode::Unknown(2031));
     assert!(!term.mode().contains(TermMode::COLOR_SCHEME_UPDATES));
+}
+
+/// Fish 在命令交接时会重新订阅；这些操作不是配色变化，也不是当前配色查询。
+/// 遍历分块边界，避免网络拆包改变应答行为。
+#[test]
+fn repeated_color_subscriptions_are_silent_at_every_stream_boundary() {
+    let sequence = b"\x1b[?2031h\x1b[?2031h\x1b[?2031l\x1b[?2031h";
+    for dark in [true, false] {
+        for split in 0..=sequence.len() {
+            let events = WriteRecorder::default();
+            let mut term = Term::new(Config::default(), &TermSize::new(5, 5), events.clone());
+            term.set_color_scheme(dark);
+            let mut parser: ansi::Processor = ansi::Processor::new();
+            parser.advance(&mut term, &sequence[..split]);
+            parser.advance(&mut term, &sequence[split..]);
+            assert!(
+                events.take().is_empty(),
+                "unexpected prompt input: dark={dark}, split={split}"
+            );
+            assert!(term.mode().contains(TermMode::COLOR_SCHEME_UPDATES));
+
+            term.set_color_scheme(!dark);
+            let expected = if dark { "\x1b[?997;2n" } else { "\x1b[?997;1n" };
+            assert_eq!(events.take(), [expected], "a real palette change still reports");
+            parser.advance(&mut term, b"\x1b[?2031h");
+            term.set_color_scheme(!dark);
+            assert!(events.take().is_empty(), "same-color reapplication stays silent");
+            parser.advance(&mut term, b"\x1b[?2031l");
+            term.set_color_scheme(dark);
+            assert!(events.take().is_empty(), "disabled notifications stay silent");
+        }
+    }
 }
 
 /// 没订阅的程序不该收到这串字节——它会当成用户敲进来的输入。
@@ -107,7 +136,7 @@ fn color_scheme_reports_only_on_a_real_flip() {
     let mut term = Term::new(Config::default(), &size, events.clone());
 
     term.set_private_mode(PrivateMode::Unknown(2031));
-    assert_eq!(events.take(), vec!["\x1b[?997;1n".to_owned()]);
+    assert!(events.take().is_empty());
 
     // 暗 → 亮：一条 `;2n`。
     term.set_color_scheme(false);
@@ -151,7 +180,7 @@ fn decset_2031_survives_the_real_parser() {
         term.mode().contains(TermMode::COLOR_SCHEME_UPDATES),
         "`\\e[?2031h` 必须经解析器落到 PrivateMode::Unknown(2031)"
     );
-    assert_eq!(events.take(), vec!["\x1b[?997;1n".to_owned()]);
+    assert!(events.take().is_empty());
 
     // 主题翻成浅色：订阅方收到 `;2n`。
     term.set_color_scheme(false);

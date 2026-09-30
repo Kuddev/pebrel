@@ -47,6 +47,12 @@ impl SettingsPane {
         let cursor = self
             .group(language.pick("光标", "Cursor"), cx)
             .child(self.select_row(
+                "cursor_motion",
+                language.text(crate::i18n::Message::SettingsCursorMotionTitle),
+                language.text(crate::i18n::Message::SettingsCursorMotionDescription),
+                cx,
+            ))
+            .child(self.select_row(
                 "cursor_shape",
                 language.pick("光标形状", "Cursor shape"),
                 help("cursor_shape", language),
@@ -126,6 +132,13 @@ impl SettingsPane {
                 ),
             )
             .child(self.font_size_row(false, cx))
+            .child(self.switch_row(
+                "ctrl_wheel_font_zoom",
+                language.text(crate::i18n::Message::SettingsFontCtrlWheelZoom),
+                language.text(crate::i18n::Message::SettingsFontCtrlWheelZoomDescription),
+                self.runtime.ctrl_wheel_font_zoom,
+                cx,
+            ))
             .child(self.select_row(
                 "ligatures",
                 language.text(crate::i18n::Message::SettingsFontLigatures),

@@ -2,6 +2,30 @@
 
 use super::*;
 
+/// 标签元数据：用户名字、色标沿用 session v4；运行时身份只随活体标签移动，
+/// 不写入 session，避免重启后的请求命中新标签。
+/// 与 `tabs` **同下标**。长度必须一致，所以增删移三种结构性改动只允许走
+/// `insert_tab_at` / `remove_tab_at` / `move_tab`——别处直接 `self.tabs.push`
+/// 会让色条和名字错位到邻居身上。
+#[derive(Clone, Debug, Default)]
+pub(super) struct TabMeta {
+    pub(super) runtime_id: crate::runtime_api::tabs::TabId,
+    /// 用户重命名过的标签名；`None` = 跟着 cwd/文件名自动走。
+    pub(super) custom_name: Option<String>,
+    /// 色标（右键菜单的标签颜色）；`None` = 不画色条。
+    pub(super) color: Option<Rgb>,
+    /// 本 Tab 创建时实际采用的 shell 短标。默认 shell 是“新建时参数”，
+    /// 不是全局实时主题；设置改变后既有 PTY 不会换进程，这个标签也不能
+    /// 跟着全局值漂移。非终端 Tab 为 `None`。
+    pub(super) shell_tag: Option<SharedString>,
+    /// 与旧壳 `TabEntry::launch` 同义：保存“这个 Tab 创建时实际采用什么
+    /// 启动方式”。共享 session v4 已有完整 schema，GPUI 只需把它保留下来，
+    /// 不能在快照时把所有本地 Tab 都降级成 `None`。
+    pub(super) launch: Option<crate::session::LaunchSession>,
+    /// 后台 tab 响过 BEL（旧壳 `has_bell`）。激活即清。
+    pub(super) has_bell: bool,
+}
+
 /// 两种 tab 布局共用的只读展示数据。状态与动作仍由 `NebulaWorkspace`
 /// 持有；这里只集中 cwd 标题、程序图标、AI 活动和用户元数据的解释。
 pub(super) struct TabPresentation {
@@ -10,6 +34,7 @@ pub(super) struct TabPresentation {
     pub(super) is_settings: bool,
     pub(super) activity: SidebarActivity,
     pub(super) logo_image: Option<Arc<RenderImage>>,
+    pub(super) logo_pending: bool,
     pub(super) program_glyph: Option<&'static str>,
     pub(super) shell_tag: Option<SharedString>,
     pub(super) color: Option<Rgb>,
@@ -71,10 +96,10 @@ impl NebulaWorkspace {
         // 事件 vs 状态的唯一裁定处（侧栏与顶栏共用这份 presentation），规则与
         // 理由见 [`sidebar::resting_activity`]。
         let activity = sidebar::resting_activity(activity, active, self.meta(ix).has_bell);
-        let logo_image = program
-            .as_deref()
-            .and_then(crate::display::ai_logo_for_program)
-            .and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
+        let brand_logo = program.as_deref().and_then(crate::display::ai_logo_for_program);
+        let logo_image =
+            brand_logo.and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
+        let logo_pending = brand_logo.is_some() && logo_image.is_none();
         let program_glyph = program
             .as_deref()
             .filter(|_| logo_image.is_none())
@@ -111,6 +136,7 @@ impl NebulaWorkspace {
             is_settings,
             activity,
             logo_image,
+            logo_pending,
             program_glyph,
             shell_tag,
             color: meta.color,

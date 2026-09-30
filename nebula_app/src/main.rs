@@ -50,6 +50,7 @@ mod chemistry;
 mod cli;
 mod clipboard;
 mod codex_config;
+mod completion;
 mod completion_context;
 mod config;
 mod config_cli;
@@ -66,6 +67,7 @@ mod encrypted_backup;
 mod event;
 mod file_uri;
 mod font_install;
+mod git_completion;
 mod git_worktree;
 #[cfg(feature = "gpui-shell")]
 mod gpui_shell;
@@ -84,6 +86,7 @@ mod markdown;
 mod math;
 mod message_bar;
 mod migrate;
+mod mobile_connection;
 mod motion;
 mod mux;
 mod nebula_history;
@@ -91,6 +94,7 @@ mod notify;
 #[cfg(windows)]
 mod panic;
 mod platform;
+mod plugins;
 #[cfg(all(unix, feature = "legacy-shell"))]
 mod polling;
 mod process_tree;
@@ -241,7 +245,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         if try_hand_over_to_resident(&options) {
             return Ok(());
         }
-        gpui_shell::run_shell(initial_cwd, terminal_options.command(), shell_id);
+        gpui_shell::run_shell(
+            initial_cwd,
+            terminal_options.command(),
+            shell_id,
+            options.config_file.clone(),
+        );
         return Ok(());
     }
 
@@ -258,16 +267,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Subcommands::Msg(options)) => msg(options)?,
         Some(Subcommands::Migrate(options)) => migrate::migrate(options),
         Some(Subcommands::Config(options)) => std::process::exit(config_cli::run(options)),
+        Some(Subcommands::Plugin(options)) => std::process::exit(plugins::cli::run(options)),
         #[cfg(windows)]
         Some(Subcommands::NotifyTest) => std::process::exit(crate::notify::notify_test()),
-        #[cfg(windows)]
         Some(Subcommands::SetupAi(options)) => {
+            #[cfg(windows)]
             if let Some(distro) = &options.wsl {
                 std::process::exit(crate::platform::wsl_hooks::setup_cli(
                     distro,
                     options.wsl_user.as_deref(),
                     options.remove,
                 ));
+            }
+            #[cfg(not(windows))]
+            if options.wsl.is_some() {
+                return Err("--wsl requires a Windows host; use --ssh for remote setup".into());
             }
             if let Some(destination) = &options.ssh {
                 std::process::exit(crate::ssh_session::setup_ai_cli(destination, options.remove));
@@ -390,9 +404,10 @@ fn nebula(mut options: Options) -> Result<(), Box<dyn Error>> {
     notify::init_proxy(window_event_loop.create_proxy());
     update_check::spawn_once(window_event_loop.create_proxy());
     #[cfg(windows)]
+    let _ai_config_guard = ai_hook::spawn_config_guard();
+    #[cfg(windows)]
     {
         ai_hook::spawn_server(window_event_loop.create_proxy());
-        ai_hook::spawn_config_guard();
         // 托盘 attention（T1-3）：常驻图标 + agent 状态菜单。开关读原始
         // 设置存储——事件循环还没有任何窗口/Display 可问。
         tray::init(window_event_loop.create_proxy());

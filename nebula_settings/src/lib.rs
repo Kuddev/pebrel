@@ -19,7 +19,9 @@ mod agent_hooks;
 pub use agent_hooks::AgentHook;
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
+mod cursor_motion;
 mod custom_theme;
+pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
     IndexedPalette, TerminalThemeColors, ThemeAppearance, ThemeDefinition, ThemeEffects,
     ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, foreground_recommendations,
@@ -622,13 +624,35 @@ pub enum CompletionStyleName {
     #[default]
     Inline,
     Popup,
+    Hybrid,
 }
 
 impl CompletionStyleName {
+    pub const ALL: [Self; 3] = [Self::Inline, Self::Popup, Self::Hybrid];
+    pub const VALUES: [&'static str; 3] = ["inline", "popup", "hybrid"];
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Inline => Self::Popup,
+            Self::Popup => Self::Hybrid,
+            Self::Hybrid => Self::Inline,
+        }
+    }
+
+    /// 混合模式仅在用户请求后显示列表，候选生成仍复用已有两种呈现。
+    pub fn active_style(self, popup_requested: bool) -> Self {
+        match self {
+            Self::Hybrid if popup_requested => Self::Popup,
+            Self::Hybrid => Self::Inline,
+            style => style,
+        }
+    }
+
     pub fn from_settings(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "inline" | "ghost" => Some(Self::Inline),
             "popup" | "menu" | "list" => Some(Self::Popup),
+            "hybrid" => Some(Self::Hybrid),
             _ => None,
         }
     }
@@ -637,7 +661,36 @@ impl CompletionStyleName {
         match self {
             Self::Inline => "inline",
             Self::Popup => "popup",
+            Self::Hybrid => "hybrid",
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_mode_tests {
+    use super::*;
+
+    #[test]
+    fn modes_round_trip_preserve_other_settings_and_reset_to_inline() {
+        for mode in CompletionStyleName::ALL {
+            let input = "accept=right\nunknown=keep\ncompletion_style=inline\n";
+            let saved = apply_updates(input, &[("completion_style", mode.settings_value().into())]);
+            assert_eq!(
+                RuntimeSettings::from_raw(&RawSettings::from_text(&saved)).completion_style,
+                mode
+            );
+            assert!(saved.contains("unknown=keep"));
+            assert!(saved.contains("accept=right"));
+            assert_eq!(CompletionStyleName::from_settings(mode.settings_value()), Some(mode));
+        }
+        assert_eq!(CompletionStyleName::Hybrid.cycle(), CompletionStyleName::Inline);
+        assert_eq!(CompletionStyleName::from_settings("ghost"), Some(CompletionStyleName::Inline));
+        assert_eq!(CompletionStyleName::from_settings("list"), Some(CompletionStyleName::Popup));
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_text("completion_style=invalid"))
+                .completion_style,
+            CompletionStyleName::Inline
+        );
     }
 }
 
@@ -975,10 +1028,14 @@ pub struct RuntimeSettings {
     /// **逻辑像素**（旧壳写盘语义：设置页 spinner 与 Ctrl+滚轮缩放持久化时
     /// 已除以 scale factor）。`None` = 跟随 nebula.toml 的 `font.size`（pt）。
     pub font_size_px: Option<f32>,
+    /// Ctrl+滚轮缩放终端字号。默认开启以保留既有行为；关闭时该手势被整体
+    /// 消费：既不缩放，也不回落成普通滚动。不影响普通滚轮与键盘字号快捷键。
+    pub ctrl_wheel_font_zoom: bool,
     /// Enabled by default; explicit theme mode follows the selected theme.
     pub ligatures: Ligatures,
     pub cursor_shape: Option<CursorShapeName>,
     pub cursor_blink: Option<bool>,
+    pub cursor_motion: CursorMotion,
     pub copy_on_select: bool,
     /// Maximum retained history for new terminals, without altering open sessions.
     pub scrollback_lines: usize,
@@ -992,9 +1049,12 @@ pub struct RuntimeSettings {
     pub multiline_paste_confirm: bool,
     /// 标签页关闭按钮（叉号）是否渲染：关 = 不渲染，仍可用中键关闭。
     pub tab_close_visible: bool,
-    /// 终端网络代理：新会话启动时把当前系统代理写入 HTTP_PROXY/HTTPS_PROXY。
-    /// 上游默认关 (false) —— fork 侧另起本地 commit 翻成默认开。
+    /// 新建本地终端是否把 Windows 系统代理写入代理环境变量。自定义代理地址
+    /// 不看这个开关：网络页填了地址就会写入新终端。默认关。已打开的会话不改。
     pub terminal_proxy: bool,
+    /// Refresh Windows registry variables for new panes. Disable to inherit the
+    /// launching process environment, including its temporary PATH additions.
+    pub refresh_environment: bool,
     pub powerline: bool,
     /// 默认 shell 的原始 id（`shell=` 原文：powershell/bash/cmd/pwsh/WSL
     /// 发行版等）。解析归 shell 检测层，这里只做持久化往返。
@@ -1146,12 +1206,17 @@ impl RuntimeSettings {
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
+            ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
             ligatures: raw
                 .value("ligatures")
                 .and_then(Ligatures::from_settings)
                 .unwrap_or_default(),
             cursor_shape: raw.value("cursor_shape").and_then(CursorShapeName::from_settings),
             cursor_blink: raw.bool_on("cursor_blink"),
+            cursor_motion: raw
+                .value("cursor_motion")
+                .and_then(CursorMotion::from_settings)
+                .unwrap_or_default(),
             copy_on_select: raw.bool_on("copy_on_select").unwrap_or(false),
             scrollback_lines: scrolling::scrollback_lines(raw),
             scroll_speed: normalize_scroll_speed(
@@ -1162,6 +1227,7 @@ impl RuntimeSettings {
             multiline_paste_confirm: raw.bool_on("multiline_paste_confirm").unwrap_or(true),
             tab_close_visible: raw.bool_on("tab_close_visible").unwrap_or(true),
             terminal_proxy: raw.bool_on("terminal_proxy").unwrap_or(false),
+            refresh_environment: raw.bool_on("refresh_environment").unwrap_or(true),
             powerline: raw.bool_on("powerline").unwrap_or(true),
             shell: raw.value("shell").or_else(|| raw.value("executor")).map(str::to_owned),
             startup_directory: raw.value("startup_directory").map(str::to_owned),
@@ -1233,7 +1299,7 @@ impl RuntimeSettings {
             background_image_cover_chrome: raw
                 .bool_on("background_image_cover_chrome")
                 .unwrap_or(false),
-            panel_resize: raw.bool_on("panel_resize").unwrap_or(false),
+            panel_resize: raw.bool_on("panel_resize").unwrap_or(true),
             sidebar_width: raw
                 .f32("sidebar_w")
                 .map(|width| width.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH))
@@ -1312,6 +1378,20 @@ pub fn format_hex_rgb(rgb: Rgb8) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn environment_refresh_defaults_and_round_trips() {
+        for text in ["", "refresh_environment=\n", "refresh_environment=invalid\n"] {
+            assert!(RuntimeSettings::from_raw(&RawSettings::from_text(text)).refresh_environment);
+        }
+        let original = "theme=Nord\nrefresh_environment=1\ncustom=keep\n";
+        let disabled = apply_updates(original, &[("refresh_environment", "0".into())]);
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&disabled)).refresh_environment);
+        assert!(disabled.contains("custom=keep"));
+        let enabled = apply_updates(&disabled, &[("refresh_environment", "1".into())]);
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).refresh_environment);
+        assert_eq!(enabled, original);
+    }
+
     #[test]
     fn pane_preferences_round_trip_and_allow_a_missing_mouse_override() {
         let defaults = RuntimeSettings::from_raw(&RawSettings::default());
@@ -1552,7 +1632,10 @@ mod tests {
         assert_eq!(settings.background, None);
         assert_eq!(settings.theme_foreground, None);
         assert_eq!(settings.custom_theme, None);
-        assert!(!settings.panel_resize);
+        assert!(settings.panel_resize);
+        assert!(
+            !RuntimeSettings::from_raw(&RawSettings::from_text("panel_resize=0\n")).panel_resize
+        );
         assert_eq!(settings.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
         assert_eq!(settings.ssh_proxy_mode, ProxyModeName::Off);
         assert_eq!(settings.quick_terminal_hotkey, DEFAULT_QUICK_TERMINAL_HOTKEY);
@@ -1601,6 +1684,22 @@ mod tests {
         let enabled = apply_updates(&disabled, &[("ai_toasts", "1".to_owned())]);
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).ai_toasts);
         assert_eq!(enabled.matches("ai_toasts=").count(), 1);
+    }
+
+    #[test]
+    fn ctrl_wheel_font_zoom_defaults_on_and_accepts_all_boolean_spellings() {
+        assert!(RuntimeSettings::from_raw(&RawSettings::default()).ctrl_wheel_font_zoom);
+        for value in ["", "invalid", "1", "true", "YES", "On"] {
+            let raw = RawSettings::from_text(&format!("ctrl_wheel_font_zoom={value}\n"));
+            assert!(RuntimeSettings::from_raw(&raw).ctrl_wheel_font_zoom, "{value:?}");
+        }
+        for value in ["0", "false", "NO", "Off"] {
+            let raw = RawSettings::from_text(&format!("ctrl_wheel_font_zoom={value}\n"));
+            let settings = RuntimeSettings::from_raw(&raw);
+            assert!(!settings.ctrl_wheel_font_zoom, "{value:?}");
+            assert_eq!(settings.bell, BellModeName::Both);
+            assert!(settings.font_size_px.is_none());
+        }
     }
 
     #[test]

@@ -4,15 +4,29 @@
 pub(crate) fn prepare_local_pty(options: &mut nebula_terminal::tty::Options) {
     #[cfg(windows)]
     {
-        if let Err(error) = nebula_terminal::tty::refresh_environment(options) {
-            log::warn!("Could not refresh the Windows environment for a new pane: {error}");
+        // 同一次启动共用设置快照，避免重复读盘或两次读取间设置变化。
+        let settings = nebula_settings::RuntimeSettings::load();
+        prepare_windows_local_pty(options, settings.refresh_environment);
+        // Both Windows shells use this adapter after environment refresh. New
+        // panes get the selected protocol; existing processes remain unchanged.
+        if crate::ssh_proxy::apply_saved_terminal_proxy_env(&mut options.env, &settings) {
+            let inherited =
+                if options.env_is_complete { None } else { std::env::var("WSLENV").ok() };
+            crate::ssh_proxy::forward_terminal_proxy_to_wsl(&mut options.env, inherited.as_deref());
         }
-        let inherited_override =
-            !options.env_is_complete && std::env::var_os(GROK_LEGACY_CONSOLE).is_some();
-        apply_local_console_defaults(options, inherited_override);
     }
     #[cfg(not(windows))]
     let _ = options;
+}
+
+#[cfg(windows)]
+fn prepare_windows_local_pty(options: &mut nebula_terminal::tty::Options, refresh: bool) {
+    if refresh && let Err(error) = nebula_terminal::tty::refresh_environment(options) {
+        log::warn!("Could not refresh the Windows environment for a new pane: {error}");
+    }
+    let inherited_override =
+        !options.env_is_complete && std::env::var_os(GROK_LEGACY_CONSOLE).is_some();
+    apply_local_console_defaults(options, inherited_override);
 }
 
 #[cfg(windows)]
@@ -33,7 +47,7 @@ fn apply_local_console_defaults(
             options.env.insert(name.to_owned(), inherited.unwrap_or_else(|| value.to_owned()));
         }
     }
-    // Grok 1.0.25 treats unknown Windows terminal names as legacy consoles and
+    // Grok 1.0.25 treats unknown terminal identities on Windows as legacy consoles and
     // omits its Braille logo. Keep our real identity and use its capability override.
     // Remove this default when Grok recognizes Pebrel's terminal capabilities.
     // A complete refreshed environment is authoritative, including deleted keys.
@@ -93,6 +107,53 @@ fn configuration_override(suffix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn inherited_environment_reaches_a_real_child_with_pane_overrides() {
+        const PROBE: &str = "PEBREL_INHERITED_ENVIRONMENT_PROBE";
+        const SENTINEL: &str = "C:\\pebrel-parent-path-only;";
+        if std::env::var_os(PROBE).is_some() {
+            let mut options = nebula_terminal::tty::Options {
+                env: [("PEBREL_PANE_VALUE".into(), "pane-override".into())].into_iter().collect(),
+                ..Default::default()
+            };
+            super::prepare_windows_local_pty(&mut options, false);
+            assert!(!options.env_is_complete, "the parent environment must remain inherited");
+            let system = std::env::var_os("SystemRoot").unwrap();
+            let command = std::path::Path::new(&system)
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+            let output = std::process::Command::new(command)
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    "[Console]::WriteLine($env:PATH); [Console]::WriteLine($env:PEBREL_PANE_VALUE)",
+                ])
+                .envs(options.env)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let output = String::from_utf8(output.stdout).unwrap();
+            let mut lines = output.lines();
+            let path = std::env::var("PATH").unwrap();
+            assert!(path.starts_with(SENTINEL));
+            assert_eq!(lines.next(), Some(path.as_str()));
+            assert_eq!(lines.next(), Some("pane-override"));
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "platform::environment::tests::inherited_environment_reaches_a_real_child_with_pane_overrides",
+                "--nocapture",
+            ])
+            .env(PROBE, "1")
+            .env("PATH", format!("{SENTINEL}{}", std::env::var("PATH").unwrap()))
+            .env("PEBREL_PANE_VALUE", "parent-value")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
     #[cfg(windows)]
     #[test]
     fn local_terminal_defaults_enable_grok_unicode_without_changing_identity() {

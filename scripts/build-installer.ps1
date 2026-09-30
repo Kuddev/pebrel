@@ -3,11 +3,15 @@ param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')]
     [string] $Version,
 
-    [ValidateSet('debug', 'release')]
+    # 与便携包相同，安装器只能收录已内嵌 GPUI 着色器的发布构建。
+    [ValidateSet('release')]
     [string] $Configuration = 'release',
 
     [ValidateSet('NebulaTerminal', 'Pebrel')]
     [string] $PackageBrand = 'Pebrel',
+
+    [ValidateSet('x64', 'arm64')]
+    [string] $Architecture = 'x64',
 
     [switch] $SkipBuild,
     # 与 -SkipBuild 联用：跳过「exe 必须比源码新」的陈旧检查。仅用于脚本
@@ -57,7 +61,7 @@ if ([string]::IsNullOrWhiteSpace($TargetDirectory)) {
 }
 $cargoTargetRoot = [System.IO.Path]::GetFullPath($TargetDirectory)
 $targetRoot = Join-Path $cargoTargetRoot $Configuration
-$setupPath = Join-Path $outputRoot "$PackageBrand-v$Version-windows-x64-setup.exe"
+$setupPath = Join-Path $outputRoot "$PackageBrand-v$Version-windows-$Architecture-setup.exe"
 
 $requiredFiles = @(
     (Join-Path $targetRoot 'pebrel.exe'),
@@ -94,6 +98,8 @@ if ($missing.Count -ne 0) {
 }
 
 $packagedExe = Join-Path $targetRoot 'pebrel.exe'
+. (Join-Path $PSScriptRoot 'windows-package-architecture.ps1')
+Assert-WindowsPackageArchitecture -Root $targetRoot -Architecture $Architecture
 if ($PackageBrand -eq 'Pebrel' -and (Get-Item -LiteralPath $packagedExe).VersionInfo.ProductName -ne 'Pebrel') {
     throw 'Pebrel packages require a freshly built Pebrel executable, not renamed Nebula binaries.'
 }
@@ -145,6 +151,7 @@ if ($ValidateOnly) {
         InstallerScript = $installerScript
         Version = $Version
         Configuration = $Configuration
+        Architecture = $Architecture
         Files = $requiredFiles.Count
     } | Format-List
     return
@@ -202,7 +209,7 @@ if (-not $translationValid) {
 
 Push-Location $PSScriptRoot
 try {
-    & $InnoCompiler "/DAppVersion=$Version" "/DNumericVersion=$numericVersion" "/DConfiguration=$Configuration" "/DPackageBrand=$PackageBrand" "/DBuildRoot=$targetRoot" "/O$outputRoot" $installerScript
+    & $InnoCompiler "/DAppVersion=$Version" "/DNumericVersion=$numericVersion" "/DConfiguration=$Configuration" "/DPackageBrand=$PackageBrand" "/DArchitecture=$Architecture" "/DBuildRoot=$targetRoot" "/O$outputRoot" $installerScript
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup compilation failed with exit code $LASTEXITCODE"
     }

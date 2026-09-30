@@ -203,6 +203,116 @@ fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
 }
 
 #[gpui::test]
+fn right_click_menu_does_not_paste_and_quick_mode_remains_explicit(cx: &mut TestAppContext) {
+    let (terminal, mut cx, receiver) = link_fixture(cx, b"prompt> ");
+    let requests = Rc::new(Cell::new(0));
+    let count = requests.clone();
+    let _subscription = cx.update(|_, cx| {
+        cx.subscribe(&terminal, move |_, event, _| {
+            if matches!(event, TerminalViewEvent::SelectionContextMenuRequested { .. }) {
+                count.set(count.get() + 1);
+            }
+        })
+    });
+    let point = cell(&terminal, &cx, 2);
+    for (quick, control, expected_requests) in [(false, false, 1), (true, true, 2)] {
+        terminal.update(&mut cx, |view, _| view.copy_on_select = quick);
+        let modifiers = Modifiers { control, ..Modifiers::default() };
+        cx.simulate_mouse_down(point, MouseButton::Right, modifiers);
+        cx.simulate_mouse_up(point, MouseButton::Right, modifiers);
+        draw(&mut cx);
+        assert_eq!(requests.get(), expected_requests);
+        assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+        assert_eq!(clipboard(&mut cx).as_deref(), Some("before"));
+    }
+    terminal.update(&mut cx, |view, _| view.copy_on_select = true);
+    cx.simulate_mouse_down(point, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Right, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(requests.get(), 2);
+    let bytes: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(bytes, b"before");
+}
+
+#[gpui::test]
+fn right_click_in_mouse_reporting_apps_still_reaches_the_application(cx: &mut TestAppContext) {
+    let (terminal, mut cx, receiver) = link_fixture(cx, b"\x1b[?1000h\x1b[?1006h");
+    let point = cell(&terminal, &cx, 2);
+    cx.simulate_mouse_down(point, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(point, MouseButton::Right, Modifiers::default());
+    draw(&mut cx);
+    let bytes: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(bytes.starts_with(b"\x1b[<2;"));
+    assert!(bytes.ends_with(b"m"), "mouse release is delivered as well");
+    assert!(!bytes.windows(6).any(|slice| slice == b"before"));
+}
+
+#[gpui::test]
+fn dragging_across_a_rendered_formula_keeps_hit_mapping_and_copies_source(cx: &mut TestAppContext) {
+    let (terminal, mut cx, _) = link_fixture(cx, b"$x^2$ suffix\r\n\r\nprompt> ");
+    let visual_suffix = |terminal: &Entity<TerminalView>, cx: &VisualTestContext| {
+        terminal.read_with(cx, |view, _| {
+            let origin = view.session.as_ref().unwrap().term.lock().viewport_origin_for(view.rows);
+            (0..view.cols)
+                .find(|column| {
+                    view.math.source_point(
+                        TermPoint::new(origin, Column(*column)),
+                        Side::Left,
+                        origin,
+                    ) == (TermPoint::new(origin, Column(5)), Side::Left)
+                })
+                .unwrap()
+        })
+    };
+    // Layout and rasterization run on the owned background executor. Advance
+    // real frames until their cache results become paintable, without sleeping.
+    let mut suffix = 5;
+    for _ in 0..8 {
+        draw(&mut cx);
+        suffix = visual_suffix(&terminal, &cx);
+        if suffix < 5 {
+            break;
+        }
+    }
+    assert!(suffix < 5, "the real rendered frame must compact the formula before selection");
+    let (start, end) = terminal.read_with(&cx, |view, _| {
+        (
+            point(view.origin.x + view.cell_width * 0.25, view.origin.y + view.line_height * 0.5),
+            point(
+                view.origin.x + view.cell_width * (suffix as f32 + 3.75),
+                view.origin.y + view.line_height * 0.5,
+            ),
+        )
+    });
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(visual_suffix(&terminal, &cx), suffix, "selection must not move the suffix");
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    cx.update(|window, cx| {
+        terminal.update(cx, |view, cx| {
+            assert!(view.copy_selection(true, window, cx));
+        });
+    });
+    assert_eq!(clipboard(&mut cx).as_deref(), Some("$x^2$ suf"));
+}
+
+#[gpui::test]
 fn link_gesture_opens_regex_files_and_osc8_with_or_without_mouse_reporting(
     cx: &mut TestAppContext,
 ) {
@@ -325,4 +435,71 @@ fn explicit_link_gesture_respects_disabled_hints_and_required_modifiers(cx: &mut
     window.simulate_mouse_down(position, MouseButton::Left, modifiers);
     window.simulate_mouse_up(position, MouseButton::Left, modifiers);
     assert_eq!(clipboard(&mut window).as_deref(), Some("https://example.com"));
+}
+
+/// 真实终端元素 + 可回滚的历史，滚轮手势才有可观察的落点。
+fn terminal_with_history(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
+    let (probe, mut cx) = open(cx);
+    let terminal = probe.read_with(&cx, |probe, _| probe.terminal.clone());
+    terminal.update(&mut cx, |view, cx| {
+        let (session, _receiver) = session::test_session();
+        view.session = Some(session);
+        let mut history = Vec::new();
+        for line in 0..200 {
+            history.extend_from_slice(format!("history-{line}\r\n").as_bytes());
+        }
+        super::super::startup_tests::feed(view, &history);
+        cx.notify();
+    });
+    draw(&mut cx);
+    (terminal, cx)
+}
+
+/// 走真实命中区域派发滚轮：`control` 决定是否按 Ctrl+滚轮解释。
+fn wheel_over_terminal(cx: &mut VisualTestContext, delta_y: f32, control: bool) {
+    let position = cx.debug_bounds("mouse-terminal").unwrap().center();
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(delta_y))),
+        modifiers: Modifiers { control, ..Modifiers::default() },
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll(cx: &mut TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    // 缩放会写 `font_size=`：与 theme studio 夹具同一把锁，并原样恢复用户的设置文件。
+    let _fixture_guard = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    let (terminal, mut cx) = terminal_with_history(cx);
+    // 从中间字号起步，让 ±1 步远离 4–64 的钳位边界。
+    cx.update(|_, cx| {
+        let settings = cx.global_mut::<Settings>();
+        settings.font_size_px = 15.0;
+        settings.ctrl_wheel_font_zoom = true;
+    });
+
+    // 开启（默认）：Ctrl+滚轮仍然放大字号，且不移动终端回滚位置。
+    wheel_over_terminal(&mut cx, 60.0, true);
+    let zoomed = terminal.read_with(&cx, |view, _| view.font_size);
+    assert!(zoomed > px(15.0), "Ctrl+滚轮应放大字号，实际 {zoomed:?}");
+    assert_eq!(terminal.read_with(&cx, |view, _| view.scroll_state().0), 0);
+
+    // 关闭：放大方向的手势既不改变字号，也不被当成普通滚动消费掉。
+    cx.update(|_, cx| cx.global_mut::<Settings>().ctrl_wheel_font_zoom = false);
+    wheel_over_terminal(&mut cx, 60.0, true);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.font_size), zoomed);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.scroll_state().0), 0);
+    // 缩小方向同样被整体吞掉。
+    wheel_over_terminal(&mut cx, -60.0, true);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.font_size), zoomed);
+    assert_eq!(terminal.read_with(&cx, |view, _| view.scroll_state().0), 0);
+
+    // 关闭开关只影响 Ctrl+滚轮：普通滚轮照旧滚动。
+    wheel_over_terminal(&mut cx, 60.0, false);
+    assert!(terminal.read_with(&cx, |view, _| view.scroll_state().0) > 0);
 }

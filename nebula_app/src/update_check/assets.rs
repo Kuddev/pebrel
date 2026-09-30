@@ -14,12 +14,18 @@ pub(crate) fn macos_names(version: &str, architecture: &str) -> Vec<String> {
     ]
 }
 
+pub(crate) fn windows_names(version: &str, architecture: &str) -> Vec<String> {
+    match architecture {
+        "x86_64" => super::windows_x64_installer_names(version).to_vec(),
+        "aarch64" => vec![format!("Pebrel-v{version}-windows-arm64-setup.exe")],
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn native_names(version: &str) -> Vec<String> {
     match Platform::current() {
         Platform::MacOS => macos_names(version, std::env::consts::ARCH),
-        Platform::Windows if std::env::consts::ARCH == "x86_64" => {
-            super::windows_x64_installer_names(version).to_vec()
-        },
+        Platform::Windows => windows_names(version, std::env::consts::ARCH),
         _ => Vec::new(),
     }
 }
@@ -92,6 +98,28 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(select("1.9.0", "", &assets, &names).unwrap().name, names[0]);
         }
+    }
+    #[test]
+    fn windows_architectures_are_exact() {
+        let version = "1.9.2";
+        let arm = windows_names(version, "aarch64");
+        let x64 = windows_names(version, "x86_64");
+        assert_eq!(arm, ["Pebrel-v1.9.2-windows-arm64-setup.exe"]);
+        assert_eq!(x64, super::super::windows_x64_installer_names(version));
+        assert!(windows_names(version, "unknown").is_empty());
+        let assets = [x64[0].clone(), arm[0].clone(), "Pebrel-v1.9.2-windows-arm64.zip".into()]
+            .into_iter()
+            .map(|name| GitHubReleaseAsset {
+                name,
+                browser_download_url: "https://example.invalid".into(),
+                size: 42,
+                digest: Some(format!("sha256:{}", "a".repeat(64))),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(select(version, "", &assets, &arm).unwrap().name, arm[0]);
+        assert_eq!(select(version, "", &assets, &x64).unwrap().name, x64[0]);
+        assert!(select(version, "", &assets[..1], &arm).is_none());
+        assert!(select(version, "", &assets[2..], &arm).is_none());
     }
     #[test]
     fn checksum_manifest_requires_one_exact_valid_entry() {

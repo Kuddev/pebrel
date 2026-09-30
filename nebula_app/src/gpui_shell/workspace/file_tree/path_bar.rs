@@ -210,7 +210,7 @@ impl NebulaWorkspace {
         if self.file_tree_path.as_ref().is_some_and(|edit| edit.origin != origin) {
             self.file_tree_path = None;
         }
-        let language = super::super::workspace_ui_language();
+        let language = crate::gpui_shell::config::ui_language(cx);
         let Some(edit) = self.file_tree_path.as_ref() else {
             let value = origin
                 .wsl

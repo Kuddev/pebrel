@@ -4,11 +4,11 @@ use super::*;
 use crate::i18n::Message;
 
 pub(super) fn init(cx: &mut App) {
-    let language = super::workspace_ui_language();
+    let language = crate::gpui_shell::config::ui_language(cx);
     let text = |message| language.text(message);
     cx.set_menus([
         Menu::new("Pebrel").items([
-            MenuItem::action(format!("{} Pebrel", text(Message::CommonAbout)), OpenAbout),
+            MenuItem::action(format!("{} Pebrel", text(Message::CommonAbout)), OpenSettings),
             MenuItem::separator(),
             MenuItem::action(text(Message::CommonSettings), OpenSettings),
             MenuItem::separator(),
@@ -17,7 +17,7 @@ pub(super) fn init(cx: &mut App) {
             MenuItem::action(text(Message::CommonHidePebrel), HideApplication),
             MenuItem::action(text(Message::CommonHideOthers), HideOtherApplications),
             MenuItem::separator(),
-            MenuItem::action(text(Message::CommonQuitPebrel), QuitApplication),
+            MenuItem::action(text(Message::CommonQuitPebrel), keyboard_bindings::QuitApp),
         ]),
         Menu::new(text(Message::CommonMenuFile)).items([
             MenuItem::action(text(Message::CommonNewWindow), NewWindow),

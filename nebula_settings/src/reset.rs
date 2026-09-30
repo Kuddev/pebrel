@@ -16,15 +16,18 @@ const RESET_KEYS: &[&str] = &[
     "ui_font_family",
     "ui_font_size",
     "font_size",
+    "ctrl_wheel_font_zoom",
     "ligatures",
     "cursor_shape",
     "cursor_blink",
+    "cursor_motion",
     "copy_on_select",
     "focus_follows_mouse",
     "dim_inactive_panes",
     "multiline_paste_confirm",
     "tab_close_visible",
     "terminal_proxy",
+    "refresh_environment",
     "powerline",
     "shell",
     "executor",
@@ -169,6 +172,15 @@ mod tests {
     }
 
     #[test]
+    fn resetting_preferences_reenables_ctrl_wheel_font_zoom_without_erasing_other_data() {
+        let original = "ctrl_wheel_font_zoom=0\ncustom_data=keep\n";
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(original)).ctrl_wheel_font_zoom);
+        let restored = default_settings_text(original);
+        assert_eq!(restored, "custom_data=keep\n");
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ctrl_wheel_font_zoom);
+    }
+
+    #[test]
     fn resetting_preferences_restores_the_default_notification_duration() {
         let original = "notification_duration=persistent\ncustom_data=keep\n";
         let restored = default_settings_text(original);
@@ -179,6 +191,15 @@ mod tests {
     }
 
     #[test]
+    fn resetting_preferences_disables_cursor_motion_and_preserves_unrelated_data() {
+        let restored = default_settings_text("cursor_motion=smooth\ncustom_data=keep\n");
+        let runtime = crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(&restored));
+        assert_eq!(runtime.cursor_motion, crate::CursorMotion::Off);
+        assert!(!restored.contains("cursor_motion="));
+        assert!(restored.contains("custom_data=keep"));
+    }
+
+    #[test]
     fn reset_enables_ligatures_even_after_following_a_theme() {
         for value in ["off", "theme"] {
             let restored = default_settings_text(&format!("ligatures={value}\ncustom=keep\n"));
@@ -186,6 +207,17 @@ mod tests {
             let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
             assert_eq!(runtime.ligatures, crate::Ligatures::On);
             assert!(runtime.ligatures.enabled(Some(false)));
+        }
+    }
+
+    #[test]
+    fn reset_restores_inline_completion_and_preserves_unrelated_data() {
+        for mode in crate::CompletionStyleName::VALUES {
+            let restored =
+                default_settings_text(&format!("completion_style={mode}\ncustom=keep\n"));
+            assert_eq!(restored, "custom=keep\n");
+            let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+            assert_eq!(runtime.completion_style, crate::CompletionStyleName::Inline);
         }
     }
 
@@ -206,6 +238,13 @@ mod tests {
         assert!(runtime.font_size_px.is_none());
         assert!(runtime.shell.is_none());
         assert!(crate::keybind_pairs_from_text(&result).is_empty());
+    }
+
+    #[test]
+    fn reset_restores_environment_refresh_without_changing_private_settings() {
+        let restored = default_settings_text("refresh_environment=0\nprivate_key=keep\n");
+        assert_eq!(restored, "private_key=keep\n");
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).refresh_environment);
     }
 
     #[test]

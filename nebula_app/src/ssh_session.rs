@@ -31,8 +31,10 @@ mod exec;
 mod integration;
 mod lifecycle;
 mod route;
+mod transcript;
 pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
+pub use transcript::TranscriptReader;
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
 pub(crate) fn terminal_config(
@@ -68,6 +70,9 @@ struct OpenedTransport {
 pub trait SshEventHost:
     nebula_terminal::event::EventListener + Clone + Send + Sync + 'static
 {
+    /// A read capability belongs to this pane's live authenticated transport.
+    fn ssh_transcript_reader(&self, _reader: Option<TranscriptReader>) {}
+
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
         let _ = stage;
@@ -223,6 +228,23 @@ impl SshDestination {
     /// 使用系统 SSH 的离线配置展开能力解析别名、用户名、端口和 IdentityFile。
     /// 这能保持用户现有 `~/.ssh/config` 行为，同时网络连接仍完全由 Rust 传输层承担。
     fn resolve(value: &str) -> io::Result<Self> {
+        let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
+        let profiles = crate::ssh_profiles::SshProfiles::load(&path)?;
+        Self::resolve_profile(value, &profiles)
+    }
+
+    fn resolve_profile(
+        value: &str,
+        profiles: &crate::ssh_profiles::SshProfiles,
+    ) -> io::Result<Self> {
+        let identity = value.trim();
+        let mut resolved = Self::resolve_address(profiles.connection_destination(identity))?;
+        // 连接目标展开后仍保留独立身份，使密码、连接池与断线恢复继续指向该副本。
+        resolved.original = identity.to_owned();
+        Ok(resolved)
+    }
+
+    fn resolve_address(value: &str) -> io::Result<Self> {
         let original = value.trim().to_owned();
         crate::ssh_profiles::validate_ssh_destination(&original)
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
@@ -280,7 +302,7 @@ impl SshDestination {
 /// 给 `ssh -G` 的离线配置探测目标。Nebula 历史存盘格式允许
 /// `user@host:port`，而 OpenSSH 只会从 `ssh://user@host:port` URI 中拆出
 /// 端口；无显式端口、已有 URI 与裸 IPv6 都保持原样，避免改变 Host 匹配。
-fn ssh_config_probe_target(value: &str) -> Cow<'_, str> {
+pub(crate) fn ssh_config_probe_target(value: &str) -> Cow<'_, str> {
     if value.starts_with("ssh://") {
         return Cow::Borrowed(value);
     }
@@ -933,6 +955,27 @@ pub(crate) async fn exec_capture(
     script: &[u8],
     budget: Duration,
 ) -> Result<String, SessionError> {
+    let channel = open_exec_channel(raw_destination).await?;
+    exec::capture(channel, command, script, budget, raw_destination).await
+}
+
+/// 中转配置含访问令牌，复用既有认证连接，但不把任何远端输出写入日志。
+pub(crate) async fn exec_private(
+    raw_destination: &str,
+    command: &str,
+    budget: Duration,
+) -> Result<Vec<u8>, SessionError> {
+    tokio::time::timeout(budget, async {
+        let channel = open_exec_channel(raw_destination).await?;
+        exec::capture_private(channel, command).await
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "private_exec_timeout"))?
+}
+
+async fn open_exec_channel(
+    raw_destination: &str,
+) -> Result<russh::Channel<russh::client::Msg>, SessionError> {
     let profiles_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
     let raw = raw_destination.to_owned();
     let (destination, profile) = tokio::task::spawn_blocking(move || {
@@ -945,8 +988,7 @@ pub(crate) async fn exec_capture(
     .map_err(|err| format!("SSH 地址解析任务失败: {err}"))??;
 
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
-    let channel = lifecycle::network("exec channel", session.channel_open_session()).await?;
-    exec::capture(channel, command, script, budget, raw_destination).await
+    Ok(lifecycle::network("exec channel", session.channel_open_session()).await?)
 }
 
 /// 在现有认证连接上打开独立 SFTP 子系统；连接池和认证策略仍只有一份。

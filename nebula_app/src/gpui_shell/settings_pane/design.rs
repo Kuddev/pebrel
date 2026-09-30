@@ -127,7 +127,7 @@ impl SettingsPane {
         let reset = dirty.then(|| {
             div()
                 .id(SharedString::from(format!("setting-reset-{label}")))
-                .size(px(20.0))
+                .size(px(32.0))
                 .rounded_md()
                 .flex()
                 .items_center()
@@ -144,7 +144,7 @@ impl SettingsPane {
                     .build(window, cx)
                 })
                 .on_click(cx.listener(move |this, _, window, cx| on_reset(this, window, cx)))
-                .child(Icon::new(IconName::Undo2).xsmall())
+                .child(Icon::new(IconName::Undo2).size(px(16.0)))
                 .into_any_element()
         });
         self.row_shell(label, desc.into(), reset, dirty, RowLayout::Standard, control, cx)
@@ -239,7 +239,7 @@ impl SettingsPane {
                             Button::new(SharedString::from(format!("settings-help-{label}")))
                                 .icon(IconName::Info)
                                 .ghost()
-                                .size(px(22.0))
+                                .size(px(32.0))
                                 .text_color(theme.muted_foreground)
                                 .accessibility_id(SharedString::from(format!(
                                     "settings-help-{label}"

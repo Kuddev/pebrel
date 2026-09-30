@@ -108,7 +108,7 @@ impl SshProfiles {
                 }
                 let searchable = format!(
                     "{} {} {} {} {}",
-                    destination,
+                    self.connection_destination(destination),
                     profile.and_then(|p| p.label.as_deref()).unwrap_or_default(),
                     organization.group,
                     organization.tags.join(" "),

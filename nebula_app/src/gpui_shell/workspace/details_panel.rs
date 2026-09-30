@@ -4,6 +4,7 @@
 use super::*;
 use crate::display::side_panel::PanelView;
 use crate::gpui_shell::file_editor::{DocumentDetails, DocumentSection, TextFileView};
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -50,6 +51,52 @@ fn panel_width(preferred: f32, available: f32) -> f32 {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn toggle_side_panel(
+        &mut self,
+        view: crate::display::side_panel::PanelView,
+        cx: &mut Context<Self>,
+    ) {
+        self.side_panel_anim_armed = !tab_reveal_instant(cx);
+        self.side_panel.toggle(view);
+        self.file_tree_menu = None;
+        if !self.side_panel.open {
+            cx.notify();
+            return;
+        }
+
+        self.sync_side_panel_to_active(true, cx);
+
+        // The shared model builds snapshots on a worker and exposes a cheap,
+        // throttled `sync`. GPUI polls only while the drawer is open; it does
+        // not move filesystem business logic into the render function.
+        if !self.side_panel_polling {
+            self.side_panel_polling = true;
+            let executor = cx.background_executor().clone();
+            cx.spawn(async move |this, cx| {
+                loop {
+                    executor.timer(Duration::from_millis(100)).await;
+                    let keep_polling = this
+                        .update(cx, |workspace, cx| {
+                            if !workspace.side_panel.open {
+                                workspace.side_panel_polling = false;
+                                return false;
+                            }
+                            if workspace.sync_side_panel_to_active(false, cx) {
+                                cx.notify();
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !keep_polling {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     fn active_details_document(&self, _cx: &App) -> Option<Entity<TextFileView>> {
         if self.settings_open {
             return None;
@@ -103,9 +150,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> Button {
         let visible = self.side_panel.open && !self.reader_focus_active(cx);
-        Button::new("toggle-right-sidebar")
-            .icon(IconName::PanelRight)
-            .ghost()
+        toolbar_button("toggle-right-sidebar", IconName::PanelRight)
             .disabled(disabled)
             .selected(visible)
             .when(visible, |button| button.bg(cx.theme().secondary))
@@ -296,6 +341,11 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let instant = tab_reveal_instant(cx);
+        if instant {
+            // 切换偏好时面板可能已经关闭，旧动画标志不得保留布局占位。
+            self.side_panel_anim_armed = false;
+        }
         if !self.side_panel_anim_armed && !self.side_panel.open {
             return div().into_any_element();
         }
@@ -327,42 +377,46 @@ impl NebulaWorkspace {
                 PanelView::Git => self.render_git_tree(window, cx),
             }
         };
-        div()
+        let band = v_flex()
+            .relative()
+            .w(px(width))
+            .h_full()
+            .pb(px(crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom))
+            .child(self.render_details_header(width, window, cx))
+            .child(div().flex_1().min_h_0().w_full().child(panel).with_animation(
+                ("details-content", self.details_panel.transition),
+                Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()),
+                |content, t| content.opacity(t),
+            ));
+        // Instant: both 240 ms translations are dropped and the band rests at
+        // its final width, so the panel appears in place instead of sliding.
+        let band: gpui::AnyElement = if instant {
+            band.into_any_element()
+        } else {
+            band.with_animation(
+                ("side-panel-push", open as usize),
+                Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
+                move |band, t| band.left(px(width * if open { 1.0 - t } else { t })),
+            )
+            .into_any_element()
+        };
+        let slot = div()
             .id("workspace-details-slot")
             .debug_selector(|| "workspace-details-slot".to_owned())
             .relative()
             .h_full()
             .flex_shrink_0()
-            .child(
-                div().size_full().overflow_hidden().bg(cx.theme().background).child(
-                    v_flex()
-                        .relative()
-                        .w(px(width))
-                        .h_full()
-                        .pb(px(crate::gpui_shell::theme::PaneCardStyle::current(cx).margin.bottom))
-                        .child(self.render_details_header(width, window, cx))
-                        .child(
-                            div().flex_1().min_h_0().w_full().child(panel).with_animation(
-                                ("details-content", self.details_panel.transition),
-                                Animation::new(Duration::from_millis(140))
-                                    .with_easing(ease_out_quint()),
-                                |content, t| content.opacity(t),
-                            ),
-                        )
-                        .with_animation(
-                            ("side-panel-push", open as usize),
-                            Animation::new(Duration::from_millis(240))
-                                .with_easing(ease_out_quint()),
-                            move |band, t| band.left(px(width * if open { 1.0 - t } else { t })),
-                        ),
-                ),
-            )
-            .with_animation(
+            .child(div().size_full().overflow_hidden().bg(cx.theme().background).child(band));
+        if instant {
+            slot.w(px(width)).into_any_element()
+        } else {
+            slot.with_animation(
                 ("side-panel-slide", open as usize),
                 Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
                 move |slot, t| slot.w(px(width * if open { t } else { 1.0 - t })),
             )
             .into_any_element()
+        }
     }
 
     pub(super) fn render_details_panel_resize_handle(

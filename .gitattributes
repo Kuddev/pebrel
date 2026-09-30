@@ -6,3 +6,9 @@ nebula_app/src/platform/pi_session.sh text eol=lf
 scripts/tests/fixtures/ai-hooks-v1.5.0/* -text
 # Embedded remote hooks keep POSIX newlines in Windows binaries.
 nebula_app/res/hooks/* text eol=lf
+# Checksum-pinned offline reader distributions retain their upstream bytes.
+mobile/android/app/src/main/assets/reader/katex/** -text
+mobile/android/app/src/main/assets/reader/mermaid/** -text -whitespace
+mobile/android/app/src/main/assets/reader/highlight.min.js -text
+mobile/android/app/src/main/assets/reader/reader-compat.js -text
+mobile/android/third_party/licenses/ZXing-Core-Apache-2.0.txt -text

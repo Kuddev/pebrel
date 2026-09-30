@@ -25,6 +25,7 @@ use gpui::{
 };
 use gpui_component::menu::PopupMenuItem;
 use gpui_component::select::SelectItem;
+use nebula_split::SplitDirection;
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::{InputOrigin, TerminalView};
@@ -121,7 +122,7 @@ impl NebulaWorkspace {
     pub(super) fn open_terminal_selection_context_menu(
         &mut self,
         source: Entity<TerminalView>,
-        _source_pane_id: u64,
+        source_pane_id: u64,
         position: Point<Pixels>,
         selection: String,
         window: &mut Window,
@@ -129,9 +130,12 @@ impl NebulaWorkspace {
     ) {
         let language = workspace_ui_language();
         let copy_cwd = super::tab_menu::copy_working_directory_item(&source, cx);
+        let source_entity_id = source.entity_id();
+        let paste_source = source.downgrade();
         let source = source.downgrade();
-        let copy_item = PopupMenuItem::new(language.pick("复制选区", "Copy Selection"))
+        let copy_item = PopupMenuItem::new(language.text(crate::i18n::Message::CommonCopy))
             .icon(IconName::Copy)
+            .disabled(selection.is_empty())
             .on_click(move |_, window, cx| {
                 if let Some(source) = source.upgrade() {
                     source.update(cx, |view, cx| {
@@ -139,13 +143,55 @@ impl NebulaWorkspace {
                     });
                 }
             });
-        self.open_selection_context_menu(
-            position,
-            selection.into(),
-            vec![copy_item, copy_cwd],
-            window,
-            cx,
+        let paste_item = PopupMenuItem::new(language.text(crate::i18n::Message::CommonPaste))
+            .on_click(move |_, window, cx| {
+                if let Some(source) = paste_source.upgrade() {
+                    source.update(cx, |view, cx| view.paste(window, cx));
+                }
+            });
+        let mut items = vec![copy_item, paste_item, copy_cwd, PopupMenuItem::separator()];
+        for (label, icon, direction) in [
+            (
+                crate::i18n::Message::TabMenuSplitLeftRight,
+                IconName::PanelRight,
+                SplitDirection::LeftRight,
+            ),
+            (
+                crate::i18n::Message::TabMenuSplitTopBottom,
+                IconName::PanelBottom,
+                SplitDirection::TopBottom,
+            ),
+        ] {
+            let workspace = cx.entity().downgrade();
+            items.push(PopupMenuItem::new(language.text(label)).icon(icon).on_click(
+                move |_, window, cx| {
+                    let _ = workspace.update(cx, |workspace, cx| {
+                        let Some((tab, pane)) = workspace.locate_pane(source_entity_id) else {
+                            return;
+                        };
+                        workspace.activate_tab(tab, window, cx);
+                        workspace.focus_pane(tab, pane, window, cx);
+                        let _ = workspace.split_focused(direction, window, cx);
+                    });
+                },
+            ));
+        }
+        let workspace = cx.entity().downgrade();
+        items.push(
+            PopupMenuItem::new(language.text(crate::i18n::Message::WorkspacePaneClose))
+                .icon(IconName::Close)
+                .on_click(move |_, window, cx| {
+                    let _ = workspace.update(cx, |workspace, cx| {
+                        let Some((tab, pane)) = workspace.locate_pane(source_entity_id) else {
+                            return;
+                        };
+                        if pane == source_pane_id {
+                            workspace.request_close_pane(tab, pane, window, cx);
+                        }
+                    });
+                }),
         );
+        self.open_selection_context_menu(position, selection.into(), items, window, cx);
     }
 
     pub(super) fn open_document_selection_context_menu(
@@ -181,7 +227,8 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let language = workspace_ui_language();
-        let has_targets = !self.send_to_chat_targets(cx).is_empty();
+        let has_targets = !selection.is_empty() && !self.send_to_chat_targets(cx).is_empty();
+        let previous_focus = window.focused(cx);
         let workspace = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |mut menu, _window, _cx| {
             let send_workspace = workspace.clone();
@@ -208,11 +255,18 @@ impl NebulaWorkspace {
                     }),
             )
         });
-        menu.focus_handle(cx).focus(window, cx);
-        let subscription = cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, _, cx| {
-            this.selection_context_menu = None;
-            cx.notify();
-        });
+        let menu_focus = menu.focus_handle(cx);
+        menu_focus.focus(window, cx);
+        let subscription =
+            cx.subscribe_in(&menu, window, move |this, _, _: &DismissEvent, window, cx| {
+                if menu_focus.is_focused(window)
+                    && let Some(focus) = &previous_focus
+                {
+                    focus.focus(window, cx);
+                }
+                this.selection_context_menu = None;
+                cx.notify();
+            });
         self.selection_context_menu =
             Some(SelectionContextMenu { menu, position, _subscription: subscription });
         cx.notify();
@@ -226,7 +280,11 @@ impl NebulaWorkspace {
                     .position(state.position)
                     .snap_to_window_with_margin(px(8.0))
                     .anchor(Anchor::TopLeft)
-                    .child(state.menu.clone()),
+                    .child(
+                        div()
+                            .debug_selector(|| "terminal-selection-context-menu".to_owned())
+                            .child(state.menu.clone()),
+                    ),
             )
             .with_priority(1)
             .into_any_element(),
@@ -529,3 +587,6 @@ mod tests {
         assert_eq!(compose_send_to_chat_message("alpha", "  "), "> alpha");
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod menu_tests;

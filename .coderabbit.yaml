@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/schema/schema.v2.json
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
+    drafts: false
+    ignore_usernames:
+      - Kuddev
+  path_instructions:
+    - path: "**/*"
+      instructions: >-
+        Follow AGENTS.md and the closest module instructions. Prioritize actionable
+        correctness, regression, security, state/lifetime and compatibility issues.
+        Give the triggering scenario and concrete code evidence. Distinguish
+        confirmed defects from questions; avoid speculative redesign and formatting
+        comments. CI and maintainer review remain the merge constraints. Never
+        recommend weakening required checks, raising budgets, or removing tests.

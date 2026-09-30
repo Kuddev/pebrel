@@ -329,6 +329,14 @@ impl TerminalView {
     /// 继续透传成一次命令执行。
     pub(super) fn accept_completion_popup(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(item) = suggest::popup_take(&mut self.suggest) else { return false };
+        self.accept_completion_item(item, cx)
+    }
+
+    pub(super) fn accept_completion_item(
+        &mut self,
+        item: crate::display::NebulaCompletionItem,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let insert = item.insert;
         self.completion_viewport.clear();
         let mut before = if self.suggest.screen_line.is_empty() {
@@ -739,8 +747,8 @@ impl TerminalView {
         true
     }
 
-    /// 右键行为：有选区直接复制，无选区直接粘贴。
-    /// Ctrl+右键保留选区菜单，供显式调用 Send to Chat。
+    /// Manual selection uses the context menu. Copy-on-select keeps quick
+    /// copy/paste, while Ctrl+right-click always requests the menu.
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -771,20 +779,17 @@ impl TerminalView {
             .as_ref()
             .and_then(|session| session.term.lock().selection_to_string())
             .filter(|text| !text.is_empty());
-        if let Some(text) = selected_text {
-            if event.modifiers.control {
-                cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
-                    position: event.position,
-                    text,
-                });
-            } else {
-                self.copy_selection(true, window, cx);
-            }
-            cx.stop_propagation();
+        if event.modifiers.control || !self.copy_on_select {
+            cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
+                position: event.position,
+                text: selected_text.unwrap_or_default(),
+            });
+        } else if selected_text.is_some() {
+            self.copy_selection(true, window, cx);
         } else {
             self.paste(window, cx);
-            cx.stop_propagation();
         }
+        cx.stop_propagation();
     }
 
     pub(super) fn on_right_up(
@@ -853,13 +858,19 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session) = &self.session {
+            session.term.lock().cancel_redraw_anchor();
+        }
         let delta_y = event.delta.pixel_delta(self.line_height).y.as_f32();
         // 旧壳 `mouse_wheel_input`：Ctrl+滚轮先于一切滚动消费者，一步 1
         // 逻辑像素，钳在 4–64。设置页步进会写盘；这里同样写 `font_size=`，
         // 让下次启动跟上（旧壳只在其它设置落盘时顺便带走当前字号）。
+        // 开关关闭时手势仍被整体消费：既不缩放，也不回落给下面的滚动逻辑。
         if event.modifiers.control && !event.modifiers.alt && delta_y != 0.0 {
-            let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
-            self.zoom_font_size(step, cx);
+            if crate::gpui_shell::config::ctrl_wheel_font_zoom(cx) {
+                let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
+                self.zoom_font_size(step, cx);
+            }
             cx.stop_propagation();
             return;
         }

@@ -28,12 +28,14 @@ use crate::vte::ansi::{
 };
 
 pub mod cell;
+mod clear;
 pub mod color;
 mod damage;
 mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
 mod prompt;
+mod redraw_anchor;
 mod renderable;
 pub mod search;
 
@@ -158,6 +160,7 @@ pub fn viewport_to_point_from(origin: Line, point: Point<usize>) -> Point {
 }
 
 pub struct Term<T> {
+    redraw_anchor: redraw_anchor::RedrawAnchor,
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
 
@@ -342,6 +345,7 @@ impl<T> Term<T> {
     where
         T: EventListener,
     {
+        self.cancel_redraw_anchor();
         let old_display_offset = self.grid.display_offset();
         self.grid.scroll_display(scroll);
         self.event_proxy.send_event(Event::MouseCursorDirty);
@@ -382,6 +386,7 @@ impl<T> Term<T> {
         let damage = TermDamageState::new(num_cols, num_lines);
 
         Term {
+            redraw_anchor: Default::default(),
             inactive_grid,
             scroll_region,
             event_proxy,
@@ -727,6 +732,7 @@ impl<T> Term<T> {
 
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
+        self.cancel_redraw_anchor();
         let old_cols = self.columns();
         let old_lines = self.screen_lines();
 
@@ -804,6 +810,7 @@ impl<T> Term<T> {
 
     /// Swap primary and alternate screen buffer.
     pub fn swap_alt(&mut self) {
+        self.cancel_redraw_anchor();
         if !self.mode.contains(TermMode::ALT_SCREEN) {
             // Set alt screen cursor to the current primary screen cursor.
             self.inactive_grid.cursor = self.grid.cursor.clone();
@@ -1902,73 +1909,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn clear_screen(&mut self, mode: ansi::ClearMode) {
-        trace!("Clearing screen: {mode:?}");
-        let bg = self.grid.cursor.template.bg;
-
-        let screen_lines = self.screen_lines();
-
-        match mode {
-            ansi::ClearMode::Above => {
-                let cursor = self.grid.cursor.point;
-
-                // If clearing more than one line.
-                if cursor.line > 1 {
-                    // Fully clear all lines before the current line.
-                    self.grid.reset_region(..cursor.line);
-                }
-
-                // Clear up to the current column in the current line.
-                let end = cmp::min(cursor.column + 1, Column(self.columns()));
-                for cell in &mut self.grid[cursor.line][..end] {
-                    *cell = bg.into();
-                }
-
-                let range = Line(0)..=cursor.line;
-                self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
-            },
-            ansi::ClearMode::Below => {
-                let cursor = self.grid.cursor.point;
-                for cell in &mut self.grid[cursor.line][cursor.column..] {
-                    *cell = bg.into();
-                }
-
-                if (cursor.line.0 as usize) < screen_lines - 1 {
-                    self.grid.reset_region((cursor.line + 1)..);
-                }
-
-                let range = cursor.line..Line(screen_lines as i32);
-                self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
-            },
-            ansi::ClearMode::All => {
-                if self.mode.contains(TermMode::ALT_SCREEN) {
-                    self.grid.reset_region(..);
-                } else {
-                    let old_offset = self.grid.display_offset();
-
-                    self.grid.clear_viewport();
-
-                    // Compute number of lines scrolled by clearing the viewport.
-                    let lines = self.grid.display_offset().saturating_sub(old_offset);
-
-                    self.vi_mode_cursor.point.line =
-                        (self.vi_mode_cursor.point.line - lines).grid_clamp(self, Boundary::Grid);
-                }
-
-                self.selection = None;
-            },
-            ansi::ClearMode::Saved if self.history_size() > 0 => {
-                self.grid.clear_history();
-
-                self.vi_mode_cursor.point.line =
-                    self.vi_mode_cursor.point.line.grid_clamp(self, Boundary::Cursor);
-
-                self.selection = self.selection.take().filter(|s| !s.intersects_range(..Line(0)));
-            },
-            // We have no history to clear.
-            ansi::ClearMode::Saved => (),
-        }
-
-        self.mark_fully_damaged();
+        self.clear_screen_contents(mode);
     }
 
     #[inline]
@@ -1987,6 +1928,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Reset all important fields in the term struct.
     #[inline]
     fn reset_state(&mut self) {
+        self.cancel_redraw_anchor();
         if self.mode.contains(TermMode::ALT_SCREEN) {
             mem::swap(&mut self.grid, &mut self.inactive_grid);
         }
@@ -2094,14 +2036,10 @@ impl<T: EventListener> Handler for Term<T> {
             self.mode.insert(TermMode::WIN32_INPUT_MODE);
             return;
         }
-        // DECSET 2031。订阅的同一刻先答一次当前值：规范里取初值靠 `CSI ? 996 n`
-        // 查询，但 vte 0.15 只把**没有** `?` 中间字节的 `CSI n` 路由到
-        // `device_status`，私有 DSR 根本到不了 handler，我们答不了那条查询。
-        // 订阅即回报把这个洞补上——多一条报告对订阅方无害（它本来就要处理这个
-        // 序列），少一条则意味着 app 在主题变化之前永远不知道当前是亮还是暗。
+        // DECSET 2031 只订阅后续配色变化，不是 CSI ? 996 n 查询；
+        // 在这里回报会在 shell 交接终端时注入它未请求的输入。
         if matches!(mode, PrivateMode::Unknown(2031)) {
             self.mode.insert(TermMode::COLOR_SCHEME_UPDATES);
-            self.report_color_scheme();
             return;
         }
         let mode = match mode {
@@ -2160,7 +2098,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.cursor_blinking_override = Some(true);
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             },
-            NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::SyncUpdate => self.begin_redraw_anchor(),
         }
     }
 
@@ -2216,7 +2154,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.cursor_blinking_override = Some(false);
                 self.event_proxy.send_event(Event::CursorBlinkingChange);
             },
-            NamedPrivateMode::SyncUpdate => (),
+            NamedPrivateMode::SyncUpdate => self.finish_redraw_anchor(),
         }
     }
 
