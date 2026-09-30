@@ -31,6 +31,7 @@ pub struct Context {
     pub directories: Vec<String>,
     options: &'static [OptionSpec],
     attached: Option<usize>,
+    branch_guess: Option<bool>,
 }
 
 impl Context {
@@ -42,6 +43,7 @@ impl Context {
             directories: Vec::new(),
             options: &[],
             attached: None,
+            branch_guess: None,
         };
         context.source = match context.input.arguments.first()?.as_str() {
             "git" | "git.exe" => context.git()?,
@@ -57,6 +59,11 @@ impl Context {
 
     pub fn value_prefix(&self) -> &str {
         &self.input.prefix()[self.attached.unwrap_or(0)..]
+    }
+
+    pub fn guesses_branches(&self, configured: bool) -> bool {
+        matches!(self.source, Source::Branches { .. } | Source::RevisionsAndPaths { .. })
+            && self.branch_guess.unwrap_or(configured)
     }
 
     /// Prefix matches stay first; fuzzy candidates reuse the existing scorer.
@@ -149,6 +156,7 @@ impl Context {
         let mut reference_only = false;
         let mut terminal = false;
         let mut root = false;
+        let mut no_track = false;
         index += 1;
         while let Some(arg) = args.get(index) {
             if parse_options && arg == "--" {
@@ -167,6 +175,12 @@ impl Context {
                 reference_only |= matches!(name, "-b" | "-B" | "-d" | "--detach");
                 terminal |= option.terminal;
                 root |= name == "--root";
+                match name {
+                    "--guess" => self.branch_guess = Some(true),
+                    "--no-guess" => self.branch_guess = Some(false),
+                    "--no-track" => no_track = true,
+                    _ => {},
+                }
                 if let Some(value_source) = option.value {
                     let provided = if let Some(value) = attached {
                         value
@@ -192,6 +206,10 @@ impl Context {
         }
         if terminal {
             return Some(Source::None);
+        }
+        // Git 的自动建分支要求 tracking 未显式指定，--guess 不能覆盖 --no-track。
+        if no_track {
+            self.branch_guess = Some(false);
         }
         if parse_options && self.input.prefix().starts_with('-') {
             if let Some((name, _)) = self.input.prefix().split_once('=') {
