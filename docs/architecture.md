@@ -35,6 +35,7 @@ to rename all existing directories or create abstract interfaces everywhere.
 | `nebula_app/src/gpui_shell` | GPUI views, UI state, commands and subscriptions | A second settings/domain implementation |
 | `nebula_app/src/product_ui` | Feature-selected shared presentation facade | A route to legacy rendering dependencies |
 | `nebula_app/src/display`, `renderer` | Legacy rendering and still-shared extracted models | A source of new undifferentiated functionality |
+| `nebula_app/src/display/animations.rs` | Legacy window animation state and shared frame snapshots behind existing display operations | Public tween fields or rendering/hit-test ownership |
 | `nebula_gpui` | Component acceptance lab | A dependency of the product |
 | `nebula_app/build`, `tools/i18n-contract` | Generation and independent contract verification | Runtime configuration loading |
 

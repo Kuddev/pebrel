@@ -197,7 +197,7 @@ fn spinner_phase() -> f32 {
 
 impl Display {
     pub(super) fn draw_ssh_editor_modal(&mut self) {
-        let progress = self.nebula_ui_anims.ssh_editor.value().clamp(0.0, 1.0);
+        let progress = self.ui_animations.ssh_editor_progress().clamp(0.0, 1.0);
         if !self.nebula_ssh_editor_open && progress <= 0.004 {
             self.nebula_ssh_editor = None;
             self.nebula_ssh_editor_rects = None;
@@ -1564,11 +1564,7 @@ impl Display {
             }
         }
 
-        if self.nebula_ui_anims.ssh_editor.animating_to(if self.nebula_ssh_editor_open {
-            1.0
-        } else {
-            0.0
-        }) {
+        if self.ui_animations.ssh_editor_animating(self.nebula_ssh_editor_open) {
             self.pending_update.dirty = true;
             self.window.request_redraw();
         }
