@@ -905,10 +905,10 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
                 }
             },
             GpuiShellEvent::RuntimeControl(dispatch) => dispatch_runtime(dispatch, cx),
-            GpuiShellEvent::UpdateAvailable(result) => {
+            event @ (GpuiShellEvent::UpdateAvailable(_) | GpuiShellEvent::UpdateInstalled(_)) => {
                 let Some(entry) = entries_by_mru(cx).into_iter().next() else { continue };
                 let _ = entry.handle.update(cx, move |_, window, cx| {
-                    super::show_update_notification(result, window, cx);
+                    super::update_dialog::show_update_event(event, window, cx);
                 });
             },
             GpuiShellEvent::SshPrompt(request) => {
