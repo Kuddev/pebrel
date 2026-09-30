@@ -62,10 +62,12 @@ pub extern "system" fn Java_io_github_kuddev_pebrel_ssh_NativeSsh_create(
     user: JString,
     password: JByteArray,
     fingerprint: JString,
+    private_key: JByteArray,
 ) -> jlong {
     invoke(&mut env, |env| {
         let size = env.get_array_length(&password).map_err(|_| Failure("INTERNAL"))?;
-        if !(1..=65535).contains(&port) || size > 4096 {
+        let key_size = env.get_array_length(&private_key).map_err(|_| Failure("INTERNAL"))?;
+        if !(1..=65535).contains(&port) || size > 4096 || key_size > 65536 {
             return Err(Failure("INVALID_INPUT"));
         }
         let password =
@@ -75,6 +77,9 @@ pub extern "system" fn Java_io_github_kuddev_pebrel_ssh_NativeSsh_create(
             port: port as u16,
             user: string(env, &user)?,
             password,
+            private_key: Zeroizing::new(
+                env.convert_byte_array(&private_key).map_err(|_| Failure("INTERNAL"))?,
+            ),
             fingerprint: string(env, &fingerprint)?,
         };
         if options.host.len() > 1024 || options.user.len() > 1024 || options.fingerprint.len() > 256

@@ -804,7 +804,7 @@ object RelayDeployment {
             SshFailureKind.TIMEOUT -> RelayDeploymentErrorCode.SSH_TIMEOUT
             SshFailureKind.TRUST_REJECTED -> RelayDeploymentErrorCode.SSH_TRUST_REJECTED
             SshFailureKind.HOST_KEY_CHANGED -> RelayDeploymentErrorCode.SSH_HOST_KEY_CHANGED
-            SshFailureKind.AUTH -> RelayDeploymentErrorCode.SSH_AUTH
+            SshFailureKind.AUTH, SshFailureKind.KEY -> RelayDeploymentErrorCode.SSH_AUTH
             else -> RelayDeploymentErrorCode.SSH_FAILED
         }
         return RelayDeploymentException(code, cause = error)

@@ -13,6 +13,8 @@ static void append_utf16(std::vector<jchar>& target, uint32_t codepoint) {
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(render)(JNIEnv* env, jobject, jlong handle,
         jobjectArray output_rows, jintArray metadata) {
     auto* state = terminal(handle);
+    // 页预算和可见历史行数分别限制；先夹紧视口，再读取对应的绘制行。
+    const auto scrollbar = state->bounded_scrollbar();
     if (!checked(env, ghostty_render_state_update(state->render, state->vt))) return;
     uint16_t columns = 0, rows = 0, cx = 0, cy = 0;
     bool visible = false, in_viewport = false;
@@ -34,8 +36,10 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(render)(JNIEnv* env, jobject, jlong
         return;
     }
     jint meta[] = {columns, rows, cx, cy, visible && in_viewport, argb(colors.background),
-        argb(colors.cursor_has_value ? colors.cursor : colors.foreground), static_cast<jint>(cursor_style)};
-    env->SetIntArrayRegion(metadata, 0, 8, meta);
+        argb(colors.cursor_has_value ? colors.cursor : colors.foreground), static_cast<jint>(cursor_style),
+        static_cast<jint>(std::min(scrollbar.total, uint64_t{INT32_MAX})),
+        static_cast<jint>(std::min(scrollbar.offset, uint64_t{INT32_MAX}))};
+    env->SetIntArrayRegion(metadata, 0, 10, meta);
     auto row_class = env->FindClass("io/github/kuddev/pebrel/terminal/TerminalRow");
     if (!row_class) return;
     auto constructor = env->GetMethodID(row_class, "<init>", "(Ljava/lang/String;[I)V");

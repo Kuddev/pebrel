@@ -1,6 +1,8 @@
 package io.github.kuddev.pebrel.mobile.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -8,6 +10,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -39,15 +46,39 @@ fun HostForm(
     var sessionMode by rememberSaveable { mutableStateOf(initial?.sessionMode ?: SshSessionMode.SHELL) }
     var sessionName by rememberSaveable { mutableStateOf(initial?.sessionName.orEmpty()) }
     var password by remember { mutableStateOf("") }
+    var auth by rememberSaveable { mutableStateOf(if (initial?.keyUri.isNullOrEmpty()) "auto" else "key") }
+    var keyUri by rememberSaveable { mutableStateOf(initial?.keyUri.orEmpty()) }
+    var keyName by rememberSaveable { mutableStateOf(initial?.keyName.orEmpty()) }
+    var keyError by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val chooseKey = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            picking = true
+            try {
+                val name = withContext(Dispatchers.IO) {
+                    context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                        if (it.moveToFirst()) it.getString(0) else null
+                    }.orEmpty()
+                }
+                keyUri = uri.toString(); keyName = name.take(160); keyError = false
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { keyError = true }
+            finally { picking = false }
+        }
+    }
     val endpoint = runCatching { parseSshEndpoint(address, user) }.getOrNull()
     val originalEndpoint = initial?.let { runCatching { parseSshEndpoint(it.address, it.user) }.getOrNull() }
     val passwordIsSaved = passwordSaved && initial != null && originalEndpoint == endpoint &&
-        initial.port == port.toIntOrNull()
+        initial.port == port.toIntOrNull() && initial.keyUri == if (auth == "key") keyUri else ""
     var rememberPassword by rememberSaveable(initial?.id) { mutableStateOf(passwordSaved || initial == null) }
     val valid = name.isNotBlank() && endpoint != null && (port.toIntOrNull() ?: 0) in 1..65535 &&
-        (sessionMode == SshSessionMode.SHELL || validRemoteSessionName(sessionMode, sessionName))
+        (sessionMode == SshSessionMode.SHELL || validRemoteSessionName(sessionMode, sessionName)) &&
+        (auth != "key" || keyUri.isNotEmpty()) && !picking
     fun profile() = HostProfile(initial?.id ?: UUID.randomUUID().toString(), name.trim(), checkNotNull(endpoint).address, port.toInt(), endpoint.user,
-        icon = icon, group = group, sessionMode = sessionMode, sessionName = sessionName)
+        icon = icon, group = group, sessionMode = sessionMode, sessionName = sessionName,
+        keyUri = if (auth == "key") keyUri else "", keyName = if (auth == "key") keyName else "")
     ConnectionForm(stringResource(if (initial == null) R.string.add_ssh else R.string.edit_host), { if (!busy) onCancel() }) {
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -70,7 +101,7 @@ fun HostForm(
             ConnectionField(user, { user = it }, R.string.username, limit = 40)
             SegmentRow(R.string.ssh_terminal_mode) {
                 ConnectionSegments(SshSessionMode.entries.map { it.id to if (it == SshSessionMode.SHELL) "Shell" else it.id },
-                    sessionMode.id, { id -> sessionMode = SshSessionMode.entries.first { it.id == id } }, Modifier.weight(1f))
+                    sessionMode.id, { id -> sessionMode = SshSessionMode.entries.first { it.id == id } }, Modifier.testTag("ssh-session-mode"), compact = true)
             }
             if (sessionMode != SshSessionMode.SHELL) {
                 ConnectionField(sessionName, { sessionName = it }, R.string.ssh_persistent_session, limit = 64)
@@ -80,25 +111,36 @@ fun HostForm(
             }
             SegmentRow(R.string.authentication) {
                 ConnectionSegments(listOf("auto" to stringResource(R.string.auth_auto), "key" to stringResource(R.string.auth_key)),
-                    "auto", {}, Modifier.weight(1f), disabled = setOf("key"))
+                    auth, { if (!busy && auth != it) { password = ""; auth = it } }, Modifier.testTag("ssh-auth-mode"), compact = true)
             }
-            ConnectionField(password, { password = it }, R.string.credential_password,
+            if (auth == "key") {
+                OutlinedButton({ chooseKey.launch(arrayOf("*/*")) }, enabled = !busy && !picking, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Text(keyName.ifBlank { stringResource(R.string.ssh_choose_key) }, maxLines = 2)
+                }
+                if (picking) LinearProgressIndicator(Modifier.fillMaxWidth())
+                HelperText(stringResource(R.string.ssh_key_file_hint))
+                if (keyError) Text(stringResource(R.string.ssh_key_access_failed), color = MaterialTheme.colorScheme.error)
+            }
+            ConnectionField(password, { password = it }, if (auth == "key") R.string.ssh_key_passphrase else R.string.credential_password,
                 keyboard = KeyboardType.Password, placeholder = if (passwordIsSaved) stringResource(R.string.password_saved_placeholder) else "",
                 transformation = PasswordVisualTransformation(), limit = 1024)
-            HelperText(stringResource(R.string.ssh_password_optional_hint))
+            HelperText(stringResource(if (auth == "key") R.string.ssh_key_passphrase_hint else R.string.ssh_password_optional_hint))
             Column {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(rememberPassword, { rememberPassword = it }, enabled = !busy)
-                    Text(stringResource(R.string.save_password), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(stringResource(if (auth == "key") R.string.ssh_save_passphrase else R.string.save_password), fontSize = 13.sp, modifier = Modifier.weight(1f))
                     if (passwordIsSaved) {
                         TextButton({
                             password = ""
                             onClearPassword()
-                        }, enabled = !busy) { Text(stringResource(R.string.clear_saved_password), fontSize = 12.sp) }
+                        }, enabled = !busy) { Text(stringResource(if (auth == "key") R.string.ssh_clear_saved_passphrase else R.string.clear_saved_password), fontSize = 12.sp) }
                     }
                 }
                 HelperText(stringResource(
                     when {
+                        auth == "key" && passwordIsSaved && rememberPassword -> R.string.ssh_passphrase_saved_hint
+                        auth == "key" && rememberPassword -> R.string.ssh_passphrase_will_save_hint
+                        auth == "key" -> R.string.ssh_passphrase_not_saved_hint
                         passwordIsSaved && rememberPassword -> R.string.password_saved_hint
                         rememberPassword -> R.string.password_will_save_hint
                         else -> R.string.password_not_saved_hint
@@ -107,7 +149,7 @@ fun HostForm(
             }
             SegmentRow(R.string.host_group) {
                 ConnectionSegments(listOf("production" to stringResource(R.string.group_production), "development" to stringResource(R.string.group_development)),
-                    group, { group = it }, Modifier.weight(1f))
+                    group, { group = it }, Modifier.testTag("ssh-host-group"), compact = true)
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -154,21 +196,27 @@ fun LoginForm(host: HostProfile, onCancel: () -> Unit, passwordSaved: Boolean, b
             }
         }
         Spacer(Modifier.height(24.dp))
-        ConnectionField(password, { password = it }, R.string.password, keyboard = KeyboardType.Password,
+        if (host.keyUri.isNotEmpty()) HelperText(host.keyName.ifBlank { stringResource(R.string.auth_key) })
+        ConnectionField(password, { password = it }, if (host.keyUri.isNotEmpty()) R.string.ssh_key_passphrase else R.string.password, keyboard = KeyboardType.Password,
             placeholder = if (passwordSaved) stringResource(R.string.password_saved_placeholder) else "",
             transformation = PasswordVisualTransformation(), limit = 1024)
-        HelperText(stringResource(R.string.ssh_password_optional_hint))
+        HelperText(stringResource(if (host.keyUri.isNotEmpty()) R.string.ssh_key_passphrase_hint else R.string.ssh_password_optional_hint))
         if (passwordSaved) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                HelperText(stringResource(R.string.password_saved_status), Modifier.weight(1f))
-                TextButton(onClearPassword, enabled = !busy) { Text(stringResource(R.string.clear_saved_password)) }
+                HelperText(stringResource(if (host.keyUri.isNotEmpty()) R.string.ssh_passphrase_saved_status else R.string.password_saved_status), Modifier.weight(1f))
+                TextButton(onClearPassword, enabled = !busy) { Text(stringResource(if (host.keyUri.isNotEmpty()) R.string.ssh_clear_saved_passphrase else R.string.clear_saved_password)) }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(rememberPassword, { rememberPassword = it }, enabled = !busy)
-            Text(stringResource(R.string.save_password), fontSize = 13.sp)
+            Text(stringResource(if (host.keyUri.isNotEmpty()) R.string.ssh_save_passphrase else R.string.save_password), fontSize = 13.sp)
         }
-        HelperText(stringResource(if (rememberPassword) R.string.password_will_save_hint else R.string.password_not_saved_hint))
+        HelperText(stringResource(when {
+            host.keyUri.isNotEmpty() && rememberPassword -> R.string.ssh_passphrase_will_save_hint
+            host.keyUri.isNotEmpty() -> R.string.ssh_passphrase_not_saved_hint
+            rememberPassword -> R.string.password_will_save_hint
+            else -> R.string.password_not_saved_hint
+        }))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(desktop, { desktop = it }, enabled = !busy && attachmentLabel == null)
             Text(stringResource(R.string.connect_pebrel), fontSize = 13.sp)

@@ -257,6 +257,7 @@ class MainActivity : ComponentActivity() {
                             } },
                             onClose = { repository.closeTerminal(session.id); back() },
                             onFiles = session.files?.let { { showPage("sftp") } },
+                            active = page == route,
                             onAttachRemote = { entry -> session.host?.let { connectHost(it, attachment = entry) } })
                         else LaunchedEffect(selected) { showPage("home") }
                     }

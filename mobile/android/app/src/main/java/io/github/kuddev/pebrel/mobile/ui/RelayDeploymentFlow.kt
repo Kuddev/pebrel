@@ -229,6 +229,7 @@ internal fun serviceErrorText(error: Exception): Int = when ((error as? RelaySer
     "invalid_address" -> R.string.service_address_error
     else -> when (classifySshFailure(error)) {
         SshFailureKind.AUTH -> R.string.ssh_error_auth
+        SshFailureKind.KEY -> R.string.ssh_error_key
         SshFailureKind.TIMEOUT -> R.string.ssh_error_timeout
         SshFailureKind.HOST_KEY_CHANGED -> R.string.ssh_error_host_key
         SshFailureKind.TRUST_REJECTED -> R.string.ssh_error_trust

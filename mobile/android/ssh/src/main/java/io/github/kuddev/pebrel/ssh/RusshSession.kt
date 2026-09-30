@@ -71,16 +71,17 @@ class RusshSession private constructor(id: Long) : Closeable {
     }
 
     companion object {
-        fun create(host: String, port: Int, user: String, password: CharArray, fingerprint: String): RusshSession {
+        fun create(host: String, port: Int, user: String, password: CharArray, fingerprint: String, privateKey: ByteArray = byteArrayOf()): RusshSession {
             val encoded = Charsets.UTF_8.encode(CharBuffer.wrap(password))
             val bytes = ByteArray(encoded.remaining())
             try {
                 encoded.get(bytes)
-                return RusshSession(NativeSsh.create(host, port, user, bytes, fingerprint))
+                return RusshSession(NativeSsh.create(host, port, user, bytes, fingerprint, privateKey))
             } finally {
                 bytes.fill(0)
                 if (encoded.hasArray()) encoded.array().fill(0)
                 password.fill('\u0000')
+                privateKey.fill(0)
             }
         }
 

@@ -224,7 +224,8 @@ class SessionRepository(private val context: Context,
         (0 until rows.length()).map { i -> rows.getJSONObject(i).let {
             HostProfile(it.getString("id"), it.getString("name"), it.getString("address"), it.getInt("port"), it.getString("user"),
                 it.optString("fingerprint"), it.optString("icon", "term"), it.optString("group", "development"),
-                SshSessionMode.entries.firstOrNull { mode -> mode.id == it.optString("session_mode") } ?: SshSessionMode.SHELL, it.optString("session_name"))
+                SshSessionMode.entries.firstOrNull { mode -> mode.id == it.optString("session_mode") } ?: SshSessionMode.SHELL, it.optString("session_name"),
+                it.optString("key_uri"), it.optString("key_name"))
         } }
     }.getOrDefault(emptyList())
 
@@ -237,7 +238,9 @@ class SessionRepository(private val context: Context,
 
     /** Credentials are scoped to both the saved identity and the login endpoint. */
     private fun credentialKey(host: HostProfile): String {
-        val identity = "${host.id}\u0000${host.address}\u0000${host.port}\u0000${host.user}"
+        // 保留旧密码记录的 AAD；密钥口令另按密钥文档隔离，避免切换认证方式后误用密码。
+        val identity = "${host.id}\u0000${host.address}\u0000${host.port}\u0000${host.user}" +
+            if (host.keyUri.isEmpty()) "" else "\u0000key\u0000${host.keyUri}"
         return java.security.MessageDigest.getInstance("SHA-256").digest(identity.toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
@@ -248,7 +251,7 @@ class SessionRepository(private val context: Context,
         }.getOrDefault(false)
 
     private fun sameSshLogin(first: HostProfile, second: HostProfile): Boolean =
-        first.id == second.id && first.port == second.port && runCatching {
+        first.id == second.id && first.port == second.port && first.keyUri == second.keyUri && runCatching {
             parseSshEndpoint(first.address, first.user) == parseSshEndpoint(second.address, second.user)
         }.getOrDefault(false)
 
@@ -265,6 +268,11 @@ class SessionRepository(private val context: Context,
                 credentialWrites.withLock {
                     try {
                         val previous = savedHosts.value.find { it.id == host.id }
+                        if (host.keyUri.isNotEmpty()) {
+                            val uri = android.net.Uri.parse(host.keyUri)
+                            require(uri.scheme == "content")
+                            context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
                         val key = credentialKey(host)
                         if (rememberPassword && password?.isNotEmpty() == true) credentialStore.save(key, password)
                         else if (!rememberPassword) credentialStore.clear(key)
@@ -278,6 +286,7 @@ class SessionRepository(private val context: Context,
                         val fingerprint = if (previous != null && sameSshServer(previous, host)) previous.fingerprint else ""
                         val next = savedHosts.value.filterNot { it.id == host.id } + host.copy(fingerprint = fingerprint)
                         check(writeHostMetadata(next))
+                        previous?.keyUri?.takeIf { it != host.keyUri }?.let { releaseKeyAccess(it, next) }
                         val ids = credentialStore.ids()
                         withContext(Dispatchers.Main) {
                             savedHosts.value = next
@@ -322,14 +331,25 @@ class SessionRepository(private val context: Context,
     fun deleteHost(host: HostProfile) {
         savedHosts.value = savedHosts.value.filterNot { it.id == host.id }
         persistHosts()
-        scope.launch { clearHostPassword(host) }
+        scope.launch {
+            clearHostPassword(host)
+            withContext(Dispatchers.IO) { releaseKeyAccess(host.keyUri, savedHosts.value) }
+        }
+    }
+
+    private fun releaseKeyAccess(uri: String, hosts: List<HostProfile>) {
+        if (uri.isEmpty() || hosts.any { it.keyUri == uri }) return
+        try {
+            context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(uri), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) { /* 文件提供方可能已经撤销授权。 */ }
     }
 
     private fun writeHostMetadata(hosts: List<HostProfile>): Boolean {
         val rows = JSONArray()
         hosts.forEach { h -> rows.put(JSONObject().put("id", h.id).put("name", h.name).put("address", h.address)
             .put("port", h.port).put("user", h.user).put("fingerprint", h.fingerprint).put("icon", h.icon).put("group", h.group)
-            .put("session_mode", h.sessionMode.id).put("session_name", h.sessionName)) }
+            .put("session_mode", h.sessionMode.id).put("session_name", h.sessionName)
+            .put("key_uri", h.keyUri).put("key_name", h.keyName)) }
         return preferences.edit().putString("hosts", rows.toString()).commit()
     }
 
@@ -380,13 +400,14 @@ class SessionRepository(private val context: Context,
         terminalColors = value.copyOf()
         live.value.forEach { it.terminal.colors(value) }
     }
-    fun local(): String = addTerminal("Term", "Local", LocalPtyTransport(LocalTerminalStorage.homePath(context)))
+    fun local(): String = addTerminal("Term", "Local", LocalPtyTransport(
+        LocalTerminalStorage.homePath(context), context.filesDir.resolve("terminal").absolutePath))
     fun ssh(host: HostProfile, password: CharArray, attachment: RemoteAttachment? = null): String {
         val id = UUID.randomUUID().toString()
         val command = attachment?.let(RemoteSessions::attachCommand)
-        val connection = SshConnection(host, password, { h, fingerprint -> verify(id, h, fingerprint) }) { stage ->
+        val connection = SshConnection(host, password, { h, fingerprint -> verify(id, h, fingerprint) }, progress = { stage ->
             main.post { update(id) { if (it.status == "connecting") it.copy(stage = stage) else it } }
-        }
+        }, keySource = sshKeySource(context, host))
         val files = SftpClient(connection::sftp) { live.value.any { it.id == id && it.status == "ready" } }
         sshConnections[id] = connection
         return addTerminal(attachment?.title ?: host.name, "SSH", SshTerminalTransport(connection, command), id, host, files, attachment)
@@ -442,7 +463,7 @@ class SessionRepository(private val context: Context,
             override fun onInputRejected(session: TerminalSession) { error.value = "input_rejected" }
 
         }
-        val terminal = TerminalSession(transport, callbacks)
+        val terminal = TerminalSession(transport, callbacks, display.state.value.scrollbackLines)
         live.value = live.value + LocalSession(id, title, source, terminal, host = host, files = files, attachment = attachment)
         SessionService.ensureStarted(context)
         terminal.start()
@@ -501,7 +522,7 @@ class SessionRepository(private val context: Context,
     fun connectDesktop(host: HostProfile, password: CharArray, allowInput: Boolean): String {
         val id = UUID.randomUUID().toString()
         return addDesktop(host, allowInput, SshDesktopTransport(SshConnection(host, password,
-            { h, fingerprint -> verify(id, h, fingerprint) })), "SSH", id)
+            { h, fingerprint -> verify(id, h, fingerprint) }, keySource = sshKeySource(context, host))), "SSH", id)
     }
 
     private fun addDesktop(host: HostProfile, allowInput: Boolean, transport: DesktopTransport, source: String,
