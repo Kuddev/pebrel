@@ -178,10 +178,12 @@ Ad-hoc-signed macOS builds may require **Open Anyway** in **System Settings >
 Privacy & Security** on first launch. Native macOS CI runs on macOS 15; the
 deployment target alone does not establish validation on every older OS version.
 
-Windows currently also provides tray residency, the global quick-terminal hotkey,
-automatic local AI-hook setup, and automatic update installation. These integrations
-are not yet available on Linux or macOS. See [installation details](INSTALL.md) for
-platform requirements and upgrading an existing Nebula installation.
+Pebrel 2.1 connects native tray actions, quick-terminal shortcuts, login startup,
+and local AI-hook setup on Windows, macOS, and Linux. Linux tray integration uses
+a status notifier, and Wayland shortcuts use the desktop portal. Windows and
+macOS provide native update installation; Linux upgrades use its package manager
+or a new package. See [installation details](INSTALL.md) for platform requirements
+and upgrading an existing Nebula installation.
 
 ## Configure
 
