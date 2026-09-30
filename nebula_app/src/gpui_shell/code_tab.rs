@@ -665,7 +665,7 @@ fn read_worktree_file(key: &MergeKey) -> Result<Vec<u8>, String> {
         },
         GitLocation::Wsl { distro, root } => {
             let path = join_guest_path(root, &key.relative_path);
-            let mut command = crate::shell_detect::wsl_exec_command(distro, None);
+            let mut command = crate::shell_detect::wsl_exec_command(distro);
             let output = crate::platform::process::hidden_command(&mut command)
                 .args(["cat", "--", path.as_str()])
                 .output()
@@ -687,7 +687,7 @@ fn write_conflict_result(key: &MergeKey, result: String) -> Result<(), String> {
         },
         GitLocation::Wsl { distro, root } => {
             let path = join_guest_path(root, &key.relative_path);
-            let mut command = crate::shell_detect::wsl_exec_command(distro, None);
+            let mut command = crate::shell_detect::wsl_exec_command(distro);
             let mut child = crate::platform::process::hidden_command(&mut command)
                 .args(["tee", "--", path.as_str()])
                 .stdin(Stdio::piped())
@@ -731,7 +731,7 @@ fn git_command(location: &GitLocation, args: &[&str]) -> Result<std::process::Ou
             command
         },
         GitLocation::Wsl { distro, root } => {
-            let mut command = crate::shell_detect::wsl_exec_command(distro, None);
+            let mut command = crate::shell_detect::wsl_exec_command(distro);
             command.args(["git", "-C", root, "--no-optional-locks"]);
             command
         },

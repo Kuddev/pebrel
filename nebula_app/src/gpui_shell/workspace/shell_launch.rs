@@ -62,26 +62,6 @@ pub(super) fn configured_local_launch(cx: &App) -> crate::session::LaunchSession
     }
 }
 
-/// The shell the first local pane of this process spawns, resolved with the
-/// same authority as that pane: `--shell <id>`, else the runtime `shell`
-/// setting, through [`resolve_shell_id`] (detected shells, terminal profiles,
-/// the synthetic WSL launch), then the PTY-default snapshot. Used to warm the
-/// guest verdict before the pane exists (`platform::wsl_guest_shell::warm_up`).
-pub(crate) fn startup_shell(shell_id: Option<String>) -> Option<nebula_terminal::tty::Shell> {
-    use crate::gpui_shell::terminal::view::TerminalLaunch;
-
-    let launch = shell_id
-        .or_else(|| nebula_settings::RuntimeSettings::load().shell)
-        .filter(|id| !id.trim().is_empty())
-        .and_then(|id| resolve_shell_id(&id).ok())
-        .unwrap_or(crate::session::LaunchSession::Default);
-    let shell = match super::NebulaWorkspace::terminal_launch_from_session(&launch, None) {
-        TerminalLaunch::Local { shell, .. } => shell,
-        TerminalLaunch::Ssh { .. } => return None,
-    };
-    crate::platform::shell::snapshot_shell(shell)
-}
-
 /// 把一个 shell id 解析成启动身份。
 ///
 /// 顺序：本机检测到的 shell（`pwsh`、`wsl:Ubuntu`…）→ `terminal_profiles.json`
@@ -215,23 +195,6 @@ mod tests {
             );
         }
         assert!(super::profile_launch_for_id(profiles, "profile:sh|qa-PROJECT").is_none());
-    }
-
-    /// Warm-up resolves the first pane's shell with the pane's own authority:
-    /// `shell_detect::resolve_id` alone misses `wsl` whenever distributions are
-    /// registered. Needs a `wsl.exe` on the machine, like the real launch.
-    #[test]
-    fn startup_shell_resolves_bare_wsl_like_the_first_pane() {
-        if crate::platform::shell::wsl_executable().is_none() {
-            return;
-        }
-        let shell = super::startup_shell(Some("wsl".into())).expect("a WSL launch");
-        assert!(crate::shell_detect::is_wsl_launcher(shell.program()));
-        let named = super::startup_shell(Some("wsl:Ubuntu".into())).expect("a WSL launch");
-        assert_eq!(
-            crate::shell_detect::wsl_launch_distro(named.program(), named.args()),
-            Some("Ubuntu")
-        );
     }
 
     /// `--shell` 的 WSL id 语义：`wsl:<发行版>` 必须落成一条真会跑的

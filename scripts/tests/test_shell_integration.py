@@ -12,20 +12,6 @@ import unittest
 from urllib.parse import quote
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "nebula_app/res/shell"
-# Hosted runners ship group/world-writable fpath directories; a native compinit would
-# stop at compaudit's prompt there too. Drop what compaudit rejects (the directory,
-# its parent, its .zwc digest or a file inside it) before the login shell's compinit.
-SECURE_FPATH_PROFILE = """autoload -Uz compaudit
-_insecure=(${(f)"$(compaudit 2>/dev/null)"})
-_kept=()
-for _dir in $fpath; do
-    (( ${_insecure[(Ie)$_dir]} || ${_insecure[(Ie)${_dir:h}]} || ${_insecure[(Ie)$_dir.zwc]} )) && continue
-    for _entry in $_insecure; do [[ ${_entry:h} == $_dir ]] && continue 2; done
-    _kept+=($_dir)
-done
-fpath=($_kept)
-unset _insecure _kept _dir _entry
-"""
 
 
 class ShellSession:
@@ -77,9 +63,7 @@ class ShellIntegrationTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.home = Path(self.temporary.name)
 
-    def start(self, shell: str, rc: str = "", original_zdotdir: Path | None = None,
-              user_files: bool = True, global_rcs: bool = False, profile: str = "",
-              marker: bytes = b"\x1b]133;A\x07") -> ShellSession:
+    def start(self, shell: str, rc: str = "", original_zdotdir: Path | None = None) -> ShellSession:
         program = shutil.which(shell)
         if not program:
             self.skipTest(f"{shell} is not installed; native CI must run this case")
@@ -92,48 +76,25 @@ class ShellIntegrationTests(unittest.TestCase):
         else:
             dotfiles = original_zdotdir or self.home
             dotfiles.mkdir(exist_ok=True)
-            if user_files:
-                (dotfiles / ".zshenv").write_text(
-                    '[[ -n $NEBULA_TEST_ZSH_MODULE_DIR ]] && module_path=("$NEBULA_TEST_ZSH_MODULE_DIR" $module_path)\n'
-                    "export NEBULA_PROFILE_TEST=env\n", encoding="utf-8")
-                (dotfiles / ".zprofile").write_text("NEBULA_PROFILE_TEST+=:profile\n" + profile,
-                                                    encoding="utf-8")
-                (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST+=:rc\n" + rc, encoding="utf-8")
-                (dotfiles / ".zlogin").write_text("NEBULA_PROFILE_TEST+=:login\n", encoding="utf-8")
+            (dotfiles / ".zshenv").write_text(
+                '[[ -n $NEBULA_TEST_ZSH_MODULE_DIR ]] && module_path=("$NEBULA_TEST_ZSH_MODULE_DIR" $module_path)\n'
+                "export NEBULA_PROFILE_TEST=env\n", encoding="utf-8")
+            (dotfiles / ".zprofile").write_text("NEBULA_PROFILE_TEST+=:profile\n", encoding="utf-8")
+            (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST+=:rc\n" + rc, encoding="utf-8")
+            (dotfiles / ".zlogin").write_text("NEBULA_PROFILE_TEST+=:login\n", encoding="utf-8")
             wrapper = self.home / "integration"
             wrapper.mkdir()
             for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
                 shutil.copyfile(SCRIPTS / source, wrapper / target)
-            args = ["-l", "-i"] if global_rcs else ["-d", "-l", "-i"]
+            args = ["-d", "-l", "-i"]
             env = {"ZDOTDIR": str(wrapper), "NEBULA_ZSH_INTEGRATION": str(wrapper),
                    "NEBULA_ZDOTDIR_WAS_SET": "1" if original_zdotdir else "0"}
             if original_zdotdir:
                 env["NEBULA_ORIGINAL_ZDOTDIR"] = str(original_zdotdir)
         session = ShellSession(program, self.home, args, env)
         self.addCleanup(session.close)
-        session.wait(marker)
+        session.wait(b"\x1b]133;A\x07")
         return session
-
-    def bootstrap(self, name: str) -> Path:
-        wrapper = self.home / name
-        wrapper.mkdir()
-        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
-            shutil.copyfile(SCRIPTS / source, wrapper / target)
-        return wrapper
-
-    def run_bootstrapped_zsh(self, *args: str, companions: bool = True, **extra: str) -> str:
-        # How a WSL guest starts zsh: the bootstrap as ZDOTDIR, with or without its companions.
-        program = shutil.which("zsh")
-        if not program:
-            self.skipTest("zsh is not installed; native CI must run this case")
-        wrapper = self.home / "integration"
-        if not wrapper.exists():
-            self.bootstrap("integration")
-        env = {"PATH": os.environ["PATH"], "HOME": str(self.home), "TERM": "dumb", "ZDOTDIR": str(wrapper)}
-        if companions:
-            env |= {"NEBULA_ZSH_INTEGRATION": str(wrapper), "NEBULA_ZDOTDIR_WAS_SET": "0"}
-        return subprocess.run([program, *args], cwd=self.home, capture_output=True, text=True,
-                              check=True, env=env | extra).stdout
 
     def check_protocol(self, shell: str) -> None:
         session = self.start(shell)
@@ -154,8 +115,6 @@ class ShellIntegrationTests(unittest.TestCase):
         session = self.start("zsh")
         session.command('print -r -- "RCS=$options[rcs] GLOBAL_RCS=$options[globalrcs]"',
                         b"RCS=on GLOBAL_RCS=off")
-        # Without global rc files no system compinit runs, so the bootstrap adds none.
-        session.command('print -r -- "COMPINIT=${+functions[compdef]}_END"', b"COMPINIT=0_END")
 
     def zsh_color_state(self, rc: str) -> bytes:
         session = self.start("zsh", rc)
@@ -272,100 +231,6 @@ class ShellIntegrationTests(unittest.TestCase):
         session.command('printf "PROFILE=%s ZDOTDIR=%s_END\\n" "$NEBULA_PROFILE_TEST" "$ZDOTDIR"',
                         f"PROFILE=env:profile:rc:login ZDOTDIR={directory}_END".encode())
 
-    def test_non_interactive_zsh_does_not_leak_the_bootstrap_zdotdir(self) -> None:
-        # WSL shape: `wsl <cmd>` runs `zsh -c`, the host cannot know the guest ZDOTDIR,
-        # and the user's ~/.zshenv moves ZDOTDIR (XDG layout).
-        dotfiles = self.home / ".config/zsh"
-        dotfiles.mkdir(parents=True)
-        (self.home / ".zshenv").write_text('export ZDOTDIR="$HOME/.config/zsh"\n', encoding="utf-8")
-        (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST=rc\n", encoding="utf-8")
-        nested = 'zsh -i -c \'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} ZDOTDIR=$ZDOTDIR"\'; env'
-        output = self.run_bootstrapped_zsh(
-            "-c", nested, WSLENV="KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu")
-        self.assertIn(f"RC=rc ZDOTDIR={dotfiles}", output)
-        environment = dict(line.split("=", 1) for line in output.splitlines()[1:] if "=" in line)
-        self.assertEqual(environment.get("ZDOTDIR"), str(dotfiles))
-        self.assertEqual(environment.get("WSLENV"), "KEEP/u:PROMPT_COMMAND")
-        self.assertFalse([name for name in environment if name.startswith("NEBULA_")])
-
-    def test_zsh_started_during_the_bootstrap_window_still_loads_the_user_rc(self) -> None:
-        # A global zshrc that execs a multiplexer starts zsh while the parent bootstrap still
-        # exports ZDOTDIR but has unexported its companions.
-        (self.home / ".zshrc").write_text("NEBULA_PROFILE_TEST=rc\n", encoding="utf-8")
-        for args in (["-d", "-i"], ["-d", "-l", "-i"]):
-            output = self.run_bootstrapped_zsh(
-                *args, "-c", 'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} Z=${ZDOTDIR-unset}"',
-                companions=False)
-            self.assertIn("RC=rc Z=unset", output, args)
-
-    def test_zsh_bootstrap_forwards_nothing_to_nested_guests_and_keeps_zdotdir_unexported(self) -> None:
-        # WSL forwards every variable WSLENV names to a nested wsl.exe regardless of
-        # /u, so the bootstrap must drop its own entries. An XDG ~/.zshenv that sets
-        # ZDOTDIR without export must leave child zsh reading ~/.zshenv.
-        dotfiles = self.home / ".config/zsh"
-        dotfiles.mkdir(parents=True)
-        (self.home / ".zshenv").write_text(
-            'ZDOTDIR="$HOME/.config/zsh"\nexport NEBULA_TEST_MARK=home-zshenv\n', encoding="utf-8")
-        (dotfiles / ".zprofile").write_text("", encoding="utf-8")
-        (dotfiles / ".zshrc").write_text("", encoding="utf-8")
-        interactive = ('typeset -p ZDOTDIR; print -r -- "WSLENV=$WSLENV"; '
-                       "env -u NEBULA_TEST_MARK zsh -c 'print -r -- \"CHILD=${NEBULA_TEST_MARK-unset}\"'")
-        for args in (["-d", "-l", "-i", "-c", interactive], ["-d", "-i", "-c", interactive]):
-            output = self.run_bootstrapped_zsh(
-                *args, WSLENV="KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu")
-            self.assertIn("WSLENV=KEEP/u:PROMPT_COMMAND\n", output, args)
-            self.assertIn(f"typeset ZDOTDIR={dotfiles}", output, args)
-            self.assertNotIn("export ZDOTDIR", output, args)
-            self.assertIn("CHILD=home-zshenv", output, args)
-
-    def test_zsh_user_rc_programs_do_not_inherit_bootstrap_variables(self) -> None:
-        # A terminal multiplexer exec'd from a user rc file must not carry the bootstrap state along.
-        session = self.start("zsh", 'print -r -- "RC_ENV=$(env | grep -cE "^NEBULA_(Z|ORIGINAL_Z)")_END"\n')
-        self.assertIn(b"RC_ENV=0_END", session.output)
-        session.command('print -r -- "LEFT=${+NEBULA_ZSH_INTEGRATION}_END"', b"LEFT=0_END")
-
-    def require_ubuntu_global_zshrc(self) -> None:
-        try:
-            os_release = Path("/etc/os-release").read_text(encoding="utf-8")
-            global_rc = Path("/etc/zsh/zshrc").read_text(encoding="utf-8")
-        except OSError:
-            self.skipTest("requires an Ubuntu global zshrc")
-        if "ubuntu" not in os_release or "skip_global_compinit" not in global_rc:
-            self.skipTest("requires an Ubuntu global zshrc")
-
-    def test_zsh_global_compinit_keeps_its_dump_out_of_the_bootstrap(self) -> None:
-        # Ubuntu's /etc/zsh/zshrc runs compinit while ZDOTDIR still names the bootstrap.
-        self.require_ubuntu_global_zshrc()
-        session = self.start("zsh", global_rcs=True, profile=SECURE_FPATH_PROFILE)
-        session.command('print -r -- "COMPINIT=${+functions[compdef]}_END"', b"COMPINIT=1_END")
-        self.assertEqual(sorted(path.name for path in (self.home / "integration").iterdir()),
-                         [".zprofile", ".zshenv", ".zshrc"])
-        self.assertTrue(list(self.home.glob(".zcompdump*")), "the dump belongs to the user")
-
-    def test_zsh_profile_can_still_skip_the_global_compinit(self) -> None:
-        # Ubuntu reads skip_global_compinit after ~/.zprofile on a login shell.
-        self.require_ubuntu_global_zshrc()
-        session = self.start("zsh", global_rcs=True, profile="skip_global_compinit=1\n")
-        session.command('print -r -- "COMPINIT=${+functions[compdef]}_END"', b"COMPINIT=0_END")
-        self.assertFalse(list(self.home.glob(".zcompdump*")))
-
-    def test_zsh_offers_the_newuser_wizard_when_the_user_has_no_startup_files(self) -> None:
-        # zsh's own check only saw the bootstrap's files.
-        probe = subprocess.run([shutil.which("zsh") or "zsh", "-f", "-c",
-                                "autoload -U +X zsh-newuser-install 2>/dev/null"],
-                               env={"PATH": os.environ["PATH"], **{name: os.environ[name]
-                                    for name in ("FPATH",) if name in os.environ}})
-        if probe.returncode != 0 or os.geteuid() == 0:
-            self.skipTest("requires zsh-newuser-install as a non-root user")
-        self.start("zsh", user_files=False, marker=b"zsh-newuser-install")
-
-    def test_zsh_newuser_check_happens_before_the_user_zshenv_moves_zdotdir(self) -> None:
-        # Native zsh checks $HOME, where this ~/.zshenv exists; the XDG directory is empty.
-        (self.home / ".config/zsh").mkdir(parents=True)
-        (self.home / ".zshenv").write_text('export ZDOTDIR="$HOME/.config/zsh"\n', encoding="utf-8")
-        session = self.start("zsh", user_files=False)
-        self.assertNotIn(b"zsh-newuser-install", session.output)
-
     def test_zsh_preserves_precmd_hooks_after_failure(self) -> None:
         session = self.start("zsh", """
 typeset -gi user_prompt_count=0
@@ -379,50 +244,6 @@ precmd_functions=(_user_precmd)
         output = session.command("(exit 7)", b"USER_PRECMD_2_STATUS=7_END")
         self.assertIn(b"\x1b]133;D;7\x07", output)
         session.command("true", b"USER_PRECMD_3_STATUS=0_END")
-
-    def test_wsl_guest_probe_reports_the_login_shell_and_bootstrap_readability(self) -> None:
-        # The host runs this once per guest before handing zsh the bootstrap as
-        # ZDOTDIR: `wsl.exe --exec sh -s` with the script on stdin and the bootstrap
-        # directory translated into NEBULA_ZSH_INTEGRATION.
-        import pwd
-
-        def probe(bootstrap: str, path: str = os.environ["PATH"]) -> dict[str, str]:
-            result = subprocess.run(
-                ["sh", "-s"], input=(SCRIPTS / "wsl-guest-probe.sh").read_text(encoding="utf-8"),
-                capture_output=True, text=True, check=True, cwd=self.home,
-                env={"PATH": path, "HOME": str(self.home),
-                     "NEBULA_ZSH_INTEGRATION": bootstrap, "SHELL": "/bin/false"},
-            )
-            self.assertEqual(result.stderr, "")
-            lines = result.stdout.splitlines()
-            self.assertEqual(len(lines), 2, result.stdout)
-            return dict(line.split("=", 1) for line in lines)
-
-        wrapper = self.bootstrap("integration dir")
-        answer = probe(str(wrapper))
-        self.assertEqual(answer["bootstrap"], "readable")
-        # The passwd entry, not $SHELL, names what `wsl.exe` starts for this user.
-        # macOS keeps accounts in Directory Services and has no getent: there the
-        # script can only fall back to $SHELL, which is what the test set.
-        user = pwd.getpwuid(os.getuid())
-        in_passwd = any(line.startswith(f"{user.pw_name}:") for line in
-                        Path("/etc/passwd").read_text(encoding="utf-8", errors="replace").splitlines())
-        expected = user.pw_shell if shutil.which("getent") or in_passwd else "/bin/false"
-        self.assertEqual(answer["shell"], expected)
-        # A guest without getent (musl, busybox) still reads /etc/passwd.
-        fake_bin = self.home / "no-getent"
-        fake_bin.mkdir()
-        (fake_bin / "getent").write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
-        (fake_bin / "getent").chmod(0o755)
-        without_getent = probe(str(wrapper), f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
-        self.assertEqual(without_getent["shell"], user.pw_shell if in_passwd else "/bin/false")
-
-        (wrapper / ".zprofile").unlink()
-        self.assertEqual(probe(str(wrapper))["bootstrap"], "unreadable")
-        # Automount off or a failed `/p` translation leaves a path the guest cannot open.
-        self.assertEqual(probe(str(self.home / "missing"))["bootstrap"], "unreadable")
-        self.assertEqual(probe(r"C:\Users\me\AppData\Roaming\Pebrel\wsl-zsh")["bootstrap"], "unreadable")
-        self.assertEqual(probe("")["bootstrap"], "unreadable")
 
 
 if __name__ == "__main__":

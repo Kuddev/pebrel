@@ -91,8 +91,8 @@ probe would block the UI thread. The `tab_duplication` and prompt-path
 - Rewrite bare launches to `-d <default>` in the persisted launch: changes
   launch identity and restore semantics for users who intentionally follow the
   default. Only the spawn options are pinned.
-- Take the identity from the guest's `WSL_DISTRO_NAME`, which the bash and zsh
-  reports carry in the `pebrel_shell` token and completion uses to fill an empty
+- Take the identity from the guest's `WSL_DISTRO_NAME`, which the bash report
+  carries in the `pebrel_shell` token and completion uses to fill an empty
   distribution: it arrives only at the first prompt, after an early split, and
   never from shells without the integration, so it supplements the snapshot.
 - CRT quoting (`escape_args`, or the PTY's escaper on the injected value):

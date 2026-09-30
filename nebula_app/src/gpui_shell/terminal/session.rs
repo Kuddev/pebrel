@@ -147,16 +147,7 @@ pub(super) fn local_options(
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("WSLENV"))
             .map(|(_, value)| value.as_str());
-        // Only a guest that confirmed zsh can read it takes the bootstrap.
-        let zsh = crate::platform::wsl_guest_shell::takes_zsh_bootstrap(
-            &program,
-            &args,
-            &crate::shell_detect::effective_wslenv(current_wslenv),
-            crate::platform::wsl_guest_shell::verified,
-        )
-        .then(|| crate::platform::shell_integration::wsl_zsh_path().to_string_lossy().into_owned());
-        let additions =
-            crate::shell_detect::wsl_cwd_report_env(&program, current_wslenv, zsh.as_deref());
+        let additions = crate::shell_detect::wsl_cwd_report_env(&program, &args, current_wslenv);
         for (name, value) in additions {
             options.env.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
             options.env.insert(name, value);

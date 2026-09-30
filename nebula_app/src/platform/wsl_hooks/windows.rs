@@ -5,7 +5,8 @@
 //! authenticated OSC protocol, with a fresh token for every PTY.
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::io::{Read as _, Seek as _, Write as _};
+use std::process::{Command, Stdio};
 use std::sync::{OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,7 @@ use serde_json::json;
 use crate::ai_hook::remote::{self, Action, Snapshot};
 
 const BUDGET: Duration = Duration::from_secs(8);
-const MAX_OUTPUT: usize = 20 * 1024 * 1024;
+const MAX_OUTPUT: u64 = 20 * 1024 * 1024;
 const RETRY_AFTER: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -49,14 +50,48 @@ impl Target {
         command
     }
 
-    /// One request/response round trip within what is left of `deadline`
-    /// (both calls of an installation share one budget).
     fn exchange(&self, request: &[u8], deadline: Instant) -> Result<String, String> {
-        let budget = deadline.saturating_duration_since(Instant::now());
-        let read = crate::platform::process_output::read_with_input;
-        read(self.command(), request, budget, MAX_OUTPUT, &|| false)
-            .map(|output| String::from_utf8_lossy(&output).into_owned())
-            .map_err(|error| format!("WSL hook setup {error}"))
+        let run = || -> std::io::Result<String> {
+            let mut input = tempfile::tempfile()?;
+            input.write_all(request)?;
+            input.rewind()?;
+            let mut output = tempfile::tempfile()?;
+            let mut child = self
+                .command()
+                .stdin(input)
+                .stdout(output.try_clone()?)
+                .stderr(Stdio::null())
+                .spawn()?;
+            let status = loop {
+                let poll = child.try_wait().and_then(|status| {
+                    if status.is_none()
+                        && (Instant::now() >= deadline || output.metadata()?.len() > MAX_OUTPUT)
+                    {
+                        return Err(std::io::Error::other("WSL hook setup exceeded its budget"));
+                    }
+                    Ok(status)
+                });
+                match poll {
+                    Ok(Some(status)) => break status,
+                    Ok(None) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    },
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(error);
+                    },
+                }
+            };
+            if !status.success() || output.metadata()?.len() > MAX_OUTPUT {
+                return Err(std::io::Error::other("WSL hook setup failed"));
+            }
+            output.rewind()?;
+            let mut text = String::new();
+            output.take(MAX_OUTPUT).read_to_string(&mut text)?;
+            Ok(text)
+        };
+        run().map_err(|error| error.to_string())
     }
 
     fn install(&self, action: Action) -> Result<(), String> {

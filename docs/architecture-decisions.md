@@ -603,7 +603,7 @@ settings files.
   compound command does not wait for the next prompt. PowerShell invokes the
   native application; bash/zsh share one payload and preserve user wrappers and
   redirected command output. Integration tokens are generated once per shell and remain unexported. Existing local
-  PowerShell/bash/zsh, WSL bash/zsh hooks and SSH bootstrap hooks carry these signals.
+  PowerShell/bash/zsh, WSL bash hooks and SSH bootstrap hooks carry these signals.
   Preserve terminal event order across chunks so a cwd cannot move past the
   parent-context report. A new shell on the same host keeps that host's history.
 - **Connection identity:** Existing JSONL files/schema remain authoritative. Typed

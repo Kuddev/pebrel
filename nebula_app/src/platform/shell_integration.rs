@@ -29,7 +29,19 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
     match name {
         "zsh" => {
             let directory = root.join("zsh");
-            write_zsh_files(&directory)?;
+            std::fs::create_dir_all(&directory)?;
+            for (name, content) in [
+                (".zshenv", include_str!("../../res/shell/zshenv")),
+                (".zprofile", include_str!("../../res/shell/zprofile")),
+                (".zshrc", include_str!("../../res/shell/zshrc")),
+            ] {
+                let content = if name == ".zshrc" {
+                    format!("{content}\n{}", tty::connection_shell())
+                } else {
+                    content.to_owned()
+                };
+                crate::atomic_file::write(&directory.join(name), content.as_bytes())?;
+            }
             if let Some(original) = std::env::var_os("ZDOTDIR") {
                 options.env.insert(
                     "NEBULA_ORIGINAL_ZDOTDIR".into(),
@@ -57,57 +69,6 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
         _ => {},
     }
     Ok(())
-}
-
-const ZSH_FILES: [(&str, &str); 3] = [
-    (".zshenv", include_str!("../../res/shell/zshenv")),
-    (".zprofile", include_str!("../../res/shell/zprofile")),
-    (".zshrc", include_str!("../../res/shell/zshrc")),
-];
-
-/// The zsh bootstrap shared by local zsh and WSL guests: restore the user's
-/// `ZDOTDIR`, source their own startup files, then install the precmd reports.
-fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(directory)?;
-    for (name, content) in ZSH_FILES {
-        let content = if name == ".zshrc" {
-            format!("{content}\n{}", tty::connection_shell())
-        } else {
-            content.to_owned()
-        };
-        let content = tty::shell_line_endings(&content);
-        crate::atomic_file::write(&directory.join(name), content.as_bytes())?;
-    }
-    Ok(())
-}
-
-/// Host directory a WSL guest zsh uses as `ZDOTDIR` (translated through `WSLENV`
-/// `/p`), apart from the local-zsh one so the two never rewrite each other.
-/// Only computes the path; [`wsl_zsh_directory`] writes it.
-pub(crate) fn wsl_zsh_path() -> std::path::PathBuf {
-    super::dirs::data_dir().join("shell-integration").join("wsl-zsh")
-}
-
-/// [`wsl_zsh_path`] with the bootstrap written. Only the guest probe worker
-/// calls it (it writes and fsyncs); whether a guest user can read it is the
-/// probe's answer (`super::wsl_guest_shell`). The files are written once per
-/// process and afterwards only when missing, never while a starting guest zsh
-/// may be reading them.
-pub(crate) fn wsl_zsh_directory() -> Option<std::path::PathBuf> {
-    static WRITTEN: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
-    if !cfg!(windows) {
-        return None;
-    }
-    let directory = wsl_zsh_path();
-    let mut written = WRITTEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !*written || !ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()) {
-        if let Err(error) = write_zsh_files(&directory) {
-            log::warn!("Could not prepare WSL zsh integration: {error}");
-            return None;
-        }
-        *written = true;
-    }
-    Some(directory)
 }
 
 #[cfg(unix)]

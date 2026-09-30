@@ -245,15 +245,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         if try_hand_over_to_resident(&options) {
             return Ok(());
         }
-        // The first WSL pane spawns before any guest could answer; ask its guest
-        // now, off this thread, so a running distribution has answered by then
-        // (see `platform::wsl_guest_shell`). An explicit command opens no shell.
-        if terminal_options.command().is_none() {
-            let shell_id = shell_id.clone();
-            platform::wsl_guest_shell::warm_up(move || {
-                crate::gpui_shell::workspace::shell_launch::startup_shell(shell_id)
-            });
-        }
         gpui_shell::run_shell(
             initial_cwd,
             terminal_options.command(),

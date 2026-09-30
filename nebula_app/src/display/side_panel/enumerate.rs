@@ -116,7 +116,7 @@ pub(crate) fn run_wsl_find_lenient(
     distro: &str,
     args: impl IntoIterator<Item = OsString>,
 ) -> Option<(Vec<u8>, bool)> {
-    let mut command = crate::shell_detect::wsl_exec_command(distro, None);
+    let mut command = crate::shell_detect::wsl_exec_command(distro);
     command.arg("find").args(args);
     crate::platform::process::hidden_command(&mut command);
     let output = match command_output_with_timeout(command, Some(WSL_COMMAND_TIMEOUT)) {

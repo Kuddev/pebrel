@@ -12,6 +12,6 @@
 - 补齐数据源选择和请求快照归 `completion.rs`，界面仅拥有任务与交互；边界依据见 [`completion`](../architecture/notes/nebula_app/completion/)。
 - 旧渲染入口的窗口动画状态归 `display/animations.rs`；迁移及显式 legacy 验证依据见 [`display`](../architecture/notes/nebula_app/display/)。
 - 新终端代理保持选定协议，不把 SOCKS 改写成 HTTP。见 [`terminal proxy scheme`](../architecture/notes/nebula_app/ssh_proxy/2026-09-29-terminal-proxy-scheme.md)。
-- WSL pane 的发行版快照与分屏/新标签继承见 [`shell_detect`](../architecture/notes/nebula_app/shell_detect/)；WSL zsh 启动注入见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-28-wsl-zsh-startup-integration.md)。
+- WSL pane 的发行版快照与分屏/新标签继承见 [`shell_detect`](../architecture/notes/nebula_app/shell_detect/)。
 - Windows Acrylic 的运行库回退与窗口生命周期见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-controller.md)。
 - Windows Acrylic 的动画期间透明回退与计时边界见 [`窗口状态切换`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-window-transitions.md)。
