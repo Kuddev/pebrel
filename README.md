@@ -189,17 +189,15 @@ through the explicit `legacy-shell` feature.
 
 ## Contact
 
-Email: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
 ## Acknowledgements
 
-Pebrel builds on [Alacritty](https://github.com/alacritty/alacritty),
-[GPUI](https://github.com/zed-industries/zed), and
-[gpui-component](https://github.com/longbridge/gpui-component). Terminal text uses
-Maple Mono, and native formulas use Latin Modern Math. Upstream copyright and
-license notices are preserved in `THIRD-PARTY-NOTICES` and `licenses/`.
+Pebrel includes third-party terminal, interface and font components. Their
+provenance, copyright and license notices are preserved in
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
 
 ## Community
 

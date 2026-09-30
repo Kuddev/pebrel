@@ -13,6 +13,21 @@
 use super::*;
 
 impl SettingsPane {
+    fn confirmation_shortcuts_label(cx: &App) -> &'static str {
+        crate::gpui_shell::config::ui_language(cx)
+            .text(crate::i18n::Message::CommonConfirmationDialogShortcuts)
+    }
+
+    fn confirmation_shortcuts_search_text() -> String {
+        let message = crate::i18n::Message::CommonConfirmationDialogShortcuts;
+        format!(
+            "{} {} Enter / Esc",
+            crate::i18n::UiLanguage::ZhCn.text(message),
+            crate::i18n::UiLanguage::EnUs.text(message),
+        )
+        .to_lowercase()
+    }
+
     fn keymap_query(&self, cx: &App) -> String {
         let query = self.settings_search_input.read(cx).value().trim().to_lowercase();
         // A section-name query opens the complete page; action/key queries filter rows.
@@ -38,6 +53,7 @@ impl SettingsPane {
             || keymap::READONLY_ROWS
                 .iter()
                 .any(|(zh, en, combo)| matches(format!("{zh} {en} {combo}").to_lowercase()))
+            || matches(Self::confirmation_shortcuts_search_text())
     }
 
     // ---- 按键映射编辑器（模型层 `display::keymap`，两壳同读同写）----
@@ -381,16 +397,22 @@ impl SettingsPane {
             start = end;
         }
 
-        // 只读行：数字系/AI 贴入键（表驱动，不可在图形页编辑）。随搜索过滤。
+        // 只读键位和确认对话框快捷键（不可编辑），随搜索过滤。
         let query = self.keymap_query(cx);
-        let readonly: Vec<&(&str, &str, &str)> = keymap::READONLY_ROWS
+        let mut readonly: Vec<(&str, &str)> = keymap::READONLY_ROWS
             .iter()
             .filter(|(zh, en, combo)| {
                 query
                     .split_whitespace()
                     .all(|word| format!("{zh} {en} {combo}").to_lowercase().contains(word))
             })
+            .map(|(zh, en, combo)| (language.pick(zh, en), *combo))
             .collect();
+        let dialog_label = Self::confirmation_shortcuts_label(cx);
+        let dialog_shortcuts = Self::confirmation_shortcuts_search_text();
+        if query.split_whitespace().all(|word| dialog_shortcuts.contains(word)) {
+            readonly.push((dialog_label, "Enter / Esc"));
+        }
         if !readonly.is_empty() {
             groups_block = groups_block.child(
                 div()
@@ -400,7 +422,7 @@ impl SettingsPane {
                     .text_color(cx.theme().muted_foreground)
                     .child(language.pick("只读", "Read-only")),
             );
-            for (zh, en, combo) in readonly {
+            for (label, combo) in readonly {
                 groups_block = groups_block.child(
                     h_flex()
                         .w_full()
@@ -414,7 +436,7 @@ impl SettingsPane {
                                 .min_w_0()
                                 .pl_4()
                                 .text_color(crate::gpui_shell::theme::faint_ink(cx))
-                                .child(language.pick(zh, en)),
+                                .child(label),
                         )
                         .child(
                             div()
@@ -429,7 +451,7 @@ impl SettingsPane {
                                 .border_color(cx.theme().border)
                                 .text_size(px(self.font_size_px(cx) * 0.86))
                                 .text_color(crate::gpui_shell::theme::faint_ink(cx))
-                                .child(*combo),
+                                .child(combo),
                         ),
                 );
             }

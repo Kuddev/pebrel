@@ -3,6 +3,9 @@
 Independent macOS runner placement superseded by
 [shared macOS runners](2026-09-27-shared-macos-runners.md).
 
+All-PR platform scheduling superseded by
+[path-based native validation](2026-09-29-path-based-native-validation.md).
+
 ## Status
 
 Implemented for review. The five native check names and two macOS release-check

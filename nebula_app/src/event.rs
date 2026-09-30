@@ -1443,8 +1443,15 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     #[inline]
-    fn nebula_accept(&self) -> crate::display::AcceptKey {
-        self.display.nebula_accept
+    fn nebula_completion_style(&self) -> crate::display::CompletionStyle {
+        self.display.nebula_completion_style
+    }
+
+    fn nebula_completion_popup_request(&mut self) -> bool {
+        let requested =
+            self.display.nebula_ghost_enabled && self.nebula_state.request_completion_popup();
+        *self.dirty |= requested;
+        requested
     }
 
     #[inline]
@@ -1458,39 +1465,20 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     fn nebula_completion_popup_move(&mut self, delta: isize) {
-        let len = self.nebula_state.completion_items.len();
-        if len == 0 {
-            return;
-        }
-        self.nebula_state.completion_selected = Some(match self.nebula_state.completion_selected {
-            Some(current) => (current as isize + delta).rem_euclid(len as isize) as usize,
-            None => 0,
-        });
+        self.nebula_state.completion_popup_move(delta);
         *self.dirty = true;
     }
 
     fn nebula_completion_popup_take(&mut self) -> Option<crate::display::NebulaCompletionItem> {
-        let state = &mut self.nebula_state;
-        let index = state.completion_selected?;
-        let insert = state.completion_items.get(index)?.clone();
-        state.completion_items.clear();
-        state.completion_selected = None;
+        let insert = self.nebula_state.completion_popup_take()?;
         *self.dirty = true;
         Some(insert)
     }
 
     fn nebula_completion_popup_dismiss(&mut self) -> bool {
-        let state = &mut self.nebula_state;
-        if state.completion_items.is_empty() {
-            return false;
-        }
-        // Items go, the recompute key stays: the cache guard in
-        // `nebula_update_suggestion` then keeps the list closed until the
-        // line itself changes.
-        state.completion_items.clear();
-        state.completion_selected = None;
-        *self.dirty = true;
-        true
+        let dismissed = self.nebula_state.completion_popup_dismiss();
+        *self.dirty |= dismissed;
+        dismissed
     }
 
     fn nebula_take_ai_fix(&mut self) -> Option<String> {

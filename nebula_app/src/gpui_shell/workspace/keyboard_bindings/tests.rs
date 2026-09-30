@@ -116,6 +116,33 @@ fn cleared_shortcut_reaches_terminal_and_can_be_restored_without_restart() {
     assert!(bindings[0].action().as_any().is::<ToggleShellPicker>());
 }
 
+#[test]
+fn stale_bare_key_removal_unbinds_the_action_instead_of_swallowing_the_key() {
+    use crate::config::Action;
+    use gpui::{KeyContext, Keymap, Keystroke};
+    // Binding a bare `enter` to a workspace action and then removing it must
+    // hand the key back to the terminal: the undo replays through
+    // `stale_removal_bindings`, whose `Unbind(action)` drops the interception
+    // instead of leaving a `NoAction` in the keymap that eats the key.
+    let original = custom_workspace_binding("enter", &Action::ToggleFullscreen).unwrap();
+    let terminal_scope = workspace_binding_in_context(
+        "enter",
+        &Action::ToggleFullscreen,
+        Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+    )
+    .unwrap();
+    let action_name = original.action().name().to_owned();
+    let mut keymap = Keymap::new(vec![original, terminal_scope]);
+    let contexts = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    let input = [Keystroke::parse("enter").unwrap()];
+    let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
+    assert!(!bindings.is_empty(), "while bound, the action owns enter");
+
+    keymap.add_bindings(stale_removal_bindings("enter", &action_name));
+    let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
+    assert!(bindings.is_empty(), "after removal enter is plain input again");
+}
+
 #[cfg(feature = "gpui-test-support")]
 mod dispatch {
     use super::*;
@@ -215,6 +242,44 @@ mod dispatch {
             crate::platform::Platform::current() == crate::platform::Platform::MacOS,
             "共享别名表只应在 macOS 注册原生命令键"
         );
+    }
+
+    #[gpui::test]
+    fn removing_a_reassigned_bare_key_does_not_revive_its_previous_action(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        for keep_previous_row in [false, true] {
+            let first = ("Enter".into(), "ToggleFullscreen".into());
+            let second = ("enter".into(), "ToggleShellPicker".into());
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![first.clone()], cx);
+            });
+            press("enter", &mut cx);
+            assert!(cx.update(|window, _| window.is_fullscreen()));
+            press("enter", &mut cx);
+            assert!(!cx.update(|window, _| window.is_fullscreen()));
+
+            workspace.update(&mut cx, |workspace, cx| {
+                let rows = if keep_previous_row {
+                    vec![first, second.clone()]
+                } else {
+                    vec![second.clone()]
+                };
+                workspace.update_keybinds(rows, cx);
+            });
+            press("enter", &mut cx);
+            assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            press("escape", &mut cx);
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![second], cx);
+                workspace.update_keybinds(Vec::new(), cx);
+            });
+            press("enter", &mut cx);
+            assert!(
+                !cx.update(|window, _| window.is_fullscreen()),
+                "old action revived after removal"
+            );
+            assert!(!workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        }
     }
 
     #[gpui::test]

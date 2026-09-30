@@ -16,8 +16,6 @@ const PANEL_EMPTY_HEIGHT: f32 = 196.0;
 const PANEL_FIXED_HEIGHT: f32 = 146.0;
 const GROUP_NAV_HEIGHT: f32 = 36.0;
 const PANEL_MARGIN: f32 = 8.0;
-// 覆盖层从自绘标题栏下沿开始；固定组件依赖当前将该区域定义为 34px。
-const WINDOW_TITLE_BAR_HEIGHT: f32 = 34.0;
 const PANEL_FOOTER_HEIGHT: f32 = 44.0;
 const ROW_HEIGHT: f32 = 62.0;
 const ROW_ICON_SIZE: f32 = 16.0;
@@ -559,8 +557,12 @@ impl NebulaWorkspace {
         let viewport = window.viewport_size();
         let panel_width =
             PANEL_MAX_WIDTH.min((f32::from(viewport.width) - PANEL_MARGIN * 2.0).max(0.0));
+        let title_bar_height = super::window_titlebar::effective_title_bar_height(
+            self.density,
+            crate::platform::window_chrome::layout(window),
+        );
         let available_height =
-            (f32::from(viewport.height) - WINDOW_TITLE_BAR_HEIGHT - PANEL_MARGIN * 2.0).max(0.0);
+            (f32::from(viewport.height) - title_bar_height - PANEL_MARGIN * 2.0).max(0.0);
 
         let rows = self.command_manager_rows(cx);
         self.command_manager_selected =
@@ -688,7 +690,7 @@ impl NebulaWorkspace {
             .child(
                 v_flex()
                     .absolute()
-                    .top(px(WINDOW_TITLE_BAR_HEIGHT + PANEL_MARGIN))
+                    .top(px(title_bar_height + PANEL_MARGIN))
                     .right(px(PANEL_MARGIN))
                     .w(px(panel_width))
                     .h(px(panel_height))

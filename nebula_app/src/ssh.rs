@@ -543,14 +543,18 @@ pub fn ssh_config_hosts() -> Vec<String> {
 }
 
 fn askpass_destination_from_args(args: &[String]) -> Option<String> {
+    destination_argument(args).map(|(_, destination)| destination)
+}
+
+fn destination_argument(args: &[String]) -> Option<(usize, String)> {
     let (mut login_user, mut port) = (None, None);
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
         if arg == "--" {
-            return args
-                .get(i + 1)
-                .map(|dest| format_destination(dest, login_user.as_deref(), port.as_deref()));
+            return args.get(i + 1).map(|dest| {
+                (i + 1, format_destination(dest, login_user.as_deref(), port.as_deref()))
+            });
         }
         let bytes = arg.as_bytes();
         if bytes.first() == Some(&b'-') && bytes.len() >= 2 {
@@ -575,9 +579,25 @@ fn askpass_destination_from_args(args: &[String]) -> Option<String> {
             i += if consumed_next { 2 } else { 1 };
             continue;
         }
-        return Some(format_destination(arg, login_user.as_deref(), port.as_deref()));
+        return Some((i, format_destination(arg, login_user.as_deref(), port.as_deref())));
     }
     None
+}
+
+fn resolve_saved_destination(
+    args: &mut [String],
+    profiles: &crate::ssh_profiles::SshProfiles,
+) -> Option<String> {
+    let (index, destination) = destination_argument(args)?;
+    let identity = &args[index];
+    let target = profiles.connection_destination(identity);
+    if target == identity {
+        return Some(destination);
+    }
+    // 系统 SSH 只接收真实地址；AskPass 仍使用副本自己的凭据键。
+    let identity = identity.clone();
+    args[index] = crate::ssh_session::ssh_config_probe_target(target).into_owned();
+    Some(identity)
 }
 
 /// Per-pane data for launching SSH from the configured default shell. The
@@ -683,13 +703,23 @@ fn slash_drive_path(path: &std::path::Path, prefix: &str) -> String {
 
 /// `nebula ssh` entrypoint. Returns the process exit code.
 #[cfg(windows)]
-pub fn run(args: Vec<String>) -> i32 {
+pub fn run(mut args: Vec<String>) -> i32 {
     use base64::Engine as _;
     use std::process::Command;
 
+    let profiles = match crate::ssh_profiles::SshProfiles::load(
+        &crate::display::nebula_data_dir().join("ssh_profiles.json"),
+    ) {
+        Ok(profiles) => profiles,
+        Err(error) => {
+            eprintln!("pebrel ssh: failed to load host profiles: {error}");
+            return 1;
+        },
+    };
+    let destination = resolve_saved_destination(&mut args, &profiles);
     let ssh = find_ssh();
     let mut cmd = Command::new(&ssh);
-    let askpass = askpass_destination_from_args(&args).and_then(|destination| {
+    let askpass = destination.and_then(|destination| {
         std::env::current_exe()
             .ok()
             .map(|exe| build_askpass_env(&exe, &destination, std::process::id() as u64))
@@ -968,5 +998,20 @@ mod tests {
         assert_eq!(parse(&["-p", "2222", "user@host"]), Some("ssh://user@host:2222".into()));
         assert_eq!(parse(&["-i", "key file", "host"]), Some("host".into()));
         assert_eq!(parse(&["-V"]), None);
+    }
+
+    #[test]
+    fn copied_host_forwards_its_address_and_keeps_its_credential_identity() {
+        let mut profiles = crate::ssh_profiles::SshProfiles::default();
+        profiles.duplicate_host("root@example.com:2222", "copy-host").unwrap();
+        // 同名选项值不能被当作目标改写；远端命令也必须原样保留。
+        let mut args: Vec<String> =
+            ["-i", "copy-host", "--", "copy-host", "printf ok"].map(String::from).into();
+        assert_eq!(resolve_saved_destination(&mut args, &profiles).as_deref(), Some("copy-host"));
+        assert_eq!(args, ["-i", "copy-host", "--", "ssh://root@example.com:2222", "printf ok"]);
+        profiles.duplicate_host("production-alias", "copy-alias").unwrap();
+        let mut args = vec!["copy-alias".to_owned()];
+        assert_eq!(resolve_saved_destination(&mut args, &profiles).as_deref(), Some("copy-alias"));
+        assert_eq!(args, ["production-alias"]);
     }
 }

@@ -99,6 +99,8 @@ struct ReadParams {
     pane_id: u64,
     #[serde(default = "default_read_lines")]
     lines: usize,
+    #[serde(default)]
+    screen: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,9 +224,24 @@ fn default_exec_output_bytes() -> usize {
 }
 
 impl RuntimeCommand {
+    pub(crate) fn execution_target(&self) -> Option<(Option<u64>, u64)> {
+        match self {
+            Self::Exec { window_id, pane_id, .. } | Self::Git { window_id, pane_id, .. } => {
+                Some((*window_id, *pane_id))
+            },
+            _ => None,
+        }
+    }
+
     pub(super) fn from_request(request: &ApiRequest) -> Result<Self, ApiError> {
         match request.method.as_str() {
             "runtime.snapshot" => Ok(Self::Snapshot),
+            "conversation.read"
+            | "conversation.send"
+            | "conversation.choose"
+            | "conversation.key" => super::conversation::parse(request),
+            "tab.focus" | "tab.open" | "tab.read" => super::tabs::parse(request),
+            "tab.close" if request.params.get("tab_id").is_some() => super::tabs::parse(request),
             "window.create" => {
                 let params: WindowParams = parse_params(&request.params)?;
                 Ok(Self::NewWindow { cwd: params.cwd, shell_id: params.shell })
@@ -332,6 +349,7 @@ impl RuntimeCommand {
                     window_id: params.window_id,
                     pane_id: params.pane_id,
                     lines: params.lines,
+                    screen: params.screen,
                 })
             },
             "pane.procs" => {
@@ -398,83 +416,12 @@ impl RuntimeCommand {
             "agent.start" | "agent.fork" | "agent.prompt" | "agent.paste" | "agent.read" => {
                 agent_api::command_from_request(request)
             },
+            method if method.starts_with("git.") => super::git::command(request),
             method => Err(ApiError::new(
                 "method_not_found",
                 format!("runtime API method {method:?} does not exist"),
             )),
         }
-    }
-}
-
-/// Read the logical tail of the terminal model. The range is anchored at the
-/// buffer bottom, never at `display_offset`, so a user scrolling through
-/// history cannot change what an external agent observes.
-pub(crate) fn capture_terminal_tail<T: EventListener>(
-    term: &Term<T>,
-    window_id: u64,
-    pane_id: u64,
-    requested_lines: usize,
-    task_state: RuntimeTaskState,
-    exited: bool,
-    exit_reason: Option<String>,
-) -> RuntimePaneRead {
-    let columns = term.columns();
-    let screen_lines = term.screen_lines();
-    let total_lines = term.total_lines();
-    let history_available = total_lines.saturating_sub(screen_lines);
-    if columns == 0 || screen_lines == 0 || total_lines == 0 {
-        return RuntimePaneRead {
-            window_id,
-            pane_id,
-            text: String::new(),
-            requested_lines,
-            returned_lines: 0,
-            history_available,
-            truncated: false,
-            task_state,
-            exited,
-            exit_reason,
-        };
-    }
-
-    let mut returned_lines = requested_lines.min(total_lines);
-    let end = Point::new(Line(screen_lines as i32 - 1), Column(columns - 1));
-    let capture = |lines: usize| {
-        let start_line = screen_lines as i64 - lines as i64;
-        let start = Point::new(Line(start_line.max(-(history_available as i64)) as i32), Column(0));
-        term.bounds_to_string(start, end)
-    };
-    let mut text = capture(returned_lines);
-
-    // Reduce by whole terminal rows first, preserving exact returned_lines.
-    // Only a pathological single row can fall through to UTF-8 byte slicing.
-    while text.len() > MAX_READ_BYTES && returned_lines > 1 {
-        let estimated = ((returned_lines as u128 * MAX_READ_BYTES as u128) / text.len() as u128)
-            .clamp(1, (returned_lines - 1) as u128) as usize;
-        returned_lines = estimated;
-        text = capture(returned_lines);
-    }
-    let mut byte_truncated = false;
-    if text.len() > MAX_READ_BYTES {
-        let mut start = text.len() - MAX_READ_BYTES;
-        while !text.is_char_boundary(start) {
-            start += 1;
-        }
-        text = text[start..].to_owned();
-        byte_truncated = true;
-    }
-
-    RuntimePaneRead {
-        window_id,
-        pane_id,
-        text,
-        requested_lines,
-        returned_lines,
-        history_available,
-        truncated: returned_lines < total_lines || byte_truncated,
-        task_state,
-        exited,
-        exit_reason,
     }
 }
 

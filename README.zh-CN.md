@@ -171,17 +171,14 @@ cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
 
 ## 联系方式
 
-邮箱：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
 ## 致谢
 
-Pebrel 基于 [Alacritty](https://github.com/alacritty/alacritty)、
-[GPUI](https://github.com/zed-industries/zed) 与
-[gpui-component](https://github.com/longbridge/gpui-component) 构建。
-终端使用 Maple Mono 字体，原生公式使用 Latin Modern Math。
-上游版权与许可证声明保留在 `THIRD-PARTY-NOTICES` 和 `licenses/` 中。
+Pebrel 使用了第三方终端、界面和字体组件。组件来源、版权与许可证声明统一保留在
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) 和 [licenses/](licenses/) 中。
 
 ## 友情链接
 

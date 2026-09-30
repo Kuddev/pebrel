@@ -624,13 +624,35 @@ pub enum CompletionStyleName {
     #[default]
     Inline,
     Popup,
+    Hybrid,
 }
 
 impl CompletionStyleName {
+    pub const ALL: [Self; 3] = [Self::Inline, Self::Popup, Self::Hybrid];
+    pub const VALUES: [&'static str; 3] = ["inline", "popup", "hybrid"];
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Inline => Self::Popup,
+            Self::Popup => Self::Hybrid,
+            Self::Hybrid => Self::Inline,
+        }
+    }
+
+    /// 混合模式仅在用户请求后显示列表，候选生成仍复用已有两种呈现。
+    pub fn active_style(self, popup_requested: bool) -> Self {
+        match self {
+            Self::Hybrid if popup_requested => Self::Popup,
+            Self::Hybrid => Self::Inline,
+            style => style,
+        }
+    }
+
     pub fn from_settings(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "inline" | "ghost" => Some(Self::Inline),
             "popup" | "menu" | "list" => Some(Self::Popup),
+            "hybrid" => Some(Self::Hybrid),
             _ => None,
         }
     }
@@ -639,7 +661,36 @@ impl CompletionStyleName {
         match self {
             Self::Inline => "inline",
             Self::Popup => "popup",
+            Self::Hybrid => "hybrid",
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_mode_tests {
+    use super::*;
+
+    #[test]
+    fn modes_round_trip_preserve_other_settings_and_reset_to_inline() {
+        for mode in CompletionStyleName::ALL {
+            let input = "accept=right\nunknown=keep\ncompletion_style=inline\n";
+            let saved = apply_updates(input, &[("completion_style", mode.settings_value().into())]);
+            assert_eq!(
+                RuntimeSettings::from_raw(&RawSettings::from_text(&saved)).completion_style,
+                mode
+            );
+            assert!(saved.contains("unknown=keep"));
+            assert!(saved.contains("accept=right"));
+            assert_eq!(CompletionStyleName::from_settings(mode.settings_value()), Some(mode));
+        }
+        assert_eq!(CompletionStyleName::Hybrid.cycle(), CompletionStyleName::Inline);
+        assert_eq!(CompletionStyleName::from_settings("ghost"), Some(CompletionStyleName::Inline));
+        assert_eq!(CompletionStyleName::from_settings("list"), Some(CompletionStyleName::Popup));
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_text("completion_style=invalid"))
+                .completion_style,
+            CompletionStyleName::Inline
+        );
     }
 }
 
@@ -998,9 +1049,12 @@ pub struct RuntimeSettings {
     pub multiline_paste_confirm: bool,
     /// 标签页关闭按钮（叉号）是否渲染：关 = 不渲染，仍可用中键关闭。
     pub tab_close_visible: bool,
-    /// 终端网络代理：新会话启动时把当前系统代理写入 HTTP_PROXY/HTTPS_PROXY。
-    /// 上游默认关 (false) —— fork 侧另起本地 commit 翻成默认开。
+    /// 新建本地终端是否把 Windows 系统代理写入代理环境变量。自定义代理地址
+    /// 不看这个开关：网络页填了地址就会写入新终端。默认关。已打开的会话不改。
     pub terminal_proxy: bool,
+    /// Refresh Windows registry variables for new panes. Disable to inherit the
+    /// launching process environment, including its temporary PATH additions.
+    pub refresh_environment: bool,
     pub powerline: bool,
     /// 默认 shell 的原始 id（`shell=` 原文：powershell/bash/cmd/pwsh/WSL
     /// 发行版等）。解析归 shell 检测层，这里只做持久化往返。
@@ -1173,6 +1227,7 @@ impl RuntimeSettings {
             multiline_paste_confirm: raw.bool_on("multiline_paste_confirm").unwrap_or(true),
             tab_close_visible: raw.bool_on("tab_close_visible").unwrap_or(true),
             terminal_proxy: raw.bool_on("terminal_proxy").unwrap_or(false),
+            refresh_environment: raw.bool_on("refresh_environment").unwrap_or(true),
             powerline: raw.bool_on("powerline").unwrap_or(true),
             shell: raw.value("shell").or_else(|| raw.value("executor")).map(str::to_owned),
             startup_directory: raw.value("startup_directory").map(str::to_owned),
@@ -1323,6 +1378,20 @@ pub fn format_hex_rgb(rgb: Rgb8) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn environment_refresh_defaults_and_round_trips() {
+        for text in ["", "refresh_environment=\n", "refresh_environment=invalid\n"] {
+            assert!(RuntimeSettings::from_raw(&RawSettings::from_text(text)).refresh_environment);
+        }
+        let original = "theme=Nord\nrefresh_environment=1\ncustom=keep\n";
+        let disabled = apply_updates(original, &[("refresh_environment", "0".into())]);
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&disabled)).refresh_environment);
+        assert!(disabled.contains("custom=keep"));
+        let enabled = apply_updates(&disabled, &[("refresh_environment", "1".into())]);
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).refresh_environment);
+        assert_eq!(enabled, original);
+    }
+
     #[test]
     fn pane_preferences_round_trip_and_allow_a_missing_mouse_override() {
         let defaults = RuntimeSettings::from_raw(&RawSettings::default());

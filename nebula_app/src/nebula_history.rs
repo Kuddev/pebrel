@@ -66,11 +66,18 @@ struct HistoryIndex {
 
 impl HistoryIndex {
     fn hint(&self, prefix: &str) -> Option<&str> {
+        self.hint_with_cancel(prefix, &|| false)
+    }
+
+    fn hint_with_cancel(&self, prefix: &str, cancelled: &dyn Fn() -> bool) -> Option<&str> {
         if prefix.is_empty() {
             return None;
         }
         let mut best: Option<(usize, &str)> = None;
         for (cmd, &pos) in self.index.range(prefix.to_owned()..) {
+            if cancelled() {
+                return None;
+            }
             if !cmd.starts_with(prefix) {
                 break;
             }
@@ -168,6 +175,16 @@ impl NebulaHistory {
     /// Popup search retains the stored spelling and ranks ties by recency.
     /// Inline ghost suggestions remain literal suffixes of the current input.
     pub fn search(&self, scope: &HistoryScope, text: &str, limit: usize) -> Vec<&str> {
+        self.search_with_cancel(scope, text, limit, &|| false)
+    }
+
+    pub(crate) fn search_with_cancel(
+        &self,
+        scope: &HistoryScope,
+        text: &str,
+        limit: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Vec<&str> {
         if text.trim().is_empty() || limit == 0 {
             return Vec::new();
         }
@@ -177,6 +194,7 @@ impl NebulaHistory {
             .entries
             .iter()
             .enumerate()
+            .take_while(|_| !cancelled())
             .filter_map(|(index, command)| {
                 (command != text)
                     .then(|| query.score(command))
@@ -184,12 +202,24 @@ impl NebulaHistory {
                     .map(|score| (score, index, command.as_str()))
             })
             .collect();
+        if cancelled() {
+            return Vec::new();
+        }
         matches.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
         matches.into_iter().take(limit).map(|(_, _, command)| command).collect()
     }
 
     pub fn hint(&self, scope: &HistoryScope, prefix: &str) -> Option<&str> {
         self.pools.get(&scope.clone().normalized())?.hint(prefix)
+    }
+
+    pub(crate) fn hint_with_cancel(
+        &self,
+        scope: &HistoryScope,
+        prefix: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<&str> {
+        self.pools.get(&scope.clone().normalized())?.hint_with_cancel(prefix, cancelled)
     }
 
     pub fn hints(&self, scope: &HistoryScope, prefix: &str, limit: usize) -> Vec<(&str, &str)> {
@@ -310,6 +340,27 @@ pub(crate) fn record_category_file(line: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancellation_stops_history_matching_before_traversing_the_whole_pool() {
+        let scope = super::HistoryScope::Local;
+        let commands: Vec<_> = (0..100).map(|i| format!("git switch branch-{i}")).collect();
+        let history = hist(scope.clone(), &commands.iter().map(String::as_str).collect::<Vec<_>>());
+        for popup in [false, true] {
+            let checks = std::cell::Cell::new(0);
+            let cancelled = || {
+                checks.set(checks.get() + 1);
+                checks.get() >= 3
+            };
+            if popup {
+                assert!(history.search_with_cancel(&scope, "git", 8, &cancelled).is_empty());
+            } else {
+                assert!(history.hint_with_cancel(&scope, "git", &cancelled).is_none());
+            }
+            assert!(checks.get() <= 4, "old input must not scan the remaining history");
+        }
+        assert_eq!(history.hint(&scope, "git switch "), Some("branch-99"));
+    }
+
     #[test]
     fn popup_search_ignores_case_and_keeps_remote_history_scoped() {
         let local = super::HistoryScope::Local;

@@ -202,6 +202,7 @@ pub fn display_name_for_id(id: &str) -> String {
         "git-bash" | "gitbash" => "Git Bash".into(),
         "zsh" => "Zsh".into(),
         "fish" => "Fish".into(),
+        "zellij" => "Zellij".into(),
         "nu" => "Nushell".into(),
         _ => trimmed.to_owned(),
     }
@@ -258,7 +259,37 @@ fn detect_unix() -> Vec<DetectedShell> {
             push(PathBuf::from(line));
         }
     }
+    // Zellij 不是登录 shell，不会出现在 /etc/shells；复用现有启动身份，
+    // 只列出真实可执行文件，不通过运行 shell 或安装软件来探测。
+    let mut directories: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        directories.extend([PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
+    }
+    if let Some(program) = find_zellij(directories) {
+        push(program);
+    }
     shells
+}
+
+#[cfg(any(unix, test))]
+fn find_zellij(directories: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    directories.into_iter().filter(|dir| dir.is_absolute()).find_map(|dir| {
+        let program = dir.join("zellij");
+        let metadata = program.metadata().ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            if metadata.permissions().mode() & 0o111 == 0 {
+                return None;
+            }
+        }
+        Some(program)
+    })
 }
 
 #[cfg(not(windows))]
@@ -267,6 +298,7 @@ fn unix_shell_label(id: &str) -> String {
         "zsh" => "Zsh".to_owned(),
         "bash" => "Bash".to_owned(),
         "fish" => "Fish".to_owned(),
+        "zellij" => "Zellij".to_owned(),
         "nu" => "Nushell".to_owned(),
         "sh" => "sh".to_owned(),
         "dash" => "Dash".to_owned(),
@@ -810,6 +842,31 @@ fn find_wsl_distros() -> Vec<DetectedShell> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn zellij_discovery_requires_an_installed_program_and_preserves_argv() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(super::find_zellij([directory.path().to_path_buf()]).is_none());
+        let program = directory.path().join("zellij");
+        std::fs::write(&program, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(super::find_zellij([directory.path().to_path_buf()]).is_none());
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(super::find_zellij([directory.path().to_path_buf()]), Some(program.clone()));
+        let detected = super::DetectedShell {
+            id: "zellij".into(),
+            name: super::display_name_for_id("zellij"),
+            program: program.to_string_lossy().into_owned(),
+            args: crate::platform::shell::interactive_args("zellij"),
+        };
+        assert_eq!(detected.name, "Zellij");
+        assert_eq!(detected.shell().program(), program.to_str().unwrap());
+        assert!(detected.shell().args().is_empty(), "Zellij must not receive shell login flags");
+    }
+
     /// WSL 位置识别：发行版只认显式 `-d` / `--distribution`。裸 `wsl` 用的是
     /// 系统默认发行版，名字无从得知——必须放弃而不是猜，否则会拼出一条指向
     /// 错误发行版的路径。

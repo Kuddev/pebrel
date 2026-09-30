@@ -145,6 +145,7 @@ pub struct TextFileView {
     selected_heading: Option<usize>,
     all_selected: bool,
     revision: u64,
+    content_revision: u64,
     preview_task: Option<Task<()>>,
     _input_subscription: Subscription,
 }
@@ -207,6 +208,7 @@ impl TextFileView {
         });
         let subscription = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
             if matches!(event, InputEvent::Change) {
+                this.content_revision = this.content_revision.wrapping_add(1);
                 if this.markdown {
                     let input = this.input.read(cx);
                     this.history.record_rope(input.text());
@@ -273,6 +275,7 @@ impl TextFileView {
             selected_heading: None,
             all_selected: false,
             revision: 0,
+            content_revision: 0,
             preview_task: None,
             _input_subscription: subscription,
         };
@@ -293,6 +296,19 @@ impl TextFileView {
     }
     pub fn is_saving(&self) -> bool {
         self.saving
+    }
+
+    pub(super) fn reader_revision(&self) -> Option<u64> {
+        (!self.loading && self.document.is_some()).then_some(self.content_revision)
+    }
+
+    pub(super) fn reader_snapshot(&self, cx: &App) -> Option<(gpui_component::Rope, u64)> {
+        // Rope 克隆共享不可变节点；编码和分块放到后台，不在 UI 线程复制整篇文档。
+        self.reader_revision().map(|revision| (self.input.read(cx).text().clone(), revision))
+    }
+
+    pub(super) fn reader_is_remote(&self) -> bool {
+        self.source.is_remote()
     }
 
     pub(super) fn reader_focus(&self) -> bool {
@@ -377,6 +393,7 @@ impl TextFileView {
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = true;
+        self.content_revision = self.content_revision.wrapping_add(1);
         self.revision += 1;
         self.preview_task = None;
         let path = self.path.clone();

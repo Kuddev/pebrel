@@ -1,7 +1,9 @@
 use gpui::{App, AppContext as _, Context, Focusable as _, Window};
 use nebula_settings::TabsPositionName;
 
-use super::{NebulaWorkspace, SettingsPane, SidebarActivity, TabPresentation, windowing};
+use super::{
+    NebulaWorkspace, SettingsPane, SidebarActivity, TabPresentation, tab_reveal_instant, windowing,
+};
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod ui_tests;
@@ -40,12 +42,12 @@ impl NebulaWorkspace {
 
         self.settings_tab_open = true;
         self.settings_open = true;
-        self.sync_settings_layout();
+        self.sync_settings_layout(tab_reveal_instant(cx));
 
         self.settings_restore_side_panel_open = self.side_panel.open;
         if self.side_panel.open {
             self.side_panel.toggle(self.side_panel.view);
-            self.side_panel_anim_armed = true;
+            self.side_panel_anim_armed = !tab_reveal_instant(cx);
             self.file_tree_menu = None;
         }
 
@@ -77,7 +79,13 @@ impl NebulaWorkspace {
         }
     }
 
-    pub(super) fn sync_settings_layout(&mut self) {
+    /// `sidebar_slide_instant`: with the slide animation off, the main sidebar
+    /// still folds for the settings page — it just snaps instead of sliding.
+    pub(super) fn sync_settings_layout(&mut self, sidebar_slide_instant: bool) {
+        // 折叠状态未变化时也要清除旧动画，设置热切换才会立即生效。
+        if sidebar_slide_instant {
+            self.sidebar_fold_armed = false;
+        }
         let (collapsed, restore) = sidebar_state(
             self.settings_open,
             self.tabs_position,
@@ -87,7 +95,7 @@ impl NebulaWorkspace {
         self.settings_restore_sidebar_collapsed = restore;
         if self.sidebar_collapsed != collapsed {
             self.sidebar_collapsed = collapsed;
-            self.sidebar_fold_armed = true;
+            self.sidebar_fold_armed = !sidebar_slide_instant;
         }
         if self.settings_open && self.tabs_position == TabsPositionName::Top {
             self.top_tabs_scroll.scroll_to_item(self.tabs.len());
@@ -99,7 +107,7 @@ impl NebulaWorkspace {
             return;
         }
         self.settings_open = false;
-        self.sync_settings_layout();
+        self.sync_settings_layout(tab_reveal_instant(cx));
         let restore_panel = std::mem::take(&mut self.settings_restore_side_panel_open);
         if restore_panel && !self.side_panel.open {
             self.toggle_side_panel(self.side_panel.view, cx);

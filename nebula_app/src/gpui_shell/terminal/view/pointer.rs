@@ -329,6 +329,14 @@ impl TerminalView {
     /// 继续透传成一次命令执行。
     pub(super) fn accept_completion_popup(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(item) = suggest::popup_take(&mut self.suggest) else { return false };
+        self.accept_completion_item(item, cx)
+    }
+
+    pub(super) fn accept_completion_item(
+        &mut self,
+        item: crate::display::NebulaCompletionItem,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let insert = item.insert;
         self.completion_viewport.clear();
         let mut before = if self.suggest.screen_line.is_empty() {
@@ -739,8 +747,8 @@ impl TerminalView {
         true
     }
 
-    /// 右键行为：有选区直接复制，无选区直接粘贴。
-    /// Ctrl+右键保留选区菜单，供显式调用 Send to Chat。
+    /// Manual selection uses the context menu. Copy-on-select keeps quick
+    /// copy/paste, while Ctrl+right-click always requests the menu.
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -771,20 +779,17 @@ impl TerminalView {
             .as_ref()
             .and_then(|session| session.term.lock().selection_to_string())
             .filter(|text| !text.is_empty());
-        if let Some(text) = selected_text {
-            if event.modifiers.control {
-                cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
-                    position: event.position,
-                    text,
-                });
-            } else {
-                self.copy_selection(true, window, cx);
-            }
-            cx.stop_propagation();
+        if event.modifiers.control || !self.copy_on_select {
+            cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
+                position: event.position,
+                text: selected_text.unwrap_or_default(),
+            });
+        } else if selected_text.is_some() {
+            self.copy_selection(true, window, cx);
         } else {
             self.paste(window, cx);
-            cx.stop_propagation();
         }
+        cx.stop_propagation();
     }
 
     pub(super) fn on_right_up(
