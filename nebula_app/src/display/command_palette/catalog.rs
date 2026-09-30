@@ -151,15 +151,9 @@ pub(super) const ITEMS: &[PaletteItem] = &[
         action: PaletteAction::ToggleGhost,
     },
     PaletteItem {
-        label: "切换补全接受键",
+        label: "切换补齐模式",
         hint: "",
-        search: "切换补全接受键 cycle accept key completion jieshou",
-        action: PaletteAction::CycleAccept,
-    },
-    PaletteItem {
-        label: "切换补全样式（行内 / 弹窗）",
-        hint: "",
-        search: "切换补全样式 行内 弹窗 completion style inline popup list buquan yangshi",
+        search: "切换补齐模式 行内 列表 混合 completion mode style inline popup list hybrid buqi",
         action: PaletteAction::CycleCompletionStyle,
     },
     PaletteItem {

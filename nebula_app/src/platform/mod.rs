@@ -15,6 +15,7 @@ pub(crate) mod ai_session_identity;
 pub mod capabilities;
 pub mod credentials;
 pub mod dirs;
+pub(crate) mod distribution;
 pub(crate) mod elevation;
 pub(crate) mod environment;
 pub(crate) mod file_drag;
@@ -24,20 +25,31 @@ pub(crate) mod file_picker;
 pub(crate) mod file_preview;
 #[cfg(feature = "gpui-shell")]
 pub mod fonts;
+#[cfg(target_os = "linux")]
+pub(crate) mod global_shortcut;
 #[cfg(all(windows, feature = "gpui-shell"))]
 pub(crate) mod keyboard;
 pub(crate) mod local_paths;
 pub mod notifications;
 pub(crate) mod pi_session;
 pub(crate) mod process;
+mod process_output;
 pub(crate) mod process_snapshot;
+#[cfg(all(windows, feature = "gpui-shell"))]
+pub(crate) mod quick_window;
 pub mod shell;
 pub mod shell_integration;
+#[cfg(unix)]
+mod sound;
 pub(crate) mod ssh_agent;
 pub mod startup;
+#[cfg(unix)]
+pub(crate) mod tray_native;
 pub(crate) mod update_installation;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod window_chrome;
+#[cfg(all(unix, feature = "gpui-shell"))]
+pub(crate) mod window_visibility;
 pub(crate) mod wsl_hooks;
 
 pub use capabilities::CAPABILITIES;
@@ -53,8 +65,8 @@ pub use capabilities::CAPABILITIES;
 ///
 /// The actual playback is handed to a throwaway thread so a wedged audio
 /// service can never stall the winit event loop — the same discipline the
-/// toast path in [`crate::notify`] follows. No-op off Windows for now.
-pub fn beep() {
+/// toast path in [`crate::notify`] follows. False keeps the visual fallback.
+pub fn beep() -> bool {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
@@ -62,34 +74,41 @@ pub fn beep() {
     /// loop into a steady tick rather than a screech, short enough that two
     /// separate turns finishing back to back are still both heard.
     const COOLDOWN: Duration = Duration::from_millis(200);
-    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    static LAST: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
 
-    {
+    let mut last = {
         // A poisoned lock only means a prior beep thread panicked mid-check;
         // the state is a plain Option, safe to keep using.
-        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let last = LAST.lock().unwrap_or_else(|e| e.into_inner());
         match *last {
-            Some(at) if at.elapsed() < COOLDOWN => return,
-            _ => *last = Some(Instant::now()),
+            Some((at, accepted)) if at.elapsed() < COOLDOWN => return accepted,
+            _ => last,
         }
-    }
+    };
 
     #[cfg(windows)]
-    {
+    let accepted = {
         // MessageBeep(MB_OK) plays the user's configured "Default Beep"
         // sound and returns before it finishes, but we still isolate it on a
         // named worker thread: best-effort by contract, a failure or stall
         // costs the sound, never the terminal.
-        let _ = std::thread::Builder::new().name("nebula-beep".into()).spawn(|| {
-            // SAFETY: MessageBeep takes a plain sound-type flag and has no
-            // pointer arguments or shared state.
-            unsafe {
-                windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(
-                    windows_sys::Win32::UI::WindowsAndMessaging::MB_OK,
-                );
-            }
-        });
-    }
+        std::thread::Builder::new()
+            .name("nebula-beep".into())
+            .spawn(|| {
+                // SAFETY: MessageBeep takes a plain sound-type flag and has no
+                // pointer arguments or shared state.
+                unsafe {
+                    windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(
+                        windows_sys::Win32::UI::WindowsAndMessaging::MB_OK,
+                    );
+                }
+            })
+            .is_ok()
+    };
+    #[cfg(unix)]
+    let accepted = sound::play();
+    *last = Some((Instant::now(), accepted));
+    accepted
 }
 
 /// 运行平台。与「配置平台」分离：前者是我真正跑在哪，后者是

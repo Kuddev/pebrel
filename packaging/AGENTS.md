@@ -8,3 +8,4 @@
 - GitHub 推送使用普通非强制推送。发布后二进制版本标签不可因说明文档修订而移动。
 - 结束前核验 Release 标题、标签、正文、真实资产文件名、空资产标签、大小、SHA256、分支与版本标签指向；创建命令成功不等于发布核验完成。
 - 构建图、资产集合、更新协议或发布事务的非平凡变化写入 `architecture/notes/packaging/`。
+- Windows MSIX/Scoop 的更新归属及打包边界见 [`安装归属记录`](../architecture/notes/packaging/2026-09-28-windows-distribution-ownership.md)；SDK 打包成功不代表商店认证或渠道安装验收完成。

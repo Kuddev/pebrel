@@ -1,4 +1,8 @@
 {
+  "tray": {
+    "show": "顯示 Pebrel",
+    "quit": "結束"
+  },
   "notification": {
     "bell": "終端機響鈴",
     "turn_failed_reason": "請求失敗：{error}",
@@ -13,6 +17,15 @@
     "en_us": "English"
   },
   "settings": {
+    "completion": {
+      "mode": "補齊模式",
+      "cycle": "切換補齊模式",
+      "inline": "行內補齊",
+      "popup": "清單補齊",
+      "hybrid": "混合補齊",
+      "description": "選擇補齊模式，決定建議的顯示方式和接受鍵。",
+      "details": "行內模式：Tab 接受游標後的建議。清單模式：隨輸入顯示候選，方向鍵選擇、Tab 填入。混合模式：右方向鍵接受行內建議；Tab 展開清單，方向鍵選擇、Enter 填入。Esc 關閉清單。接受建議不會執行命令。切換後對已開啟終端立即生效。"
+    },
     "scrolling": {
       "history": "回捲行數",
       "history_description": "每個窗格保留的歷史行數。僅適用於新窗格。",

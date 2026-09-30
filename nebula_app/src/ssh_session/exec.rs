@@ -3,6 +3,35 @@ use super::{SessionError, lifecycle};
 use russh::{Channel, ChannelMsg, client};
 use std::time::Duration;
 
+pub(super) async fn capture_private(
+    channel: Channel<client::Msg>,
+    command: &str,
+) -> Result<Vec<u8>, SessionError> {
+    let mut channel = lifecycle::own_channel(channel);
+    channel.exec(true, command).await?;
+    let mut stdout = Vec::new();
+    let mut exit = None;
+    while let Some(message) = channel.wait().await {
+        match message {
+            ChannelMsg::Data { data } => {
+                if stdout.len().saturating_add(data.len()) > 8192 {
+                    return Err("private_exec_output_limit".into());
+                }
+                stdout.extend_from_slice(&data);
+            },
+            ChannelMsg::Failure => return Err("private_exec_rejected".into()),
+            ChannelMsg::ExitStatus { exit_status } => exit = Some(exit_status),
+            ChannelMsg::Close => break,
+            _ => {},
+        }
+    }
+    channel.finish().await?;
+    if exit != Some(0) {
+        return Err("private_exec_failed".into());
+    }
+    Ok(stdout)
+}
+
 pub(super) async fn capture(
     channel: Channel<client::Msg>,
     command: &str,

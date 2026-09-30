@@ -14,10 +14,25 @@ use gpui::{
 use crate::display::ui::widgets::{self, OverlayScrollbar};
 use crate::gpui_shell::prelude::*;
 
-use super::{NebulaWorkspace, TAB_ROW_H, TAB_ROW_PITCH};
+use nebula_settings::DensityName;
 
-/// 行间距（pitch − 行高）。旧壳 `gap = s(8)`。
-const TAB_ROW_GAP: f32 = TAB_ROW_PITCH - TAB_ROW_H;
+use super::NebulaWorkspace;
+
+pub(super) fn tab_row_height(density: DensityName) -> f32 {
+    match density {
+        DensityName::Standard => 34.0,
+        DensityName::Compact => crate::display::ui::tokens::control::MIN_HIT_TARGET,
+    }
+}
+
+pub(super) fn tab_row_gap(density: DensityName) -> f32 {
+    use crate::display::ui::tokens::space;
+    match density {
+        DensityName::Standard => space::XS,
+        DensityName::Compact => space::XXS,
+    }
+}
+
 /// 旧壳 `tab_right_pad`：给覆盖式滚动条留的恒定沟槽，出现与否都不改行宽。
 pub(super) const TAB_SCROLL_GUTTER: f32 = 9.0;
 
@@ -97,9 +112,18 @@ struct TabsWindow {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn tab_row_pitch(&self) -> f32 {
+        tab_row_height(self.density) + tab_row_gap(self.density)
+    }
+
     fn tabs_window(&self) -> TabsWindow {
         let want = self.tabs.len();
-        let show = visible_count(want, self.tabs_viewport_h, TAB_ROW_PITCH, TAB_ROW_GAP);
+        let show = visible_count(
+            want,
+            self.tabs_viewport_h,
+            self.tab_row_pitch(),
+            tab_row_gap(self.density),
+        );
         let max = max_scroll(want, show);
         let scroll = clamp_scroll(self.tabs_scroll, max);
         TabsWindow { scroll, show, max, want }
@@ -137,15 +161,16 @@ impl NebulaWorkspace {
         if window.show == 0 || window.want <= window.show {
             return None;
         }
-        let viewport = rows_h(window.show, TAB_ROW_PITCH, TAB_ROW_GAP).max(1.0);
-        let content = rows_h(window.want, TAB_ROW_PITCH, TAB_ROW_GAP);
+        let viewport =
+            rows_h(window.show, self.tab_row_pitch(), tab_row_gap(self.density)).max(1.0);
+        let content = rows_h(window.want, self.tab_row_pitch(), tab_row_gap(self.density));
         let width = self.tabs_list_width.max(1.0);
         let height = self.tabs_viewport_h.max(viewport);
         widgets::overlay_scrollbar(
             (0.0, 0.0, width, height),
             viewport,
             content,
-            window.scroll as f32 * TAB_ROW_PITCH,
+            window.scroll as f32 * self.tab_row_pitch(),
             1.0,
         )
     }
@@ -191,7 +216,7 @@ impl NebulaWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let delta_y = f32::from(event.delta.pixel_delta(px(TAB_ROW_PITCH)).y);
+        let delta_y = f32::from(event.delta.pixel_delta(px(self.tab_row_pitch())).y);
         let rows = wheel_rows(delta_y);
         if rows == 0 {
             return;
@@ -254,7 +279,7 @@ impl NebulaWorkspace {
                 .absolute()
                 .size_full(),
             )
-            .child(v_flex().w_full().gap_2().children(items))
+            .child(v_flex().w_full().gap(px(tab_row_gap(self.density))).children(items))
             .when_some(bar.filter(|_| show_thumb), |list, bar| {
                 list.child(
                     div()
@@ -304,7 +329,10 @@ impl NebulaWorkspace {
         }
         // 折叠中/已折叠：裁剪高度不是 `tabs_avail`。写回去会让
         // `visible_count` 按 20–40px 算出 0/1 行，展开后整列锁死。
-        if !self.tabs_section_collapsed && !self.tabs_fold_frozen && h >= TAB_ROW_H {
+        if !self.tabs_section_collapsed
+            && !self.tabs_fold_frozen
+            && h >= tab_row_height(self.density)
+        {
             self.tabs_viewport_h = h;
         }
         self.tabs_list_width = w;
@@ -348,6 +376,24 @@ mod tests {
         apply_wheel, clamp_scroll, index_visible, max_scroll, reveal_index, rows_h, visible_count,
         wheel_rows,
     };
+
+    #[test]
+    fn compact_rows_fit_more_tabs_without_shrinking_hit_targets() {
+        use super::{DensityName, tab_row_gap, tab_row_height};
+        for (density, expected_height, expected_show) in
+            [(DensityName::Standard, 34.0, 2), (DensityName::Compact, 32.0, 3)]
+        {
+            let height = tab_row_height(density);
+            let gap = tab_row_gap(density);
+            let pitch = height + gap;
+            assert_eq!(height, expected_height);
+            assert!(height >= crate::display::ui::tokens::control::MIN_HIT_TARGET);
+            assert_eq!(rows_h(1, pitch, gap), height);
+            let show = visible_count(10, 104.0, pitch, gap);
+            assert_eq!(show, expected_show);
+            assert_eq!(reveal_index(9, 0, show), max_scroll(10, show));
+        }
+    }
 
     const PITCH: f32 = 42.0;
     const GAP: f32 = 8.0;

@@ -72,6 +72,7 @@ pub(crate) fn nebula_clear_line(state: &mut NebulaPaneState) {
     state.line_buf.clear();
     state.screen_line.clear();
     state.completion_suppressed_line = None;
+    state.completion_popup_requested = false;
     state.clear_completion_hints();
 }
 

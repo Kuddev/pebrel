@@ -1,115 +1,146 @@
-//! Backup operations and view-owned state; storage and encryption have one authority.
+//! 备份设置的草稿与操作生命周期；文件、协议和加密规则归业务层所有。
 use super::*;
-use crate::backup_remote::{self as remote, BackupProtocol, preferences::ConfigWriter};
+use crate::backup_remote::{self as remote, BackupProtocol, BackupRemoteConfig, Snapshot};
+use crate::encrypted_backup::{
+    self as archive, BackupArchive, BackupCategory, BackupSelection, CategorySummary,
+};
 use crate::i18n::Message;
+use zeroize::Zeroizing;
 
+mod drawer;
+mod form;
+mod operations;
+mod setup;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 mod view;
 
 #[derive(Default)]
-pub(super) struct BackupUiState {
-    initialized: bool,
-    configuration: bool,
-    scope_open: bool,
-    writer: ConfigWriter,
-    save_revision: u64,
-    save_result: Option<Result<(), String>>,
-    save_watch: Option<Task<()>>,
-    list_revision: u64,
-    listing: bool,
-    snapshots: Vec<String>,
-    checked: bool,
-    list_error: Option<String>,
-    secret_ready: Option<bool>,
-    secret_busy: bool,
-    secret_revision: u64,
+struct BackupPassword(Option<Zeroizing<String>>);
+impl gpui::Global for BackupPassword {}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackupSheet {
+    Storage,
+    Backup,
+    Export,
+    Restore,
+    Password,
 }
 
+#[derive(Clone)]
 enum RestoreSource {
     File(std::path::PathBuf),
-    Remote(Option<String>),
+    Remote(String),
+}
+
+#[derive(Default)]
+pub(super) struct BackupUiState {
+    initialized: bool,
+    step: usize,
+    draft: BackupRemoteConfig,
+    tested: bool,
+    draft_snapshots: Vec<Snapshot>,
+    snapshots: Vec<Snapshot>,
+    listing: bool,
+    list_error: Option<String>,
+    summary: Vec<CategorySummary>,
+    summary_loading: bool,
+    summary_error: Option<String>,
+    confirm: Option<Entity<InputState>>,
+    sheet: Option<BackupSheet>,
+    sheet_focus: Option<FocusHandle>,
+    previous_focus: Option<FocusHandle>,
+    source: Option<RestoreSource>,
+    opened: Option<BackupArchive>,
+    restore_pass: Option<Zeroizing<String>>,
+    undo: Option<(archive::recovery::RestorePoint, Zeroizing<String>)>,
+    known: std::collections::HashMap<String, (usize, String)>,
+    task: Option<Task<()>>,
+}
+
+fn recommended() -> BackupSelection {
+    BackupSelection::from_categories([
+        BackupCategory::Appearance,
+        BackupCategory::Config,
+        BackupCategory::Assistant,
+        BackupCategory::Ssh,
+        BackupCategory::Session,
+    ])
 }
 
 impl SettingsPane {
-    fn initialize_backup(&mut self, cx: &mut Context<Self>) {
+    fn initialize_backup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.backup_ui.initialized {
             return;
         }
         self.backup_ui.initialized = true;
-        for input in self.backup_remote_inputs.clone() {
+        self.backup_ui.step = 1;
+        self.backup_ui.confirm = Some(cx.new(|cx| InputState::new(window, cx).masked(true)));
+        self.backup_ui.sheet_focus = Some(cx.focus_handle());
+        self.backup_ui.draft = self.backup_remote.clone();
+        if self.backup_remote.protocol == BackupProtocol::Off {
+            self.backup_selection = recommended();
+            self.backup_ui.draft.protocol = BackupProtocol::WebDav;
+            self.backup_ui.draft.webdav_url = "https://dav.jianguoyun.com/dav/pebrel_backup".into();
+        }
+        self.fill_backup_fields(window, cx);
+        for input in self
+            .backup_remote_inputs
+            .iter()
+            .chain([&self.backup_secret_input])
+            .cloned()
+            .collect::<Vec<_>>()
+        {
             self._subscriptions.push(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
-                    let old = this.backup_remote.clone();
-                    this.read_backup_fields(cx);
-                    if this.backup_remote != old {
-                        this.queue_backup_save(cx);
-                    }
+                    this.backup_ui.tested = false;
+                    cx.notify();
                 }
             }));
         }
-        self.read_backup_secret_status(cx);
-        self.backup_ui.configuration = self.backup_remote.protocol == BackupProtocol::Off;
+        if self.backup_remote.protocol != BackupProtocol::Off {
+            self.refresh_backup_snapshots(cx);
+        }
     }
 
     fn read_backup_fields(&mut self, cx: &App) {
         for (index, input) in self.backup_remote_inputs.iter().enumerate() {
-            self.backup_remote.set_slot(index, input.read(cx).value().trim().to_owned());
+            self.backup_ui.draft.set_slot(index, input.read(cx).value().trim().to_owned());
         }
-        self.backup_remote.selection = self.backup_selection;
     }
 
-    fn queue_backup_save(&mut self, cx: &mut Context<Self>) {
-        self.backup_remote.selection = self.backup_selection;
-        self.backup_ui.checked = false;
-        self.backup_ui.snapshots.clear();
-        self.backup_ui.list_error = None;
-        self.backup_ui.list_revision = self.backup_ui.list_revision.wrapping_add(1);
-        self.backup_ui.listing = false;
-        self.backup_ui.save_result = None;
-        let writer = self.backup_ui.writer.clone();
-        let revision = writer.submit(self.backup_remote.clone());
-        self.backup_ui.save_revision = revision;
-        // The observer can stop with the view; the writer still persists the last edit.
-        self.backup_ui.save_watch = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_millis(100)).await;
-                if let Some(result) = writer.result(revision) {
-                    let _ = this.update(cx, |this, cx| {
-                        if this.backup_ui.save_revision == revision {
-                            this.backup_ui.save_result = Some(result);
-                            cx.notify();
-                        }
-                    });
-                    break;
-                }
-                if this.upgrade().is_none() {
-                    break;
-                }
-            }
-        }));
-        cx.notify();
-    }
-
-    fn read_backup_secret_status(&mut self, cx: &mut Context<Self>) {
-        let protocol = self.backup_remote.protocol;
-        self.backup_ui.secret_revision = self.backup_ui.secret_revision.wrapping_add(1);
-        let revision = self.backup_ui.secret_revision;
-        self.backup_ui.secret_ready = None;
-        let task =
-            cx.background_executor().spawn(async move { remote::protocol_secret_set(protocol) });
-        cx.spawn(async move |this, cx| {
-            let ready = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.backup_ui.secret_revision == revision
-                    && this.backup_remote.protocol == protocol
-                {
-                    this.backup_ui.secret_ready = Some(ready);
-                }
-                cx.notify();
+    fn fill_backup_fields(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let fields = form::storage_fields(&self.backup_ui.draft);
+        for (index, input) in self.backup_remote_inputs.iter().enumerate() {
+            let value = self.backup_ui.draft.slot(index).unwrap_or_default().to_owned();
+            let placeholder = fields
+                .get(index)
+                .filter(|field| !field.secret)
+                .and_then(|field| field.placeholder)
+                .map(|id| language.text(id))
+                .unwrap_or("");
+            input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx);
+                input.set_value(value, window, cx);
             });
-        })
-        .detach();
+        }
+        let secret_placeholder = fields
+            .iter()
+            .find(|field| field.secret)
+            .and_then(|field| field.placeholder)
+            .map(|id| language.text(id))
+            .unwrap_or("");
+        self.backup_secret_input
+            .update(cx, |input, cx| input.set_placeholder(secret_placeholder, window, cx));
+        self.backup_pass_input.update(cx, |input, cx| {
+            input.set_placeholder(
+                language.text(Message::BackupFlowNewPasswordPlaceholder),
+                window,
+                cx,
+            )
+        });
     }
 
     fn select_backup_protocol(
@@ -119,62 +150,55 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.backup_busy || self.backup_ui.secret_busy {
+        if self.backup_busy {
             return;
         }
         self.read_backup_fields(cx);
-        self.backup_remote.protocol = protocol;
+        self.backup_ui.draft.protocol = protocol;
         if nutstore {
-            self.backup_remote.webdav_url = "https://dav.jianguoyun.com/dav/pebrel_backup".into();
+            self.backup_ui.draft.webdav_url = "https://dav.jianguoyun.com/dav/pebrel_backup".into();
+        } else if protocol == BackupProtocol::WebDav
+            && self.backup_ui.draft.webdav_url.starts_with("https://dav.jianguoyun.com/")
+        {
+            self.backup_ui.draft.webdav_url.clear();
         }
-        for (index, input) in self.backup_remote_inputs.iter().enumerate() {
-            let value = self.backup_remote.slot(index).unwrap_or_default().to_owned();
-            input.update(cx, |input, cx| input.set_value(value, window, cx));
+        if protocol == BackupProtocol::S3 && self.backup_ui.draft.s3_region.is_empty() {
+            self.backup_ui.draft.s3_region = "auto".into();
         }
+        self.fill_backup_fields(window, cx);
         self.backup_secret_input.update(cx, |input, cx| input.set_value("", window, cx));
-        self.queue_backup_save(cx);
-        self.read_backup_secret_status(cx);
+        self.backup_ui.tested = false;
+        self.backup_status = None;
+        cx.notify();
     }
 
-    fn store_remote_secret(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.backup_ui.secret_busy || self.backup_busy {
-            return;
-        }
-        let secret = zeroize::Zeroizing::new(self.backup_secret_input.read(cx).value().to_string());
-        if secret.is_empty() {
-            self.backup_status = Some(BackupStatus::CredentialEmpty);
-            cx.notify();
-            return;
-        }
-        let config = self.backup_remote.clone();
-        self.backup_ui.secret_busy = true;
-        self.backup_ui.secret_revision = self.backup_ui.secret_revision.wrapping_add(1);
-        let task = cx.background_executor().spawn(async move {
-            match config.protocol {
-                BackupProtocol::WebDav => {
-                    remote::store_webdav_password(&config.webdav_username, &secret)
-                },
-                BackupProtocol::S3 => remote::store_s3_secret(&config.s3_access_key, &secret),
-                _ => Err("No separate credential is required".into()),
-            }
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
+    fn backup_task<T: Send + 'static>(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        work: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+        done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        self.backup_seq = self.backup_seq.wrapping_add(1);
+        let seq = self.backup_seq;
+        self.backup_busy = true;
+        self.backup_status = Some(BackupStatus::Processing);
+        let work = cx.background_executor().spawn(work);
+        self.backup_ui.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.backup_ui.secret_busy = false;
+                if seq != this.backup_seq {
+                    return;
+                }
+                this.backup_busy = false;
+                this.backup_status = None;
                 match result {
-                    Ok(()) => {
-                        this.backup_secret_input
-                            .update(cx, |input, cx| input.set_value("", window, cx));
-                        this.backup_ui.secret_ready = Some(true);
-                        this.backup_status = Some(BackupStatus::CredentialSaved);
-                    },
+                    Ok(value) => done(this, value, window, cx),
                     Err(error) => this.backup_status = Some(BackupStatus::Error(error)),
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        }));
         cx.notify();
     }
 
@@ -182,213 +206,195 @@ impl SettingsPane {
         if self.backup_ui.listing || self.backup_remote.protocol == BackupProtocol::Off {
             return;
         }
-        self.backup_ui.list_revision = self.backup_ui.list_revision.wrapping_add(1);
-        let revision = self.backup_ui.list_revision;
         let config = self.backup_remote.clone();
+        let original = config.clone();
         self.backup_ui.listing = true;
         self.backup_ui.list_error = None;
-        let task = cx.background_executor().spawn(async move { remote::snapshots(&config) });
+        let task =
+            cx.background_executor().spawn(async move { remote::snapshot_details(&config, None) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.backup_ui.list_revision != revision {
+                this.backup_ui.listing = false;
+                if this.backup_remote != original {
+                    this.refresh_backup_snapshots(cx);
                     return;
                 }
-                this.backup_ui.listing = false;
-                this.backup_ui.checked = result.is_ok();
                 match result {
-                    Ok(names) => this.backup_ui.snapshots = names,
-                    Err(error) => {
-                        this.backup_ui.snapshots.clear();
-                        this.backup_ui.list_error = Some(error);
-                    },
+                    Ok(entries) => this.backup_ui.snapshots = entries,
+                    Err(error) => this.backup_ui.list_error = Some(error),
                 }
                 cx.notify();
             });
         })
         .detach();
-        cx.notify();
     }
 
-    fn backup_passphrase(&mut self, cx: &mut Context<Self>) -> Option<zeroize::Zeroizing<String>> {
-        let pass = self.backup_pass_input.read(cx).value().to_string();
-        if pass.chars().count() < 8 {
-            self.backup_status = Some(BackupStatus::PassphraseTooShort);
-            self.backup_ui.configuration = true;
-            cx.notify();
-            return None;
+    fn load_backup_summary(&mut self, cx: &mut Context<Self>) {
+        if self.backup_ui.summary_loading {
+            return;
         }
-        Some(zeroize::Zeroizing::new(pass))
-    }
-
-    fn backup_run_async(
-        &mut self,
-        task: impl std::future::Future<Output = Result<BackupCompletion, String>> + Send + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        self.backup_seq = self.backup_seq.wrapping_add(1);
-        let seq = self.backup_seq;
-        self.backup_busy = true;
-        self.backup_status = Some(BackupStatus::Processing);
-        let task = cx.background_executor().spawn(task);
+        self.backup_ui.summary_loading = true;
+        self.backup_ui.summary_error = None;
+        let all = BackupSelection {
+            appearance: true,
+            config: true,
+            ssh: true,
+            sync: true,
+            assistant: true,
+            session: true,
+            directory_history: true,
+            command_history: true,
+            fonts: true,
+        };
+        let task = cx
+            .background_executor()
+            .spawn(async move { archive::collect(all).map(|a| a.summary()) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |pane, cx| {
-                if seq != pane.backup_seq {
-                    return;
-                }
-                pane.backup_busy = false;
-                if matches!(result, Ok(BackupCompletion::Restored | BackupCompletion::Pulled(_))) {
-                    pane.reload_after_restore(cx);
-                }
-                let refresh =
-                    matches!(result, Ok(BackupCompletion::Pushed(_) | BackupCompletion::Pulled(_)));
-                pane.backup_status = Some(match result {
-                    Ok(completion) => BackupStatus::Completed(completion),
-                    Err(error) => BackupStatus::Error(error),
-                });
-                if refresh {
-                    pane.refresh_backup_snapshots(cx);
+            let _ = this.update(cx, |this, cx| {
+                this.backup_ui.summary_loading = false;
+                match result {
+                    Ok(summary) => this.backup_ui.summary = summary,
+                    Err(error) => this.backup_ui.summary_error = Some(error),
                 }
                 cx.notify();
             });
         })
         .detach();
-        cx.notify();
     }
 
-    fn push_remote(&mut self, cx: &mut Context<Self>) {
+    fn check_backup_connection(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.backup_busy {
             return;
         }
-        let Some(pass) = self.backup_passphrase(cx) else { return };
-        if self.backup_selection.is_empty() {
-            self.backup_status = Some(BackupStatus::SelectionRequired);
-            cx.notify();
-            return;
-        }
-        let selection = self.backup_selection;
-        let config = self.backup_remote.clone();
-        self.backup_run_async(
-            async move {
-                let archive = crate::encrypted_backup::collect(selection)?;
-                let packet = crate::encrypted_backup::seal(&archive, &pass)?;
-                remote::push_to(&config, &packet).map(BackupCompletion::Pushed)
-            },
+        self.read_backup_fields(cx);
+        let config = self.backup_ui.draft.clone();
+        let secret = Zeroizing::new(self.backup_secret_input.read(cx).value().to_string());
+        self.backup_ui.tested = false;
+        self.backup_task(
+            window,
             cx,
+            async move {
+                remote::snapshot_details(&config, (!secret.is_empty()).then_some(secret.as_str()))
+            },
+            move |this, entries, window, cx| {
+                this.backup_ui.tested = true;
+                this.backup_ui.draft_snapshots = entries;
+                if save {
+                    this.save_backup_storage(false, window, cx);
+                } else if this.backup_ui.sheet.is_none() {
+                    this.backup_ui.step = 3;
+                    this.backup_pass_input.update(cx, |input, cx| input.focus(window, cx));
+                }
+            },
         );
     }
 
-    fn confirm_backup_restore(
+    fn next_backup_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.backup_busy {
+            return;
+        }
+        self.backup_status = None;
+        match self.backup_ui.step {
+            1 => {
+                self.backup_ui.step = 2;
+                self.backup_remote_inputs[0].update(cx, |input, cx| input.focus(window, cx));
+            },
+            2 => self.check_backup_connection(false, window, cx),
+            3 => {
+                let pass = self.backup_pass_input.read(cx).value();
+                let confirm = self.backup_ui.confirm.as_ref().unwrap().read(cx).value();
+                if pass.chars().count() < 8 {
+                    self.backup_status = Some(BackupStatus::PassphraseTooShort);
+                } else if pass != confirm {
+                    self.backup_status = Some(BackupStatus::Error(
+                        crate::gpui_shell::config::ui_language(cx)
+                            .text(Message::BackupFlowMismatch)
+                            .into(),
+                    ));
+                } else {
+                    cx.set_global(BackupPassword(Some(Zeroizing::new(pass.to_string()))));
+                    self.backup_ui.step = 4;
+                    self.load_backup_summary(cx);
+                }
+            },
+            _ => self.save_backup_storage(true, window, cx),
+        }
+        cx.notify();
+    }
+
+    fn save_backup_storage(
         &mut self,
-        source: RestoreSource,
+        backup_now: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.backup_busy {
+        if self.backup_busy || self.backup_selection.is_empty() {
             return;
         }
-        let Some(pass) = self.backup_passphrase(cx) else { return };
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
-            language.text(Message::CloudRestore),
-            Some(language.text(Message::CloudRestoreWarning)),
-            &[language.text(Message::CommonCancel), language.text(Message::CloudRestore)],
+        if !self.backup_ui.tested {
+            self.check_backup_connection(true, window, cx);
+            return;
+        }
+        self.read_backup_fields(cx);
+        let mut config = self.backup_ui.draft.clone();
+        config.selection = self.backup_selection;
+        let secret = Zeroizing::new(self.backup_secret_input.read(cx).value().to_string());
+        self.backup_task(
+            window,
             cx,
-        );
-        let config = self.backup_remote.clone();
-        self.backup_busy = true;
-        cx.spawn(async move |this, cx| {
-            let accepted = matches!(prompt.await, Ok(1));
-            let _ = this.update(cx, |pane, cx| {
-                pane.backup_busy = false;
-                if accepted {
-                    pane.backup_run_async(
-                        async move {
-                            let (name, packet) = match source {
-                                RestoreSource::File(path) => {
-                                    (None, std::fs::read(path).map_err(|error| error.to_string())?)
-                                },
-                                RestoreSource::Remote(name) => {
-                                    let (name, packet) =
-                                        remote::pull_from(&config, name.as_deref())?;
-                                    (Some(name), packet)
-                                },
-                            };
-                            crate::encrypted_backup::restore(&packet, &pass)?;
-                            Ok(name
-                                .map(BackupCompletion::Pulled)
-                                .unwrap_or(BackupCompletion::Restored))
+            async move {
+                if !secret.is_empty() {
+                    match config.protocol {
+                        BackupProtocol::WebDav => {
+                            remote::store_webdav_password(&config.webdav_username, &secret)?
                         },
-                        cx,
-                    );
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn export_backup(&mut self, cx: &mut Context<Self>) {
-        if self.backup_busy {
-            return;
-        }
-        let Some(pass) = self.backup_passphrase(cx) else { return };
-        let selection = self.backup_selection;
-        if selection.is_empty() {
-            self.backup_status = Some(BackupStatus::SelectionRequired);
-            cx.notify();
-            return;
-        }
-        let picked = cx
-            .prompt_for_new_path(&crate::display::nebula_data_dir(), Some("pebrel.pebrel-backup"));
-        self.backup_busy = true;
-        cx.spawn(async move |this, cx| {
-            let path = picked.await;
-            let _ = this.update(cx, |pane, cx| {
-                pane.backup_busy = false;
-                if let Ok(Ok(Some(path))) = path {
-                    pane.backup_run_async(
-                        async move {
-                            let archive = crate::encrypted_backup::collect(selection)?;
-                            let packet = crate::encrypted_backup::seal(&archive, &pass)?;
-                            std::fs::write(&path, packet).map_err(|error| error.to_string())?;
-                            Ok(BackupCompletion::Exported(path))
+                        BackupProtocol::S3 => {
+                            remote::store_s3_secret(&config.s3_access_key, &secret)?
                         },
-                        cx,
-                    );
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn restore_backup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.backup_busy {
-            return;
-        }
-        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
-        self.backup_busy = true;
-        cx.spawn_in(window, async move |this, cx| {
-            let paths = picked.await;
-            let _ = this.update_in(cx, |pane, window, cx| {
-                pane.backup_busy = false;
-                if let Ok(Ok(Some(paths))) = paths {
-                    if let Some(path) = paths.into_iter().next() {
-                        pane.confirm_backup_restore(RestoreSource::File(path), window, cx);
+                        _ => {},
                     }
                 }
-                cx.notify();
-            });
-        })
-        .detach();
+                config.save()?;
+                Ok(config)
+            },
+            move |this, config, window, cx| {
+                this.backup_remote = config;
+                this.backup_ui.snapshots = std::mem::take(&mut this.backup_ui.draft_snapshots);
+                this.backup_ui.list_error = None;
+                this.close_backup_sheet(window, cx);
+                this.clear_backup_inputs(window, cx);
+                this.backup_status = Some(BackupStatus::RemoteConfigSaved);
+                if backup_now {
+                    this.perform_backup(false, window, cx);
+                }
+            },
+        );
+    }
+
+    fn backup_passphrase(&mut self, cx: &mut Context<Self>) -> Option<Zeroizing<String>> {
+        let input = self.backup_pass_input.read(cx).value();
+        let pass = if input.is_empty() {
+            cx.try_global::<BackupPassword>().and_then(|p| p.0.clone())
+        } else {
+            Some(Zeroizing::new(input.to_string()))
+        };
+        if pass.as_ref().is_none_or(|p| p.chars().count() < 8) {
+            self.backup_status = Some(BackupStatus::PassphraseTooShort);
+            cx.notify();
+            return None;
+        }
+        pass
+    }
+
+    fn clear_backup_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
+        for input in [&self.backup_pass_input, &self.backup_secret_input]
+            .into_iter()
+            .chain(self.backup_ui.confirm.iter())
+        {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
     }
 
     pub(super) fn reload_after_restore(&mut self, cx: &mut Context<Self>) {

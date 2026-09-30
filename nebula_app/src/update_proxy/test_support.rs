@@ -117,6 +117,16 @@ fn read_headers(reader: &mut BufReader<TcpStream>) -> String {
         let mut line = String::new();
         assert!(reader.read_line(&mut line).unwrap() > 0, "unexpected fixture EOF");
         if line == "\r\n" {
+            // PROPFIND 等请求携带正文；未读完就关闭连接会在 Windows 上触发 TCP reset。
+            let length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .map(|(_, value)| value.trim().parse::<u64>().unwrap())
+                .unwrap_or(0);
+            assert!(length <= 128 * 1024, "fixture request body is too large");
+            let read = std::io::copy(&mut reader.take(length), &mut std::io::sink()).unwrap();
+            assert_eq!(read, length, "unexpected fixture body EOF");
             return headers;
         }
         headers.push_str(&line);

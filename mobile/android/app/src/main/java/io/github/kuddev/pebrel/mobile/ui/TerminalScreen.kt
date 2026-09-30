@@ -1,0 +1,286 @@
+package io.github.kuddev.pebrel.mobile.ui
+
+import android.view.KeyEvent
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import io.github.kuddev.pebrel.mobile.R
+import io.github.kuddev.pebrel.mobile.connection.DesktopPane
+import io.github.kuddev.pebrel.mobile.connection.DesktopTab
+import io.github.kuddev.pebrel.mobile.connection.DesktopReconnect
+import io.github.kuddev.pebrel.mobile.connection.SshSessionMode
+import io.github.kuddev.pebrel.mobile.session.DesktopWorkspace
+import io.github.kuddev.pebrel.mobile.session.LocalSession
+import io.github.kuddev.pebrel.mobile.session.SessionRepository
+import kotlinx.coroutines.delay
+
+@Composable
+fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit,
+                        onRetry: () -> Unit, onEdit: () -> Unit, onClose: () -> Unit, onFiles: (() -> Unit)? = null) {
+    val prefs by repository.display.state.collectAsStateWithLifecycle()
+    var direct by rememberSaveable(session.id, prefs.directInput) { mutableStateOf(prefs.directInput) }
+    val attachments = rememberTerminalAttachmentAction(session, repository) { direct = false }
+    var closing by remember { mutableStateOf(false) }
+    var focused by rememberSaveable(session.id) { mutableStateOf(false) }
+    var keyboardRequest by remember(session.id) { mutableIntStateOf(0) }
+    val trust by repository.trust.collectAsStateWithLifecycle()
+    if (!focused) TerminalHeader(session.title,
+        if (session.source == "Local") stringResource(R.string.local_device) else session.source,
+        session.status, onBack, onSessions, { closing = true }, onFiles = onFiles)
+    Column(Modifier.fillMaxSize()) {
+        if (session.status == "ended" || (session.status == "failed" && session.hasConnected)) TerminalDisconnected(session, if (session.host != null) onRetry else null)
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            key(session.id) {
+                TerminalSurface(session, repository, Modifier.fillMaxSize(), direct, prefs.fontSize, keyboardRequest)
+            }
+            if (session.host != null && (session.status == "connecting" || (session.status == "failed" && !session.hasConnected))) {
+                SshConnectionStatus(session, onClose, onRetry, onEdit,
+                    trust = trust?.takeIf { it.ownerId == session.id }, onTrust = repository::answerTrust)
+            }
+        }
+        CommandComposer(session.id, repository, session.status == "ready", direct, {
+            direct = it
+            if (it) keyboardRequest++
+        }, { label ->
+            val key = when (label) {
+                "Ctrl+B" -> KeyEvent.KEYCODE_B
+                "Ctrl+C" -> KeyEvent.KEYCODE_C
+                "Esc" -> KeyEvent.KEYCODE_ESCAPE
+                "Tab", "Shift+Tab" -> KeyEvent.KEYCODE_TAB
+                "←" -> KeyEvent.KEYCODE_DPAD_LEFT
+                "→" -> KeyEvent.KEYCODE_DPAD_RIGHT
+                "↑" -> KeyEvent.KEYCODE_DPAD_UP
+                else -> KeyEvent.KEYCODE_DPAD_DOWN
+            }
+            val control = label in setOf("Ctrl+C", "Ctrl+B")
+            val letter = if (control) label.last().lowercase() else ""
+            val modifiers = if (control) 2 else if (label == "Shift+Tab") 1 else 0
+            if (!session.terminal.key(key, modifiers,
+                    text = letter, unshifted = letter.firstOrNull()?.code ?: 0)) repository.error.value = "input_rejected"
+        }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused },
+            onAttach = attachments.pick, attachmentBusy = attachments.busy,
+            extraShortcuts = if (session.host?.sessionMode in setOf(SshSessionMode.TMUX, SshSessionMode.HERDR)) listOf("Ctrl+B") else emptyList()) { command ->
+            val bytes = (command + "\r").toByteArray()
+            session.terminal.tryWrite(bytes, 0, bytes.size)
+        }
+    }
+    if (closing) AlertDialog(onDismissRequest = { closing = false }, title = { Text(stringResource(R.string.close_session)) },
+        text = { Text(stringResource(R.string.close_session_confirm, session.title)) },
+        confirmButton = { TextButton(onClose) { Text(stringResource(R.string.close_session)) } },
+        dismissButton = { TextButton({ closing = false }) { Text(stringResource(R.string.cancel)) } })
+}
+
+@Composable
+fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit,
+                          onGit: (() -> Unit)? = null, onConversation: (() -> Unit)? = null) {
+    val output by repository.output.collectAsStateWithLifecycle()
+    val prefs by repository.display.state.collectAsStateWithLifecycle()
+    val lifecycle = LocalLifecycleOwner.current
+    val identity = "${desktop.id}:${pane.window}:${pane.id}"
+    var direct by rememberSaveable(identity, prefs.directInput) { mutableStateOf(prefs.directInput) }
+    var keyboardRequest by remember(identity) { mutableIntStateOf(0) }
+    var focused by rememberSaveable(identity) { mutableStateOf(false) }
+    var showPermission by remember(identity) { mutableStateOf(false) }
+    var showDetails by remember(identity) { mutableStateOf(false) }
+    // TUI 边框和光标属于桌面网格；手机重排只作为用户主动选择的阅读模式。
+    var wrapLines by rememberSaveable(identity) { mutableStateOf(false) }
+    val enabled = desktop.allowInput && desktop.status == "ready"
+    LaunchedEffect(enabled) { if (enabled) showPermission = false }
+    val input = remember(identity, enabled, desktop.connectionGeneration) { repository.desktopInput(desktop.id, pane) }
+    DisposableEffect(input) { onDispose { input.close() } }
+    LaunchedEffect(identity, desktop.status, desktop.connectionGeneration) {
+        if (desktop.status == "ready") lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            repository.watchDesktop(desktop.id, pane)
+        }
+    }
+    DisposableEffect(identity) { onDispose { repository.leaveDesktopPane() } }
+    DesktopTerminalTheme(if (output.target == identity) output.frame else null) {
+    if (!focused) TerminalHeader(pane.displayTitle, desktop.host.name, desktop.status, onBack, onSessions,
+        onGit = onGit.takeIf { pane.sshDestination == null }, gitEnabled = desktop.status == "ready",
+        onDetails = { showDetails = true }, onConversation = onConversation.takeIf { pane.agent != null },
+        wrapLines = wrapLines, onToggleWrap = { wrapLines = !wrapLines })
+    Column(Modifier.fillMaxSize()) {
+        if (desktop.status != "ready") Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            val recovering = desktop.hasConnected && desktop.relayProfile != null && DesktopReconnect.retryable(desktop.failure)
+            HelperText(if (recovering) stringResource(R.string.desktop_reconnecting)
+                else desktop.failure?.let { desktopFailureText(it) } ?: statusLabel(desktop.status), Modifier.weight(1f))
+            if (desktop.status != "connecting") desktop.relayProfile?.let { profile ->
+                TextButton({ repository.connectRelay(profile) }) { Text(stringResource(R.string.retry)) }
+            }
+        }
+        else if (!desktop.allowInput) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            HelperText(stringResource(R.string.composer_pc_read_only_short), Modifier.weight(1f))
+            TextButton({ showPermission = true }) { Text(stringResource(R.string.composer_pc_enable_input)) }
+        }
+        DesktopOutputSurface(identity, if (output.target == identity) output.text else "", prefs.fontSize,
+            prefs.pinchZoom, { size -> repository.display.update { it.copy(fontSize = size) } },
+            Modifier.weight(1f).fillMaxWidth(), frame = if (output.target == identity) output.frame else null,
+            inputTarget = input.takeIf { enabled && direct }, keyboardRequest = keyboardRequest,
+            loading = output.loading, connected = desktop.status == "ready", wrapLines = wrapLines)
+        if (output.loading && output.text.isBlank()) LinearProgressIndicator(Modifier.fillMaxWidth())
+        CommandComposer(identity, repository, enabled, direct, {
+            direct = it
+            if (it) keyboardRequest++
+        }, { label ->
+            val code = when (label) {
+                "Ctrl+C" -> KeyEvent.KEYCODE_C
+                "Esc" -> KeyEvent.KEYCODE_ESCAPE
+                "Tab", "Shift+Tab" -> KeyEvent.KEYCODE_TAB
+                "←" -> KeyEvent.KEYCODE_DPAD_LEFT
+                "→" -> KeyEvent.KEYCODE_DPAD_RIGHT
+                "↑" -> KeyEvent.KEYCODE_DPAD_UP
+                else -> KeyEvent.KEYCODE_DPAD_DOWN
+            }
+            val modifiers = if (label == "Ctrl+C") 2 else if (label == "Shift+Tab") 1 else 0
+            input.key(code, modifiers)
+        }, onKeyboard = { keyboardRequest++ }, focused = focused, onToggleFocus = { focused = !focused },
+            send = input::submit)
+    }
+    if (showPermission) AlertDialog(onDismissRequest = { showPermission = false },
+        title = { Text(stringResource(R.string.composer_pc_enable_input)) },
+        text = { Text(stringResource(R.string.composer_pc_read_only)) },
+        confirmButton = { TextButton({ showPermission = false }) { Text(stringResource(R.string.close)) } })
+    if (showDetails) DesktopPaneDetails(desktop, pane, output.target == identity && output.frame != null) { showDetails = false }
+    }
+}
+
+@Composable
+private fun DesktopPaneDetails(desktop: DesktopWorkspace, pane: DesktopPane, colorGrid: Boolean, onDismiss: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(stringResource(R.string.terminal_details)) },
+        text = {
+            SelectionContainer {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column {
+                        HelperText(stringResource(R.string.terminal_full_title))
+                        Text(pane.title.ifBlank { pane.displayTitle })
+                    }
+                    if (pane.cwd.isNotBlank()) Column {
+                        HelperText(stringResource(R.string.terminal_directory))
+                        Text(pane.cwd)
+                    }
+                    Column {
+                        HelperText(stringResource(R.string.terminal_connection))
+                        Text("${desktop.host.name} · ${statusLabel(desktop.status)}")
+                        Text("${desktop.transport} · ${desktop.host.address}")
+                    }
+                    Column {
+                        HelperText(stringResource(R.string.terminal_display_mode))
+                        Text(stringResource(if (colorGrid) R.string.terminal_color_grid else R.string.terminal_plain_text))
+                        if (!colorGrid) HelperText(stringResource(R.string.desktop_legacy_text))
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onDismiss) { Text(stringResource(R.string.close)) } })
+}
+
+@Composable
+internal fun TerminalHeader(title: String, endpoint: String, status: String, onBack: () -> Unit, onSessions: () -> Unit,
+                           onClose: (() -> Unit)? = null, onGit: (() -> Unit)? = null, gitEnabled: Boolean = true,
+                           onDetails: (() -> Unit)? = null, onConversation: (() -> Unit)? = null, conversationActive: Boolean = false,
+                           onFiles: (() -> Unit)? = null, wrapLines: Boolean = false, onToggleWrap: (() -> Unit)? = null) {
+    var menu by remember { mutableStateOf(false) }
+    val connection = "$endpoint · ${statusLabel(status)}"
+    Row(Modifier.fillMaxWidth().height(48.dp).background(MaterialTheme.colorScheme.background), verticalAlignment = Alignment.CenterVertically) {
+        GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
+        Row(Modifier.weight(1f).heightIn(min = 48.dp)
+            .clickable(onClickLabel = stringResource(R.string.switch_session), onClick = onSessions)
+            .semantics { contentDescription = connection },
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            if (status == "connecting") CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
+            else Glyph(if (status == "ready") R.drawable.ic_terminal else R.drawable.ic_info, Modifier.size(15.dp),
+                if (status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+            Text(title, fontSize = 13.sp, fontFamily = LocalTerminalFont.current, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Glyph(R.drawable.ic_down, Modifier.size(12.dp))
+        }
+        Row(Modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (onGit != null) TerminalHeaderAction(R.drawable.ic_github, stringResource(R.string.git_title), onGit, enabled = gitEnabled)
+            if (onConversation != null) TerminalHeaderAction(if (conversationActive) R.drawable.ic_terminal else R.drawable.ic_chat,
+                stringResource(if (conversationActive) R.string.chat_terminal else R.string.chat_title), onConversation)
+            if (onFiles != null) TerminalHeaderAction(R.drawable.ic_git_folder, stringResource(R.string.sftp_title), onFiles, enabled = status == "ready")
+            if (onClose != null || onDetails != null || onToggleWrap != null) Box {
+                TerminalHeaderAction(R.drawable.ic_more, stringResource(R.string.more_actions), { menu = true })
+                DropdownMenu(menu, { menu = false }) {
+                    if (onToggleWrap != null) DropdownMenuItem(
+                        text = { Text(stringResource(R.string.terminal_wrap_lines)) },
+                        trailingIcon = { Checkbox(checked = wrapLines, onCheckedChange = null) },
+                        onClick = { menu = false; onToggleWrap() })
+                    if (onDetails != null) DropdownMenuItem(text = { Text(stringResource(R.string.terminal_details)) }, onClick = { menu = false; onDetails() })
+                    if (onClose != null) DropdownMenuItem(text = { Text(stringResource(R.string.close_session)) }, onClick = { menu = false; onClose() })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TerminalHeaderAction(@DrawableRes icon: Int, label: String, onClick: () -> Unit, enabled: Boolean = true) {
+    // 只收紧顶栏占位，保留原生触摸扩展；局部覆盖避免把弹出菜单和其他页面也压窄。
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+        GlyphButton(icon, label, onClick, enabled, modifier = Modifier.width(36.dp))
+    }
+}
+
+@Composable
+fun DesktopScreen(desktop: DesktopWorkspace?, onPane: (DesktopPane) -> Unit, onRetry: (() -> Unit)? = null,
+                  onTab: ((DesktopTab) -> Unit)? = null, onCloseTab: ((DesktopTab) -> Unit)? = null, onDisconnect: () -> Unit) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 12.dp)) {
+        Row(Modifier.padding(vertical = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(15.dp)) {
+            Glyph(R.drawable.ic_monitor, Modifier.size(30.dp), MaterialTheme.colorScheme.primary)
+            Column {
+                Text(desktop?.host?.name.orEmpty(), fontSize = 19.sp)
+                Box(Modifier.padding(top = 7.dp)) { StatusCaption(desktop?.status ?: "disconnected", "${desktop?.transport.orEmpty()} · ") }
+            }
+        }
+        if (desktop?.status == "connecting") LinearProgressIndicator(Modifier.fillMaxWidth())
+        desktop?.pairingApproval?.let { approval ->
+            Column(Modifier.fillMaxWidth().workspaceFrame().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.pair_awaiting_approval), fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                Text(approval.code.chunked(3).joinToString(" "), fontSize = 28.sp, fontFamily = LocalTerminalFont.current)
+                HelperText(stringResource(R.string.pair_compare_code))
+            }
+        }
+        GroupHeading(stringResource(R.string.computer_tabs), desktop?.tabs?.size?.takeIf { it > 0 } ?: desktop?.panes?.size ?: 0)
+        if (desktop != null && desktop.tabs.isNotEmpty() && onTab != null) DesktopTabRows(desktop, onTab, onPane, onCloseTab)
+        else desktop?.panes?.forEach { pane ->
+            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).workspaceFrame()
+                .clickable(enabled = desktop.status == "ready") { onPane(pane) }.padding(horizontal = 14.dp, vertical = 18.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Glyph(R.drawable.ic_terminal)
+                Column(Modifier.weight(1f)) {
+                    Text(pane.displayTitle, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(pane.task.ifBlank { pane.cwd }, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = LocalTerminalFont.current,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
+                }
+                Text(statusLabel(pane.state), fontSize = 12.sp, lineHeight = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (desktop?.tabs.isNullOrEmpty() && desktop?.panes.isNullOrEmpty() && desktop?.status == "ready") HelperText(stringResource(R.string.no_panes), Modifier.padding(vertical = 20.dp))
+        desktop?.failure?.let { HelperText(desktopFailureText(it), Modifier.padding(vertical = 12.dp)) }
+        if (desktop?.status !in listOf("ready", "connecting", "approval")) HelperText(stringResource(R.string.device_unavailable), Modifier.padding(vertical = 12.dp))
+        if (onRetry != null && desktop?.status !in listOf("ready", "connecting", "approval")) {
+            Button(onRetry, modifier = Modifier.padding(top = 12.dp)) { Text(stringResource(R.string.retry)) }
+        }
+        OutlinedButton(onDisconnect, modifier = Modifier.padding(top = 20.dp)) { Text(stringResource(R.string.disconnect)) }
+    }
+}

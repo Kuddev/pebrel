@@ -105,9 +105,14 @@ Run affected behavior tests and the appropriate real product checks as well:
 cargo check -p nebula --bin pebrel --features gpui-shell --tests --locked
 ```
 
-`Full native tests` runs on every PR and merge-group update, and on `main` pushes.
-It tests the full workspace on Linux, Windows x64 / ARM64 and both macOS
-architectures. New commits cancel obsolete PR runs. Pull requests run tests and
+`Full native tests` plans validation on every PR. Ordinary shared-code changes
+run the complete Linux suite; OS-specific paths and Rust conditional compilation
+add the relevant native architectures. Documentation-only PRs retain repository
+contracts without a native application build. Dependencies, toolchains, CI,
+packaging, shared host boundaries and unknown code roots select all five platforms.
+Main pushes, daily scheduled runs, merge groups and manual/reusable calls retain
+the complete matrix. The authoritative selector is [`scripts/ci_plan.py`](scripts/ci_plan.py).
+New commits cancel obsolete PR runs. Pull requests run tests and
 compile checks without building distribution packages. Package validation runs
 after matching changes reach `main`, or by explicit manual dispatch; a package
 job does not replace the native test suite. These triggers do not configure
@@ -130,16 +135,24 @@ compile check into a claim that UI tests or a packaged application were run.
 `Tests (<os>)` jobs and both `Release workspace (<os>)` jobs are required checks
 on `main`, together with Code Owner approval; see the
 [activation checklist](docs/project-constraints.md#server-side-activation).
-Draft and ready pull requests both run all five native platforms and both macOS
-release-profile compile checks. Each macOS native job also runs its release check
-on the same runner, reusing the checkout, toolchain and source downloads while
-keeping the two compiled workloads in their existing separate caches. The two
-`Release workspace (<os>)` contexts are lightweight Linux result checks: they
-require this run's entire native matrix to succeed, not a previous run's result.
-The release compilation itself still runs natively on each Mac architecture.
-The required lint job validates the event and
-selects the matrix before requesting platform runners. Every required check must
-succeed before merging. Marking a draft ready without changing its commits does
+Draft and ready PRs use the same path policy. The required lint job validates the
+complete Git merge-base diff before requesting native runners. Renames include
+both old and new paths; Rust OS/architecture conditions are inspected in both
+file revisions. Missing commits or unreadable source fail planning.
+
+Actual compilation and tests appear in `Native tests (<os>)` jobs. The existing
+five `Tests (<os>)` and two macOS `Release workspace (<os>)` contexts are lightweight
+Ubuntu policy reports. Their summaries explicitly distinguish **executed** from
+**not run**. Every selected native job must succeed; failure, cancellation or an
+unexpected skip prevents passing reports. No conclusion is copied from another run.
+Mac release compilation still runs on the selected native Mac, sharing its checkout
+and toolchain while keeping the existing separate compiled caches.
+
+Shared-code regressions specific to another host may now be found after merge.
+Full main/daily validation and existing release packaging/conformance remain;
+dispatch the complete native workflow on the intended release commit when needed.
+See the [policy decision](architecture/notes/scripts/ci/2026-09-29-path-based-native-validation.md).
+Every required check must succeed before merging. Marking a draft ready without changing its commits does
 not repeat the matrix; source updates and reopen events run it again. Native CI
 uses pinned `cargo-nextest` for unit and
 integration tests, followed by `cargo test --doc` with the same workspace features;
@@ -169,7 +182,7 @@ feature work; there is no routine `--skip-architecture` option.
 
 - 先读架构图、工程合同和决策记录；按职责拆分，不按行号切片。
 - 一个 PR 只做一件事；改动超过 1500 行源码（不计文档、lockfile、资源）`pr-size` 会失败，请拆分。
-- Draft 和 Ready PR 都先运行必需的格式检查和矩阵规划，再执行五平台原生测试及两项 macOS release 编译检查；每个 Mac 在同一 runner 完成两类检查，原有 release 检查名称由轻量结果汇总保留。十项必需检查全绿才能合并，不省略平台或 doctest。
+- Draft 和 Ready PR 共用路径策略：文档不构建原生应用，普通共享代码跑完整 Linux 测试，平台路径及条件编译追加相应原生架构，依赖/CI/打包等改动跑全量。main、每日定时和手动验证保留五平台。十项必需检查名称不变，结果汇总明确注明未运行的平台，已选择的测试失败仍阻止合并；原生套件和 doctest 不删减。
 - 附加截图留在贡献者 fork 中生成；上游按需执行，不重复自动跑整套截图构建，也不上传 PR 专属的大型编译缓存。截图与原生回归测试不能互相替代。
 - 2000 行是现有仓库的防灾上限，800 行只提示审查，不是“大厂标准”。
 - 普通功能 PR 不得增加存量债务；有问题的规则可以修订，但要有反例、测试和维护者审批。

@@ -12,7 +12,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::directory_history::DirectoryHistory;
 use crate::display::suggest_engine::{SuggestSources, suggest_update};
-use crate::display::{AcceptKey, CompletionStyle, NebulaPaneState};
+use crate::display::{CompletionStyle, NebulaPaneState};
 use crate::nebula_history::NebulaHistory;
 
 /// 历史是唯一需要独占可变借用的源（`record` 追加 + 落盘）。目录/PATH
@@ -68,6 +68,36 @@ pub fn update(
     );
 }
 
+pub(super) fn cache_key(state: &NebulaPaneState, line: &str, style: CompletionStyle) -> String {
+    let commands = crate::display::nebula_commands_handle();
+    let generation = commands.lock().map(|commands| commands.len()).unwrap_or(0);
+    crate::display::suggest_engine::suggestion_key(state, line, style, generation)
+}
+
+pub(super) struct Suggestion {
+    pub ghost: String,
+    pub items: Vec<crate::display::NebulaCompletionItem>,
+    pub pending_remote_dir: Option<String>,
+}
+
+/// 只把请求所需的数据送到后台，终端网格与视图仍由前台独占。
+pub(super) fn calculate(
+    cwd: String,
+    env: crate::display::SuggestEnv,
+    line: String,
+    style: CompletionStyle,
+) -> Suggestion {
+    let mut state = NebulaPaneState::default();
+    state.cwd = cwd;
+    state.suggest_env = env;
+    update(&mut state, Some(line), true, style);
+    Suggestion {
+        ghost: state.suggestion,
+        items: state.completion_items,
+        pending_remote_dir: state.pending_remote_dir,
+    }
+}
+
 /// Enter 提交：命令进共享历史（与旧壳 `nebula_commit_line` 同一落点），
 /// pane 状态清空等下一行。空行只清不记。
 pub fn commit_line(state: &mut NebulaPaneState) {
@@ -100,38 +130,18 @@ pub fn popup_active(state: &NebulaPaneState) -> bool {
 /// 弹窗高亮行循环移动。初始没有选中项；首次向任一方向导航都从首项进入，
 /// 避免 Up 在无选择态直接跳到列表末尾。
 pub fn popup_move(state: &mut NebulaPaneState, delta: isize) {
-    let len = state.completion_items.len();
-    if len == 0 {
-        return;
-    }
-    state.completion_selected = Some(match state.completion_selected {
-        Some(current) => (current as isize + delta).rem_euclid(len as isize) as usize,
-        None => 0,
-    });
+    state.completion_popup_move(delta);
 }
 
 /// 取走选中候选要键入的余量并关闭列表。
 pub fn popup_take(state: &mut NebulaPaneState) -> Option<crate::display::NebulaCompletionItem> {
-    let index = state.completion_selected?;
-    let insert = state.completion_items.get(index)?.clone();
-    state.completion_items.clear();
-    state.completion_selected = None;
-    Some(insert)
+    state.completion_popup_take()
 }
 
 /// Esc 关闭列表；候选清空但重算键保留，列表在行变化前不会复开（与旧壳
 /// `nebula_completion_popup_dismiss` 的缓存约定一致）。返回是否真的关了。
 pub fn popup_dismiss(state: &mut NebulaPaneState) -> bool {
-    if state.completion_items.is_empty() {
-        return false;
-    }
-    let line = if state.screen_line.is_empty() { &state.line_buf } else { &state.screen_line };
-    if !line.is_empty() {
-        state.completion_suppressed_line = Some(line.clone());
-    }
-    state.completion_items.clear();
-    state.completion_selected = None;
-    true
+    state.completion_popup_dismiss()
 }
 
 #[cfg(test)]
@@ -191,14 +201,5 @@ mod tests {
         assert_eq!(viewport.offset, 1);
         assert_eq!(state.completion_selected, Some(0));
         assert_eq!(popup_take(&mut state).map(|item| item.insert).as_deref(), Some(" upstream"));
-    }
-}
-
-/// 接受键（Tab/Right/Both）的判定复用旧壳 [`AcceptKey`]。
-pub fn accepts(accept: AcceptKey, key: &str) -> bool {
-    match key {
-        "tab" => accept.accepts_tab(),
-        "right" => accept.accepts_right(),
-        _ => false,
     }
 }

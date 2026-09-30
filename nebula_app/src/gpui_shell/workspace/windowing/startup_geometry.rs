@@ -15,14 +15,12 @@ fn chrome_size(sidebar_width: f32) -> Size<Pixels> {
 
 fn default_size(
     metrics: (Pixels, Pixels),
+    grid: (f32, f32),
     sidebar_width: f32,
     display_limit: Option<Size<Pixels>>,
 ) -> Size<Pixels> {
     let chrome = chrome_size(sidebar_width);
-    let preferred = size(
-        metrics.0 * f32::from(TerminalView::DEFAULT_GRID_COLUMNS) + chrome.width,
-        metrics.1 * f32::from(TerminalView::DEFAULT_GRID_LINES) + chrome.height,
-    );
+    let preferred = size(metrics.0 * grid.0 + chrome.width, metrics.1 * grid.1 + chrome.height);
     display_limit.map_or(preferred, |limit| preferred.min(&limit))
 }
 
@@ -49,6 +47,7 @@ pub(super) fn preferred_size(cx: &App, sidebar_width: f32) -> Option<Size<Pixels
     Some(fit_preflight_size(
         default_size(
             TerminalView::startup_cell_metrics_at_scale(scale, cx),
+            crate::gpui_shell::config::startup_grid(cx),
             sidebar_width,
             display_limit(cx),
         ),
@@ -74,6 +73,7 @@ pub(in crate::gpui_shell::workspace) fn prepare_initial_grid(
     let target = if fit_window_to_default_grid {
         let requested = default_size(
             TerminalView::startup_cell_metrics(window, cx),
+            crate::gpui_shell::config::startup_grid(cx),
             sidebar_width,
             display_limit(cx),
         );
@@ -112,12 +112,16 @@ mod tests {
     #[test]
     fn initial_window_keeps_the_base_font_grid_and_fits_the_display() {
         let metrics = (px(8.0), px(20.0));
-        assert_eq!(default_size(metrics, 230.0, None), size(px(1200.0), px(668.0)));
+        let grid = (
+            f32::from(TerminalView::DEFAULT_GRID_COLUMNS),
+            f32::from(TerminalView::DEFAULT_GRID_LINES),
+        );
+        assert_eq!(default_size(metrics, grid, 230.0, None), size(px(1200.0), px(668.0)));
         assert_eq!(
-            default_size(metrics, 230.0, Some(size(px(1000.0), px(600.0)))),
+            default_size(metrics, grid, 230.0, Some(size(px(1000.0), px(600.0)))),
             size(px(1000.0), px(600.0)),
         );
-        assert_eq!(default_size(metrics, 300.0, None), size(px(1270.0), px(668.0)),);
+        assert_eq!(default_size(metrics, grid, 300.0, None), size(px(1270.0), px(668.0)),);
     }
 
     #[test]

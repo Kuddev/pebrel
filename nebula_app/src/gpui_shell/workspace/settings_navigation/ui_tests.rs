@@ -160,3 +160,53 @@ fn closing_last_regular_tab_keeps_settings_until_it_is_closed(cx: &mut TestAppCo
     cx.simulate_keystrokes("ctrl-shift-w");
     assert!(cx.read(|cx| cx.windows().is_empty()));
 }
+
+#[gpui::test]
+fn density_changes_real_tab_bounds_and_sidebar_drag_pitch(cx: &mut TestAppContext) {
+    use nebula_settings::{DensityName, TabsPositionName};
+
+    let (_directory, workspace, mut cx) = open_workspace(8, cx);
+    click_tab("top-tab-0", &mut cx);
+    for position in [TabsPositionName::Sidebar, TabsPositionName::Top] {
+        for (density, height, gap, title_height) in [
+            (DensityName::Standard, 34.0, 8.0, 48.0),
+            (DensityName::Compact, 32.0, 4.0, 40.0),
+            (DensityName::Standard, 34.0, 8.0, 48.0),
+        ] {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.tabs_position = position;
+                workspace.density = density;
+                workspace.sync_settings_layout();
+                workspace.reveal_active_tab();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let sidebar = position == TabsPositionName::Sidebar;
+            let first = tab_bounds(if sidebar { "sidebar-tab-0" } else { "top-tab-0" }, &mut cx);
+            let second = tab_bounds(if sidebar { "sidebar-tab-1" } else { "top-tab-1" }, &mut cx);
+            assert_eq!(f32::from(first.size.height), height);
+            assert_eq!(f32::from(second.size.height), height);
+            if sidebar {
+                assert_eq!(f32::from(second.top() - first.top()), height + gap);
+            }
+            let native = cx.update(|window, _| crate::platform::window_chrome::layout(window));
+            let title = tab_bounds("workspace-titlebar", &mut cx);
+            assert_eq!(
+                f32::from(title.size.height),
+                native.map_or(title_height, |layout| layout.0)
+            );
+
+            // Padding belongs to the tab's actual click target in either density.
+            let point = gpui::point(second.left() + px(8.0), second.bottom() - px(2.0));
+            cx.simulate_click(point, Modifiers::default());
+            workspace.read_with(&cx, |workspace, _| assert_eq!(workspace.active, 1));
+            if sidebar {
+                cx.simulate_mouse_down(point, gpui::MouseButton::Left, Modifiers::default());
+                workspace.read_with(&cx, |workspace, _| {
+                    assert_eq!(workspace.tab_drag.as_ref().unwrap().pitch, height + gap);
+                });
+                cx.simulate_mouse_up(point, gpui::MouseButton::Left, Modifiers::default());
+            }
+        }
+    }
+}
