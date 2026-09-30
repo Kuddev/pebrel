@@ -5,6 +5,166 @@ fn context(line: &str) -> Context {
 }
 
 #[test]
+fn ssh_completion_preserves_login_jump_and_option_values() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        for (line, expected) in [
+            ("ssh pro", "prod"),
+            ("ssh me@pro", "me@prod"),
+            ("ssh ssh://me@pro", "ssh://me@prod"),
+            ("ssh -J first,me@pro", "first,me@prod"),
+            ("ssh -vJfirst,me@pro", "-vJfirst,me@prod"),
+        ] {
+            let context = Context::parse(line, line.len(), syntax).unwrap();
+            assert!(matches!(context.source, Source::SshHosts { .. }), "{line}");
+            assert_eq!(context.value_prefix(), "pro");
+            let candidate = context.candidates(["prod"]).pop().unwrap();
+            let decoded =
+                CommandContext::parse(&candidate.value, candidate.value.len(), syntax).unwrap();
+            assert_eq!(decoded.prefix(), expected, "{syntax:?}: {line}");
+        }
+        for line in ["ssh -p ", "ssh -p22", "ssh prod ", "ssh prod cat ", "ssh -o "] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().source,
+                Source::None,
+                "{line}"
+            );
+        }
+        let line = "ssh -Fconfig -iidentity pro";
+        assert_eq!(
+            Context::parse(line, line.len(), syntax).unwrap().ssh_config.as_deref(),
+            Some("config")
+        );
+        let line = "ssh -viidentity";
+        let c = Context::parse(line, line.len(), syntax).unwrap();
+        assert_eq!(c.source, Source::Paths { directories_only: false });
+        let expected =
+            if syntax == ShellSyntax::PowerShell { "'-viidentity.pem'" } else { "-viidentity.pem" };
+        assert_eq!(c.candidate("identity.pem").unwrap().value, expected);
+    }
+    assert!(context("ssh -F ~/.ssh/config pro").ssh_config_expands_home);
+    assert!(!context("ssh -F '~/.ssh/config' pro").ssh_config_expands_home);
+    assert_eq!(context("ssh -F=literal pro").ssh_config.as_deref(), Some("=literal"));
+    assert_eq!(context("ssh -F first -F second pro").ssh_config.as_deref(), Some("second"));
+}
+
+#[test]
+fn powershell_attached_paths_are_single_native_arguments() {
+    for (line, path, expected) in [
+        ("ssh -Fqa-ssh.c", "qa-ssh.conf", "'-Fqa-ssh.conf'"),
+        ("ssh -iC:/ke", "C:/keys/id", "'-iC:/keys/id'"),
+        ("ssh -viid", "identity.pem", "'-viidentity.pem'"),
+        ("ssh -Fconf", "config", "-Fconfig"),
+    ] {
+        let c = Context::parse(line, line.len(), ShellSyntax::PowerShell).unwrap();
+        assert_eq!(c.candidate(path).unwrap().value, expected);
+    }
+    for (line, expected) in
+        [("git switch --qui", "--quiet"), ("Get-Content -LiteralP", "-LiteralPath")]
+    {
+        let c = Context::parse(line, line.len(), ShellSyntax::PowerShell).unwrap();
+        assert_eq!(c.static_candidates()[0].value, expected);
+    }
+}
+
+#[test]
+fn wsl_completion_separates_registered_names_paths_and_guest_commands() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        for line in [
+            "wsl -d ",
+            "wsl.exe --distribution De",
+            "wsl --export ",
+            "wsl --set-version ",
+            "wsl --terminate De",
+        ] {
+            let c = Context::parse(line, line.len(), syntax).unwrap();
+            assert_eq!(c.source, Source::WslDistributions);
+            assert_eq!(c.candidates(["Debian"])[0].value, "Debian");
+        }
+        for line in [
+            "wsl -e cat ",
+            "wsl -- cat ",
+            "wsl -d Debian cat ",
+            "wsl --cd /",
+            "wsl --user ",
+            "wsl --install ",
+            "wsl --install Ubuntu -d ",
+        ] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().source,
+                Source::None,
+                "{line}"
+            );
+        }
+        for (line, directories_only) in [
+            ("wsl --export Debian ", false),
+            ("wsl --import New ", true),
+            ("wsl --import New root ", false),
+        ] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().source,
+                Source::Paths { directories_only },
+                "{line}"
+            );
+        }
+        let line = "wsl --set-version Debian ";
+        assert_eq!(Context::parse(line, line.len(), syntax).unwrap().static_candidates().len(), 2);
+        for line in ["wsl -dDebian ", "wsl --distribution=Debian ", "wsl -lv "] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().source,
+                Source::None,
+                "{line}"
+            );
+        }
+    }
+}
+
+#[test]
+fn common_commands_select_the_correct_cli_and_argument_roles() {
+    assert!(
+        Context::parse("cat fi", 6, ShellSyntax::Literal).unwrap().candidate("file@host").is_none()
+    );
+    for syntax in [ShellSyntax::Posix, ShellSyntax::Literal] {
+        for line in ["ls -al fi", "cp -R src fi", "grep -e pattern fi", "grep pattern fi"] {
+            assert_eq!(
+                Context::parse(line, line.len(), syntax).unwrap().source,
+                Source::Paths { directories_only: false },
+                "{line}"
+            );
+        }
+        for line in ["grep ", "grep -e ", "mkdir -m "] {
+            assert_eq!(Context::parse(line, line.len(), syntax).unwrap().source, Source::None);
+        }
+        assert!(!Context::parse("ls -", 4, syntax).unwrap().static_candidates().is_empty());
+    }
+    for line in [
+        "Get-ChildItem -LiteralPath fi",
+        "Copy-Item -Destination fi",
+        "Get-Content -literalpath fi",
+    ] {
+        assert_eq!(
+            Context::parse(line, line.len(), ShellSyntax::PowerShell).unwrap().source,
+            Source::Paths { directories_only: false }
+        );
+    }
+    assert_eq!(
+        Context::parse("Get-Content -Tail ", "Get-Content -Tail ".len(), ShellSyntax::PowerShell)
+            .unwrap()
+            .source,
+        Source::None
+    );
+    for line in ["DIR /S fi", "copy /Y src fi", "type fi"] {
+        assert_eq!(
+            Context::parse(line, line.len(), ShellSyntax::Cmd).unwrap().source,
+            Source::Paths { directories_only: false }
+        );
+    }
+    assert_eq!(
+        Context::parse("cd /d fi", 8, ShellSyntax::Cmd).unwrap().source,
+        Source::Paths { directories_only: true }
+    );
+}
+
+#[test]
 fn branches_respect_argument_roles_directories_and_worktrees() {
     for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
         for line in [
