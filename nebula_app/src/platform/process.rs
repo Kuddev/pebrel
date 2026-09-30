@@ -78,27 +78,29 @@ pub(crate) fn run_bounded(
         command.stdin(stdin).stdout(output.try_clone()?).stderr(Stdio::null()).spawn()?;
     let deadline = Instant::now() + budget;
     let status = loop {
+        // Every error past spawn, a failed stat included, still kills and reaps.
         let overrun = if Instant::now() >= deadline {
-            Some("exceeded its time budget")
-        } else if output.metadata()?.len() > max_output {
-            Some("exceeded its output limit")
+            Some(io::Error::other("exceeded its time budget"))
         } else {
-            None
+            match output.metadata() {
+                Ok(metadata) if metadata.len() > max_output => {
+                    Some(io::Error::other("exceeded its output limit"))
+                },
+                Ok(_) => None,
+                Err(error) => Some(error),
+            }
         };
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if overrun.is_none() => std::thread::sleep(Duration::from_millis(10)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(io::Error::other(overrun.unwrap_or_default()));
+        let error = match (child.try_wait(), overrun) {
+            (Ok(Some(status)), _) => break status,
+            (Ok(None), None) => {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
             },
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            },
-        }
+            (Ok(None), Some(error)) | (Err(error), _) => error,
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
     };
     if !status.success() {
         return Err(io::Error::other(format!("exited with {status}")));

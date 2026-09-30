@@ -21,7 +21,9 @@ fi
 if [[ -r ${ZDOTDIR-$HOME}/.zshenv ]]; then
     source "${ZDOTDIR-$HOME}/.zshenv"
 fi
-if [[ -o rcs && -o interactive ]]; then
+# A zsh started while a parent bootstrap still exports ZDOTDIR sees only that
+# ZDOTDIR (the companions are unexported); it must not take over with an empty one.
+if [[ -o rcs && -o interactive && -n ${NEBULA_ZSH_INTEGRATION-} ]]; then
     # Only this shell reads them; programs the user's rc files exec must not inherit them.
     NEBULA_ZDOTDIR_WAS_SET=${+ZDOTDIR}
     NEBULA_ORIGINAL_ZDOTDIR=${ZDOTDIR-}

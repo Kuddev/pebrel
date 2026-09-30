@@ -775,12 +775,23 @@ pub fn wsl_unc_path(distro: &str, guest_path: &str) -> std::path::PathBuf {
 /// 一个 WSL 终端的位置：发行版名 + 来宾绝对路径。
 ///
 /// 即使宿主看不见来宾文件系统（9P 重定向不可用，见 [`wsl_unc_cwd`]）这个位置
-/// 依然成立——拿着它可以用 `wsl.exe -d <发行版> -- <命令>` 直接在来宾里干活。
+/// 依然成立——拿着它可以用 [`wsl_exec_command`] 直接在来宾里干活。
 /// Git 视图识别 WSL 仓库靠的就是它，不依赖任何 UNC 映射。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WslCwd {
     pub distro: String,
     pub guest: String,
+}
+
+/// `wsl.exe -d <distro> --exec`, the one way host code runs a helper program
+/// (git, find, cat) inside a guest. `--` would hand the joined line to the
+/// guest's login shell, which runs `$(…)`, backquotes and `;` in a directory name
+/// a guest program reported through OSC 7. Every argument appended must pass
+/// [`wsl_accepts_arg`]; [`WslCwd`] values from panes already do.
+pub(crate) fn wsl_exec_command(distro: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("wsl.exe");
+    command.args(["-d", distro, "--exec"]);
+    command
 }
 
 /// 认出「聚焦终端属于某个 WSL 发行版、且正停在来宾的某个目录」。
@@ -896,6 +907,27 @@ fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007\033]133;D;%s\007\033]7;file
     }
     additions.push(("WSLENV".to_owned(), wslenv));
     additions
+}
+
+/// Remove [`wsl_cwd_report_env`]'s zsh takeover from a pane environment, the
+/// same rule the first bash prompt applies. A helper run with `wsl.exe --exec`
+/// (`pane.exec`, Runtime git) never reaches the bootstrap `.zshenv` that undoes
+/// it, so an installer writing `${ZDOTDIR:-$HOME}/.zshrc` would overwrite the
+/// bootstrap and a nested `wsl.exe` would carry it into another guest.
+pub(crate) fn strip_wsl_zsh_takeover(env: &mut std::collections::HashMap<String, String>) {
+    const NAMES: [&str; 3] = ["ZDOTDIR", "NEBULA_ZSH_INTEGRATION", "NEBULA_ZDOTDIR_WAS_SET"];
+    let Some(bootstrap) = env.remove("NEBULA_ZSH_INTEGRATION") else { return };
+    if env.get("ZDOTDIR") == Some(&bootstrap) {
+        env.remove("ZDOTDIR");
+    }
+    env.remove("NEBULA_ZDOTDIR_WAS_SET");
+    if let Some(wslenv) = env.get_mut("WSLENV") {
+        *wslenv = wslenv
+            .split(':')
+            .filter(|entry| !NAMES.contains(&wslenv_name(entry)))
+            .collect::<Vec<_>>()
+            .join(":");
+    }
 }
 
 /// Whether a guest program is zsh (`zsh`, `/usr/bin/zsh`, `zsh-5.9`); an empty
@@ -1438,6 +1470,27 @@ mod tests {
                 "KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu:NEBULA_ZDOTDIR_WAS_SET/u"
             )
         );
+
+        // `wsl.exe --exec` helpers never run the bootstrap that undoes the takeover.
+        let mut helper = additions.clone();
+        helper.insert("KEEP".to_owned(), "1".to_owned());
+        strip_wsl_zsh_takeover(&mut helper);
+        for name in ["ZDOTDIR", "NEBULA_ZSH_INTEGRATION", "NEBULA_ZDOTDIR_WAS_SET"] {
+            assert!(!helper.contains_key(name), "{name} reached a guest helper");
+        }
+        assert_eq!(helper.get("WSLENV").map(String::as_str), Some("KEEP/u:PROMPT_COMMAND"));
+        assert_eq!(helper.get("KEEP").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn guest_helpers_keep_a_zdotdir_the_takeover_did_not_set() {
+        let mut env = std::collections::HashMap::from([
+            ("ZDOTDIR".to_owned(), "/home/me/.config/zsh".to_owned()),
+            ("WSLENV".to_owned(), "ZDOTDIR/p".to_owned()),
+        ]);
+        let untouched = env.clone();
+        strip_wsl_zsh_takeover(&mut env);
+        assert_eq!(env, untouched);
     }
 
     #[test]

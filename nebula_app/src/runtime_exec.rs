@@ -95,10 +95,14 @@ impl PaneExecContext {
                 user: crate::shell_detect::wsl_launch_user(shell.program(), shell.args())
                     .map(str::to_owned),
             });
+        let mut env = options.env.clone();
+        if matches!(location, ExecLocation::Wsl { .. }) {
+            crate::shell_detect::strip_wsl_zsh_takeover(&mut env);
+        }
         Self {
             location,
             shell_program: options.shell.as_ref().map(|shell| shell.program().to_owned()),
-            env: options.env.clone(),
+            env,
             fallback_cwd: options
                 .working_directory
                 .clone()

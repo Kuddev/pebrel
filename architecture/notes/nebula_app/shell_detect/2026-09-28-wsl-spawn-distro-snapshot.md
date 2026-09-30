@@ -60,11 +60,23 @@ not the CRT's (`shell_detect::wsl_raw_arg`). Measured on WSL 2 on 2026-09-29:
 `wsl.exe` pairs `"` and keeps every backslash literal, so a CRT `\"` ends the
 quote and the rest of the path runs as a guest command. A path with whitespace
 is wrapped in quotes; a path containing `"` has no encoding and is not
-injected, so the copy starts without `--cd`. `pane.exec` in a WSL pane goes
+injected: a split, duplicate or fork keeps the launch's own `--cd` or `~`, and
+only a file-tree terminal starts without `--cd`. `pane.exec` in a WSL pane goes
 through `std::process::Command`, whose CRT quoting has the same flaw, so it
 refuses a guest cwd or argument containing `"` (`wsl_accepts_arg`, the one rule
 both paths use). Persisted WSL launch arguments follow the raw convention too:
 a spaced `--cd` value is stored quoted, which is what a restored raw spawn needs.
+
+Host-side guest helpers (the side panel's git and `find`, the merge tab's
+`cat`/`tee`/git) start through `shell_detect::wsl_exec_command`, that is
+`wsl.exe -d <distro> --exec`. The snapshot made every WSL pane, not only an
+explicit `-d` one, feed its reported cwd to these helpers, and `wsl.exe -- …`
+hands the joined line to the guest's login shell: measured on 2026-09-30, a
+directory named `x$(touch /tmp/pwned)` ran the `touch` through `--` and not
+through `--exec`. Direct exec also keeps `find -printf`'s single backslash. A
+cwd that fails `wsl_accepts_arg` is not handed to the helpers. `pane.exec` and
+Runtime git drop the zsh takeover (`strip_wsl_zsh_takeover`) because a direct
+exec never reaches the bootstrap `.zshenv` that removes it.
 
 Copies of a pane follow its snapshot:
 
