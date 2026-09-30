@@ -26,6 +26,63 @@ class SshIntegrationTest {
     private val expectedFingerprint get() = requireNotNull(
         InstrumentationRegistry.getArguments().getString("sshFingerprint"))
 
+    @Test fun privateKeysAuthenticateWithPassphrasesAndNeverFallBackToPassword() {
+        val trusted = host.copy(fingerprint = expectedFingerprint)
+        fun command(text: String): ByteArray = SshConnection(trusted, "pebrel-test-only".toCharArray(),
+            { _, _ -> error("Already trusted") }).use { connection ->
+            connection.connect(); connection.openExec(text)
+            val output = connection.input().readBytes()
+            assertEquals("fixture command failed", 0, connection.awaitExit())
+            output
+        }
+        for ((kind, passphrase, accepted) in listOf(
+            Triple("ed25519", "", true), Triple("ed25519", "pebrel-key-test-only", true),
+            Triple("rsa", "", true), Triple("ed25519", "", false))) {
+            val marker = "pebrel-key-${java.util.UUID.randomUUID()}"
+            val directory = ".$marker"
+            val format = if (kind == "rsa") "-b 2048 -m PEM" else ""
+            val authorize = if (accepted) "cat '$directory/key.pub' >> .ssh/authorized_keys; chmod 600 .ssh/authorized_keys;" else ""
+            val key = command("umask 077; mkdir '$directory'; mkdir -p .ssh; chmod 700 .ssh; " +
+                "ssh-keygen -q -t $kind $format -N '$passphrase' -C '$marker' -f '$directory/key'; $authorize cat '$directory/key'")
+            try {
+                val profile = trusted.copy(keyUri = "content://fixture/$marker")
+                val secret = (if (accepted) passphrase else "pebrel-test-only").toCharArray()
+                SshConnection(profile, secret, { _, _ -> error("Already trusted") }, keySource = { key.copyOf() }).use { connection ->
+                    val failure = runCatching { connection.connect() }.exceptionOrNull()
+                    assertTrue(secret.all { it == '\u0000' })
+                    if (accepted) {
+                        assertNull(failure)
+                        connection.openExec("printf key-authenticated; sleep 10")
+                        val expected = "key-authenticated".toByteArray(Charsets.UTF_8)
+                        val output = ByteArray(expected.size)
+                        var offset = 0
+                        val input = connection.input()
+                        while (offset < output.size) {
+                            val count = input.read(output, offset, output.size - offset)
+                            assertTrue(count > 0)
+                            offset += count
+                        }
+                        assertArrayEquals(expected, output)
+                        assertEquals("file", connection.sftp(org.json.JSONObject().put("op", "stat").put("path", "$directory/key.pub")).getString("kind"))
+                    } else {
+                        assertEquals("a valid password must not replace a rejected selected key", SshFailureKind.AUTH, (failure as SshFailure).kind)
+                    }
+                }
+                if (passphrase.isNotEmpty()) {
+                    val wrong = "wrong-key-passphrase".toCharArray()
+                    SshConnection(profile, wrong, { _, _ -> error("Already trusted") }, keySource = { key.copyOf() }).use { connection ->
+                        val error = runCatching { connection.connect() }.exceptionOrNull()
+                        assertEquals(SshFailureKind.KEY, (error as SshFailure).kind)
+                        assertTrue(wrong.all { it == '\u0000' })
+                    }
+                }
+            } finally {
+                key.fill(0)
+                command("if [ -f .ssh/authorized_keys ]; then sed -i '/ $marker\$/d' .ssh/authorized_keys; fi; rm -f '$directory/key' '$directory/key.pub'; rmdir '$directory'").fill(0)
+            }
+        }
+    }
+
     @Test fun tmuxReattachesTheSameRemoteShellAndKeepsSftpAvailable() = runBlocking {
         persistentSession(SshSessionMode.TMUX)
     }
@@ -53,7 +110,8 @@ class SshIntegrationTest {
                 terminal.failureCause?.let { throw AssertionError("Persistent SSH failed", it) }
                 try {
                     withTimeout(15_000) {
-                        while (terminal.frame?.cursorVisible != true || terminal.frame?.text().isNullOrBlank()) delay(50)
+                        // 全屏 TUI 可以自行绘制光标；后面的真实命令/PID断言才判定可交互和重连。
+                        while (terminal.frame?.text().isNullOrBlank()) delay(50)
                     }
                 } catch (error: TimeoutCancellationException) {
                     throw AssertionError("${mode.id} initial frame: ${terminal.frame?.meta?.contentToString()}\n${terminal.frame?.text()?.take(2400)}", error)

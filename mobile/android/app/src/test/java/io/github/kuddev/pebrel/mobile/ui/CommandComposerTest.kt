@@ -35,6 +35,16 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CommandComposerTest {
+    @Test fun scrollbackDefaultsToOneThousandAndPersistsWithinTheDeviceLimit() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val preferences = DisplayPreferences(context)
+        assertEquals(1000, preferences.state.value.scrollbackLines)
+        preferences.update { it.copy(scrollbackLines = 50_000) }
+        assertEquals(preferences.maxScrollbackLines, preferences.state.value.scrollbackLines)
+        assertEquals(preferences.state.value.scrollbackLines, DisplayPreferences(context).state.value.scrollbackLines)
+        preferences.update { it.copy(scrollbackLines = 1000) }
+    }
+
     @Test fun fileSymbolsUseDedicatedOutlineResources() {
         val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
         assertNotEquals(fileSymbol("README.md", false), fileSymbol("README.unknown", false))
@@ -49,6 +59,57 @@ class CommandComposerTest {
         assertEquals(types.size, types.map { fileSymbol(it, false) }.distinct().size)
         for (path in types) {
             assertTrue(path, context.resources.getDrawable(fileSymbol(path, false), context.theme).intrinsicWidth > 0)
+        }
+    }
+
+    @Test fun keyAuthenticationCanBeSelectedAndRequiresAKeyDocument() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        compose.setContent {
+            MaterialTheme { HostForm(HostProfile("key-form", "Key host", "127.0.0.1", 22, "test"), {}, false, false, {}, { _, _, _, _ -> }) }
+        }
+        assertTrue(compose.onNodeWithTag("ssh-session-mode").fetchSemanticsNode().boundsInRoot.width <= 240 * context.resources.displayMetrics.density)
+        assertTrue(compose.onNodeWithTag("ssh-auth-mode").fetchSemanticsNode().boundsInRoot.width <= 220 * context.resources.displayMetrics.density)
+        compose.onNodeWithText(context.getString(R.string.auth_key)).performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText(context.getString(R.string.ssh_choose_key)).performScrollTo().assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText(context.getString(R.string.auth_auto)).performScrollTo().performClick()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).performScrollTo().assertIsEnabled()
+    }
+
+    @Test fun savedKeyFormUsesPassphraseLabelsInsteadOfPasswordLabels() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        compose.setContent {
+            MaterialTheme { HostForm(HostProfile("saved-key", "Key host", "127.0.0.1", 22, "test",
+                keyUri = "content://fixture/key", keyName = "encrypted-key"), {}, true, false, {}, { _, _, _, _ -> }) }
+        }
+        compose.onNodeWithText(context.getString(R.string.ssh_clear_saved_passphrase)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.ssh_passphrase_saved_hint)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.clear_saved_password)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.password_saved_hint)).assertDoesNotExist()
+    }
+
+    @Test fun compactSegmentsKeepLargeEnglishLabelsAndFortyEightDpTargets() {
+        var chosen by mutableStateOf("production")
+        var scale by mutableFloatStateOf(1f)
+        compose.setContent {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, scale)) {
+                MaterialTheme {
+                    Box(Modifier.width(320.dp)) {
+                        ConnectionSegments(listOf("production" to "Production", "development" to "Development"),
+                            chosen, { chosen = it }, Modifier.testTag("compact-segments"), compact = true)
+                    }
+                }
+            }
+        }
+        for (fontScale in listOf(1f, 1.5f)) {
+            compose.runOnIdle { scale = fontScale }
+            val density = ApplicationProvider.getApplicationContext<PebrelApplication>().resources.displayMetrics.density
+            assertTrue(compose.onNodeWithTag("compact-segments").fetchSemanticsNode().boundsInRoot.width <= 280 * density)
+            for (label in listOf("Production", "Development")) {
+                compose.onNode(hasText(label) and hasClickAction()).assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
+            }
+            compose.runOnIdle { assertEquals("development", chosen) }
         }
     }
 

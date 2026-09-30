@@ -130,7 +130,7 @@ object TerminalAttachments {
             stageSource(context.contentResolver, uri, stagingRoot)
         }
         return try {
-            uploadStaged(host, password, verify, staged)
+            uploadStaged(host, password, verify, staged, sshKeySource(context, host))
         } finally {
             deleteStaging(staged.file)
         }
@@ -224,8 +224,9 @@ object TerminalAttachments {
         password: CharArray,
         verify: (HostProfile, String) -> Boolean,
         staged: StagedAttachment,
+        keySource: (() -> ByteArray)?,
     ): String = withTimeout(TRANSFER_TIMEOUT_MS) {
-        val ssh = UploadSsh(host, password, verify)
+        val ssh = UploadSsh(host, password, verify, keySource)
         try {
             val connection = ssh.open()
             try {
@@ -627,6 +628,7 @@ object TerminalAttachments {
         private val host: HostProfile,
         password: CharArray,
         private val verify: (HostProfile, String) -> Boolean,
+        private val keySource: (() -> ByteArray)?,
     ) : Closeable {
         private val initialPassword = password.copyOf()
         private val guard = Any()
@@ -636,7 +638,7 @@ object TerminalAttachments {
         suspend fun open(): SshConnection {
             val connection = synchronized(guard) {
                 check(!closed) { "closed" }
-                SshConnection(host, initialPassword.copyOf(), verify).also { active = it }
+                SshConnection(host, initialPassword.copyOf(), verify, keySource = keySource).also { active = it }
             }
             return try {
                 withTimeout(CONNECT_TIMEOUT_MS) {

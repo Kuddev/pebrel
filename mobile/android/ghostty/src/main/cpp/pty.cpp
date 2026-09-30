@@ -12,15 +12,19 @@ static void io_error(JNIEnv* env, const char* message) {
     env->ThrowNew(env->FindClass("java/io/IOException"), message);
 }
 
-extern "C" JNIEXPORT jintArray JNICALL JNI_METHOD(ptyOpen)(JNIEnv* env, jobject, jstring directory, jint cols, jint rows) {
+extern "C" JNIEXPORT jintArray JNICALL JNI_METHOD(ptyOpen)(JNIEnv* env, jobject, jstring directory, jstring startup, jint cols, jint rows) {
     const char* raw = env->GetStringUTFChars(directory, nullptr);
     if (!raw) return nullptr;
     const std::string cwd(raw);
     env->ReleaseStringUTFChars(directory, raw);
+    const char* raw_startup = env->GetStringUTFChars(startup, nullptr);
+    if (!raw_startup) return nullptr;
+    const std::string shell_rc = "ENV=" + std::string(raw_startup);
+    env->ReleaseStringUTFChars(startup, raw_startup);
     const std::string home = "HOME=" + cwd;
     const std::string temporary = "TMPDIR=" + cwd;
     const char* environment[] = {"PATH=/system/bin:/system/xbin", "TERM=xterm-256color", "COLORTERM=truecolor",
-        "LANG=C.UTF-8", home.c_str(), temporary.c_str(), nullptr};
+        "LANG=C.UTF-8", home.c_str(), temporary.c_str(), shell_rc.c_str(), nullptr};
     const char* arguments[] = {"/system/bin/sh", "-i", nullptr};
     int master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
     char slave_name[128];

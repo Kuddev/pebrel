@@ -57,6 +57,12 @@ class GhosttyView(context: Context) : View(context) {
     )
     internal var composingText = ""
     private var inputGeneration = 0
+    private val taps = TerminalTapTracker(context)
+    private val scrollbar = TerminalScrollbar(this) { fraction ->
+        session?.frame?.let { frame ->
+            session?.scrollTo(((frame.scrollTotal - frame.rows.size).coerceAtLeast(0) * fraction).roundToInt())
+        }
+    }
     private var pinchInProgress = false
     private var pinchFontSize = fontSize.toFloat()
     private var pinchChanged = false
@@ -199,6 +205,8 @@ class GhosttyView(context: Context) : View(context) {
         resetCursorBlink()
     }
     override fun onDetachedFromWindow() {
+        scrollbar.cancel()
+        taps.reset()
         inputGeneration++
         composingText = ""
         stopScrolling()
@@ -255,6 +263,8 @@ class GhosttyView(context: Context) : View(context) {
         canvas.restoreToCount(checkpoint)
         selection.geometry(cellWidth, cellHeight)
         selection.draw(canvas)
+        scrollbar.update(frame.scrollTotal.toFloat(), frame.rows.size.toFloat(), frame.scrollOffset.toFloat())
+        scrollbar.draw(canvas, frame.cursorColor)
     }
 
     private fun drawCursor(canvas: Canvas, frame: TerminalFrame) {
@@ -288,7 +298,7 @@ class GhosttyView(context: Context) : View(context) {
 
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(event: MotionEvent) = true
-        override fun onSingleTapUp(event: MotionEvent): Boolean {
+        override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
             performClick()
             if (directInput) { requestFocus(); context.getSystemService(InputMethodManager::class.java).showSoftInput(this@GhosttyView, 0) }
             return true
@@ -309,6 +319,7 @@ class GhosttyView(context: Context) : View(context) {
             return true
         }
         override fun onLongPress(event: MotionEvent) {
+            taps.reset()
             stopScrolling()
             selection.geometry(cellWidth, cellHeight)
             session?.frame?.let { selection.begin(it, event.x, event.y) }
@@ -398,6 +409,24 @@ class GhosttyView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (scrollbar.touch(event)) {
+            taps.reset()
+            stopScrolling()
+            selection.clear()
+            cancelPointerGesture(event)
+            return true
+        }
+        val count = taps.onTouch(event)
+        if (count >= 2) {
+            cancelPointerGesture(event)
+            stopScrolling()
+            selection.geometry(cellWidth, cellHeight)
+            (selection.frame ?: session?.frame)?.let {
+                selection.begin(it, event.x, event.y, line = count == 3, dragging = false)
+            }
+            parent?.requestDisallowInterceptTouchEvent(false)
+            return true
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 stopScrolling()

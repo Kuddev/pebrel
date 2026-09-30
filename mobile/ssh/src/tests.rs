@@ -102,6 +102,7 @@ fn cancelling_key_exchange_closes_the_actual_socket() {
                 port: listener.local_addr().unwrap().port(),
                 user: "fixture".into(),
                 password: Zeroizing::new(Vec::new()),
+                private_key: Zeroizing::new(Vec::new()),
                 fingerprint: String::new(),
             })
             .unwrap();

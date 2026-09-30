@@ -50,6 +50,7 @@ fun SettingsScreen(repository: SessionRepository, onBack: () -> Unit, onComputer
             "font" -> R.string.terminal_font_and_size
             "cursor" -> R.string.terminal_cursor
             "gestures" -> R.string.terminal_gestures
+            "scrolling" -> R.string.terminal_history
             "input" -> R.string.input_settings
             "completion" -> R.string.completion_settings
             "keepalive" -> R.string.background_title
@@ -72,6 +73,9 @@ fun SettingsScreen(repository: SessionRepository, onBack: () -> Unit, onComputer
                             SettingDivider()
                             SettingsRow(R.drawable.ic_terminal, stringResource(R.string.terminal_cursor),
                                 cursorLabel(prefs.cursorStyle)) { open("cursor") }
+                            SettingDivider()
+                            SettingsRow(R.drawable.ic_terminal, stringResource(R.string.terminal_history),
+                                stringResource(R.string.terminal_history_lines, prefs.scrollbackLines)) { open("scrolling") }
                         }
                         SettingsGroup(stringResource(R.string.input_group)) {
                             SettingsRow(R.drawable.ic_keyboard, stringResource(R.string.input_settings),
@@ -134,6 +138,18 @@ fun SettingsScreen(repository: SessionRepository, onBack: () -> Unit, onComputer
                             }
                         }
                         HelperText(stringResource(R.string.terminal_cursor_hint))
+                    }
+                    "scrolling" -> {
+                        SettingsGroup(stringResource(R.string.terminal_history)) {
+                            listOf(500, 1000, 2000, 5000).filter { it <= repository.display.maxScrollbackLines }
+                                .forEachIndexed { index, lines ->
+                                    if (index > 0) SettingDivider()
+                                    SettingsChoice(stringResource(R.string.terminal_history_lines, lines), prefs.scrollbackLines == lines) {
+                                        repository.display.update { it.copy(scrollbackLines = lines) }
+                                    }
+                                }
+                        }
+                        HelperText(stringResource(R.string.terminal_history_hint, repository.display.maxScrollbackLines))
                     }
                     "gestures" -> {
                         SettingsGroup(stringResource(R.string.terminal_gestures)) {
