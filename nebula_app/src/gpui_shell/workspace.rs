@@ -1774,11 +1774,9 @@ impl NebulaWorkspace {
         view.read(cx).local_cwd()
     }
 
-    /// The focused pane's WSL distribution and guest directory; `None` outside
-    /// WSL. The Git view runs git inside the guest with it, without any UNC
-    /// mapping, so it still works when the host cannot see the WSL file system.
-    /// The identity is the pane's spawn snapshot, not the tab-level launch; see
-    /// `architecture/notes/nebula_app/shell_detect/`.
+    /// 聚焦 pane 的 WSL 发行版（spawn 快照）+ 来宾目录；不是 WSL 时为 `None`。
+    /// Git 视图拿它在来宾里直接跑 git，不经
+    /// 任何 UNC 映射，所以宿主看不见 WSL 文件系统时依然有效。
     fn active_wsl_cwd(&self, cx: &App) -> Option<crate::shell_detect::WslCwd> {
         let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)?.read(cx);
         let distro = view.wsl_distro.clone()?;

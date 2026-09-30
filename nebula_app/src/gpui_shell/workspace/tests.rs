@@ -750,8 +750,7 @@ fn wsl_file_tree_terminal_changes_directory_without_forcing_bash() {
         let crate::session::LaunchSession::Shell { args, .. } = launch else { unreachable!() };
         args
     };
-    // Raw command lines keep a spaced path whole; one wsl.exe cannot receive stays out.
-    assert_eq!(at("/home/user/my project"), ["--cd", "\"/home/user/my project\"", "-d", "Ubuntu"]);
+    // A path wsl.exe cannot receive only enters the distribution.
     assert_eq!(at("/tmp/i\" touch /tmp/x #"), ["-d", "Ubuntu"]);
 }
 

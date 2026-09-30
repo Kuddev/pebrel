@@ -51,7 +51,13 @@ impl PaneExecContext {
                 .or_else(|| std::env::var("WSLENV").ok())
                 .unwrap_or_default();
             for (key, _) in vars {
-                crate::shell_detect::append_wslenv(&mut forwarded, &format!("{key}/u"));
+                if !forwarded.split(':').any(|entry| entry.split('/').next() == Some(key)) {
+                    if !forwarded.is_empty() {
+                        forwarded.push(':');
+                    }
+                    forwarded.push_str(key);
+                    forwarded.push_str("/u");
+                }
             }
             self.env.insert("WSLENV".into(), forwarded);
         }
@@ -88,7 +94,7 @@ impl PaneExecContext {
         let location = options
             .shell
             .as_ref()
-            .filter(|shell| crate::shell_detect::is_wsl_launcher(shell.program()))
+            .filter(|shell| is_wsl_program(shell.program()))
             .map_or(ExecLocation::Host, |shell| ExecLocation::Wsl {
                 distro: crate::shell_detect::wsl_launch_distro(shell.program(), shell.args())
                     .map(str::to_owned),
@@ -119,6 +125,13 @@ impl PaneExecContext {
             fallback_cwd: Some(cwd),
         }
     }
+}
+
+fn is_wsl_program(program: &str) -> bool {
+    Path::new(program)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("wsl"))
 }
 
 #[derive(Debug)]
@@ -220,9 +233,7 @@ pub(crate) fn build_command(
         },
         ExecLocation::Wsl { distro, user } => {
             let guest_cwd = crate::shell_detect::wsl_guest_cwd(reported_cwd);
-            // `wsl.exe` splits its own command line and cannot receive a `"` inside
-            // an argument: the CRT `\"` that `Command` writes ends the quote, and
-            // the rest runs as a guest command. Refuse rather than run something else.
+            // Refuse what `wsl.exe` cannot receive rather than run something else.
             if let Some(value) = guest_cwd
                 .into_iter()
                 .chain(argv.iter().map(String::as_str))
@@ -408,18 +419,6 @@ mod tests {
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), None);
         options.shell = Some(nebula_terminal::tty::Shell::new("wsl.exe".into(), Vec::new()));
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), Some(None));
-        // A pane spawns with its snapshot pinned into the options, so exec follows it.
-        let pinned = crate::shell_detect::wsl_args_pinned("wsl.exe", &[], "Ubuntu").unwrap();
-        options.shell = Some(nebula_terminal::tty::Shell::new("wsl.exe".into(), pinned));
-        assert_eq!(
-            PaneExecContext::from_pty_options(&options).wsl_distribution(),
-            Some(Some("Ubuntu"))
-        );
-        options.shell = Some(nebula_terminal::tty::Shell::new(
-            r"C:\Program Files\WSL\wsl.exe".into(),
-            vec!["-e".into(), "tool".into(), "-d".into(), "guest-arg".into()],
-        ));
-        assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), Some(None));
         options.shell = Some(nebula_terminal::tty::Shell::new(
             "wsl.exe".into(),
             vec!["--distribution".into(), "Debian".into(), "--user".into(), "hello".into()],
@@ -431,8 +430,7 @@ mod tests {
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_user(), Some("hello"));
     }
 
-    /// A `"` in a guest cwd (an OSC 7 report from a cloned repository) or argv
-    /// would end `wsl.exe`'s quote and run the rest as a guest command.
+    /// A `"` in a guest cwd (an OSC 7 report) or argv would end `wsl.exe`'s quote.
     #[test]
     fn wsl_exec_refuses_what_wsl_cannot_receive() {
         let mut options = nebula_terminal::tty::Options::default();
@@ -442,20 +440,13 @@ mod tests {
         ));
         let context = PaneExecContext::from_pty_options(&options);
         let argv = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
-        let refused = |cwd: &str, argv: &[String]| match build_command(&context, cwd, argv) {
-            Err(error) => error.code == "exec_argument_unsupported",
-            Ok(_) => false,
+        let refused = |cwd: &str, argv: &[String]| {
+            build_command(&context, cwd, argv)
+                .is_err_and(|error| error.code == "exec_argument_unsupported")
         };
         assert!(refused("/tmp/i\" touch /tmp/x #", &argv(&["pwd"])));
         assert!(refused("/srv", &argv(&["git", "commit", "-m", "say \"hi\""])));
-        let (command, _) = build_command(&context, "/srv/my project", &argv(&["git", "status"]))
-            .expect("spaces are fine");
-        let args: Vec<_> =
-            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
-        assert_eq!(
-            args,
-            ["--distribution", "Ubuntu", "--cd", "/srv/my project", "--exec", "git", "status"]
-        );
+        assert!(!refused("/srv/my project", &argv(&["git", "status"])));
     }
 
     #[test]

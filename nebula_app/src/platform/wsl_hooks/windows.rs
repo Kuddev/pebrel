@@ -93,7 +93,12 @@ pub(crate) fn prepare(options: &mut tty::Options) {
     };
     options.env.insert(remote::TOKEN_ENV.into(), token);
     let wslenv = options.env.entry("WSLENV".into()).or_default();
-    crate::shell_detect::append_wslenv(wslenv, remote::TOKEN_ENV);
+    if !wslenv.split(':').any(|entry| entry.split('/').next() == Some(remote::TOKEN_ENV)) {
+        if !wslenv.is_empty() {
+            wslenv.push(':');
+        }
+        wslenv.push_str(remote::TOKEN_ENV);
+    }
     match worker().and_then(|tx| tx.try_send(target).ok()) {
         Some(()) => {},
         None => log::warn!("ai_hook: WSL setup queue unavailable; retry with setup-ai --wsl"),

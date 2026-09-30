@@ -45,42 +45,32 @@ fn wsl_program_args(launch: &LaunchSession) -> Option<(&str, &[String])> {
     }
 }
 
-/// Launch for a split of a pane. A WSL pane (explicit or default shell) keeps its
-/// distribution/user and passes the guest cwd through `--cd`; Windows would
-/// otherwise resolve `/home/x` against the current drive. A WSL pane without a
-/// reported guest cwd (fish, or before the first prompt) still stays in its guest.
-/// Other panes keep the current-default-shell behavior with the host cwd.
+/// Launch for a split of a pane: a WSL pane is duplicated into its own guest (see
+/// [`duplicate_launch`]), even without a reported guest cwd (fish, or before the
+/// first prompt); other panes open the current default shell in the host cwd.
 pub(super) fn split_launch(
     session: &LaunchSession,
-    wsl_distro: Option<&str>,
+    focused: Option<FocusedGuest<'_>>,
     raw_cwd: &str,
-    host_cwd: Option<std::path::PathBuf>,
+    host_cwd: impl FnOnce() -> Option<std::path::PathBuf>,
 ) -> crate::gpui_shell::terminal::view::TerminalLaunch {
     if wsl_program_args(session).is_none() {
+        let cwd = host_cwd();
         return crate::gpui_shell::terminal::view::TerminalLaunch::Local {
-            cwd: host_cwd,
+            cwd,
             shell: None,
             shell_name: None,
         };
     }
-    let mut launch = session.clone();
-    if let Some(distro) = wsl_distro {
-        pin_distribution(&mut launch, distro);
-    }
-    if inherit_guest_directory(&mut launch, raw_cwd) {
-        return NebulaWorkspace::terminal_launch_from_session(&launch, None);
-    }
-    // Without a guest report the pane still shows its spawn-time host directory.
-    // Replay that spawn as is: the launch's own `--cd` or `~` won there too.
-    let host_cwd = host_cwd.filter(|_| crate::shell_detect::wsl_guest_cwd(raw_cwd).is_none());
-    NebulaWorkspace::terminal_launch_from_session(&launch, host_cwd)
+    let (launch, cwd) = duplicate_launch(session.clone(), focused, raw_cwd, host_cwd);
+    NebulaWorkspace::terminal_launch_from_session(&launch, cwd)
 }
 
 /// [`split_launch`] for a live pane.
 pub(super) fn pane_split(
     view: &crate::gpui_shell::terminal::view::TerminalView,
 ) -> crate::gpui_shell::terminal::view::TerminalLaunch {
-    split_launch(&view.session_launch, view.wsl_distro.as_deref(), &view.cwd, view.local_cwd())
+    split_launch(&view.session_launch, focused_guest(view), &view.cwd, || host_visible_cwd(view))
 }
 
 /// The guest a WSL pane runs in: its spawn-time distribution and explicit user.
@@ -90,12 +80,9 @@ pub(super) struct FocusedGuest<'a> {
     pub user: Option<&'a str>,
 }
 
-/// Launch and host directory for a new default-shell tab opened from a pane.
-/// When the default shell enters the focused pane's WSL distribution as the same
-/// user, the guest cwd travels through `--cd`; otherwise only a host-visible
-/// directory is used. A target that chooses its own directory keeps it, as a
-/// profile `cwd` does for host shells.
-pub(super) fn new_tab_launch(
+/// The guest cwd travels through `--cd` only when `launch` enters the focused
+/// pane's guest as the same user; otherwise the copy gets the host directory.
+fn follow_guest(
     mut launch: LaunchSession,
     focused: Option<FocusedGuest<'_>>,
     raw_cwd: &str,
@@ -103,11 +90,8 @@ pub(super) fn new_tab_launch(
 ) -> (LaunchSession, Option<std::path::PathBuf>) {
     let same_guest =
         wsl_program_args(&launch).zip(focused).is_some_and(|((program, args), focused)| {
-            let own_directory = crate::shell_detect::wsl_launch_chooses_directory(program, args)
-                || matches!(&launch, LaunchSession::Profile { cwd: Some(_), .. });
-            !own_directory
-                && crate::shell_detect::wsl_spawn_distro(program, args)
-                    .is_some_and(|target| target.eq_ignore_ascii_case(focused.distro))
+            crate::shell_detect::wsl_spawn_distro(program, args)
+                .is_some_and(|distro| distro.eq_ignore_ascii_case(focused.distro))
                 && crate::shell_detect::wsl_launch_user(program, args) == focused.user
         });
     if same_guest && inherit_guest_directory(&mut launch, raw_cwd) {
@@ -116,40 +100,33 @@ pub(super) fn new_tab_launch(
     (launch, host_cwd())
 }
 
-/// Launch and host directory for a duplicate of a tab's identity. A bare WSL
-/// identity is pinned to the focused pane's spawn-time distribution; the guest
-/// cwd travels only when the copy then enters that guest as the same user. A
-/// pane without a snapshot (`--distribution-id`, `--system`) qualifies only when
-/// the identity is its own launch apart from the directory.
-pub(super) fn duplicate_launch(
-    mut launch: LaunchSession,
+/// A new default-shell tab opened from a pane; a target that chooses its own
+/// directory keeps it, as a profile `cwd` does for host shells.
+pub(super) fn new_tab_launch(
+    launch: LaunchSession,
     focused: Option<FocusedGuest<'_>>,
-    pane_launch: &LaunchSession,
     raw_cwd: &str,
     host_cwd: impl FnOnce() -> Option<std::path::PathBuf>,
 ) -> (LaunchSession, Option<std::path::PathBuf>) {
-    let same_guest = match focused {
-        Some(focused) => {
-            pin_distribution(&mut launch, focused.distro);
-            wsl_program_args(&launch).is_some_and(|(program, args)| {
-                crate::shell_detect::wsl_launch_distro(program, args)
-                    .is_some_and(|distro| distro.eq_ignore_ascii_case(focused.distro))
-                    && crate::shell_detect::wsl_launch_user(program, args) == focused.user
-            })
-        },
-        None => {
-            let identity = |launch| {
-                wsl_program_args(launch).and_then(|(program, args)| {
-                    crate::shell_detect::wsl_args_in_host_directory(program, args)
-                })
-            };
-            identity(&launch).is_some_and(|args| Some(args) == identity(pane_launch))
-        },
-    };
-    if same_guest && inherit_guest_directory(&mut launch, raw_cwd) {
-        return (launch, None);
+    let own_directory = matches!(&launch, LaunchSession::Profile { cwd: Some(_), .. })
+        || wsl_program_args(&launch)
+            .and_then(|(program, args)| crate::shell_detect::wsl_launch(program, args))
+            .is_some_and(|options| options.chooses_directory);
+    follow_guest(launch, focused.filter(|_| !own_directory), raw_cwd, host_cwd)
+}
+
+/// A duplicate (or fork) of a tab's identity, which may differ from the focused
+/// pane's. A bare WSL identity is pinned to the pane's spawn-time distribution.
+pub(super) fn duplicate_launch(
+    mut launch: LaunchSession,
+    focused: Option<FocusedGuest<'_>>,
+    raw_cwd: &str,
+    host_cwd: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> (LaunchSession, Option<std::path::PathBuf>) {
+    if let Some(focused) = focused {
+        pin_distribution(&mut launch, focused.distro);
     }
-    (launch, host_cwd())
+    follow_guest(launch, focused, raw_cwd, host_cwd)
 }
 
 pub(super) fn focused_guest(
@@ -162,18 +139,16 @@ pub(super) fn focused_guest(
     })
 }
 
-/// The pane's directory as a host launch may use it. A WSL pane's guest path
-/// never reaches the host `is_dir` check (Windows resolves `/` against the
-/// current drive), even without a distribution snapshot; only `/mnt/<drive>`
-/// maps, since a UNC probe would block the UI thread and cmd or another guest
-/// cannot start in `\\wsl.localhost\…`.
+/// The pane's directory as a host launch may use it: a WSL guest path maps only
+/// from `/mnt/<drive>` (Windows resolves `/` against the current drive, and a UNC
+/// probe would block the UI thread).
 pub(super) fn host_visible_cwd(
     view: &crate::gpui_shell::terminal::view::TerminalView,
 ) -> Option<std::path::PathBuf> {
     let is_wsl = view.wsl_distro.is_some() || wsl_program_args(&view.session_launch).is_some();
     match crate::shell_detect::wsl_guest_cwd(&view.cwd).filter(|_| is_wsl) {
         Some(guest) => crate::shell_detect::wsl_mounted_host_cwd(&crate::shell_detect::WslCwd {
-            distro: view.wsl_distro.clone().unwrap_or_default(),
+            distro: String::new(),
             guest: guest.to_owned(),
         }),
         None => view.local_cwd(),
@@ -220,13 +195,7 @@ impl NebulaWorkspace {
             // the default shell); a guest path follows only into the same guest.
             let (launch, cwd) = {
                 let view = view.read(cx);
-                duplicate_launch(
-                    launch,
-                    focused_guest(view),
-                    &view.session_launch,
-                    &view.cwd,
-                    || host_visible_cwd(view),
-                )
+                duplicate_launch(launch, focused_guest(view), &view.cwd, || host_visible_cwd(view))
             };
             self.add_terminal_with(launch, cwd, None, window, cx);
         }
@@ -294,238 +263,96 @@ mod tests {
         assert_eq!(launch, original);
     }
 
-    #[test]
-    fn split_of_wsl_pane_keeps_distribution_and_guest_directory() {
-        use crate::gpui_shell::terminal::view::TerminalLaunch;
-
-        // Default-shell case: startup snapshots the resolved WSL shell as the identity.
-        let session = LaunchSession::Shell {
-            name: "wsl:Ubuntu".into(),
-            program: r"C:\Windows\System32\wsl.exe".into(),
-            args: ["-d", "Ubuntu", "-u", "dev"].map(String::from).to_vec(),
-        };
-        let TerminalLaunch::Local { cwd, shell: Some(shell), .. } =
-            split_launch(&session, Some("Ubuntu"), "/home/dev/project", None)
-        else {
-            panic!("a split of a WSL pane must launch the same WSL shell");
-        };
-        assert!(cwd.is_none(), "the guest cwd must not be passed as a host directory");
-        assert_eq!(shell.args(), ["--cd", "/home/dev/project", "-d", "Ubuntu", "-u", "dev"]);
-    }
-
-    fn split_args(
-        session: &LaunchSession,
-        raw_cwd: &str,
-        host_cwd: Option<std::path::PathBuf>,
-    ) -> (Option<std::path::PathBuf>, Vec<String>) {
-        use crate::gpui_shell::terminal::view::TerminalLaunch;
-
-        let TerminalLaunch::Local { cwd, shell: Some(shell), .. } =
-            split_launch(session, Some("Ubuntu"), raw_cwd, host_cwd)
-        else {
-            panic!("a split of a WSL pane must launch WSL");
-        };
-        (cwd, shell.args().to_vec())
-    }
-
-    #[test]
-    fn split_of_bare_wsl_pane_pins_the_snapshotted_distribution() {
-        let bare = LaunchSession::Shell {
-            name: "wsl".into(),
-            program: "wsl.exe".into(),
-            args: vec!["~".into()],
-        };
-        let (cwd, args) = split_args(&bare, "/home/dev", None);
-        assert!(cwd.is_none());
-        assert_eq!(args, ["--cd", "/home/dev", "-d", "Ubuntu"]);
-    }
-
-    #[test]
-    fn split_of_wsl_pane_without_guest_cwd_stays_in_the_guest() {
-        let session = wsl("Ubuntu");
-        // fish or a split before the first prompt: the pane still reports a host cwd.
-        // A Windows host path, as WSL panes report; a Unix temp dir would read as a guest path.
-        let host = std::path::PathBuf::from(r"C:\Users\dev\project");
-        let (cwd, args) = split_args(&session, &host.to_string_lossy(), Some(host.clone()));
-        assert_eq!(cwd, Some(host.clone()));
-        assert_eq!(args, ["-d", "Ubuntu"]);
-        let (cwd, args) = split_args(&session, "", None);
-        assert!(cwd.is_none());
-        assert_eq!(args, ["-d", "Ubuntu"]);
-        // Before the first report the launch's own directory still wins, as at spawn.
-        let own = LaunchSession::Shell {
-            name: "work".into(),
-            program: "wsl.exe".into(),
-            args: ["-d", "Ubuntu", "--cd", "~/work"].map(String::from).to_vec(),
-        };
-        let (_, args) = split_args(&own, &host.to_string_lossy(), Some(host.clone()));
-        assert_eq!(args, ["-d", "Ubuntu", "--cd", "~/work"]);
-    }
-
-    #[test]
-    fn duplicate_follows_the_guest_only_into_the_same_guest() {
-        let bare = LaunchSession::Shell {
-            name: "wsl".into(),
-            program: "wsl.exe".into(),
-            args: Vec::new(),
-        };
-        let (launch, cwd) =
-            duplicate_launch(bare, guest("Ubuntu"), &LaunchSession::Default, "/srv", || {
-                panic!("the same guest needs no host directory")
-            });
-        assert!(cwd.is_none());
-        let LaunchSession::Shell { args, .. } = launch else { panic!("shell identity lost") };
-        assert_eq!(args, ["--cd", "/srv", "-d", "Ubuntu"]);
-
-        // A tab identity in another distribution or shell never receives the guest path.
-        let host = Some(std::path::PathBuf::from(r"D:\work"));
-        let (launch, cwd) = duplicate_launch(
-            wsl("Debian"),
-            guest("Ubuntu"),
-            &LaunchSession::Default,
-            "/tmp",
-            || host.clone(),
-        );
-        assert_eq!((launch, cwd), (wsl("Debian"), host.clone()));
-        let focused = Some(FocusedGuest { distro: "Ubuntu", user: Some("root") });
-        let (launch, cwd) =
-            duplicate_launch(wsl("Ubuntu"), focused, &LaunchSession::Default, "/root", || None);
-        assert_eq!((launch, cwd), (wsl("Ubuntu"), None));
-        let pwsh = LaunchSession::Shell {
-            name: "pwsh".into(),
-            program: "pwsh.exe".into(),
-            args: Vec::new(),
-        };
-        let (launch, cwd) =
-            duplicate_launch(pwsh.clone(), guest("Ubuntu"), &LaunchSession::Default, "/", || None);
-        assert_eq!((launch, cwd), (pwsh, None));
-
-        // Without a snapshot the guest cwd follows only the pane's own identity.
-        let by_id = |cd: &[&str]| LaunchSession::Shell {
-            name: "id".into(),
-            program: "wsl.exe".into(),
-            args: [&["--distribution-id", "{0000}"][..], cd]
-                .concat()
-                .into_iter()
-                .map(String::from)
-                .collect(),
-        };
-        let (launch, cwd) =
-            duplicate_launch(by_id(&[]), None, &by_id(&["--cd", "/a"]), "/b", || {
-                panic!("the same identity needs no host directory")
-            });
-        assert!(cwd.is_none());
-        let LaunchSession::Shell { args, .. } = launch else { panic!("shell identity lost") };
-        assert_eq!(args, ["--cd", "/b", "--distribution-id", "{0000}"]);
-        let (launch, cwd) = duplicate_launch(by_id(&[]), None, &wsl("Ubuntu"), "/b", || None);
-        assert_eq!((launch, cwd), (by_id(&[]), None));
+    fn shell(name: &str, program: &str, args: &[&str]) -> LaunchSession {
+        LaunchSession::Shell {
+            name: name.into(),
+            program: program.into(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        }
     }
 
     fn wsl(distro: &str) -> LaunchSession {
-        LaunchSession::Shell {
-            name: format!("wsl:{distro}"),
-            program: "wsl.exe".into(),
-            args: ["-d", distro].map(String::from).to_vec(),
-        }
+        shell(&format!("wsl:{distro}"), "wsl.exe", &["-d", distro])
     }
 
     fn guest(distro: &str) -> Option<FocusedGuest<'_>> {
         Some(FocusedGuest { distro, user: None })
     }
 
+    fn args(launch: &LaunchSession) -> &[String] {
+        match launch {
+            LaunchSession::Shell { args, .. } | LaunchSession::Profile { args, .. } => args,
+            _ => &[],
+        }
+    }
+
+    /// A copy never carries a guest path into another distribution, user or shell;
+    /// a duplicate pins a bare identity, a new tab follows the default and keeps a
+    /// directory the target chooses itself (a guest command's `--cd` is not one).
     #[test]
-    fn new_tab_in_the_same_wsl_distribution_keeps_the_guest_directory() {
-        let (launch, cwd) = new_tab_launch(wsl("Ubuntu"), guest("ubuntu"), "/home/dev/app", || {
-            panic!("the host directory is not needed for the same guest")
-        });
-        assert!(cwd.is_none(), "the guest cwd must not become a host directory");
-        let LaunchSession::Shell { args, .. } = launch else { panic!("shell identity lost") };
-        assert_eq!(args, ["--cd", "/home/dev/app", "-d", "Ubuntu"]);
+    fn copies_follow_the_guest_only_into_the_same_guest() {
+        let host = std::path::PathBuf::from(r"D:\work");
+        let root = Some(FocusedGuest { distro: "Ubuntu", user: Some("root") });
+        let bare = shell("wsl", "wsl.exe", &[]);
+        let pwsh = shell("pwsh", "pwsh.exe", &[]);
+        let own = shell("work", "wsl.exe", &["-d", "Ubuntu", "--cd", "~/work"]);
+        let tool = shell("tool", "wsl.exe", &["-d", "Ubuntu", "-e", "tool", "--cd", "/t"]);
+        type Case<'a> = (LaunchSession, Option<FocusedGuest<'a>>, &'a [&'a str], bool);
+        let duplicates: [Case; 5] = [
+            (bare, guest("Ubuntu"), &["--cd", "/srv", "-d", "Ubuntu"], true),
+            (wsl("Debian"), guest("Ubuntu"), &["-d", "Debian"], false),
+            (wsl("Ubuntu"), root, &["-d", "Ubuntu"], false),
+            (pwsh.clone(), guest("Ubuntu"), &[], false),
+            (wsl("Ubuntu"), None, &["-d", "Ubuntu"], false),
+        ];
+        let new_tabs: [Case; 5] = [
+            (wsl("Ubuntu"), guest("ubuntu"), &["--cd", "/srv", "-d", "Ubuntu"], true),
+            (wsl("Debian"), guest("Ubuntu"), &["-d", "Debian"], false),
+            (pwsh, guest("Ubuntu"), &[], false),
+            (own, guest("Ubuntu"), &["-d", "Ubuntu", "--cd", "~/work"], false),
+            (
+                tool,
+                guest("Ubuntu"),
+                &["--cd", "/srv", "-d", "Ubuntu", "-e", "tool", "--cd", "/t"],
+                true,
+            ),
+        ];
+        for (duplicate, cases) in [(true, duplicates), (false, new_tabs)] {
+            for (target, focused, expected, inherits) in cases {
+                let host = || Some(host.clone());
+                let (launch, cwd) = if duplicate {
+                    duplicate_launch(target, focused, "/srv", host)
+                } else {
+                    new_tab_launch(target, focused, "/srv", host)
+                };
+                assert_eq!(args(&launch), expected);
+                assert_eq!(cwd.is_none(), inherits, "{expected:?}");
+            }
+        }
     }
 
     #[test]
-    fn new_tab_in_another_shell_only_uses_the_host_visible_directory() {
-        let host = Some(std::path::PathBuf::from(r"D:\work"));
-        // Another distribution: no guest path from Ubuntu may leak into Debian.
-        let (launch, cwd) =
-            new_tab_launch(wsl("Debian"), guest("Ubuntu"), "/mnt/d/work", || host.clone());
-        assert_eq!(launch, wsl("Debian"));
-        assert_eq!(cwd, host);
-        // A host default shell opened from a WSL pane.
-        let pwsh = LaunchSession::Shell {
-            name: "pwsh".into(),
-            program: "pwsh.exe".into(),
-            args: Vec::new(),
-        };
-        let (launch, cwd) = new_tab_launch(pwsh.clone(), guest("Ubuntu"), "/home/dev", || None);
-        assert_eq!(launch, pwsh);
-        assert!(cwd.is_none());
-    }
-
-    #[test]
-    fn new_tab_as_another_guest_user_does_not_inherit_the_guest_directory() {
-        let focused = Some(FocusedGuest { distro: "Ubuntu", user: Some("root") });
-        let (launch, cwd) = new_tab_launch(wsl("Ubuntu"), focused, "/root/secret", || None);
-        assert_eq!(launch, wsl("Ubuntu"));
-        assert!(cwd.is_none());
-    }
-
-    #[test]
-    fn new_tab_profile_with_its_own_directory_keeps_it() {
-        let profile = LaunchSession::Profile {
-            name: "Ubuntu work".into(),
-            command: "wsl.exe".into(),
-            args: ["-d", "Ubuntu", "--cd", "~/work"].map(String::from).to_vec(),
-            cwd: None,
-            shell_id: None,
-        };
-        let (launch, _) = new_tab_launch(profile.clone(), guest("Ubuntu"), "/tmp", || None);
-        assert_eq!(launch, profile);
-        let profile = LaunchSession::Profile {
-            name: "Ubuntu".into(),
-            command: "wsl.exe".into(),
-            args: ["-d", "Ubuntu"].map(String::from).to_vec(),
-            cwd: None,
-            shell_id: None,
-        };
-        let (launch, _) = new_tab_launch(profile, guest("Ubuntu"), "/tmp", || None);
-        let LaunchSession::Profile { args, .. } = launch else { panic!("profile identity lost") };
-        assert_eq!(args, ["--cd", "/tmp", "-d", "Ubuntu"]);
-    }
-
-    #[test]
-    fn new_tab_guest_command_cd_is_not_the_launch_directory() {
-        // `--cd` after `-e` belongs to the guest tool, not to WSL's start directory.
-        let tool = LaunchSession::Shell {
-            name: "tool".into(),
-            program: "wsl.exe".into(),
-            args: ["-d", "Ubuntu", "-e", "tool", "--cd", "/tool-dir"].map(String::from).to_vec(),
-        };
-        let (launch, cwd) = new_tab_launch(tool, guest("Ubuntu"), "/home/dev/app", || None);
-        assert!(cwd.is_none());
-        let LaunchSession::Shell { args, .. } = launch else { panic!("shell identity lost") };
-        assert_eq!(
-            args,
-            ["--cd", "/home/dev/app", "-d", "Ubuntu", "-e", "tool", "--cd", "/tool-dir"]
-        );
-    }
-
-    #[test]
-    fn split_of_host_pane_keeps_default_shell_and_host_directory() {
+    fn split_stays_in_the_guest_and_host_panes_keep_the_default_shell() {
         use crate::gpui_shell::terminal::view::TerminalLaunch;
 
-        let session = LaunchSession::Shell {
-            name: "pwsh".into(),
-            program: "pwsh.exe".into(),
-            args: Vec::new(),
+        let host = std::path::PathBuf::from(r"C:\Users\dev\project");
+        let split = |session, focused, raw: &str| match split_launch(&session, focused, raw, || {
+            Some(host.clone())
+        }) {
+            TerminalLaunch::Local { cwd, shell, .. } => (cwd, shell.map(|s| s.args().to_vec())),
+            TerminalLaunch::Ssh { .. } => panic!("a local split stays local"),
         };
-        let host = std::env::temp_dir();
-        let TerminalLaunch::Local { cwd, shell, .. } =
-            split_launch(&session, None, &host.to_string_lossy(), Some(host.clone()))
-        else {
-            panic!("a split of a host pane stays local");
-        };
-        assert!(shell.is_none());
-        assert_eq!(cwd, Some(host));
+        let (cwd, args) = split(shell("wsl", "wsl.exe", &["~"]), guest("Ubuntu"), "/home/dev");
+        assert_eq!(
+            (cwd, args.unwrap()),
+            (None, vec!["--cd".into(), "/home/dev".into(), "-d".into(), "Ubuntu".into()])
+        );
+        // fish or a split before the first prompt: the pane still reports a host cwd,
+        // and the launch's own directory still wins, as at spawn.
+        let (cwd, args) = split(wsl("Ubuntu"), guest("Ubuntu"), r"C:\Users\dev\project");
+        assert_eq!((cwd, args.unwrap()), (Some(host.clone()), vec!["-d".into(), "Ubuntu".into()]));
+        let own = shell("work", "wsl.exe", &["-d", "Ubuntu", "--cd", "~/work"]);
+        assert_eq!(split(own, guest("Ubuntu"), "").1.unwrap(), ["-d", "Ubuntu", "--cd", "~/work"]);
+        assert_eq!(split(shell("pwsh", "pwsh.exe", &[]), None, "/x"), (Some(host.clone()), None));
     }
 }

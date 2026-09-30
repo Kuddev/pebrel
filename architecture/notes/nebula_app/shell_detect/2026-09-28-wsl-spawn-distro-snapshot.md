@@ -80,20 +80,22 @@ exec never reaches the bootstrap `.zshenv` that removes it.
 
 Copies of a pane follow its snapshot:
 
-- **Split and duplicate** insert `-d <snapshot>` into a bare launch, after a
-  leading `~`. A later default change therefore cannot move the copy to another
-  guest. The pinned argument is part of the copy's persisted launch, so a
-  restored copy stays in that guest while the restored original follows the
-  default again.
+One rule (`tab_duplication::follow_guest`) decides every copy: the guest cwd
+travels through `--cd` only when the copy enters the focused pane's
+distribution as the same user; otherwise the copy gets the host-visible cwd.
+
+- **Split, duplicate and AI-session fork** insert `-d <snapshot>` into a bare
+  launch, after a leading `~`, so a later default change cannot move the copy.
+  The pinned argument is part of the copy's persisted launch; the restored
+  original follows the default again. A split duplicates the pane's own launch,
+  a duplicate or fork the tab's identity, which may differ from the pane's.
 - **A WSL pane without a guest cwd** (fish, or before the first prompt) splits
-  into the same guest rather than the host default shell, replaying its spawn:
-  the launch's own `--cd` or `~` still wins over the spawn-time host directory.
-- **A new default-shell tab** inherits the guest cwd only when it targets the
-  same distribution and explicit user, and does not choose its own directory.
-- **A duplicate or AI-session fork** uses the tab's identity, which may differ
-  from the focused pane's; the guest cwd follows only into the same
-  distribution and user. A pane without a snapshot qualifies when the identity
-  is its own launch apart from the directory.
+  into the same guest, replaying its spawn: the launch's own `--cd` or `~`
+  still wins over the spawn-time host directory.
+- **A new default-shell tab** is not pinned, and keeps a directory it chooses
+  itself.
+- **A pane without a snapshot** (`--distribution-id`, `--system`) never passes
+  its guest cwd on; its copies start in the host-visible cwd or the guest home.
 - **Relative prompt paths** resolve against the guest cwd mapped into the
   snapshotted distribution, like absolute ones.
 - **Otherwise** a WSL pane's guest path yields only a `/mnt/<drive>` host

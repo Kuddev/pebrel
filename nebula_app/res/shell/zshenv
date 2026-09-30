@@ -9,7 +9,7 @@ fi
 if [[ -n ${WSLENV-} ]]; then
     () {
         emulate -L zsh
-        WSLENV=${(j.:.)${(@)${(s.:.)WSLENV}:#(ZDOTDIR|NEBULA_ZSH_INTEGRATION|NEBULA_ZDOTDIR_WAS_SET)(|/*)}}
+        WSLENV=${(j.:.)${(@)${(s.:.)WSLENV}:#(ZDOTDIR|NEBULA_ZSH_INTEGRATION)(|/*)}}
     }
 fi
 # zsh's own newuser check ran before this file, so it saw the bootstrap. Repeat it

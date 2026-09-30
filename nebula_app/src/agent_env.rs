@@ -196,14 +196,23 @@ fn merge_wslenv(env: &mut HashMap<String, String>) {
         .map(str::to_owned)
         .or_else(|| std::env::var(WSLENV).ok())
         .unwrap_or_default();
-    let mut wslenv =
-        existing.split(':').filter(|entry| !entry.is_empty()).collect::<Vec<_>>().join(":");
+    let mut entries: Vec<String> =
+        existing.split(':').filter(|entry| !entry.is_empty()).map(str::to_owned).collect();
     for entry in WSLENV_ENTRIES {
         // 只按变量名判重：宿主若已用别的标志位传同一个变量，尊重它的选择，
         // 不去覆盖成我们的标志。
-        crate::shell_detect::append_wslenv(&mut wslenv, entry);
+        let name = variable_name(entry);
+        if !entries.iter().any(|existing| variable_name(existing) == name) {
+            entries.push((*entry).to_owned());
+        }
     }
-    insert_env(env, WSLENV, wslenv);
+    insert_env(env, WSLENV, entries.join(":"));
+}
+
+/// `WSLENV` 条目里的变量名部分（`NEBULA_CLI/p` → `NEBULA_CLI`）。
+#[cfg(windows)]
+fn variable_name(entry: &str) -> &str {
+    entry.split('/').next().unwrap_or(entry)
 }
 
 #[cfg(not(windows))]
@@ -307,8 +316,7 @@ mod tests {
         fn wslenv_entries_match_variables() {
             // 透传表里的路径条目是字面量。变量改名而这里忘记跟着改，就会静默丢掉
             // WSL 侧的可达性——用一个断言把它变成编译期之后立刻可见的失败。
-            let names: Vec<&str> =
-                WSLENV_ENTRIES.iter().copied().map(crate::shell_detect::wslenv_name).collect();
+            let names: Vec<&str> = WSLENV_ENTRIES.iter().copied().map(variable_name).collect();
             assert!(
                 names.contains(&CLI_ENV),
                 "{CLI_ENV} missing from WSLENV passthrough: {names:?}"
@@ -342,7 +350,7 @@ mod tests {
             assert_eq!(env["COLORTERM"], "24bit");
             let entries: Vec<_> = env["WSLENV"]
                 .split(':')
-                .filter(|entry| crate::shell_detect::wslenv_name(entry) == "COLORTERM")
+                .filter(|entry| variable_name(entry) == "COLORTERM")
                 .collect();
             assert_eq!(entries, ["COLORTERM/u"]);
         }

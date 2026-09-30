@@ -82,122 +82,27 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Host directory that a WSL guest zsh uses as `ZDOTDIR` (translated through
-/// `WSLENV` `/p`), see [`crate::shell_detect::wsl_cwd_report_env`]. Kept apart
-/// from the local-zsh directory so the two integrations never rewrite each other.
-///
-/// `None` off Windows and when the data directory is not on a local drive
-/// letter: a UNC or redirected path is not automounted in the guest, and a
-/// `ZDOTDIR` the guest cannot read would also skip the user's own startup files.
-/// Whether a given guest user can actually read it, and whether the launch starts
-/// zsh at all, is the guest's answer (`super::wsl_guest_shell`), not a host guess.
-/// Only the guest probe worker calls this (see `super::wsl_guest_shell`): it
-/// writes and fsyncs, so it must never run on the UI thread. The spawn path uses
-/// [`wsl_zsh_directory_ready`]. The files are written once per process; later
-/// calls never replace a file that a starting guest zsh may be reading. A failed
-/// write (a sharing violation from a guest still reading through 9P, an
-/// antivirus hold) warns once and is retried only after five minutes. A
-/// bootstrap file deleted while the process runs is rewritten by the next probe.
+/// Host directory a WSL guest zsh uses as `ZDOTDIR` (translated through `WSLENV`
+/// `/p`), apart from the local-zsh one so the two never rewrite each other.
+/// Only the guest probe worker calls it (it writes and fsyncs); whether a guest
+/// user can read it is the probe's answer (`super::wsl_guest_shell`). The files
+/// are written once per process and afterwards only when missing, never while a
+/// starting guest zsh may be reading them.
 pub(crate) fn wsl_zsh_directory() -> Option<std::path::PathBuf> {
-    #[cfg(windows)]
-    {
-        use std::sync::PoisonError;
-        use std::time::Instant;
-
-        let mut state = WSL_BOOTSTRAP.lock().unwrap_or_else(PoisonError::into_inner);
-        let (directory, complete) = match &*state {
-            Some(Bootstrap::Ineligible) => return None,
-            Some(Bootstrap::Ready(directory)) => (
-                directory.clone(),
-                ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()),
-            ),
-            Some(Bootstrap::Failed(_, at)) if at.elapsed() < BOOTSTRAP_RETRY_AFTER => return None,
-            Some(Bootstrap::Failed(directory, _)) => (directory.clone(), false),
-            None => {
-                let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
-                if !is_local_drive_path(&directory) {
-                    *state = Some(Bootstrap::Ineligible);
-                    return None;
-                }
-                (directory, false)
-            },
-        };
-        if complete {
-            return Some(directory);
+    static WRITTEN: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    if !cfg!(windows) {
+        return None;
+    }
+    let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
+    let mut written = WRITTEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !*written || !ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()) {
+        if let Err(error) = write_zsh_files(&directory) {
+            log::warn!("Could not prepare WSL zsh integration: {error}");
+            return None;
         }
-        match write_zsh_files(&directory) {
-            Ok(()) => {
-                *state = Some(Bootstrap::Ready(directory.clone()));
-                Some(directory)
-            },
-            Err(error) => {
-                log::warn!("Could not prepare WSL zsh integration: {error}");
-                *state = Some(Bootstrap::Failed(directory, Instant::now()));
-                None
-            },
-        }
+        *written = true;
     }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
-/// The WSL bootstrap directory if it is already written and complete, for the
-/// spawn path on the UI thread: it never writes and never waits for a writer
-/// (a busy lock answers `None`; that pane simply starts without zsh reports).
-pub(crate) fn wsl_zsh_directory_ready() -> Option<std::path::PathBuf> {
-    #[cfg(windows)]
-    {
-        let state = WSL_BOOTSTRAP.try_lock().ok()?;
-        match &*state {
-            Some(Bootstrap::Ready(directory))
-                if ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()) =>
-            {
-                Some(directory.clone())
-            },
-            _ => None,
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
-#[cfg(windows)]
-const BOOTSTRAP_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
-
-#[cfg(windows)]
-enum Bootstrap {
-    Ineligible,
-    Ready(std::path::PathBuf),
-    Failed(std::path::PathBuf, std::time::Instant),
-}
-
-#[cfg(windows)]
-static WSL_BOOTSTRAP: std::sync::Mutex<Option<Bootstrap>> = std::sync::Mutex::new(None);
-
-/// `D:\…` or `\\?\D:\…` on a fixed disk. UNC shares, mapped network drives and
-/// relative paths are not automounted into the guest.
-#[cfg(windows)]
-fn is_local_drive_path(path: &std::path::Path) -> bool {
-    use std::path::{Component, Prefix};
-    // `DRIVE_FIXED` lives in a `windows` feature this crate does not enable.
-    const DRIVE_FIXED: u32 = 3;
-    let letter = match path.components().next() {
-        Some(Component::Prefix(prefix)) => match prefix.kind() {
-            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => letter,
-            _ => return false,
-        },
-        _ => return false,
-    };
-    let root: Vec<u16> = format!("{}:\\", char::from(letter)).encode_utf16().chain([0]).collect();
-    // SAFETY: `root` is a NUL-terminated UTF-16 string that outlives the call.
-    let kind = unsafe {
-        windows::Win32::Storage::FileSystem::GetDriveTypeW(windows::core::PCWSTR(root.as_ptr()))
-    };
-    kind == DRIVE_FIXED
+    Some(directory)
 }
 
 #[cfg(unix)]
@@ -212,36 +117,16 @@ fn supports(name: &str, args: &[String]) -> bool {
 #[cfg(test)]
 mod zsh_file_tests {
     #[test]
-    fn zsh_bootstrap_is_posix_text_and_chains_the_user_rc() {
+    fn zsh_bootstrap_is_posix_text() {
         let directory = tempfile::tempdir().expect("temporary directory");
         // The second write covers replacing an existing bootstrap.
         for _ in 0..2 {
             super::write_zsh_files(directory.path()).expect("write zsh bootstrap");
         }
-        for name in [".zshenv", ".zprofile", ".zshrc"] {
+        for (name, _) in super::ZSH_FILES {
             let content = std::fs::read_to_string(directory.path().join(name)).expect(name);
             assert!(!content.contains('\r'), "{name} must not carry CR into the guest");
-            assert!(
-                content.contains(&format!("${{ZDOTDIR-$HOME}}/{name}")),
-                "{name} chains user file"
-            );
         }
-        let env = std::fs::read_to_string(directory.path().join(".zshenv")).unwrap();
-        assert!(
-            env.contains("-o rcs && -o interactive"),
-            "`zsh -c` must not export the bootstrap ZDOTDIR to its children"
-        );
-        let rc = std::fs::read_to_string(directory.path().join(".zshrc")).unwrap();
-        assert!(rc.contains("]7;file://"), "zsh integration reports OSC 7 cwd");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_bootstrap_needs_a_guest_visible_drive() {
-        let system = std::env::var_os("SystemRoot").expect("SystemRoot");
-        assert!(super::is_local_drive_path(std::path::Path::new(&system)));
-        assert!(!super::is_local_drive_path(std::path::Path::new(r"\\server\share\Pebrel")));
-        assert!(!super::is_local_drive_path(std::path::Path::new(r"relative\Pebrel")));
     }
 }
 

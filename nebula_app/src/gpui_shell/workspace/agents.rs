@@ -355,7 +355,6 @@ impl NebulaWorkspace {
             super::tab_duplication::duplicate_launch(
                 launch_session,
                 super::tab_duplication::focused_guest(view),
-                &view.session_launch,
                 &view.cwd,
                 || super::tab_duplication::host_visible_cwd(view),
             )

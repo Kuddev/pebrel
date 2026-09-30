@@ -527,27 +527,38 @@ pub fn shell_short_tag(name_or_id: &str) -> String {
 /// 旧壳 `window_context::focused_wsl_cwd` 的判定原样固化在这里，两壳共用。
 /// 需要「这个 pane 实际进了哪个发行版」时用 [`wsl_spawn_distro`]。
 pub fn wsl_launch_distro<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
-    if !is_wsl_launcher(program) {
-        return None;
-    }
-    wsl_options(args).distro
+    wsl_launch(program, args)?.distro
 }
 
 /// The parts of `wsl.exe`'s own option region that decide the guest identity.
 #[derive(Default)]
-struct WslOptions<'a> {
+pub(crate) struct WslOptions<'a> {
     /// The name from `-d` / `--distribution` / `--distribution=`.
-    distro: Option<&'a str>,
+    pub(crate) distro: Option<&'a str>,
     /// The user from `-u` / `--user` / `--user=`.
-    user: Option<&'a str>,
+    pub(crate) user: Option<&'a str>,
     /// Any distribution selector appeared (including `--distribution-id`,
     /// `--system` and an empty name): this launch does not follow the default.
     selects_distribution: bool,
     /// The launch picks its own start directory: a leading `~`, `--cd` or `--cd=`.
-    chooses_directory: bool,
+    pub(crate) chooses_directory: bool,
     /// The guest command's program (after `--` / `-e` / `--exec`, or the first
     /// non-option argument); `None` starts the guest's login shell.
-    command: Option<&'a str>,
+    pub(crate) command: Option<&'a str>,
+}
+
+impl WslOptions<'_> {
+    /// The distribution this launch **actually enters**: an explicit `-d`, else
+    /// `default` (the registry's, which `wsl.exe` reads at that moment).
+    /// `--distribution-id` and `--system` stay unknown until a GUID maps to a name.
+    fn spawn_distro(&self, default: impl FnOnce() -> Option<String>) -> Option<String> {
+        if self.selects_distribution { self.distro.map(str::to_owned) } else { default() }
+    }
+}
+
+/// A WSL launch's option region; `None` for other programs.
+pub(crate) fn wsl_launch<'a>(program: &str, args: &'a [String]) -> Option<WslOptions<'a>> {
+    is_wsl_launcher(program).then(|| wsl_options(args))
 }
 
 /// Read only `wsl.exe`'s option region: `--`, `-e` / `--exec` or any argument it
@@ -598,37 +609,15 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
     options
 }
 
-/// The distribution a WSL launch **actually enters**: an explicit `-d` first,
-/// otherwise the registry's `Lxss\DefaultDistribution`, which is the value
-/// `wsl.exe` itself reads at that moment.
-///
-/// Call it only at spawn and let the caller snapshot it: read later, the default
-/// may have changed, and that is the guess [`wsl_launch_distro`] refuses.
-/// Non-WSL programs return `None`.
+/// [`WslOptions::spawn_distro`] with the registry default. Call it only at spawn
+/// and snapshot it: read later, the default may have changed, which is the guess
+/// [`wsl_launch_distro`] refuses.
 pub fn wsl_spawn_distro(program: &str, args: &[String]) -> Option<String> {
-    wsl_spawn_distro_with(program, args, crate::platform::shell::default_wsl_distro)
+    wsl_launch(program, args)?.spawn_distro(crate::platform::shell::default_wsl_distro)
 }
 
-fn wsl_spawn_distro_with(
-    program: &str,
-    args: &[String],
-    default: impl FnOnce() -> Option<String>,
-) -> Option<String> {
-    if !is_wsl_launcher(program) {
-        return None;
-    }
-    let options = wsl_options(args);
-    if options.selects_distribution {
-        // Neither `--distribution-id` nor `--system` selects the default; until a
-        // GUID maps back to a name, the distribution stays unknown.
-        return options.distro.map(str::to_owned);
-    }
-    default()
-}
-
-/// Accepts `wsl`, `wsl.exe` and full paths, comparing `file_stem` without case.
-/// This is the only WSL check: the distribution snapshot, cwd reports and zsh
-/// injection must reach the same verdict for the same program.
+/// Accepts `wsl`, `wsl.exe` and full paths, comparing `file_stem` without case;
+/// the one WSL check for launches.
 pub(crate) fn is_wsl_launcher(program: &str) -> bool {
     let filename = program.rsplit(['/', '\\']).next().unwrap_or(program);
     std::path::Path::new(filename)
@@ -641,10 +630,7 @@ pub(crate) fn is_wsl_launcher(program: &str) -> bool {
 /// 使用同一个用户，否则 `wsl.exe` 可能启动另一份默认用户环境，看不到目标
 /// Codex 的 `/proc`。
 pub fn wsl_launch_user<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
-    if !is_wsl_launcher(program) {
-        return None;
-    }
-    wsl_options(args).user
+    wsl_launch(program, args)?.user
 }
 
 /// 终端报的 cwd 是来宾侧的绝对路径吗（`/home/x`）。宿主路径（`D:\…`）不需要
@@ -652,12 +638,6 @@ pub fn wsl_launch_user<'a>(program: &str, args: &'a [String]) -> Option<&'a str>
 pub fn wsl_guest_cwd(cwd: &str) -> Option<&str> {
     let trimmed = cwd.trim();
     trimmed.starts_with('/').then_some(trimmed)
-}
-
-/// Whether a WSL launch picks its own start directory (a leading `~`, `--cd`
-/// or `--cd=` in WSL's option region). A guest command's `--cd` does not count.
-pub fn wsl_launch_chooses_directory(program: &str, args: &[String]) -> bool {
-    is_wsl_launcher(program) && wsl_options(args).chooses_directory
 }
 
 /// Set the WSL guest cwd without changing its distribution, user or command.
@@ -669,12 +649,8 @@ pub fn wsl_args_at(program: &str, args: &[String], cwd: &str) -> Option<Vec<Stri
     wsl_args_with_directory(program, args, Some(&wsl_raw_arg(cwd)?))
 }
 
-/// A value as one raw `wsl.exe` argument. An explicit shell's arguments are
-/// joined into the command line as is, and `wsl.exe` splits that line itself:
-/// it only pairs `"`, keeps every backslash literal and cannot escape `"`
-/// (measured on WSL 2 on 2026-09-29: a CRT `\"` ends the quote and the rest runs
-/// as a guest command). A value with whitespace is therefore quoted whole; one
-/// containing `"` cannot be expressed and returns `None`.
+/// A value as one raw argument of the command line `wsl.exe` splits itself: a
+/// value with whitespace is quoted whole (see [`wsl_accepts_arg`]).
 fn wsl_raw_arg(value: &str) -> Option<String> {
     if !wsl_accepts_arg(value) {
         return None;
@@ -682,17 +658,16 @@ fn wsl_raw_arg(value: &str) -> Option<String> {
     Some(if value.contains([' ', '\t']) { format!("\"{value}\"") } else { value.to_owned() })
 }
 
-/// Whether `wsl.exe` can receive `value` as one argument at all: it cannot
-/// express a `"` (see [`wsl_raw_arg`]). Every path that hands a guest value to
-/// `wsl.exe`, launch arguments and `pane.exec` alike, checks this one rule.
+/// `wsl.exe` only pairs `"`, keeps backslashes literal and cannot express a `"`
+/// inside an argument (a CRT `\"` ends the quote and the rest runs as a guest
+/// command; see `architecture/notes/nebula_app/shell_detect/`). Every guest value
+/// handed to `wsl.exe` checks this one rule.
 pub(crate) fn wsl_accepts_arg(value: &str) -> bool {
     !value.contains('"')
 }
 
-/// Pin the spawn-time distribution snapshot into a WSL launch, so a later
-/// default change cannot move a split of a bare `wsl` pane into another guest.
-/// A launch that already selects a distribution (including `--distribution-id`
-/// and `--system`) is returned unchanged; non-WSL programs return `None`.
+/// Pin the spawn-time distribution into a WSL launch that follows the default;
+/// one that selects its own is returned unchanged, non-WSL programs `None`.
 pub fn wsl_args_pinned(program: &str, args: &[String], distro: &str) -> Option<Vec<String>> {
     if !is_wsl_launcher(program) {
         return None;
@@ -783,11 +758,9 @@ pub struct WslCwd {
     pub guest: String,
 }
 
-/// `wsl.exe -d <distro> --exec`, the one way host code runs a helper program
-/// (git, find, cat) inside a guest. `--` would hand the joined line to the
-/// guest's login shell, which runs `$(…)`, backquotes and `;` in a directory name
-/// a guest program reported through OSC 7. Every argument appended must pass
-/// [`wsl_accepts_arg`]; [`WslCwd`] values from panes already do.
+/// `wsl.exe -d <distro> --exec` for host-side guest helpers (git, find, cat):
+/// `--` would let the guest's login shell expand a reported cwd. Appended
+/// arguments must pass [`wsl_accepts_arg`].
 pub(crate) fn wsl_exec_command(distro: &str) -> std::process::Command {
     let mut command = std::process::Command::new("wsl.exe");
     command.args(["-d", distro, "--exec"]);
@@ -841,24 +814,10 @@ pub fn wsl_unc_cwd(located: &WslCwd) -> Option<std::path::PathBuf> {
 /// Debian/Ubuntu 的默认 `.bashrc` 只设 OSC 0 窗口标题，不发这些标记（实测
 /// `PROMPT_COMMAND` 为空）。
 ///
-/// 尽力而为、失败无害：用户自己在 rc 里直接赋值把它覆盖掉，只是回到"不上报"
-/// 的现状，不会影响 shell 正常启动。fish 不认 `PROMPT_COMMAND`，也没有可经
-/// 环境变量安全接管的启动目录，仍需自行发 OSC 7。
-///
-/// zsh 同样不认 `PROMPT_COMMAND`。`zsh_integration` 给出宿主上已写好的 zsh
-/// 启动目录（[`crate::platform::shell_integration::wsl_zsh_directory`]）时，
-/// 经 `WSLENV` 的 `/p` 转换把它作为 `ZDOTDIR` 送进来宾：与本机 zsh 集成同一套
-/// 文件，先还原并 source 用户自己的 `~/.zshenv`/`.zprofile`/`.zshrc`，再挂
-/// precmd 上报。只有交互 zsh 接管：`zsh -c` 等非交互进程在 `.zshenv` 里就还原
-/// 并撤掉这些变量。
-///
-/// 调用方只在来宾确认过之后才传 `zsh_integration`（见
-/// [`crate::platform::wsl_guest_shell::takes_zsh_bootstrap`]）：这次启动进的
-/// 是 zsh（显式 `-e zsh`，或来宾 passwd 里的登录 shell 是 zsh），且该来宾用户
-/// 读得到这个目录。宿主从启动参数看不出登录 shell 是什么，automount 关闭、
-/// `/p` 翻译失败或 drvfs 权限也会让来宾读不到 bootstrap——那时替换 `ZDOTDIR`
-/// 会让 zsh 连用户自己的启动文件一起跳过，或让 fish/nushell 一直带着没人还原
-/// 的 `ZDOTDIR`。本函数不做这个判断，也不再自己猜。
+/// 尽力而为、失败无害：fish（不认 `PROMPT_COMMAND`），或用户自己在 rc 里直接
+/// 赋值把它覆盖掉，都只是回到"不上报"的现状，不会影响 shell 正常启动。zsh 用
+/// `zsh_integration`：来宾确认过的 bootstrap 目录经 `WSLENV` `/p` 作为 `ZDOTDIR`
+/// 送进来宾，见 `architecture/notes/nebula_app/platform/`。
 pub fn wsl_cwd_report_env(
     program: &str,
     current_wslenv: Option<&str>,
@@ -870,13 +829,10 @@ pub fn wsl_cwd_report_env(
     // 用 `$PWD` 而不是 `$(pwd)`，整个 PROMPT_COMMAND 只有变量赋值与一个
     // builtin printf；身份只在首个提示符编码一次。初始提示符多发的 D 无害，
     // Runtime submit barrier 会拒绝把它错配给尚未真正提交的新命令。
-    // 首个提示符顺带撤掉只给 zsh 的变量：正常情况下 bash 来宾收不到它们（来宾
-    // 已报告登录 shell 不是 zsh），这里兜底的是验证之后来宾又 `chsh` 的情形——
-    // bash 不该把宿主 bootstrap 当成自己的 `ZDOTDIR` 传给之后启动的 zsh 或安装脚本。
-    // 同时从来宾的 `WSLENV` 里删掉这三项：WSL 会把 `WSLENV` 点名的变量原样转给
-    // 来宾里再启动的 `wsl.exe`（`/u` 管不住），`unset` 本身拦不住嵌套来宾。
+    // 首个提示符撤掉只给 zsh 的接管（验证后来宾又 `chsh` 的兜底），规则同
+    // [`strip_wsl_zsh_takeover`]。
     const REPORT: &str = r#"__nebula_status=$?; if [ -z "${__pebrel_shell_token:-}" ]; then __pebrel_shell_token=$(printf '%s' "wsl|${WSL_DISTRO_NAME:-}|bash:${HOSTNAME:-wsl}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n');
-if [ -n "${NEBULA_ZSH_INTEGRATION:-}" ]; then [ "${ZDOTDIR-}" = "$NEBULA_ZSH_INTEGRATION" ] && unset ZDOTDIR; unset NEBULA_ZSH_INTEGRATION NEBULA_ZDOTDIR_WAS_SET; __nebula_keep=; for __nebula_entry in ${WSLENV//:/ }; do case ${__nebula_entry%%/*} in ZDOTDIR|NEBULA_ZSH_INTEGRATION|NEBULA_ZDOTDIR_WAS_SET) ;; *) __nebula_keep=${__nebula_keep:+$__nebula_keep:}$__nebula_entry ;; esac; done; WSLENV=$__nebula_keep; unset __nebula_keep __nebula_entry; fi
+if [ -n "${NEBULA_ZSH_INTEGRATION:-}" ]; then [ "${ZDOTDIR-}" = "$NEBULA_ZSH_INTEGRATION" ] && unset ZDOTDIR; unset NEBULA_ZSH_INTEGRATION; __nebula_keep=; for __nebula_entry in ${WSLENV//:/ }; do case ${__nebula_entry%%/*} in ZDOTDIR|NEBULA_ZSH_INTEGRATION) ;; *) __nebula_keep=${__nebula_keep:+$__nebula_keep:}$__nebula_entry ;; esac; done; WSLENV=$__nebula_keep; unset __nebula_keep __nebula_entry; fi
 __PEBREL_CONNECTION_HOOK__
 fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007\033]133;D;%s\007\033]7;file://%s%s\007\033]133;A\007' "$__pebrel_shell_token" "$__nebula_status" "${HOSTNAME:-wsl}" "$PWD""#;
     // 宿主侧可能已经有 WSLENV（别的工具设的），必须追加而不是覆盖。
@@ -890,41 +846,32 @@ fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007\033]133;D;%s\007\033]7;file
     if let Some(directory) = zsh_integration
         && !wslenv_forwards(&wslenv, "ZDOTDIR")
     {
-        // `/u`: not translated back for Windows programs. It does not stop WSL from
-        // forwarding the entries to a `wsl.exe` started inside the guest, so the
-        // guest-side scripts remove them from the guest's `WSLENV` once read. The
-        // pane's Windows-side environment keeps them: a Windows program started
-        // from the guest (`code`, `cmd.exe`) still sees the host `ZDOTDIR`.
-        for (name, flags, value) in [
-            ("ZDOTDIR", "/pu", directory),
-            ("NEBULA_ZSH_INTEGRATION", "/pu", directory),
-            // The host cannot know the guest's own ZDOTDIR; a login shell defaults to `$HOME`.
-            ("NEBULA_ZDOTDIR_WAS_SET", "/u", "0"),
-        ] {
-            additions.push((name.to_owned(), value.to_owned()));
-            append_wslenv(&mut wslenv, &format!("{name}{flags}"));
+        // `/u` keeps them from Windows programs; the guest scripts drop them for nested guests.
+        for name in WSL_ZSH_TAKEOVER {
+            additions.push((name.to_owned(), directory.to_owned()));
+            append_wslenv(&mut wslenv, &format!("{name}/pu"));
         }
     }
     additions.push(("WSLENV".to_owned(), wslenv));
     additions
 }
 
-/// Remove [`wsl_cwd_report_env`]'s zsh takeover from a pane environment, the
-/// same rule the first bash prompt applies. A helper run with `wsl.exe --exec`
-/// (`pane.exec`, Runtime git) never reaches the bootstrap `.zshenv` that undoes
-/// it, so an installer writing `${ZDOTDIR:-$HOME}/.zshrc` would overwrite the
-/// bootstrap and a nested `wsl.exe` would carry it into another guest.
+/// The variables of [`wsl_cwd_report_env`]'s zsh takeover.
+const WSL_ZSH_TAKEOVER: [&str; 2] = ["ZDOTDIR", "NEBULA_ZSH_INTEGRATION"];
+
+/// Remove the zsh takeover from a pane environment for a `wsl.exe --exec`
+/// helper (`pane.exec`, Runtime git): it never runs the bootstrap `.zshenv`
+/// that undoes it, so an installer would overwrite the bootstrap and a nested
+/// `wsl.exe` would carry it into another guest.
 pub(crate) fn strip_wsl_zsh_takeover(env: &mut std::collections::HashMap<String, String>) {
-    const NAMES: [&str; 3] = ["ZDOTDIR", "NEBULA_ZSH_INTEGRATION", "NEBULA_ZDOTDIR_WAS_SET"];
     let Some(bootstrap) = env.remove("NEBULA_ZSH_INTEGRATION") else { return };
     if env.get("ZDOTDIR") == Some(&bootstrap) {
         env.remove("ZDOTDIR");
     }
-    env.remove("NEBULA_ZDOTDIR_WAS_SET");
     if let Some(wslenv) = env.get_mut("WSLENV") {
         *wslenv = wslenv
             .split(':')
-            .filter(|entry| !NAMES.contains(&wslenv_name(entry)))
+            .filter(|entry| !WSL_ZSH_TAKEOVER.contains(&wslenv_name(entry)))
             .collect::<Vec<_>>()
             .join(":");
     }
@@ -935,16 +882,6 @@ pub(crate) fn strip_wsl_zsh_takeover(env: &mut std::collections::HashMap<String,
 pub(crate) fn is_zsh_program(command: &str) -> bool {
     let name = command.rsplit('/').next().unwrap_or(command);
     name == "zsh" || name.starts_with("zsh-")
-}
-
-/// The guest command a WSL launch runs (after `--`, `-e` / `--exec`, or the first
-/// argument WSL does not own); `None` starts the guest's login shell, which the
-/// host cannot name. Non-WSL programs return `None` as well.
-pub fn wsl_launch_command<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
-    if !is_wsl_launcher(program) {
-        return None;
-    }
-    wsl_options(args).command
 }
 
 /// The `WSLENV` a spawn starts from: the pane environment's value if it has one,
@@ -958,15 +895,10 @@ pub(crate) fn wslenv_forwards(wslenv: &str, name: &str) -> bool {
     wslenv.split(':').any(|entry| wslenv_name(entry) == name)
 }
 
-/// The shell a local pane spawns, from the configured launch (`effective`) and
-/// the snapshotted one (`snapshot`: `effective`, or the PTY default).
-///
-/// A PTY-default WSL (runtime `shell=wsl`) spawns the snapshotted `wsl.exe`
-/// explicitly, so it receives the same guest environment as a configured one;
-/// other PTY defaults stay `None` and keep the engine path and its argument
-/// escaping. A WSL spawn is pinned to the spawn-time distribution (`distro`)
-/// while the caller persists the launch as configured, so the pane, its guest
-/// probe and its hook installer name the same guest by construction.
+/// The shell a local pane spawns from the configured launch (`effective`) and
+/// the snapshotted one (`effective`, or the PTY default). A PTY-default WSL spawns
+/// the snapshot explicitly, other PTY defaults stay `None`; a WSL spawn is pinned
+/// to `distro` while the caller persists the launch as configured.
 pub(crate) fn spawn_shell(
     effective: Option<nebula_terminal::tty::Shell>,
     snapshot: Option<&nebula_terminal::tty::Shell>,
@@ -1249,92 +1181,133 @@ mod tests {
 
     #[test]
     fn wsl_home_marker_yields_to_an_injected_directory() {
-        let args = ["~", "-d", "Ubuntu"].map(String::from);
+        let args = owned(&["~", "-d", "Ubuntu"]);
         assert_eq!(
             super::wsl_args_at("wsl.exe", &args, "/srv").unwrap(),
             ["--cd", "/srv", "-d", "Ubuntu"]
         );
         // An inherited host directory replaces `~` too, and a `--cd` after it.
         assert_eq!(super::wsl_args_in_host_directory("wsl.exe", &args).unwrap(), ["-d", "Ubuntu"]);
-        let later = ["~", "-d", "Ubuntu", "--cd", "/x"].map(String::from);
+        let later = owned(&["~", "-d", "Ubuntu", "--cd", "/x"]);
         assert_eq!(super::wsl_args_in_host_directory("wsl.exe", &later).unwrap(), ["-d", "Ubuntu"]);
     }
 
     #[test]
     fn spawn_shell_pins_wsl_and_keeps_other_pty_defaults_on_the_engine_path() {
         use nebula_terminal::tty::Shell;
-        let shell = |program: &str, args: &[&str]| {
-            Shell::new(program.to_owned(), args.iter().map(|arg| (*arg).to_owned()).collect())
+        let shell = |program: &str, args: &[&str]| Shell::new(program.to_owned(), owned(args));
+        let spawned = |effective: Option<Shell>, snapshot: Option<Shell>| {
+            super::spawn_shell(effective, snapshot.as_ref(), Some("Ubuntu"))
+                .map(|shell| shell.args().to_vec())
         };
-        let spawned = |effective: Option<Shell>, snapshot: Option<Shell>, distro: Option<&str>| {
-            super::spawn_shell(effective, snapshot.as_ref(), distro)
-                .map(|shell| (shell.program().to_owned(), shell.args().to_vec()))
-        };
-        let bare = shell("wsl.exe", &[]);
-        let pinned = Some(("wsl.exe".to_owned(), vec!["-d".to_owned(), "Ubuntu".to_owned()]));
         // A configured bare `wsl` and a PTY-default `wsl` both spawn pinned.
-        assert_eq!(spawned(Some(bare.clone()), Some(bare.clone()), Some("Ubuntu")), pinned);
-        assert_eq!(spawned(None, Some(bare), Some("Ubuntu")), pinned);
-        // An explicit distribution is already its own snapshot.
-        let debian = shell("wsl.exe", &["-d", "Debian"]);
-        assert_eq!(
-            spawned(Some(debian.clone()), Some(debian), Some("Debian")),
-            Some(("wsl.exe".to_owned(), vec!["-d".to_owned(), "Debian".to_owned()]))
-        );
+        let bare = shell("wsl.exe", &[]);
+        assert_eq!(spawned(Some(bare.clone()), None), Some(owned(&["-d", "Ubuntu"])));
+        assert_eq!(spawned(None, Some(bare)), Some(owned(&["-d", "Ubuntu"])));
         // A PowerShell PTY default stays on the engine path; a configured one is kept.
-        assert_eq!(spawned(None, Some(shell("pwsh.exe", &[])), None), None);
-        assert_eq!(
-            spawned(Some(shell("pwsh.exe", &["-NoLogo"])), None, None),
-            Some(("pwsh.exe".to_owned(), vec!["-NoLogo".to_owned()]))
-        );
+        assert_eq!(spawned(None, Some(shell("pwsh.exe", &[]))), None);
+        assert_eq!(spawned(Some(shell("pwsh.exe", &["-NoLogo"])), None), Some(owned(&["-NoLogo"])));
     }
 
     #[test]
     fn spawn_snapshot_pins_bare_wsl_launches_only() {
-        let pin = |args: &[&str]| {
-            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            super::wsl_args_pinned("wsl.exe", &args, "Ubuntu").unwrap()
-        };
+        let pin =
+            |args: &[&str]| super::wsl_args_pinned("wsl.exe", &owned(args), "Ubuntu").unwrap();
         assert_eq!(pin(&[]), ["-d", "Ubuntu"]);
         assert_eq!(pin(&["~", "-u", "dev"]), ["~", "-d", "Ubuntu", "-u", "dev"]);
-        assert_eq!(pin(&["-d", "Debian"]), ["-d", "Debian"]);
-        assert_eq!(pin(&["--distribution-id", "{0000}"]), ["--distribution-id", "{0000}"]);
-        assert_eq!(pin(&["--distribution=Debian"]), ["--distribution=Debian"]);
-        assert_eq!(pin(&["--system"]), ["--system"]);
+        for selected in [
+            &["-d", "Debian"][..],
+            &["--distribution-id", "{0000}"],
+            &["--distribution=Debian"],
+            &["--system"],
+        ] {
+            assert_eq!(pin(selected), selected);
+        }
         // A guest command's `-d` is not a WSL selection.
         assert_eq!(pin(&["-e", "tool", "-d", "x"]), ["-d", "Ubuntu", "-e", "tool", "-d", "x"]);
         assert!(super::wsl_args_pinned("pwsh.exe", &[], "Ubuntu").is_none());
     }
 
-    /// Identity comes from WSL's own option region only, in every accepted spelling.
+    /// Identity comes from WSL's own option region only, in every accepted spelling:
+    /// (arguments, distribution, user, chooses a directory, guest command, spawn distribution
+    /// with the default `Ubuntu`).
     #[test]
     fn wsl_identity_reads_only_the_option_region() {
-        let owned =
-            |args: &[&str]| -> Vec<String> { args.iter().map(|a| (*a).to_owned()).collect() };
-        let default = || Some("Ubuntu".to_owned());
-        let spawn = |args: &[&str]| super::wsl_spawn_distro_with("wsl.exe", &owned(args), default);
-
+        type Case<'a> = (
+            &'a [&'a str],
+            Option<&'a str>,
+            Option<&'a str>,
+            bool,
+            Option<&'a str>,
+            Option<&'a str>,
+        );
+        let cases: [Case; 12] = [
+            (&[], None, None, false, None, Some("Ubuntu")),
+            (&["--distribution=Debian"], Some("Debian"), None, false, None, Some("Debian")),
+            (
+                &["~", "-u", "dev", "-d", "Debian"],
+                Some("Debian"),
+                Some("dev"),
+                true,
+                None,
+                Some("Debian"),
+            ),
+            (
+                &["--cd", "/x", "--shell-type=login", "--user=dev"],
+                None,
+                Some("dev"),
+                true,
+                None,
+                Some("Ubuntu"),
+            ),
+            (&["--system"], None, None, false, None, None),
+            (&["--distribution-id={0000}"], None, None, false, None, None),
+            (&["-d", ""], None, None, false, None, None),
+            (&["-e", "zsh", "-l"], None, None, false, Some("zsh"), Some("Ubuntu")),
+            (
+                &["--", "tool", "-d", "x", "-u", "root", "--cd", "/y"],
+                None,
+                None,
+                false,
+                Some("tool"),
+                Some("Ubuntu"),
+            ),
+            (&["--exec", "fish"], None, None, false, Some("fish"), Some("Ubuntu")),
+            (
+                &["-d", "Ubuntu", "htop", "-d", "1"],
+                Some("Ubuntu"),
+                None,
+                false,
+                Some("htop"),
+                Some("Ubuntu"),
+            ),
+            (&["--user"], None, None, false, None, Some("Ubuntu")),
+        ];
+        for (args, distro, user, directory, command, spawn) in cases {
+            let args = owned(args);
+            let options = super::wsl_launch("wsl", &args).unwrap();
+            assert_eq!(
+                (options.distro, options.user, options.chooses_directory, options.command),
+                (distro, user, directory, command),
+                "{args:?}"
+            );
+            assert_eq!(
+                options.spawn_distro(|| Some("Ubuntu".into())).as_deref(),
+                spawn,
+                "{args:?}"
+            );
+        }
+        // One detector: an unquoted path with spaces is WSL for every WSL rule.
+        let spaced = r"C:\Program Files\WSL\wsl.exe";
         assert_eq!(
-            super::wsl_launch_distro("wsl", &owned(&["--distribution=Debian"])),
+            super::wsl_spawn_distro(spaced, &owned(&["-d", "Debian"])).as_deref(),
             Some("Debian")
         );
-        assert_eq!(spawn(&["--distribution=Debian"]).as_deref(), Some("Debian"));
-        assert_eq!(spawn(&["~", "-u", "dev", "-d", "Debian"]).as_deref(), Some("Debian"));
-        assert_eq!(spawn(&["--system"]), None, "the system distro is not the default");
-        assert_eq!(spawn(&["--distribution-id={0000}"]), None);
-        for marker in ["--", "-e", "--exec", "zsh"] {
-            let args = [marker, "tool", "-d", "x", "-u", "root"];
-            assert_eq!(super::wsl_launch_distro("wsl", &owned(&args)), None, "{marker}");
-            assert_eq!(super::wsl_launch_user("wsl", &owned(&args)), None, "{marker}");
-            assert_eq!(spawn(&args).as_deref(), Some("Ubuntu"), "{marker}");
-        }
-        assert_eq!(
-            super::wsl_launch_user(
-                "wsl",
-                &owned(&["--cd", "/x", "--shell-type=login", "-u", "dev"])
-            ),
-            Some("dev")
-        );
+        assert!(!wsl_cwd_report_env(spaced, None, None).is_empty());
+        assert!(super::wsl_launch("pwsh.exe", &owned(&["-d", "Debian"])).is_none());
+        assert!(wsl_cwd_report_env("pwsh.exe", None, Some(r"C:\x")).is_empty());
+        assert!(is_zsh_program("/usr/bin/zsh") && is_zsh_program("zsh-5.9"));
+        assert!(!is_zsh_program("") && !is_zsh_program("/usr/bin/fish"));
     }
 
     #[test]
@@ -1406,6 +1379,10 @@ mod tests {
 
     use super::*;
 
+    fn owned(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
     #[test]
     fn shell_integration_is_selected_by_stable_shell_id() {
         assert_eq!(
@@ -1448,99 +1425,37 @@ mod tests {
         assert!(prompt_command.contains("]7;file://%s%s"));
         assert!(prompt_command.contains("]133;A"));
         assert!(!prompt_command.contains('\r'));
-        // The first prompt also drops the zsh-only entries from the guest's WSLENV.
-        assert!(
-            prompt_command.contains("ZDOTDIR|NEBULA_ZSH_INTEGRATION|NEBULA_ZDOTDIR_WAS_SET) ;;")
-        );
         assert!(!additions.contains_key("ZDOTDIR"), "zsh takeover is opt-in per spawn");
     }
 
     #[test]
-    fn wsl_zsh_integration_travels_through_translated_wslenv_entries() {
+    fn wsl_zsh_takeover_travels_through_wslenv_and_never_reaches_guest_helpers() {
         let dir = r"C:\Users\guest\AppData\Roaming\Pebrel\shell-integration\wsl-zsh";
-        let additions = wsl_cwd_report_env("wsl.exe", Some("KEEP/u"), Some(dir));
-        let additions: std::collections::HashMap<_, _> = additions.into_iter().collect();
-
+        let additions: std::collections::HashMap<_, _> =
+            wsl_cwd_report_env("wsl.exe", Some("KEEP/u"), Some(dir)).into_iter().collect();
         assert_eq!(additions.get("ZDOTDIR").map(String::as_str), Some(dir));
         assert_eq!(additions.get("NEBULA_ZSH_INTEGRATION").map(String::as_str), Some(dir));
-        assert_eq!(additions.get("NEBULA_ZDOTDIR_WAS_SET").map(String::as_str), Some("0"));
         assert_eq!(
             additions.get("WSLENV").map(String::as_str),
-            Some(
-                "KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu:NEBULA_ZDOTDIR_WAS_SET/u"
-            )
+            Some("KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu")
         );
-
         // `wsl.exe --exec` helpers never run the bootstrap that undoes the takeover.
         let mut helper = additions.clone();
-        helper.insert("KEEP".to_owned(), "1".to_owned());
         strip_wsl_zsh_takeover(&mut helper);
-        for name in ["ZDOTDIR", "NEBULA_ZSH_INTEGRATION", "NEBULA_ZDOTDIR_WAS_SET"] {
-            assert!(!helper.contains_key(name), "{name} reached a guest helper");
-        }
+        assert!(!helper.contains_key("ZDOTDIR") && !helper.contains_key("NEBULA_ZSH_INTEGRATION"));
         assert_eq!(helper.get("WSLENV").map(String::as_str), Some("KEEP/u:PROMPT_COMMAND"));
-        assert_eq!(helper.get("KEEP").map(String::as_str), Some("1"));
-    }
-
-    #[test]
-    fn guest_helpers_keep_a_zdotdir_the_takeover_did_not_set() {
-        let mut env = std::collections::HashMap::from([
+        // A ZDOTDIR the takeover did not set, and the user's forwarded one, stay.
+        let mut own = std::collections::HashMap::from([
             ("ZDOTDIR".to_owned(), "/home/me/.config/zsh".to_owned()),
             ("WSLENV".to_owned(), "ZDOTDIR/p".to_owned()),
         ]);
-        let untouched = env.clone();
-        strip_wsl_zsh_takeover(&mut env);
-        assert_eq!(env, untouched);
-    }
-
-    #[test]
-    fn wsl_zsh_integration_respects_a_user_forwarded_zdotdir() {
-        let additions = wsl_cwd_report_env("wsl.exe", Some("ZDOTDIR/up"), Some(r"C:\x"));
-        let additions: std::collections::HashMap<_, _> = additions.into_iter().collect();
-
-        assert!(!additions.contains_key("ZDOTDIR"));
-        assert_eq!(additions.get("WSLENV").map(String::as_str), Some("ZDOTDIR/up:PROMPT_COMMAND"));
-    }
-
-    /// The guest command is read from WSL's option region only; a login shell has
-    /// none, and the host cannot name it (`platform::wsl_guest_shell` asks the guest).
-    #[test]
-    fn wsl_launch_command_reads_only_the_option_region() {
-        let command = |args: &[&str]| {
-            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            wsl_launch_command("wsl.exe", &args).map(str::to_owned)
-        };
-        assert_eq!(command(&["-d", "Ubuntu", "--cd", "/srv"]), None);
-        assert_eq!(command(&["~", "-u", "alice"]), None);
-        assert_eq!(command(&["-e", "zsh", "-l"]).as_deref(), Some("zsh"));
-        assert_eq!(command(&["--", "/usr/bin/zsh"]).as_deref(), Some("/usr/bin/zsh"));
-        assert_eq!(command(&["-d", "Ubuntu", "--exec", "fish"]).as_deref(), Some("fish"));
-        assert_eq!(command(&["htop", "-d", "1"]).as_deref(), Some("htop"));
-        assert_eq!(wsl_launch_command("pwsh.exe", &["-e".to_owned(), "zsh".to_owned()]), None);
-        assert!(is_zsh_program("/usr/bin/zsh") && is_zsh_program("zsh-5.9"));
-        assert!(!is_zsh_program("") && !is_zsh_program("/usr/bin/fish"));
-    }
-
-    #[test]
-    fn non_wsl_launches_get_no_guest_environment() {
-        assert!(wsl_cwd_report_env("pwsh.exe", None, Some(r"C:\x")).is_empty());
-        assert_eq!(super::wsl_spawn_distro("pwsh.exe", &[]), None);
-        let args = ["-d", "Debian"].map(String::from);
-        assert_eq!(super::wsl_spawn_distro("WSL.EXE", &args).as_deref(), Some("Debian"));
-        let default = || Some("Ubuntu".to_owned());
-        let spawn = |args: &[&str]| {
-            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-            super::wsl_spawn_distro_with("wsl.exe", &args, default)
-        };
-        assert_eq!(spawn(&[]).as_deref(), Some("Ubuntu"), "bare wsl follows the default");
-        assert_eq!(spawn(&["-d", "Debian"]).as_deref(), Some("Debian"));
-        assert_eq!(spawn(&["--distribution-id", "{0000}"]), None, "an id is not the default");
-        assert_eq!(super::wsl_spawn_distro_with("pwsh.exe", &[], default), None);
-        // One detector: an unquoted path with spaces is WSL for every WSL rule.
-        let spaced = r"C:\Program Files\WSL\wsl.exe";
-        assert_eq!(super::wsl_spawn_distro(spaced, &args).as_deref(), Some("Debian"));
-        assert!(!wsl_cwd_report_env(spaced, None, None).is_empty());
-        assert!(super::wsl_args_at(spaced, &args, "/home").is_some());
+        let untouched = own.clone();
+        strip_wsl_zsh_takeover(&mut own);
+        assert_eq!(own, untouched);
+        let forwarded: std::collections::HashMap<_, _> =
+            wsl_cwd_report_env("wsl.exe", Some("ZDOTDIR/up"), Some(dir)).into_iter().collect();
+        assert!(!forwarded.contains_key("ZDOTDIR"));
+        assert_eq!(forwarded.get("WSLENV").map(String::as_str), Some("ZDOTDIR/up:PROMPT_COMMAND"));
     }
 
     #[test]
@@ -1569,7 +1484,7 @@ mod tests {
                 // A bash guest must drop the zsh-only bootstrap variables.
                 .env("ZDOTDIR", "/mnt/c/pebrel/wsl-zsh")
                 .env("NEBULA_ZSH_INTEGRATION", "/mnt/c/pebrel/wsl-zsh")
-                .env("NEBULA_ZDOTDIR_WAS_SET", "0")
+                .env("WSLENV", "KEEP/u:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -1579,7 +1494,7 @@ mod tests {
                 r#"{user_function}
 (exit 7); eval "$PROMPT_COMMAND" || exit 91
 typeset -f __pebrel_connection >/dev/null || exit 92
-test -z "${{ZDOTDIR+x}}${{NEBULA_ZSH_INTEGRATION+x}}${{NEBULA_ZDOTDIR_WAS_SET+x}}" || exit 98
+test -z "${{ZDOTDIR+x}}${{NEBULA_ZSH_INTEGRATION+x}}" && test "$WSLENV" = KEEP/u || exit 98
 typeset -f ssh >/dev/null || exit 93
 token=$__pebrel_shell_token
 test -n "$token" || exit 94

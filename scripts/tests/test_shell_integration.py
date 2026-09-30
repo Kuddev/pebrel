@@ -114,6 +114,13 @@ class ShellIntegrationTests(unittest.TestCase):
         session.wait(marker)
         return session
 
+    def bootstrap(self, name: str) -> Path:
+        wrapper = self.home / name
+        wrapper.mkdir()
+        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
+            shutil.copyfile(SCRIPTS / source, wrapper / target)
+        return wrapper
+
     def check_protocol(self, shell: str) -> None:
         session = self.start(shell)
         output = session.command("(exit 7)", b"\x1b]133;D;7\x07")
@@ -261,10 +268,7 @@ class ShellIntegrationTests(unittest.TestCase):
         dotfiles.mkdir(parents=True)
         (self.home / ".zshenv").write_text('export ZDOTDIR="$HOME/.config/zsh"\n', encoding="utf-8")
         (dotfiles / ".zshrc").write_text("NEBULA_PROFILE_TEST=rc\n", encoding="utf-8")
-        wrapper = self.home / "integration"
-        wrapper.mkdir()
-        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
-            shutil.copyfile(SCRIPTS / source, wrapper / target)
+        wrapper = self.bootstrap("integration")
         nested = 'zsh -i -c \'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} ZDOTDIR=$ZDOTDIR"\'; env'
         result = subprocess.run(
             [program, "-c", nested], cwd=self.home, capture_output=True, text=True, check=True,
@@ -284,10 +288,7 @@ class ShellIntegrationTests(unittest.TestCase):
         if not program:
             self.skipTest("zsh is not installed; native CI must run this case")
         (self.home / ".zshrc").write_text("NEBULA_PROFILE_TEST=rc\n", encoding="utf-8")
-        wrapper = self.home / "integration"
-        wrapper.mkdir()
-        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
-            shutil.copyfile(SCRIPTS / source, wrapper / target)
+        wrapper = self.bootstrap("integration")
         for args in (["-d", "-i"], ["-d", "-l", "-i"]):
             result = subprocess.run(
                 [program, *args, "-c", 'print -r -- "RC=${NEBULA_PROFILE_TEST-unset} Z=${ZDOTDIR-unset}"'],
@@ -310,14 +311,11 @@ class ShellIntegrationTests(unittest.TestCase):
             'ZDOTDIR="$HOME/.config/zsh"\nexport NEBULA_TEST_MARK=home-zshenv\n', encoding="utf-8")
         (dotfiles / ".zprofile").write_text("", encoding="utf-8")
         (dotfiles / ".zshrc").write_text("", encoding="utf-8")
-        wrapper = self.home / "integration"
-        wrapper.mkdir()
-        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
-            shutil.copyfile(SCRIPTS / source, wrapper / target)
+        wrapper = self.bootstrap("integration")
         environment = {"PATH": os.environ["PATH"], "HOME": str(self.home), "TERM": "dumb",
                        "ZDOTDIR": str(wrapper), "NEBULA_ZSH_INTEGRATION": str(wrapper),
                        "NEBULA_ZDOTDIR_WAS_SET": "0",
-                       "WSLENV": "KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu:NEBULA_ZDOTDIR_WAS_SET/u"}
+                       "WSLENV": "KEEP/u:PROMPT_COMMAND:ZDOTDIR/pu:NEBULA_ZSH_INTEGRATION/pu"}
         interactive = ('typeset -p ZDOTDIR; print -r -- "WSLENV=$WSLENV"; '
                        "env -u NEBULA_TEST_MARK zsh -c 'print -r -- \"CHILD=${NEBULA_TEST_MARK-unset}\"'")
         for args in (["-d", "-l", "-i", "-c", interactive], ["-d", "-i", "-c", interactive]):
@@ -411,10 +409,7 @@ precmd_functions=(_user_precmd)
             self.assertEqual(len(lines), 2, result.stdout)
             return dict(line.split("=", 1) for line in lines)
 
-        wrapper = self.home / "integration dir"
-        wrapper.mkdir()
-        for source, target in [("zshenv", ".zshenv"), ("zprofile", ".zprofile"), ("zshrc", ".zshrc")]:
-            shutil.copyfile(SCRIPTS / source, wrapper / target)
+        wrapper = self.bootstrap("integration dir")
         answer = probe(str(wrapper))
         self.assertEqual(answer["bootstrap"], "readable")
         # The passwd entry, not $SHELL, names what `wsl.exe` starts for this user.
