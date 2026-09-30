@@ -176,7 +176,7 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
-    def test_nextest_serializes_only_fixtures_that_write_the_real_settings_file(self):
+    def test_nextest_reserves_only_shared_settings_and_the_heavy_git_fixture(self):
         root = Path(__file__).resolve().parents[2]
         config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
@@ -188,6 +188,10 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(environment_refresh_switch_is_searchable_and_persists)"
                           " or test(pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url)",
                 "test-group": "theme-studio",
+            }, {
+                "filter": "test(=gpui_shell::terminal::view::startup_tests::"
+                          "git_completion_real_repository_reaches_all_modes_and_preserves_quoted_edits)",
+                "threads-required": "num-test-threads",
             }],
         })
 

@@ -8,3 +8,9 @@ theme-studio = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = 'test(gpui_shell::settings_pane::theme_studio_tests::) or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll) or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch) or test(environment_refresh_switch_is_searchable_and_persists) or test(pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url)'
 test-group = 'theme-studio'
+
+# 三模式夹具包含九个真实 Git/窗口场景；原生进程的墙钟期限不能用并发 UI 负载测试。
+# 只为此重型夹具保留资源，产品查询期限和用例断言保持不变。
+[[profile.default.overrides]]
+filter = 'test(=gpui_shell::terminal::view::startup_tests::git_completion_real_repository_reaches_all_modes_and_preserves_quoted_edits)'
+threads-required = 'num-test-threads'

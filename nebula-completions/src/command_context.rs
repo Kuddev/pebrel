@@ -29,115 +29,122 @@ struct Word {
     span: Span,
     quote: Option<char>,
     closed: bool,
+    home: bool,
 }
 
-/// A proven branch argument, not a guess based on the final whitespace token.
+/// Literal arguments and the final editable word; never evaluates shell code.
 #[derive(Debug)]
-pub struct GitSwitchContext {
-    pub directories: Vec<String>,
+pub struct CommandContext {
+    pub(crate) arguments: Vec<String>,
+    home_arguments: Vec<usize>,
     target: Word,
     syntax: ShellSyntax,
-    pub include_busy: bool,
 }
 
-impl GitSwitchContext {
+impl CommandContext {
     pub fn parse(line: &str, cursor: usize, syntax: ShellSyntax) -> Option<Self> {
-        // 当前终端只证明行尾的输入真值；中线编辑不能把右侧文本悄悄覆盖。
+        Self::parse_words(line, cursor, syntax, false)
+    }
+
+    pub(crate) fn parse_with_home(line: &str, cursor: usize, syntax: ShellSyntax) -> Option<Self> {
+        Self::parse_words(line, cursor, syntax, true)
+    }
+
+    pub(crate) fn argument_expands_home(&self, index: usize) -> bool {
+        self.home_arguments.contains(&index)
+    }
+
+    fn parse_words(
+        line: &str,
+        cursor: usize,
+        syntax: ShellSyntax,
+        allow_home: bool,
+    ) -> Option<Self> {
+        // 终端目前只证明行尾输入，不能借补齐覆盖光标右侧的未知内容。
         if cursor != line.len() || line.len() > 4096 {
-            return None;
-        }
-        let command = line.trim_start_matches([' ', '\t']);
-        if !["git ", "git\t", "git.exe ", "git.exe\t"]
-            .iter()
-            .any(|prefix| command.starts_with(prefix))
-        {
             return None;
         }
         let mut words = words(line, syntax)?;
         let target = words.pop()?;
-        let mut args = words.iter();
-        if !matches!(args.next()?.value.as_str(), "git" | "git.exe") {
+        // 已完成参数若含展开，无法证明它指向哪个目录；目标词的 home 由路径来源处理。
+        if words.iter().any(|word| !word.closed || word.home && !allow_home) {
             return None;
         }
-        let mut directories = Vec::new();
-        loop {
-            match args.next()?.value.as_str() {
-                "-C" => directories.push(args.next()?.value.clone()),
-                "switch" => break,
-                _ => return None,
-            }
-        }
-        let mut include_busy = false;
-        let mut options = true;
-        while let Some(arg) = args.next() {
-            match arg.value.as_str() {
-                "--" if options => options = false,
-                "-c" | "-C" | "--create" | "--force-create" if options => {
-                    args.next()?; // 新分支名由用户指定；其后的 start-point 才接受现有分支。
-                    include_busy = true;
-                },
-                "--conflict" if options => {
-                    if !matches!(args.next()?.value.as_str(), "merge" | "diff3" | "zdiff3") {
-                        return None;
-                    }
-                },
-                "--ignore-other-worktrees" if options => include_busy = true,
-                "-d" | "--detach" if options => include_busy = true,
-                "-q"
-                | "--quiet"
-                | "-m"
-                | "--merge"
-                | "-f"
-                | "--force"
-                | "--discard-changes"
-                | "--guess"
-                | "--no-guess"
-                | "--no-track"
-                | "--progress"
-                | "--no-progress"
-                | "--overwrite-ignore"
-                | "--no-overwrite-ignore"
-                    if options => {},
-                _ => return None,
-            }
-        }
-        if target.value.starts_with('-') && options {
-            return None;
-        }
-        Some(Self { directories, target, syntax, include_busy })
+        let home_arguments =
+            words.iter().enumerate().filter_map(|(i, word)| word.home.then_some(i)).collect();
+        Some(Self {
+            arguments: words.into_iter().map(|word| word.value).collect(),
+            home_arguments,
+            target,
+            syntax,
+        })
     }
 
-    pub fn candidate(&self, branch: &str) -> Option<Suggestion> {
-        if !branch.starts_with(&self.target.value) || branch.starts_with('-') {
+    pub fn prefix(&self) -> &str {
+        &self.target.value
+    }
+
+    pub fn expands_home(&self) -> bool {
+        self.target.home && (self.prefix() == "~" || self.prefix().starts_with("~/"))
+    }
+
+    /// Matching is separate from quoting so ranked/fuzzy results use the same edit contract.
+    pub fn candidate(&self, value: &str) -> Option<Suggestion> {
+        if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
             return None;
         }
         let quote = self.target.quote;
-        let safe =
-            branch.chars().all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'));
-        let value = match (quote, self.syntax, safe) {
-            (Some('\''), ShellSyntax::Posix, _) => format!("'{}'", branch.replace('\'', "'\\''")),
-            (Some('\''), ShellSyntax::PowerShell, _) => format!("'{}'", branch.replace('\'', "''")),
+        // PowerShell 将 -Fconfig.conf 拆成参数 -Fconfig 和 .conf；整个词需引用。
+        // 普通选项仍保持裸写，否则 cmdlet 会把参数名当成位置参数。
+        let parameter_split = self.syntax == ShellSyntax::PowerShell
+            && value.starts_with('-')
+            && value.contains(['.', ':']);
+        let safe = !parameter_split
+            && value.chars().all(|c| {
+                c.is_alphanumeric()
+                    || matches!(c, '/' | '.' | '_' | '-' | ':' | '=')
+                    || c == '@'
+                        && self.syntax != ShellSyntax::Literal
+                        && (self.syntax != ShellSyntax::PowerShell || !value.starts_with('@'))
+                    || c == ',' && matches!(self.syntax, ShellSyntax::Posix | ShellSyntax::Cmd)
+                    || c == '\\'
+                        && matches!(self.syntax, ShellSyntax::PowerShell | ShellSyntax::Cmd)
+            });
+        let cmd_quoted_safe = self.syntax == ShellSyntax::Cmd
+            && value.chars().all(|c| {
+                c.is_alphanumeric()
+                    || matches!(c, '/' | '\\' | '.' | '_' | '-' | ':' | '=' | ' ' | '@' | ',')
+            });
+        let quoted = match (quote, self.syntax, safe) {
+            (Some('\''), ShellSyntax::Posix, _) => format!("'{}'", value.replace('\'', "'\\''")),
+            (Some('\''), ShellSyntax::PowerShell, _) => format!("'{}'", value.replace('\'', "''")),
             (Some('"'), ShellSyntax::Posix, _) => format!(
                 "\"{}\"",
-                branch
+                value
                     .replace('\\', "\\\\")
                     .replace('$', "\\$")
                     .replace('`', "\\`")
                     .replace('"', "\\\"")
             ),
             (Some('"'), ShellSyntax::PowerShell, _) => {
-                format!("\"{}\"", branch.replace('`', "``").replace('$', "`$").replace('"', "`\""))
+                format!("\"{}\"", value.replace('`', "``").replace('$', "`$").replace('"', "`\""))
             },
-            (Some('"'), ShellSyntax::Cmd, true) => format!("\"{branch}\""),
-            (None, _, true) => branch.to_owned(),
-            (None, ShellSyntax::Posix, false) => format!("'{}'", branch.replace('\'', "'\\''")),
-            (None, ShellSyntax::PowerShell, false) => format!("'{}'", branch.replace('\'', "''")),
+            (_, ShellSyntax::Cmd, _) if cmd_quoted_safe && (quote.is_some() || !safe) => {
+                // CMD 内建命令和外部 argv 对尾部反斜杠的规则不同；路径来源先统一为 /。
+                if value.ends_with('\\') {
+                    return None;
+                }
+                format!("\"{value}\"")
+            },
+            (None, _, true) => value.to_owned(),
+            (None, ShellSyntax::Posix, false) => format!("'{}'", value.replace('\'', "'\\''")),
+            (None, ShellSyntax::PowerShell, false) => format!("'{}'", value.replace('\'', "''")),
             // CMD 的百分号/延迟展开依赖运行中的选项，不能伪造通用转义。
             _ => return None,
         };
         Some(Suggestion {
-            value,
-            display_override: Some(branch.to_owned()),
+            value: quoted,
+            display_override: Some(value.to_owned()),
             span: self.target.span,
             append_whitespace: false,
             ..Default::default()
@@ -152,7 +159,7 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
         if matches!(first, ' ' | '\t') {
             continue;
         }
-        let quote = match first {
+        let mut quote = match first {
             '"' if syntax != ShellSyntax::Literal => Some(first),
             '\'' if matches!(syntax, ShellSyntax::Posix | ShellSyntax::PowerShell) => Some(first),
             _ => None,
@@ -162,6 +169,7 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
             span: Span::new(start, line.len()),
             quote,
             closed: quote.is_none(),
+            home: first == '~' && matches!(syntax, ShellSyntax::Posix | ShellSyntax::PowerShell),
         };
         let mut current = if quote.is_some() { chars.next() } else { Some((start, first)) };
         while let Some((offset, ch)) = current {
@@ -172,16 +180,18 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
                     chars.next();
                     word.value.push(ch);
                 } else {
+                    quote = None;
                     word.closed = true;
-                    word.span.end = offset + ch.len_utf8();
-                    if chars.peek().is_some_and(|(_, next)| !matches!(next, ' ' | '\t')) {
-                        return None;
-                    }
-                    break;
                 }
             } else if quote.is_none() && matches!(ch, ' ' | '\t') {
                 word.span.end = offset;
                 break;
+            } else if quote.is_none()
+                && (ch == '"' && syntax != ShellSyntax::Literal
+                    || ch == '\'' && matches!(syntax, ShellSyntax::Posix | ShellSyntax::PowerShell))
+            {
+                quote = Some(ch);
+                word.closed = false;
             } else {
                 let escape = match syntax {
                     ShellSyntax::Posix => ch == '\\' && quote != Some('\''),
@@ -191,6 +201,10 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
                 if escape {
                     let (_, escaped) = chars.next()?;
                     if escaped.is_control() {
+                        return None;
+                    }
+                    // PowerShell 的 `n/`t 等是控制字符，不是被转义的字母。
+                    if syntax == ShellSyntax::PowerShell && escaped.is_ascii_alphanumeric() {
                         return None;
                     }
                     if syntax == ShellSyntax::Posix
@@ -208,7 +222,8 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
                             quote != Some('\'') && matches!(ch, '$' | '`')
                         },
                         ShellSyntax::Literal => {
-                            !ch.is_alphanumeric() && !matches!(ch, '/' | '.' | '_' | '-')
+                            !ch.is_alphanumeric()
+                                && !matches!(ch, '/' | '.' | '_' | '-' | ':' | '=')
                         },
                     };
                     if ch.is_control()
@@ -229,7 +244,6 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
                                     | '*'
                                     | '?'
                                     | '#'
-                                    | '~'
                                     | '\''
                                     | '"'
                             )
@@ -255,78 +269,8 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
             span: Span::new(line.len(), line.len()),
             quote: None,
             closed: true,
+            home: false,
         });
     }
     Some(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn branch_position_preserves_directories_options_and_utf8_ranges() {
-        for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
-            for line in [
-                "git switch ",
-                "git switch --quiet fe",
-                "git switch -c new fe",
-                "git switch -- fe",
-                "git -C \"中文 repo\" switch \"fe\"",
-            ] {
-                let context = GitSwitchContext::parse(line, line.len(), syntax).unwrap();
-                let candidate = context.candidate("feature/中文").unwrap();
-                assert!(line.is_char_boundary(candidate.span.start));
-                assert_eq!(candidate.span.end, line.len());
-                assert!(candidate.value.contains("feature/中文"));
-                if line.contains("-C") {
-                    assert_eq!(context.directories, ["中文 repo"]);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn does_not_treat_other_arguments_or_shell_expressions_as_branches() {
-        for line in [
-            "git switch",
-            "git switch -c ",
-            "git switch --orphan new",
-            "git switch --conflict ",
-            "git switch main ",
-            "git switch --track ",
-            "echo git switch fe",
-            "git -c alias.switch=x switch fe",
-            "git switch $(echo fe)",
-            "git switch fe; pwd",
-            "git switch fe | cat",
-        ] {
-            assert!(
-                GitSwitchContext::parse(line, line.len(), ShellSyntax::Posix).is_none(),
-                "{line}"
-            );
-        }
-        assert!(GitSwitchContext::parse("git switch feat", 13, ShellSyntax::Posix).is_none());
-    }
-
-    #[test]
-    fn incomplete_quotes_and_shell_escaping_produce_literal_arguments() {
-        let line = "git switch 'fe";
-        for (syntax, expected) in
-            [(ShellSyntax::Posix, "'feat'\\''$x'"), (ShellSyntax::PowerShell, "'feat''$x'")]
-        {
-            let context = GitSwitchContext::parse(line, line.len(), syntax).unwrap();
-            assert_eq!(context.candidate("feat'$x").unwrap().value, expected);
-        }
-        let line = "git -C repo\\ name switch fe";
-        assert_eq!(
-            GitSwitchContext::parse(line, line.len(), ShellSyntax::Posix).unwrap().directories,
-            ["repo name"]
-        );
-        let line = "git -C \"D:\\repo name\" switch fe";
-        assert_eq!(
-            GitSwitchContext::parse(line, line.len(), ShellSyntax::PowerShell).unwrap().directories,
-            ["D:\\repo name"]
-        );
-    }
 }

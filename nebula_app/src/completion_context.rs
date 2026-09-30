@@ -133,10 +133,7 @@ impl NebulaPaneState {
         self.suggest_env = env;
         self.cwd = cwd;
         self.pending_remote_dir = None;
-        self.clear_completion_hints();
-        self.completion_suppressed_line = None;
-        self.screen_line.clear();
-        self.line_buf.clear();
+        crate::display::nebula_clear_line(self);
     }
 }
 

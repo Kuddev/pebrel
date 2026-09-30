@@ -5,13 +5,13 @@
 //! 数据源与排序规则两个壳共用，避免第二套平行实现（与 `ssh_session` 的
 //! `SshEventHost` 泛型下沉同一手法）。
 
-use nebula_completions::file::complete_item_with_cancel;
-use nebula_completions::{CompletionOptions, Span};
+use nebula_completions::command_context::ShellSyntax;
+use nebula_completions::{SemanticSuggestion, SuggestionKind};
 
 use super::state::{CompletionStyle, NebulaCompletionItem, NebulaCompletionKind, NebulaPaneState};
 use super::{
     NEBULA_GHOST_MAX, nebula_command_hint, nebula_command_hints, nebula_debug_log,
-    nebula_is_command_position, nebula_path_wants_directory,
+    nebula_is_command_position,
 };
 
 /// 借用的共享数据源与运行时开关。生命周期只覆盖一次重算调用。
@@ -297,6 +297,11 @@ pub(crate) fn suggest_update_with_cancel(
     if cancelled() {
         return;
     }
+    if let Some(line) = line_override.as_deref()
+        && !state.completion_echo_ready(line)
+    {
+        return;
+    }
     let line = line_override.unwrap_or_else(|| state.line_buf.clone());
     if !sources.enabled || line.is_empty() {
         state.completion_popup_requested = false;
@@ -341,6 +346,11 @@ pub(crate) fn suggest_update_with_cancel(
     let result = calculate(
         sources,
         &Input { cwd: &state.cwd, env: &state.suggest_env, line: &line },
+        if state.suggest_env.is_this_machine() {
+            ShellSyntax::for_program(&crate::platform::shell::default_shell_id())
+        } else {
+            ShellSyntax::Literal
+        },
         cancelled,
     );
     state.suggestion = result.suggestion;
@@ -367,6 +377,7 @@ pub(crate) struct Candidates {
 pub(crate) fn calculate(
     sources: &SuggestSources<'_>,
     input: &Input<'_>,
+    syntax: ShellSyntax,
     cancelled: &dyn Fn() -> bool,
 ) -> Candidates {
     let mut result = Candidates::default();
@@ -379,7 +390,7 @@ pub(crate) fn calculate(
     // Popup style computes a multi-candidate list instead of the single
     // ghost remainder; the two are mutually exclusive per pane.
     if sources.style == CompletionStyle::Popup {
-        suggest_collect(sources, input, &mut result, cancelled);
+        suggest_collect(sources, input, syntax, &mut result, cancelled);
         return result;
     }
 
@@ -389,22 +400,6 @@ pub(crate) fn calculate(
         result.suggestion = rem;
         nebula_debug_log(format!("suggest_result kind=history rem={:?}", result.suggestion));
         return result;
-    }
-
-    // Directory-history hint for cd-like commands. This normalizes Windows
-    // slash style/case, so `cd D:\te` can pick a previous
-    // `cd D:/temp_build/wuwei` before generic filesystem completion falls
-    // back to alphabetic candidates like `D:\Telegram\`.
-    //
-    // 只在本机：frecency 池里混着三台机器访问过的路径，条目自身没有环境标签，
-    // 而 `hint` 是拿**宿主的** `is_dir` 把关的——在 WSL tab 里 `/temp_build`
-    // 会被解析成 `D:\temp_build` 并当成命中（见 [`SuggestEnv`]）。
-    if input.env.is_this_machine() {
-        if let Some(rem) = sources.directories.hint_with_cancel(line, input.cwd, cancelled) {
-            result.suggestion = clamp_ghost(&rem);
-            nebula_debug_log(format!("suggest_result kind=dir rem={:?}", result.suggestion));
-            return result;
-        }
     }
 
     if cancelled() {
@@ -430,95 +425,16 @@ pub(crate) fn calculate(
         }
     }
 
-    // Otherwise complete the final path token. Absolute tokens (drive,
-    // root or `~`) resolve without a cwd; relative ones need the tracked
-    // cwd, so bail if it is unknown.
-    let token = line.rsplit([' ', '\t']).next().unwrap_or("");
-    if token.is_empty() {
-        return result;
-    }
-    // 非本机的路径补齐走各自的通道（来宾 `find` / SFTP），都带往返，所以只
-    // 读缓存：miss 时把目录登记给壳去异步拉（见 [`remote_path_matches`]）。
-    // 这里**必须**分流而不是"顺手用 `std::fs` 试试"：宿主会把 `/te` 解析成
-    // 当前盘的 `\te`，补出来的是 `D:\temp_build` 这种在当前 shell 里根本不
-    // 存在的路径——比补不出来更糟。
-    if !input.env.is_this_machine() {
-        let remainder = remote_path_matches(input, &mut result, token).into_iter().next();
-        if let Some((rem, _)) = remainder {
-            result.suggestion = clamp_ghost(&rem);
-            nebula_debug_log(format!(
-                "suggest_result kind=remote_path rem={:?}",
-                result.suggestion
-            ));
-        } else {
-            nebula_debug_log(format!(
-                "suggest_result kind=none env={:?} token={:?} pending={:?}",
-                input.env, token, result.pending_remote_dir
-            ));
-        }
-        return result;
-    }
-    let absolute = token.starts_with(['/', '\\', '~']) || token.as_bytes().get(1) == Some(&b':'); // Windows drive, e.g. `D:`
-    if !absolute && input.cwd.is_empty() {
-        return result;
-    }
-
-    // Case-insensitive so `mor` completes `MoRealm` on Windows; prefer
-    // directories for the common directory-changing commands.
-    let options =
-        CompletionOptions { case_sensitive: !cfg!(windows), ..CompletionOptions::default() };
-    let want_dir = nebula_path_wants_directory(line);
-    let span = Span::new(0, token.len());
-    let cwd = input.cwd;
-    let cwd_slot = [cwd];
-    let cwds: &[&str] = if cwd.is_empty() { &[] } else { &cwd_slot };
-    let matches =
-        complete_item_with_cancel(want_dir, span, token, cwds, &options, false, None, cancelled);
-    if cancelled() {
-        return result;
-    }
-    let matches = if want_dir {
-        sources.directories.rank_file_suggestions(matches, input.cwd)
-    } else {
-        matches
-    };
-    let candidates: Vec<_> = matches
-        .iter()
-        .take(6)
-        .map(|s| s.display_override.as_deref().unwrap_or(&s.path).to_owned())
-        .collect();
-    let remainder = matches.into_iter().find_map(|s| {
-        let path = s.display_override.as_deref().unwrap_or(&s.path);
-        // The match was case-insensitive, so the suggestion is the slice of
-        // `path` past what the user typed. Compare the head ignoring ASCII
-        // case (so `mor` matches `MoRealm`) and guard the byte split against
-        // multibyte boundaries.
-        if path.len() <= token.len() || !path.is_char_boundary(token.len()) {
-            return None;
-        }
-        let (head, rem) = path.split_at(token.len());
-        if !head.eq_ignore_ascii_case(token) {
-            return None;
-        }
-        // Stop at the first separator so a single deep match doesn't drill
-        // the whole tree into the ghost; suggest one segment.
-        Some(match rem.find(['/', '\\']) {
-            Some(i) => rem[..=i].to_owned(),
-            None => rem.to_owned(),
-        })
-    });
-    if let Some(rem) = remainder {
-        result.suggestion = clamp_ghost(&rem);
-        nebula_debug_log(format!(
-            "suggest_result kind=path token={:?} candidates={:?} rem={:?}",
-            token, candidates, result.suggestion
-        ));
-    } else {
-        nebula_debug_log(format!(
-            "suggest_result kind=none token={:?} candidates={:?}",
-            token, candidates
-        ));
-    }
+    let (paths, pending) = crate::completion::paths::complete(
+        input,
+        syntax,
+        sources.directories,
+        sources.style,
+        None,
+        cancelled,
+    );
+    result = semantic_candidates(line, sources.style, paths);
+    result.pending_remote_dir = pending;
     result
 }
 
@@ -540,42 +456,6 @@ pub(crate) fn suggestion_key(
 /// Cap ghost length so a long path/command can't spill into the chrome.
 fn clamp_ghost(rem: &str) -> String {
     rem.chars().take(NEBULA_GHOST_MAX).collect()
-}
-
-/// 来宾 / 远端目录里匹配当前 token 的候选，`(插入余量, 是否目录)`。
-///
-/// 只读 [`crate::remote_dirs`] 的缓存——列一个来宾目录要一次子进程往返（冷
-/// 启动实测可达 7.5 秒），挂在按键路径上整个 UI 都会卡住。缓存没有时把目录
-/// 登记到结果的 `pending_remote_dir`，壳看到就去异步拉，回填后代际一变，下
-/// 一次重算就有候选了。
-///
-/// 命令位置（`gre<Tab>`）不问目录：那是在补命令名，为它跑一趟 SSH 往返纯属
-/// 浪费。带了 `/` 就不同了——`./scr` 或 `/usr/bin/l` 明确是在打路径。
-fn remote_path_matches(
-    input: &Input<'_>,
-    result: &mut Candidates,
-    token: &str,
-) -> Vec<(String, bool)> {
-    if !input.env.can_query_remote_paths() {
-        return Vec::new();
-    }
-    if nebula_is_command_position(input.line) && !token.contains('/') {
-        return Vec::new();
-    }
-    let Some(request) = crate::remote_dirs::path_request(token, input.cwd) else {
-        return Vec::new();
-    };
-    let want_dir = nebula_path_wants_directory(input.line);
-    match crate::remote_dirs::lookup(input.env, &request.dir) {
-        Some(entries) => crate::remote_dirs::candidates(&request, &entries)
-            .into_iter()
-            .filter(|(_, is_dir)| !want_dir || *is_dir)
-            .collect(),
-        None => {
-            result.pending_remote_dir = Some(request.dir);
-            Vec::new()
-        },
-    }
 }
 
 /// Elide long popup labels from the LEFT (paths keep their informative
@@ -602,12 +482,13 @@ fn popup_edit(line: &str, candidate: &str) -> (usize, String) {
 pub(crate) fn semantic_candidates(
     line: &str,
     style: CompletionStyle,
-    candidates: Vec<nebula_completions::Suggestion>,
+    candidates: Vec<SemanticSuggestion>,
 ) -> Candidates {
     let mut result = Candidates::default();
     let items: Vec<_> = candidates
         .into_iter()
-        .filter_map(|candidate| {
+        .filter_map(|semantic| {
+            let candidate = semantic.suggestion;
             if candidate.span.end != line.len() {
                 return None;
             }
@@ -623,9 +504,15 @@ pub(crate) fn semantic_candidates(
                 label: elide_left(candidate.display_value(), 44),
                 insert: candidate.value[common..].to_owned(),
                 replace_chars: token[common..].chars().count(),
-                kind: NebulaCompletionKind::Command,
+                kind: match semantic.kind {
+                    Some(SuggestionKind::Directory) => NebulaCompletionKind::Dir,
+                    Some(SuggestionKind::File) => NebulaCompletionKind::File,
+                    _ => NebulaCompletionKind::Command,
+                },
             })
         })
+        .filter(|item| item.replace_chars != 0 || !item.insert.is_empty())
+        .take(256)
         .collect();
     if style == CompletionStyle::Popup {
         result.completion_items = items;
@@ -642,6 +529,7 @@ pub(crate) fn semantic_candidates(
 fn suggest_collect(
     sources: &SuggestSources<'_>,
     input: &Input<'_>,
+    syntax: ShellSyntax,
     result: &mut Candidates,
     cancelled: &dyn Fn() -> bool,
 ) {
@@ -678,25 +566,6 @@ fn suggest_collect(
         );
     }
 
-    let token = line.rsplit([' ', '\t']).next().unwrap_or("");
-
-    // Frecency-ranked directory completion for cd-like commands. 只在本机，
-    // 理由同 ghost 分支：frecency 池没有环境标签，而 `hint` 拿宿主的 `is_dir`
-    // 把关，会把 `D:\temp_build` 当成 WSL 的 `/temp_build`。
-    if input.env.is_this_machine() {
-        if let Some(rem) = sources.directories.hint_with_cancel(line, input.cwd, cancelled) {
-            push(
-                &mut items,
-                NebulaCompletionItem {
-                    replace_chars: 0,
-                    label: elide_left(&format!("{token}{rem}"), LABEL_MAX),
-                    insert: rem,
-                    kind: NebulaCompletionKind::Dir,
-                },
-            );
-        }
-    }
-
     if cancelled() {
         return;
     }
@@ -730,82 +599,17 @@ fn suggest_collect(
         }
     }
 
-    // Filesystem candidates for the final token (same gating as the ghost
-    // path: absolute tokens work without a cwd, relative ones need one).
-    // 非本机走 [`remote_path_matches`]：同一份缓存、同一套分流，只是这里保留
-    // 多个候选而不是第一个。
-    if !token.is_empty() && !input.env.is_this_machine() {
-        for (rem, is_dir) in remote_path_matches(input, result, token).into_iter().take(POPUP_LIMIT)
-        {
-            push(
-                &mut items,
-                NebulaCompletionItem {
-                    replace_chars: 0,
-                    label: elide_left(&format!("{token}{rem}"), LABEL_MAX),
-                    insert: rem,
-                    kind: if is_dir {
-                        NebulaCompletionKind::Dir
-                    } else {
-                        NebulaCompletionKind::File
-                    },
-                },
-            );
-        }
-    } else if !token.is_empty() && input.env.is_this_machine() {
-        let absolute =
-            token.starts_with(['/', '\\', '~']) || token.as_bytes().get(1) == Some(&b':');
-        if absolute || !input.cwd.is_empty() {
-            let options = CompletionOptions {
-                case_sensitive: !cfg!(windows),
-                ..CompletionOptions::default()
-            };
-            let want_dir = nebula_path_wants_directory(line);
-            let span = Span::new(0, token.len());
-            let cwd = input.cwd;
-            let cwd_slot = [cwd];
-            let cwds: &[&str] = if cwd.is_empty() { &[] } else { &cwd_slot };
-            let matches = complete_item_with_cancel(
-                want_dir, span, token, cwds, &options, false, None, cancelled,
-            );
-            if cancelled() {
-                return;
-            }
-            let matches = if want_dir {
-                sources.directories.rank_file_suggestions(matches, input.cwd)
-            } else {
-                matches
-            };
-            for candidate in matches.iter().take(POPUP_LIMIT) {
-                let path = candidate.display_override.as_deref().unwrap_or(&candidate.path);
-                if path.len() <= token.len() || !path.is_char_boundary(token.len()) {
-                    continue;
-                }
-                let (head, rem) = path.split_at(token.len());
-                if !head.eq_ignore_ascii_case(token) {
-                    continue;
-                }
-                // One segment at a time, like the ghost: a deep match
-                // drills the tree one directory per acceptance.
-                let (insert, cut_at_dir) = match rem.find(['/', '\\']) {
-                    Some(i) => (&rem[..=i], true),
-                    None => (rem, false),
-                };
-                let kind = if cut_at_dir || candidate.is_dir {
-                    NebulaCompletionKind::Dir
-                } else {
-                    NebulaCompletionKind::File
-                };
-                push(
-                    &mut items,
-                    NebulaCompletionItem {
-                        replace_chars: 0,
-                        label: elide_left(&format!("{token}{insert}"), LABEL_MAX),
-                        insert: insert.to_owned(),
-                        kind,
-                    },
-                );
-            }
-        }
+    let (paths, pending) = crate::completion::paths::complete(
+        input,
+        syntax,
+        sources.directories,
+        sources.style,
+        None,
+        cancelled,
+    );
+    result.pending_remote_dir = pending;
+    for item in semantic_candidates(line, CompletionStyle::Popup, paths).completion_items {
+        push(&mut items, item);
     }
 
     nebula_debug_log(format!("suggest_result kind=popup line={:?} items={}", line, items.len()));
