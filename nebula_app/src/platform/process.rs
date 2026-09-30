@@ -20,7 +20,8 @@
 //! 那几处是**故意**要给用户看见窗口的。
 
 use std::io;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// `CREATE_NO_WINDOW` 的**唯一定义处**。
 ///
@@ -51,6 +52,64 @@ pub(crate) fn hidden_command_with(command: &mut Command, extra_flags: u32) -> &m
     #[cfg(not(windows))]
     let _ = extra_flags;
     command
+}
+
+/// Run a non-interactive child to completion with `input` on stdin, bounded by
+/// `budget` and by `max_output` bytes of stdout, and return that stdout.
+///
+/// Temporary files stand in for pipes, so no reader thread outlives a
+/// descendant that keeps a handle open. A child that overruns either bound is
+/// killed and reaped; one that fails, or overruns, yields an error rather than
+/// partial output. The caller supplies a hidden command (see [`hidden_command`])
+/// and runs this off the UI thread: it polls until the child exits.
+pub(crate) fn run_bounded(
+    command: &mut Command,
+    input: &[u8],
+    budget: Duration,
+    max_output: u64,
+) -> io::Result<String> {
+    use std::io::{Read as _, Seek as _, Write as _};
+
+    let mut stdin = tempfile::tempfile()?;
+    stdin.write_all(input)?;
+    stdin.rewind()?;
+    let mut output = tempfile::tempfile()?;
+    let mut child =
+        command.stdin(stdin).stdout(output.try_clone()?).stderr(Stdio::null()).spawn()?;
+    let deadline = Instant::now() + budget;
+    let status = loop {
+        let overrun = if Instant::now() >= deadline {
+            Some("exceeded its time budget")
+        } else if output.metadata()?.len() > max_output {
+            Some("exceeded its output limit")
+        } else {
+            None
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if overrun.is_none() => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::other(overrun.unwrap_or_default()));
+            },
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            },
+        }
+    };
+    if !status.success() {
+        return Err(io::Error::other(format!("exited with {status}")));
+    }
+    if output.metadata()?.len() > max_output {
+        return Err(io::Error::other("exceeded its output limit"));
+    }
+    output.rewind()?;
+    let mut text = String::new();
+    output.take(max_output).read_to_string(&mut text)?;
+    Ok(text)
 }
 
 #[cfg(unix)]

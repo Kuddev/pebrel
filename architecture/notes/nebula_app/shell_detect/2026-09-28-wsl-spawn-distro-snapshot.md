@@ -39,7 +39,10 @@ to the default. `TerminalView` snapshots the value as `wsl_distro`. The
 workspace WSL location, prompt-path links and the pane's `PaneExecContext`
 (`with_spawn_distro`) read the focused pane's snapshot instead of the tab
 launch. A PTY-default WSL pane spawns the snapshotted `wsl.exe` explicitly, so
-it gets the same guest environment. `wsl_launch_distro` keeps its explicit-only
+it gets the same guest environment. The spawn options of every WSL pane are
+pinned to the snapshot (`wsl_args_pinned`) while the persisted launch stays as
+the user configured it, so the pane, the guest shell probe and the hook
+installer name the same guest by construction. `wsl_launch_distro` keeps its explicit-only
 semantics for launch-argument rewriting.
 
 One parser, `shell_detect::wsl_options`, reads WSL's option region for the
@@ -83,8 +86,9 @@ Copies of a pane follow its snapshot:
 
 - Read the registry default whenever a location is needed: a later default
   change would silently retarget a running pane — the guess the old rule forbade.
-- Rewrite bare launches to `-d <default>`: changes persisted launch identity and
-  restore semantics for users who intentionally follow the default.
+- Rewrite bare launches to `-d <default>` in the persisted launch: changes
+  launch identity and restore semantics for users who intentionally follow the
+  default. Only the spawn options are pinned.
 - Take the identity from the guest's `WSL_DISTRO_NAME`: the bash and zsh
   reports already carry it in the `pebrel_shell` token, which completion uses
   to fill an empty distribution. It arrives only at the first prompt, which is

@@ -245,6 +245,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         if try_hand_over_to_resident(&options) {
             return Ok(());
         }
+        // The first WSL pane spawns before any guest could answer; ask the default
+        // shell's guest now, off this thread, so a running distribution has
+        // answered by then (see `platform::wsl_guest_shell`).
+        platform::wsl_guest_shell::warm_up(shell_id.clone());
         gpui_shell::run_shell(
             initial_cwd,
             terminal_options.command(),

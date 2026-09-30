@@ -92,33 +92,60 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
 /// Whether a given guest user can actually read it, and whether the launch starts
 /// zsh at all, is the guest's answer (`super::wsl_guest_shell`), not a host guess.
 /// The files are written once per process; spawns never replace a file that a
-/// starting guest zsh may be reading. A failed first write is cached, so it warns
-/// once instead of retrying on every spawn. A bootstrap file deleted while the
+/// starting guest zsh may be reading. A failed write (a sharing violation from a
+/// guest still reading through 9P, an antivirus hold) warns once and is retried
+/// only after five minutes, so a transient failure does not disable the
+/// integration for the rest of the process. A bootstrap file deleted while the
 /// process runs is rewritten, or the directory is withheld from that spawn with
 /// a warning: a `ZDOTDIR` missing one of them would silently skip the matching
 /// user file.
 pub(crate) fn wsl_zsh_directory() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        static PREPARED: std::sync::OnceLock<Option<std::path::PathBuf>> =
-            std::sync::OnceLock::new();
-        let prepare = |directory: std::path::PathBuf| match write_zsh_files(&directory) {
-            Ok(()) => Some(directory),
-            Err(error) => {
-                log::warn!("Could not prepare WSL zsh integration: {error}");
-                None
+        use std::path::PathBuf;
+        use std::sync::{Mutex, PoisonError};
+        use std::time::{Duration, Instant};
+
+        const RETRY_AFTER: Duration = Duration::from_secs(300);
+        enum Bootstrap {
+            Ineligible,
+            Ready(PathBuf),
+            Failed(PathBuf, Instant),
+        }
+        static STATE: Mutex<Option<Bootstrap>> = Mutex::new(None);
+
+        let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let (directory, complete) = match &*state {
+            Some(Bootstrap::Ineligible) => return None,
+            Some(Bootstrap::Ready(directory)) => (
+                directory.clone(),
+                ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()),
+            ),
+            Some(Bootstrap::Failed(_, at)) if at.elapsed() < RETRY_AFTER => return None,
+            Some(Bootstrap::Failed(directory, _)) => (directory.clone(), false),
+            None => {
+                let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
+                if !is_local_drive_path(&directory) {
+                    *state = Some(Bootstrap::Ineligible);
+                    return None;
+                }
+                (directory, false)
             },
         };
-        let directory = PREPARED
-            .get_or_init(|| {
-                let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
-                is_local_drive_path(&directory).then_some(directory).and_then(prepare)
-            })
-            .clone()?;
-        if ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()) {
+        if complete {
             return Some(directory);
         }
-        prepare(directory)
+        match write_zsh_files(&directory) {
+            Ok(()) => {
+                *state = Some(Bootstrap::Ready(directory.clone()));
+                Some(directory)
+            },
+            Err(error) => {
+                log::warn!("Could not prepare WSL zsh integration: {error}");
+                *state = Some(Bootstrap::Failed(directory, Instant::now()));
+                None
+            },
+        }
     }
     #[cfg(not(windows))]
     {
