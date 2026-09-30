@@ -1,5 +1,9 @@
 //! macOS startup-only storage selection. No preferences or workers may open first.
 
+use objc2_core_foundation::{
+    CFOptionFlags, CFString, CFUserNotificationDisplayAlert, kCFUserNotificationCancelResponse,
+    kCFUserNotificationNoteAlertLevel, kCFUserNotificationStopAlertLevel,
+};
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
@@ -47,18 +51,15 @@ pub(super) fn prepare(gui_launch: bool, explicit_config: bool) -> io::Result<Lau
         let portable = language.text(Message::StartupPortableEnable);
         let normal = language.text(Message::StartupPortableNormal);
         let quit = language.text(Message::StartupPortableQuit);
-        let result = rfd::MessageDialog::new()
-            .set_title(language.text(Message::StartupPortableTitle))
-            .set_description(language.format(
+        let result = startup_dialog(
+            language.text(Message::StartupPortableTitle),
+            &language.format(
                 Message::StartupPortableDescription,
                 &[("path", &data.display().to_string())],
-            ))
-            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
-                portable.to_owned(),
-                normal.to_owned(),
-                quit.to_owned(),
-            ))
-            .show();
+            ),
+            [Some(portable), Some(normal), Some(quit)],
+            kCFUserNotificationNoteAlertLevel,
+        );
         match selected_launch(result, language) {
             Launch::Portable => {},
             other => return Ok(other),
@@ -148,11 +149,49 @@ fn language() -> UiLanguage {
 }
 
 pub(super) fn report_error(error: &dyn std::fmt::Display) {
-    rfd::MessageDialog::new()
-        .set_title(language().text(Message::StartupPortableErrorTitle))
-        .set_description(error.to_string())
-        .set_level(rfd::MessageLevel::Error)
-        .show();
+    startup_dialog(
+        language().text(Message::StartupPortableErrorTitle),
+        &error.to_string(),
+        [Some("OK"), None, None],
+        kCFUserNotificationStopAlertLevel,
+    );
+}
+
+fn startup_dialog(
+    title: &str,
+    description: &str,
+    buttons: [Option<&str>; 3],
+    level: CFOptionFlags,
+) -> rfd::MessageDialogResult {
+    let title = CFString::from_str(title);
+    let description = CFString::from_str(description);
+    let labels = buttons.map(|label| label.map(CFString::from_str));
+    let mut response = kCFUserNotificationCancelResponse;
+    // RFD's synchronous wrapper creates NSApplication before GPUI can install
+    // its subclass. Use the same native alert without initializing AppKit.
+    // SAFETY: all CF strings and the initialized output remain alive for this synchronous call.
+    let status = unsafe {
+        CFUserNotificationDisplayAlert(
+            0.0,
+            level,
+            None,
+            None,
+            None,
+            Some(&title),
+            Some(&description),
+            labels[0].as_deref(),
+            labels[1].as_deref(),
+            labels[2].as_deref(),
+            &mut response,
+        )
+    };
+    if status == 0
+        && let Some(Some(label)) = buttons.get(response as usize)
+    {
+        rfd::MessageDialogResult::Custom((*label).to_owned())
+    } else {
+        rfd::MessageDialogResult::Cancel
+    }
 }
 
 #[cfg(test)]
