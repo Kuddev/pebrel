@@ -515,6 +515,8 @@ pub(crate) fn ssh_config_tokens_checked(line: &str) -> std::io::Result<Vec<Strin
     Ok(tokens)
 }
 
+pub(crate) mod hosts;
+
 fn parse_ssh_config_hosts(text: &str) -> Vec<String> {
     let mut hosts = Vec::new();
     for line in text.lines() {
@@ -538,8 +540,8 @@ fn parse_ssh_config_hosts(text: &str) -> Vec<String> {
 }
 
 pub fn ssh_config_hosts() -> Vec<String> {
-    let Ok(data) = read_ssh_config() else { return Vec::new() };
-    parse_ssh_config_hosts(&data)
+    let Some(home) = crate::platform::dirs::home_dir() else { return Vec::new() };
+    hosts::discover(&home.join(".ssh/config"), &home.join(".ssh"), &home, &|| false)
 }
 
 fn askpass_destination_from_args(args: &[String]) -> Option<String> {

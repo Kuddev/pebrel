@@ -13,11 +13,17 @@ notices remain applicable; inclusion does not relicense upstream sources.
   Source: https://github.com/google/material-design-icons/blob/master/src/action/settings/materialiconsoutlined/24px.svg.
   Converted to Android VectorDrawable without changing the icon geometry;
   the Apache-2.0 license is included in licenses/Apache-2.0.txt.
-- GitHub Octicons, `mark-github-16`, `sync-16`, `git-branch-16`, `file-16`,
-  `file-directory-16`, `dash-16`, `comment-discussion-16`: MIT, Copyright (c) 2026 GitHub Inc.
+- Tabler Icons, selected outline technology, file-type and folder icons: MIT.
+  Source: https://github.com/tabler/tabler-icons/tree/0239805680a36bab4e1070529b6744924402d804.
+  Original paths, viewports and rounded strokes are preserved in Android VectorDrawable resources.
+  The exact selection and source/output hashes are in `third_party/file-icons.json`;
+  license text: `licenses/Tabler-MIT.txt`. Resources are bundled, not fetched at runtime.
+  Technology marks identify file types; respective trademark rights remain with their owners.
+- GitHub Octicons, `mark-github-16`, `sync-16`, `git-branch-16`,
+  `dash-16`, `comment-discussion-16`: MIT, Copyright (c) 2026 GitHub Inc.
   Source: https://github.com/primer/octicons/blob/90af1f14984832de34e94b2d530043fbcf85eb7f/icons/mark-github-16.svg.
   Converted to Android VectorDrawable with the original path and viewport.
-  The Git view icons use the same pinned revision and original paths under `icons/`.
+  The remaining Git view controls use the same pinned revision and original paths under `icons/`.
   License text: licenses/Octicons-MIT.txt. The GitHub mark remains a GitHub trademark.
 - Third-party notice: russh 0.62.2: https://github.com/warp-tech/russh, Apache License 2.0.
   The independent Rust transport is built from public source using ring and RSA

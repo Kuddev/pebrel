@@ -134,7 +134,7 @@ fun SftpFileScreen(session: LocalSession, tab: SftpTab, onBack: () -> Unit, onTa
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
             Row(Modifier.weight(1f).heightIn(min = 48.dp).clickable(onClick = onTabs), verticalAlignment = Alignment.CenterVertically) {
-                Glyph(if (image) R.drawable.ic_image else R.drawable.ic_git_file, Modifier.size(18.dp))
+                FileSymbol(file.path, modifier = Modifier.size(20.dp))
                 Text(file.name, Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
                 Glyph(R.drawable.ic_down, Modifier.size(12.dp))
             }
