@@ -262,7 +262,12 @@ impl SettingsPane {
         let update_source = h_flex()
             .items_center()
             .gap_2()
-            .child(div().w(px(240.0)).child(Input::new(&self.update_release_input).h(px(32.0))))
+            .child(
+                div()
+                    .debug_selector(|| "update-release-source-input".to_owned())
+                    .w(px(240.0))
+                    .child(Input::new(&self.update_release_input).h(px(32.0))),
+            )
             .child(
                 NebulaButton::new("save-update-release-source")
                     .label(language.text(crate::i18n::Message::CommonSave))

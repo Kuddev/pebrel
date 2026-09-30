@@ -1509,3 +1509,67 @@ fn theme_editor_save_only_forks_a_non_active_custom_template_without_publishing_
     assert_eq!(settings_file_snapshot(), before_save_settings);
     assert_eq!(settings_file_snapshot(), before_settings_file);
 }
+
+#[gpui::test]
+fn update_source_form_rejects_invalid_urls_and_persists_keyboard_edits(cx: &mut TestAppContext) {
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    std::fs::create_dir_all(nebula_settings::settings_dir()).unwrap();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS).unwrap();
+    let (pane, mut window) = open_settings(cx);
+    pane.update(&mut window, |pane, cx| {
+        pane.active_section = 0;
+        cx.notify();
+    });
+    draw(&mut window);
+    let generation = crate::update_check::release_source_generation();
+    let selector = "update-release-source-input";
+    let bounds = window.debug_bounds(selector).expect("source input is visible");
+    assert!(f32::from(bounds.size.width) >= 200.0);
+    assert!(f32::from(bounds.size.height) >= 28.0);
+    click(selector, &mut window);
+    window.simulate_input("https://example.com/acme/pebrel/releases");
+    draw(&mut window);
+    assert_eq!(
+        pane.read_with(&mut window, |pane, cx| pane.update_release_input.read(cx).value()),
+        "https://example.com/acme/pebrel/releases"
+    );
+    click("nebula-btn-save-update-release-source", &mut window);
+    assert!(RuntimeSettings::load().update_release_url.is_empty());
+    assert!(crate::update_check::release_source_is_current(generation));
+    click(selector, &mut window);
+    let select_all = match crate::platform::Platform::current() {
+        crate::platform::Platform::MacOS => "cmd-a",
+        _ => "ctrl-a",
+    };
+    window.simulate_keystrokes(select_all);
+    window.simulate_input("https://github.com/acme/pebrel/releases/latest/");
+    draw(&mut window);
+    click("nebula-btn-save-update-release-source", &mut window);
+    assert_eq!(
+        RuntimeSettings::load().update_release_url,
+        "https://github.com/acme/pebrel/releases"
+    );
+    assert!(!crate::update_check::release_source_is_current(generation));
+    pane.read_with(&mut window, |pane, cx| {
+        assert_eq!(
+            pane.update_release_input.read(cx).value(),
+            RuntimeSettings::load().update_release_url
+        );
+        assert!(matches!(pane.about_update, AboutUpdateState::Idle));
+        assert!(pane.about_last_checked.is_none());
+    });
+    let reopened = window.update(|window, cx| cx.new(|cx| SettingsPane::new(window, cx)));
+    reopened.read_with(&mut window, |pane, cx| {
+        assert_eq!(
+            pane.update_release_input.read(cx).value(),
+            RuntimeSettings::load().update_release_url
+        );
+    });
+    click(selector, &mut window);
+    window.simulate_keystrokes(select_all);
+    window.simulate_keystrokes("backspace");
+    draw(&mut window);
+    click("nebula-btn-save-update-release-source", &mut window);
+    assert!(RuntimeSettings::load().update_release_url.is_empty());
+}
