@@ -114,7 +114,7 @@ fun DesktopFileScreen(desktop: DesktopWorkspace, tab: DesktopTab, repository: Se
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             GlyphButton(R.drawable.ic_back, stringResource(R.string.back), onBack)
             Row(Modifier.weight(1f).heightIn(min = 48.dp).clickable(onClick = onTabs), verticalAlignment = Alignment.CenterVertically) {
-                Glyph(tabIcon(tab), Modifier.size(18.dp))
+                DesktopTabSymbol(tab, Modifier.size(20.dp))
                 Text(tab.displayTitle, Modifier.weight(1f).padding(horizontal = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
                 Glyph(R.drawable.ic_down, Modifier.size(12.dp))
             }

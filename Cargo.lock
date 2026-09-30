@@ -5281,6 +5281,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "gl_generator",
+ "glob",
  "global-hotkey",
  "glutin",
  "gpui",

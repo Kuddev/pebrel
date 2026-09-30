@@ -769,25 +769,10 @@ pub fn wsl_host_cwd(located: &WslCwd) -> Option<std::path::PathBuf> {
 /// 去的入口才保证在。跳过 docker-desktop 等管道发行版，口径同 shell 菜单。
 #[cfg(windows)]
 pub fn wsl_distro_names() -> Vec<String> {
-    use winreg::RegKey;
-    use winreg::enums::HKEY_CURRENT_USER;
-
-    let Ok(lxss) = RegKey::predef(HKEY_CURRENT_USER)
-        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
-    else {
-        return Vec::new();
-    };
-    let mut names = Vec::new();
-    for guid in lxss.enum_keys().flatten() {
-        let Ok(sub) = lxss.open_subkey(&guid) else { continue };
-        let Ok(name) = sub.get_value::<String, _>("DistributionName") else { continue };
-        if name.starts_with("docker-desktop") {
-            continue;
-        }
-        names.push(name);
-    }
-    names.sort();
-    names
+    crate::platform::shell::registered_wsl_distros(&|| false)
+        .into_iter()
+        .filter(|name| !name.starts_with("docker-desktop"))
+        .collect()
 }
 
 #[cfg(windows)]

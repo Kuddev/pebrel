@@ -30,7 +30,7 @@ pub(crate) fn complete(
         || crate::display::nebula_path_wants_directory(input.line),
         |context| matches!(context.source, Source::Paths { directories_only: true }),
     );
-    let prefix = context.prefix();
+    let prefix = semantic.map_or_else(|| context.prefix(), Context::value_prefix);
     let mut cwd = input.cwd.to_owned();
     if let Some(semantic) = semantic {
         for directory in &semantic.directories {
@@ -53,12 +53,14 @@ pub(crate) fn complete(
         }
     }
     let make = |path: &str, is_dir| {
-        context.candidate(path).map(|suggestion| {
-            SemanticSuggestion::with_kind(
-                suggestion,
-                if is_dir { SuggestionKind::Directory } else { SuggestionKind::File },
-            )
-        })
+        semantic.map_or_else(|| context.candidate(path), |semantic| semantic.candidate(path)).map(
+            |suggestion| {
+                SemanticSuggestion::with_kind(
+                    suggestion,
+                    if is_dir { SuggestionKind::Directory } else { SuggestionKind::File },
+                )
+            },
+        )
     };
     if !input.env.is_this_machine() {
         // 方言未知时只插入通用字面量；绝不能落到宿主目录扫描。
@@ -95,7 +97,7 @@ pub(crate) fn complete(
     }
     let mut candidates = Vec::new();
     // 旧访问记录仍可优先补到深层目录，但必须经过同一转义规则。
-    if semantic.is_none()
+    if semantic.is_none_or(|context| context.directories.is_empty())
         && want_dir
         && prefix
             .chars()

@@ -13,6 +13,7 @@ use crate::runtime_exec::PaneExecContext;
 use nebula_completions::command_context::ShellSyntax;
 use nebula_completions::semantic::{Context as SemanticContext, Source};
 
+mod connections;
 pub(crate) mod paths;
 mod project_scripts;
 
@@ -52,12 +53,14 @@ impl Cancellation {
 pub(crate) struct Session {
     git: Arc<crate::git_completion::Cache>,
     scripts: Arc<project_scripts::Cache>,
+    connections: Arc<connections::Cache>,
 }
 
 impl Session {
     pub(crate) fn invalidate(&self) {
         self.git.invalidate();
         self.scripts.invalidate();
+        self.connections.invalidate();
     }
 
     pub(crate) fn request(
@@ -68,6 +71,14 @@ impl Session {
         style: CompletionStyle,
         execution: Option<&PaneExecContext>,
     ) -> Request {
+        let env = if env.is_this_machine()
+            && let Some(distro) = execution.and_then(PaneExecContext::wsl_distribution)
+        {
+            // 执行快照已确认是 WSL 时，尚未刷新的视图标签不能放行宿主文件系统。
+            SuggestEnv::Wsl { distro: distro.unwrap_or_default().to_owned() }
+        } else {
+            env
+        };
         let local =
             env.is_this_machine() && execution.is_none_or(|e| e.wsl_distribution().is_none());
         // 方言是输入事实；远端/嵌套 shell 未证明方言时只接受通用字面量。
@@ -81,7 +92,10 @@ impl Session {
         } else {
             ShellSyntax::Literal
         };
-        let semantic = SemanticContext::parse(&line, line.len(), syntax);
+        let semantic = SemanticContext::parse(&line, line.len(), syntax).filter(|context| {
+            // 无目录通道的嵌套 shell 仍能召回本会话历史；空路径来源不应把历史挡住。
+            !matches!(context.source, Source::Paths { .. }) || local || env.can_query_remote_paths()
+        });
         // 只有需要本机 Git I/O 的请求才复制启动环境。
         let git = if local
             && semantic.as_ref().is_some_and(|c| {
@@ -97,7 +111,8 @@ impl Session {
             None
         };
         let scripts = local.then(|| self.scripts.clone());
-        Request { cwd, env, line, style, git, semantic, scripts, syntax }
+        let connections = local.then(|| self.connections.clone());
+        Request { cwd, env, line, style, git, semantic, scripts, connections, syntax }
     }
 }
 
@@ -110,6 +125,7 @@ pub(crate) struct Request {
     git: Option<(Arc<crate::git_completion::Cache>, PaneExecContext)>,
     semantic: Option<SemanticContext>,
     scripts: Option<Arc<project_scripts::Cache>>,
+    connections: Option<Arc<connections::Cache>>,
     syntax: ShellSyntax,
 }
 
@@ -132,6 +148,11 @@ impl Request {
             Source::ProjectScripts => self.scripts.as_ref().map_or_else(Vec::new, |cache| {
                 cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
             }),
+            Source::SshHosts { .. } | Source::WslDistributions => {
+                self.connections.as_ref().map_or_else(Vec::new, |cache| {
+                    cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
+                })
+            },
             Source::None | Source::Paths { .. } => Vec::new(),
         });
         if cancellation.is_cancelled() {
@@ -233,6 +254,124 @@ pub(crate) fn history_hint_for_test(scope: &HistoryScope, prefix: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_completion_uses_config_includes_and_never_leaks_host_data() {
+        let root = tempfile::tempdir().unwrap();
+        let included = root.path().join("included.conf");
+        std::fs::write(&included, "Host completion-prod completion-stage\nHost * !excluded bad?\n")
+            .unwrap();
+        std::fs::write(
+            root.path().join("config"),
+            format!("Include \"{}\"\n", included.to_string_lossy().replace('\\', "/")),
+        )
+        .unwrap();
+        std::fs::write(root.path().join("identity.pem"), b"fixture").unwrap();
+        let session = Session::default();
+        let query = |env, line: &str, style| {
+            session
+                .request(root.path().to_string_lossy().into(), env, line.into(), style, None)
+                .calculate(&Cancellation::default())
+        };
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+            let r = query(SuggestEnv::Local, "ssh -F config me@completion-pr", style);
+            if style == CompletionStyle::Popup {
+                assert_eq!(r.completion_items[0].insert, "od");
+            } else {
+                assert_eq!(r.suggestion, "od");
+            }
+        }
+        for (program, expected) in
+            [("sh", "-iidentity.pem"), ("pwsh", "'-iidentity.pem'"), ("cmd", "-iidentity.pem")]
+        {
+            let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                ..Default::default()
+            });
+            let line = "ssh -F config -iidentity";
+            for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+            {
+                let result = session
+                    .request(
+                        root.path().to_string_lossy().into(),
+                        SuggestEnv::Local,
+                        line.into(),
+                        style,
+                        Some(&execution),
+                    )
+                    .calculate(&Cancellation::default());
+                let edit = if style == CompletionStyle::Popup {
+                    &result.completion_items[0]
+                } else {
+                    result.suggestion_edit.as_ref().unwrap()
+                };
+                let accepted: String = line
+                    .chars()
+                    .take(line.chars().count() - edit.replace_chars)
+                    .chain(edit.insert.chars())
+                    .collect();
+                assert_eq!(accepted, format!("ssh -F config {expected}"), "{program} {style:?}");
+            }
+        }
+        assert!(
+            query(SuggestEnv::Local, "ssh -F none completion-", CompletionStyle::Popup)
+                .completion_items
+                .is_empty()
+        );
+        std::fs::write(&included, "Host completion-new\n").unwrap();
+        session.invalidate();
+        assert_eq!(
+            query(SuggestEnv::Local, "ssh -F config completion-", CompletionStyle::Popup)
+                .completion_items[0]
+                .insert,
+            "new"
+        );
+        for env in [
+            SuggestEnv::Wsl { distro: "source-isolation".into() },
+            SuggestEnv::Ssh { destination: "source-isolation.invalid".into() },
+        ] {
+            assert!(
+                query(env.clone(), "ssh -F config completion-", CompletionStyle::Popup)
+                    .completion_items
+                    .is_empty()
+            );
+            assert!(
+                query(env.clone(), "wsl -d ", CompletionStyle::Popup).completion_items.is_empty()
+            );
+            crate::remote_dirs::finish_fetch(
+                &env,
+                "/project",
+                Some(vec![crate::remote_dirs::RemoteEntry {
+                    name: "file.txt".into(),
+                    is_dir: false,
+                }]),
+            );
+            let r = session
+                .request("/project".into(), env, "ls -al fi".into(), CompletionStyle::Popup, None)
+                .calculate(&Cancellation::default());
+            assert_eq!(r.completion_items[0].insert, "le.txt");
+        }
+        let names = crate::platform::shell::registered_wsl_distros(&|| false);
+        let r = query(SuggestEnv::Local, "wsl -d ", CompletionStyle::Popup);
+        assert_eq!(r.completion_items.len(), names.len());
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            shell: Some(nebula_terminal::tty::Shell::new(
+                "wsl.exe".into(),
+                vec!["-d".into(), "source-isolation".into()],
+            )),
+            ..Default::default()
+        });
+        let result = session
+            .request(
+                root.path().to_string_lossy().into(),
+                SuggestEnv::Local,
+                "cat identity".into(),
+                CompletionStyle::Popup,
+                Some(&execution),
+            )
+            .calculate(&Cancellation::default());
+        assert!(result.completion_items.is_empty(), "stale local labels must not read host paths");
+    }
 
     #[test]
     fn path_completion_preserves_quotes_utf8_types_and_directory_roles_in_all_modes() {

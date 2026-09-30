@@ -97,6 +97,7 @@ glutin = { version = "0.32.2", optional = true, default-features = false, featur
 # 远程备份的 S3 SigV4 签名（backup_remote）。0.13 配 sha2 0.11 的 digest
 # 世代；lock 里已有该版本，零新增下载。
 hmac = "0.13"
+glob = "0.3.4"
 html-escape = "0.2.14"
 home = "0.5.5"
 libc = "0.2"

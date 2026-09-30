@@ -3,6 +3,8 @@
 use crate::command_context::{CommandContext, ShellSyntax};
 use crate::{CandidateMatcher, CompletionOptions, CompletionSort, MatchAlgorithm, Suggestion};
 
+mod common;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Words(&'static [&'static str]),
@@ -19,6 +21,10 @@ pub enum Source {
         directories_only: bool,
     },
     ProjectScripts,
+    SshHosts {
+        jump: bool,
+    },
+    WslDistributions,
     Options,
     /// A known free-form value must not receive unrelated history/path candidates.
     None,
@@ -29,6 +35,8 @@ pub struct Context {
     input: CommandContext,
     pub source: Source,
     pub directories: Vec<String>,
+    pub ssh_config: Option<String>,
+    pub ssh_config_expands_home: bool,
     options: &'static [OptionSpec],
     attached: Option<usize>,
     branch_guess: Option<bool>,
@@ -36,11 +44,21 @@ pub struct Context {
 
 impl Context {
     pub fn parse(line: &str, cursor: usize, syntax: ShellSyntax) -> Option<Self> {
-        let input = CommandContext::parse(line, cursor, syntax)?;
+        let input = CommandContext::parse(line, cursor, syntax).or_else(|| {
+            // SSH 的身份文件不改变 cwd；只对其已知参数保留 home 意图给宿主适配层。
+            let input = CommandContext::parse_with_home(line, cursor, syntax)?;
+            let name = input.arguments.first()?;
+            (matches!(name.as_str(), "ssh" | "ssh.exe")
+                || matches!(syntax, ShellSyntax::PowerShell | ShellSyntax::Cmd)
+                    && (name.eq_ignore_ascii_case("ssh") || name.eq_ignore_ascii_case("ssh.exe")))
+            .then_some(input)
+        })?;
         let mut context = Self {
             input,
             source: Source::None,
             directories: Vec::new(),
+            ssh_config: None,
+            ssh_config_expands_home: false,
             options: &[],
             attached: None,
             branch_guess: None,
@@ -48,8 +66,19 @@ impl Context {
         context.source = match context.input.arguments.first()?.as_str() {
             "git" | "git.exe" => context.git()?,
             "npm" | "npm.cmd" | "pnpm" | "pnpm.cmd" | "yarn" | "yarn.cmd" => context.scripts()?,
-            _ => return None,
+            _ => context.common(syntax)?,
         };
+        if let Source::SshHosts { jump } = context.source {
+            let base = context.attached.unwrap_or(0);
+            let prefix = context.value_prefix();
+            let start = if jump { prefix.rfind(',').map_or(0, |n| n + 1) } else { 0 };
+            let login = prefix[start..]
+                .rfind('@')
+                .map(|n| start + n + 1)
+                .or_else(|| prefix.starts_with("ssh://").then_some(6))
+                .unwrap_or(start);
+            context.attached = Some(base + login);
+        }
         Some(context)
     }
 
@@ -59,6 +88,11 @@ impl Context {
 
     pub fn value_prefix(&self) -> &str {
         &self.input.prefix()[self.attached.unwrap_or(0)..]
+    }
+
+    pub fn candidate(&self, value: &str) -> Option<Suggestion> {
+        let full = self.attached.map(|end| format!("{}{value}", &self.input.prefix()[..end]));
+        self.input.candidate(full.as_deref().unwrap_or(value))
     }
 
     pub fn guesses_branches(&self, configured: bool) -> bool {
@@ -75,9 +109,7 @@ impl Context {
         };
         let mut matcher = CandidateMatcher::literal(self.value_prefix(), &options, true);
         for value in values {
-            let full_value =
-                self.attached.map(|end| format!("{}{value}", &self.input.prefix()[..end]));
-            if let Some(candidate) = self.input.candidate(full_value.as_deref().unwrap_or(value)) {
+            if let Some(candidate) = self.candidate(value) {
                 matcher.add(value, candidate);
             }
         }
