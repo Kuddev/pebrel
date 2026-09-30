@@ -257,6 +257,30 @@ fn open_theme_editor(cx: &mut VisualTestContext) {
     assert!(cx.debug_bounds("theme-editor-dialog").is_some());
 }
 
+fn reveal_editor_control(selector: &'static str, cx: &mut VisualTestContext) {
+    let viewport = cx
+        .debug_bounds("theme-editor-fields-scroll")
+        .or_else(|| cx.debug_bounds("theme-editor-scroll"))
+        .expect("editor scroll viewport");
+    let target = cx.debug_bounds(selector).expect("editor control layout");
+    // 双栏和窄窗使用不同滚动容器；按真实布局滚动，避免点击落在固定底栏上。
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(
+            px(0.0),
+            viewport.center().y - target.center().y,
+        )),
+        touch_phase: gpui::TouchPhase::Moved,
+        modifiers: Modifiers::default(),
+    });
+    draw(cx);
+    let target = cx.debug_bounds(selector).expect("scrolled editor control");
+    assert!(
+        target.top() >= viewport.top() && target.bottom() <= viewport.bottom(),
+        "{selector} must be reachable above the footer: {target:?}, viewport: {viewport:?}"
+    );
+}
+
 fn runtime_snapshot() -> RuntimeSnapshot {
     let runtime = RuntimeSettings::load();
     RuntimeSnapshot {
@@ -497,10 +521,19 @@ fn theme_editor_opens_from_the_picker_with_common_fields_and_collapsed_advanced(
     assert!(window.debug_bounds("theme-editor-advanced-toggle").is_some());
     assert!(window.debug_bounds("theme-editor-ansi-0").is_none());
 
-    click("theme-editor-advanced-toggle", &mut window);
-    assert!(window.debug_bounds("theme-editor-ansi-0").is_some());
-    click("theme-editor-advanced-toggle", &mut window);
-    assert!(window.debug_bounds("theme-editor-ansi-0").is_none());
+    for viewport in [size(px(1280.0), px(1000.0)), size(px(680.0), px(740.0))] {
+        window.simulate_resize(viewport);
+        draw(&mut window);
+        reveal_editor_control("theme-editor-advanced-toggle", &mut window);
+        click("theme-editor-advanced-toggle", &mut window);
+        assert!(window.debug_bounds("theme-editor-ansi-0").is_some());
+        reveal_editor_control("theme-editor-ansi-0", &mut window);
+        let save = window.debug_bounds("theme-editor-save-apply").expect("fixed save button");
+        assert!(save.bottom() <= viewport.height);
+        reveal_editor_control("theme-editor-advanced-toggle", &mut window);
+        click("theme-editor-advanced-toggle", &mut window);
+        assert!(window.debug_bounds("theme-editor-ansi-0").is_none());
+    }
 }
 
 #[gpui::test]
@@ -526,6 +559,41 @@ fn theme_editor_input_is_a_local_draft_until_apply_and_preserves_builtin_source(
     assert_eq!(runtime_snapshot(), before_runtime);
     assert_eq!(palette_snapshot(&mut window), before_palette);
     assert_eq!(settings_file_snapshot(), before_settings_file);
+}
+
+#[gpui::test]
+fn theme_editor_single_color_reset_preserves_other_colors_and_recovers_invalid_hex(
+    cx: &mut TestAppContext,
+) {
+    let _fixture_guard = lock_theme_studio();
+    let (pane, mut window) = open_settings(cx);
+    let before_runtime = runtime_snapshot();
+    let before_file = settings_file_snapshot();
+    open_theme_editor(&mut window);
+    let original = editor_draft(&pane, &mut window);
+    // 模拟带独立界面色的合法草稿，重置一个色块不能覆盖其他已编辑颜色。
+    pane.update(&mut window, |pane, cx| {
+        pane.theme_editor.as_mut().unwrap().draft.ui.warning = [17, 34, 51];
+        cx.notify();
+    });
+    draw(&mut window);
+    edit_input("theme-editor-accent", "#102030", &mut window);
+    let mut expected = editor_draft(&pane, &mut window);
+    expected.ui.accent = original.resolved_ui().accent;
+    click("theme-editor-reset-theme-editor-accent", &mut window);
+    assert_eq!(editor_draft(&pane, &mut window), expected);
+
+    edit_input("theme-editor-foreground", "invalid", &mut window);
+    assert!(
+        pane.read_with(&mut window, |pane, _| pane.theme_editor.as_ref().unwrap().error.is_some())
+    );
+    click("theme-editor-reset-theme-editor-foreground", &mut window);
+    assert!(
+        pane.read_with(&mut window, |pane, _| pane.theme_editor.as_ref().unwrap().error.is_none())
+    );
+    assert_eq!(editor_draft(&pane, &mut window), expected);
+    assert_eq!(runtime_snapshot(), before_runtime);
+    assert_eq!(settings_file_snapshot(), before_file);
 }
 
 #[gpui::test]
@@ -1032,6 +1100,10 @@ fn theme_picker_foreground_swatches_are_local_until_apply(cx: &mut TestAppContex
     let before_runtime = runtime_snapshot();
     let before_palette = palette_snapshot(&mut window);
     click("open-theme-picker", &mut window);
+    let customize = window.debug_bounds("customize-theme").expect("custom theme entry");
+    let apply = window.debug_bounds("apply-appearance-picker").expect("apply entry");
+    assert!(customize.right() < apply.left(), "custom theme stays at the footer's left edge");
+    assert!((customize.bottom() - apply.bottom()).abs() < px(12.0));
 
     for index in 0..3 {
         let selector = match index {
@@ -1040,6 +1112,8 @@ fn theme_picker_foreground_swatches_are_local_until_apply(cx: &mut TestAppContex
             _ => "theme-foreground-swatch-2",
         };
         click(selector, &mut window);
+        let hit = window.debug_bounds(selector).expect("foreground color hit area");
+        assert_eq!(hit.size, size(px(32.0), px(32.0)));
         assert!(pane.read_with(&mut window, |pane, _| {
             pane.appearance_picker.as_ref().is_some_and(|picker| picker.draft.is_theme())
         }));
@@ -1065,6 +1139,84 @@ fn theme_picker_foreground_swatches_are_local_until_apply(cx: &mut TestAppContex
     click("confirm-dialog-ok", &mut window);
     assert_eq!(runtime_snapshot(), before_runtime);
     assert_eq!(palette_snapshot(&mut window), before_palette);
+}
+
+/// 仅按需显示真实 GPUI 控件；使用独立配置目录，不启动 PTY 或修改用户配置。
+#[test]
+#[ignore = "manual theme visual review; requires isolated PEBREL_CONFIG_DIR and PEBREL_THEME_QA_DIR"]
+fn native_theme_picker_visual_review() {
+    use std::{path::PathBuf, time::Duration};
+    let config = PathBuf::from(std::env::var_os("PEBREL_CONFIG_DIR").expect("isolated config"));
+    let output = PathBuf::from(std::env::var_os("PEBREL_THEME_QA_DIR").expect("QA output"));
+    let mode = std::env::var("PEBREL_THEME_QA_MODE").unwrap_or_else(|_| "cards".into());
+    assert!(config.is_absolute() && output.is_absolute());
+    assert!(!config.join("pebrel_settings.txt").exists(), "use a fresh isolated config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(
+        config.join("pebrel_settings.txt"),
+        "theme=Nord\nfollow_system_theme=0\nlanguage=zh-CN\nfont_size=14\n",
+    )
+    .unwrap();
+    gpui_platform::application().with_assets(crate::gpui_shell::NebulaAssets).run(move |cx| {
+        crate::gpui_shell::init(cx, None);
+        let mut pane = None;
+        let handle = cx
+            .open_window(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                        gpui::point(px(30.0), px(20.0)),
+                        size(px(1100.0), px(690.0)),
+                    ))),
+                    focus: false,
+                    show: true,
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let settings = cx.new(|cx| SettingsPane::new(window, cx));
+                    settings.update(cx, |settings, cx| {
+                        settings.active_section = 1;
+                        if mode != "appearance" {
+                            settings.open_appearance_picker(true, window, cx);
+                        }
+                    });
+                    pane = Some(settings.clone());
+                    let host = cx.new(|_| ThemeStudioHost { pane: settings });
+                    cx.new(|cx| Root::new(host, window, cx))
+                },
+            )
+            .unwrap();
+        let pane = pane.unwrap();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_millis(800)).await;
+            cx.update_window(handle.into(), |_, window, cx| {
+                pane.update(cx, |pane, cx| match mode.as_str() {
+                    "palette" => pane.open_theme_foreground_picker(window, cx),
+                    "editor" => pane.open_theme_editor(window, cx),
+                    _ => {},
+                });
+                window.refresh();
+            })
+            .unwrap();
+            cx.background_executor().timer(Duration::from_millis(800)).await;
+            std::fs::write(
+                output.join("ready.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "pid": std::process::id(), "mode": mode,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            for _ in 0..240 {
+                if output.join("capture-complete").exists() {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+            }
+            cx.update(|cx| cx.quit());
+        })
+        .detach();
+    });
 }
 
 #[gpui::test]

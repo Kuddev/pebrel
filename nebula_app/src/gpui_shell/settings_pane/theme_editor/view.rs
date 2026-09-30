@@ -12,6 +12,7 @@ impl SettingsPane {
         colors: AppearanceColors,
         language: crate::display::UiLanguage,
         compact: bool,
+        preview_width: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let draft = &editor.draft;
@@ -51,10 +52,10 @@ impl SettingsPane {
         let preview_surface = match preview_mode {
             1 => v_flex()
                 .w_full()
-                .min_h(px(if compact { 170.0 } else { 226.0 }))
+                .min_h(px(if compact { 260.0 } else { 340.0 }))
                 .p(px(14.0))
                 .gap(px(8.0))
-                .rounded(px(9.0))
+                .rounded(px(6.0))
                 .bg(theme_color(draft.resolved_ui().background, opacity))
                 .text_color(theme_color(draft.resolved_ui().foreground, 1.0))
                 .child(
@@ -113,10 +114,10 @@ impl SettingsPane {
                 let ansi = draft.terminal.palette.ansi_colors();
                 v_flex()
                     .w_full()
-                    .min_h(px(if compact { 170.0 } else { 226.0 }))
+                    .min_h(px(if compact { 260.0 } else { 340.0 }))
                     .p(px(15.0))
                     .gap(px(12.0))
-                    .rounded(px(9.0))
+                    .rounded(px(6.0))
                     .bg(background)
                     .text_color(foreground)
                     .child(
@@ -156,15 +157,15 @@ impl SettingsPane {
             },
             _ => v_flex()
                 .w_full()
-                .min_h(px(if compact { 170.0 } else { 226.0 }))
+                .min_h(px(if compact { 260.0 } else { 340.0 }))
                 .px(px(15.0))
                 .py(px(14.0))
                 .gap(px(7.0))
-                .rounded(px(9.0))
+                .rounded(px(6.0))
                 .bg(background)
                 .text_color(foreground)
                 .font(crate::font_install::gpui_font_with_fallbacks(&family))
-                .text_size(px(font_size * 0.78))
+                .text_size(px(font_size))
                 .line_height(gpui::relative(line_height))
                 .child(
                     h_flex()
@@ -191,33 +192,59 @@ impl SettingsPane {
                         .child(div().text_color(accent).child("❯"))
                         .child(div().text_color(foreground.opacity(0.82)).child("~/workspace")),
                 )
-                .child(div().text_color(foreground.opacity(0.74)).child("git status --short"))
+                .child(div().text_color(foreground).child("git status --short"))
                 .child(
                     h_flex()
                         .gap(px(6.0))
-                        .child(div().text_color(accent).child("M"))
+                        .child(
+                            div()
+                                .text_color(theme_color(
+                                    draft.terminal.ansi(3).unwrap_or(resolved_ui.warning),
+                                    1.0,
+                                ))
+                                .child("M"),
+                        )
                         .child("src/main.rs"),
                 )
                 .child(
                     h_flex()
                         .gap(px(6.0))
-                        .child(div().text_color(theme_color([224, 174, 82], 1.0)).child("??"))
+                        .child(
+                            div()
+                                .text_color(theme_color(
+                                    draft.terminal.ansi(1).unwrap_or(resolved_ui.error),
+                                    1.0,
+                                ))
+                                .child("??"),
+                        )
                         .child("themes/paper.json"),
                 )
-                .child(
-                    div().mt(px(4.0)).text_color(foreground.opacity(0.74)).child("git diff --stat"),
-                )
+                .child(div().mt(px(4.0)).text_color(foreground).child("git diff --stat"))
                 .child(
                     h_flex()
                         .gap(px(6.0))
                         .child("src/main.rs")
                         .child(div().text_color(foreground.opacity(0.50)).child("│"))
-                        .child(div().text_color(accent).child("++++++"))
-                        .child(div().text_color(theme_color([224, 100, 110], 1.0)).child("──")),
+                        .child(
+                            div()
+                                .text_color(theme_color(
+                                    draft.terminal.ansi(2).unwrap_or(resolved_ui.success),
+                                    1.0,
+                                ))
+                                .child("++++++"),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme_color(
+                                    draft.terminal.ansi(1).unwrap_or(resolved_ui.error),
+                                    1.0,
+                                ))
+                                .child("──"),
+                        ),
                 )
                 .child(
                     div()
-                        .text_color(foreground.opacity(0.52))
+                        .text_color(foreground.opacity(0.7))
                         .child("1 file changed, 6 insertions(+), 2 deletions(-)"),
                 )
                 .child(
@@ -260,7 +287,7 @@ impl SettingsPane {
             (2, "theme-editor-preview-ansi", language.text(Message::ThemeEditorPreviewAnsi)),
         ];
         v_flex()
-            .w(px(if compact { 0.0 } else { 360.0 }))
+            .w(px(preview_width))
             .when(compact, |preview| preview.w_full())
             .flex_shrink_0()
             .gap(px(10.0))
@@ -294,25 +321,35 @@ impl SettingsPane {
                     ),
             )
             .child(preview_surface)
-            .child(h_flex().w_full().gap(px(4.0)).children(tabs.into_iter().map(
-                |(index, selector, label)| {
+            .child(h_flex().w_full().gap(px(12.0)).border_b_1().border_color(colors.line).children(
+                tabs.into_iter().map(|(index, selector, label)| {
                     Button::new(selector)
                         .debug_selector(move || selector.to_owned())
                         .label(label)
                         .ghost()
                         .small()
-                        .rounded_full()
-                        .when(preview_mode == index, |button| {
-                            button.bg(colors.selected).font_semibold()
+                        .rounded_none()
+                        .border_0()
+                        .border_b_2()
+                        .border_color(if preview_mode == index {
+                            colors.primary
+                        } else {
+                            gpui::transparent_black()
                         })
+                        .text_color(if preview_mode == index {
+                            colors.ink
+                        } else {
+                            colors.secondary
+                        })
+                        .when(preview_mode == index, |button| button.font_semibold())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(editor) = this.theme_editor.as_mut() {
                                 editor.preview = index;
                             }
                             cx.notify();
                         }))
-                },
-            )))
+                }),
+            ))
     }
 
     pub(in crate::gpui_shell::settings_pane) fn theme_editor_modal(
@@ -325,11 +362,13 @@ impl SettingsPane {
         let colors = AppearanceColors::current(cx);
         let viewport = window.viewport_size();
         let compact = f32::from(viewport.width) < 760.0;
-        let width = (f32::from(viewport.width) - 32.0).min(920.0);
+        let width = (f32::from(viewport.width) - 32.0).min(1120.0);
         let height = (f32::from(viewport.height) - 48.0).min(760.0).max(280.0);
         let save_busy = editor.save_busy;
         let dirty = editor.dirty();
-        let preview = self.theme_editor_preview(editor, colors, language, compact, cx);
+        let preview_width = if compact { 0.0 } else { (width - 85.0) * 0.47 };
+        let preview =
+            self.theme_editor_preview(editor, colors, language, compact, preview_width, cx);
         let common =
             self.theme_editor_common_fields(editor, language, colors, save_busy, window, cx);
         let common = if editor.advanced {
@@ -338,14 +377,14 @@ impl SettingsPane {
             common
         };
         let body = if compact {
-            v_flex().w_full().gap(px(22.0)).child(preview).child(common)
+            v_flex().w_full().gap(px(24.0)).child(common).child(preview)
         } else {
             h_flex()
                 .w_full()
                 .h_full()
                 .min_h_0()
                 .items_start()
-                .gap(px(18.0))
+                .gap(px(24.0))
                 .child(
                     div()
                         .id("theme-editor-fields-scroll")
@@ -354,7 +393,7 @@ impl SettingsPane {
                         .flex_1()
                         .h_full()
                         .overflow_y_scroll()
-                        .pr(px(10.0))
+                        .pr(px(18.0))
                         .child(common),
                 )
                 .child(div().w(px(1.0)).h_full().bg(colors.line))
@@ -378,12 +417,11 @@ impl SettingsPane {
             .w(px(width))
             .h(px(height))
             .max_h(px(f32::from(viewport.height) - 28.0))
-            .rounded(px(14.0))
+            .rounded(px(8.0))
             .border_1()
             .border_color(colors.control)
             .bg(colors.surface)
             .text_color(colors.ink)
-            .shadow_2xl()
             .overflow_hidden()
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key.eq_ignore_ascii_case("escape") {
@@ -409,7 +447,7 @@ impl SettingsPane {
                                     .debug_selector(|| "theme-editor-back".to_owned())
                                     .icon(IconName::ArrowLeft)
                                     .ghost()
-                                    .size(px(28.0))
+                                    .size(px(32.0))
                                     .tooltip(language.text(Message::ThemeEditorBack))
                                     .disabled(save_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -421,7 +459,7 @@ impl SettingsPane {
                                     .gap(px(3.0))
                                     .child(
                                         div()
-                                            .text_size(px(19.0))
+                                            .text_size(px(22.0))
                                             .font_semibold()
                                             .child(language.text(Message::ThemeEditorTitle)),
                                     )
@@ -464,7 +502,7 @@ impl SettingsPane {
                                     .debug_selector(|| "theme-editor-close".to_owned())
                                     .icon(IconName::Close)
                                     .ghost()
-                                    .size(px(28.0))
+                                    .size(px(32.0))
                                     .text_color(colors.secondary)
                                     .tooltip(language.text(Message::ThemeTransferClose))
                                     .disabled(save_busy)
@@ -626,15 +664,18 @@ impl SettingsPane {
             let focused = input.read(cx).focus_handle(cx).is_focused(window);
             v_flex()
                 .min_w_0()
+                .flex_1()
                 .debug_selector(move || selector.to_owned())
-                .gap(px(5.0))
+                .gap(px(7.0))
                 .child(div().text_size(px(11.0)).text_color(colors.secondary).child(label))
                 .child(
                     div()
                         .w_full()
                         .h(px(34.0))
-                        .border_b_1()
-                        .border_color(if focused { colors.primary } else { colors.line })
+                        .rounded(px(4.0))
+                        .border_1()
+                        .border_color(if focused { colors.primary } else { colors.control })
+                        .bg(colors.subtle)
                         .child(
                             Input::new(input)
                                 .w_full()
@@ -642,169 +683,211 @@ impl SettingsPane {
                                 .bordered(false)
                                 .focus_bordered(false)
                                 .appearance(false)
-                                .rounded_none()
                                 .disabled(save_busy),
                         ),
                 )
         };
-        let selected_template = editor.templates.get(editor.selected_index());
-        let template_color = selected_template
-            .map(|template| template.definition.terminal.background)
-            .unwrap_or(editor.draft.terminal.background);
-        let source_name = selected_template
+        let source_name = editor
+            .templates
+            .get(editor.selected_index())
             .map(|template| template.label.to_string())
             .unwrap_or_else(|| editor.draft.name.clone());
-        let font_field = v_flex()
-            .flex_1()
-            .min_w_0()
-            .debug_selector(|| "theme-editor-font".to_owned())
-            .gap(px(5.0))
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(colors.secondary)
-                    .child(language.text(Message::ThemeEditorFontFamily)),
-            )
-            .child(div().w_full().h(px(34.0)).border_b_1().border_color(colors.line).child(
-                Select::new(&editor.font_select).disabled(save_busy || editor.templates_loading),
-            ));
+        let contrast = nebula_settings::wcag_contrast_ratio(
+            editor.draft.terminal.foreground,
+            editor.draft.terminal.background,
+        );
         v_flex()
             .min_w_0()
             .flex_1()
-            .gap(px(14.0))
+            .gap(px(24.0))
             .child(
                 v_flex()
-                    .gap(px(5.0))
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(colors.secondary)
-                            .child(language.text(Message::ThemeEditorTemplate)),
-                    )
+                    .gap(px(12.0))
                     .child(
                         h_flex()
                             .w_full()
-                            .gap(px(8.0))
-                            .items_center()
+                            .gap(px(16.0))
                             .child(
-                                div()
-                                    .size(px(18.0))
-                                    .flex_shrink_0()
-                                    .rounded(px(5.0))
-                                    .border_1()
-                                    .border_color(colors.line)
-                                    .bg(theme_color(template_color, 1.0)),
-                            )
-                            .child(
-                                div()
-                                    .debug_selector(|| "theme-editor-template".to_owned())
+                                v_flex()
                                     .flex_1()
                                     .min_w_0()
+                                    .gap(px(7.0))
                                     .child(
-                                        Select::new(&editor.template_select)
-                                            .disabled(save_busy || editor.templates_loading),
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(colors.secondary)
+                                            .child(language.text(Message::ThemeEditorTemplate)),
+                                    )
+                                    .child(
+                                        div()
+                                            .debug_selector(|| "theme-editor-template".to_owned())
+                                            .w_full()
+                                            .child(
+                                                Select::new(&editor.template_select)
+                                                    .w_full()
+                                                    .disabled(
+                                                        save_busy || editor.templates_loading,
+                                                    ),
+                                            ),
                                     ),
-                            ),
+                            )
+                            .child(field(
+                                "theme-editor-name",
+                                language.text(Message::ThemeEditorName),
+                                &editor.name_input,
+                            )),
                     )
-                    .child(div().text_size(px(10.5)).text_color(colors.secondary).child(
+                    .child(div().text_size(px(11.0)).text_color(colors.secondary).child(
                         language.format(Message::ThemeEditorBasedOn, &[("name", &source_name)]),
                     )),
             )
-            .child(field(
-                "theme-editor-name",
-                language.text(Message::ThemeEditorName),
-                &editor.name_input,
-            ))
             .when(editor.templates_loading, |view| {
                 view.child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(px(11.0))
                         .text_color(colors.secondary)
                         .child(language.text(Message::ThemeEditorLoading)),
                 )
             })
             .child(
                 v_flex()
-                    .gap(px(9.0))
+                    .gap(px(14.0))
+                    .pt(px(20.0))
+                    .border_t_1()
+                    .border_color(colors.line)
                     .child(
-                        div()
-                            .text_size(px(13.0))
-                            .font_semibold()
-                            .child(language.text(Message::ThemeEditorCommon)),
+                        h_flex()
+                            .w_full()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(14.0))
+                                    .font_semibold()
+                                    .child(language.text(Message::ThemeEditorCommon)),
+                            )
+                            .child(
+                                Button::new("theme-editor-reset")
+                                    .debug_selector(|| "theme-editor-reset".to_owned())
+                                    .label(language.text(Message::ThemeEditorResetShort))
+                                    .ghost()
+                                    .xsmall()
+                                    .text_color(colors.secondary)
+                                    .disabled(save_busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.reset_theme_editor(window, cx)
+                                    })),
+                            ),
                     )
                     .child(
                         self.theme_editor_color_grid(
                             editor, language, colors, save_busy, window, cx,
                         ),
-                    ),
-            )
-            .child(
-                h_flex().w_full().gap(px(10.0)).child(font_field).child(
-                    field(
-                        "theme-editor-font-size",
-                        language.text(Message::ThemeEditorFontSize),
-                        &editor.font_size_input,
                     )
-                    .w(px(108.0))
-                    .flex_shrink_0(),
-                ),
-            )
-            .child(
-                h_flex().w_full().gap(px(10.0)).children([
-                    field(
-                        "theme-editor-line-height",
-                        language.text(Message::ThemeEditorLineHeight),
-                        &editor.line_height_input,
-                    )
-                    .flex_1()
-                    .min_w_0()
-                    .into_any_element(),
-                    field(
-                        "theme-editor-opacity",
-                        language.text(Message::ThemeEditorOpacity),
-                        &editor.opacity_input,
-                    )
-                    .flex_1()
-                    .min_w_0()
-                    .into_any_element(),
-                ]),
-            )
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap(px(9.0))
                     .child(
-                        Button::new("theme-editor-advanced-toggle")
-                            .debug_selector(|| "theme-editor-advanced-toggle".to_owned())
-                            .label(if editor.advanced {
-                                language.text(Message::ThemeEditorAdvancedHide)
-                            } else {
-                                language.text(Message::ThemeEditorAdvanced)
-                            })
-                            .ghost()
-                            .justify_start()
-                            .px_0()
-                            .text_color(colors.primary)
-                            .disabled(save_busy)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(editor) = this.theme_editor.as_mut() {
-                                    editor.advanced = !editor.advanced;
+                        h_flex()
+                            .w_full()
+                            .justify_between()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(colors.secondary)
+                                    .child(language.text(Message::ThemeEditorContrast)),
+                            )
+                            .child(div().text_size(px(11.0)).font_medium().child(format!(
+                                "{contrast:.1} : 1  {}",
+                                if contrast >= 7.0 {
+                                    "AAA"
+                                } else if contrast >= 4.5 {
+                                    "AA"
+                                } else {
+                                    "< AA"
                                 }
-                                cx.notify();
-                            })),
+                            ))),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap(px(14.0))
+                    .pt(px(20.0))
+                    .border_t_1()
+                    .border_color(colors.line)
+                    .child(
+                        div()
+                            .text_size(px(14.0))
+                            .font_semibold()
+                            .child(language.text(Message::ThemeEditorTypography)),
                     )
                     .child(
-                        Button::new("theme-editor-reset")
-                            .debug_selector(|| "theme-editor-reset".to_owned())
-                            .label(language.text(Message::ThemeEditorResetShort))
-                            .ghost()
-                            .xsmall()
-                            .text_color(colors.secondary)
-                            .disabled(save_busy)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.reset_theme_editor(window, cx);
-                            })),
+                        h_flex()
+                            .w_full()
+                            .gap(px(16.0))
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .debug_selector(|| "theme-editor-font".to_owned())
+                                    .gap(px(7.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(colors.secondary)
+                                            .child(language.text(Message::ThemeEditorFontFamily)),
+                                    )
+                                    .child(
+                                        Select::new(&editor.font_select)
+                                            .w_full()
+                                            .disabled(save_busy || editor.templates_loading),
+                                    ),
+                            )
+                            .child(field(
+                                "theme-editor-font-size",
+                                language.text(Message::ThemeEditorFontSize),
+                                &editor.font_size_input,
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap(px(16.0))
+                            .child(field(
+                                "theme-editor-line-height",
+                                language.text(Message::ThemeEditorLineHeight),
+                                &editor.line_height_input,
+                            ))
+                            .child(field(
+                                "theme-editor-opacity",
+                                language.text(Message::ThemeEditorOpacity),
+                                &editor.opacity_input,
+                            )),
                     ),
+            )
+            .child(
+                h_flex().w_full().pt(px(16.0)).border_t_1().border_color(colors.line).child(
+                    Button::new("theme-editor-advanced-toggle")
+                        .debug_selector(|| "theme-editor-advanced-toggle".to_owned())
+                        .label(if editor.advanced {
+                            language.text(Message::ThemeEditorAdvancedHide)
+                        } else {
+                            language.text(Message::ThemeEditorAdvanced)
+                        })
+                        .icon(if editor.advanced {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .ghost()
+                        .justify_start()
+                        .px_0()
+                        .text_color(colors.ink)
+                        .disabled(save_busy)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(editor) = this.theme_editor.as_mut() {
+                                editor.advanced = !editor.advanced;
+                            }
+                            cx.notify();
+                        })),
+                ),
             )
     }
 
@@ -833,67 +916,74 @@ impl SettingsPane {
                 .unwrap_or_else(|| slot.read(&editor.baseline));
             let swatch_selector = format!("{selector}-swatch");
             let reset_selector = format!("theme-editor-reset-{selector}");
-            v_flex()
+            h_flex()
                 .debug_selector(move || selector.to_owned())
                 .flex_1()
                 .min_w_0()
-                .gap(px(7.0))
+                .h(px(44.0))
+                .px(px(6.0))
+                .gap(px(5.0))
+                .rounded(px(4.0))
+                .border_1()
+                .border_color(if focused { colors.primary } else { colors.control })
+                .child(
+                    Button::new(SharedString::from(swatch_selector.clone()))
+                        .debug_selector(move || swatch_selector.clone())
+                        .ghost()
+                        .size(px(32.0))
+                        .p(px(3.0))
+                        .flex_shrink_0()
+                        .rounded(px(4.0))
+                        .tooltip(language.text(message))
+                        .disabled(save_busy)
+                        .child(
+                            div()
+                                .size_full()
+                                .rounded(px(3.0))
+                                .border_1()
+                                .border_color(colors.control)
+                                .bg(theme_color(color, 1.0)),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_theme_color_picker(slot, window, cx)
+                        })),
+                )
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
                         .text_size(px(11.0))
-                        .text_color(colors.secondary)
+                        .font_medium()
+                        .text_color(colors.ink)
                         .child(language.text(message)),
                 )
                 .child(
-                    h_flex()
-                        .w_full()
-                        .items_end()
-                        .gap(px(7.0))
-                        .child(
-                            div()
-                                .id(SharedString::from(swatch_selector.clone()))
-                                .debug_selector(move || swatch_selector.clone())
-                                .size(px(22.0))
-                                .flex_shrink_0()
-                                .rounded(px(6.0))
-                                .border_1()
-                                .border_color(colors.line)
-                                .bg(theme_color(color, 1.0))
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.open_theme_color_picker(slot, window, cx);
-                                })),
+                    Input::new(input)
+                        .w(px(78.0))
+                        .h(px(32.0))
+                        .flex_shrink_0()
+                        .bordered(false)
+                        .focus_bordered(false)
+                        .appearance(false)
+                        .rounded_none()
+                        .disabled(save_busy),
+                )
+                .child(
+                    Button::new(SharedString::from(reset_selector.clone()))
+                        .debug_selector(move || reset_selector.clone())
+                        .icon(IconName::Undo2)
+                        .ghost()
+                        .xsmall()
+                        .tooltip(language.text(Message::ThemeEditorResetShort))
+                        .disabled(
+                            save_busy
+                                || (color == reset_color
+                                    && !editor.invalid_inputs.contains(&slot.editor_input())),
                         )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .h(px(34.0))
-                                .border_b_1()
-                                .border_color(if focused { colors.primary } else { colors.line })
-                                .child(
-                                    Input::new(input)
-                                        .w_full()
-                                        .h_full()
-                                        .bordered(false)
-                                        .focus_bordered(false)
-                                        .appearance(false)
-                                        .rounded_none()
-                                        .disabled(save_busy),
-                                ),
-                        )
-                        .child(
-                            Button::new(SharedString::from(reset_selector.clone()))
-                                .debug_selector(move || reset_selector.clone())
-                                .icon(IconName::Undo2)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(language.text(Message::ThemeEditorResetShort))
-                                .disabled(save_busy || color == reset_color)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.reset_theme_color_slot(slot, window, cx);
-                                })),
-                        ),
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.reset_theme_color_slot(slot, window, cx)
+                        })),
                 )
         };
         v_flex()
@@ -959,7 +1049,11 @@ impl SettingsPane {
                 ThemeColorSlot::Foreground => {
                     editor.draft.terminal.foreground = source.terminal.foreground
                 },
-                ThemeColorSlot::Accent => editor.draft.ui = source.ui,
+                ThemeColorSlot::Accent => {
+                    // 单色重置只还原强调色，保留草稿中其他界面颜色。
+                    let color = slot.read(source);
+                    slot.write(&mut editor.draft, color);
+                },
                 ThemeColorSlot::Cursor => editor.draft.terminal.cursor = source.terminal.cursor,
             }
             let color = slot.read(&editor.draft);
