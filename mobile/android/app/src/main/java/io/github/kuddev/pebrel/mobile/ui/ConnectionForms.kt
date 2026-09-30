@@ -23,11 +23,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
@@ -155,15 +157,26 @@ fun ConnectionButton(label: String, enabled: Boolean = true, primary: Boolean = 
 
 @Composable
 fun ConnectionSegments(options: List<Pair<String, String>>, value: String, onSelect: (String) -> Unit,
-                       modifier: Modifier = Modifier, disabled: Set<String> = emptySet()) {
+                       modifier: Modifier = Modifier, disabled: Set<String> = emptySet(), compact: Boolean = false) {
     if (options.isEmpty()) return
     val colors = MaterialTheme.colorScheme
     val motion = rememberPebrelMotion()
     val pill = RoundedCornerShape(50)
+    val preferredWidth = if (compact) {
+        val density = LocalDensity.current
+        val measurer = rememberTextMeasurer()
+        val style = LocalTextStyle.current.copy(fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+        // 滑块依赖 BoxWithConstraints，不能用固有尺寸；实际测字后保留 48dp 命中宽度。
+        val labelWidth = remember(options, style, density, measurer) {
+            options.maxOf { measurer.measure(it.second, style, softWrap = false, maxLines = 1).size.width }
+        }
+        (with(density) { labelWidth.toDp() } + 18.dp).coerceAtLeast(48.dp) * options.size +
+            2.dp * (options.size - 1) + 6.dp
+    } else null
     // Keep the track quiet and let one shared indicator carry the selected state.
     // Each child keeps a 48 dp hit target while the visual track stays compact.
     BoxWithConstraints(
-        modifier.selectableGroup().clip(pill)
+        (if (preferredWidth != null) modifier.width(preferredWidth) else modifier).selectableGroup().clip(pill)
             .drawBehind {
                 val inset = 6.dp.toPx()
                 val height = (size.height - inset * 2).coerceAtLeast(0f)

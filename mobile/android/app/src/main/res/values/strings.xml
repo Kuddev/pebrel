@@ -142,12 +142,12 @@
     <string name="session_ended_hint">The remote session has ended. Output remains available to read.</string>
     <string name="ssh_stage_network">Connecting to the server and negotiating an encrypted channel…</string>
     <string name="ssh_stage_verifying">Waiting for your confirmation of the host fingerprint…</string>
-    <string name="ssh_stage_auth">Verifying username and password…</string>
+    <string name="ssh_stage_auth">Verifying login credentials…</string>
     <string name="ssh_stage_shell">Opening the remote terminal…</string>
     <string name="ssh_error_dns">The host address could not be resolved. Check the address and DNS connection.</string>
     <string name="ssh_error_timeout">The server did not respond in time. Check the address, port and network, then retry.</string>
     <string name="ssh_error_refused">Could not connect to the SSH port. Check the SSH service, port and firewall.</string>
-    <string name="ssh_error_auth">Authentication failed. Check the username and password, and whether the server allows password login.</string>
+    <string name="ssh_error_auth">Authentication failed. Check the username, password or authorized key, and the login methods allowed by the server.</string>
     <string name="ssh_error_host_key">The host fingerprint has changed. Connection was blocked. Verify the server identity before removing and adding this host again.</string>
     <string name="ssh_error_trust">The host fingerprint was not confirmed, or confirmation timed out. Reconnect to verify it again.</string>
     <string name="ssh_error_channel">The server could not open the terminal channel. Check shell access for this account.</string>
@@ -233,6 +233,7 @@
     <string name="sftp_symlink">Symbolic link</string>
     <string name="sftp_file">File</string>
     <string name="sftp_file_actions">Actions for %1$s</string>
+    <string name="sftp_selected_count">%1$d selected</string>
     <string name="sftp_empty">This folder is empty.</string>
     <string name="sftp_more">Load more files</string>
     <string name="sftp_refresh">Refresh</string>

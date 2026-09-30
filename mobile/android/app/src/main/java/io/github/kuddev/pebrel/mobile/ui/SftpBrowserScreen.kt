@@ -2,7 +2,6 @@ package io.github.kuddev.pebrel.mobile.ui
 
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,11 +11,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -27,7 +29,7 @@ import io.github.kuddev.pebrel.mobile.session.LocalSession
 import io.github.kuddev.pebrel.ssh.NativeSshException
 import kotlinx.coroutines.*
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (String) -> Unit,
                       onBack: () -> Unit, onFile: (SftpEntry) -> Unit) {
@@ -36,10 +38,10 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
     val scope = rememberCoroutineScope()
     var requested by rememberSaveable(session.id) { mutableStateOf(initialPath) }
     var location by rememberSaveable(session.id) { mutableStateOf(initialPath) }
-    var history by rememberSaveable(session.id) { mutableStateOf(listOf<String>()) }
     var rows by remember(session.id) { mutableStateOf(emptyList<SftpEntry>()) }
     var cursor by remember(session.id) { mutableStateOf<Long?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<Int?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -48,6 +50,9 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
     var addMenu by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<SftpEntry?>(null) }
+    var actionMenu by remember { mutableStateOf<String?>(null) }
+    var selectedPaths by remember(session.id) { mutableStateOf(setOf<String>()) }
+    var selectionAnchor by remember(session.id) { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<SftpEntry?>(null) }
     var actionBusy by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
@@ -78,34 +83,43 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
             catch (_: Exception) { failure = "SFTP_LOCAL_FILE" }
         }
     }
+    fun clearSelection() { selectedPaths = emptySet(); selectionAnchor = null }
     fun navigate(path: String) {
+        actionMenu = null
+        refreshing = false
+        clearSelection()
         notice = null
         if (path == location) { refresh++; return }
-        history = history + location
         requested = path
     }
     fun back() {
-        if (history.isEmpty()) onBack()
-        else { requested = history.last(); history = history.dropLast(1) }
+        if (selectedPaths.isNotEmpty()) clearSelection()
+        // 页面返回与目录导航分开：访问目录不压页面栈，父目录由「..」负责。
+        else onBack()
     }
     BackHandler { back() }
     LaunchedEffect(naming) { actionError = null; if (naming != null) notice = null }
     LaunchedEffect(requested, refresh, session.status) {
         val generation = ++listingGeneration
-        paging?.cancel(); paging = null
-        if (!ready) return@LaunchedEffect
+        paging?.cancelAndJoin(); paging = null
+        val previousCursor = cursor
         cursor = null
+        // 刷新和换目录前释放旧分页游标，避免反复下拉耗尽同一 SSH 连接的目录句柄。
+        if (previousCursor != null) withContext(NonCancellable) { runCatching { client.closeList(previousCursor) } }
+        if (!ready) { loading = false; refreshing = false; return@LaunchedEffect }
         loading = true; failure = null
         try {
             val result = client.list(requested)
             ensureActive()
             rows = result.entries; cursor = result.cursor; location = result.path
+            clearSelection()
             onPath(result.path)
             if (result.skipped > 0) notice = R.string.sftp_skipped
-            listState.scrollToItem(0)
+            // 新目录与滚动位置在下一次测量一同生效，不强制重测尚未替换的旧条目。
+            listState.requestScrollToItem(0)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { failure = sftpFailureCode(error) }
-        finally { if (generation == listingGeneration) loading = false }
+        finally { if (generation == listingGeneration) { loading = false; refreshing = false } }
     }
     LaunchedEffect(client) {
         try { awaitCancellation() }
@@ -128,29 +142,37 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             GlyphButton(R.drawable.ic_back, stringResource(R.string.back), ::back)
-            Column(Modifier.weight(1f).clickable { naming = "path" }.padding(vertical = 6.dp)) {
-                Text(location.trimEnd('/').substringAfterLast('/').ifBlank { "/" }, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
+            Column(Modifier.weight(1f).clip(MaterialTheme.shapes.medium).clickable { clearSelection(); naming = "path" }
+                .padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Text(if (selectedPaths.isEmpty()) location.trimEnd('/').substringAfterLast('/').ifBlank { "/" }
+                    else stringResource(R.string.sftp_selected_count, selectedPaths.size),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp)
                 Text("SFTP · ${session.host?.name ?: session.title}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
             }
+            if (selectedPaths.isNotEmpty()) TextButton(::clearSelection) {
+                Text(stringResource(R.string.cancel))
+            }
             Box {
-                GlyphButton(R.drawable.ic_plus, stringResource(R.string.sftp_add), { addMenu = true }, ready && uploading == null)
+                GlyphButton(R.drawable.ic_plus, stringResource(R.string.sftp_add), { clearSelection(); addMenu = true }, ready && uploading == null)
                 DropdownMenu(addMenu, { addMenu = false }) {
                     DropdownMenuItem({ Text(stringResource(R.string.sftp_upload)) }, { addMenu = false; pickUpload.launch(arrayOf("*/*")) })
                     DropdownMenuItem({ Text(stringResource(R.string.sftp_new_folder)) }, { addMenu = false; naming = "mkdir" })
                 }
             }
             Box {
-                GlyphButton(R.drawable.ic_more, stringResource(R.string.more_actions), { menu = true })
+                GlyphButton(R.drawable.ic_more, stringResource(R.string.more_actions), { clearSelection(); menu = true })
                 DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem({ Text(stringResource(R.string.sftp_refresh)) }, { menu = false; notice = null; refresh++ }, enabled = ready && !loading)
                     DropdownMenuItem({ Text(stringResource(R.string.sftp_go_path)) }, { menu = false; naming = "path" })
-                    DropdownMenuItem({ Text(stringResource(if (showHidden) R.string.sftp_hide_hidden else R.string.sftp_show_hidden)) }, { menu = false; showHidden = !showHidden })
+                    DropdownMenuItem({ Text(stringResource(if (showHidden) R.string.sftp_hide_hidden else R.string.sftp_show_hidden)) }, {
+                        menu = false; showHidden = !showHidden; clearSelection()
+                    })
                     DropdownMenuItem({ Text(stringResource(R.string.chat_terminal)) }, { menu = false; onBack() })
                 }
             }
         }
         if (!ready) HelperText(stringResource(R.string.sftp_disconnected), Modifier.padding(16.dp))
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (loading && !refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (uploading != null) SftpTransferProgress(transferred, transferTotal, cancellingUpload) {
             cancellingUpload = true; uploading?.cancel()
         }
@@ -159,64 +181,67 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
         val visible = remember(rows, showHidden) {
             rows.filter { showHidden || !it.name.startsWith('.') }.sortedWith(compareBy<SftpEntry> { !it.directory }.thenBy { it.name.lowercase() })
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
-            if (location != "/" && location != ".") item {
-                NavigationRow(R.drawable.ic_up, "..", stringResource(R.string.sftp_parent)) { navigate(sftpParent(location)) }
+        val visiblePaths = remember(visible) { visible.map { it.path } }
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = {
+            if (ready && !loading) {
+                clearSelection(); actionMenu = null; notice = null; refreshing = true; refresh++
             }
-            items(visible, key = { it.path }) { entry ->
-                Row(Modifier.fillMaxWidth().heightIn(min = 60.dp)
-                    .combinedClickable(enabled = ready && !loading, onClick = { open(entry) }, onLongClick = { selected = entry }),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Glyph(if (entry.directory) R.drawable.ic_git_folder else if (isSftpImage(entry.path)) R.drawable.ic_image else R.drawable.ic_git_file,
-                        Modifier.padding(end = 12.dp).size(20.dp))
-                    Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                        Text(entry.name, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        val detail = when {
-                            entry.directory -> stringResource(R.string.sftp_folder)
-                            entry.kind == "symlink" -> stringResource(R.string.sftp_symlink)
-                            entry.size != null -> Formatter.formatShortFileSize(context, entry.size)
-                            else -> stringResource(R.string.sftp_file)
-                        }
-                        HelperText(detail)
-                    }
-                    GlyphButton(R.drawable.ic_more, stringResource(R.string.sftp_file_actions, entry.name), { selected = entry }, ready)
+        }, modifier = Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(Modifier.fillMaxSize().testTag("sftp-file-list"), state = listState, contentPadding = PaddingValues(vertical = 4.dp)) {
+                // 父目录只有导航语义，独立于 selectable entries，范围选择不会包含它。
+                if (location != "/" && location != ".") item {
+                    SftpParentRow(ready && !loading) { navigate(sftpParent(location)) }
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
-            if (visible.isEmpty() && !loading && failure == null) item {
-                HelperText(stringResource(R.string.sftp_empty), Modifier.padding(vertical = 28.dp))
-            }
-            if (cursor != null) item {
-                TextButton({
-                    if (loading) return@TextButton
-                    loading = true; failure = null
-                    val generation = listingGeneration
-                    val path = location
-                    val ownedCursor = cursor
-                    paging = scope.launch {
-                        try {
-                            val result = client.list(path, ownedCursor)
-                            if (generation != listingGeneration || result.path != location) return@launch
-                            if (rows.size + result.entries.size > 8192) throw NativeSshException("SFTP_DIRECTORY_LIMIT")
-                            rows = (rows + result.entries).distinctBy { it.path }; cursor = result.cursor
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (error: Exception) {
-                            failure = sftpFailureCode(error)
-                            // 闲置游标已由 SSH 层回收，继续提交同一游标只会重复失败；保留列表供刷新恢复。
-                            if (failure == "SFTP_STALE") cursor = null
+                items(visible, key = { it.path }) { entry ->
+                    val selectedEntry = entry.path in selectedPaths
+                    SftpEntryRow(entry, selectedEntry, ready && !loading, actionMenu == entry.path,
+                        onMenu = { expanded ->
+                            if (expanded) clearSelection()
+                            actionMenu = if (expanded) entry.path else null
+                        },
+                        onOpen = {
+                            if (selectedPaths.isEmpty()) open(entry)
+                            else {
+                                selectedPaths = if (selectedEntry) selectedPaths - entry.path else selectedPaths + entry.path
+                                if (selectedPaths.isEmpty()) selectionAnchor = null
+                            }
+                        },
+                        onSwipe = {
+                            selectedPaths = selectedPaths + sftpSelectionRange(visiblePaths, selectionAnchor, entry.path)
+                            selectionAnchor = entry.path
+                        },
+                        onRename = { selected = entry; naming = "rename" },
+                        onDelete = { deleting = entry })
+                }
+                if (visible.isEmpty() && !loading && failure == null) item {
+                    HelperText(stringResource(R.string.sftp_empty), Modifier.padding(horizontal = 16.dp, vertical = 28.dp))
+                }
+                if (cursor != null) item {
+                    TextButton({
+                        if (loading) return@TextButton
+                        loading = true; failure = null
+                        val generation = listingGeneration
+                        val path = location
+                        val ownedCursor = cursor
+                        paging = scope.launch {
+                            try {
+                                val result = client.list(path, ownedCursor)
+                                if (generation != listingGeneration || result.path != location) return@launch
+                                if (rows.size + result.entries.size > 8192) throw NativeSshException("SFTP_DIRECTORY_LIMIT")
+                                rows = (rows + result.entries).distinctBy { it.path }; cursor = result.cursor
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (error: Exception) {
+                                failure = sftpFailureCode(error)
+                                // 闲置游标已由 SSH 层回收，继续提交同一游标只会重复失败；保留列表供刷新恢复。
+                                if (failure == "SFTP_STALE") cursor = null
+                            }
+                            finally { if (generation == listingGeneration) { loading = false; paging = null } }
                         }
-                        finally { if (generation == listingGeneration) { loading = false; paging = null } }
-                    }
-                }, Modifier.fillMaxWidth(), enabled = !loading && ready) { Text(stringResource(R.string.sftp_more)) }
+                    }, Modifier.fillMaxWidth(), enabled = !loading && ready) { Text(stringResource(R.string.sftp_more)) }
+                }
             }
         }
     }
-    selected?.takeIf { naming != "rename" }?.let { entry -> AlertDialog(onDismissRequest = { selected = null }, title = { Text(entry.name) },
-        text = { Column {
-            TextButton({ selected = null; open(entry) }, Modifier.fillMaxWidth()) { Text(stringResource(R.string.sftp_open)) }
-            TextButton({ naming = "rename" }, Modifier.fillMaxWidth()) { Text(stringResource(R.string.sftp_rename)) }
-            TextButton({ selected = null; deleting = entry }, Modifier.fillMaxWidth()) { Text(stringResource(R.string.sftp_delete), color = MaterialTheme.colorScheme.error) }
-        } }, confirmButton = { TextButton({ selected = null }) { Text(stringResource(R.string.close)) } }) }
     naming?.let { action ->
         val title = stringResource(when (action) { "path" -> R.string.sftp_go_path; "mkdir" -> R.string.sftp_new_folder; "rename" -> R.string.sftp_rename; else -> R.string.sftp_upload })
         SftpNameDialog(title, when (action) { "path" -> location; "rename" -> selected?.name.orEmpty(); "upload" -> uploadName; else -> "" }, actionBusy, actionError,

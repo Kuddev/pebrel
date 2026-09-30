@@ -20,7 +20,8 @@ private data class Geometry(val columns: Int = 80, val rows: Int = 24, val width
 private class Input(val budget: Int, val encode: (GhosttyCore) -> ByteArray)
 
 /** Application-owned. I/O is bounded; parser/render state never runs on the main thread. */
-class TerminalSession(private val transport: SessionTransport, private val callbacks: TerminalCallbacks) {
+class TerminalSession(private val transport: SessionTransport, private val callbacks: TerminalCallbacks,
+                      private val scrollbackLines: Int = 1000) {
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateDispatcher = Dispatchers.Default.limitedParallelism(1)
@@ -55,7 +56,7 @@ class TerminalSession(private val transport: SessionTransport, private val callb
             try {
                 withContext(stateDispatcher) {
                     val size = geometry
-                    core = GhosttyCore(size.columns, size.rows).also { engine ->
+                    core = GhosttyCore(size.columns, size.rows, scrollbackLines).also { engine ->
                         engine.resize(size.columns, size.rows, size.width, size.height)
                         palette?.let(engine::colors)
                     }
@@ -199,6 +200,9 @@ class TerminalSession(private val transport: SessionTransport, private val callb
     }
     fun scroll(lines: Int) {
         scope.launch(stateDispatcher) { core?.scroll(lines); requestFrame() }
+    }
+    fun scrollTo(offset: Int) {
+        scope.launch(stateDispatcher) { core?.scrollTo(offset); requestFrame() }
     }
     fun previewText(): String {
         val current = frame ?: return ""

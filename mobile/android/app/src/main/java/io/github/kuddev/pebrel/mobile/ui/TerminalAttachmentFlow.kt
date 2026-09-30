@@ -150,6 +150,7 @@ private fun attachmentErrorText(error: Exception): Int = when (error) {
 
 private fun attachmentSshErrorText(kind: SshFailureKind): Int = when (kind) {
     SshFailureKind.AUTH -> R.string.ssh_error_auth
+    SshFailureKind.KEY -> R.string.ssh_error_key
     SshFailureKind.HOST_KEY_CHANGED -> R.string.ssh_error_host_key
     SshFailureKind.TRUST_REJECTED -> R.string.ssh_error_trust
     SshFailureKind.TIMEOUT -> R.string.ssh_error_timeout
