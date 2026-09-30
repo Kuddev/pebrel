@@ -5,37 +5,71 @@
 //! 单例，所有 `TerminalView` 共用——多 pane 各自 load 会在退出时互相覆盖
 //! 历史文件，单例还顺带免掉每次 spawn 的重复读盘。
 //!
-//! 锁序：本模块的锁内不再碰 `Term` 锁与 GPUI 实体；调用方先读完 grid 行、
-//! 放掉终端锁，再进这里算建议（文件系统 IO 只发生在补全源里）。
+//! 历史只在匹配期间加锁；目录查询不得持有历史锁，避免后台扫描阻塞前台提交。
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::directory_history::DirectoryHistory;
-use crate::display::suggest_engine::{SuggestSources, suggest_update};
+use crate::display::suggest_engine::{HistorySource, SuggestSources, suggest_update_with_cancel};
 use crate::display::{CompletionStyle, NebulaPaneState};
 use crate::nebula_history::NebulaHistory;
 
 /// 历史是唯一需要独占可变借用的源（`record` 追加 + 落盘）。目录/PATH
 /// 内部自带共享语义（`DirectoryHistory` 克隆句柄、commands 是 `Arc<Mutex>`）。
 struct Shared {
-    history: NebulaHistory,
+    history: Mutex<NebulaHistory>,
     directories: DirectoryHistory,
     commands: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
-static SHARED: OnceLock<Mutex<Shared>> = OnceLock::new();
+static SHARED: OnceLock<Shared> = OnceLock::new();
 
-fn shared() -> MutexGuard<'static, Shared> {
-    SHARED
-        .get_or_init(|| {
-            Mutex::new(Shared {
-                history: NebulaHistory::load(),
-                directories: crate::directory_history::global(),
-                commands: crate::display::nebula_commands_handle(),
-            })
-        })
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+fn shared() -> &'static Shared {
+    SHARED.get_or_init(|| Shared {
+        history: Mutex::new(NebulaHistory::load()),
+        directories: crate::directory_history::global(),
+        commands: crate::display::nebula_commands_handle(),
+    })
+}
+
+fn history() -> MutexGuard<'static, NebulaHistory> {
+    shared().history.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[derive(Clone, Default)]
+pub(super) struct Cancellation(Arc<AtomicBool>);
+
+impl Cancellation {
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// 视图释放任务时同时通知已开始的同步计算，不能仅丢弃最后的 UI 回填。
+pub(super) struct Pending {
+    _task: gpui::Task<()>,
+    cancellation: Cancellation,
+}
+
+impl Pending {
+    pub(super) fn new(task: gpui::Task<()>, cancellation: Cancellation) -> Self {
+        Self { _task: task, cancellation }
+    }
+
+    #[cfg(test)]
+    pub(super) fn cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.cancellation.0.store(true, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -43,7 +77,7 @@ pub(super) fn history_hint_for_test(
     scope: &crate::nebula_history::HistoryScope,
     prefix: &str,
 ) -> Option<String> {
-    shared().history.hint(scope, prefix).map(str::to_owned)
+    history().hint(scope, prefix).map(str::to_owned)
 }
 
 /// 重算一个 pane 的 ghost/弹窗建议。`line_override` 是 grid 读出的屏幕真值
@@ -54,17 +88,28 @@ pub fn update(
     enabled: bool,
     style: CompletionStyle,
 ) {
-    let guard = shared();
-    suggest_update(
+    update_with_cancel(state, line_override, enabled, style, &|| false);
+}
+
+fn update_with_cancel(
+    state: &mut NebulaPaneState,
+    line_override: Option<String>,
+    enabled: bool,
+    style: CompletionStyle,
+    cancelled: &dyn Fn() -> bool,
+) {
+    let sources = shared();
+    suggest_update_with_cancel(
         &SuggestSources {
-            history: &guard.history,
-            directories: &guard.directories,
-            commands: &guard.commands,
+            history: HistorySource::Shared(&sources.history),
+            directories: &sources.directories,
+            commands: &sources.commands,
             enabled,
             style,
         },
         state,
         line_override,
+        cancelled,
     );
 }
 
@@ -86,11 +131,14 @@ pub(super) fn calculate(
     env: crate::display::SuggestEnv,
     line: String,
     style: CompletionStyle,
+    cancellation: Cancellation,
 ) -> Suggestion {
     let mut state = NebulaPaneState::default();
     state.cwd = cwd;
     state.suggest_env = env;
-    update(&mut state, Some(line), true, style);
+    if !cancellation.is_cancelled() {
+        update_with_cancel(&mut state, Some(line), true, style, &|| cancellation.is_cancelled());
+    }
     Suggestion {
         ghost: state.suggestion,
         items: state.completion_items,
@@ -104,7 +152,7 @@ pub fn commit_line(state: &mut NebulaPaneState) {
     let line = state.screen_line.trim().to_owned();
     let committed = if line.is_empty() { state.line_buf.trim().to_owned() } else { line.clone() };
     if !line.is_empty() {
-        state.record_completion_command(&mut shared().history, &line);
+        state.record_completion_command(&mut history(), &line);
     } else {
         state.completion_submitted(&state.line_buf.clone());
     }

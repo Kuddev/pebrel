@@ -243,11 +243,13 @@ impl TerminalView {
         let env = self.suggest.suggest_env.clone();
         let request_cwd = cwd.clone();
         let request_env = env.clone();
+        let cancellation = suggest::Cancellation::default();
+        let worker_cancellation = cancellation.clone();
         // 本地目录也可能位于慢盘/网络挂载；扫描和历史首次加载都不能进入绘制回调。
         let calculation = cx.background_spawn(async move {
-            suggest::calculate(request_cwd, request_env, line, style)
+            suggest::calculate(request_cwd, request_env, line, style, worker_cancellation)
         });
-        self.suggestion_task = Some(cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             let result = calculation.await;
             let _ = this.update(cx, |view, cx| {
                 // 按键、取消与 shell 切换都会使 key 或环境失效，旧结果不得回填。
@@ -274,7 +276,8 @@ impl TerminalView {
                 view.drive_pending_remote_dir(cx);
                 cx.notify();
             });
-        }));
+        });
+        self.suggestion_task = Some(suggest::Pending::new(task, cancellation));
     }
 
     /// 补齐登记了一个还没缓存的来宾 / 远端目录时，去后台拉一次。

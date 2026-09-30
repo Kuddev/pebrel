@@ -212,10 +212,15 @@ fn completion_mode_switch_invalidates_a_pending_list_and_right_accepts_inline(
         view.ghost_enabled = true;
         view.completion_style = crate::display::CompletionStyle::Hybrid;
         view.refresh_suggestion_from_snapshot(Some("systemc".into()), Some((0, 7)), cx);
+        let inline_request = view.suggestion_task.as_ref().unwrap().cancellation();
         view.handle_completion_key("tab", cx);
+        assert!(inline_request.is_cancelled());
+        let list_request = view.suggestion_task.as_ref().unwrap().cancellation();
         cx.global_mut::<Settings>().completion_style = crate::display::CompletionStyle::Inline;
         cx.global_mut::<Settings>().ghost = true;
         view.apply_settings(cx);
+        assert!(list_request.is_cancelled());
+        assert!(view.suggestion_task.is_none());
     });
     window.run_until_parked();
     view.update(window, |view, cx| {

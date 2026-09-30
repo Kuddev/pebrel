@@ -436,7 +436,7 @@ pub struct TerminalView {
     /// 与光标；GPUI 的 render/paint 分两次取锁，因此用此锚点拒绝跨世代组合
     /// （典型是退格回显夹在两次取锁之间造成 ghost 左右跳）。
     pub(super) suggest_anchor: Option<(usize, usize)>,
-    suggestion_task: Option<gpui::Task<()>>,
+    suggestion_task: Option<suggest::Pending>,
     ghost_enabled: bool,
     completion_style: crate::display::CompletionStyle,
     /// BEL 后暂停侧栏转圈，直到用户再往 PTY 打字（旧壳 `awaiting_input`）。
@@ -898,6 +898,7 @@ impl TerminalView {
         self.ghost_enabled = settings.ghost;
         self.completion_style = settings.completion_style;
         // 样式/开关热切换即作废当前提示：缓存键留着会挡住新样式的首次重算。
+        self.suggestion_task = None;
         self.suggest.clear_completion_hints();
         self.suggest.completion_popup_requested = false;
 

@@ -5,7 +5,7 @@
 //! 数据源与排序规则两个壳共用，避免第二套平行实现（与 `ssh_session` 的
 //! `SshEventHost` 泛型下沉同一手法）。
 
-use nebula_completions::file::complete_item;
+use nebula_completions::file::complete_item_with_cancel;
 use nebula_completions::{CompletionOptions, Span};
 
 use super::state::{CompletionStyle, NebulaCompletionItem, NebulaCompletionKind, NebulaPaneState};
@@ -16,11 +16,52 @@ use super::{
 
 /// 借用的共享数据源与运行时开关。生命周期只覆盖一次重算调用。
 pub(crate) struct SuggestSources<'a> {
-    pub history: &'a crate::nebula_history::NebulaHistory,
+    pub history: HistorySource<'a>,
     pub directories: &'a crate::directory_history::DirectoryHistory,
     pub commands: &'a std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub enabled: bool,
     pub style: CompletionStyle,
+}
+
+/// 两个界面拥有历史的方式不同；只在取出少量匹配项时借用历史，不能让文件扫描占锁。
+pub(crate) enum HistorySource<'a> {
+    Borrowed(&'a crate::nebula_history::NebulaHistory),
+    Shared(&'a std::sync::Mutex<crate::nebula_history::NebulaHistory>),
+}
+
+impl HistorySource<'_> {
+    fn read<R>(&self, query: impl FnOnce(&crate::nebula_history::NebulaHistory) -> R) -> R {
+        match self {
+            Self::Borrowed(history) => query(history),
+            Self::Shared(history) => {
+                query(&history.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+            },
+        }
+    }
+
+    fn hint(
+        &self,
+        scope: &crate::nebula_history::HistoryScope,
+        line: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<String> {
+        self.read(|history| history.hint_with_cancel(scope, line, cancelled).map(clamp_ghost))
+    }
+
+    fn search(
+        &self,
+        scope: &crate::nebula_history::HistoryScope,
+        line: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Vec<String> {
+        self.read(|history| {
+            history
+                .search_with_cancel(scope, line, 8, cancelled)
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        })
+    }
 }
 
 /// WSL / SSH pane 在命令位置能补的东西。
@@ -244,6 +285,18 @@ pub(crate) fn suggest_update(
     state: &mut NebulaPaneState,
     line_override: Option<String>,
 ) {
+    suggest_update_with_cancel(sources, state, line_override, &|| false);
+}
+
+pub(crate) fn suggest_update_with_cancel(
+    sources: &SuggestSources<'_>,
+    state: &mut NebulaPaneState,
+    line_override: Option<String>,
+    cancelled: &dyn Fn() -> bool,
+) {
+    if cancelled() {
+        return;
+    }
     let line = line_override.unwrap_or_else(|| state.line_buf.clone());
     if !sources.enabled || line.is_empty() {
         state.completion_popup_requested = false;
@@ -288,14 +341,14 @@ pub(crate) fn suggest_update(
     // Popup style computes a multi-candidate list instead of the single
     // ghost remainder; the two are mutually exclusive per pane.
     if sources.style == CompletionStyle::Popup {
-        suggest_collect(sources, state, &line);
+        suggest_collect(sources, state, &line, cancelled);
         return;
     }
 
     // History first: newest command that extends the whole line (indexed
     // prefix lookup — scales with matches, not history size).
-    if let Some(rem) = sources.history.hint(&state.suggest_env.history_scope(), &line) {
-        state.suggestion = clamp_ghost(rem);
+    if let Some(rem) = sources.history.hint(&state.suggest_env.history_scope(), &line, cancelled) {
+        state.suggestion = rem;
         nebula_debug_log(format!("suggest_result kind=history rem={:?}", state.suggestion));
         return;
     }
@@ -309,11 +362,15 @@ pub(crate) fn suggest_update(
     // 而 `hint` 是拿**宿主的** `is_dir` 把关的——在 WSL tab 里 `/temp_build`
     // 会被解析成 `D:\temp_build` 并当成命中（见 [`SuggestEnv`]）。
     if state.suggest_env.is_this_machine() {
-        if let Some(rem) = sources.directories.hint(&line, &state.cwd) {
+        if let Some(rem) = sources.directories.hint_with_cancel(&line, &state.cwd, cancelled) {
             state.suggestion = clamp_ghost(&rem);
             nebula_debug_log(format!("suggest_result kind=dir rem={:?}", state.suggestion));
             return;
         }
+    }
+
+    if cancelled() {
+        return;
     }
 
     // First token with no path separators is a command position. Reuse the
@@ -374,7 +431,11 @@ pub(crate) fn suggest_update(
     let cwd = state.cwd.clone();
     let cwd_slot = [cwd.as_str()];
     let cwds: &[&str] = if cwd.is_empty() { &[] } else { &cwd_slot };
-    let matches = complete_item(want_dir, span, token, cwds, &options, false, None);
+    let matches =
+        complete_item_with_cancel(want_dir, span, token, cwds, &options, false, None, cancelled);
+    if cancelled() {
+        return;
+    }
     let matches = if want_dir {
         sources.directories.rank_file_suggestions(matches, &state.cwd)
     } else {
@@ -498,7 +559,12 @@ fn popup_edit(line: &str, candidate: &str) -> (usize, String) {
 /// Fill `state.completion_items` for the popup style: the same sources as
 /// the ghost hint (history → directory history → PATH commands → file
 /// system), but keeping several candidates each instead of the first hit.
-fn suggest_collect(sources: &SuggestSources<'_>, state: &mut NebulaPaneState, line: &str) {
+fn suggest_collect(
+    sources: &SuggestSources<'_>,
+    state: &mut NebulaPaneState,
+    line: &str,
+    cancelled: &dyn Fn() -> bool,
+) {
     // 8 是视口行数，不是数据上限。旧实现把两者混成一个常量，候选在收集
     // 阶段就被截断，因而既画不出滚动条，Tab 也永远走不到第九项以后。
     const POPUP_LIMIT: usize = 256;
@@ -518,13 +584,13 @@ fn suggest_collect(sources: &SuggestSources<'_>, state: &mut NebulaPaneState, li
     };
 
     // Whole-line history matches, newest first.
-    for full in sources.history.search(&state.suggest_env.history_scope(), line, 8) {
-        let (replace_chars, insert) = popup_edit(line, full);
+    for full in sources.history.search(&state.suggest_env.history_scope(), line, cancelled) {
+        let (replace_chars, insert) = popup_edit(line, &full);
         push(
             &mut items,
             NebulaCompletionItem {
                 replace_chars,
-                label: elide_left(full, LABEL_MAX),
+                label: elide_left(&full, LABEL_MAX),
                 insert,
                 kind: NebulaCompletionKind::History,
             },
@@ -537,7 +603,7 @@ fn suggest_collect(sources: &SuggestSources<'_>, state: &mut NebulaPaneState, li
     // 理由同 ghost 分支：frecency 池没有环境标签，而 `hint` 拿宿主的 `is_dir`
     // 把关，会把 `D:\temp_build` 当成 WSL 的 `/temp_build`。
     if state.suggest_env.is_this_machine() {
-        if let Some(rem) = sources.directories.hint(line, &state.cwd) {
+        if let Some(rem) = sources.directories.hint_with_cancel(line, &state.cwd, cancelled) {
             push(
                 &mut items,
                 NebulaCompletionItem {
@@ -548,6 +614,10 @@ fn suggest_collect(sources: &SuggestSources<'_>, state: &mut NebulaPaneState, li
                 },
             );
         }
+    }
+
+    if cancelled() {
+        return;
     }
 
     // PATH executables while the first token is being typed. 本机用 shell 继承
@@ -612,7 +682,12 @@ fn suggest_collect(sources: &SuggestSources<'_>, state: &mut NebulaPaneState, li
             let cwd = state.cwd.clone();
             let cwd_slot = [cwd.as_str()];
             let cwds: &[&str] = if cwd.is_empty() { &[] } else { &cwd_slot };
-            let matches = complete_item(want_dir, span, token, cwds, &options, false, None);
+            let matches = complete_item_with_cancel(
+                want_dir, span, token, cwds, &options, false, None, cancelled,
+            );
+            if cancelled() {
+                return;
+            }
             let matches = if want_dir {
                 sources.directories.rank_file_suggestions(matches, &state.cwd)
             } else {
@@ -661,6 +736,35 @@ mod tests {
     use super::*;
     use crate::directory_history::DirectoryHistory;
     use crate::nebula_history::NebulaHistory;
+
+    #[test]
+    fn filesystem_completion_does_not_hold_the_shared_history_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("candidate.txt"), b"").unwrap();
+        let history = std::sync::Mutex::new(NebulaHistory::default());
+        let fixture = Fixture::new();
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup] {
+            let sources = SuggestSources {
+                history: HistorySource::Shared(&history),
+                ..fixture.sources(style)
+            };
+            let mut state = NebulaPaneState {
+                cwd: temp.path().to_string_lossy().into_owned(),
+                ..Default::default()
+            };
+            let checks = std::cell::Cell::new(0);
+            suggest_update_with_cancel(&sources, &mut state, Some("cat ca".into()), &|| {
+                checks.set(checks.get() + 1);
+                assert!(
+                    history.try_lock().is_ok(),
+                    "directory work cannot block history submission"
+                );
+                false
+            });
+            assert!(checks.get() > 3, "the real filesystem calculation must run");
+            assert!(!state.suggestion.is_empty() || !state.completion_items.is_empty());
+        }
+    }
 
     #[test]
     fn issue_353_current_directory_candidates_work_in_both_styles() {
@@ -807,7 +911,7 @@ mod tests {
 
         fn sources(&self, style: CompletionStyle) -> SuggestSources<'_> {
             SuggestSources {
-                history: &self.history,
+                history: HistorySource::Borrowed(&self.history),
                 directories: &self.directories,
                 commands: &self.commands,
                 enabled: true,

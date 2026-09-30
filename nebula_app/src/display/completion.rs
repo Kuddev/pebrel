@@ -87,7 +87,7 @@ impl Display {
         }
         suggest_engine::suggest_update(
             &suggest_engine::SuggestSources {
-                history: &self.nebula_history,
+                history: suggest_engine::HistorySource::Borrowed(&self.nebula_history),
                 directories: &self.directory_history,
                 commands: &self.nebula_commands,
                 enabled: self.nebula_ghost_enabled,
