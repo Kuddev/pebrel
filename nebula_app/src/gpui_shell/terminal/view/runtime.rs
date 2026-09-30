@@ -335,7 +335,7 @@ impl TerminalView {
         }
     }
 
-    fn ensure_runtime_readable(&self) -> Result<(), crate::runtime_api::ApiError> {
+    pub(super) fn ensure_runtime_readable(&self) -> Result<(), crate::runtime_api::ApiError> {
         if self.ssh_destination.is_none() {
             return Ok(());
         }
@@ -378,6 +378,7 @@ impl TerminalView {
         &self,
         window_id: u64,
         lines: usize,
+        screen: bool,
     ) -> Result<crate::runtime_api::RuntimePaneRead, crate::runtime_api::ApiError> {
         self.ensure_runtime_readable()?;
         let Some(session) = &self.session else {
@@ -387,7 +388,7 @@ impl TerminalView {
             ));
         };
         let term = session.term.lock();
-        Ok(crate::runtime_api::capture_terminal_tail(
+        let mut read = crate::runtime_api::capture_terminal_tail(
             &term,
             window_id,
             self.pane_id,
@@ -395,7 +396,13 @@ impl TerminalView {
             self.runtime_task_state(),
             self.exited.is_some(),
             self.exited.clone(),
-        ))
+        );
+        if screen {
+            read.screen = Some(crate::runtime_api::capture_terminal_screen(&term, |index| {
+                self.palette.query_reply(index, term.colors())
+            })?);
+        }
+        Ok(read)
     }
 
     pub fn runtime_procs(
@@ -529,7 +536,6 @@ impl TerminalView {
             ));
         }
         let agent = self.runtime_agent();
-        let recognized_agent = submit && agent.is_some();
         let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         if submit {
             self.capture_runtime_prompt();
@@ -566,8 +572,8 @@ impl TerminalView {
             // 仍盯着提交前 Idle；真实 shell/hook 结束事件负责把它归位。
             self.awaiting_input = false;
             self.mark_command_running();
-            if recognized_agent {
-                self.agent_activity.submitted();
+            if let Some(agent) = agent {
+                self.agent_activity.submitted_text(&agent.kind, &text);
             }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
@@ -646,8 +652,8 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Result<(), crate::runtime_api::ApiError> {
         self.ensure_local_context_allowed(origin)?;
-        let recognized_agent = self.runtime_chat_agent().is_some();
-        if require_agent && !recognized_agent {
+        let agent = self.runtime_chat_agent();
+        if require_agent && agent.is_none() {
             return Err(crate::runtime_api::ApiError::new(
                 "invalid_target",
                 "multi-line Agent input requires a live Agent pane",
@@ -704,8 +710,8 @@ impl TerminalView {
         if submit {
             self.awaiting_input = false;
             self.mark_command_running();
-            if recognized_agent {
-                self.agent_activity.submitted();
+            if let Some(agent) = agent {
+                self.agent_activity.submitted_text(&agent.kind, &text);
             }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();

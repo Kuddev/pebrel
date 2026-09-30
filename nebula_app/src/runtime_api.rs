@@ -8,8 +8,14 @@
 mod agent_api;
 mod cli;
 mod command;
+pub(crate) mod conversation;
+pub(crate) mod git;
+pub(crate) mod mobile_bridge;
+mod mobile_screen;
 mod orchestrate;
 mod server;
+pub(crate) mod tabs;
+mod terminal_read;
 mod transport;
 
 use transport::*;
@@ -17,14 +23,15 @@ pub mod shortcuts;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use cli::request_once_bounded;
 pub use cli::run_cli;
 use command::{
     RuntimeWaitState, SubscribeParams, WaitParams, default_read_lines, default_true, parse_params,
     validate_agent_name, validate_agent_selector, wait_matches,
 };
 pub(crate) use command::{
-    capture_process_tree, capture_terminal_tail, validate_chat_message, validate_command_line,
-    validate_paste_text, validate_prompt,
+    capture_process_tree, validate_chat_message, validate_command_line, validate_paste_text,
+    validate_prompt,
 };
 #[cfg(feature = "legacy-shell")]
 pub use server::dispatch_prompt;
@@ -34,6 +41,8 @@ pub use server::{
     RuntimeServer, try_open_default_tab_existing, try_open_directory_existing,
     try_open_window_existing,
 };
+pub use terminal_read::RuntimePaneRead;
+pub(crate) use terminal_read::{capture_terminal_screen, capture_terminal_tail};
 
 use std::error::Error;
 use std::fmt;
@@ -51,11 +60,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(feature = "legacy-shell")]
 use winit::event_loop::EventLoopProxy;
-
-use nebula_terminal::event::EventListener;
-use nebula_terminal::grid::Dimensions as _;
-use nebula_terminal::index::{Column, Line, Point};
-use nebula_terminal::term::Term;
 
 use crate::cli::{
     ControlCommand as CliCommand, ControlOptions, ControlSplitDirection, ControlWaitState,
@@ -136,10 +140,15 @@ pub struct ApiResponse {
     pub version: u16,
     pub id: String,
     pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_json", skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ApiError>,
+}
+
+// 显式 null 是有效结果；保留它与“回复缺少 result 字段”的区别。
+fn present_json<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(input).map(Some)
 }
 
 impl ApiResponse {
@@ -430,6 +439,10 @@ pub struct RuntimeWindow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuntimeTab {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<tabs::FileInfo>,
     pub index: usize,
     pub active: bool,
     pub label: String,
@@ -494,21 +507,6 @@ pub struct RuntimeAgentPane {
     pub agent: RuntimeAgent,
     pub task_state: RuntimeTaskState,
     pub state_change_seq: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RuntimePaneRead {
-    pub window_id: u64,
-    pub pane_id: u64,
-    pub text: String,
-    pub requested_lines: usize,
-    pub returned_lines: usize,
-    pub history_available: usize,
-    pub truncated: bool,
-    pub task_state: RuntimeTaskState,
-    pub exited: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -755,6 +753,15 @@ pub struct RuntimeKeyModifiers {
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
     Snapshot,
+    Conversation {
+        window_id: u64,
+        pane_id: u64,
+        request: conversation::Request,
+    },
+    Tab {
+        window_id: u64,
+        request: tabs::Request,
+    },
     NewWindow {
         /// 普通启动 / Explorer 右键要求新开窗口时，把目标目录一路带到首个标签。
         cwd: Option<PathBuf>,
@@ -824,6 +831,7 @@ pub enum RuntimeCommand {
         window_id: Option<u64>,
         pane_id: u64,
         lines: usize,
+        screen: bool,
     },
     Procs {
         window_id: Option<u64>,
@@ -849,6 +857,11 @@ pub enum RuntimeCommand {
         argv: Vec<String>,
         timeout_ms: u64,
         max_output_bytes: usize,
+    },
+    Git {
+        window_id: Option<u64>,
+        pane_id: u64,
+        request: git::Request,
     },
     AgentStart {
         window_id: Option<u64>,
@@ -1927,7 +1940,7 @@ pub(crate) fn read_pane_tail_text(
 ) -> Option<(String, usize)> {
     let requested = lines.saturating_add(TAIL_SCAN_EXTRA_LINES).min(MAX_READ_LINES);
     let result = dispatch_runtime_command(
-        RuntimeCommand::ReadPane { window_id, pane_id, lines: requested },
+        RuntimeCommand::ReadPane { window_id, pane_id, lines: requested, screen: false },
         sink,
         hub,
     )

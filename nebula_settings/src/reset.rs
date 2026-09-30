@@ -27,6 +27,7 @@ const RESET_KEYS: &[&str] = &[
     "multiline_paste_confirm",
     "tab_close_visible",
     "terminal_proxy",
+    "refresh_environment",
     "powerline",
     "shell",
     "executor",
@@ -210,6 +211,17 @@ mod tests {
     }
 
     #[test]
+    fn reset_restores_inline_completion_and_preserves_unrelated_data() {
+        for mode in crate::CompletionStyleName::VALUES {
+            let restored =
+                default_settings_text(&format!("completion_style={mode}\ncustom=keep\n"));
+            assert_eq!(restored, "custom=keep\n");
+            let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+            assert_eq!(runtime.completion_style, crate::CompletionStyleName::Inline);
+        }
+    }
+
+    #[test]
     fn reset_removes_all_overrides_and_keeps_user_data() {
         let text = "# preferences\r\n THEME = Nord\r\ncopy_on_select=1\nkeybind=ctrl+x:Copy\nFONT_SIZE=30\nexecutor=custom\nblur=acrylic\nopacity=0.65\nbackground=#101216\ntheme_foreground=#d6dae6\ncustom_theme=my-night\nssh_hosts=saved-host\nai_provider=custom\nfuture_setting=keep\n";
         let result = default_settings_text(text);
@@ -226,6 +238,13 @@ mod tests {
         assert!(runtime.font_size_px.is_none());
         assert!(runtime.shell.is_none());
         assert!(crate::keybind_pairs_from_text(&result).is_empty());
+    }
+
+    #[test]
+    fn reset_restores_environment_refresh_without_changing_private_settings() {
+        let restored = default_settings_text("refresh_environment=0\nprivate_key=keep\n");
+        assert_eq!(restored, "private_key=keep\n");
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).refresh_environment);
     }
 
     #[test]

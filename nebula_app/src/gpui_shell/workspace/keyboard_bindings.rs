@@ -2,8 +2,8 @@
 
 use super::*;
 
-/// 工作区静态默认绑定的 combo 集（[`init`] 的镜像）。撤销已失效的自定义
-/// 注入时要排除：gpui 的 NoAction 打在静态默认键上会误杀基础功能。
+/// 工作区静态默认绑定的 combo 集([`init`] 的镜像)。撤销已失效的自定义
+/// 注入时用它决定走「恢复默认」还是「Unbind(动作名)」精确收回。
 #[cfg(test)]
 pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
     "ctrl-shift-t",
@@ -258,30 +258,25 @@ fn workspace_binding_in_context(
     }
 }
 
+/// Undo a custom binding that is no longer configured: `gpui::Unbind(action)`
+/// drops exactly that action's binding for this key, so the key falls back to
+/// plain input. `NoAction` in its place would keep intercepting the key, which is
+/// why a bare `enter` stayed dead after its action was removed.
+pub(super) fn stale_removal_bindings(combo: &str, action_name: &str) -> Vec<KeyBinding> {
+    vec![KeyBinding::new(combo, gpui::Unbind(action_name.into()), None)]
+}
+
 impl NebulaWorkspace {
     pub(super) fn apply_custom_keybinds(&mut self, cx: &mut Context<Self>) {
         self.update_keybinds(nebula_settings::keybind_pairs(), cx);
     }
 
     fn update_keybinds(&mut self, raw: Vec<(String, String)>, cx: &mut Context<Self>) {
-        let applied: Vec<_> = raw.iter().map(|(combo, _)| gpui_binding_combo(combo)).collect();
-        let defaults = crate::display::keymap::default_shortcuts();
-        let mut bindings = Vec::new();
-        for stale in self.custom_keybinds_applied.iter().filter(|combo| !applied.contains(combo)) {
-            let restored =
-                defaults.iter().rev().find(|(combo, _)| gpui_binding_combo(combo) == *stale);
-            if let Some((combo, action)) = restored {
-                for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
-                    if let Some(binding) = workspace_binding_in_context(combo, action, scope) {
-                        bindings.push(binding);
-                    }
-                }
-            } else {
-                for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
-                    bindings.push(KeyBinding::new(stale, gpui::NoAction, scope));
-                }
-            }
-        }
+        // Every record keeps its action name: undoing the binding needs
+        // `Unbind(name)` for exactly this key, while `NoAction` would swallow
+        // the key itself (a bare Enter stayed dead after removal).
+        let mut applied: Vec<(String, String)> = Vec::new();
+        let mut current_bindings = Vec::new();
         for (combo, action) in raw {
             let Some(action) = crate::display::keymap::parse_action(&action) else { continue };
             if crate::display::keymap::parse_combo(&combo).is_none() {
@@ -291,10 +286,31 @@ impl NebulaWorkspace {
             // cannot continue to intercept input through a more specific context.
             for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
                 if let Some(binding) = workspace_binding_in_context(&combo, &action, scope) {
-                    bindings.push(binding);
+                    if scope.is_none() {
+                        applied.push((gpui_binding_combo(&combo), binding.action().name().into()));
+                    }
+                    current_bindings.push(binding);
                 }
             }
         }
+        let defaults = crate::display::keymap::default_shortcuts();
+        let mut bindings = Vec::new();
+        // GPUI 追加绑定；同一个键从 A 改成 B 时也必须收回 A，避免删除 B 后旧 A 复活。
+        for (stale, stale_action) in
+            self.custom_keybinds_applied.iter().filter(|previous| !applied.contains(previous))
+        {
+            bindings.extend(stale_removal_bindings(stale, stale_action));
+            let restored =
+                defaults.iter().rev().find(|(combo, _)| gpui_binding_combo(combo) == *stale);
+            if let Some((combo, action)) = restored {
+                for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
+                    if let Some(binding) = workspace_binding_in_context(combo, action, scope) {
+                        bindings.push(binding);
+                    }
+                }
+            }
+        }
+        bindings.extend(current_bindings);
         self.custom_keybinds_applied = applied;
         cx.bind_keys(bindings);
     }

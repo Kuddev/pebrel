@@ -136,6 +136,45 @@ pub(crate) fn default_wsl_distro() -> Option<String> {
     }
 }
 
+/// Windows invokes the native npm launcher instead of depending on PowerShell script policy.
+#[cfg(test)]
+pub(crate) fn completion_qa_package_manager() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
+}
+
+/// Isolated native-shell fixture for completion acceptance on every desktop host.
+#[cfg(test)]
+pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal::tty::Shell {
+    #[cfg(windows)]
+    {
+        let integrated = nebula_terminal::tty::powershell_with_nebula_integration(
+            "powershell.exe".into(),
+            vec!["-NoLogo".into(), "-NoProfile".into()],
+        );
+        let mut args = integrated.args().to_vec();
+        args.last_mut().unwrap().push_str("; Set-PSReadLineOption -HistorySaveStyle SaveNothing; if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource')) { Set-PSReadLineOption -PredictionSource None }");
+        nebula_terminal::tty::Shell::new(integrated.program().to_owned(), args)
+    }
+    #[cfg(unix)]
+    {
+        let rcfile = _output.join("bashrc");
+        std::fs::write(
+            &rcfile,
+            "PS1='\\[\\e]133;A\\a\\]QA> \\[\\e]133;B\\a\\]'\nunset HISTFILE PROMPT_COMMAND\n",
+        )
+        .unwrap();
+        nebula_terminal::tty::Shell::new(
+            "bash".into(),
+            vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                rcfile.to_string_lossy().into_owned(),
+                "-i".into(),
+            ],
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

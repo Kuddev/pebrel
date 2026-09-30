@@ -6,3 +6,4 @@
 - 依赖和行数策略的单一权威仍在 `architecture/`；脚本读取同一来源，不复制第二份常量清单。
 - 发布脚本还必须遵循 [`../packaging/AGENTS.md`](../packaging/AGENTS.md)。
 - 门禁语义、扫描边界或治理流程的非平凡变化写入 `architecture/notes/scripts/<area>/`。
+- 原生 CI 的平台选择由 `ci_plan.py` 统一维护；当前路径策略见 [`native validation`](../architecture/notes/scripts/ci/2026-09-29-path-based-native-validation.md)。

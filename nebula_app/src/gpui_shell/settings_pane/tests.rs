@@ -2,6 +2,150 @@ use super::*;
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
+fn environment_refresh_switch_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    let _fixture_guard = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("refresh_environment", "1".into())]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane_out = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("环境变量", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 2);
+    if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("nebula-switch-refresh_environment").is_none());
+        assert!(RuntimeSettings::load().refresh_environment);
+        return;
+    }
+    for enabled in [false, true] {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let bounds = cx.debug_bounds("nebula-switch-refresh_environment").unwrap();
+        assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+        assert!(bounds.origin.y >= px(0.0) && bounds.bottom() <= px(900.0));
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(pane.read_with(cx, |pane, _| pane.runtime.refresh_environment), enabled);
+        assert_eq!(RuntimeSettings::load().refresh_environment, enabled);
+        assert_eq!(
+            pane.read_with(cx, |pane, _| pane.setting_override("refresh_environment")),
+            Some((!enabled, "1".into()))
+        );
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url(cx: &mut gpui::TestAppContext) {
+    use crate::display::{MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol};
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+    use gpui::Focusable as _;
+
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[
+        ("ssh_proxy_mode", "custom".into()),
+        ("ssh_proxy_url", "socks5://127.0.0.1:1080".into()),
+    ])
+    .unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, _| pane.active_section = 5);
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(1200.0), gpui::px(900.0)));
+    for (text, expected, host) in [
+        ("http://127.0.0.1:8080", ManualProxyProtocol::Http, "127.0.0.1:8080"),
+        ("socks5://127.0.0.1:1080", ManualProxyProtocol::Socks5, "127.0.0.1:1080"),
+    ] {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            pane.read(cx).proxy_url_input.read(cx).focus_handle(cx).focus(window, cx);
+        });
+        let select_all = if crate::platform::Platform::current() == crate::platform::Platform::MacOS
+        {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        };
+        cx.simulate_keystrokes(select_all);
+        cx.simulate_input(text);
+        cx.run_until_parked();
+        pane.read_with(cx, |pane, cx| {
+            let row = pane.proxy_protocol_select.read(cx).selected_index(cx).unwrap().row;
+            assert_eq!(MANUAL_PROXY_PROTOCOL_OPTIONS[row], expected);
+            assert_eq!(pane.proxy_url_input.read(cx).value().to_string(), host);
+        });
+        assert_eq!(nebula_settings::RuntimeSettings::load().ssh_proxy_url, text);
+    }
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn provider_key_dialog_blocks_clipboard_export_and_cancel_does_not_store(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    cx.simulate_resize(gpui::size(px(1100.0), px(900.0)));
+    cx.update(|window, cx| pane.update(cx, |pane, cx| pane.prompt_provider_key(window, cx)));
+    cx.run_until_parked();
+    cx.simulate_input("test-secret-that-must-not-leave-input");
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("clipboard sentinel".into()));
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+        window.dispatch_action(Box::new(gpui_component::input::Copy), cx);
+        window.dispatch_action(Box::new(gpui_component::input::Cut), cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some("clipboard sentinel"));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(pane.read_with(cx, |pane, _| pane.provider_key_task.is_none()));
+    assert!(pane.read_with(cx, |pane, _| !matches!(
+        pane.provider_status,
+        Some(ProviderStatus::ApiKeySaved)
+    )));
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
 fn rename_keymap_row_is_searchable_and_enters_capture(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -186,11 +330,11 @@ fn ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch(
 }
 
 #[test]
-fn settings_nav_visibility_keeps_stable_routes_and_hides_backup() {
+fn settings_nav_visibility_hides_providers_and_keeps_stable_routes() {
     let visibility: Vec<_> = (0..SECTION_IDS.len()).map(is_nav_section_visible).collect();
     assert_eq!(
         visibility,
-        vec![true, true, true, false, true, true, true, true, true, false, true]
+        vec![true, true, true, false, true, true, true, true, true, true, true, true]
     );
     assert_eq!(
         SECTION_IDS,
@@ -206,6 +350,7 @@ fn settings_nav_visibility_keeps_stable_routes_and_hides_backup() {
             "advanced",
             "backup",
             "agents",
+            "mobile",
         ]
     );
 }
@@ -213,14 +358,26 @@ fn settings_nav_visibility_keeps_stable_routes_and_hides_backup() {
 #[test]
 fn settings_nav_starts_with_application_then_frequent_options() {
     let visible: Vec<_> = visible_nav_sections().collect();
-    assert_eq!(visible, vec![0, 1, 2, 10, 6, 7, 4, 5, 8]);
+    assert_eq!(visible, vec![0, 1, 2, 10, 6, 7, 4, 5, 11, 8, 9]);
     let zh_labels: Vec<_> = visible
         .iter()
         .map(|index| section_label(*index, crate::display::UiLanguage::ZhCn))
         .collect();
     assert_eq!(
         zh_labels,
-        vec!["应用", "外观", "终端", "Agents", "交互", "按键映射", "SSH", "网络", "高级"]
+        vec![
+            "应用",
+            "外观",
+            "终端",
+            "Agents",
+            "交互",
+            "按键映射",
+            "SSH",
+            "网络",
+            "手机远程",
+            "高级",
+            "备份"
+        ]
     );
     let en_labels: Vec<_> = visible
         .iter()
@@ -237,7 +394,9 @@ fn settings_nav_starts_with_application_then_frequent_options() {
             "Key Bindings",
             "SSH",
             "Network",
+            "Phone Remote",
             "Advanced",
+            "Backup",
         ]
     );
 }
@@ -250,6 +409,7 @@ fn localized_select_labels_keep_stable_value_cardinality() {
         ("tabs_position", &["sidebar", "top"]),
         ("bell", &["off", "visual", "sound", "both"]),
         ("notification_duration", nebula_settings::NotificationDuration::VALUES),
+        ("completion_style", &nebula_settings::CompletionStyleName::VALUES),
     ];
     for (key, values) in cases {
         for language in crate::display::UiLanguage::ALL {

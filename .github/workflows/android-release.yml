@@ -1,0 +1,216 @@
+name: Android Preview release package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+  RUST_TOOLCHAIN: "1.97.1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  relay:
+    name: Embedded relay (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      CC: musl-gcc
+      RUSTFLAGS: -C linker=musl-gcc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install native static-link tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: android-relay
+          target: target/${{ matrix.target }}/release
+      - name: Build and package same-source relay
+        env:
+          RELAY_ARCH: ${{ matrix.arch }}
+          RELAY_TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --locked --release -p pebrel-mobile-link --features relay --bin pebrel-relay
+          python3 mobile/tools/package_native_relay.py \
+            --binary "target/$RELAY_TARGET/release/pebrel-relay" \
+            --output relay-assets --arch "$RELAY_ARCH" --commit "$GITHUB_SHA"
+      - name: Save compiled relay
+        if: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: target/${{ matrix.target }}/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-relay-${{ matrix.arch }}
+          path: relay-assets
+          if-no-files-found: error
+          retention-days: 7
+
+  apk:
+    name: Android universal Preview APK
+    needs: relay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PACKAGE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018 cmake;3.22.1'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+          cache-read-only: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Select the pinned NDK
+        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/rust-cache
+        id: rust-cache
+        with:
+          key: android-ssh
+          target: |
+            mobile/ssh/target/aarch64-linux-android/release
+            mobile/ssh/target/x86_64-linux-android/release
+          extra-key: ndk-27.2.12479018
+      - uses: actions/cache@v4
+        with:
+          path: 'mobile/android/ghostty/build/upstream'
+          key: android-vt-linux-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/tools/build_ghostty.py') }}
+      - name: Build both Android native ABIs
+        run: |
+          python3 mobile/tools/build_ghostty.py
+          python3 mobile/tools/build_russh.py
+      - name: Save compiled Android transport
+        if: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            mobile/ssh/target/aarch64-linux-android/release
+            mobile/ssh/target/x86_64-linux-android/release
+          key: ${{ steps.rust-cache.outputs.cache-key }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-relay-*
+          merge-multiple: true
+          path: mobile/android/app/build/generated/nativeRelayAssets/native-relay
+      - name: Run unit tests and build the optimized Preview variant
+        run: |
+          gradle --no-daemon -p mobile/android \
+            :app:testDebugUnitTest :app:lintPreview \
+            :app:assemblePreview :app:assemblePreviewAndroidTest
+      - name: Prepare the isolated OpenSSH fixture
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-server
+          sudo useradd --create-home --shell /bin/bash pebreltest
+          echo 'pebreltest:pebrel-test-only' | sudo chpasswd
+          mkdir -p "$RUNNER_TEMP/android-ssh"
+          ssh-keygen -t ed25519 -N '' -f "$RUNNER_TEMP/android-ssh/host_key"
+          sudo mkdir -p /run/sshd
+          cat > "$RUNNER_TEMP/android-ssh/sshd_config" <<EOF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey $RUNNER_TEMP/android-ssh/host_key
+          PidFile $RUNNER_TEMP/android-ssh/sshd.pid
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication no
+          UsePAM no
+          PermitRootLogin no
+          AllowUsers pebreltest
+          Subsystem sftp internal-sftp
+          EOF
+          sudo /usr/sbin/sshd -f "$RUNNER_TEMP/android-ssh/sshd_config" -E "$RUNNER_TEMP/android-ssh/sshd.log"
+          sudo -u pebreltest mkdir /home/pebreltest/paging
+          sudo -u pebreltest bash -c 'for n in $(seq 1 300); do touch "/home/pebreltest/paging/file-$n"; done'
+          echo "SSH_FINGERPRINT=$(ssh-keygen -lf "$RUNNER_TEMP/android-ssh/host_key.pub" -E sha256 | awk '{print $2}')" >> "$GITHUB_ENV"
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test native terminal, SSH and SFTP in the Preview APK
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            gradle --no-daemon -p mobile/android :app:connectedPreviewAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.kuddev.pebrel.mobile.GhosttyEngineTest,io.github.kuddev.pebrel.mobile.SshIntegrationTest#sftpRoundTripPagingAndCancellationKeepTheRealShellUsable,io.github.kuddev.pebrel.mobile.SshIntegrationTest#realPasswordShellStreamsOutputThroughGhostty,io.github.kuddev.pebrel.mobile.SshIntegrationTest#wrongPasswordReportsAuthenticationAndWipesSecret,io.github.kuddev.pebrel.mobile.SshIntegrationTest#changedHostKeyNeverReachesAuthentication,io.github.kuddev.pebrel.mobile.SshIntegrationTest#declinedTrustNeverAuthenticates,io.github.kuddev.pebrel.mobile.SshIntegrationTest#execKeepsStderrOutOfRpcStdoutAndPreservesExitCode -Pandroid.testInstrumentationRunnerArguments.sshFingerprint="$SSH_FINGERPRINT" -Pandroid.testInstrumentationRunnerArguments.sftpFixtureDirectory=paging
+      - name: Verify signing, identity, native payload and test results
+        run: |
+          python3 scripts/android_release.py --version "$PACKAGE_VERSION" --commit "$GITHUB_SHA" \
+            --sdk "$ANDROID_HOME" --output dist --report android-evidence/android-report.json
+      - name: Upload Android Preview asset
+        uses: actions/upload-artifact@v4
+        with:
+          compression-level: 0
+          name: stable-package-android
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Android release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-evidence-android
+          path: android-evidence/android-report.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload Android diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: |
+            mobile/android/app/build/reports
+            mobile/android/app/build/test-results
+            mobile/android/app/build/outputs/androidTest-results
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Stop the test SSH service
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/android-ssh/sshd.pid" ]]; then
+            sudo kill "$(cat "$RUNNER_TEMP/android-ssh/sshd.pid")"
+          fi

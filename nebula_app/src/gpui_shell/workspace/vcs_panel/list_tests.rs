@@ -26,7 +26,7 @@ fn git_list_repaints_visible_rows_and_clicks_the_scrolled_path(cx: &mut TestAppC
         gpui_component::init(cx);
         crate::gpui_shell::math_view::register(cx);
         crate::gpui_shell::file_editor::init(cx);
-        crate::gpui_shell::init(cx);
+        crate::gpui_shell::init(cx, None);
         cx.set_reduce_motion(true);
         windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
     });

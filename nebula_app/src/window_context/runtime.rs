@@ -101,6 +101,8 @@ impl WindowContext {
                         .unwrap_or_else(|| tab_kind(&tab.launch).to_owned())
                 });
                 RuntimeTab {
+                    tab_id: None,
+                    file: None,
                     index,
                     active: index == self.active_tab,
                     label,
@@ -514,6 +516,7 @@ impl WindowContext {
         &self,
         pane_id: u64,
         lines: usize,
+        screen: bool,
     ) -> Result<RuntimePaneRead, ApiError> {
         let Some(pane) = self.pane(pane_id) else {
             return Err(ApiError::new(
@@ -522,7 +525,7 @@ impl WindowContext {
             ));
         };
         let term = pane.terminal.lock();
-        Ok(crate::runtime_api::capture_terminal_tail(
+        let mut read = crate::runtime_api::capture_terminal_tail(
             &term,
             self.id().into(),
             pane_id,
@@ -530,7 +533,13 @@ impl WindowContext {
             task_state(&pane.nebula_state),
             false,
             None,
-        ))
+        );
+        if screen {
+            read.screen = Some(crate::runtime_api::capture_terminal_screen(&term, |index| {
+                term.colors()[index].unwrap_or(*self.display.colors[index])
+            })?);
+        }
+        Ok(read)
     }
 
     pub(crate) fn runtime_procs(&self, pane_id: u64) -> Result<RuntimePaneProcesses, ApiError> {

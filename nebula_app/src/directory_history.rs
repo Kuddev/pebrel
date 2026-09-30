@@ -170,6 +170,18 @@ impl DirectoryHistory {
 
     /// Remainder for a cd-like ghost suggestion, ranked by frecency.
     pub(crate) fn hint(&self, line: &str, cwd: &str) -> Option<String> {
+        self.hint_with_cancel(line, cwd, &|| false)
+    }
+
+    pub(crate) fn hint_with_cancel(
+        &self,
+        line: &str,
+        cwd: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<String> {
+        if cancelled() {
+            return None;
+        }
         let request = parse_directory_request(line, cwd)?;
         let request_key = normalize(&request.absolute)?;
         let now = current_time();
@@ -188,11 +200,15 @@ impl DirectoryHistory {
             right.score(now).total_cmp(&left.score(now)).then_with(|| left.path.cmp(&right.path))
         });
 
-        candidates.into_iter().take(12).find_map(|entry| {
-            if !Path::new(&entry.path).is_dir() {
+        // 只复制最多 12 条路径，随后释放共享锁；慢盘元数据查询不能挡住目录记录。
+        let candidates: Vec<_> =
+            candidates.into_iter().take(12).map(|entry| entry.path.clone()).collect();
+        drop(state);
+        candidates.into_iter().take_while(|_| !cancelled()).find_map(|path| {
+            if !Path::new(&path).is_dir() {
                 return None;
             }
-            let suffix = suffix_after_prefix(&entry.path, &request.absolute)?;
+            let suffix = suffix_after_prefix(&path, &request.absolute)?;
             Some(apply_separator_style(suffix, request.separator))
         })
     }
@@ -577,6 +593,25 @@ fn apply_separator_style(value: &str, separator: Option<char>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_hint_checks_paths_without_holding_the_database_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("candidate");
+        std::fs::create_dir(&target).unwrap();
+        let history = history(&[(target.to_str().unwrap(), 1.0, current_time())]);
+        let result = history.hint_with_cancel("cd ca", temp.path().to_str().unwrap(), &|| {
+            assert!(
+                history.state.try_lock().is_some(),
+                "metadata queries must release the database"
+            );
+            false
+        });
+        assert!(result.is_some());
+        assert!(
+            history.hint_with_cancel("cd ca", temp.path().to_str().unwrap(), &|| true).is_none()
+        );
+    }
 
     fn history(entries: &[(&str, f64, u64)]) -> DirectoryHistory {
         DirectoryHistory {

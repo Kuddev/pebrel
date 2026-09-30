@@ -1,0 +1,19 @@
+<resources>
+    <string name="new_connection">新建</string>
+    <string name="new_computer_hint">扫码或 8 位配对码</string>
+    <string name="new_ssh_hint">填写地址和账号，直接登录</string>
+    <string name="new_deploy_relay">通过 SSH 部署中转</string>
+    <string name="new_deploy_relay_hint">Linux 原生服务，无需 Docker</string>
+    <string name="onboarding_connection_title">先连接什么？</string>
+    <string name="onboarding_connection_hint">之后可以随时从首页添加连接。</string>
+    <string name="onboarding_my_computer">我的电脑</string>
+    <string name="onboarding_my_computer_hint">跟进 Pebrel 桌面端的终端和 Agent</string>
+    <string name="onboarding_other_ways">其他方式</string>
+    <string name="onboarding_ssh_host">SSH 主机</string>
+    <string name="onboarding_phone_terminal">手机本地终端</string>
+    <string name="onboarding_phone_terminal_hint">在这台手机上运行 Shell</string>
+    <string name="onboarding_later">以后再说</string>
+    <string name="home_empty_title">还没有会话</string>
+    <string name="home_empty_hint">连接电脑后，这里会列出它正在运行的终端。</string>
+    <string name="home_open_local">打开本地终端</string>
+</resources>
