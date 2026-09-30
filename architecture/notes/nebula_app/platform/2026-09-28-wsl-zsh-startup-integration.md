@@ -12,6 +12,8 @@ guest whose login shell is zsh reported no OSC 7, so the file tree, Git view,
 split/duplicate directory inheritance and prompt-path links stayed at the
 initial directory. `wsl.exe` must keep launching the guest login shell; adding
 `--exec` was the 1.1.0 regression, so no startup argument can be injected.
+This builds on the spawn-time distribution snapshot
+(`architecture/notes/nebula_app/shell_detect/`), which names the guest a pane enters.
 
 ## Evidence
 
@@ -36,8 +38,9 @@ initial directory. `wsl.exe` must keep launching the guest login shell; adding
 
 - **The guest answers, not the host.** Before the first takeover of a
   (distribution, user), `platform::wsl_guest_shell` runs
-  `wsl.exe --distribution <d> [--user <u>] --exec sh -s` with
-  `res/shell/wsl-guest-probe.sh` and the bootstrap sent through `WSLENV` `/p`.
+  `wsl.exe -d <d> [-u <u>] --exec sh -s` (`shell_detect::wsl_exec_command`)
+  with `res/shell/wsl-guest-probe.sh` and the bootstrap sent through `WSLENV`
+  `/p`, against the launch's spawn-time distribution that the pinned pane enters.
   The guest reports its passwd login shell (`getent`, else `/etc/passwd`) and
   whether that user can read all three files. A login shell takes the bootstrap
   only when the guest said zsh **and** readable, an explicit `-e zsh` only when
@@ -52,26 +55,25 @@ initial directory. `wsl.exe` must keep launching the guest login shell; adding
   `<data dir>/shell-integration/wsl-zsh` once per process, and again only when
   one is missing. A taking-over pane adds `ZDOTDIR/pu` and
   `NEBULA_ZSH_INTEGRATION/pu` to `WSLENV`.
-- **No wait on the UI thread.** The spawn (`nebula_app/AGENTS.md`) reads only the
-  cached verdict; a first sight starts the worker and that pane starts without
-  zsh reports. `main` warms the first pane's guest at process start
-  (`shell_launch::startup_shell`, the pane's own resolution) unless a command
-  was given. The worker shares `platform::process::run_bounded` with the hook
-  installer.
+- **No wait on the UI thread.** The spawn (`terminal::session`) reads only the
+  cached verdict and takes the path from `shell_integration::wsl_zsh_path`
+  without touching the files; a first sight starts the worker and that pane
+  starts without zsh reports. `main` warms the first pane's guest at process
+  start (`shell_launch::startup_shell`, the pane's own resolution) unless a
+  command was given. The worker shares `platform::process_output::read_with_input`
+  with the hook installer.
 - **Removal.** WSL forwards every variable `WSLENV` names to a `wsl.exe` started
   in the guest, whatever `/u` says, so the bootstrap `.zshenv` and the bash first
   prompt drop both entries from the guest `WSLENV`. `wsl.exe --exec` helpers
   never run either, so `shell_detect::strip_wsl_zsh_takeover` removes the
   takeover from `pane.exec` and Runtime git environments.
 - **Takeover scope.** `.zshenv` takes over only an interactive zsh started with
-  `NEBULA_ZSH_INTEGRATION`, keeps the `NEBULA_*` state unexported and restores
-  the export attribute the user gave `ZDOTDIR`. A zsh started while a parent
-  bootstrap still exports `ZDOTDIR` sees no companion variable and restores
-  instead of taking over with an empty directory.
-- **Global compinit and new users.** `.zshenv` sets `skip_global_compinit` to a
-  marker unless the user did; if it survives `.zprofile`, `.zshrc` repeats
-  Ubuntu's condition once the user's `ZDOTDIR` is back. The newuser check runs
-  where zsh runs it, before the user's `.zshenv`.
+  `NEBULA_ZSH_INTEGRATION`, so one started under a parent's exported `ZDOTDIR`
+  restores instead of taking over an empty directory. It keeps `NEBULA_*`
+  unexported, restores `ZDOTDIR`'s export attribute, runs the newuser check
+  before the user's `.zshenv` and, unless the user set one, a
+  `skip_global_compinit` marker; if it survives `.zprofile`, `.zshrc` repeats
+  Ubuntu's condition once the user's `ZDOTDIR` is back (`res/shell/zshenv`, `zshrc`).
 
 ## Rejected alternatives
 
@@ -127,10 +129,8 @@ initial directory. `wsl.exe` must keep launching the guest login shell; adding
 
 ## Validation
 
-- Rust: `shell_detect` (environment, opt-out, option region, spawn composition,
-  bash cleanup, helper stripping), `platform::wsl_guest_shell` (probe command,
-  parser, takeover table), `platform::process` (`run_bounded`), `shell_launch`
-  (warm-up resolves bare `wsl`).
+- Rust: the `shell_detect`, `platform::wsl_guest_shell`,
+  `platform::process_output` and `workspace::shell_launch` tests.
 - Real shells: `scripts/tests/test_shell_integration.py` runs the bootstrap and the
   probe under real zsh and `sh`; the leak, compinit, newuser, export, window and
   `WSLENV` cases fail against earlier scripts.

@@ -30,30 +30,30 @@ into a directory plus a guest command; a directory name from a cloned repository
 could thus run a guest command on split, duplicate or fork. `runtime_exec`, the WSL hook setup and a
 PTY-default `shell=wsl` pane still read launch arguments without the snapshot.
 
+`wsl.exe -- …` hands the joined line to the guest's login shell: measured on
+2026-09-30, a directory named `x$(touch /tmp/pwned)` ran the `touch` through
+`--` and not through `--exec`. Direct exec also keeps `find -printf`'s single
+backslash.
+
 ## Decision
 
-`shell_detect::wsl_spawn_distro` returns the explicit distribution or the
-registry default. A spawn reads it once and completion scoping reuses the
-value; a new-tab decision and the startup warm-up read it on their own.
-`--distribution-id` and `--system` resolve to `None` rather than to the default.
-`TerminalView` snapshots the value as `wsl_distro`. The workspace WSL location
-and prompt-path links read the focused pane's snapshot instead of the tab
-launch. `shell_detect::spawn_shell` composes the spawn: a PTY-default WSL pane
-spawns the snapshotted `wsl.exe` explicitly, and every WSL spawn is pinned to
-the snapshot (`wsl_args_pinned`) while the persisted launch stays as the user
-configured it. The pane, its `PaneExecContext`, the guest shell probe and the
-hook installer therefore read the same guest from the same options.
+A pane's WSL identity is the distribution resolved at spawn
+(`shell_detect::wsl_spawn_distro`): the explicit distribution, else the registry
+default; `--distribution-id` and `--system` resolve to `None` rather than to the
+default. `shell_detect::spawn_shell` pins every WSL spawn to it
+(`wsl_args_pinned`) while the persisted launch stays as the user configured it,
+and a PTY-default `shell=wsl` pane now spawns the snapshotted `wsl.exe`
+explicitly. The pane's `PaneExecContext` records the pinned options, so the
+workspace WSL location and prompt-path links read the focused pane's snapshot
+(`TerminalView::wsl_distro`) instead of the tab launch. Completion scoping
+reuses the spawn's value; a new-tab decision reads it on its own.
 `wsl_launch_distro` keeps its explicit-only semantics.
 
-One parser, `shell_detect::wsl_options`, reads WSL's option region for the
-distribution, user, distribution selection and guest command. It stops at `--`,
-`-e`/`--exec` or the first argument it does not know. It tolerates the `=` forms
-that `wsl_args_with_directory` already preserved, although `wsl.exe` itself
-rejects them. A leading `~` is WSL's own directory choice like `--cd`: both
-give way to an injected or inherited host directory. `is_wsl_launcher` is the
-WSL program detector for launches (the snapshot, the cwd report environment,
-argument rewriting, `runtime_exec`, hook setup); completion classifies a typed
-command word separately.
+One parser, `shell_detect::wsl_options`, reads WSL's option region for every
+reader, and `is_wsl_launcher` is the one WSL program detector for launches. The
+parser tolerates the `=` forms that `wsl_args_with_directory` already preserved,
+although `wsl.exe` itself rejects them. Completion classifies a typed command
+word separately.
 
 An injected guest cwd is encoded for `wsl.exe`'s own command-line splitting,
 not the CRT's (`shell_detect::wsl_raw_arg`). Measured on WSL 2 on 2026-09-29:
@@ -68,39 +68,21 @@ both paths use). Persisted WSL launch arguments follow the raw convention too:
 a spaced `--cd` value is stored quoted, which is what a restored raw spawn needs.
 
 Host-side guest helpers (the side panel's git and `find`, the merge tab's
-`cat`/`tee`/git) start through `shell_detect::wsl_exec_command`, that is
-`wsl.exe -d <distro> --exec`. The snapshot made every WSL pane, not only an
-explicit `-d` one, feed its reported cwd to these helpers, and `wsl.exe -- …`
-hands the joined line to the guest's login shell: measured on 2026-09-30, a
-directory named `x$(touch /tmp/pwned)` ran the `touch` through `--` and not
-through `--exec`. Direct exec also keeps `find -printf`'s single backslash. A
-cwd that fails `wsl_accepts_arg` is not handed to the helpers. `pane.exec` and
-Runtime git drop the zsh takeover (`strip_wsl_zsh_takeover`) because a direct
-exec never reaches the bootstrap `.zshenv` that removes it.
+`cat`/`tee`/git) start through `shell_detect::wsl_exec_command`
+(`wsl.exe -d <distro> --exec`), because the snapshot made every WSL pane, not
+only an explicit `-d` one, feed its reported cwd to them. A cwd that fails
+`wsl_accepts_arg` is not handed to the helpers.
 
-Copies of a pane follow its snapshot:
-
-One rule (`tab_duplication::follow_guest`) decides every copy: the guest cwd
-travels through `--cd` only when the copy enters the focused pane's
-distribution as the same user; otherwise the copy gets the host-visible cwd.
-
-- **Split, duplicate and AI-session fork** insert `-d <snapshot>` into a bare
-  launch, after a leading `~`, so a later default change cannot move the copy.
-  The pinned argument is part of the copy's persisted launch; the restored
-  original follows the default again. A split duplicates the pane's own launch,
-  a duplicate or fork the tab's identity, which may differ from the pane's.
-- **A WSL pane without a guest cwd** (fish, or before the first prompt) splits
-  into the same guest, replaying its spawn: the launch's own `--cd` or `~`
-  still wins over the spawn-time host directory.
-- **A new default-shell tab** is not pinned, and keeps a directory it chooses
-  itself.
-- **A pane without a snapshot** (`--distribution-id`, `--system`) never passes
-  its guest cwd on; its copies start in the host-visible cwd or the guest home.
-- **Relative prompt paths** resolve against the guest cwd mapped into the
-  snapshotted distribution, like absolute ones.
-- **Otherwise** a WSL pane's guest path yields only a `/mnt/<drive>` host
-  directory, even without a snapshot; Windows would resolve `/` against the
-  current drive, and a UNC probe would block the UI thread.
+Copies of a pane follow its snapshot through one rule
+(`tab_duplication::copy_launch`). Split, duplicate and AI-session fork insert
+`-d <snapshot>` into a bare launch, after a leading `~`, so a later default
+change cannot move the copy; the pin is persisted only in the copy, and the
+restored original follows the default again. The guest cwd travels through
+`--cd` only into the same distribution as the same user; otherwise the copy
+gets the host-visible cwd. A guest path maps to a host directory only from
+`/mnt/<drive>`: Windows would resolve `/` against the current drive, and a UNC
+probe would block the UI thread. The `tab_duplication` and prompt-path
+(`osc_links`) tests hold the cases.
 
 ## Rejected alternatives
 
@@ -109,11 +91,10 @@ distribution as the same user; otherwise the copy gets the host-visible cwd.
 - Rewrite bare launches to `-d <default>` in the persisted launch: changes
   launch identity and restore semantics for users who intentionally follow the
   default. Only the spawn options are pinned.
-- Take the identity from the guest's `WSL_DISTRO_NAME`: the bash and zsh
-  reports already carry it in the `pebrel_shell` token, which completion uses
-  to fill an empty distribution. It arrives only at the first prompt, which is
-  after a split made before it, and never from shells without the integration,
-  so it could supplement the snapshot but not replace it.
+- Take the identity from the guest's `WSL_DISTRO_NAME`, which the bash and zsh
+  reports carry in the `pebrel_shell` token and completion uses to fill an empty
+  distribution: it arrives only at the first prompt, after an early split, and
+  never from shells without the integration, so it supplements the snapshot.
 - CRT quoting (`escape_args`, or the PTY's escaper on the injected value):
   `wsl.exe` does not parse `\"`, so a directory name containing `"` would still
   inject a guest command, as the first cut of this fix did. `escape_args` would
@@ -134,19 +115,12 @@ another name after spawn leaves pinned copies pointing at the old name.
 
 ## Validation
 
-- **Registry-free unit tests.** Explicit, `=`-form, bare, id-based, `--system`
-  and non-WSL resolution, with an injected default, and guest-command
-  arguments that must not count as WSL options.
-- **Launch rewriting.** Pinning, the `~` marker, quoting of spaced paths with
-  literal backslashes, refusal of paths containing `"` and `--distribution-id`.
-  The encoding was checked against a real `wsl.exe`, which is not automated.
-- **Pane snapshot.** Prompt-path mapping, the spawn composition
-  (`spawn_shell`) and the exec context from pinned options; `pane.exec`
-  refusing a `"` in the guest cwd or argv.
-- **Split, duplicate and new-tab launches.** Guest cwd, no guest cwd, the
-  launch's own `--cd`, another distribution or user, a host shell and a profile
-  directory.
-- **Not automated.** Interactive file-tree following.
+- Registry-free tests in `shell_detect` (resolution, option region, launch
+  rewriting, spawn composition), `tab_duplication` (copies), `osc_links`
+  (prompt paths) and `runtime_exec` (`pane.exec` refusing `"` in a guest cwd or
+  argv).
+- By hand, not automated: the `"`/backslash encoding against a real `wsl.exe`,
+  and interactive file-tree following.
 
 ## Supersedes
 
