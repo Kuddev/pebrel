@@ -329,7 +329,7 @@ private fun GitTreeItem(row: GitTreeRow, staged: Boolean, collapsed: Boolean, en
                         fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                         color = if (entry.conflict || code == "D") colors.error else if (code == "A" || code == "?") colors.tertiary else colors.primary)
                 }
-                Glyph(if (entry == null) R.drawable.ic_git_folder else R.drawable.ic_git_file, Modifier.size(16.dp))
+                FileSymbol(row.path, entry == null, Modifier.size(20.dp), expanded = !collapsed)
                 Column(Modifier.weight(1f)) {
                     Text(row.path.substringAfterLast('/'), fontSize = 14.sp, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (entry?.original != null) Text(entry.original, fontSize = 12.sp, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
