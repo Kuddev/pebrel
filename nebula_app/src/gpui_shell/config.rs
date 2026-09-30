@@ -124,6 +124,12 @@ pub(crate) fn panel_resize(cx: &App) -> bool {
     cx.try_global::<Settings>().is_some_and(|settings| settings.panel_resize)
 }
 
+/// 只查询内存快照，避免动画渲染读盘；初始化前保持默认滑动行为。
+pub(crate) fn tab_reveal_instant(cx: &App) -> bool {
+    cx.try_global::<Settings>()
+        .is_some_and(|settings| settings.tab_reveal == nebula_settings::TabRevealName::Instant)
+}
+
 pub(crate) fn ctrl_wheel_font_zoom(cx: &App) -> bool {
     cx.try_global::<Settings>().is_none_or(|settings| settings.ctrl_wheel_font_zoom)
 }

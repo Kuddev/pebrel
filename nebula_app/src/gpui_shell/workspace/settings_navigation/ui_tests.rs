@@ -52,7 +52,7 @@ fn open_workspace(
     window.simulate_resize(gpui::size(px(1280.0), px(900.0)));
     workspace_out.as_ref().unwrap().update(window, |workspace, cx| {
         workspace.tabs_position = nebula_settings::TabsPositionName::Top;
-        workspace.sync_settings_layout();
+        workspace.sync_settings_layout(false);
         cx.notify();
     });
     window.run_until_parked();
@@ -136,7 +136,7 @@ fn settings_survives_overflow_and_layout_changes(cx: &mut TestAppContext) {
     {
         workspace.update(&mut cx, |workspace, cx| {
             workspace.tabs_position = position;
-            workspace.sync_settings_layout();
+            workspace.sync_settings_layout(false);
             cx.notify();
         });
         assert_eq!(workspace.read_with(&cx, |workspace, _| workspace.top_tab_count()), 13);
@@ -145,6 +145,36 @@ fn settings_survives_overflow_and_layout_changes(cx: &mut TestAppContext) {
     let settings = tab_bounds("top-tab-12", &mut cx);
     assert!(settings.origin.x >= px(0.0) && settings.right() <= px(760.0));
     workspace.read_with(&cx, |workspace, _| assert!(workspace.settings_open));
+}
+
+#[gpui::test]
+fn instant_slide_animation_keeps_the_side_panel_static(cx: &mut TestAppContext) {
+    let (_directory, workspace, mut cx) = open_workspace(1, cx);
+    // With the slide animation off, folding the main sidebar for the settings
+    // page must not arm the fold animation: the column snaps into place.
+    workspace.update(&mut cx, |workspace, cx| {
+        workspace.tabs_position = nebula_settings::TabsPositionName::Sidebar;
+        workspace.settings_open = true;
+        workspace.sidebar_collapsed = false;
+        workspace.sync_settings_layout(true);
+    });
+    workspace.read_with(&cx, |workspace, _| {
+        assert!(workspace.sidebar_collapsed, "sidebar mode folds for settings");
+        assert!(!workspace.sidebar_fold_armed, "instant: fold animation not armed");
+    });
+    // The default slide mode keeps arming the fold as before.
+    workspace.update(&mut cx, |workspace, _| {
+        workspace.sidebar_collapsed = false;
+        workspace.sync_settings_layout(false);
+    });
+    workspace.read_with(&cx, |workspace, _| {
+        assert!(workspace.sidebar_fold_armed, "slide: fold animation armed");
+    });
+    workspace.update(&mut cx, |workspace, _| workspace.sync_settings_layout(true));
+    workspace.read_with(&cx, |workspace, _| {
+        assert!(workspace.sidebar_collapsed);
+        assert!(!workspace.sidebar_fold_armed, "mode switch must clear an unchanged fold");
+    });
 }
 
 #[gpui::test]
@@ -176,7 +206,7 @@ fn density_changes_real_tab_bounds_and_sidebar_drag_pitch(cx: &mut TestAppContex
             workspace.update(&mut cx, |workspace, cx| {
                 workspace.tabs_position = position;
                 workspace.density = density;
-                workspace.sync_settings_layout();
+                workspace.sync_settings_layout(tab_reveal_instant(cx));
                 workspace.reveal_active_tab();
                 cx.notify();
             });

@@ -16,6 +16,7 @@ use gpui_component::menu::PopupMenuItem;
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::SidebarActivity;
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::{Message, UiLanguage};
 
 use super::{
@@ -690,14 +691,13 @@ impl NebulaWorkspace {
             .child(div().h_full().flex_1().min_w_0())
             .child(
                 title_bar_panel_controls()
+                    .gap(px(8.0))
                     .child(
-                        Button::new("top-toggle-command-manager")
-                            .icon(
-                                Icon::new(Icon::empty()).path(
-                                    crate::gpui_shell::assets::nav::COMMAND_MANAGER,
-                                ),
-                            )
-                            .ghost()
+                        toolbar_button(
+                            "top-toggle-command-manager",
+                            Icon::new(Icon::empty())
+                                .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                        )
                             .selected(self.command_manager_open)
                             .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {

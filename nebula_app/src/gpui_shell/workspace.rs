@@ -35,6 +35,7 @@ use gpui::{
 
 use crate::display::color::Rgb;
 use crate::gpui_shell::code_tab::CodeTabViewEvent;
+use crate::gpui_shell::config::tab_reveal_instant;
 use crate::gpui_shell::doc_tabs::DocTabViewEvent;
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::settings_pane::{SettingsPane, SettingsPaneEvent};
@@ -1128,7 +1129,7 @@ impl NebulaWorkspace {
         self.tabs_position = runtime.tabs_position;
         self.density = runtime.density;
         self.reveal_active_tab();
-        self.sync_settings_layout();
+        self.sync_settings_layout(tab_reveal_instant(cx));
         self.sidebar_resizing = None;
         self.reveal_if_tray_disabled(cx);
         cx.notify();
@@ -1835,52 +1836,6 @@ impl NebulaWorkspace {
         self.side_panel.sync_at(cwd, wsl) || cleared
     }
 
-    fn toggle_side_panel(
-        &mut self,
-        view: crate::display::side_panel::PanelView,
-        cx: &mut Context<Self>,
-    ) {
-        self.side_panel_anim_armed = true;
-        self.side_panel.toggle(view);
-        self.file_tree_menu = None;
-        if !self.side_panel.open {
-            cx.notify();
-            return;
-        }
-
-        self.sync_side_panel_to_active(true, cx);
-
-        // The shared model builds snapshots on a worker and exposes a cheap,
-        // throttled `sync`. GPUI polls only while the drawer is open; it does
-        // not move filesystem business logic into the render function.
-        if !self.side_panel_polling {
-            self.side_panel_polling = true;
-            let executor = cx.background_executor().clone();
-            cx.spawn(async move |this, cx| {
-                loop {
-                    executor.timer(Duration::from_millis(100)).await;
-                    let keep_polling = this
-                        .update(cx, |workspace, cx| {
-                            if !workspace.side_panel.open {
-                                workspace.side_panel_polling = false;
-                                return false;
-                            }
-                            if workspace.sync_side_panel_to_active(false, cx) {
-                                cx.notify();
-                            }
-                            true
-                        })
-                        .unwrap_or(false);
-                    if !keep_polling {
-                        break;
-                    }
-                }
-            })
-            .detach();
-        }
-        cx.notify();
-    }
-
     fn toggle_file_tree(&mut self, cx: &mut Context<Self>) {
         if self.active_document_section(cx).is_some() {
             self.details_panel.section = None;
@@ -2253,7 +2208,7 @@ impl NebulaWorkspace {
             },
             PaletteAction::ToggleSidebar => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
-                self.sidebar_fold_armed = true;
+                self.sidebar_fold_armed = !tab_reveal_instant(cx);
                 self.focus_active(window, cx);
             },
             PaletteAction::OpenSettings => self.open_settings(window, cx),
@@ -3002,7 +2957,7 @@ impl Render for NebulaWorkspace {
                     return;
                 }
                 this.sidebar_collapsed = !this.sidebar_collapsed;
-                this.sidebar_fold_armed = true;
+                this.sidebar_fold_armed = !tab_reveal_instant(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &recipes::OpenLayoutRecipes, window, cx| {
