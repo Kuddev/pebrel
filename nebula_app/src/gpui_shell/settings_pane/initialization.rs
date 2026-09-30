@@ -341,7 +341,13 @@ impl SettingsPane {
             .unwrap_or(0);
         let proxy_protocol_select = cx.new(|cx| {
             SelectState::new(
-                vec![SharedString::from("SOCKS5"), SharedString::from("HTTP")],
+                crate::display::MANUAL_PROXY_PROTOCOL_OPTIONS
+                    .iter()
+                    .copied()
+                    .map(|protocol| {
+                        SharedString::from(crate::display::manual_proxy_protocol_label(protocol))
+                    })
+                    .collect::<Vec<_>>(),
                 Some(IndexPath::default().row(proxy_protocol_ix)),
                 window,
                 cx,

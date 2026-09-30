@@ -84,6 +84,7 @@ fn pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url(cx: &mut gpui:
     for (text, expected, host) in [
         ("http://127.0.0.1:8080", ManualProxyProtocol::Http, "127.0.0.1:8080"),
         ("socks5://127.0.0.1:1080", ManualProxyProtocol::Socks5, "127.0.0.1:1080"),
+        ("socks5h://127.0.0.1:1080", ManualProxyProtocol::Socks5h, "127.0.0.1:1080"),
     ] {
         cx.update(|window, cx| {
             let _ = window.draw(cx);

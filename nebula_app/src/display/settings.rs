@@ -137,7 +137,7 @@ pub enum SettingsDropdown {
     BackupProtocol,
     /// 代理：SSH 连接代理模式（关闭/系统/自定义）。
     SshProxyMode,
-    /// 网络→指定代理→手动填写：地址协议（SOCKS5/HTTP）。
+    /// 网络→指定代理→手动填写：地址协议（SOCKS5/SOCKS5H/HTTP）。
     SshProxyProtocol,
     /// 网络→指定代理→SSH 跳板：已保存主机的选择下拉。
     SshJumpHost,
@@ -208,10 +208,7 @@ fn manual_proxy_protocol_label(
     protocol: ManualProxyProtocol,
     _language: UiLanguage,
 ) -> &'static str {
-    match protocol {
-        ManualProxyProtocol::Socks5 => "SOCKS5",
-        ManualProxyProtocol::Http => "HTTP",
-    }
+    super::network_proxy_model::manual_proxy_protocol_label(protocol)
 }
 
 /// 设置页的悬停层使用当前主题的 accent，而不是固定的灰色或另一套绿色。
@@ -3184,7 +3181,7 @@ fn ssh_proxy_manual_controls(
     let s = |v: f32| v * scale;
     let (x, y, w, h) = sync_input_rect(row, scale);
     let gap = s(8.0);
-    let protocol_w = s(112.0).min((w - gap) * 0.38);
+    let protocol_w = s(132.0).min((w - gap) * 0.38);
     let protocol = (x, y, protocol_w, h);
     let address = (x + protocol_w + gap, y, (w - protocol_w - gap).max(s(80.0)), h);
     (protocol, address)
