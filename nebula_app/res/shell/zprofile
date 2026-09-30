@@ -1,5 +1,6 @@
 if [[ $NEBULA_ZDOTDIR_WAS_SET == 1 ]]; then
     ZDOTDIR=$NEBULA_ORIGINAL_ZDOTDIR
+    [[ ${NEBULA_ZDOTDIR_EXPORTED:-1} == 1 ]] || typeset +x ZDOTDIR
 else
     unset ZDOTDIR
 fi
@@ -8,6 +9,7 @@ if [[ -r ${ZDOTDIR-$HOME}/.zprofile ]]; then
 fi
 NEBULA_ZDOTDIR_WAS_SET=${+ZDOTDIR}
 NEBULA_ORIGINAL_ZDOTDIR=${ZDOTDIR-}
+[[ ${(t)ZDOTDIR-} == *export* ]] && NEBULA_ZDOTDIR_EXPORTED=1 || NEBULA_ZDOTDIR_EXPORTED=0
 if [[ -o rcs ]]; then
     export ZDOTDIR=$NEBULA_ZSH_INTEGRATION
 fi

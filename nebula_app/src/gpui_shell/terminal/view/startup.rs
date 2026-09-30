@@ -152,42 +152,20 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                // A PTY-default WSL (runtime `shell=wsl`) spawns the snapshotted
-                // `wsl.exe` explicitly so it receives the same guest environment.
-                // Other PTY defaults keep the engine path and its argument escaping.
-                // The spawn itself is pinned to the snapshot while the persisted
-                // launch stays bare: the pane, its guest probe and its hook installer
-                // then name the same guest by construction, whatever the default
-                // becomes between the registry read and their own runs.
-                let spawn_shell = effective
-                    .or_else(|| {
-                        snapshot_shell
-                            .clone()
-                            .filter(|shell| crate::shell_detect::is_wsl_launcher(shell.program()))
-                    })
-                    .map(|shell| {
-                        let pinned = wsl_distro.as_deref().and_then(|distro| {
-                            crate::shell_detect::wsl_args_pinned(
-                                shell.program(),
-                                shell.args(),
-                                distro,
-                            )
-                        });
-                        match pinned {
-                            Some(args) => {
-                                nebula_terminal::tty::Shell::new(shell.program().to_owned(), args)
-                            },
-                            None => shell,
-                        }
-                    });
+                // The spawn is pinned to the snapshot while `session_launch` above
+                // stays as configured; see `shell_detect::spawn_shell`.
+                let spawn_shell = crate::shell_detect::spawn_shell(
+                    effective,
+                    snapshot_shell.as_ref(),
+                    wsl_distro.as_deref(),
+                );
                 let options = session::local_options(spawn_shell, pane_id, cwd);
                 let history_cwd = startup_history_directory(&options, &suggest_env);
+                let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
                 completion_cwd = history_cwd
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options)
-                    .with_spawn_distro(wsl_distro.as_deref());
                 let spawned = session::spawn(initial, term_config, options);
                 if spawned.is_ok()
                     && let Some(cwd) = history_cwd

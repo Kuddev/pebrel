@@ -112,6 +112,69 @@ pub(crate) fn run_bounded(
     Ok(text)
 }
 
+#[cfg(test)]
+mod run_bounded_tests {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    use super::{hidden_command, run_bounded};
+
+    /// A shell running `script`: `cmd /c` on Windows, `sh -c` elsewhere.
+    fn shell(windows: &str, unix: &str) -> Command {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/D", "/C", windows]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", unix]);
+            command
+        };
+        hidden_command(&mut command);
+        command
+    }
+
+    #[test]
+    fn returns_stdout_after_feeding_stdin() {
+        let echoed = run_bounded(
+            &mut shell("more", "cat"),
+            b"shell=/usr/bin/zsh\n",
+            Duration::from_secs(20),
+            1024,
+        )
+        .expect("the child echoes its input");
+        assert!(echoed.contains("shell=/usr/bin/zsh"), "{echoed:?}");
+    }
+
+    #[test]
+    fn failure_timeout_and_oversized_output_are_errors() {
+        let failed =
+            run_bounded(&mut shell("exit /b 7", "exit 7"), b"", Duration::from_secs(20), 64);
+        assert!(failed.unwrap_err().to_string().contains("exited with"));
+
+        let started = Instant::now();
+        let slow = run_bounded(
+            &mut shell("ping -n 30 127.0.0.1 >nul", "sleep 30"),
+            b"",
+            Duration::from_millis(300),
+            64,
+        );
+        assert!(slow.unwrap_err().to_string().contains("time budget"));
+        assert!(started.elapsed() < Duration::from_secs(20), "the child is killed, not awaited");
+
+        let loud = run_bounded(
+            &mut shell(
+                "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789",
+                "i=0; while [ $i -lt 200 ]; do echo 0123456789012345678901234567890123456789; i=$((i+1)); done",
+            ),
+            b"",
+            Duration::from_secs(20),
+            100,
+        );
+        assert!(loud.unwrap_err().to_string().contains("output limit"));
+    }
+}
+
 #[cfg(unix)]
 pub(crate) fn configure_process_group(command: &mut Command) {
     use std::os::unix::process::CommandExt as _;

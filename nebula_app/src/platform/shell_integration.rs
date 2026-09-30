@@ -91,37 +91,27 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
 /// `ZDOTDIR` the guest cannot read would also skip the user's own startup files.
 /// Whether a given guest user can actually read it, and whether the launch starts
 /// zsh at all, is the guest's answer (`super::wsl_guest_shell`), not a host guess.
-/// The files are written once per process; spawns never replace a file that a
-/// starting guest zsh may be reading. A failed write (a sharing violation from a
-/// guest still reading through 9P, an antivirus hold) warns once and is retried
-/// only after five minutes, so a transient failure does not disable the
-/// integration for the rest of the process. A bootstrap file deleted while the
-/// process runs is rewritten, or the directory is withheld from that spawn with
-/// a warning: a `ZDOTDIR` missing one of them would silently skip the matching
-/// user file.
+/// Only the guest probe worker calls this (see `super::wsl_guest_shell`): it
+/// writes and fsyncs, so it must never run on the UI thread. The spawn path uses
+/// [`wsl_zsh_directory_ready`]. The files are written once per process; later
+/// calls never replace a file that a starting guest zsh may be reading. A failed
+/// write (a sharing violation from a guest still reading through 9P, an
+/// antivirus hold) warns once and is retried only after five minutes. A
+/// bootstrap file deleted while the process runs is rewritten by the next probe.
 pub(crate) fn wsl_zsh_directory() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        use std::path::PathBuf;
-        use std::sync::{Mutex, PoisonError};
-        use std::time::{Duration, Instant};
+        use std::sync::PoisonError;
+        use std::time::Instant;
 
-        const RETRY_AFTER: Duration = Duration::from_secs(300);
-        enum Bootstrap {
-            Ineligible,
-            Ready(PathBuf),
-            Failed(PathBuf, Instant),
-        }
-        static STATE: Mutex<Option<Bootstrap>> = Mutex::new(None);
-
-        let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = WSL_BOOTSTRAP.lock().unwrap_or_else(PoisonError::into_inner);
         let (directory, complete) = match &*state {
             Some(Bootstrap::Ineligible) => return None,
             Some(Bootstrap::Ready(directory)) => (
                 directory.clone(),
                 ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()),
             ),
-            Some(Bootstrap::Failed(_, at)) if at.elapsed() < RETRY_AFTER => return None,
+            Some(Bootstrap::Failed(_, at)) if at.elapsed() < BOOTSTRAP_RETRY_AFTER => return None,
             Some(Bootstrap::Failed(directory, _)) => (directory.clone(), false),
             None => {
                 let directory = super::dirs::data_dir().join("shell-integration").join("wsl-zsh");
@@ -152,6 +142,41 @@ pub(crate) fn wsl_zsh_directory() -> Option<std::path::PathBuf> {
         None
     }
 }
+
+/// The WSL bootstrap directory if it is already written and complete, for the
+/// spawn path on the UI thread: it never writes and never waits for a writer
+/// (a busy lock answers `None`; that pane simply starts without zsh reports).
+pub(crate) fn wsl_zsh_directory_ready() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        let state = WSL_BOOTSTRAP.try_lock().ok()?;
+        match &*state {
+            Some(Bootstrap::Ready(directory))
+                if ZSH_FILES.iter().all(|(name, _)| directory.join(name).is_file()) =>
+            {
+                Some(directory.clone())
+            },
+            _ => None,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+#[cfg(windows)]
+const BOOTSTRAP_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
+#[cfg(windows)]
+enum Bootstrap {
+    Ineligible,
+    Ready(std::path::PathBuf),
+    Failed(std::path::PathBuf, std::time::Instant),
+}
+
+#[cfg(windows)]
+static WSL_BOOTSTRAP: std::sync::Mutex<Option<Bootstrap>> = std::sync::Mutex::new(None);
 
 /// `D:\…` or `\\?\D:\…` on a fixed disk. UNC shares, mapped network drives and
 /// relative paths are not automounted into the guest.

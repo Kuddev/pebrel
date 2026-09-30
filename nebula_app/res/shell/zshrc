@@ -1,5 +1,6 @@
 if [[ $NEBULA_ZDOTDIR_WAS_SET == 1 ]]; then
     ZDOTDIR=$NEBULA_ORIGINAL_ZDOTDIR
+    [[ ${NEBULA_ZDOTDIR_EXPORTED:-1} == 1 ]] || typeset +x ZDOTDIR
 else
     unset ZDOTDIR
 fi
@@ -33,7 +34,7 @@ if [[ "$OSTYPE" == darwin* && -z "$NO_COLOR" && "$TERM" != dumb ]]; then
     export CLICOLOR LSCOLORS
 fi
 
-unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
+unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZDOTDIR_EXPORTED NEBULA_ZSH_INTEGRATION
 
 __pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}zsh:${HOST:-localhost}:$$:$RANDOM" | base64 | tr -d '\r\n')
 

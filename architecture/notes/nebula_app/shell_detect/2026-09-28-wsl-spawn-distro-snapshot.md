@@ -33,32 +33,38 @@ PTY-default `shell=wsl` pane still read launch arguments without the snapshot.
 ## Decision
 
 `shell_detect::wsl_spawn_distro` returns the explicit distribution or the
-registry default. It is called once per spawn, and completion scoping reuses
-the same value. `--distribution-id` and `--system` resolve to `None` rather than
-to the default. `TerminalView` snapshots the value as `wsl_distro`. The
-workspace WSL location, prompt-path links and the pane's `PaneExecContext`
-(`with_spawn_distro`) read the focused pane's snapshot instead of the tab
-launch. A PTY-default WSL pane spawns the snapshotted `wsl.exe` explicitly, so
-it gets the same guest environment. The spawn options of every WSL pane are
-pinned to the snapshot (`wsl_args_pinned`) while the persisted launch stays as
-the user configured it, so the pane, the guest shell probe and the hook
-installer name the same guest by construction. `wsl_launch_distro` keeps its explicit-only
-semantics for launch-argument rewriting.
+registry default. A spawn reads it once and completion scoping reuses the
+value; a new-tab decision and the startup warm-up read it on their own.
+`--distribution-id` and `--system` resolve to `None` rather than to the default.
+`TerminalView` snapshots the value as `wsl_distro`. The workspace WSL location
+and prompt-path links read the focused pane's snapshot instead of the tab
+launch. `shell_detect::spawn_shell` composes the spawn: a PTY-default WSL pane
+spawns the snapshotted `wsl.exe` explicitly, and every WSL spawn is pinned to
+the snapshot (`wsl_args_pinned`) while the persisted launch stays as the user
+configured it. The pane, its `PaneExecContext`, the guest shell probe and the
+hook installer therefore read the same guest from the same options.
+`wsl_launch_distro` keeps its explicit-only semantics.
 
 One parser, `shell_detect::wsl_options`, reads WSL's option region for the
 distribution, user, distribution selection and guest command. It stops at `--`,
 `-e`/`--exec` or the first argument it does not know. It tolerates the `=` forms
 that `wsl_args_with_directory` already preserved, although `wsl.exe` itself
-rejects them. `is_wsl_launcher` is the single WSL program detector for the
-snapshot, the cwd report environment, argument rewriting, `runtime_exec` and WSL
-hook setup.
+rejects them. A leading `~` is WSL's own directory choice like `--cd`: both
+give way to an injected or inherited host directory. `is_wsl_launcher` is the
+WSL program detector for launches (the snapshot, the cwd report environment,
+argument rewriting, `runtime_exec`, hook setup); completion classifies a typed
+command word separately.
 
 An injected guest cwd is encoded for `wsl.exe`'s own command-line splitting,
 not the CRT's (`shell_detect::wsl_raw_arg`). Measured on WSL 2 on 2026-09-29:
 `wsl.exe` pairs `"` and keeps every backslash literal, so a CRT `\"` ends the
 quote and the rest of the path runs as a guest command. A path with whitespace
 is wrapped in quotes; a path containing `"` has no encoding and is not
-injected, so the copy starts without `--cd`.
+injected, so the copy starts without `--cd`. `pane.exec` in a WSL pane goes
+through `std::process::Command`, whose CRT quoting has the same flaw, so it
+refuses a guest cwd or argument containing `"` (`wsl_accepts_arg`, the one rule
+both paths use). Persisted WSL launch arguments follow the raw convention too:
+a spaced `--cd` value is stored quoted, which is what a restored raw spawn needs.
 
 Copies of a pane follow its snapshot:
 
@@ -120,7 +126,9 @@ another name after spawn leaves pinned copies pointing at the old name.
 - **Launch rewriting.** Pinning, the `~` marker, quoting of spaced paths with
   literal backslashes, refusal of paths containing `"` and `--distribution-id`.
   The encoding was checked against a real `wsl.exe`, which is not automated.
-- **Pane snapshot.** Prompt-path mapping and the exec context from the snapshot.
+- **Pane snapshot.** Prompt-path mapping, the spawn composition
+  (`spawn_shell`) and the exec context from pinned options; `pane.exec`
+  refusing a `"` in the guest cwd or argv.
 - **Split, duplicate and new-tab launches.** Guest cwd, no guest cwd, the
   launch's own `--cd`, another distribution or user, a host shell and a profile
   directory.

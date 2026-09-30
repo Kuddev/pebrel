@@ -51,13 +51,7 @@ impl PaneExecContext {
                 .or_else(|| std::env::var("WSLENV").ok())
                 .unwrap_or_default();
             for (key, _) in vars {
-                if !forwarded.split(':').any(|entry| entry.split('/').next() == Some(key)) {
-                    if !forwarded.is_empty() {
-                        forwarded.push(':');
-                    }
-                    forwarded.push_str(key);
-                    forwarded.push_str("/u");
-                }
+                crate::shell_detect::append_wslenv(&mut forwarded, &format!("{key}/u"));
             }
             self.env.insert("WSLENV".into(), forwarded);
         }
@@ -110,18 +104,6 @@ impl PaneExecContext {
                 .clone()
                 .or_else(|| std::env::current_dir().ok()),
         }
-    }
-
-    /// Pin a bare WSL launch to the pane's spawn-time distribution snapshot, so
-    /// commands run where the file tree, Git view and prompt links point instead
-    /// of following a later default change.
-    pub(crate) fn with_spawn_distro(mut self, snapshot: Option<&str>) -> Self {
-        if let (ExecLocation::Wsl { distro: distro @ None, .. }, Some(snapshot)) =
-            (&mut self.location, snapshot)
-        {
-            *distro = Some(snapshot.to_owned());
-        }
-        self
     }
 
     #[cfg(test)]
@@ -233,6 +215,21 @@ pub(crate) fn build_command(
             execution = json!({ "environment": "host", "cwd": cwd });
         },
         ExecLocation::Wsl { distro, user } => {
+            let guest_cwd = crate::shell_detect::wsl_guest_cwd(reported_cwd);
+            // `wsl.exe` splits its own command line and cannot receive a `"` inside
+            // an argument: the CRT `\"` that `Command` writes ends the quote, and
+            // the rest runs as a guest command. Refuse rather than run something else.
+            if let Some(value) = guest_cwd
+                .into_iter()
+                .chain(argv.iter().map(String::as_str))
+                .find(|value| !crate::shell_detect::wsl_accepts_arg(value))
+            {
+                return Err(ApiError::new(
+                    "exec_argument_unsupported",
+                    "WSL cannot receive a double quote inside an argument or working directory",
+                )
+                .details(json!({ "argument": value })));
+            }
             command = Command::new("wsl.exe");
             if let Some(distro) = distro {
                 command.args(["--distribution", distro]);
@@ -240,7 +237,6 @@ pub(crate) fn build_command(
             if let Some(user) = user {
                 command.args(["--user", user]);
             }
-            let guest_cwd = crate::shell_detect::wsl_guest_cwd(reported_cwd);
             if let Some(cwd) = guest_cwd {
                 command.args(["--cd", cwd]);
             } else if !reported_cwd.trim().is_empty() {
@@ -408,9 +404,13 @@ mod tests {
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), None);
         options.shell = Some(nebula_terminal::tty::Shell::new("wsl.exe".into(), Vec::new()));
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_distribution(), Some(None));
-        // The pane's spawn snapshot fills a bare launch; it never overrides an explicit one.
-        let pinned = PaneExecContext::from_pty_options(&options).with_spawn_distro(Some("Ubuntu"));
-        assert_eq!(pinned.wsl_distribution(), Some(Some("Ubuntu")));
+        // A pane spawns with its snapshot pinned into the options, so exec follows it.
+        let pinned = crate::shell_detect::wsl_args_pinned("wsl.exe", &[], "Ubuntu").unwrap();
+        options.shell = Some(nebula_terminal::tty::Shell::new("wsl.exe".into(), pinned));
+        assert_eq!(
+            PaneExecContext::from_pty_options(&options).wsl_distribution(),
+            Some(Some("Ubuntu"))
+        );
         options.shell = Some(nebula_terminal::tty::Shell::new(
             r"C:\Program Files\WSL\wsl.exe".into(),
             vec!["-e".into(), "tool".into(), "-d".into(), "guest-arg".into()],
@@ -425,11 +425,33 @@ mod tests {
             Some(Some("Debian"))
         );
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_user(), Some("hello"));
-        let explicit =
-            PaneExecContext::from_pty_options(&options).with_spawn_distro(Some("Ubuntu"));
-        assert_eq!(explicit.wsl_distribution(), Some(Some("Debian")));
-        let host = PaneExecContext::from_pty_options(&Default::default());
-        assert_eq!(host.with_spawn_distro(Some("Ubuntu")).wsl_distribution(), None);
+    }
+
+    /// A `"` in a guest cwd (an OSC 7 report from a cloned repository) or argv
+    /// would end `wsl.exe`'s quote and run the rest as a guest command.
+    #[test]
+    fn wsl_exec_refuses_what_wsl_cannot_receive() {
+        let mut options = nebula_terminal::tty::Options::default();
+        options.shell = Some(nebula_terminal::tty::Shell::new(
+            "wsl.exe".into(),
+            vec!["-d".into(), "Ubuntu".into()],
+        ));
+        let context = PaneExecContext::from_pty_options(&options);
+        let argv = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let refused = |cwd: &str, argv: &[String]| match build_command(&context, cwd, argv) {
+            Err(error) => error.code == "exec_argument_unsupported",
+            Ok(_) => false,
+        };
+        assert!(refused("/tmp/i\" touch /tmp/x #", &argv(&["pwd"])));
+        assert!(refused("/srv", &argv(&["git", "commit", "-m", "say \"hi\""])));
+        let (command, _) = build_command(&context, "/srv/my project", &argv(&["git", "status"]))
+            .expect("spaces are fine");
+        let args: Vec<_> =
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            args,
+            ["--distribution", "Ubuntu", "--cd", "/srv/my project", "--exec", "git", "status"]
+        );
     }
 
     #[test]

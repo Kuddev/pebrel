@@ -47,12 +47,12 @@ fish or nushell login kept a host `ZDOTDIR` that nothing restores.
 
 ## Decision
 
-- **Host side.** For WSL spawns the host writes the same three files, CR-normalized,
-  into `<data dir>/shell-integration/wsl-zsh`. It writes them once per process
-  and only when that directory is on a fixed local drive. A failed write is
-  retried after five minutes; a file deleted while the process runs is rewritten.
-  It then adds `ZDOTDIR/pu`, `NEBULA_ZSH_INTEGRATION/pu` and
-  `NEBULA_ZDOTDIR_WAS_SET/u` to `WSLENV`.
+- **Host side.** The host writes the same three files, CR-normalized, into
+  `<data dir>/shell-integration/wsl-zsh`, only when that directory is on a
+  fixed local drive, once per process and only on the probe worker. A failed
+  write is retried after five minutes. A pane that takes over adds
+  `ZDOTDIR/pu`, `NEBULA_ZSH_INTEGRATION/pu` and `NEBULA_ZDOTDIR_WAS_SET/u` to
+  `WSLENV`.
 - **Guest command.** A launch that runs a guest command other than zsh
   (`wsl htop`, `wsl sh -c …`, `-e bash`) receives none of the zsh variables and
   is never probed: no zsh would take them back, and an installer that finds
@@ -60,29 +60,34 @@ fish or nushell login kept a host `ZDOTDIR` that nothing restores.
 - **The guest answers, not the host.** Before the first takeover of a
   (distribution, user), `platform::wsl_guest_shell` runs one
   `wsl.exe --distribution <d> [--user <u>] --exec sh -s` with
-  `res/shell/wsl-guest-probe.sh` on stdin and the bootstrap sent through the
-  same `WSLENV` `/p` translation the pane will use. The guest reports the login
-  shell from its passwd entry and whether that user can read all three
-  bootstrap files there. The verdict is cached per process; a failed probe is
-  retried after five minutes. A login shell takes the bootstrap only when the
-  guest said zsh **and** readable, an explicit `-e zsh` only when readable.
-  Unknown (failed, timed out, or `--distribution-id`/`--system` with no name
-  to enter) leaves the guest environment untouched.
-- **No wait.** The spawn runs on the UI thread and must not wait for a child
-  process (`nebula_app/AGENTS.md`), so it takes the verdict only when it is
-  already cached; a first sight starts the probe on a worker thread and that
-  pane starts without zsh reports. `main` asks the default shell's guest at
-  process start (`warm_up`), off the main thread, so a running distribution has
-  usually answered before the first pane. The probe reuses
-  `platform::process::run_bounded`, shared with the WSL hook installer.
-- **Unknown guest `ZDOTDIR`.** The host cannot observe the guest's original
-  `ZDOTDIR`, so it is treated as unset.
-- **User-forwarded `ZDOTDIR`.** If the host already forwards one, Pebrel leaves
-  zsh untouched.
+  `res/shell/wsl-guest-probe.sh` on stdin and the bootstrap sent through `WSLENV`
+  `/p`. The guest reports the login shell from its passwd entry (`getent`, else
+  `/etc/passwd`) and whether that user can read all three files there. The
+  verdict is cached per process; a failed probe is retried after five minutes.
+  A login shell takes the bootstrap only when the guest said zsh **and**
+  readable, an explicit `-e zsh` only when readable. Unknown (failed, timed
+  out, or `--distribution-id`/`--system` with no name to enter) leaves the
+  guest environment untouched.
+- **No wait on the UI thread.** The spawn (`nebula_app/AGENTS.md`: no waits on
+  disk or child processes) reads only the cached verdict and an already written
+  bootstrap (`wsl_zsh_directory_ready`, a `try_lock` and three stats). A first
+  sight starts the worker, which writes the files and then probes; that pane
+  starts without zsh reports. `main` warms the first pane's guest at process
+  start, resolving the shell with the pane's own authority
+  (`shell_launch::startup_shell`), and skips it when a command was given. The
+  worker uses `platform::process::run_bounded`, shared with the hook installer.
+- **Opt-out first.** A host `WSLENV` that already forwards `ZDOTDIR` is checked
+  before any probe or write (`shell_detect::wslenv_forwards`), and zsh is left
+  alone. The host cannot observe the guest's original `ZDOTDIR`; it is unset.
+- **Nested guests.** WSL forwards every variable `WSLENV` names to a `wsl.exe`
+  started inside the guest, whatever the `/u` flag, so the bootstrap `.zshenv`
+  (every zsh) and the bash first prompt remove the three entries from the
+  guest's `WSLENV` once read.
 - **Takeover scope.** The bootstrap `.zshenv` takes over only an interactive
   shell (`-o rcs && -o interactive`). A non-interactive zsh restores the user's
   `ZDOTDIR` and unsets the `NEBULA_*` variables. When taking over, it keeps the
-  `NEBULA_*` state unexported, since only this shell reads it.
+  `NEBULA_*` state unexported, and each restore keeps the export attribute the
+  user gave `ZDOTDIR`, so a child zsh still starts from `~/.zshenv`.
 - **Global compinit.** While taking over, `.zshenv` sets `skip_global_compinit`
   to a marker value unless the user did. If the marker survives the user's
   `.zprofile`, the bootstrap `.zshrc` clears it and, with `GLOBAL_RCS` still on,
@@ -91,9 +96,10 @@ fish or nushell login kept a host `ZDOTDIR` that nothing restores.
 - **New users.** The bootstrap `.zshenv` checks for the four startup files
   before sourcing the user's `.zshenv`, where zsh itself checks; `.zshrc` then
   runs `zsh-newuser-install`.
-- **bash guests.** They drop these variables at their first `PROMPT_COMMAND`.
-- **One bootstrap.** The file writer is shared with the local zsh integration,
-  so one bootstrap remains the authority.
+- **One bootstrap, two guest callers.** The file writer is shared with local
+  zsh. The hook installer keeps its own guest target (an install queue, not a
+  verdict cache); both name the pane's guest because the spawn options are
+  pinned to the distribution snapshot.
 
 ## Rejected alternatives
 
@@ -104,18 +110,15 @@ fish or nushell login kept a host `ZDOTDIR` that nothing restores.
 - Rewrite the files on every spawn: fsyncs on the UI thread and a replace that
   can race a guest zsh that is still sourcing them.
 - Forward the zsh variables for every guest command and rely on the interactive
-  gate in `.zshenv`: it does cover a zsh started later, but a command without
-  zsh (an `sh -c` installer) keeps the host `ZDOTDIR` for good.
+  gate in `.zshenv`: a command without zsh (an `sh -c` installer) keeps the
+  host `ZDOTDIR` for good.
 - Treat an unspecified guest command as zsh, or hand out `ZDOTDIR` without a
-  reachability check (the submitted cut): the two regressions above. No
-  guest-side script can recover from them, because zsh reads nothing from an
-  unreadable `ZDOTDIR`, and fish/nushell never read the bootstrap at all.
-- Read `\\wsl.localhost\<distro>\etc\passwd` and `wsl.conf` from the host
-  instead of probing: it also starts the distribution and blocks, but cannot
-  see a failed `/p` translation or another user's drvfs permissions.
+  reachability check (the submitted cut): the two regressions above.
+- Read `\\wsl.localhost\<distro>\etc\passwd` from the host instead of probing:
+  it also starts the distribution and blocks, but cannot see a failed `/p`
+  translation or another user's drvfs permissions.
 - Wait on the UI thread for the first verdict, even bounded: session restore
-  creates several WSL panes in a row, each waiting its own bound while a cold
-  guest boots, and the rendering rule forbids the wait outright.
+  creates several WSL panes in a row, each waiting while a cold guest boots.
 - Defer the PTY spawn until the verdict: the view would need a pending state
   and an asynchronous attach; out of scope for this change.
 - Delete `.zcompdump` from the bootstrap after the global rc: the dump would be
@@ -129,25 +132,26 @@ fish or nushell login kept a host `ZDOTDIR` that nothing restores.
 
 - **Startup cost.** An interactive guest zsh reads three small files from the
   host drive; a non-interactive one reads only `.zshenv`. Each (distribution,
-  user) costs one guest `sh` round trip per process, on a worker thread.
-- **First pane.** A guest seen for the first time (a profile other than the
-  default shell, or a default shell whose distribution was still booting at
-  process start) starts that pane without zsh reports; later panes use the
-  cached verdict. The pane's own zsh still reads its own startup files.
+  user) costs one guest `sh` round trip per process, on a worker thread. With
+  a WSL default shell the warm-up starts a stopped distribution at launch.
+- **Panes before the verdict.** Every pane of a guest spawned before its first
+  verdict (a profile other than the first pane's shell, or a whole restored
+  session on a cold distribution) has no zsh reports for its lifetime; later
+  panes use the cached verdict. Those panes still read their own startup files.
 - **Unreadable bootstrap.** If automount is disabled (`[automount] enabled=false`),
   `/p` translation fails, or drvfs permissions hide the files from the pane's
-  `-u` user, the guest reports the bootstrap unreadable and the pane starts with
-  its own startup environment: no zsh reports, no lost startup files. UNC or
-  redirected data directories are withheld on the host before any probe.
-- **Opt-out.** Adding `ZDOTDIR` to the host `WSLENV` (with or without a value)
-  makes Pebrel leave zsh untouched.
+  `-u` user, the guest reports the bootstrap unreadable and the pane keeps its
+  own startup environment. UNC or redirected data directories are never offered.
 - **Other login shells.** A fish, nushell or bash login receives no zsh
-  variables, because the guest named it; only a passwd entry saying zsh, or an
-  explicit `-e zsh`, is taken over. A zsh started from another shell is not.
-- **Probe failures.** A guest that cannot run `sh` or does not answer within
-  the budget is left alone and retried after five minutes, with one warning.
-- **Nested zsh under a command.** A guest command such as `wsl bash`
-  followed by `zsh` gets no zsh reports, since the command is not zsh.
+  variables, because the guest named it. A zsh started from another shell, or
+  under a guest command such as `wsl bash`, is not integrated.
+- **Windows children.** The pane's Windows-side environment keeps `ZDOTDIR`, so
+  a Windows program started from the guest (`code`, `cmd.exe`) sees the host
+  bootstrap path; only zsh reads it.
+- **Local zsh.** The shared scripts changed local macOS/Linux zsh too: the
+  interactive gate, unexported `NEBULA_*` state, the kept `ZDOTDIR` export
+  attribute, Ubuntu's replayed compinit and the newuser wizard for a user with
+  no startup files.
 - **Global compinit elsewhere.** Only Ubuntu's `skip_global_compinit` contract is
   repeated; another distribution whose global rc runs `compinit` unconditionally
   still writes its dump into the bootstrap.
@@ -156,38 +160,30 @@ fish or nushell login kept a host `ZDOTDIR` that nothing restores.
   when it is unset sees the bootstrap value, so the user's files are read from
   `$HOME` instead.
 - **Stale verdict.** `chsh` in the guest, or a changed mount, is seen by the
-  next Pebrel process. A bash login receives no `ZDOTDIR` any more; its
-  first-prompt cleanup stays as the guard for a passwd entry changed since.
-- **Write failure.** A failed write logs one warning and omits the variables
-  until the next attempt five minutes later; a failed rewrite of a deleted
-  file does the same.
+  next Pebrel process; the bash first-prompt cleanup guards a changed passwd.
+- **Failures.** A failed write or a guest that cannot run `sh` or does not
+  answer in time logs one warning and is retried after five minutes.
 
 ## Validation
 
-- **Rust unit tests.** `shell_detect` tests cover entry flags, preservation of
-  existing `WSLENV` entries, a user-forwarded `ZDOTDIR` and reading the guest
-  command from WSL's option region only. `platform::wsl_guest_shell` tests
-  cover the probe command (distribution, user, `--exec sh -s`, the `/p`
-  forwarded bootstrap), the answer parser, and the takeover decision with a
-  guest double: non-zsh guest commands are never probed, `-e zsh` still needs a
-  readable bootstrap, and a login shell is taken over only for zsh with a
-  readable bootstrap (fish, nushell, bash, an empty answer and no answer all
-  decline). The bash `PROMPT_COMMAND` test checks that the variables are
-  dropped. The `shell_integration` tests check that the files carry no CR,
-  chain each user startup file, gate the takeover on interactivity, and require
-  a fixed local drive.
-- **Real zsh.** The Python suite runs the bootstrap in real zsh for interactive
-  login and nested non-interactive shapes, with global rc files enabled on an
-  Ubuntu host, with no user startup files, and for variables seen by the user's
-  rc. Negative cases cover `GLOBAL_RCS` off, `skip_global_compinit` in
-  `~/.zprofile` and an XDG `ZDOTDIR` set by `~/.zshenv`. It passed on the Ubuntu
-  26.04 WSL guest; the leak, compinit, newuser and export cases fail against the
-  first-cut scripts. The probe script runs under real `sh` with a readable
-  bootstrap, a bootstrap missing one file, a missing directory, an untranslated
-  Windows path and an empty variable, and its shell answer is compared with the
-  passwd entry rather than `$SHELL`.
-- **Not automated.** An end-to-end pane spawned through `wsl.exe`; the probe
-  command was run by hand against a real guest (see the PR evidence).
+- **Rust unit tests.** `shell_detect` covers `WSLENV` entries, the opt-out,
+  reading the guest command from WSL's option region, the spawn composition
+  (`spawn_shell`: pinned bare and PTY-default WSL, untouched PowerShell) and the
+  bash cleanup. `platform::wsl_guest_shell` covers the probe command, the
+  parser and the takeover decision with a guest double (cheap refusals never
+  probe; readable plus zsh required; bootstrap looked up last).
+  `platform::process` covers `run_bounded` (stdin, exit status, time budget,
+  output cap). `shell_launch` checks that warm-up resolves bare `wsl`.
+- **Real zsh.** The Python suite runs the bootstrap in real zsh for login,
+  interactive and nested non-interactive shapes, global rc files, no user files,
+  variables seen by the user's rc, `GLOBAL_RCS` off, `skip_global_compinit` in
+  `~/.zprofile`, XDG `ZDOTDIR` exported or not (a child zsh still reads
+  `~/.zshenv`), and a `WSLENV` left with no bootstrap entries. The leak,
+  compinit, newuser, export and `WSLENV` cases fail against earlier scripts. The
+  probe runs under real `sh` with readable, partial, missing, untranslated and
+  empty bootstraps and without `getent`.
+- **By hand.** The probe and a nested `wsl.exe` under a taken-over zsh were run
+  against a real Ubuntu 26.04 guest; an end-to-end pane is not automated.
 
 ## Supersedes
 

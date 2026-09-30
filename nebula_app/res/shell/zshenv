@@ -3,6 +3,15 @@ if [[ ${NEBULA_ZDOTDIR_WAS_SET:-0} == 1 ]]; then
 else
     unset ZDOTDIR
 fi
+# WSL forwards every variable WSLENV names to a wsl.exe started from this guest,
+# whatever its /u flag. Drop the bootstrap entries so a nested guest (another
+# distribution or user, an installer) never receives an unverified ZDOTDIR.
+if [[ -n ${WSLENV-} ]]; then
+    () {
+        emulate -L zsh
+        WSLENV=${(j.:.)${(@)${(s.:.)WSLENV}:#(ZDOTDIR|NEBULA_ZSH_INTEGRATION|NEBULA_ZDOTDIR_WAS_SET)(|/*)}}
+    }
+fi
 # zsh's own newuser check ran before this file, so it saw the bootstrap. Repeat it
 # where zsh runs it: after the global zshenv, before the user's startup files.
 if [[ ! -e ${ZDOTDIR:-$HOME}/.zshenv && ! -e ${ZDOTDIR:-$HOME}/.zprofile &&
@@ -16,7 +25,10 @@ if [[ -o rcs && -o interactive ]]; then
     # Only this shell reads them; programs the user's rc files exec must not inherit them.
     NEBULA_ZDOTDIR_WAS_SET=${+ZDOTDIR}
     NEBULA_ORIGINAL_ZDOTDIR=${ZDOTDIR-}
-    typeset +x NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION
+    # An XDG ~/.zshenv often sets ZDOTDIR without exporting it; child zsh must then
+    # still start from ~/.zshenv, so the restore keeps the attribute too.
+    [[ ${(t)ZDOTDIR-} == *export* ]] && NEBULA_ZDOTDIR_EXPORTED=1 || NEBULA_ZDOTDIR_EXPORTED=0
+    typeset +x NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZDOTDIR_EXPORTED NEBULA_ZSH_INTEGRATION
     export ZDOTDIR=$NEBULA_ZSH_INTEGRATION
     # Ubuntu's global zshrc runs compinit while ZDOTDIR still names this
     # bootstrap, which would put .zcompdump here; .zshrc runs it for the user.
@@ -25,5 +37,5 @@ if [[ -o rcs && -o interactive ]]; then
         skip_global_compinit=nebula-bootstrap
     fi
 else
-    unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZSH_INTEGRATION _nebula_newuser
+    unset NEBULA_ZDOTDIR_WAS_SET NEBULA_ORIGINAL_ZDOTDIR NEBULA_ZDOTDIR_EXPORTED NEBULA_ZSH_INTEGRATION _nebula_newuser
 fi

@@ -147,7 +147,7 @@ pub(super) fn local_options(
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("WSLENV"))
             .map(|(_, value)| value.as_str());
-        let zsh_integration = wsl_zsh_integration(&program, &args);
+        let zsh_integration = wsl_zsh_integration(&program, &args, current_wslenv);
         let additions = crate::shell_detect::wsl_cwd_report_env(
             &program,
             current_wslenv,
@@ -170,12 +170,17 @@ pub(super) fn local_options(
 /// a guest that has not answered yet, another login shell or an unreadable
 /// bootstrap only lose zsh's cwd reports; the guest keeps its own startup files
 /// and environment. Nothing here waits on the guest.
-fn wsl_zsh_integration(program: &str, args: &[String]) -> Option<String> {
+fn wsl_zsh_integration(
+    program: &str,
+    args: &[String],
+    current_wslenv: Option<&str>,
+) -> Option<String> {
     crate::platform::wsl_guest_shell::takes_zsh_bootstrap(
         program,
         args,
-        crate::platform::shell_integration::wsl_zsh_directory,
+        &crate::shell_detect::effective_wslenv(current_wslenv),
         crate::platform::wsl_guest_shell::verified,
+        crate::platform::shell_integration::wsl_zsh_directory_ready,
     )
     .map(|directory| directory.to_string_lossy().into_owned())
 }
