@@ -29,6 +29,7 @@ struct Word {
     span: Span,
     quote: Option<char>,
     closed: bool,
+    home: bool,
 }
 
 /// Literal arguments and the final editable word; never evaluates shell code.
@@ -47,7 +48,8 @@ impl CommandContext {
         }
         let mut words = words(line, syntax)?;
         let target = words.pop()?;
-        if words.is_empty() {
+        // 已完成参数若含展开，无法证明它指向哪个目录；目标词的 home 由路径来源处理。
+        if words.iter().any(|word| !word.closed || word.home) {
             return None;
         }
         Some(Self { arguments: words.into_iter().map(|word| word.value).collect(), target, syntax })
@@ -57,15 +59,25 @@ impl CommandContext {
         &self.target.value
     }
 
+    pub fn expands_home(&self) -> bool {
+        self.target.home && (self.prefix() == "~" || self.prefix().starts_with("~/"))
+    }
+
     /// Matching is separate from quoting so ranked/fuzzy results use the same edit contract.
     pub fn candidate(&self, value: &str) -> Option<Suggestion> {
         if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
             return None;
         }
         let quote = self.target.quote;
-        let safe = value
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':' | '='));
+        let safe = value.chars().all(|c| {
+            c.is_alphanumeric()
+                || matches!(c, '/' | '.' | '_' | '-' | ':' | '=')
+                || c == '\\' && matches!(self.syntax, ShellSyntax::PowerShell | ShellSyntax::Cmd)
+        });
+        let cmd_quoted_safe = self.syntax == ShellSyntax::Cmd
+            && value.chars().all(|c| {
+                c.is_alphanumeric() || matches!(c, '/' | '\\' | '.' | '_' | '-' | ':' | '=' | ' ')
+            });
         let quoted = match (quote, self.syntax, safe) {
             (Some('\''), ShellSyntax::Posix, _) => format!("'{}'", value.replace('\'', "'\\''")),
             (Some('\''), ShellSyntax::PowerShell, _) => format!("'{}'", value.replace('\'', "''")),
@@ -80,7 +92,13 @@ impl CommandContext {
             (Some('"'), ShellSyntax::PowerShell, _) => {
                 format!("\"{}\"", value.replace('`', "``").replace('$', "`$").replace('"', "`\""))
             },
-            (Some('"'), ShellSyntax::Cmd, true) => format!("\"{value}\""),
+            (_, ShellSyntax::Cmd, _) if cmd_quoted_safe && (quote.is_some() || !safe) => {
+                // CMD 内建命令和外部 argv 对尾部反斜杠的规则不同；路径来源先统一为 /。
+                if value.ends_with('\\') {
+                    return None;
+                }
+                format!("\"{value}\"")
+            },
             (None, _, true) => value.to_owned(),
             (None, ShellSyntax::Posix, false) => format!("'{}'", value.replace('\'', "'\\''")),
             (None, ShellSyntax::PowerShell, false) => format!("'{}'", value.replace('\'', "''")),
@@ -104,7 +122,7 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
         if matches!(first, ' ' | '\t') {
             continue;
         }
-        let quote = match first {
+        let mut quote = match first {
             '"' if syntax != ShellSyntax::Literal => Some(first),
             '\'' if matches!(syntax, ShellSyntax::Posix | ShellSyntax::PowerShell) => Some(first),
             _ => None,
@@ -114,6 +132,7 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
             span: Span::new(start, line.len()),
             quote,
             closed: quote.is_none(),
+            home: first == '~' && matches!(syntax, ShellSyntax::Posix | ShellSyntax::PowerShell),
         };
         let mut current = if quote.is_some() { chars.next() } else { Some((start, first)) };
         while let Some((offset, ch)) = current {
@@ -124,16 +143,18 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
                     chars.next();
                     word.value.push(ch);
                 } else {
+                    quote = None;
                     word.closed = true;
-                    word.span.end = offset + ch.len_utf8();
-                    if chars.peek().is_some_and(|(_, next)| !matches!(next, ' ' | '\t')) {
-                        return None;
-                    }
-                    break;
                 }
             } else if quote.is_none() && matches!(ch, ' ' | '\t') {
                 word.span.end = offset;
                 break;
+            } else if quote.is_none()
+                && (ch == '"' && syntax != ShellSyntax::Literal
+                    || ch == '\'' && matches!(syntax, ShellSyntax::Posix | ShellSyntax::PowerShell))
+            {
+                quote = Some(ch);
+                word.closed = false;
             } else {
                 let escape = match syntax {
                     ShellSyntax::Posix => ch == '\\' && quote != Some('\''),
@@ -186,7 +207,6 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
                                     | '*'
                                     | '?'
                                     | '#'
-                                    | '~'
                                     | '\''
                                     | '"'
                             )
@@ -212,6 +232,7 @@ fn words(line: &str, syntax: ShellSyntax) -> Option<Vec<Word>> {
             span: Span::new(line.len(), line.len()),
             quote: None,
             closed: true,
+            home: false,
         });
     }
     Some(result)

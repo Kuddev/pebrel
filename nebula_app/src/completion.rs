@@ -13,6 +13,7 @@ use crate::runtime_exec::PaneExecContext;
 use nebula_completions::command_context::ShellSyntax;
 use nebula_completions::semantic::{Context as SemanticContext, Source};
 
+pub(crate) mod paths;
 mod project_scripts;
 
 pub(crate) use suggest_engine::Candidates;
@@ -83,14 +84,20 @@ impl Session {
         let semantic = SemanticContext::parse(&line, line.len(), syntax);
         // 只有需要本机 Git I/O 的请求才复制启动环境。
         let git = if local
-            && semantic.as_ref().is_some_and(|c| matches!(c.source, Source::Branches { .. }))
-        {
+            && semantic.as_ref().is_some_and(|c| {
+                matches!(
+                    c.source,
+                    Source::Branches { .. }
+                        | Source::Revisions { .. }
+                        | Source::RevisionsAndPaths { .. }
+                )
+            }) {
             execution.cloned().map(|execution| (self.git.clone(), execution))
         } else {
             None
         };
         let scripts = local.then(|| self.scripts.clone());
-        Request { cwd, env, line, style, git, semantic, scripts }
+        Request { cwd, env, line, style, git, semantic, scripts, syntax }
     }
 }
 
@@ -103,6 +110,7 @@ pub(crate) struct Request {
     git: Option<(Arc<crate::git_completion::Cache>, PaneExecContext)>,
     semantic: Option<SemanticContext>,
     scripts: Option<Arc<project_scripts::Cache>>,
+    syntax: ShellSyntax,
 }
 
 impl Request {
@@ -112,7 +120,9 @@ impl Request {
         }
         let semantic = self.semantic.as_ref().map(|context| match context.source {
             Source::Words(_) | Source::Options => context.static_candidates(),
-            Source::Branches { .. } => {
+            Source::Branches { .. }
+            | Source::Revisions { .. }
+            | Source::RevisionsAndPaths { .. } => {
                 self.git.as_ref().map_or_else(Vec::new, |(cache, execution)| {
                     crate::git_completion::complete(cache, execution, &self.cwd, context, &|| {
                         cancellation.is_cancelled()
@@ -122,12 +132,29 @@ impl Request {
             Source::ProjectScripts => self.scripts.as_ref().map_or_else(Vec::new, |cache| {
                 cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
             }),
-            Source::None => Vec::new(),
+            Source::None | Source::Paths { .. } => Vec::new(),
         });
         if cancellation.is_cancelled() {
             return Candidates::default();
         }
-        if let Some(mut candidates) = semantic {
+        if let Some(candidates) = semantic {
+            let mut candidates: Vec<nebula_completions::SemanticSuggestion> =
+                candidates.into_iter().map(Into::into).collect();
+            let mut pending = None;
+            if let Some(context) = self.semantic.as_ref().filter(|c| {
+                matches!(c.source, Source::Paths { .. } | Source::RevisionsAndPaths { .. })
+            }) {
+                let (paths, demand) = paths::complete(
+                    &Input { cwd: &self.cwd, env: &self.env, line: &self.line },
+                    self.syntax,
+                    &shared().directories,
+                    self.style,
+                    Some(context),
+                    &|| cancellation.is_cancelled(),
+                );
+                candidates.extend(paths);
+                pending = demand;
+            }
             // 历史只给仍然有效的语义候选提权，不能复活已删除的分支/脚本。
             if !candidates.is_empty() {
                 let recent = shared()
@@ -140,6 +167,7 @@ impl Request {
                     .map(|suffix| format!("{}{suffix}", self.line));
                 if let Some(recent) = recent {
                     if let Some(index) = candidates.iter().position(|candidate| {
+                        let candidate = &candidate.suggestion;
                         self.line.get(..candidate.span.start).is_some_and(|head| {
                             recent.strip_prefix(head) == Some(candidate.value.as_str())
                         })
@@ -151,7 +179,10 @@ impl Request {
             if cancellation.is_cancelled() {
                 return Candidates::default();
             }
-            return suggest_engine::semantic_candidates(&self.line, self.style, candidates);
+            let mut result =
+                suggest_engine::semantic_candidates(&self.line, self.style, candidates);
+            result.pending_remote_dir = pending;
+            return result;
         }
         let sources = shared();
         suggest_engine::calculate(
@@ -163,6 +194,7 @@ impl Request {
                 style: self.style,
             },
             &Input { cwd: &self.cwd, env: &self.env, line: &self.line },
+            self.syntax,
             &|| cancellation.is_cancelled(),
         )
     }
@@ -201,6 +233,130 @@ pub(crate) fn history_hint_for_test(scope: &HistoryScope, prefix: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_completion_preserves_quotes_utf8_types_and_directory_roles_in_all_modes() {
+        use crate::display::NebulaCompletionKind;
+        use nebula_completions::command_context::CommandContext;
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["repo 中文", "'quote", "quote", "a...b", "~"] {
+            std::fs::create_dir(directory.path().join(name)).unwrap();
+            std::fs::write(directory.path().join(name).join("child file.txt"), b"").unwrap();
+        }
+        std::fs::write(directory.path().join("repo other.txt"), b"").unwrap();
+        let session = Session::default();
+        for (program, syntax) in [
+            ("sh", ShellSyntax::Posix),
+            ("pwsh", ShellSyntax::PowerShell),
+            ("cmd", ShellSyntax::Cmd),
+        ] {
+            let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                ..Default::default()
+            });
+            for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+            {
+                for line in [
+                    "git -C repo",
+                    "git -C \"repo\"",
+                    "cat \"repo 中文/ch",
+                    "cat 'a...b/ch",
+                    "cat \"'quote/ch",
+                    "cat '~/ch",
+                ] {
+                    if syntax == ShellSyntax::Cmd && line.contains('\'') {
+                        continue;
+                    }
+                    let result = session
+                        .request(
+                            directory.path().to_str().unwrap().into(),
+                            SuggestEnv::Local,
+                            line.into(),
+                            style,
+                            Some(&execution),
+                        )
+                        .calculate(&Cancellation::default());
+                    let item = if style == CompletionStyle::Popup {
+                        assert_eq!(result.completion_items.len(), 1, "{program}: {line}");
+                        &result.completion_items[0]
+                    } else {
+                        result.suggestion_edit.as_ref().expect(line)
+                    };
+                    let accepted: String = line
+                        .chars()
+                        .take(line.chars().count() - item.replace_chars)
+                        .chain(item.insert.chars())
+                        .collect();
+                    let decoded = CommandContext::parse(&accepted, accepted.len(), syntax).unwrap();
+                    let target = directory.path().join(decoded.prefix());
+                    assert!(target.exists(), "{program}: {accepted}");
+                    assert_eq!(
+                        item.kind,
+                        if target.is_dir() {
+                            NebulaCompletionKind::Dir
+                        } else {
+                            NebulaCompletionKind::File
+                        }
+                    );
+                }
+            }
+        }
+        let line = "git -C \"repo 中文\" checkout -- child";
+        let result = session
+            .request(
+                directory.path().to_str().unwrap().into(),
+                SuggestEnv::Local,
+                line.into(),
+                CompletionStyle::Popup,
+                None,
+            )
+            .calculate(&Cancellation::default());
+        assert_eq!(result.completion_items.len(), 1);
+        assert_eq!(result.completion_items[0].kind, NebulaCompletionKind::File);
+    }
+
+    #[test]
+    fn checkout_completion_combines_branches_and_paths_and_scopes_remote_demand() {
+        use crate::display::NebulaCompletionKind;
+        let repository = crate::git_completion::tests::repository();
+        std::fs::write(repository.path().join("feature-file.txt"), b"").unwrap();
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            working_directory: Some(repository.path().to_owned()),
+            ..Default::default()
+        });
+        let session = Session::default();
+        let result = session
+            .request(
+                repository.path().to_str().unwrap().into(),
+                SuggestEnv::Local,
+                "git checkout fe".into(),
+                CompletionStyle::Popup,
+                Some(&execution),
+            )
+            .calculate(&Cancellation::default());
+        assert_eq!(result.completion_items[0].kind, NebulaCompletionKind::Command);
+        assert!(result.completion_items.iter().any(|item| item.kind == NebulaCompletionKind::File));
+        let env = SuggestEnv::Ssh { destination: "path-context-test.invalid".into() };
+        let query = || {
+            session
+                .request(
+                    "/project".into(),
+                    env.clone(),
+                    "git -C sub checkout -- fi".into(),
+                    CompletionStyle::Popup,
+                    None,
+                )
+                .calculate(&Cancellation::default())
+        };
+        let result = query();
+        assert_eq!(result.pending_remote_dir.as_deref(), Some("/project/sub"));
+        crate::remote_dirs::finish_fetch(
+            &env,
+            "/project/sub",
+            Some(vec![crate::remote_dirs::RemoteEntry { name: "file.txt".into(), is_dir: false }]),
+        );
+        assert_eq!(query().completion_items[0].insert, "le.txt");
+    }
 
     #[test]
     fn completion_requests_work_without_a_view_and_keep_repository_invalidation() {

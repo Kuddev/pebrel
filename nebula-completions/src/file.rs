@@ -127,7 +127,7 @@ fn complete_rec(
     let has_more = !partial.is_empty() && (partial.len() > 1 || isdir);
 
     if let Some((&base, rest)) = partial.split_first()
-        && base.chars().all(|c| c == '.')
+        && matches!(base, "." | "..")
         && has_more
     {
         let built_paths: Vec<_> = built_paths
@@ -151,7 +151,7 @@ fn complete_rec(
     }
 
     let prefix = partial.first().unwrap_or(&"");
-    let mut matcher = CandidateMatcher::new(prefix, options, true);
+    let mut matcher = CandidateMatcher::literal(prefix, options, true);
 
     let mut exact_match = None;
     let mut multiple_exact_matches = false;
@@ -308,6 +308,15 @@ fn dirs_next_home() -> Option<PathBuf> {
     )
 }
 
+/// Expand only a verified leading home token; quoted literal tildes never call this.
+pub fn expand_home(partial: &str) -> Option<String> {
+    let rest = partial.strip_prefix('~')?;
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return None;
+    }
+    Some(format!("{}{rest}", dirs_next_home()?.to_str()?))
+}
+
 /// Remove surrounding quotes from a partial path.
 pub fn surround_remove(partial: &str) -> String {
     for c in ['`', '"', '\''] {
@@ -358,7 +367,6 @@ pub fn complete_item(
 /// Complete paths with cooperative cancellation between directory operations.
 /// Cancellation discards partial results; it cannot interrupt a pending OS read.
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(not(feature = "color"), allow(unused_variables))]
 pub fn complete_item_with_cancel(
     want_directory: bool,
     span: Span,
@@ -369,12 +377,55 @@ pub fn complete_item_with_cancel(
     ls_colors_env: Option<&str>,
     cancelled: &dyn Fn() -> bool,
 ) -> Vec<FileSuggestion> {
+    complete_paths(
+        want_directory,
+        span,
+        partial,
+        cwds,
+        options,
+        use_ls_colors,
+        ls_colors_env,
+        false,
+        cancelled,
+    )
+}
+
+/// Match decoded literal paths without shell quoting, home or n-dot interpretation.
+/// The caller owns shell spelling; traversal and cancellation remain shared.
+pub fn complete_literal_with_cancel(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
+    complete_paths(want_directory, span, partial, cwds, options, false, None, true, cancelled)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "color"), allow(unused_variables))]
+fn complete_paths(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    use_ls_colors: bool,
+    ls_colors_env: Option<&str>,
+    literal: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
     if cancelled() {
         return Vec::new();
     }
-    let cleaned_partial = surround_remove(partial);
+    let cleaned_partial = if literal { partial.to_owned() } else { surround_remove(partial) };
     let isdir = cleaned_partial.ends_with(is_separator);
-    let expanded_partial = expand_ndots(Path::new(&cleaned_partial));
+    let expanded_partial = if literal {
+        PathBuf::from(&cleaned_partial)
+    } else {
+        expand_ndots(Path::new(&cleaned_partial))
+    };
     let should_collapse_dots = expanded_partial != Path::new(&cleaned_partial);
     let mut partial = expanded_partial.to_string_lossy().to_string();
 
@@ -411,7 +462,7 @@ pub fn complete_item_with_cancel(
             prefix_len = 1;
             original_cwd = OriginalCwd::Prefix(String::new());
         },
-        Some(Component::Normal(home)) if home.to_string_lossy() == "~" => {
+        Some(Component::Normal(home)) if !literal && home.to_string_lossy() == "~" => {
             cwds = dirs_next_home().map(|dir| vec![dir]).unwrap_or(cwd_pathbufs);
             prefix_len = 1;
             original_cwd = OriginalCwd::Home;
@@ -481,7 +532,7 @@ pub fn complete_item_with_cancel(
                     .map(|s| s.to_nu_ansi_term_style())
             });
 
-            let (value, display_override) = if let Some(escaped) = escape_path(&path) {
+            let (value, display_override) = if !literal && let Some(escaped) = escape_path(&path) {
                 (escaped, Some(path))
             } else {
                 (path, None)

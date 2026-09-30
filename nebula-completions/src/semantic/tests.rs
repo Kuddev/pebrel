@@ -10,7 +10,6 @@ fn branches_respect_argument_roles_directories_and_worktrees() {
         for line in [
             "git switch ",
             "git switch --quiet fe",
-            "git switch -c new fe",
             "git switch -- fe",
             "git -C \"中文 repo\" switch \"fe\"",
         ] {
@@ -27,13 +26,14 @@ fn branches_respect_argument_roles_directories_and_worktrees() {
     }
     for line in [
         "git switch --detach ma",
+        "git switch -c new fe",
         "git switch -C new ma",
         "git merge ma",
         "git rebase --onto ma",
         "git rebase main fe",
         "git checkout -b new ma",
     ] {
-        assert_eq!(context(line).source, Source::Branches { include_busy: true }, "{line}");
+        assert_eq!(context(line).source, Source::Revisions { include_busy: true }, "{line}");
     }
     for line in [
         "git switch -c ",
@@ -49,9 +49,6 @@ fn branches_respect_argument_roles_directories_and_worktrees() {
         assert_eq!(context(line).source, Source::None, "{line}");
     }
     for line in [
-        "git checkout -- src",
-        "git checkout src",
-        "git checkout main -- src",
         "echo git switch fe",
         "git -c alias.switch=x switch fe",
         "git switch $(echo fe)",
@@ -61,6 +58,52 @@ fn branches_respect_argument_roles_directories_and_worktrees() {
         assert!(Context::parse(line, line.len(), ShellSyntax::Posix).is_none(), "{line}");
     }
     assert!(Context::parse("git switch feat", 13, ShellSyntax::Posix).is_none());
+}
+
+#[test]
+fn paths_and_ambiguous_arguments_retain_directory_scope() {
+    for line in ["git checkout -- src", "git checkout main -- src", "git checkout main src"] {
+        assert_eq!(context(line).source, Source::Paths { directories_only: false });
+    }
+    assert_eq!(
+        context("git checkout src").source,
+        Source::RevisionsAndPaths { include_busy: false }
+    );
+    for line in
+        ["git -C repo", "git -C one -C two", "npm --prefix repo", "pnpm -C repo", "yarn --cwd repo"]
+    {
+        assert_eq!(context(line).source, Source::Paths { directories_only: true }, "{line}");
+    }
+    assert_eq!(context("git -C one -C two").directories, ["one"]);
+    assert!(context("npm --prefix one --prefix two").directories.is_empty());
+    assert_eq!(
+        context("git checkout --ignore-other-worktrees fe").source,
+        Source::RevisionsAndPaths { include_busy: true }
+    );
+    assert_eq!(context("git -C one checkout -- file").directories, ["one"]);
+}
+
+#[test]
+fn path_quotes_roundtrip_literal_characters_and_home_intent() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell] {
+        for value in ["中文 repo/file", "'quote", "a'b/child", "~literal", ".../file", "$var`file"]
+        {
+            let input = CommandContext::parse("cat a", 5, syntax).unwrap();
+            let candidate = input.candidate(value).unwrap();
+            let line = format!("cat {}", candidate.value);
+            let decoded = CommandContext::parse(&line, line.len(), syntax).unwrap();
+            assert_eq!(decoded.prefix(), value, "{syntax:?}: {line}");
+        }
+        let input = CommandContext::parse("cat ~/", 6, syntax).unwrap();
+        assert!(input.expands_home());
+        let input = CommandContext::parse("cat '~/", 7, syntax).unwrap();
+        assert!(!input.expands_home());
+    }
+    let input = CommandContext::parse("git -C re", 9, ShellSyntax::Cmd).unwrap();
+    assert_eq!(input.candidate("repo 中文/").unwrap().value, "\"repo 中文/\"");
+    assert!(input.candidate("repo%PATH%/").is_none());
+    assert!(input.candidate("repo!/").is_none());
+    assert!(input.candidate("repo name\\").is_none());
 }
 
 #[test]

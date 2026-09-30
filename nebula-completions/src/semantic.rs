@@ -9,6 +9,15 @@ pub enum Source {
     Branches {
         include_busy: bool,
     },
+    Revisions {
+        include_busy: bool,
+    },
+    RevisionsAndPaths {
+        include_busy: bool,
+    },
+    Paths {
+        directories_only: bool,
+    },
     ProjectScripts,
     Options,
     /// A known free-form value must not receive unrelated history/path candidates.
@@ -34,12 +43,20 @@ impl Context {
             options: &[],
             attached: None,
         };
-        context.source = match context.input.arguments[0].as_str() {
+        context.source = match context.input.arguments.first()?.as_str() {
             "git" | "git.exe" => context.git()?,
             "npm" | "npm.cmd" | "pnpm" | "pnpm.cmd" | "yarn" | "yarn.cmd" => context.scripts()?,
             _ => return None,
         };
         Some(context)
+    }
+
+    pub fn input(&self) -> &CommandContext {
+        &self.input
+    }
+
+    pub fn value_prefix(&self) -> &str {
+        &self.input.prefix()[self.attached.unwrap_or(0)..]
     }
 
     /// Prefix matches stay first; fuzzy candidates reuse the existing scorer.
@@ -49,8 +66,7 @@ impl Context {
             sort: CompletionSort::Smart,
             ..Default::default()
         };
-        let prefix = &self.input.prefix()[self.attached.unwrap_or(0)..];
-        let mut matcher = CandidateMatcher::new(prefix, &options, true);
+        let mut matcher = CandidateMatcher::literal(self.value_prefix(), &options, true);
         for value in values {
             let full_value =
                 self.attached.map(|end| format!("{}{value}", &self.input.prefix()[..end]));
@@ -78,7 +94,10 @@ impl Context {
         let args = &self.input.arguments;
         let mut index = 1;
         while args.get(index).is_some_and(|arg| arg == "-C") {
-            self.directories.push(args.get(index + 1)?.clone());
+            let Some(directory) = args.get(index + 1) else {
+                return Some(Source::Paths { directories_only: true });
+            };
+            self.directories.push(directory.clone());
             index += 2;
         }
         let Some(command) = args.get(index) else {
@@ -126,13 +145,15 @@ impl Context {
         let mut positional = 0;
         let mut parse_options = true;
         let mut include_busy = matches!(command.as_str(), "merge" | "rebase");
+        let mut revisions = command != "switch";
+        let mut reference_only = false;
         let mut terminal = false;
         let mut root = false;
         index += 1;
         while let Some(arg) = args.get(index) {
             if parse_options && arg == "--" {
                 if command == "checkout" {
-                    return None; // checkout -- takes paths, not references.
+                    return Some(Source::Paths { directories_only: false });
                 }
                 parse_options = false;
             } else if parse_options && arg.starts_with('-') {
@@ -140,6 +161,10 @@ impl Context {
                     arg.split_once('=').map_or((arg.as_str(), None), |(a, b)| (a, Some(b)));
                 let option = options.iter().find(|option| option.names.contains(&name))?;
                 include_busy |= option.include_busy;
+                // 普通 switch 只接受分支；新分支起点和 detach 则接受任意 commit-ish。
+                revisions |=
+                    matches!(name, "-c" | "-C" | "--create" | "--force-create" | "-d" | "--detach");
+                reference_only |= matches!(name, "-b" | "-B" | "-d" | "--detach");
                 terminal |= option.terminal;
                 root |= name == "--root";
                 if let Some(value_source) = option.value {
@@ -176,9 +201,13 @@ impl Context {
             }
             return Some(Source::Options);
         }
-        // checkout 的无标记位置也可以是路径；尚未合并两类来源前保留原有路径行为。
-        if command == "checkout" && !include_busy {
-            return None;
+        // checkout 的首个无标记参数可指向分支或路径，后续参数只接受路径。
+        if command == "checkout" && !reference_only {
+            return Some(if positional == 0 {
+                Source::RevisionsAndPaths { include_busy }
+            } else {
+                Source::Paths { directories_only: false }
+            });
         }
         let limit = match command.as_str() {
             "merge" => usize::MAX,
@@ -187,9 +216,17 @@ impl Context {
             _ => 1,
         };
         if positional >= limit {
-            return if command == "checkout" { None } else { Some(Source::None) };
+            return Some(if command == "checkout" {
+                Source::Paths { directories_only: false }
+            } else {
+                Source::None
+            });
         }
-        Some(Source::Branches { include_busy })
+        Some(if revisions {
+            Source::Revisions { include_busy }
+        } else {
+            Source::Branches { include_busy }
+        })
     }
 
     fn scripts(&mut self) -> Option<Source> {
@@ -203,7 +240,12 @@ impl Context {
         let mut index = 1;
         while let Some(arg) = args.get(index) {
             if arg == directory_flag || program == "pnpm" && arg == "-C" {
-                self.directories.push(args.get(index + 1)?.clone());
+                let Some(directory) = args.get(index + 1) else {
+                    // 包管理器目录选项相对于命令 cwd；不像 Git -C 那样逐级进入。
+                    self.directories.clear();
+                    return Some(Source::Paths { directories_only: true });
+                };
+                self.directories.push(directory.clone());
                 index += 2;
             } else if let Some(value) = arg.strip_prefix(&format!("{directory_flag}=")) {
                 self.directories.push(value.to_owned());
@@ -249,7 +291,7 @@ const fn value(names: &'static [&'static str], source: Source) -> OptionSpec {
     OptionSpec { value: Some(source), ..flag(names) }
 }
 const CONFLICT: Source = Source::Words(&["merge", "diff3", "zdiff3"]);
-const BRANCH: Source = Source::Branches { include_busy: true };
+const REVISION: Source = Source::Revisions { include_busy: true };
 const SWITCH_OPTIONS: &[OptionSpec] = &[
     OptionSpec {
         include_busy: true,
@@ -323,7 +365,7 @@ const MERGE_OPTIONS: &[OptionSpec] = &[
     OptionSpec { terminal: true, ..flag(&["--abort", "--continue", "--quit"]) },
 ];
 const REBASE_OPTIONS: &[OptionSpec] = &[
-    value(&["--onto"], BRANCH),
+    value(&["--onto"], REVISION),
     value(&["--empty"], Source::Words(&["drop", "keep", "stop"])),
     value(&["-x", "--exec", "-C"], Source::None),
     flag(&[
