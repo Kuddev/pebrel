@@ -7,7 +7,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from build import build, HERE, home_header, page_url
+from build import build, HERE, home_header, page_url, source_details
 
 
 class Document(HTMLParser):
@@ -101,6 +101,17 @@ class SiteTests(unittest.TestCase):
         self.assertIn('quickstart/index.html', hero)
         self.assertIn('installation/index.html', hero)
         self.assertEqual(header.count('https://github.com/Kuddev/pebrel/releases/latest'), 3)
+
+    def test_page_specific_version_and_sources(self):
+        config = json.loads((HERE / 'site.json').read_text())
+        for group in config['groups']:
+            for page in group['pages']:
+                with self.subTest(page=page['slug']):
+                    output = (self.root / page_url(page['slug'])).read_text()
+                    commit = page.get('source_commit', config['source_commit'])
+                    self.assertIn(source_details(page, config['source_commit']), output)
+                    self.assertIn(f'/blob/{commit}/', output)
+                    self.assertIn(f"Pebrel {page.get('version', config['version'])} 用户手册", output)
 
     def test_page_structure(self):
         for path, document in self.documents.items():

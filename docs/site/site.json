@@ -101,13 +101,19 @@
         },
         {
           "slug": "completions",
-          "title": "历史与路径补全",
-          "description": "开启补全，选择建议样式，并设置接受建议的按键。",
+          "title": "命令补全与智能候选",
+          "description": "选择三种补齐模式，补齐 Git 分支、项目脚本、SSH 别名、路径与历史命令。",
           "sources": [
-            "nebula_app/src/completion_context.rs",
-            "nebula_app/src/gpui_shell/terminal/completion_viewport.rs",
-            "nebula_app/src/gpui_shell/settings_pane/setting_help.rs"
-          ]
+            "nebula_app/src/gpui_shell/settings_pane.rs",
+            "nebula_app/i18n/zh-CN.json",
+            "nebula_app/src/gpui_shell/terminal/view/completion.rs",
+            "nebula_app/src/completion.rs",
+            "nebula_app/src/completion/connections.rs",
+            "nebula_app/src/completion/project_scripts.rs",
+            "nebula-completions/src/semantic/common.rs"
+          ],
+          "version": "main（2026-09-30）",
+          "source_commit": "5ff2f3eea54b9c66e416149e17e823b8d72b1dee"
         },
         {
           "slug": "palette",
@@ -258,6 +264,24 @@
             "nebula_app/src/gpui_shell/workspace/remote_files/transfers.rs",
             "nebula_app/src/ssh_sftp/transfer.rs",
             "nebula_app/src/ssh_sftp/transaction.rs"
+          ]
+        },
+        {
+          "slug": "mobile",
+          "title": "Android 连接电脑",
+          "description": "配对自己的手机、核对校验码、选择只看或允许输入，并撤销不用的设备。",
+          "version": "main（2026-09-30）",
+          "source_commit": "5ff2f3eea54b9c66e416149e17e823b8d72b1dee",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/mobile/view.rs",
+            "nebula_app/src/mobile_connection/preferences.rs",
+            "nebula_app/i18n/zh-CN.json",
+            "mobile/android/app/src/main/java/io/github/kuddev/pebrel/mobile/ui/RelayForm.kt",
+            "mobile/android/app/src/main/java/io/github/kuddev/pebrel/mobile/ui/TerminalScreen.kt",
+            "mobile/android/app/src/main/res/values-zh-rCN/pairing.xml",
+            "mobile/android/app/build.gradle.kts",
+            "mobile/link/src/pairing.rs",
+            "mobile/link/src/endpoint/host.rs"
           ]
         }
       ]
@@ -531,6 +555,23 @@
             "nebula_app/src/platform/update_installation.rs",
             "nebula_app/src/platform/update_installation/macos.rs",
             "nebula_app/src/update_download.rs"
+          ]
+        },
+        {
+          "slug": "backups",
+          "title": "加密备份与恢复",
+          "description": "创建加密快照、导出迁移文件、选择恢复内容，检查密码与存储平台限制。",
+          "version": "main（2026-09-30）",
+          "source_commit": "5ff2f3eea54b9c66e416149e17e823b8d72b1dee",
+          "sources": [
+            "nebula_app/src/gpui_shell/settings_pane/backup.rs",
+            "nebula_app/src/gpui_shell/settings_pane/backup/setup.rs",
+            "nebula_app/src/gpui_shell/settings_pane/backup/view.rs",
+            "nebula_app/src/gpui_shell/settings_pane/backup/operations.rs",
+            "nebula_app/src/encrypted_backup.rs",
+            "nebula_app/src/encrypted_backup/recovery.rs",
+            "nebula_app/src/backup_remote.rs",
+            "nebula_app/i18n/zh-CN.json"
           ]
         },
         {

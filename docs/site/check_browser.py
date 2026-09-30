@@ -73,6 +73,17 @@ def check(site: Path, output: Path):
                 expect(page.locator('#menu-toggle')).to_have_attribute('aria-expanded', 'true')
                 page.keyboard.press('Escape')
                 expect(page.locator('#menu-toggle')).to_have_attribute('aria-expanded', 'false')
+                manifest = json.loads((Path(__file__).parent / 'site.json').read_text())
+                pages = {item['slug']: item for group in manifest['groups'] for item in group['pages']}
+                for slug in ('completions', 'backups', 'mobile'):
+                    page.goto(base + slug + '/index.html')
+                    expect(page.locator('.article-footer')).to_contain_text(pages[slug]['version'])
+                    page.locator('.source-details summary').click()
+                    expect(page.locator('.source-details a').first).to_have_attribute(
+                        'href', __import__('re').compile(f"/blob/{pages[slug]['source_commit']}/"))
+                    assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
+                    page.screenshot(path=str(output / f'docs-{slug}-mobile.png'), full_page=True)
+                page.goto(base)
                 page.emulate_media(reduced_motion='reduce')
                 assert page.locator('.hero').evaluate("el => getComputedStyle(el).animationName") == 'none'
                 nojs = browser.new_context(java_script_enabled=False, viewport={'width': 390, 'height': 844})

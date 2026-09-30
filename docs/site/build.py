@@ -110,6 +110,7 @@ def home_header() -> str:
 
 
 def source_details(page: dict, commit: str) -> str:
+    commit = page.get("source_commit", commit)
     sources = page.get("sources", [])
     links = "".join(f'<li><a href="{UPSTREAM}/blob/{commit}/{quote(path, safe="/#")}" target="_blank" rel="noopener">{html.escape(path)}</a></li>' for path in sources)
     return (f'<details class="source-details"><summary>版本与参考 · {commit[:7]}</summary>'
@@ -196,7 +197,7 @@ def build(destination: Path, base_url: str) -> dict:
         canonical = f'<link rel="canonical" href="{html.escape(base_url + page_url(slug))}">' if base_url else ""
         output = template.substitute(
             description=html.escape(page["description"]), title=html.escape(page["title"]), canonical=canonical,
-            root=root, slug=slug, version=config["version"], group=html.escape(page["group"]),
+            root=root, slug=slug, version=html.escape(page.get("version", config["version"])), group=html.escape(page["group"]),
             navigation=navigation(config["groups"], slug, root), main_class="home" if slug == "index" else "document",
             breadcrumb_tools=breadcrumb_tools, page_header=header, content=content, source_details=source_details(page, config["source_commit"]),
             pagination="".join(pagination), toc=toc, edit_url=f'{UPSTREAM}/edit/main/docs/site/content/{slug}.md')

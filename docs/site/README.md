@@ -19,7 +19,7 @@ For the browser smoke check, install `playwright==1.57.0`, run
 The check serves the site under `/pebrel/`, exercising project-site path handling.
 `CHROMIUM_PATH` optionally selects an existing Chromium executable.
 
-The manifest currently contains 53 user-facing guides, organized by tasks rather
+The manifest currently contains 55 user-facing guides, organized by tasks rather
 than implementation modules. Source links are pinned to the documented commit.
 
 The generated `dist/` is disposable and ignored. Publish that directory's contents,
@@ -50,7 +50,11 @@ separately enables the same opt-in variable and Pages setting.
 ## Maintain content
 
 `site.json` owns navigation, the documented version, the source commit and each
-page's evidence paths. Pages live in `content/`. Use Markdown links such as
+page's evidence paths. A page may override `version` and `source_commit` when
+a newer feature has been audited; its displayed version and evidence links then
+use that snapshot without relabeling older guides. State the boundary in the page
+body too: an audited `main` feature is not a claim of release availability.
+Pages live in `content/`. Use Markdown links such as
 `[Installation](installation.md)`: the builder resolves them for nested HTML paths.
 Use `@ROOT@` for local image paths in rich HTML. Raw HTML is allowed for trusted,
 reviewed repository content only; this is not an untrusted Markdown service.
@@ -62,8 +66,9 @@ do not label a mockup or a documentation-page screenshot as an application captu
 
 After verifying a feature change, update the relevant page and its evidence.
 Lead with the task, identify the actual menu or shortcut, explain the result,
-and place cautions beside the affected operation. Use visible 1.9.1 entry points: retained
-implementation code is not by itself evidence of an available UI feature. Keep
+and place cautions beside the affected operation. Use visible entry points from
+the page's documented snapshot: retained implementation code is not by itself
+evidence of an available UI feature. Keep
 implementation rationale out of the user guide. Add each new public source
 file to the exact `.gitignore` allowlist rather than opening the whole `docs/`
 subtree. The build checks that evidence paths exist; existence alone is not proof

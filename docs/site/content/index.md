@@ -13,16 +13,18 @@
 | --- | --- |
 | 安装 Pebrel，或选择适合电脑的版本 | [安装与平台支持](installation.md) |
 | 一边运行服务，一边输入其他命令 | [标签页与分屏](workspace.md) |
+| 补齐分支、脚本、主机和历史命令 | [命令补全](completions.md) |
 | 下次打开时恢复标签和目录 | [会话保存与恢复](sessions.md) |
 | 重复使用一组终端布局 | [布局配方](layouts.md) |
 | 找到并修改项目文件 | [文件浏览](files.md) · [Markdown 编辑](markdown-editing.md) |
 | 查看改动、提交代码和处理冲突 | [Git 提交](vcs.md) · [解决冲突](git-conflicts.md) · [SVN](svn.md) |
 | 将文件传到服务器 | [SFTP 文件传输](sftp.md) |
+| 从 Android 查看电脑终端或发送输入 | [Android 连接电脑](mobile.md) |
 | 重新打开上次的 AI 对话 | [AI 会话历史](ai-history.md) |
 | 更改快捷键或通知时间 | [快捷键](keyboard.md) · [通知](notifications.md) |
-| 备份设置，或迁移到另一台电脑 | [备份与迁移](migration.md) |
+| 备份设置，或迁移到另一台电脑 | [加密备份](backups.md) · [备份与迁移](migration.md) |
 | 处理无法启动、连接或保存的问题 | [故障排查](troubleshooting.md) |
 
 <figure><img src="@ROOT@assets/screenshots/nebula-top-tabs.png" alt="Pebrel 的顶部标签栏与终端工作区" width="1040" loading="lazy"><figcaption>终端工作区。截图中的主题和窗口装饰可能因平台而不同。</figcaption></figure>
 
-本指南适用于 **Pebrel 1.9.1**。macOS 和 Linux 安装包目前标为 Preview；平台差异见[安装与平台支持](installation.md)。
+本指南的基础页面适用于 **Pebrel 1.9.1**；[命令补全](completions.md)等已更新页面会在正文和“版本与参考”中单独注明核对的 `main` 日期与提交。`main` 中的功能不代表已发布到你安装的版本。macOS 和 Linux 安装包目前标为 Preview；平台差异见[安装与平台支持](installation.md)。
