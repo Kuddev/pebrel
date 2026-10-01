@@ -10,8 +10,20 @@ pub(crate) struct ReleaseNotes {
     pub body: String,
 }
 
-fn cache_path() -> PathBuf {
-    nebula_settings::settings_dir().join("updates/release-notes.json")
+fn cache_directory() -> PathBuf {
+    nebula_settings::settings_dir().join("updates")
+}
+
+fn cache_path(directory: &Path, version: &str) -> PathBuf {
+    use sha2::{Digest as _, Sha256};
+    // Remote version strings must not become filesystem paths.
+    let key = format!("{:x}", Sha256::digest(version.as_bytes()));
+    directory.join("release-notes").join(format!("{key}.json"))
+}
+
+fn cached(directory: &Path, version: &str) -> Option<ReleaseNotes> {
+    read(&cache_path(directory, version), version)
+        .or_else(|| read(&directory.join("release-notes.json"), version))
 }
 
 fn read(path: &Path, version: &str) -> Option<ReleaseNotes> {
@@ -23,7 +35,7 @@ fn read(path: &Path, version: &str) -> Option<ReleaseNotes> {
 
 pub(crate) fn remember(version: &str, body: &str) {
     let notes = ReleaseNotes { version: version.to_owned(), body: body.to_owned() };
-    if let Err(error) = save(&cache_path(), &notes) {
+    if let Err(error) = save(&cache_path(&cache_directory(), version), &notes) {
         log::warn!("Could not cache release notes: {error}");
     }
 }
@@ -34,7 +46,11 @@ fn save(path: &Path, notes: &ReleaseNotes) -> Result<(), String> {
 }
 
 pub(crate) fn snapshot(version: &str, directory: &Path) -> Result<(), String> {
-    if let Some(notes) = read(&cache_path(), version) {
+    snapshot_from(&cache_directory(), version, directory)
+}
+
+fn snapshot_from(cache: &Path, version: &str, directory: &Path) -> Result<(), String> {
+    if let Some(notes) = cached(cache, version) {
         save(&directory.join("release-notes.json"), &notes)?;
     }
     Ok(())
@@ -48,7 +64,7 @@ pub(crate) fn current() -> Result<ReleaseNotes, String> {
     {
         return Ok(notes);
     }
-    if let Some(notes) = read(&cache_path(), version) {
+    if let Some(notes) = cached(&cache_directory(), version) {
         return Ok(notes);
     }
     let url = format!("https://api.github.com/repos/Kuddev/pebrel/releases/tags/v{version}");
@@ -162,5 +178,36 @@ mod tests {
         save(&path, &notes).unwrap();
         assert_eq!(read(&path, "2.0.0").unwrap().body, notes.body);
         assert!(read(&path, "2.1.0").is_none());
+    }
+
+    #[test]
+    fn reading_installed_notes_does_not_evict_the_pending_offline_snapshot() {
+        let cache = tempfile::tempdir().unwrap();
+        let handoff = tempfile::tempdir().unwrap();
+        let pending = ReleaseNotes { version: "2.1.0".into(), body: "New update notes".into() };
+        let installed = ReleaseNotes { version: "2.0.0".into(), body: "Installed notes".into() };
+        // The update check caches the pending release before Settings reads the installed one.
+        save(&cache_path(cache.path(), &pending.version), &pending).unwrap();
+        save(&cache_path(cache.path(), &installed.version), &installed).unwrap();
+        assert_eq!(cached(cache.path(), &installed.version).unwrap().body, installed.body);
+        snapshot_from(cache.path(), &pending.version, handoff.path()).unwrap();
+        let restored = read(&handoff.path().join("release-notes.json"), &pending.version).unwrap();
+        assert_eq!(restored.body, pending.body);
+        assert!(read(&handoff.path().join("release-notes.json"), &installed.version).is_none());
+    }
+
+    #[test]
+    fn legacy_cache_remains_readable_and_version_keys_cannot_escape_the_cache() {
+        let cache = tempfile::tempdir().unwrap();
+        let legacy = ReleaseNotes { version: "2.0.0".into(), body: "Existing notes".into() };
+        save(&cache.path().join("release-notes.json"), &legacy).unwrap();
+        assert_eq!(cached(cache.path(), &legacy.version).unwrap().body, legacy.body);
+        assert!(cached(cache.path(), "2.1.0").is_none());
+        let unusual = ReleaseNotes { version: "../../outside".into(), body: "Isolated".into() };
+        let path = cache_path(cache.path(), &unusual.version);
+        assert_eq!(path.parent().unwrap(), cache.path().join("release-notes"));
+        save(&path, &unusual).unwrap();
+        assert_eq!(cached(cache.path(), &unusual.version).unwrap().body, unusual.body);
+        assert_eq!(cached(cache.path(), &legacy.version).unwrap().body, legacy.body);
     }
 }

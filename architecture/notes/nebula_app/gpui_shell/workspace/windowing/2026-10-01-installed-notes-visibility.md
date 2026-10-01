@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented; regression validation pending.
+Implemented; isolated visibility regression passed on all selected native platforms.
 
 ## Context
 
@@ -31,6 +31,8 @@ Only a successful persistent claim for a visible target consumes the pending not
 ## Validation
 
 An isolated GPUI regression sends the real installed event while the workspace is hidden, checks that no persistent acknowledgement exists, reveals it, and checks one acknowledgement. Existing rendered-dialog tests cover content and close/Escape.
+
+PR head e763523db8ad0bbe3a6d053cd11b1e46ee682adf passed all ten required checks. Its macOS ARM native suite passed 2583 tests (24 existing skips); the visibility regression passed in 3.046 seconds. Later cache changes require their own current-head CI result and do not replace this visibility evidence.
 
 ## Supersedes
 
