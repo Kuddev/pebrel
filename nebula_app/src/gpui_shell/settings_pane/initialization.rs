@@ -506,26 +506,8 @@ impl SettingsPane {
         subscriptions.push(cx.subscribe_in(
             &font_family_cjk_input,
             window,
-            |this: &mut Self, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    let raw = input.read(cx).value();
-                    let normalized = crate::font_install::normalize_font_family_chain(&raw);
-                    let value = if normalized.is_empty() {
-                        crate::font_install::REQUIRED_FONT_FAMILY.to_owned()
-                    } else {
-                        normalized
-                    };
-                    let current = this
-                        .runtime
-                        .font_family_cjk
-                        .as_deref()
-                        .unwrap_or(crate::font_install::REQUIRED_FONT_FAMILY);
-                    let changed = current != value;
-                    input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
-                    if changed {
-                        this.persist(&[("font_family_cjk", value)], cx);
-                    }
-                }
+            |this: &mut Self, _, event: &InputEvent, window, cx| {
+                this.on_cjk_font_family_input_event(event, window, cx);
             },
         ));
 
@@ -647,12 +629,14 @@ impl SettingsPane {
             ssh_delete_undo: None,
             ssh_undo_seq: 0,
             font_picker_open: false,
+            font_picker_cjk: false,
             font_loading: false,
             font_system: None,
             font_imported: Vec::new(),
             font_family_input,
             font_family_cjk_input,
             font_picker_trigger_bounds: None,
+            font_picker_cjk_bounds: None,
             backup_selection: backup_remote.selection,
             backup_ui: backup::BackupUiState::default(),
             backup_pass_input: cx.new(|cx| {
