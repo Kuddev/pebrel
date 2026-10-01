@@ -48,6 +48,8 @@ and nextest group; an in-process guard alone is insufficient.
 The native workflow contract checks the precise serial-group membership while
 preserving the existing independent-test and heavy-Git scheduling policies.
 The original native interaction and persistence regressions remain in the suite.
+[Full native validation](https://github.com/Kuddev/pebrel/actions/runs/36901272891)
+passed on Windows x64/ARM64, Linux, and both macOS architectures at source `d574856d`.
 
 ## Supersedes
 
