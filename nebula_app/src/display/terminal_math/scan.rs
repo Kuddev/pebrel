@@ -736,53 +736,42 @@ pub(super) fn find_dollar_formula(
     open: GridPosition,
 ) -> Option<(FormulaOverlay, GridPosition)> {
     let source_start = grid.after(open, 1);
-    let first = grid.character(source_start)?;
-    // `$ ` is how every sh-family prompt ends, and `$$` belongs to a display
-    // delimiter. Neither opens an inline formula.
-    if first.is_whitespace() || first == '$' {
+    if grid.character(source_start)? == '$' {
         return None;
     }
-
-    let mut search = source_start;
-    while let Some(close) = find_inline_dollar_closing(grid, search) {
-        // TeX never puts a space right before the closing `$`, while a shell
-        // line routinely does (`$HOME $USER`). A following identifier
-        // character means this `$` opens the *next* variable rather than
-        // closing ours.
-        let previous = grid.previous(close).and_then(|position| grid.character(position));
-        let next = grid.next(close).and_then(|position| grid.character(position));
-        if previous.is_some_and(char::is_whitespace)
-            || next.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
-        {
-            search = grid.after(close, 1);
-            continue;
-        }
-
-        let after = grid.after(close, 1);
-        let source = grid.extract(source_start, close)?;
-        if standard_formula_source(&source, false) {
-            return Some((
-                make_overlay(grid, open, after, source, DelimiterKind::DollarInline),
-                after,
-            ));
-        }
-        search = after;
+    // 第一个闭合候选失败就交回逐格扫描，不能越过后续公式把正文吞进同一源码。
+    let close = find_inline_dollar_closing(grid, source_start)?;
+    let next = grid.next(close).and_then(|position| grid.character(position));
+    if next.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_') {
+        return None;
     }
-    None
+    if close.row > source_start.row
+        && !grid.wrapped[close.row - 1]
+        && !inline_math_fragment(grid, close.row, 0, close.column)
+    {
+        return None;
+    }
+    let after = grid.after(close, 1);
+    let source = grid.extract(source_start, close)?;
+    standard_formula_source(&source, false)
+        .then(|| (make_overlay(grid, open, after, source, DelimiterKind::DollarInline), after))
 }
 
 /// Find a single-dollar closer without borrowing either character from a
-/// `$$` display delimiter, and without leaving the logical line: an inline
-/// formula may follow a soft wrap, but a real newline ends it. An unmatched
-/// shell/currency dollar must not reach across rows to consume another one.
+/// `$$` display delimiter. Hard-wrapped rows need independent math evidence;
+/// blank lines and prose still terminate the search.
 pub(super) fn find_inline_dollar_closing(
     grid: &TextGrid,
     mut position: GridPosition,
 ) -> Option<GridPosition> {
+    let start = position;
+    let mut bytes = DEFAULT_LIMITS.max_source_bytes;
+    let mut hard_rows = 0;
     loop {
         if position.row >= grid.rows.len() {
             return None;
         }
+        bytes = bytes.checked_sub(grid.character(position).map_or(0, char::len_utf8))?;
         if grid.character(position) == Some('$') && !grid.is_escaped(position) {
             let previous_is_dollar =
                 grid.previous(position).and_then(|previous| grid.character(previous)) == Some('$');
@@ -795,9 +784,28 @@ pub(super) fn find_inline_dollar_closing(
         let previous_row = position.row;
         position = grid.next(position)?;
         if position.row != previous_row && !grid.wrapped[previous_row] {
-            return None;
+            hard_rows += 1;
+            let column = if previous_row == start.row { start.column } else { 0 };
+            if hard_rows > 8 || !inline_math_fragment(grid, previous_row, column, grid.columns) {
+                return None;
+            }
         }
     }
+}
+
+fn inline_math_fragment(grid: &TextGrid, row: usize, start: usize, end: usize) -> bool {
+    let source: String =
+        grid.rows[row][start.min(grid.columns)..end.min(grid.columns)].iter().flatten().collect();
+    let source = source.trim();
+    if source.is_empty() || obviously_non_math(source) {
+        return false;
+    }
+    // TUI 的硬折行不带 WRAPLINE；只接数学片段，绝不跨空段或普通说明文字。
+    let operand = source.trim_start_matches(['=', '+', '-', '*']).trim();
+    standard_formula_source(source, true)
+        || explicit_operand(operand)
+        || implicit_product_operand(operand)
+        || source.chars().all(|character| matches!(character, '{' | '}'))
 }
 
 /// Markdown-unescaped display block: some AI CLIs run their answer through a
@@ -1201,6 +1209,12 @@ pub(super) fn has_known_tex_command(source: &str) -> bool {
 /// groups, so their evidence must be structurally compact.
 pub(super) fn standard_formula_source(source: &str, display: bool) -> bool {
     let source = source.trim();
+    // 成对定界符中的数字与单字母都是公式；不能被货币字母白名单误伤。
+    if source.parse::<f64>().is_ok_and(f64::is_finite)
+        || source.chars().count() == 1 && source.chars().all(char::is_alphabetic)
+    {
+        return true;
+    }
     !obviously_non_math(source) && has_math_evidence(source, display)
 }
 
@@ -1297,7 +1311,8 @@ pub(super) fn has_math_evidence(source: &str, lax: bool) -> bool {
     let parenthesized_variable = source
         .strip_prefix('(')
         .and_then(|source| source.strip_suffix(')'))
-        .is_some_and(explicit_operand);
+        .or_else(|| source.strip_prefix('[').and_then(|source| source.strip_suffix(']')))
+        .is_some_and(|body| body.split(',').all(explicit_operand));
     let compact_operator = ['+', '-', '*', '/'].into_iter().any(|operator| {
         source.find(operator).is_some_and(|index| {
             let (left, right) = source.split_at(index);
@@ -1353,6 +1368,11 @@ pub(super) fn relation_operand(operand: &str) -> bool {
     let operand = operand.trim();
     explicit_operand(operand)
         || implicit_product_operand(operand)
+        || operand.contains(['+', '-'])
+            && operand
+                .trim_start_matches(['+', '-'])
+                .split(['+', '-'])
+                .all(|term| explicit_operand(term) || implicit_product_operand(term))
         || operand.find('(').is_some_and(|open| {
             let name = operand[..open].trim();
             let arguments = operand[open + 1..].strip_suffix(')').unwrap_or("").trim();
