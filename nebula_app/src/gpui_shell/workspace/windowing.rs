@@ -138,6 +138,9 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
     }
 }
 
+mod shell_events;
+pub(crate) use shell_events::dispatch_shell_events;
+
 pub(crate) struct WindowRegistry {
     next_window_id: u64,
     activation_sequence: u64,
@@ -871,75 +874,6 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
             select_mru_window(nebula_settings::RuntimeSettings::load().windowing_behavior, cx)
         });
     entry.ok_or_else(|| ApiError::new("target_not_found", "no terminal window is available"))
-}
-
-pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
-    for event in events {
-        match event {
-            GpuiShellEvent::NotificationFocus(pane_id) => focus_notification(pane_id, cx),
-            GpuiShellEvent::NotificationChoice { pane_id, request_id, choice } => {
-                let feedback = entry_with_pane(pane_id, cx).map(|entry| entry.handle);
-                crate::gpui_shell::toast::reply_to_choice(
-                    pane_id, request_id, choice, feedback, cx,
-                );
-            },
-            GpuiShellEvent::TrayFocus(pane_id) => {
-                let target =
-                    pane_id.and_then(|pane_id| entry_with_pane(pane_id, cx)).or_else(|| {
-                        select_mru_window(
-                            nebula_settings::RuntimeSettings::load().windowing_behavior,
-                            cx,
-                        )
-                    });
-                if let Some(entry) = target {
-                    focus_entry(&entry, pane_id, cx);
-                }
-            },
-            GpuiShellEvent::TrayQuit => {
-                quit_all(cx);
-                return;
-            },
-            GpuiShellEvent::MuxAttach => {
-                if let Some(entry) = entries_by_mru(cx).into_iter().next() {
-                    focus_entry(&entry, None, cx);
-                }
-            },
-            GpuiShellEvent::RuntimeControl(dispatch) => dispatch_runtime(dispatch, cx),
-            event @ (GpuiShellEvent::UpdateAvailable(_) | GpuiShellEvent::UpdateInstalled(_)) => {
-                let Some(entry) = entries_by_mru(cx).into_iter().next() else { continue };
-                let _ = entry.handle.update(cx, move |_, window, cx| {
-                    super::update_dialog::show_update_event(event, window, cx);
-                });
-            },
-            GpuiShellEvent::SshPrompt(request) => {
-                let Some(entry) = entries_by_mru(cx).into_iter().next() else {
-                    request.respond(crate::ssh_prompt::PromptResponse::Cancel);
-                    continue;
-                };
-                let pending = request.clone();
-                if entry
-                    .handle
-                    .update(cx, move |_, window, cx| {
-                        super::ssh_dialog::show(pending, window, cx);
-                    })
-                    .is_err()
-                {
-                    request.respond(crate::ssh_prompt::PromptResponse::Cancel);
-                }
-            },
-            GpuiShellEvent::OpenDirectories(urls) => {
-                for url in urls {
-                    let Some(path) = crate::file_uri::file_uri_to_local_path(&url) else {
-                        continue;
-                    };
-                    if let Err(error) = open_new_window(cx, Some(path)) {
-                        log::warn!("Could not open a desktop folder: {error}");
-                    }
-                }
-            },
-        }
-    }
-    publish_runtime_snapshot(cx);
 }
 
 pub(crate) fn dispatch_ai_events(events: Vec<crate::ai_hook::AiHookEvent>, cx: &mut App) {

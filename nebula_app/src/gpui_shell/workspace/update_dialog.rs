@@ -21,14 +21,45 @@ fn update_dialog_frame(dialog: Dialog, window: &Window, estimated_height: f32, c
 pub(super) fn show_update_event(event: GpuiShellEvent, window: &mut Window, cx: &mut App) {
     match event {
         GpuiShellEvent::UpdateAvailable(result) => show_update_notification(result, window, cx),
-        GpuiShellEvent::UpdateInstalled(notes) => {
-            match crate::update_check::release_notes::claim(&notes.version) {
-                Ok(true) => crate::gpui_shell::release_notes::open_dialog(notes, window, cx),
-                Ok(false) => {},
-                Err(error) => log::warn!("Could not acknowledge installed release notes: {error}"),
-            }
-        },
+        GpuiShellEvent::UpdateInstalled(notes) => queue_installed_notes(notes, cx),
         _ => unreachable!(),
+    }
+}
+
+struct PendingInstalledNotes {
+    notes: Option<crate::update_check::release_notes::ReleaseNotes>,
+    retry_after: std::time::Instant,
+}
+
+impl gpui::Global for PendingInstalledNotes {}
+
+pub(super) fn queue_installed_notes(
+    notes: crate::update_check::release_notes::ReleaseNotes,
+    cx: &mut App,
+) {
+    cx.set_global(PendingInstalledNotes {
+        notes: Some(notes),
+        retry_after: std::time::Instant::now(),
+    });
+}
+
+pub(super) fn has_pending_installed_notes(cx: &App) -> bool {
+    cx.try_global::<PendingInstalledNotes>().is_some_and(|pending| {
+        pending.notes.is_some() && std::time::Instant::now() >= pending.retry_after
+    })
+}
+
+pub(super) fn show_pending_installed_notes(window: &mut Window, cx: &mut App) {
+    let Some(notes) = cx.global_mut::<PendingInstalledNotes>().notes.take() else { return };
+    match crate::update_check::release_notes::claim(&notes.version) {
+        Ok(true) => crate::gpui_shell::release_notes::open_dialog(notes, window, cx),
+        Ok(false) => {},
+        Err(error) => {
+            log::warn!("Could not acknowledge installed release notes: {error}");
+            let pending = cx.global_mut::<PendingInstalledNotes>();
+            pending.notes = Some(notes);
+            pending.retry_after = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        },
     }
 }
 
