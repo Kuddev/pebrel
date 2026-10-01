@@ -1,15 +1,8 @@
 //! 原型的阅读顺序：状态 → 存储 → 时间线；低频操作放在面板下面。
 use super::*;
 
-pub(super) fn panel(cx: &App) -> gpui::Div {
-    v_flex()
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(crate::gpui_shell::theme::settings_hairline(cx))
-        .overflow_hidden()
+pub(super) fn panel(_cx: &App) -> gpui::Div {
+    v_flex().w_full().min_w_0().flex_shrink_0().overflow_hidden()
 }
 
 pub(super) fn caption(text: impl Into<SharedString>, cx: &App) -> gpui::Div {
@@ -64,7 +57,7 @@ impl SettingsPane {
             .w_full()
             .flex_shrink_0()
             .max_w(px(700.0))
-            .gap_6()
+            .gap(px(48.0))
             .text_size(px(14.0))
             .child(
                 v_flex()
@@ -90,8 +83,9 @@ impl SettingsPane {
                         .child(
                             Button::new("backup-undo")
                                 .label(l.text(Message::BackupFlowUndo))
-                                .ghost()
-                                .small()
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_button(button, false, cx)
+                                })
                                 .disabled(self.backup_busy)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.undo_backup_restore(window, cx)
@@ -100,7 +94,9 @@ impl SettingsPane {
                         .child(
                             Button::new("backup-dismiss-undo")
                                 .icon(IconName::Close)
-                                .ghost()
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_icon_button(button, cx)
+                                })
                                 .small()
                                 .disabled(self.backup_busy)
                                 .tooltip(l.text(Message::CommonClose))
@@ -170,8 +166,8 @@ impl SettingsPane {
                 let name = entry.name.clone();
                 row.child(
                     Button::new("backup-restore-latest")
+                        .map(|button| crate::gpui_shell::widgets::settings_button(button, true, cx))
                         .label(l.text(Message::CloudRestore))
-                        .small()
                         .disabled(self.backup_busy)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_backup_restore(
@@ -233,8 +229,9 @@ impl SettingsPane {
                     .child(
                         Button::new("backup-edit-storage")
                             .label(l.text(Message::BackupFlowChange))
-                            .ghost()
-                            .small()
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_button(button, false, cx)
+                            })
                             .disabled(self.backup_busy)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_backup_sheet(BackupSheet::Storage, window, cx)
@@ -257,7 +254,9 @@ impl SettingsPane {
                     .child(
                         Button::new("backup-refresh")
                             .icon(IconName::Redo2)
-                            .ghost()
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_icon_button(button, cx)
+                            })
                             .small()
                             .tooltip(l.text(Message::CloudTest))
                             .disabled(self.backup_busy || self.backup_ui.listing)
@@ -342,8 +341,9 @@ impl SettingsPane {
                     .child(
                         Button::new(("backup-restore", index))
                             .label(l.text(Message::CloudRestore))
-                            .small()
-                            .ghost()
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_button(button, false, cx)
+                            })
                             .disabled(self.backup_busy)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_backup_restore(
@@ -380,16 +380,18 @@ impl SettingsPane {
             .debug_selector(|| "backup-encryption".into())
             .w_full()
             .flex_shrink_0()
-            .gap_3()
-            .child(div().font_semibold().child(l.text(Message::BackupFlowEncryption)))
+            .gap(px(20.0))
+            .child(super::super::design::group_heading(
+                l.text(Message::BackupFlowEncryption),
+                14.0,
+                cx,
+            ))
             .child(
                 v_flex()
                     .w_full()
                     .flex_shrink_0()
                     .gap_2()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
+                    .py(px(self.row_padding_y()))
                     .child(
                         h_flex()
                             .w_full()
@@ -417,8 +419,11 @@ impl SettingsPane {
                                             } else {
                                                 Message::BackupFlowEnter
                                             }))
-                                            .small()
-                                            .ghost()
+                                            .map(|button| {
+                                                crate::gpui_shell::widgets::settings_button(
+                                                    button, false, cx,
+                                                )
+                                            })
                                             .disabled(self.backup_busy)
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 if ready {
@@ -449,8 +454,8 @@ impl SettingsPane {
     fn backup_file_rows(&self, cx: &mut Context<Self>) -> gpui::Div {
         let l = crate::gpui_shell::config::ui_language(cx);
         v_flex()
-            .gap_3()
-            .child(div().font_semibold().child(l.text(Message::BackupFlowFiles)))
+            .gap(px(20.0))
+            .child(super::super::design::group_heading(l.text(Message::BackupFlowFiles), 14.0, cx))
             .children(
                 [
                     (true, Message::CloudExport, Message::BackupFlowExportHint),
@@ -462,9 +467,7 @@ impl SettingsPane {
                         .gap_4()
                         .items_center()
                         .flex_wrap()
-                        .py_3()
-                        .border_t_1()
-                        .border_color(cx.theme().border)
+                        .py(px(self.row_padding_y()))
                         .child(
                             v_flex()
                                 .flex_1()
@@ -475,12 +478,14 @@ impl SettingsPane {
                         )
                         .child(
                             Button::new(if export { "backup-export" } else { "backup-import" })
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_button(button, true, cx)
+                                })
                                 .label(l.text(if export {
                                     Message::CloudExport
                                 } else {
                                     Message::BackupFlowChooseFile
                                 }))
-                                .small()
                                 .disabled(self.backup_busy)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     if export {

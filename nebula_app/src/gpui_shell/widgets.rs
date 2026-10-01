@@ -1,9 +1,7 @@
 //! Shell 品牌图标资产，以及设置控件的两个薄适配层。
 //!
-//! [`NebulaSwitch`] / [`NebulaButton`] 现在只是 `gpui_component` 的 `Switch`
-//! / `Button` 的转发壳：保留名字和 builder 签名，让四十来处调用点不必改，
-//! 内芯换成组件库。这样控件的观感、可访问性和后续升级都跟着上游走，我们只
-//! 在主题层调色。
+//! 两类控件共用组件库 Button 的输入、键盘焦点与禁用行为。开关的轨道、
+//! 滑块和过渡由 `switch` 呈现；设置动作通过语义 variant 取色。
 //!
 //! 文件末尾用注释保留了原来的自绘实现（**废案**）：液态胶囊开关（48×26、
 //! 四通道 Tween、`LiquidToggle` 过冲）与 130ms 过渡的文字按钮。它们把旧壳
@@ -19,9 +17,8 @@ use gpui::{
     App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ParentElement as _,
     RenderImage, RenderOnce, SharedString, Styled as _, Window, div, px,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::switch::Switch;
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _};
 use image::Frame;
 
 /// Shell 的彩色品牌图标（`extra/shell-icons` 的 PNG）预缩放成与物理像素
@@ -56,6 +53,53 @@ pub(crate) fn settings_control_height(cx: &App) -> gpui::Pixels {
     px(f32::from(cx.theme().font_size).max(16.0) * 2.0)
 }
 
+/// Transparent settings action with a restrained, neutral interaction wash.
+/// Outline uses the shared border; unlike upstream outline it has no input fill.
+pub(crate) fn settings_button(button: Button, outlined: bool, cx: &App) -> Button {
+    button
+        .with_size(gpui_component::Size::Medium)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(if outlined {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .hover(cx.theme().foreground.opacity(0.045))
+                .active(cx.theme().foreground.opacity(0.08)),
+        )
+        .when(outlined, |button| button.border_1().border_color(cx.theme().border))
+        .h(settings_control_height(cx))
+        .px(px(12.0))
+        .rounded(px(6.0))
+}
+
+/// Icon-only actions keep a square hit area without text-button side padding.
+pub(crate) fn settings_icon_button(button: Button, cx: &App) -> Button {
+    settings_button(button, false, cx).w(px(32.0)).h(px(32.0)).px_0()
+}
+
+/// The select keeps its native popup and keyboard handling; this frame supplies
+/// the transparent resting surface and visible pointer feedback.
+pub(crate) fn settings_select_frame(
+    id: impl Into<ElementId>,
+    control: impl IntoElement,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let hover = cx.theme().foreground.opacity(if cx.theme().is_dark() { 0.08 } else { 0.06 });
+    let edge = cx.theme().muted_foreground.opacity(0.65);
+    div()
+        .id(id)
+        .h(settings_control_height(cx))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(cx.theme().border)
+        .text_color(cx.theme().foreground)
+        .cursor_pointer()
+        .hover(move |frame| frame.bg(hover).border_color(edge))
+        .child(control)
+}
+
 /// Toolbar glyphs and their hover/hit surfaces have independent logical sizes.
 pub(crate) fn toolbar_button(id: impl Into<ElementId>, icon: impl Into<Icon>) -> Button {
     Button::new(id).icon(Icon::new(icon).size(px(18.0))).ghost().size(px(32.0))
@@ -65,56 +109,8 @@ pub(crate) fn toolbar_button(id: impl Into<ElementId>, icon: impl Into<Icon>) ->
 #[path = "widgets_tests.rs"]
 mod tests;
 
-/// 设置行开关。组件库 `Switch` 的转发壳——`on_click` 与它同签名
-/// （`Fn(&bool, &mut Window, &mut App)`，参数是**点击后**的目标值）。
-#[derive(IntoElement)]
-pub struct NebulaSwitch {
-    key: SharedString,
-    checked: bool,
-    disabled: bool,
-    on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
-}
-
-impl NebulaSwitch {
-    pub fn new(key: impl Into<SharedString>) -> Self {
-        Self { key: key.into(), checked: false, disabled: false, on_click: None }
-    }
-
-    pub fn checked(mut self, checked: bool) -> Self {
-        self.checked = checked;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-
-    pub fn on_click<F>(mut self, handler: F) -> Self
-    where
-        F: Fn(&bool, &mut Window, &mut App) + 'static,
-    {
-        self.on_click = Some(Rc::new(handler));
-        self
-    }
-}
-
-impl RenderOnce for NebulaSwitch {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        Switch::new(ElementId::Name(format!("nebula-switch-{}", self.key).into()))
-            .checked(self.checked)
-            .disabled(self.disabled)
-            .when_some(self.on_click, |switch, on_click| {
-                switch.on_click(move |checked, window, cx| {
-                    // 开关在设置行里，行本身可能也挂着点击（如聚焦、展开）；
-                    // 不吃掉事件的话一次点击会走两条路。
-                    cx.stop_propagation();
-                    on_click(checked, window, cx);
-                })
-            })
-    }
-}
+mod switch;
+pub use switch::NebulaSwitch;
 
 /// 设置行动作按钮。组件库 `Button` 的转发壳，四个 kind 映射到它的 variant。
 #[derive(IntoElement)]
@@ -209,12 +205,11 @@ impl RenderOnce for NebulaButton {
             .px(px(12.0))
             .label(self.label)
             .disabled(self.disabled);
-        // Default 走 outline：设置行里的动作按钮需要一条边把自己从行底分出来，
-        // 组件库的无描边默认态在浅色主题下几乎看不见。
         let button = match self.kind {
-            NebulaButtonKind::Default | NebulaButtonKind::Outline => button.outline(),
+            NebulaButtonKind::Default => settings_button(button, false, cx),
+            NebulaButtonKind::Outline => settings_button(button, true, cx),
             NebulaButtonKind::Primary => button.primary(),
-            NebulaButtonKind::Danger => button.danger(),
+            NebulaButtonKind::Danger => button.danger().outline(),
         };
         button.when_some(self.on_click, |button, on_click| {
             button.on_click(move |event, window, cx| {
