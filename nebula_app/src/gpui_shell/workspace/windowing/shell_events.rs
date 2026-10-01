@@ -1,6 +1,6 @@
 //! Process-level shell events select live windows and defer installed notes until visible.
-use super::*;
 use super::super::{ssh_dialog, update_dialog};
+use super::*;
 
 pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
     for event in events {
