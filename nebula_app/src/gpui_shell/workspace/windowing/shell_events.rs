@@ -1,5 +1,6 @@
 //! Process-level shell events select live windows and defer installed notes until visible.
 use super::*;
+use super::super::{ssh_dialog, update_dialog};
 
 pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
     for event in events {
@@ -34,12 +35,12 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
             },
             GpuiShellEvent::RuntimeControl(dispatch) => dispatch_runtime(dispatch, cx),
             GpuiShellEvent::UpdateInstalled(notes) => {
-                super::update_dialog::queue_installed_notes(notes, cx);
+                update_dialog::queue_installed_notes(notes, cx);
             },
             event @ GpuiShellEvent::UpdateAvailable(_) => {
                 let Some(entry) = entries_by_mru(cx).into_iter().next() else { continue };
                 let _ = entry.handle.update(cx, move |_, window, cx| {
-                    super::update_dialog::show_update_event(event, window, cx);
+                    update_dialog::show_update_event(event, window, cx);
                 });
             },
             GpuiShellEvent::SshPrompt(request) => {
@@ -51,7 +52,7 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
                 if entry
                     .handle
                     .update(cx, move |_, window, cx| {
-                        super::ssh_dialog::show(pending, window, cx);
+                        ssh_dialog::show(pending, window, cx);
                     })
                     .is_err()
                 {
@@ -70,13 +71,13 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
             },
         }
     }
-    if super::update_dialog::has_pending_installed_notes(cx)
+    if update_dialog::has_pending_installed_notes(cx)
         && let Some(entry) = entries_by_mru(cx).into_iter().find(|entry| {
             entry.workspace.upgrade().is_some_and(|workspace| !workspace.read(cx).window_hidden)
         })
     {
         let _ = entry.handle.update(cx, |_, window, cx| {
-            super::update_dialog::show_pending_installed_notes(window, cx);
+            update_dialog::show_pending_installed_notes(window, cx);
         });
     }
     publish_runtime_snapshot(cx);
