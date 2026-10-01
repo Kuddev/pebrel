@@ -1,4 +1,4 @@
-//! `nebula-completions` — A lightweight, standalone completion engine.
+//! `pebrel-completions` — A lightweight, standalone completion engine.
 //!
 //! Extracted from Nushell's `nu-cli` completions framework, this crate
 //! provides:

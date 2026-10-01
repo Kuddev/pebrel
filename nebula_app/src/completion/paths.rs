@@ -1,8 +1,8 @@
 //! 路径来源复用文件匹配器；shell 转义只由命令上下文负责。
 
-use nebula_completions::command_context::{CommandContext, ShellSyntax};
-use nebula_completions::semantic::{Context, Source};
-use nebula_completions::{CompletionOptions, SemanticSuggestion, Span, SuggestionKind};
+use pebrel_completions::command_context::{CommandContext, ShellSyntax};
+use pebrel_completions::semantic::{Context, Source};
+use pebrel_completions::{CompletionOptions, SemanticSuggestion, Span, SuggestionKind};
 
 use crate::directory_history::DirectoryHistory;
 use crate::display::suggest_engine::Input;
@@ -86,7 +86,7 @@ pub(crate) fn complete(
     }
     let expanded;
     let prefix = if context.expands_home() {
-        expanded = nebula_completions::file::expand_home(prefix);
+        expanded = pebrel_completions::file::expand_home(prefix);
         let Some(expanded) = expanded.as_deref() else { return (Vec::new(), None) };
         expanded
     } else {
@@ -120,7 +120,7 @@ pub(crate) fn complete(
         case_sensitive: crate::platform::local_paths::completion_case_sensitive(),
         ..Default::default()
     };
-    let matches = nebula_completions::file::complete_literal_with_cancel(
+    let matches = pebrel_completions::file::complete_literal_with_cancel(
         want_dir,
         Span::new(0, prefix.len()),
         prefix,

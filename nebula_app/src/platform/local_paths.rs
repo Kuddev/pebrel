@@ -7,9 +7,9 @@ pub(crate) fn completion_case_sensitive() -> bool {
 
 pub(crate) fn completion_spelling(
     path: &str,
-    syntax: nebula_completions::command_context::ShellSyntax,
+    syntax: pebrel_completions::command_context::ShellSyntax,
 ) -> String {
-    use nebula_completions::command_context::ShellSyntax;
+    use pebrel_completions::command_context::ShellSyntax;
     // PowerShell 5.1 给原生程序重建 argv 时，也会误解带空格目录尾部的反斜杠。
     if cfg!(windows)
         && (matches!(syntax, ShellSyntax::Posix | ShellSyntax::Cmd)
@@ -79,7 +79,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn completion_directory_quotes_survive_native_cmd_and_powershell_arguments() {
-        use nebula_completions::command_context::{CommandContext, ShellSyntax};
+        use pebrel_completions::command_context::{CommandContext, ShellSyntax};
         use std::os::windows::process::CommandExt;
         let root = tempfile::tempdir().unwrap();
         let repo = root.path().join("repo name");

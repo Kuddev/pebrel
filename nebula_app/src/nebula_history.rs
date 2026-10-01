@@ -189,7 +189,7 @@ impl NebulaHistory {
             return Vec::new();
         }
         let Some(pool) = self.pools.get(&scope.clone().normalized()) else { return Vec::new() };
-        let mut query = nebula_completions::command_search::CommandQuery::new(text);
+        let mut query = pebrel_completions::command_search::CommandQuery::new(text);
         let mut matches: Vec<_> = pool
             .entries
             .iter()
