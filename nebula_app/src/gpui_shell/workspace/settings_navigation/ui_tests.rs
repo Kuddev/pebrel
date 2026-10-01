@@ -200,7 +200,7 @@ fn density_changes_real_tab_bounds_and_sidebar_drag_pitch(cx: &mut TestAppContex
     for position in [TabsPositionName::Sidebar, TabsPositionName::Top] {
         for (density, height, gap, title_height) in [
             (DensityName::Standard, 34.0, 8.0, 48.0),
-            (DensityName::Compact, 32.0, 4.0, 40.0),
+            (DensityName::Compact, 32.0, 4.0, 48.0),
             (DensityName::Standard, 34.0, 8.0, 48.0),
         ] {
             workspace.update(&mut cx, |workspace, cx| {

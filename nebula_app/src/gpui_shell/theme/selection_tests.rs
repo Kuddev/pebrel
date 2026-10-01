@@ -9,7 +9,7 @@ use gpui_component::{
 };
 use nebula_settings::ThemeName;
 
-use super::{ResolvedTheme, apply_skin_tokens, wash};
+use super::{ResolvedTheme, apply_skin_tokens};
 
 fn apply_reader_theme(name: ThemeName, cx: &mut App) {
     let chrome = ResolvedTheme::builtin(name, None);
@@ -30,7 +30,7 @@ fn text_selection_and_search_matches_stay_distinct_from_the_document(cx: &mut Te
         gpui_component::init(cx);
         for name in ThemeName::BUILTIN {
             let chrome = ResolvedTheme::builtin(name, None);
-            let original = wash(chrome.skin().accent_soft);
+            let expected_list_selection = super::ink(chrome.skin().accent).opacity(0.08);
             apply_reader_theme(name, cx);
 
             let theme = cx.theme();
@@ -53,8 +53,37 @@ fn text_selection_and_search_matches_stay_distinct_from_the_document(cx: &mut Te
             }
             assert_eq!(theme.tokens.selection.color, selection, "{name:?}");
             assert_eq!(theme.tokens.selection.background, selection.into(), "{name:?}");
-            // Solid selection surfaces for lists are not text overlays.
-            assert_eq!(theme.list_active, original, "{name:?}");
+            // List rows use a separate light wash, not the stronger text overlay.
+            assert_eq!(theme.list_active, expected_list_selection, "{name:?}");
+        }
+    });
+}
+
+#[gpui::test]
+fn primary_buttons_keep_nord_solid_and_other_themes_soft_and_readable(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        for name in [ThemeName::Nord, ThemeName::NordLight, ThemeName::Paper, ThemeName::GlassLight]
+        {
+            apply_reader_theme(name, cx);
+            let theme = cx.theme();
+            assert_eq!(theme.button.a, 0.0, "default action must not gain a solid surface");
+            if name == ThemeName::Nord {
+                assert_eq!(theme.button_primary, theme.primary);
+            } else {
+                assert!((theme.button_primary.a - 0.10).abs() < 0.001);
+                assert!((theme.button_primary_hover.a - 0.15).abs() < 0.001);
+                assert!((theme.button_primary_active.a - 0.20).abs() < 0.001);
+            }
+            let panel = super::wash(ResolvedTheme::builtin(name, None).skin().panel);
+            for fill in
+                [theme.button_primary, theme.button_primary_hover, theme.button_primary_active]
+            {
+                assert!(
+                    contrast(panel.blend(fill), theme.button_primary_foreground) >= 4.45,
+                    "{name:?}"
+                );
+            }
         }
     });
 }

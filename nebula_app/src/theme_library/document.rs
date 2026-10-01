@@ -987,9 +987,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtins_produce_fifteen_valid_documents() {
+    fn builtins_produce_one_valid_document_per_catalog_entry() {
         let documents = builtin_documents();
-        assert_eq!(documents.len(), 15);
+        assert_eq!(documents.len(), ThemeName::BUILTIN.len());
+        assert!(documents.iter().any(|document| document.name() == "NordLight"));
+        assert!(documents.iter().any(|document| document.name() == "WarmSand"));
+        assert!(documents.iter().any(|document| document.name() == "SlateLight"));
         assert!(documents.iter().all(|document| document.palette().is_some()));
     }
 

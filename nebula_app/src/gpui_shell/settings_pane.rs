@@ -202,6 +202,7 @@ pub struct SettingsPane {
     pub(super) ssh_undo_seq: u64,
     /// 可直接编辑的字体链及其建议弹层；逗号分隔主字体与 fallback 字体。
     pub(super) font_picker_open: bool,
+    font_picker_cjk: bool,
     font_loading: bool,
     /// None = 尚未枚举；首次展开时在后台线程装配（几百字体的机器上
     /// `IsMonospacedFont` 逐族探询是实打实的开销，不挡 UI 帧）。
@@ -213,6 +214,7 @@ pub struct SettingsPane {
     /// 字体输入框上一帧的窗口坐标。字体目录是宽弹层，不能把整条设置行当
     /// 锚点；否则输入框在右侧、菜单却会从正文左缘展开。
     font_picker_trigger_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    font_picker_cjk_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     /// 备份类别选择（本地 UI 态；出厂默认 = 共享 `BackupSelection::default`）。
     backup_selection: crate::encrypted_backup::BackupSelection,
     backup_ui: backup::BackupUiState,
@@ -323,6 +325,7 @@ impl SettingsPane {
             (&self.ssh_jump_host_input, "ssh_jump_host"),
             (&self.ssh_icon_filter_input, "ssh_icon_filter"),
             (&self.font_family_input, "font_family"),
+            (&self.font_family_cjk_input, "font_family"),
             (&self.backup_pass_input, "backup_password"),
             (&self.backup_secret_input, "backup_secret"),
         ] {
@@ -679,16 +682,18 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let select = self.select_of(key);
-        // 闭态选中值 = accent（旧壳 combobox_value 15 处调用 14 处传
-        // sk.accent）。闭框/背景都不带文字色，包一层就能继承下去；右侧
-        // chevron 在组件内自带 muted，不会被染色。
         let control = self.segmented_setting(key, cx).unwrap_or_else(|| {
-            div()
-                .debug_selector(move || format!("settings-select-{key}"))
-                .w(px(SETTINGS_SELECT_WIDTH))
-                .text_color(cx.theme().link)
-                .children(select.map(|state| Select::new(&state).h(settings_control_height(cx))))
-                .into_any_element()
+            let Some(state) = select else {
+                return div().into_any_element();
+            };
+            crate::gpui_shell::widgets::settings_select_frame(
+                SharedString::from(format!("settings-select-{key}")),
+                Select::new(&state).appearance(false).h_full().rounded(px(6.0)),
+                cx,
+            )
+            .debug_selector(move || format!("settings-select-{key}"))
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .into_any_element()
         });
         self.maybe_marked(key, label, desc, control, cx)
     }
@@ -698,11 +703,13 @@ impl SettingsPane {
         self.row(
             language.pick("默认 Shell", "Default shell"),
             help("shell", language),
-            div()
-                .w(px(SETTINGS_SELECT_WIDTH))
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_color(cx.theme().link)
-                .child(Select::new(&self.shell_select).h(settings_control_height(cx))),
+            crate::gpui_shell::widgets::settings_select_frame(
+                "settings-shell-select",
+                Select::new(&self.shell_select).appearance(false).h_full().rounded(px(6.0)),
+                cx,
+            )
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .font_family(cx.theme().mono_font_family.clone()),
             cx,
         )
     }
