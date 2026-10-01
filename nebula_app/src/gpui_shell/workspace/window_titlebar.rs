@@ -1,10 +1,8 @@
 use super::*;
 
-fn title_bar_height(density: nebula_settings::DensityName) -> f32 {
-    match density {
-        nebula_settings::DensityName::Standard => 48.0,
-        nebula_settings::DensityName::Compact => 40.0,
-    }
+fn title_bar_height(_density: nebula_settings::DensityName) -> f32 {
+    // Content density must not compress the application chrome.
+    48.0
 }
 
 pub(super) fn effective_title_bar_height(
@@ -182,11 +180,11 @@ mod density_tests {
     use nebula_settings::DensityName;
 
     #[test]
-    fn compact_title_bar_retains_space_around_controls() {
+    fn content_density_preserves_title_bar_height_and_native_layout() {
         assert_eq!(title_bar_height(DensityName::Standard), 48.0);
-        assert_eq!(title_bar_height(DensityName::Compact), 40.0);
+        assert_eq!(title_bar_height(DensityName::Compact), 48.0);
         assert_eq!(effective_title_bar_height(DensityName::Standard, None), 48.0);
-        assert_eq!(effective_title_bar_height(DensityName::Compact, None), 40.0);
+        assert_eq!(effective_title_bar_height(DensityName::Compact, None), 48.0);
         assert_eq!(effective_title_bar_height(DensityName::Compact, Some((34.0, 7.0))), 34.0);
         assert!(title_bar_height(DensityName::Compact) >= 32.0 + 2.0 * 4.0);
     }

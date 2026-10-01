@@ -1,6 +1,6 @@
 [package]
 name = "nebula_terminal"
-version = "2.1.0"
+version = "2.1.1"
 license = "GPL-3.0-or-later"
 description = "Nebula terminal emulation core"
 readme = "../README.md"
