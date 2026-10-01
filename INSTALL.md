@@ -9,6 +9,10 @@ application at startup.
 
 The 1.6.0 release provides three Linux x64 Preview packages.
 
+- NixOS
+  ```sh
+  nix profile add github:Kuddev/pebrel#pebrel
+  ```
 - Debian/Ubuntu: install
   `Pebrel-v<version>-linux-x64-preview.deb` with
   `sudo apt install ./Pebrel-v<version>-linux-x64-preview.deb`.
