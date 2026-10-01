@@ -20,10 +20,52 @@ static void title_changed(GhosttyTerminal, void* userdata) {
     static_cast<Terminal*>(userdata)->title_changed = true;
 }
 
-extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(create)(JNIEnv* env, jobject, jint cols, jint rows) {
+static uint64_t history_start(const Terminal& state, const GhosttyTerminalScrollbar& bar) {
+    const uint64_t available = bar.total > bar.len ? bar.total - bar.len : 0;
+    return available > state.history_rows ? available - state.history_rows : 0;
+}
+
+static void seek_native(Terminal& state, uint64_t offset) {
+    GhosttyTerminalScrollViewport value{};
+    value.tag = GHOSTTY_SCROLL_VIEWPORT_TOP;
+    ghostty_terminal_scroll_viewport(state.vt, value);
+    value.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA;
+    value.value.delta = static_cast<int64_t>(offset);
+    ghostty_terminal_scroll_viewport(state.vt, value);
+    state.force = true;
+}
+
+GhosttyTerminalScrollbar Terminal::bounded_scrollbar() {
+    GhosttyTerminalScrollbar bar{};
+    ghostty_terminal_get(vt, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar);
+    const auto first = history_start(*this, bar);
+    if (bar.offset < first) { seek_native(*this, first); bar.offset = first; }
+    bar.total -= first;
+    bar.offset -= first;
+    return bar;
+}
+
+void Terminal::seek_history(uint64_t offset) {
+    GhosttyTerminalScrollbar bar{};
+    ghostty_terminal_get(vt, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar);
+    const auto first = history_start(*this, bar);
+    const auto maximum = bar.total > bar.len ? bar.total - bar.len : 0;
+    seek_native(*this, std::min(first + offset, maximum));
+}
+
+extern "C" JNIEXPORT jlong JNICALL JNI_METHOD(create)(JNIEnv* env, jobject, jint cols, jint rows, jint scrollback) {
+    if (scrollback < 0 || scrollback > 5000) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Invalid history row limit");
+        return 0;
+    }
     auto state = std::make_unique<Terminal>();
+    state->history_rows = scrollback;
+    // 固定版本的 C 头文件误写为行，Screen 实际使用字节；不能把 1000 行传成 1000 字节。
+    // 按支持的最大列宽和已核实的 64 位 Cell/Row 留出页开销，另用行窗口限制可回滚范围。
+    const size_t history_bytes = scrollback == 0 ? 0 : std::min(size_t{16 * 1024 * 1024},
+        static_cast<size_t>(scrollback) * (400 + 1) * sizeof(uint64_t) * 2 + 128 * 1024);
     if (!checked(env, ghostty_terminal_new(nullptr, &state->vt,
-            {static_cast<uint16_t>(cols), static_cast<uint16_t>(rows), 2000})) ||
+            {static_cast<uint16_t>(cols), static_cast<uint16_t>(rows), history_bytes})) ||
         !checked(env, ghostty_render_state_new(nullptr, &state->render)) ||
         !checked(env, ghostty_render_state_row_iterator_new(nullptr, &state->rows)) ||
         !checked(env, ghostty_render_state_row_cells_new(nullptr, &state->cells)) ||
@@ -76,7 +118,13 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(scroll)(JNIEnv*, jobject, jlong han
     value.tag = delta == INT32_MAX ? GHOSTTY_SCROLL_VIEWPORT_BOTTOM : GHOSTTY_SCROLL_VIEWPORT_DELTA;
     value.value.delta = delta;
     ghostty_terminal_scroll_viewport(state->vt, value);
+    state->bounded_scrollbar();
     state->force = true;
+}
+
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(scrollTo)(JNIEnv*, jobject, jlong handle, jint offset) {
+    auto* state = terminal(handle);
+    state->seek_history(static_cast<uint64_t>(std::max(offset, 0)));
 }
 
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(colors)(JNIEnv* env, jobject, jlong handle, jintArray input) {

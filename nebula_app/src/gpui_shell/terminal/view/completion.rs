@@ -220,6 +220,14 @@ impl TerminalView {
             self.completion_viewport.clear();
             return;
         }
+        if let Some(line) = line.as_deref()
+            && !self.suggest.completion_echo_ready(line)
+        {
+            self.suggestion_task = None;
+            self.suggest_anchor = None;
+            self.completion_viewport.clear();
+            return;
+        }
         let Some(line) = line.filter(|line| !line.is_empty()) else {
             self.suggestion_task = None;
             self.suggest_anchor = None;

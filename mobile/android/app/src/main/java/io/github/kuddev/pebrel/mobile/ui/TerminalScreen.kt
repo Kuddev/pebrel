@@ -36,7 +36,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, onBack: () -> Unit, onSessions: () -> Unit,
                         onRetry: () -> Unit, onEdit: () -> Unit, onClose: () -> Unit, onFiles: (() -> Unit)? = null,
-                        onAttachRemote: ((RemoteAttachment) -> Unit)? = null) {
+                        onAttachRemote: ((RemoteAttachment) -> Unit)? = null, active: Boolean = true) {
     val prefs by repository.display.state.collectAsStateWithLifecycle()
     var direct by rememberSaveable(session.id, prefs.directInput) { mutableStateOf(prefs.directInput) }
     val attachments = rememberTerminalAttachmentAction(session, repository) { direct = false }
@@ -53,7 +53,8 @@ fun LocalTerminalScreen(session: LocalSession, repository: SessionRepository, on
         if (session.status == "ended" || (session.status == "failed" && session.hasConnected)) TerminalDisconnected(session, if (session.host != null) onRetry else null)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             key(session.id) {
-                TerminalSurface(session, repository, Modifier.fillMaxSize(), direct, prefs.fontSize, keyboardRequest)
+                // 退出动画仍保留旧视图，但它已失去输入所有权；延迟单击不得在文件页弹回键盘。
+                TerminalSurface(session, repository, Modifier.fillMaxSize(), direct && active, prefs.fontSize, keyboardRequest)
             }
             if (session.host != null && (session.status == "connecting" || (session.status == "failed" && !session.hasConnected))) {
                 SshConnectionStatus(session, onClose, onRetry, onEdit,

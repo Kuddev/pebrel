@@ -92,6 +92,7 @@ private fun failureText(kind: SshFailureKind?): Int = when (kind) {
     SshFailureKind.TIMEOUT -> R.string.ssh_error_timeout
     SshFailureKind.REFUSED -> R.string.ssh_error_refused
     SshFailureKind.AUTH -> R.string.ssh_error_auth
+    SshFailureKind.KEY -> R.string.ssh_error_key
     SshFailureKind.HOST_KEY_CHANGED -> R.string.ssh_error_host_key
     SshFailureKind.TRUST_REJECTED -> R.string.ssh_error_trust
     SshFailureKind.CHANNEL -> R.string.ssh_error_channel

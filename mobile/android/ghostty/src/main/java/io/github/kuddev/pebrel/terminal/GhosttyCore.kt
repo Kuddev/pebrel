@@ -13,16 +13,19 @@ class TerminalFrame(val rows: Array<TerminalRow?>, val meta: IntArray, val wrapp
     val background get() = meta[5]
     val cursorColor get() = meta[6]
     val cursorStyle get() = meta[7]
+    val scrollTotal get() = meta.getOrElse(8) { rows.size }
+    val scrollOffset get() = meta.getOrElse(9) { 0 }
     fun text() = rows.joinToString("\n") { it?.text?.trimEnd().orEmpty() }.trimEnd()
 }
 
 /** Synchronization is a lifetime boundary; production calls run on a serial worker. */
-class GhosttyCore(columns: Int = 80, rows: Int = 24) : Closeable {
+class GhosttyCore(columns: Int = 80, rows: Int = 24, scrollbackLines: Int = 1000) : Closeable {
     private var handle: Long
     private var rowCache: Array<TerminalRow?>
     init {
         require(columns in 2..400 && rows in 2..200)
-        handle = NativeBridge.create(columns, rows)
+        require(scrollbackLines in 0..5000)
+        handle = NativeBridge.create(columns, rows, scrollbackLines)
         check(handle != 0L)
         rowCache = arrayOfNulls(rows)
     }
@@ -38,12 +41,13 @@ class GhosttyCore(columns: Int = 80, rows: Int = 24) : Closeable {
         if (rowCache.size != rows) rowCache = arrayOfNulls(rows)
     }
     @Synchronized fun snapshot(): TerminalFrame {
-        val meta = IntArray(8)
+        val meta = IntArray(10)
         NativeBridge.render(pointer(), rowCache, meta)
         // Unchanged immutable rows are shared across frames; changed rows are replaced by JNI.
         return TerminalFrame(rowCache.copyOf(), meta)
     }
     @Synchronized fun scroll(lines: Int) = NativeBridge.scroll(pointer(), lines)
+    @Synchronized fun scrollTo(offset: Int) = NativeBridge.scrollTo(pointer(), offset.coerceAtLeast(0))
     @Synchronized fun colors(colors: IntArray) {
         require(colors.size == 19)
         NativeBridge.colors(pointer(), colors)
@@ -62,17 +66,18 @@ class GhosttyCore(columns: Int = 80, rows: Int = 24) : Closeable {
 
 internal object NativeBridge {
     init { System.loadLibrary("pebrel_ghostty") }
-    external fun create(columns: Int, rows: Int): Long
+    external fun create(columns: Int, rows: Int, scrollbackLines: Int): Long
     external fun destroy(handle: Long)
     external fun feed(handle: Long, input: ByteArray, count: Int): ByteArray
     external fun title(handle: Long): ByteArray?
     external fun resize(handle: Long, columns: Int, rows: Int, cellWidth: Int, cellHeight: Int)
     external fun render(handle: Long, rows: Array<TerminalRow?>, metadata: IntArray)
     external fun scroll(handle: Long, lines: Int)
+    external fun scrollTo(handle: Long, offset: Int)
     external fun colors(handle: Long, colors: IntArray)
     external fun key(handle: Long, keyCode: Int, mods: Int, action: Int, text: ByteArray, unshifted: Int): ByteArray
     external fun bracketedPaste(handle: Long): Boolean
-    external fun ptyOpen(directory: String, columns: Int, rows: Int): IntArray
+    external fun ptyOpen(directory: String, startup: String, columns: Int, rows: Int): IntArray
     external fun ptyResize(fd: Int, columns: Int, rows: Int, cellWidth: Int, cellHeight: Int)
     external fun ptyStop(pid: Int)
     external fun ptyWait(pid: Int): Int

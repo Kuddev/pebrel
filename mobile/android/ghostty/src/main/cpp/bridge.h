@@ -18,6 +18,9 @@ struct Terminal {
     bool overflow = false;
     bool force = true;
     bool title_changed = false;
+    uint64_t history_rows = 1000;
+    GhosttyTerminalScrollbar bounded_scrollbar();
+    void seek_history(uint64_t offset);
     ~Terminal();
 };
 

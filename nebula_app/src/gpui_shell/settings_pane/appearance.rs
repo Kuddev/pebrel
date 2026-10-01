@@ -1,20 +1,6 @@
 use super::appearance_picker::AppearanceColors;
 use super::*;
 
-fn appearance_copy(
-    title: &'static str,
-    description: &'static str,
-    colors: AppearanceColors,
-) -> gpui::Div {
-    v_flex()
-        .min_w_0()
-        .flex_1()
-        .text_left()
-        .gap(px(4.0))
-        .child(div().text_size(px(14.0)).font_semibold().child(title))
-        .child(div().text_size(px(12.0)).text_color(colors.secondary).child(description))
-}
-
 impl SettingsPane {
     fn appearance_trigger(
         &self,
@@ -24,6 +10,8 @@ impl SettingsPane {
     ) -> gpui::AnyElement {
         let language = crate::gpui_shell::config::ui_language(cx);
         let colors = AppearanceColors::current(cx);
+        let base_px = self.font_size_px(cx);
+        let description_px = base_px * super::design::DESC_SCALE;
         let resolved = crate::gpui_shell::theme::resolved_theme(cx);
         let name = resolved.base_name();
         let icon = crate::app_icon::selected();
@@ -69,6 +57,7 @@ impl SettingsPane {
             .track_focus(&focus.clone().tab_stop(true))
             .role(gpui::accesskit::Role::Button)
             .aria_label(format!("{action}: {label}"))
+            .w_full()
             .min_w(px(166.0))
             .max_w(px(250.0))
             .flex_shrink_0()
@@ -91,8 +80,13 @@ impl SettingsPane {
                     .flex_1()
                     .min_w_0()
                     .gap(px(2.0))
-                    .child(div().text_size(px(12.0)).font_medium().truncate().child(label))
-                    .child(div().text_size(px(10.5)).text_color(colors.secondary).child(action)),
+                    .child(div().text_size(px(base_px)).font_medium().truncate().child(label))
+                    .child(
+                        div()
+                            .text_size(px(description_px))
+                            .text_color(colors.secondary)
+                            .child(action),
+                    ),
             )
             .child(Icon::new(IconName::ChevronRight).size(px(14.0)).text_color(colors.secondary))
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -164,29 +158,20 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
-        let colors = AppearanceColors::current(cx);
         let theme = self.appearance_trigger(true, window, cx);
         let icon = self.appearance_trigger(false, window, cx);
+        // 与开关、字体等设置共用行原语，字号、字重和说明缩放只维护一份。
         let selectors = v_flex()
             .w_full()
-            .gap(px(24.0))
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_h(px(58.0))
-                    .gap(px(25.0))
-                    .items_center()
-                    .justify_between()
-                    .child(appearance_copy(
-                        language.pick("主题", "Theme"),
-                        language.pick(
-                            "终端与界面的配色，统一选择。",
-                            "One palette for the terminal and interface.",
-                        ),
-                        colors,
-                    ))
-                    .child(theme),
-            )
+            .child(self.row(
+                language.pick("主题", "Theme"),
+                language.pick(
+                    "终端与界面的配色，统一选择。",
+                    "One palette for the terminal and interface.",
+                ),
+                theme,
+                cx,
+            ))
             .child(self.switch_row(
                 "follow_system_theme",
                 language.pick("跟随系统", "Follow system"),
@@ -197,23 +182,15 @@ impl SettingsPane {
                 self.runtime.follow_system_theme,
                 cx,
             ))
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_h(px(58.0))
-                    .gap(px(25.0))
-                    .items_center()
-                    .justify_between()
-                    .child(appearance_copy(
-                        language.pick("应用图标", "App icon"),
-                        language.pick(
-                            "独立于主题，切换配色时保持不变。",
-                            "Independent of the theme; changing colors keeps the icon.",
-                        ),
-                        colors,
-                    ))
-                    .child(icon),
-            );
+            .child(self.row(
+                language.pick("应用图标", "App icon"),
+                language.pick(
+                    "独立于主题，切换配色时保持不变。",
+                    "Independent of the theme; changing colors keeps the icon.",
+                ),
+                icon,
+                cx,
+            ));
         let settings = self.appearance_advanced_settings(window, cx);
         v_flex().w_full().gap(px(GROUP_GAP)).child(selectors).child(settings)
     }

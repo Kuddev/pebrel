@@ -63,6 +63,8 @@
   </tr>
 </table>
 
+商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+
 ## 一个工作区
 
 Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行工具放进同一个原生桌面工作区。
@@ -75,7 +77,35 @@ Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行
   可从当前会话元数据补全身份。
 - Windows 下可选择后台驻留，让关窗后的会话继续运行。进程退出后重新接续已保存的对话
   是另一项功能，需要 CLI 支持恢复，并且有可用的会话身份。
-- 历史记录与路径补全、自定义快捷键，以及集成的 Shell 提示符。
+- 智能补齐与历史补齐、自定义快捷键，以及集成的 Shell 提示符。
+
+### 智能补齐
+
+从当前 Git 仓库、项目脚本、SSH 配置和文件系统获取候选，第一次输入命令也能补齐。
+Windows 下还支持已注册的 WSL 发行版。这些候选由 Pebrel 自带的补齐引擎提供，
+无需 Shell 补齐插件或 AI 请求。
+
+下面在真实 Windows/PowerShell 终端中演示五种命令：Git 分支、npm 脚本、SSH 别名、
+WSL 发行版，以及 `cat` 读取带空格的文件名。使用内置 Powerline 提示符，逐字连续输入。
+
+<p align="center">
+  <img src="docs/screenshots/intelligent-completion.gif" alt="Pebrel 首次输入 Git、npm、SSH、WSL 和 cat 时的智能补齐" width="960" />
+</p>
+
+设置中可选择**行内补齐**（Tab 接受灰字）、**列表补齐**（Tab 接受选中候选），
+或**混合补齐**（→ 接受灰字，Tab 打开列表）。
+
+<details>
+<summary>历史补齐有什么不同？</summary>
+
+历史补齐回填已经执行过的命令。下面先运行 `echo deployment finished`，再输入
+`echo dep` 从历史中补齐；上面的五个例子则从当前环境发现候选，无需相应的命令历史。
+
+<p align="center">
+  <img src="docs/screenshots/history-completion.gif" alt="从历史记录补齐已执行过的命令" width="960" />
+</p>
+
+</details>
 
 ### SSH 与文件
 
@@ -135,8 +165,10 @@ Linux 可安装 DEB，或为 AppImage 添加执行权限。macOS 打开对应 DM
 采用临时签名的 macOS 包首次启动可能需要在“系统设置 > 隐私与安全性”中选择“仍要打开”。
 原生 macOS CI 运行在 macOS 15 上，部署目标并不代表每个较早系统版本都已通过运行验证。
 
-系统托盘驻留、全局快速终端热键、自动配置本地 AI hook 和自动安装更新目前由 Windows 提供，
-Linux 与 macOS 尚未提供这些集成。平台要求和旧版 Nebula 升级步骤见[安装说明](INSTALL.md)。
+Pebrel 2.1 在 Windows、macOS 和 Linux 上接通原生托盘操作、快速终端快捷键、登录自启和
+本地 AI Hook 配置。Linux 托盘使用状态通知器，Wayland 快捷键使用桌面 Portal。
+Windows 与 macOS 提供原生更新安装；Linux 通过包管理器或新安装包升级。
+平台要求和旧版 Nebula 升级步骤见[安装说明](INSTALL.md)。
 
 ## 配置
 
@@ -170,8 +202,6 @@ cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
 旧渲染器仅在显式启用 `legacy-shell` 时使用。
 
 ## 联系方式
-
-商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 

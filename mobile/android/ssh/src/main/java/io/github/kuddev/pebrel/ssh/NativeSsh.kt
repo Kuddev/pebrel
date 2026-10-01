@@ -7,7 +7,7 @@ class NativeSshException @JvmOverloads constructor(val code: String, cause: Thro
 
 internal object NativeSsh {
     init { System.loadLibrary("pebrel_ssh") }
-    external fun create(host: String, port: Int, user: String, password: ByteArray, fingerprint: String): Long
+    external fun create(host: String, port: Int, user: String, password: ByteArray, fingerprint: String, privateKey: ByteArray): Long
     external fun nextEvent(id: Long): String
     external fun answerHostKey(id: Long, accepted: Boolean)
     external fun openShell(id: Long, columns: Int, rows: Int, width: Int, height: Int)

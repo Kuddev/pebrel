@@ -268,6 +268,49 @@ fn issue_353_history_uses_echoed_command_and_refreshes_on_all_platforms(cx: &mut
 }
 
 #[gpui::test]
+fn completion_never_accepts_a_candidate_for_partial_pty_echo(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("echo-candidate.txt"), b"").unwrap();
+    let (view, window, receiver) = open_at(cx, Some(directory.path().to_owned()));
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.ghost_enabled = true;
+            view.completion_style = crate::display::CompletionStyle::Inline;
+            feed(view, "❯ ".as_bytes());
+            refresh_completion_from_grid(view, cx);
+            view.replace_text_in_range(None, "cat echo-ca", window, cx);
+            feed(view, b"cat echo-c");
+            refresh_completion_from_grid(view, cx);
+        })
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert!(view.suggest.suggestion.is_empty(), "the last sent character is still in flight");
+        assert!(view.suggest.completion_items.is_empty());
+        feed(view, b"a");
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert_eq!(view.suggest.suggestion, "ndidate.txt");
+            view.on_terminal_tab(&TerminalTab, window, cx);
+        })
+    });
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"cat echo-candidate.txt");
+}
+
+#[gpui::test]
 fn completion_mode_hybrid_lists_without_writing_and_cancels_pending_results(
     cx: &mut TestAppContext,
 ) {
