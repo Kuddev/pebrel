@@ -1,5 +1,5 @@
 [package]
-name = "nebula-completions"
+name = "pebrel-completions"
 version = "2.1.0"
 edition.workspace = true
 

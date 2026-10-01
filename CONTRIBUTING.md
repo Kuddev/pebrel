@@ -3,7 +3,9 @@
 Pebrel 1.6 uses the `pebrel` command, Pebrel installation directories, and
 `PEBREL_*` environment variables. Legacy configuration and integration identifiers
 remain compatibility inputs; follow the [identity migration decision](docs/architecture-decisions.md#adr-0003---pebrel-16-identity-migration)
-when changing them. Internal Rust crate and source-directory names remain stable.
+when changing them. Internal Rust names migrate one module at a time. The completion package now uses
+`pebrel-completions`; its source directory remains `nebula-completions/` until the
+scan-root migration is validated. See the [package identity decision](architecture/notes/nebula-completions/2026-09-30-package-identity.md).
 
 ## Required reading
 

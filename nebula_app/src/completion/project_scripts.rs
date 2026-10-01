@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use nebula_completions::semantic::Context;
+use pebrel_completions::semantic::Context;
 
 #[derive(Debug)]
 struct Snapshot {
@@ -29,7 +29,7 @@ impl Cache {
         cwd: &str,
         context: &Context,
         cancelled: &dyn Fn() -> bool,
-    ) -> Vec<nebula_completions::Suggestion> {
+    ) -> Vec<pebrel_completions::Suggestion> {
         let cwd = Path::new(cwd);
         if !cwd.is_absolute() || cancelled() {
             return Vec::new();
@@ -110,7 +110,7 @@ fn read_names(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nebula_completions::command_context::ShellSyntax;
+    use pebrel_completions::command_context::ShellSyntax;
 
     #[test]
     fn scripts_follow_project_scope_and_refresh_without_running_project_code() {
