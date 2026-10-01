@@ -210,6 +210,44 @@ class GhosttyEngineTest {
         } finally { terminal.finishIfRunning(); directory.deleteRecursively() }
     }
 
+    @Test fun localPromptTracksDirectoriesAndRespectsUserMkshrc() {
+        val target = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = java.io.File(target.cacheDir, "prompt-${System.nanoTime()}").apply { mkdirs() }.canonicalFile
+        val nested = java.io.File(directory, "中文 path").apply { mkdirs() }
+        fun checkPrompt(custom: Boolean) {
+            if (custom) java.io.File(directory, ".mkshrc").writeText("PS1='custom:${'$'}{PWD} > '\n", Charsets.UTF_8)
+            val ready = CountDownLatch(1)
+            val terminal = TerminalSession(LocalPtyTransport(directory.absolutePath,
+                target.filesDir.resolve("terminal").absolutePath), object : TerminalCallbacks() {
+                override fun onTransportReady(session: TerminalSession) { ready.countDown() }
+            })
+            fun prompt(path: String) = if (custom) "custom:$path >" else "$path ${'$'}"
+            fun awaitPrompt(path: String) {
+                await { terminal.frame?.rows?.filterNotNull()?.lastOrNull { it.text.isNotBlank() }
+                    ?.text?.trimEnd() == prompt(path) }
+            }
+            try {
+                terminal.updateSize(160, 12, 8, 16)
+                terminal.start(); terminal.setVisible(true)
+                assertTrue(ready.await(10, TimeUnit.SECONDS))
+                awaitPrompt(directory.absolutePath)
+                // Disable echo before cd, so the command text cannot satisfy the prompt assertion.
+                assertTrue(terminal.sendText("stty -echo; clear; printf '\\120\\122\\117\\115\\120\\124_READY\\n'\r"))
+                await { terminal.frame?.text()?.contains("PROMPT_READY") == true }
+                awaitPrompt(directory.absolutePath)
+                assertTrue(terminal.sendText("cd '中文 path'\r"))
+                awaitPrompt(nested.absolutePath)
+                assertTrue(terminal.sendText("cd /\r"))
+                awaitPrompt("/")
+                assertTrue(terminal.sendText("cd \"${'$'}HOME\"\r"))
+                awaitPrompt(directory.absolutePath)
+                assertNull(terminal.failure)
+            } finally { terminal.finishIfRunning() }
+        }
+        try { checkPrompt(false); checkPrompt(true) }
+        finally { directory.deleteRecursively() }
+    }
+
     @Test fun terminalBackgroundCannotEraseSiblingChrome() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val target = instrumentation.targetContext

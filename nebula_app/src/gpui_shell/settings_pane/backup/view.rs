@@ -5,6 +5,7 @@ pub(super) fn panel(cx: &App) -> gpui::Div {
     v_flex()
         .w_full()
         .min_w_0()
+        .flex_shrink_0()
         .rounded(px(10.0))
         .border_1()
         .border_color(crate::gpui_shell::theme::settings_hairline(cx))
@@ -61,6 +62,7 @@ impl SettingsPane {
         let off = self.backup_remote.protocol == BackupProtocol::Off;
         v_flex()
             .w_full()
+            .flex_shrink_0()
             .max_w(px(700.0))
             .gap_6()
             .text_size(px(14.0))
@@ -207,64 +209,72 @@ impl SettingsPane {
             },
             BackupProtocol::Off => String::new(),
         };
-        let store =
-            v_flex()
-                .px_6()
-                .py_3()
-                .gap_2()
-                .border_t_1()
-                .border_color(cx.theme().border)
-                .child(
-                    h_flex()
-                        .gap_3()
-                        .items_center()
-                        .flex_wrap()
-                        .child(
-                            Icon::default()
-                                .path(super::setup::provider_icon(&self.backup_remote))
-                                .size(px(16.0)),
-                        )
-                        .child(div().font_medium().child(l.text(provider(&self.backup_remote))))
-                        .child(caption(path, cx).flex_1().min_w_0().truncate())
-                        .child(
-                            Button::new("backup-edit-storage")
-                                .label(l.text(Message::BackupFlowChange))
-                                .ghost()
-                                .small()
-                                .disabled(self.backup_busy)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_backup_sheet(BackupSheet::Storage, window, cx)
-                                })),
-                        ),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(caption(
-                            l.text(if self.backup_ui.listing {
-                                Message::CloudChecking
-                            } else if self.backup_ui.list_error.is_some() {
-                                Message::BackupFlowConnectionFailed
-                            } else {
-                                Message::BackupFlowConnected
-                            }),
-                            cx,
-                        ))
-                        .child(
-                            Button::new("backup-refresh")
-                                .icon(IconName::Redo2)
-                                .ghost()
-                                .small()
-                                .tooltip(l.text(Message::CloudTest))
-                                .disabled(self.backup_busy || self.backup_ui.listing)
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.refresh_backup_snapshots(cx)),
-                                ),
-                        ),
-                )
-                .children(self.backup_ui.list_error.as_ref().map(|error| {
-                    div().text_sm().text_color(cx.theme().danger).child(error.clone())
-                }));
+        let store = v_flex()
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .px_6()
+            .py_3()
+            .gap_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .flex_wrap()
+                    .child(
+                        Icon::default()
+                            .path(super::setup::provider_icon(&self.backup_remote))
+                            .size(px(16.0)),
+                    )
+                    .child(div().font_medium().child(l.text(provider(&self.backup_remote))))
+                    .child(caption(path, cx).flex_1().min_w_0().truncate())
+                    .child(
+                        Button::new("backup-edit-storage")
+                            .label(l.text(Message::BackupFlowChange))
+                            .ghost()
+                            .small()
+                            .disabled(self.backup_busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_backup_sheet(BackupSheet::Storage, window, cx)
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(caption(
+                        l.text(if self.backup_ui.listing {
+                            Message::CloudChecking
+                        } else if self.backup_ui.list_error.is_some() {
+                            Message::BackupFlowConnectionFailed
+                        } else {
+                            Message::BackupFlowConnected
+                        }),
+                        cx,
+                    ))
+                    .child(
+                        Button::new("backup-refresh")
+                            .icon(IconName::Redo2)
+                            .ghost()
+                            .small()
+                            .tooltip(l.text(Message::CloudTest))
+                            .disabled(self.backup_busy || self.backup_ui.listing)
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.refresh_backup_snapshots(cx)),
+                            ),
+                    ),
+            )
+            .children(self.backup_ui.list_error.as_ref().map(|error| {
+                div()
+                    .debug_selector(|| "backup-storage-error".into())
+                    .w_full()
+                    .flex_shrink_0()
+                    .text_sm()
+                    .text_color(cx.theme().danger)
+                    .child(error.clone())
+            }));
         let mut history =
             v_flex().w_full().px_6().py_3().border_t_1().border_color(cx.theme().border);
         for (index, entry) in self.backup_ui.snapshots.iter().enumerate() {
@@ -349,7 +359,16 @@ impl SettingsPane {
             history.child(caption(l.text(Message::BackupFlowRetention), cx).pl(px(26.0)).py_3());
         panel(cx)
             .debug_selector(|| "backup-dashboard".into())
-            .child(h_flex().w_full().p_6().gap_4().flex_wrap().child(head).child(actions))
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_shrink_0()
+                    .p_6()
+                    .gap_4()
+                    .flex_wrap()
+                    .child(head)
+                    .child(actions),
+            )
             .child(store)
             .when(latest.is_some(), |d| d.child(history))
     }
@@ -358,51 +377,71 @@ impl SettingsPane {
         let l = crate::gpui_shell::config::ui_language(cx);
         let ready = cx.try_global::<BackupPassword>().is_some_and(|p| p.0.is_some());
         v_flex()
+            .debug_selector(|| "backup-encryption".into())
+            .w_full()
+            .flex_shrink_0()
             .gap_3()
             .child(div().font_semibold().child(l.text(Message::BackupFlowEncryption)))
             .child(
-                h_flex()
-                    .gap_4()
-                    .items_center()
-                    .flex_wrap()
+                v_flex()
+                    .w_full()
+                    .flex_shrink_0()
+                    .gap_2()
                     .py_3()
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w(px(180.0))
-                            .gap_1()
-                            .child(l.text(Message::CloudPassphrase))
-                            .child(caption(l.text(Message::BackupFlowPasswordHint), cx)),
+                        h_flex()
+                            .w_full()
+                            .gap_3()
+                            .justify_between()
+                            .flex_wrap()
+                            .child(div().child(l.text(Message::CloudPassphrase)))
+                            .child(
+                                h_flex()
+                                    .flex_shrink_0()
+                                    .gap_2()
+                                    .child(caption(
+                                        l.text(if ready {
+                                            Message::BackupFlowPasswordReady
+                                        } else {
+                                            Message::BackupFlowPasswordMissing
+                                        }),
+                                        cx,
+                                    ))
+                                    .child(
+                                        Button::new("backup-password")
+                                            .debug_selector(|| "backup-password".into())
+                                            .label(l.text(if ready {
+                                                Message::BackupFlowClear
+                                            } else {
+                                                Message::BackupFlowEnter
+                                            }))
+                                            .small()
+                                            .ghost()
+                                            .disabled(self.backup_busy)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                if ready {
+                                                    cx.set_global(BackupPassword::default());
+                                                    this.clear_backup_inputs(window, cx);
+                                                    cx.notify();
+                                                } else {
+                                                    this.open_backup_sheet(
+                                                        BackupSheet::Password,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            })),
+                                    ),
+                            ),
                     )
-                    .child(caption(
-                        l.text(if ready {
-                            Message::BackupFlowPasswordReady
-                        } else {
-                            Message::BackupFlowPasswordMissing
-                        }),
-                        cx,
-                    ))
                     .child(
-                        Button::new("backup-password")
-                            .label(l.text(if ready {
-                                Message::BackupFlowClear
-                            } else {
-                                Message::BackupFlowEnter
-                            }))
-                            .small()
-                            .ghost()
-                            .disabled(self.backup_busy)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if ready {
-                                    cx.set_global(BackupPassword::default());
-                                    this.clear_backup_inputs(window, cx);
-                                    cx.notify();
-                                } else {
-                                    this.open_backup_sheet(BackupSheet::Password, window, cx);
-                                }
-                            })),
+                        caption(l.text(Message::BackupFlowPasswordHint), cx)
+                            .debug_selector(|| "backup-password-description".into())
+                            .w_full()
+                            .max_w(px(560.0))
+                            .flex_shrink_0(),
                     ),
             )
     }
