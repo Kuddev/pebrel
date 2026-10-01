@@ -9,10 +9,6 @@ application at startup.
 
 The 1.6.0 release provides three Linux x64 Preview packages.
 
-- NixOS
-  ```sh
-  nix profile add github:Kuddev/pebrel#pebrel
-  ```
 - Debian/Ubuntu: install
   `Pebrel-v<version>-linux-x64-preview.deb` with
   `sudo apt install ./Pebrel-v<version>-linux-x64-preview.deb`.
@@ -33,6 +29,11 @@ passphrases requires `libsecret-tools` and an unlocked Secret Service keyring
 (for example GNOME Keyring or a compatible KWallet setup). The Debian package
 recommends these dependencies. If storage is unavailable, enter the secret for
 the current connection instead; Pebrel does not silently claim to save it.
+
+## NixOS
+```sh
+nix profile add github:Kuddev/pebrel#pebrel
+```
 
 ## macOS Preview
 
