@@ -258,9 +258,9 @@ impl DirectoryHistory {
     /// set. Unvisited candidates retain the completion engine's stable order.
     pub(crate) fn rank_file_suggestions(
         &self,
-        suggestions: Vec<nebula_completions::file::FileSuggestion>,
+        suggestions: Vec<pebrel_completions::file::FileSuggestion>,
         cwd: &str,
-    ) -> Vec<nebula_completions::file::FileSuggestion> {
+    ) -> Vec<pebrel_completions::file::FileSuggestion> {
         let now = current_time();
         let state = self.state.lock();
         let mut scored: Vec<_> = suggestions
@@ -723,9 +723,9 @@ mod tests {
         );
     }
 
-    fn suggestion(path: &str) -> nebula_completions::file::FileSuggestion {
-        nebula_completions::file::FileSuggestion {
-            span: nebula_completions::Span::new(0, path.len()),
+    fn suggestion(path: &str) -> pebrel_completions::file::FileSuggestion {
+        pebrel_completions::file::FileSuggestion {
+            span: pebrel_completions::Span::new(0, path.len()),
             path: path.to_owned(),
             style: None,
             is_dir: true,

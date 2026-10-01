@@ -190,8 +190,8 @@ fn git_completion_native_shell_end_to_end() {
         std::fs::write(repository.path().join(format!("qa move {mode}.txt")), "executed").unwrap();
     }
     let shell = crate::platform::shell::completion_qa_shell(&output);
-    let powershell = nebula_completions::command_context::ShellSyntax::for_program(shell.program())
-        == nebula_completions::command_context::ShellSyntax::PowerShell;
+    let powershell = pebrel_completions::command_context::ShellSyntax::for_program(shell.program())
+        == pebrel_completions::command_context::ShellSyntax::PowerShell;
     let result = Arc::new(Mutex::new(None));
     let after = result.clone();
     gpui_platform::application().with_assets(crate::gpui_shell::assets::NebulaAssets).run(move |cx| {
