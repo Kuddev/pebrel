@@ -176,6 +176,10 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
+            gradle --no-daemon -p mobile/android :app:installPreview
+            # 触摸验收从已授权的本地终端开始；全新模拟器的权限弹窗不应截获选词和复制手势。
+            adb shell appops set --uid io.github.kuddev.pebrel.mobile.preview MANAGE_EXTERNAL_STORAGE allow
+            adb shell pm grant io.github.kuddev.pebrel.mobile.preview android.permission.POST_NOTIFICATIONS
             gradle --no-daemon -p mobile/android :app:connectedPreviewAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.kuddev.pebrel.mobile.GhosttyEngineTest,io.github.kuddev.pebrel.mobile.SshIntegrationTest#privateKeysAuthenticateWithPassphrasesAndNeverFallBackToPassword,io.github.kuddev.pebrel.mobile.SshIntegrationTest#sftpRoundTripPagingAndCancellationKeepTheRealShellUsable,io.github.kuddev.pebrel.mobile.SshIntegrationTest#realPasswordShellStreamsOutputThroughGhostty,io.github.kuddev.pebrel.mobile.SshIntegrationTest#wrongPasswordReportsAuthenticationAndWipesSecret,io.github.kuddev.pebrel.mobile.SshIntegrationTest#changedHostKeyNeverReachesAuthentication,io.github.kuddev.pebrel.mobile.SshIntegrationTest#declinedTrustNeverAuthenticates,io.github.kuddev.pebrel.mobile.SshIntegrationTest#execKeepsStderrOutOfRpcStdoutAndPreservesExitCode -Pandroid.testInstrumentationRunnerArguments.sshFingerprint="$SSH_FINGERPRINT" -Pandroid.testInstrumentationRunnerArguments.sftpFixtureDirectory=paging
       - name: Verify signing, identity, native payload and test results
         run: |
