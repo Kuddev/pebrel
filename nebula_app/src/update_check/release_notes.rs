@@ -17,7 +17,10 @@ fn cache_directory() -> PathBuf {
 fn cache_path(directory: &Path, version: &str) -> PathBuf {
     use sha2::{Digest as _, Sha256};
     // Remote version strings must not become filesystem paths.
-    let key = format!("{:x}", Sha256::digest(version.as_bytes()));
+    let key = Sha256::digest(version.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     directory.join("release-notes").join(format!("{key}.json"))
 }
 
