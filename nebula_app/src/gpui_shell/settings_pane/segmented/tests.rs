@@ -1,7 +1,7 @@
 use super::*;
 use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 
-struct SegmentsHost(Entity<SettingsPane>);
+struct SegmentsHost(Entity<SettingsPane>, &'static str);
 
 impl Render for SegmentsHost {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -9,7 +9,7 @@ impl Render for SegmentsHost {
         div()
             .size_full()
             .track_focus(&focus)
-            .child(self.0.update(cx, |pane, cx| pane.segmented_setting("vcs_display", cx).unwrap()))
+            .child(self.0.update(cx, |pane, cx| pane.segmented_setting(self.1, cx).unwrap()))
     }
 }
 
@@ -17,7 +17,8 @@ impl Render for SegmentsHost {
 fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpui::TestAppContext) {
     let _lock = lock_theme_studio();
     let _settings = SettingsBytesGuard::capture();
-    nebula_settings::persist_keys(&[("vcs_display", "auto".into())]).unwrap();
+    nebula_settings::persist_keys(&[("tab_reveal", "slide".into()), ("language", "en-US".into())])
+        .unwrap();
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_reduce_motion(true);
@@ -29,16 +30,17 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
         pane = Some(settings.clone());
         let host = cx.new(|cx| {
             cx.observe(&settings, |_, _, cx| cx.notify()).detach();
-            SegmentsHost(settings)
+            SegmentsHost(settings, "tab_reveal")
         });
         gpui_component::Root::new(host, window, cx)
     });
     let pane = pane.unwrap();
     window.simulate_resize(gpui::size(px(500.0), px(200.0)));
+    // Short choices stay segmented; long-label dropdown behavior is covered below.
     for (value, selector) in [
-        ("auto", "settings-choice-vcs_display-auto"),
-        ("svn", "settings-choice-vcs_display-svn"),
-        ("git", "settings-choice-vcs_display-git"),
+        ("slide", "settings-choice-tab_reveal-slide"),
+        ("instant", "settings-choice-tab_reveal-instant"),
+        ("slide", "settings-choice-tab_reveal-slide"),
     ] {
         window.update(|window, cx| {
             let _ = window.draw(cx);
@@ -53,8 +55,8 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
         window.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        let track = window.debug_bounds("settings-choices-vcs_display").unwrap();
-        let thumb = window.debug_bounds("settings-indicator-vcs_display").unwrap();
+        let track = window.debug_bounds("settings-choices-tab_reveal").unwrap();
+        let thumb = window.debug_bounds("settings-indicator-tab_reveal").unwrap();
         assert!((f32::from(thumb.left() - slot.left())).abs() < 0.1);
         assert!((f32::from(thumb.size.width - slot.size.width)).abs() < 0.1);
         assert_eq!(thumb.top(), slot.top());
@@ -62,25 +64,67 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
         assert_eq!(thumb.top() - track.top(), px(TRACK_INSET));
         assert_eq!(track.bottom() - thumb.bottom(), px(TRACK_INSET));
         let (_, select, values) = pane.read_with(window, |pane, _| {
-            pane.selects.iter().find(|(key, _, _)| *key == "vcs_display").unwrap().clone()
+            pane.selects.iter().find(|(key, _, _)| *key == "tab_reveal").unwrap().clone()
         });
         let row = window.update(|_, cx| select.read(cx).selected_index(cx).unwrap().row);
         assert_eq!(values[row], value);
-        assert_eq!(RuntimeSettings::load().vcs_display.settings_value(), value);
+        assert_eq!(RuntimeSettings::load().tab_reveal.settings_value(), value);
     }
     window.update(|window, cx| {
         pane.update(cx, |pane, cx| {
-            pane.sync_select("vcs_display", "auto", window, cx);
+            pane.sync_select("tab_reveal", "slide", window, cx);
             pane.focus_handle.focus(window, cx);
             cx.notify();
         });
         let _ = window.draw(cx);
     });
-    window.simulate_keystrokes("tab tab tab enter");
+    window.simulate_keystrokes("tab tab enter");
     // GPUI activates buttons on release; simulate_keystrokes sends only key-down.
     window.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("enter").unwrap() });
     window.run_until_parked();
-    assert_eq!(RuntimeSettings::load().vcs_display.settings_value(), "svn");
+    assert_eq!(RuntimeSettings::load().tab_reveal.settings_value(), "instant");
+}
+
+#[gpui::test]
+fn long_segments_use_a_real_dropdown_without_losing_preference_updates(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("vcs_display", "auto".into()), ("language", "en-US".into())])
+        .unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_reduce_motion(true);
+        gpui_component::Theme::global_mut(cx).font_size = px(28.0);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        let host = cx.new(|cx| {
+            cx.observe(&pane, |_, _, cx| cx.notify()).detach();
+            SegmentsHost(pane, "vcs_display")
+        });
+        gpui_component::Root::new(host, window, cx)
+    });
+    window.simulate_resize(gpui::size(px(500.0), px(400.0)));
+    window.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(window.debug_bounds("settings-choices-vcs_display").is_none());
+    let trigger = window.debug_bounds("settings-segments-dropdown-vcs_display").unwrap();
+    window.simulate_click(trigger.center(), gpui::Modifiers::default());
+    window.run_until_parked();
+    window.simulate_keystrokes("down enter");
+    window.run_until_parked();
+    assert_eq!(RuntimeSettings::load().vcs_display.settings_value(), "git");
+    for (keys, expected) in [("down enter", "svn"), ("up up enter", "auto")] {
+        window.simulate_click(trigger.center(), gpui::Modifiers::default());
+        window.run_until_parked();
+        window.simulate_keystrokes(keys);
+        window.run_until_parked();
+        assert_eq!(RuntimeSettings::load().vcs_display.settings_value(), expected);
+    }
 }
 
 #[gpui::test]
@@ -96,6 +140,8 @@ fn rapid_retarget_keeps_the_visible_thumb_position(cx: &mut gpui::TestAppContext
                 key: "probe",
                 selected: self.selected,
                 height: px(28.0),
+                labels: vec!["A".into(), "B".into(), "C".into()],
+                fallback: None,
                 buttons: (0usize..3).map(|ix| Button::new(ix).flex_1().h(px(28.0))).collect(),
             }
             .render(window, cx)

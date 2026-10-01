@@ -5,8 +5,8 @@ use gpui::{Animation, AnimationExt as _, ElementId, FontWeight, Pixels, RenderOn
 use gpui_component::button::ButtonCustomVariant;
 use std::{cell::Cell, rc::Rc};
 
-const TRACK_INSET: f32 = 3.0;
-const SLIDE_DURATION: Duration = Duration::from_millis(180);
+const TRACK_INSET: f32 = 2.0;
+const SLIDE_DURATION: Duration = Duration::from_millis(280);
 
 /// Keep the last displayed position, so a second click starts where the thumb is.
 struct IndicatorMotion {
@@ -21,11 +21,46 @@ struct SettingsSegments {
     key: &'static str,
     selected: usize,
     height: Pixels,
+    labels: Vec<SharedString>,
+    fallback: Option<gpui::AnyElement>,
     buttons: Vec<Button>,
 }
 
 impl RenderOnce for SettingsSegments {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let font_size = cx.theme().font_size * 0.875;
+        let mut font = gpui::font(cx.theme().font_family.clone());
+        font.weight = FontWeight::MEDIUM;
+        let text_system = window.text_system();
+        let slot_width = self
+            .labels
+            .iter()
+            .map(|label| {
+                text_system
+                    .shape_line(
+                        SharedString::from(label.clone()),
+                        font_size,
+                        &[gpui::TextRun {
+                            len: label.len(),
+                            font: font.clone(),
+                            color: cx.theme().foreground,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        }],
+                        None,
+                    )
+                    .width
+                    + px(24.0)
+            })
+            .fold(px(64.0), |width, next| width.max(next));
+        let width = slot_width * self.labels.len() as f32;
+        // Longer translations retain the full dropdown instead of clipping text.
+        if width + px(TRACK_INSET * 2.0) > px(SETTINGS_SELECT_WIDTH) {
+            if let Some(fallback) = self.fallback {
+                return fallback;
+            }
+        }
         let key = self.key;
         let count = self.buttons.len() as f32;
         let target = self.selected as f32 / count;
@@ -91,7 +126,7 @@ impl RenderOnce for SettingsSegments {
         div()
             .id(SharedString::from(format!("settings-choices-{key}")))
             .debug_selector(move || format!("settings-choices-{key}"))
-            .w(px(SETTINGS_SELECT_WIDTH) + px(TRACK_INSET * 2.0))
+            .w(width + px(TRACK_INSET * 2.0))
             .max_w_full()
             .border_1()
             .border_color(cx.theme().border)
@@ -101,6 +136,7 @@ impl RenderOnce for SettingsSegments {
             .child(
                 h_flex().relative().w_full().h(self.height).child(indicator).children(self.buttons),
             )
+            .into_any_element()
     }
 }
 
@@ -127,12 +163,23 @@ impl SettingsPane {
         let selected = state.read(cx).selected_index(cx).map(|index| index.row).unwrap_or(0);
         let labels =
             localized_select_labels(key, values, crate::gpui_shell::config::ui_language(cx));
-        let height = settings_control_height(cx);
+        let height = (cx.theme().font_size * 2.0).max(px(28.0));
         Some(
             SettingsSegments {
                 key,
                 selected,
                 height,
+                labels: labels.clone(),
+                fallback: Some(
+                    crate::gpui_shell::widgets::settings_select_frame(
+                        SharedString::from(format!("settings-segments-dropdown-{key}")),
+                        Select::new(state).appearance(false).h_full().rounded(px(6.0)),
+                        cx,
+                    )
+                    .debug_selector(move || format!("settings-segments-dropdown-{key}"))
+                    .w(px(SETTINGS_SELECT_WIDTH))
+                    .into_any_element(),
+                ),
                 buttons: values
                     .iter()
                     .copied()
@@ -144,7 +191,9 @@ impl SettingsPane {
                             .debug_selector(move || format!("settings-choice-{key}-{value}"))
                             .flex_1()
                             .min_w_0()
+                            .small()
                             .h(height)
+                            .px(px(12.0))
                             .rounded(height / 2.0)
                             .custom(
                                 ButtonCustomVariant::new(cx)
