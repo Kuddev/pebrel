@@ -74,7 +74,7 @@ impl NebulaWorkspace {
             .collect::<Vec<_>>();
         if self.command_manager_group.is_none() {
             let available = self.available_saved_commands(cx);
-            let mut search = nebula_completions::command_search::CommandQuery::new(query);
+            let mut search = pebrel_completions::command_search::CommandQuery::new(query);
             for (id, name) in self.command_groups(cx) {
                 let Some(id) = id else { continue };
                 if !query.is_empty() && search.score_fields(&[&name]).is_none() {

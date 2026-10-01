@@ -3,8 +3,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use nebula_completions::Suggestion;
-use nebula_completions::semantic::{Context, Source};
+use pebrel_completions::Suggestion;
+use pebrel_completions::semantic::{Context, Source};
 
 use crate::runtime_exec::PaneExecContext;
 
@@ -210,7 +210,7 @@ fn query(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use nebula_completions::command_context::ShellSyntax;
+    use pebrel_completions::command_context::ShellSyntax;
 
     pub(crate) fn git(cwd: &std::path::Path, args: &[&str]) {
         git_output(cwd, args);

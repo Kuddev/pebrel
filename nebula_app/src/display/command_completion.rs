@@ -219,7 +219,7 @@ pub(crate) fn nebula_command_hints<'a>(
     if prefix.is_empty() || limit == 0 {
         return Vec::new();
     }
-    let mut query = nebula_completions::command_search::CommandQuery::new(prefix);
+    let mut query = pebrel_completions::command_search::CommandQuery::new(prefix);
     let mut matches: Vec<_> = commands
         .iter()
         .filter_map(|command| query.score(command).map(|score| (score, command.as_str())))

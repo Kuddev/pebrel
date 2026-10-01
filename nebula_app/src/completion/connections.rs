@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use nebula_completions::semantic::{Context, Source};
+use pebrel_completions::semantic::{Context, Source};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Key {
@@ -60,7 +60,7 @@ impl Cache {
         cwd: &str,
         context: &Context,
         cancelled: &dyn Fn() -> bool,
-    ) -> Vec<nebula_completions::Suggestion> {
+    ) -> Vec<pebrel_completions::Suggestion> {
         if cancelled() {
             return Vec::new();
         }
