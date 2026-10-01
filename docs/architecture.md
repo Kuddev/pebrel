@@ -20,7 +20,7 @@ to rename all existing directories or create abstract interfaces everywhere.
 | `nebula_split` | Split tree, geometry, navigation rules | Window management or rendering |
 | `nebula_terminal` | Grid, VT processing, terminal/PTY behavior | Product panels or GPUI state |
 | `nebula_config`, `nebula_config_derive` | Configuration abstractions and derives | Application orchestration |
-| `nebula-completions` | Completion matching and presentation-independent results | Terminal view ownership |
+| `pebrel-completions` (source: `nebula-completions/`) | Completion matching and presentation-independent results | Terminal view ownership |
 | `nebula_app/src/completion.rs` | Completion request snapshots, shared source lifetime and per-pane source selection | A GPUI task owner or a shell interpreter |
 | `nebula_app/src/display/suggest_engine.rs` | Shared candidate calculation from input snapshots; compatibility adapter for pane state | A second source registry or access to the terminal grid during calculation |
 | `nebula_hook` | Small process/lifecycle hook bridge | An application dependency container |

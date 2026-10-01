@@ -1128,7 +1128,7 @@ impl CommandPalette {
             });
             self.filtered = order;
         } else {
-            let mut matcher = nebula_completions::command_search::CommandQuery::new(query);
+            let mut matcher = pebrel_completions::command_search::CommandQuery::new(query);
             let mut scored: Vec<(u32, PaletteCandidate)> = candidates
                 .into_iter()
                 .filter_map(|candidate| {
@@ -1422,7 +1422,7 @@ pub struct PaletteRow {
 /// needle matches everything with score 0, preserving declaration order.
 #[cfg(test)]
 fn fuzzy_score(needle: &str, haystack: &str) -> Option<i32> {
-    nebula_completions::command_search::CommandQuery::new(needle)
+    pebrel_completions::command_search::CommandQuery::new(needle)
         .score(haystack)
         .map(|score| score as i32)
 }

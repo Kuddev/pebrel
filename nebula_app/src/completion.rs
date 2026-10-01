@@ -10,8 +10,8 @@ use crate::display::suggest_engine::{self, HistorySource, Input, SuggestSources}
 use crate::display::{CompletionStyle, SuggestEnv};
 use crate::nebula_history::{HistoryScope, NebulaHistory};
 use crate::runtime_exec::PaneExecContext;
-use nebula_completions::command_context::ShellSyntax;
-use nebula_completions::semantic::{Context as SemanticContext, Source};
+use pebrel_completions::command_context::ShellSyntax;
+use pebrel_completions::semantic::{Context as SemanticContext, Source};
 
 mod connections;
 pub(crate) mod paths;
@@ -159,7 +159,7 @@ impl Request {
             return Candidates::default();
         }
         if let Some(candidates) = semantic {
-            let mut candidates: Vec<nebula_completions::SemanticSuggestion> =
+            let mut candidates: Vec<pebrel_completions::SemanticSuggestion> =
                 candidates.into_iter().map(Into::into).collect();
             let mut pending = None;
             if let Some(context) = self.semantic.as_ref().filter(|c| {
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn path_completion_preserves_quotes_utf8_types_and_directory_roles_in_all_modes() {
         use crate::display::NebulaCompletionKind;
-        use nebula_completions::command_context::CommandContext;
+        use pebrel_completions::command_context::CommandContext;
         let directory = tempfile::tempdir().unwrap();
         for name in ["repo 中文", "'quote", "quote", "a...b", "~"] {
             std::fs::create_dir(directory.path().join(name)).unwrap();

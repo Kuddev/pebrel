@@ -125,7 +125,7 @@ impl NebulaWorkspace {
         if query.is_empty() {
             return commands;
         }
-        let mut query = nebula_completions::command_search::CommandQuery::new(query);
+        let mut query = pebrel_completions::command_search::CommandQuery::new(query);
         let mut matches = commands
             .into_iter()
             .enumerate()
