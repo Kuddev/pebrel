@@ -63,6 +63,8 @@ class LocalPtyTransport(private val directory: String, private val configDirecto
         val contents = """
             # 仅配置交互 shell；--color=auto 保证重定向和管道不夹带颜色转义。
             case ${'$'}- in *i*) alias ls='ls --color=auto' ;; esac
+            # mksh expands PWD at each prompt; single quotes keep cd updates live.
+            PS1='${'$'}{PWD} ${'$'} '
             if [ -r "${'$'}HOME/.mkshrc" ]; then . "${'$'}HOME/.mkshrc"; fi
         """.trimIndent() + "\n"
         if (!rc.isFile || rc.readText(Charsets.UTF_8) != contents) {

@@ -300,10 +300,6 @@ impl SettingsPane {
             .pl(px(RAIL_INDENT))
             .pr_4()
             .py(px(pad_y))
-            // 四角都收。这里原来只圆右侧，是为了让 hover 底看起来"从灰轨道
-            // 上长出来"；轨道已经删掉，再留着左边两个直角就只是缺角。
-            .rounded(px(7.0))
-            .hover(|row| row.bg(theme.list_hover.opacity(0.55)))
             // 竖线整条让给状态，不再画常驻的灰轨道。
             //
             // 灰线原本表达"这几行是一组"，但那件事组标题说了一遍、24px 组间

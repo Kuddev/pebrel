@@ -18,6 +18,52 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
 }
 
 #[gpui::test]
+fn backup_errors_and_password_help_keep_their_full_layout(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_reduce_motion(true);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Paper));
+    });
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, cx| {
+            pane.backup_remote = BackupRemoteConfig::default();
+            pane.initialize_backup(window, cx);
+            pane.backup_remote.protocol = BackupProtocol::WebDav;
+            pane.backup_remote.webdav_url = "https://example.invalid/backups".into();
+            pane.backup_ui.list_error = Some(
+                "The backup connection could not be opened. Check the account and the application password in storage settings, then try again. ".repeat(3),
+            );
+            pane.active_section = 9;
+        });
+        gpui_component::Root::new(view, window, cx)
+    });
+    for language in [crate::display::UiLanguage::ZhCn, crate::display::UiLanguage::EnUs] {
+        for width in [800.0, 1280.0] {
+            cx.update(|_, cx| {
+                cx.global_mut::<crate::gpui_shell::config::Settings>().ui_language = language;
+            });
+            cx.simulate_resize(gpui::size(px(width), px(1000.0)));
+            draw(cx);
+            let panel = cx.debug_bounds("backup-dashboard").unwrap();
+            let error = cx.debug_bounds("backup-storage-error").unwrap();
+            let encryption = cx.debug_bounds("backup-encryption").unwrap();
+            let password = cx.debug_bounds("backup-password").unwrap();
+            let description = cx.debug_bounds("backup-password-description").unwrap();
+            assert!(error.size.height > px(30.0), "the long error must wrap: {error:?}");
+            assert!(
+                error.bottom() + px(8.0) <= panel.bottom(),
+                "error clipped: {error:?}, {panel:?}"
+            );
+            assert!(panel.bottom() < encryption.top(), "sections overlap");
+            assert!(password.bottom() <= description.top(), "help must have its own line");
+            assert!(description.bottom() <= encryption.bottom(), "help clipped");
+            assert!(description.right() <= panel.right(), "help exceeds the content column");
+        }
+    }
+}
+
+#[gpui::test]
 fn backup_wizard_requires_connection_and_matching_passwords(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
