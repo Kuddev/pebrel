@@ -70,7 +70,7 @@ optional = true
 version = "0.3"
 optional = true
 
-[dependencies.nebula-completions]
+[dependencies.pebrel-completions]
 path = "../nebula-completions"
 version = "2.1.0"
 
