@@ -551,6 +551,41 @@ impl SettingsPane {
             },
         ));
 
+        let font_size_input = cx.new(|cx| InputState::new(window, cx));
+        subscriptions.push(cx.subscribe_in(
+            &font_size_input,
+            window,
+            |this: &mut Self, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    this.finish_font_size_edit(true, window, cx);
+                }
+            },
+        ));
+        let font_size_interceptor =
+            cx.listener(|this, event: &gpui::KeystrokeEvent, window, cx| {
+                if this.font_size_editing.is_some()
+                    && this.font_size_input.read(cx).focus_handle(cx).is_focused(window)
+                {
+                    match event.keystroke.key.as_str() {
+                        "escape" => {
+                            cx.stop_propagation();
+                            this.finish_font_size_edit(false, window, cx);
+                        },
+                        "tab" => {
+                            cx.stop_propagation();
+                            if event.keystroke.modifiers.shift {
+                                window.focus_prev(cx);
+                            } else {
+                                window.focus_next(cx);
+                            }
+                            this.finish_font_size_edit(true, window, cx);
+                        },
+                        _ => {},
+                    }
+                }
+            });
+        subscriptions.push(cx.intercept_keystrokes(font_size_interceptor));
+
         Self {
             focus_handle: cx.focus_handle(),
             runtime,
@@ -635,6 +670,8 @@ impl SettingsPane {
             font_imported: Vec::new(),
             font_family_input,
             font_family_cjk_input,
+            font_size_input,
+            font_size_editing: None,
             font_picker_trigger_bounds: None,
             font_picker_cjk_bounds: None,
             backup_selection: backup_remote.selection,
