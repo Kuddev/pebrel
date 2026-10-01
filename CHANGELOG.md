@@ -8,6 +8,17 @@ Every release entry is provided in English and Simplified Chinese.
 
 ### English
 
+#### Added
+
+- Added a searchable dropdown for Chinese terminal fonts, with independent font-family and fallback choices from the English terminal font.
+- Added direct entry for terminal and interface font sizes: click the size, type a value, and press Enter or leave the field to apply; Escape cancels.
+
+#### Improved
+
+- Refined settings layout with clearer group headings, consistent control alignment, tighter density options and compact segmented selectors. Ghost and outline buttons retain comfortable click areas, and dropdown triggers and menu items provide hover feedback. The title bar keeps its standard height in both density modes.
+- Made Nord Light the default light theme. Paper is now presented as Warm Sand and Glass Light as Slate Light; existing saved theme names remain compatible. Nord retains solid primary buttons, while other themes use softer primary fills.
+- Simplified backup sections with spacing between headings and content, without heading underlines or enclosing cards.
+
 #### Fixed
 
 - Fixed SSH host form choices on Android not aligning to the right edge. Terminal mode, authentication method, and group selectors now share the form's trailing alignment while labels remain on the left.
@@ -19,6 +30,17 @@ Every release entry is provided in English and Simplified Chinese.
 
 ### 中文
 
+#### 新增
+
+- 新增：中文终端字体支持可搜索的下拉列表，字体及回退字体选择与英文终端字体独立保存。
+- 新增：终端与界面字号支持点击数值直接输入，按 Enter 或移开焦点应用，按 Escape 取消。
+
+#### 改进
+
+- 改进：设置页采用更清晰的分组标题与统一控件对齐，收紧密度档位及分段选择器；幽灵按钮和描边按钮保留完整点击区域，下拉触发器及菜单项提供悬停反馈。两档密度均保留标准顶部栏高度。
+- 改进：默认浅色主题改为 Nord Light，Paper 显示为 Warm Sand，Glass Light 显示为 Slate Light，兼容已有配置中的主题名称。Nord 保留实心主按钮，其他主题采用柔和的浅色主按钮。
+- 改进：备份区块通过标题与内容间的留白分组，去除标题下横线及区块外框。
+
 #### 修复
 
 - 修复：Android SSH 主机表单的选项组未靠右对齐的问题，终端模式、认证方式和分组选择器统一对齐表单右侧，标签保持在左侧。
@@ -27,6 +49,12 @@ Every release entry is provided in English and Simplified Chinese.
 - 修复：备份存储卡片裁切连接错误，以及密码说明与操作控件挤在同一行的问题。错误详情完整显示，密码说明独立排列在操作行下方。
 - 修复：主题预览下方的名称、明暗标签和文字颜色色块未居中的问题。
 - 修复：终端内 `$0$`、`$E$` 和多项式等行内公式保留为源码或吞并相邻公式的问题。在有界扫描内识别美元定界符中的数学折行，同时保留 Shell 变量及普通正文。对应 [#420](https://github.com/Kuddev/pebrel/issues/420)。
+
+### Contributors
+
+| Contributor | Contributions |
+| --- | --- |
+| [<img src="https://github.com/Kuddev.png?size=64" width="48" height="48" alt="Kuddev" /><br />Kuddev](https://github.com/Kuddev) | Release fixes, settings controls and editable font sizes ([#426](https://github.com/Kuddev/pebrel/pull/426), [#427](https://github.com/Kuddev/pebrel/pull/427), [#429](https://github.com/Kuddev/pebrel/pull/429)) |
 
 ---
 

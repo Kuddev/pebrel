@@ -759,6 +759,9 @@ mod interaction_tests {
     fn review_regression_font_fields_align_and_dropdown_toggles_with_search(
         cx: &mut TestAppContext,
     ) {
+        use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+        let _lock = lock_theme_studio();
+        let _settings = SettingsBytesGuard::capture();
         cx.update(|cx| {
             gpui_component::init(cx);
             let mut settings =
