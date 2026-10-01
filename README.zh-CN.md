@@ -63,6 +63,8 @@
   </tr>
 </table>
 
+商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+
 ## 一个工作区
 
 Pebrel（原名 Nebula）把本地 Shell、远程主机、文件和 AI 命令行工具放进同一个原生桌面工作区。
@@ -200,8 +202,6 @@ cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
 旧渲染器仅在显式启用 `legacy-shell` 时使用。
 
 ## 联系方式
-
-商业合作或赞助，请联系：[fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 Discord：[discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
