@@ -959,6 +959,9 @@ mod tests {
                 r"  \int_a^b f(x),\mathrm{d}x=F(b)-F(a)",
                 "  ]",
                 "",
+                r"$E$ $0$ $2.71828$ $ax^2+bx+c=0$ $\pm$",
+                r"$\displaystyle\int_0^1 x^2,dx",
+                r"  = \dfrac{1}{3}$",
                 "prompt",
             ],
         );
@@ -971,12 +974,12 @@ mod tests {
                 overlay.finalize_frame(pending, 1.0, cx)
             });
             counts.push(frame.formulas.len());
-            if frame.formulas.len() == 3 {
+            if frame.formulas.len() == 9 {
                 break;
             }
             cx.run_until_parked();
         }
-        assert_eq!(counts.last(), Some(&3), "async pipeline frame counts: {counts:?}");
+        assert_eq!(counts.last(), Some(&9), "async pipeline frame counts: {counts:?}");
     }
 
     #[test]

@@ -1299,6 +1299,22 @@ fn theme_picker_foreground_swatches_fit_above_footer_in_a_short_window(cx: &mut 
     draw(&mut window);
     click("open-theme-picker", &mut window);
 
+    let preview = window.debug_bounds("theme-picker-terminal-preview").expect("theme preview");
+    for selector in ["theme-preview-name", "theme-preview-mode"] {
+        let label = window.debug_bounds(selector).expect("preview caption");
+        assert!(
+            f32::from(label.center().x - preview.center().x).abs() < 1.0,
+            "{selector} must be centered beneath the preview"
+        );
+    }
+    let first = window.debug_bounds("theme-foreground-swatch-0").unwrap();
+    let last = window.debug_bounds("theme-foreground-custom-swatch").unwrap();
+    let swatch_center = (first.left() + last.right()) / 2.0;
+    assert!(
+        f32::from(swatch_center - preview.center().x).abs() < 1.0,
+        "the swatches must be centered as a group"
+    );
+
     let footer =
         window.debug_bounds("apply-appearance-picker").expect("appearance picker apply button");
     for selector in [
