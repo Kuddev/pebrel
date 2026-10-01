@@ -5,8 +5,8 @@
 //! 数据源与排序规则两个壳共用，避免第二套平行实现（与 `ssh_session` 的
 //! `SshEventHost` 泛型下沉同一手法）。
 
-use nebula_completions::command_context::ShellSyntax;
-use nebula_completions::{SemanticSuggestion, SuggestionKind};
+use pebrel_completions::command_context::ShellSyntax;
+use pebrel_completions::{SemanticSuggestion, SuggestionKind};
 
 use super::state::{CompletionStyle, NebulaCompletionItem, NebulaCompletionKind, NebulaPaneState};
 use super::{
