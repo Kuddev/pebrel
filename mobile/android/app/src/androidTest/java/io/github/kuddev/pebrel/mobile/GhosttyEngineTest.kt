@@ -318,6 +318,18 @@ class GhosttyEngineTest {
         }
         var baseline: android.graphics.Bitmap? = null
         try {
+            // 点空白退出选择也会唤起输入法；先用真实点击打开键盘，避免把窗口缩放当成选区残留。
+            instrumentation.runOnMainSync { viewRef.get().getLocationOnScreen(location) }
+            tap(location[0] + viewRef.get().width * .8f, location[1] + viewRef.get().height * .6f)
+            await {
+                var visible = false
+                instrumentation.runOnMainSync {
+                    visible = androidx.core.view.ViewCompat.getRootWindowInsets(viewRef.get())
+                        ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true
+                }
+                visible
+            }
+            device.waitForIdle()
             assertTrue(terminal.sendText("printf '\\033[2J\\033[Halpha beta\\r\\nsecond line\\r\\n'\r"))
             // 命令回显也含 alpha beta；必须等到真正执行后的两行，才建立像素基线。
             await { terminal.frame?.rows?.getOrNull(0)?.text?.trimEnd() == "alpha beta" &&
