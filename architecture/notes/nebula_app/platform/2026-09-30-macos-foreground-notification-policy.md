@@ -37,3 +37,5 @@ None.
 ## Revisit when
 
 The pinned notification backend changes its delegate class or adopts a native foreground callback.
+
+Superseded by [GPUI macOS notification ownership](notifications/2026-10-01-gpui-macos-notification-ownership.md), pending native acceptance.
