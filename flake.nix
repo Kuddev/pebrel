@@ -1,15 +1,15 @@
 {
   description = "Pebrel";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
-      version = "v2.0.0";
+      version = (fromTOML (builtins.readFile ./nebula_app/Cargo.toml)).package.version;
 
       # 构建期依赖库，同时也是写进 rpath 的运行期库：GPUI/winit 会在运行时
       # dlopen 掉其中一部分（X11/Wayland/Vulkan），NixOS 上不写 rpath 会找不到。
@@ -42,20 +42,15 @@
         let
           libs = runtimeLibs p;
         in
-        p.rustPackages_1_97.rustPlatform.buildRustPackage {
+        p.rustPackages_1_98.rustPlatform.buildRustPackage {
           pname = "pebrel";
           inherit version;
 
-          src = p.fetchFromGitHub {
-            owner = "Kuddev";
-            repo = "pebrel";
-            tag = version;
-            hash = "sha256-OM8M6YdeCMZ/1B+0kX3bj7B89gJdZNiDc1awCDTBah0=";
-          };
+          src = self;
 
           # 升级版本时：改上面的 version，再用 `nix build --keep-going` 报出的 got 值
-          # 更新 src 与 cargoHash；也可以用 nix-update 自动完成。
-          cargoHash = "sha256-aIfxG18eHVO3k2n8jiq6IUd2cllD6uMioakcBSsJttQ=";
+          # 使用fakeHash
+          cargoHash = "sha256-5SoTbyvQmnLbYff917kZ5ZEAHHSHzPd70UIwc4D9xPY=";
 
           # 上游 README：cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
           cargoBuildFlags = [
