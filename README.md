@@ -63,6 +63,8 @@
   </tr>
 </table>
 
+For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
+
 ## One Workspace
 
 Pebrel (formerly Nebula) brings local shells, remote hosts, files, and AI command-line
@@ -222,8 +224,6 @@ are `pebrel`. GPUI is the product interface. The older renderer is available onl
 through the explicit `legacy-shell` feature.
 
 ## Contact
-
-For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
