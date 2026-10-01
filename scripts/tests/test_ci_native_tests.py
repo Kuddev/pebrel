@@ -187,7 +187,11 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)"
                           " or test(environment_refresh_switch_is_searchable_and_persists)"
                           " or test(pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url)"
-                          " or test(capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection)",
+                          " or test(capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection)"
+                          " or test(long_segments_use_a_real_dropdown_without_losing_preference_updates)"
+                          " or test(font_size_click_input_commits_cancels_and_bounds_values)"
+                          " or test(cjk_dropdown_selection_preserves_the_english_font_chain)"
+                          " or test(review_regression_font_fields_align_and_dropdown_toggles_with_search)",
                 "test-group": "theme-studio",
             }, {
                 "filter": "test(=gpui_shell::terminal::view::startup_tests::"
