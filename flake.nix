@@ -48,9 +48,9 @@
 
           src = self;
 
-          # 升级版本时：改上面的 version，再用 `nix build --keep-going` 报出的 got 值
-          # 使用fakeHash
-          cargoHash = "sha256-5SoTbyvQmnLbYff917kZ5ZEAHHSHzPd70UIwc4D9xPY=";
+          # 依赖变化（Cargo.lock 变更）后重算：把 cargoHash 设为 p.lib.fakeHash，
+          # 运行 `nix build .#pebrel`，用报错里的 got 值更新这里。
+          cargoHash = "sha256-bE++uF9kpMI66kKAIRlgd3t1E7FcqXECaYOh7Dnr/e4=";
 
           # 上游 README：cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
           # 同时构建 AI Hook 辅助程序 pebrel-hook（nebula_hook）：应用在自身可执行
