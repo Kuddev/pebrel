@@ -53,12 +53,18 @@
           cargoHash = "sha256-5SoTbyvQmnLbYff917kZ5ZEAHHSHzPd70UIwc4D9xPY=";
 
           # 上游 README：cargo build --release --locked -p nebula --bin pebrel --features gpui-shell
+          # 同时构建 AI Hook 辅助程序 pebrel-hook（nebula_hook）：应用在自身可执行
+          # 文件同目录查找它（nebula_app/src/ai_hook/local.rs），scripts/package-linux.sh
+          # 也要求它随应用安装；缺失会导致本地 Agent 集成无法安装。
+          # 特性用 `nebula/gpui-shell` 限定，避免把 gpui-shell 施加到 nebula_hook。
           cargoBuildFlags = [
             "--locked"
             "--package=nebula"
             "--bin=pebrel"
+            "--package=nebula_hook"
+            "--bin=pebrel-hook"
           ];
-          buildFeatures = [ "gpui-shell" ];
+          buildFeatures = [ "nebula/gpui-shell" ];
 
           nativeBuildInputs = with p; [
             cmake
@@ -84,10 +90,11 @@
             install -Dm644 packaging/linux/io.github.kuddev.pebrel.metainfo.xml \
               $out/share/metainfo/io.github.kuddev.pebrel.metainfo.xml
 
-            # 上游用 ImageMagick 把 1024x1024 的 nebula.png 缩成 256x256；这里装原图，
-            # 省掉 imagemagick 这个构建依赖，图标按文件名 io.github.kuddev.pebrel 查找。
+            # 上游用 ImageMagick 把 1024x1024 的 nebula.png 缩成 256x256；这里不引入
+            # imagemagick，改为把原图装到与其尺寸一致的 1024x1024 目录。
+            # desktop 里 Icon=io.github.kuddev.pebrel 按名字查找，不绑定具体尺寸。
             install -Dm644 extra/logo/nebula.png \
-              $out/share/icons/hicolor/256x256/apps/io.github.kuddev.pebrel.png
+              $out/share/icons/hicolor/1024x1024/apps/io.github.kuddev.pebrel.png
 
             install -Dm644 extra/completions/pebrel.bash $out/share/bash-completion/completions/pebrel
             install -Dm644 extra/completions/pebrel.fish $out/share/fish/vendor_completions.d/pebrel.fish
@@ -107,7 +114,7 @@
           meta = {
             description = "AI-native, GPU-accelerated terminal emulator";
             homepage = "https://github.com/Kuddev/pebrel";
-            license = p.lib.licenses.gpl3Only;
+            license = p.lib.licenses.gpl3Plus;
             mainProgram = "pebrel";
             platforms = [ "x86_64-linux" ];
           };
