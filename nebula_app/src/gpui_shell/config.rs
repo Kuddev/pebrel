@@ -1144,8 +1144,8 @@ mod tests {
         let original_cursor = paper.cursor;
         let original_selection = paper.selection;
         apply_theme(&mut paper, ThemeName::Paper);
-        assert_eq!(paper.foreground, rgba8([0x1a, 0x1a, 0x1a]));
-        assert_eq!(paper.ansi[15], rgba8([0x2f, 0x2e, 0x2e]));
+        assert_eq!(paper.foreground, rgba8([0x2f, 0x2e, 0x2b]));
+        assert_eq!(paper.ansi[15], rgba8([0x4a, 0x43, 0x3b]));
         assert_eq!(paper.cursor, original_cursor);
         assert_eq!(paper.cursor_text, None);
         assert_eq!(paper.selection, original_selection);

@@ -225,12 +225,12 @@ pub enum ThemeName {
     MossDark,
     /// 深色：Nord 配色（Arctic Ice Studio 公开色板）。出厂默认。
     ///
-    /// 跟随系统外观时它的浅色对应是 [`Self::Paper`]（配对表在旧壳
-    /// `display/ui/theme.rs::for_system_appearance`，两壳同一来源），所以改这一个
-    /// `#[default]` 就同时定下了「默认深色 = Nord、默认浅色 = Paper」。
+    /// 跟随系统时与 Nord Light 配对；显式主题选择保持独立。
     #[default]
     Nord,
-    /// 浅色：暖纸面 Paper 配色。跟随系统时作为 [`Self::Nord`] 的浅色成员。
+    /// 浅色：基于 Nord 色板的浅色适配。
+    NordLight,
+    /// Warm Sand；保留 Rust 变体名与旧 Paper 配置的兼容读取。
     Paper,
     BreezeLight,
     BreezeDark,
@@ -240,6 +240,7 @@ pub enum ThemeName {
     CatppuccinLatte,
     CatppuccinFrappe,
     CatppuccinMacchiato,
+    /// Slate Light；兼容旧 GlassLight 标识。
     GlassLight,
     GlassDark,
 }
@@ -255,7 +256,8 @@ impl ThemeName {
             "LinenLight" => Self::LinenLight,
             "MossDark" => Self::MossDark,
             "Nord" => Self::Nord,
-            "Paper" => Self::Paper,
+            "Paper" | "WarmSand" => Self::Paper,
+            "NordLight" => Self::NordLight,
             "BreezeLight" => Self::BreezeLight,
             "BreezeDark" => Self::BreezeDark,
             "MintLight" => Self::MintLight,
@@ -264,7 +266,7 @@ impl ThemeName {
             "CatppuccinLatte" => Self::CatppuccinLatte,
             "CatppuccinFrappe" => Self::CatppuccinFrappe,
             "CatppuccinMacchiato" => Self::CatppuccinMacchiato,
-            "GlassLight" => Self::GlassLight,
+            "GlassLight" | "SlateLight" => Self::GlassLight,
             "GlassDark" => Self::GlassDark,
 
             _ => return None,
@@ -281,7 +283,8 @@ impl ThemeName {
             Self::LinenLight => "LinenLight",
             Self::MossDark => "MossDark",
             Self::Nord => "Nord",
-            Self::Paper => "Paper",
+            Self::Paper => "WarmSand",
+            Self::NordLight => "NordLight",
             Self::BreezeLight => "BreezeLight",
             Self::BreezeDark => "BreezeDark",
             Self::MintLight => "MintLight",
@@ -290,7 +293,7 @@ impl ThemeName {
             Self::CatppuccinLatte => "CatppuccinLatte",
             Self::CatppuccinFrappe => "CatppuccinFrappe",
             Self::CatppuccinMacchiato => "CatppuccinMacchiato",
-            Self::GlassLight => "GlassLight",
+            Self::GlassLight => "SlateLight",
             Self::GlassDark => "GlassDark",
         }
     }
@@ -300,7 +303,9 @@ impl ThemeName {
         // 背景与 is_light 来自各主题 palette()；powerline 为提示符段色
         // （icon bg/fg、path bg/fg、branch bg/fg、time bg/fg）。
         match self {
-            Self::BreezeLight
+            Self::NordLight
+            | Self::Paper
+            | Self::BreezeLight
             | Self::BreezeDark
             | Self::MintLight
             | Self::MintDark
@@ -455,48 +460,6 @@ impl ThemeName {
                     [0x88, 0xc0, 0xd0],
                     [0x2e, 0x34, 0x40],
                     [0x7b, 0x82, 0x94],
-                ],
-            },
-            Self::Paper => TermTheme {
-                background: [0xfc, 0xfb, 0xf9],
-                is_light: true,
-                exact: Some(ExactTermColors {
-                    foreground: [0x1a, 0x1a, 0x1a],
-                    ansi: [
-                        [0x1a, 0x1a, 0x1a],
-                        [0xa3, 0x3a, 0x3a],
-                        [0x2b, 0x5a, 0x38],
-                        [0xa8, 0x5a, 0x20],
-                        [0x4a, 0x7a, 0x8a],
-                        [0x4a, 0x3a, 0x6a],
-                        [0x3a, 0x7a, 0x6a],
-                        [0x47, 0x46, 0x46],
-                        [0x8c, 0x8a, 0x80],
-                        [0xc3, 0x6a, 0x6a],
-                        [0x6b, 0x9a, 0x78],
-                        [0xc8, 0x8a, 0x50],
-                        [0x7a, 0x9a, 0xaa],
-                        [0x8a, 0x7a, 0x9a],
-                        [0x6a, 0xba, 0xaa],
-                        [0x2f, 0x2e, 0x2e],
-                    ],
-                    // Paper 色板没有声明 cursor / selection；None 必须保留，
-                    // 不能把截图近似值冒充成主题自带数据。
-                    cursor: None,
-                    cursor_text: None,
-                    cursor_stroke: None,
-                    selection_foreground: None,
-                    selection_background: None,
-                }),
-                powerline: [
-                    [0xe0, 0xdf, 0xd5],
-                    [0x1a, 0x1a, 0x1a],
-                    [0xf5, 0xf4, 0xf0],
-                    [0x47, 0x46, 0x46],
-                    [0xc1, 0xbe, 0xb5],
-                    [0x2b, 0x5a, 0x38],
-                    [0xfc, 0xfb, 0xf9],
-                    [0x8c, 0x8a, 0x80],
                 ],
             },
         }
@@ -1881,7 +1844,7 @@ mod tests {
     }
 
     #[test]
-    fn nord_and_paper_keep_their_declared_terminal_palettes() {
+    fn nord_and_warm_sand_keep_their_declared_terminal_palettes() {
         let nord = ThemeName::Nord.term_theme().exact.expect("Nord exact colors");
         assert_eq!(nord.foreground, [0xf1, 0xf6, 0xff]);
         assert_eq!(nord.ansi[0], [0x3b, 0x42, 0x52]);
@@ -1890,10 +1853,10 @@ mod tests {
         assert_eq!(nord.cursor_stroke, Some([0x88, 0xc0, 0xd0]));
         assert_eq!(nord.selection_background, Some([0xe5, 0xe9, 0xf0]));
 
-        let paper = ThemeName::Paper.term_theme().exact.expect("Paper exact colors");
-        assert_eq!(paper.foreground, [0x1a, 0x1a, 0x1a]);
-        assert_eq!(paper.ansi[0], [0x1a, 0x1a, 0x1a]);
-        assert_eq!(paper.ansi[15], [0x2f, 0x2e, 0x2e]);
+        let paper = ThemeName::Paper.term_theme().exact.expect("Warm Sand exact colors");
+        assert_eq!(paper.foreground, [0x2f, 0x2e, 0x2b]);
+        assert_eq!(paper.ansi[0], [0x2f, 0x2e, 0x2b]);
+        assert_eq!(paper.ansi[15], [0x4a, 0x43, 0x3b]);
         assert_eq!(paper.cursor, None);
         assert_eq!(paper.selection_background, None);
     }
