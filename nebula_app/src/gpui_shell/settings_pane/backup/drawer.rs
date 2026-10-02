@@ -38,6 +38,7 @@ impl SettingsPane {
                 .child(self.backup_storage_fields(true, cx))
                 .child(
                     Button::new("backup-check")
+                        .map(|button| crate::gpui_shell::widgets::settings_button(button, true, cx))
                         .label(l.text(Message::CloudTest))
                         .disabled(self.backup_busy)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -60,8 +61,9 @@ impl SettingsPane {
                         .child(
                             Button::new("backup-defaults")
                                 .label(l.text(Message::BackupFlowDefaults))
-                                .small()
-                                .ghost()
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_button(button, false, cx)
+                                })
                                 .disabled(self.backup_busy)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.backup_selection = recommended();
@@ -88,6 +90,9 @@ impl SettingsPane {
                 } else {
                     body.child(self.backup_password_field(cx)).child(
                         Button::new("backup-unlock")
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_button(button, true, cx)
+                            })
                             .debug_selector(|| "backup-unlock".into())
                             .label(l.text(Message::BackupFlowUnlock))
                             .disabled(self.backup_busy)
@@ -135,8 +140,6 @@ impl SettingsPane {
                     .px_6()
                     .py_5()
                     .gap_3()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
                     .child(
                         v_flex()
                             .gap_2()
@@ -149,7 +152,9 @@ impl SettingsPane {
                         Button::new("backup-close-drawer")
                             .icon(IconName::Close)
                             .small()
-                            .ghost()
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_icon_button(button, cx)
+                            })
                             .tooltip(l.text(Message::CommonClose))
                             .disabled(self.backup_busy)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -184,8 +189,11 @@ impl SettingsPane {
                                 Button::new("backup-cancel")
                                     .debug_selector(|| "backup-cancel".into())
                                     .label(l.text(Message::CommonCancel))
-                                    .ghost()
-                                    .small()
+                                    .map(|button| {
+                                        crate::gpui_shell::widgets::settings_button(
+                                            button, false, cx,
+                                        )
+                                    })
                                     .disabled(self.backup_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.cancel_backup_sheet(window, cx)

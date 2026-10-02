@@ -163,7 +163,9 @@ impl SettingsPane {
                             .py_3()
                             .px_4()
                             .justify_start()
-                            .ghost()
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_button(button, false, cx)
+                            })
                             .selected(provider(&self.backup_ui.draft) == title)
                             .disabled(self.backup_busy)
                             .child(Icon::default().path(icon).size(px(18.0)).flex_shrink_0())
@@ -273,8 +275,9 @@ impl SettingsPane {
                             Button::new("backup-back")
                                 .debug_selector(|| "backup-back".into())
                                 .label(l.text(Message::BackupFlowBack))
-                                .small()
-                                .ghost()
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_button(button, false, cx)
+                                })
                                 .disabled(self.backup_busy)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.backup_ui.step -= 1;
@@ -298,9 +301,17 @@ impl SettingsPane {
                                         ))
                                         .child(
                                             Button::new("backup-export-setup")
+                                                .map(|button| {
+                                                    crate::gpui_shell::widgets::settings_button(
+                                                        button, true, cx,
+                                                    )
+                                                })
                                                 .label(l.text(Message::CloudExport))
-                                                .small()
-                                                .ghost()
+                                                .map(|button| {
+                                                    crate::gpui_shell::widgets::settings_button(
+                                                        button, false, cx,
+                                                    )
+                                                })
                                                 .disabled(self.backup_busy)
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.open_backup_sheet(
@@ -319,8 +330,9 @@ impl SettingsPane {
                             Button::new("backup-later")
                                 .debug_selector(|| "backup-later".into())
                                 .label(l.text(Message::BackupFlowFinishLater))
-                                .small()
-                                .ghost()
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_button(button, false, cx)
+                                })
                                 .disabled(self.backup_busy || self.backup_selection.is_empty())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.save_backup_storage(false, window, cx)

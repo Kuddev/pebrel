@@ -13,11 +13,7 @@ pub(super) fn description(text: impl Into<SharedString>, cx: &App) -> gpui::Div 
 }
 
 pub(super) fn group_heading(text: impl Into<SharedString>, cx: &App) -> gpui::Div {
-    div()
-        .text_size(px(13.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(cx.theme().muted_foreground)
-        .child(text.into())
+    super::super::design::group_heading(text, 14.0, cx)
 }
 
 pub(super) fn failure_message(failure: Failure) -> Message {
