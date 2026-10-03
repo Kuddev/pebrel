@@ -1,8 +1,9 @@
-use gpui::{App, AppContext as _, Context, Focusable as _, Window};
+use gpui::{App, AppContext as _, Context, Entity, Focusable as _, Window};
 use nebula_settings::TabsPositionName;
 
 use super::{
-    NebulaWorkspace, SettingsPane, SidebarActivity, TabPresentation, tab_reveal_instant, windowing,
+    NebulaWorkspace, SettingsPane, SettingsPaneEvent, SidebarActivity, TabPresentation,
+    tab_reveal_instant, windowing,
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -22,6 +23,31 @@ fn sidebar_state(
 }
 
 impl NebulaWorkspace {
+    /// 热应用设置页变更，并把 SSH 连接请求转为新标签。
+    pub(super) fn on_settings_event(
+        &mut self,
+        _: &Entity<SettingsPane>,
+        event: &SettingsPaneEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            SettingsPaneEvent::Close => self.close_settings(window, cx),
+            SettingsPaneEvent::Changed | SettingsPaneEvent::BackupRestored => {
+                self.apply_runtime_settings(cx);
+                // 键位编辑器可能改了 keybind= 表：注入/撤销随之热更新。
+                self.apply_custom_keybinds(cx);
+                if matches!(event, SettingsPaneEvent::BackupRestored) && self.command_manager_open {
+                    self.refresh_command_manager(window, cx);
+                }
+            },
+            SettingsPaneEvent::TerminalProfilesChanged => self.refresh_shell_if_open(window, cx),
+            SettingsPaneEvent::LaunchSsh(host) => {
+                self.add_ssh_terminal(host.clone(), window, cx);
+            },
+        }
+    }
+
     /// Open Settings as a window-level page while preserving the active tab.
     /// Side-tab mode folds its real left rail; top-tab mode has no such rail,
     /// so touching `sidebar_collapsed` there would only create hidden state.

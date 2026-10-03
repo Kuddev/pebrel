@@ -90,6 +90,7 @@ pub enum SettingsPaneEvent {
     /// Explicitly close Settings and return to the workspace.
     Close,
     Changed,
+    BackupRestored,
     /// 导入 Profile 已落盘；Tab 的 Shell 面板若正打开，需要重建候选快照。
     TerminalProfilesChanged,
     /// 设置页"连接"按钮：宿主开 SSH tab（连接语义在业务层）。

@@ -989,7 +989,7 @@
     "assistant": "助手设置",
     "sessions": "工作区会话",
     "directories": "目录历史",
-    "commands": "命令历史",
+    "commands": "命令与历史",
     "fonts": "自定义字体"
   },
   "ai_hooks": {
@@ -1126,7 +1126,7 @@
     "hosts_hint": "已保存的主机地址与连接配置",
     "session_hint": "窗口、标签页与分屏布局",
     "dirs_hint": "最近进入过的目录，会带上项目路径",
-    "commands_hint": "可能包含粘贴进命令行的令牌",
+    "commands_hint": "已保存命令及其分组，以及 Shell 历史记录。可能包含粘贴的令牌。",
     "settings": "设置",
     "data": "数据与历史",
     "measuring": "正在计算内容体积…",

@@ -1635,28 +1635,6 @@ impl NebulaWorkspace {
         })
     }
 
-    /// 热应用设置页变更，并把 SSH 连接请求转为新标签。
-    fn on_settings_event(
-        &mut self,
-        _: &Entity<SettingsPane>,
-        event: &SettingsPaneEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            SettingsPaneEvent::Close => self.close_settings(window, cx),
-            SettingsPaneEvent::Changed => {
-                self.apply_runtime_settings(cx);
-                // 键位编辑器可能改了 keybind= 表：注入/撤销随之热更新。
-                self.apply_custom_keybinds(cx);
-            },
-            SettingsPaneEvent::TerminalProfilesChanged => self.refresh_shell_if_open(window, cx),
-            SettingsPaneEvent::LaunchSsh(host) => {
-                self.add_ssh_terminal(host.clone(), window, cx);
-            },
-        }
-    }
-
     /// 终端应用惯例：最后一个 Tab 关闭即退出应用。整 tab 关闭（侧栏 ×）
     /// 逐 pane 回收会话；实体引用清零后 `TerminalView::drop` 再兜底。
     fn close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {

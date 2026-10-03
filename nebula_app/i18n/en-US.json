@@ -989,7 +989,7 @@
     "assistant": "Assistant settings",
     "sessions": "Workspace sessions",
     "directories": "Directory history",
-    "commands": "Command history",
+    "commands": "Commands and history",
     "fonts": "Custom fonts"
   },
   "ai_hooks": {
@@ -1126,7 +1126,7 @@
     "hosts_hint": "Saved host addresses and connection profiles",
     "session_hint": "Windows, tabs and split layouts",
     "dirs_hint": "Recently used directories, including project paths",
-    "commands_hint": "May include tokens pasted into commands",
+    "commands_hint": "Saved commands and their groups, plus shell history. May include pasted tokens.",
     "settings": "Settings",
     "data": "Data and history",
     "measuring": "Calculating contents…",
