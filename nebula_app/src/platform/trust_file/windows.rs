@@ -57,8 +57,11 @@ mod tests {
         } else {
             r#"$ErrorActionPreference='Stop'; (Get-Acl $env:PEBREL_KNOWN_HOSTS).GetSecurityDescriptorSddlForm('Access')"#
         };
+        // Indirect launches from pwsh inherit incompatible PowerShell 7 modules.
+        // Let Windows PowerShell rebuild its own module paths.
         let output = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .env_remove("PSModulePath")
             .env("PEBREL_KNOWN_HOSTS", path)
             .output()
             .unwrap();
