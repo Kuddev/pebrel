@@ -72,12 +72,15 @@ pub(super) fn inspect(
         } else {
             first
         };
-        let patterns: HostPatterns = hosts.parse().map_err(|_| denied("Cannot safely parse host patterns"))?;
+        let patterns: HostPatterns =
+            hosts.parse().map_err(|_| denied("Cannot safely parse host patterns"))?;
         if !matches(&patterns, &endpoint) {
             replacement.push_str(line);
             continue;
         }
-        let entry: Entry = normalized.parse().map_err(|_| denied("Cannot safely parse matching known_hosts record"))?;
+        let entry: Entry = normalized
+            .parse()
+            .map_err(|_| denied("Cannot safely parse matching known_hosts record"))?;
         if entry.marker().is_some() {
             return Err(denied(
                 "SSH host has a revoked or certificate-authority record; update it outside Pebrel",

@@ -1,11 +1,12 @@
 //! Trust-file replacement preserves the target DACL and never ignores ACL merge errors.
 use std::io;
-use std::path::Path;
 use std::os::windows::ffi::OsStrExt as _;
+use std::path::Path;
 use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
 
 pub(super) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
-    let backup = tempfile::Builder::new().prefix(".known-hosts-backup-")
+    let backup = tempfile::Builder::new()
+        .prefix(".known-hosts-backup-")
         .tempfile_in(destination.parent().ok_or_else(|| io::Error::other("No trust directory"))?)?
         .into_temp_path();
     std::fs::remove_file(&backup)?;
@@ -17,10 +18,18 @@ pub(super) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     // mandatory. A backup is required because error 1176 without one can remove
     // the destination, and 1177 can move it to the backup before returning failure.
     let success = unsafe {
-        ReplaceFileW(original.as_ptr(), replacement.as_ptr(), saved.as_ptr(), 0,
-            std::ptr::null(), std::ptr::null())
+        ReplaceFileW(
+            original.as_ptr(),
+            replacement.as_ptr(),
+            saved.as_ptr(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
     };
-    if success != 0 { return Ok(()); }
+    if success != 0 {
+        return Ok(());
+    }
     let error = io::Error::last_os_error();
     if backup.exists() {
         // An exclusive hard-link creation restores the original file identity
@@ -30,7 +39,10 @@ pub(super) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
             return Err(error);
         }
         let preserved = backup.keep().map_err(io::Error::other)?;
-        return Err(io::Error::new(error.kind(), format!("{error}; original trust file retained at {}", preserved.display())));
+        return Err(io::Error::new(
+            error.kind(),
+            format!("{error}; original trust file retained at {}", preserved.display()),
+        ));
     }
     Err(error)
 }
@@ -48,7 +60,9 @@ mod tests {
         };
         let output = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .env("PEBREL_KNOWN_HOSTS", path).output().unwrap();
+            .env("PEBREL_KNOWN_HOSTS", path)
+            .output()
+            .unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
@@ -59,11 +73,31 @@ mod tests {
         let path = directory.path().join("known_hosts");
         let old = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
         let new = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
-        std::fs::write(&path, format!("fixture.example {}\n", old.public_key().to_openssh().unwrap())).unwrap();
+        std::fs::write(
+            &path,
+            format!("fixture.example {}\n", old.public_key().to_openssh().unwrap()),
+        )
+        .unwrap();
         let before = acl(&path, true);
-        super::super::inspect(&path, "fixture.example", 22, new.public_key()).unwrap().unwrap().save(&path).unwrap();
-        assert_eq!(acl(&path, false), before, "Parent's broader inherited DACL must not replace target DACL");
-        assert!(russh::keys::known_hosts::check_known_hosts_path("fixture.example", 22, new.public_key(), &path).unwrap());
+        super::super::inspect(&path, "fixture.example", 22, new.public_key())
+            .unwrap()
+            .unwrap()
+            .save(&path)
+            .unwrap();
+        assert_eq!(
+            acl(&path, false),
+            before,
+            "Parent's broader inherited DACL must not replace target DACL"
+        );
+        assert!(
+            russh::keys::known_hosts::check_known_hosts_path(
+                "fixture.example",
+                22,
+                new.public_key(),
+                &path
+            )
+            .unwrap()
+        );
     }
 
     #[test]
