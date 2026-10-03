@@ -1,6 +1,7 @@
 //! Portable ZIP themes. Cold, synchronous operations run outside render callbacks.
 
 mod archive;
+pub(crate) mod cli;
 mod envelope;
 #[cfg(test)]
 mod tests;
