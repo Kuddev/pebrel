@@ -49,7 +49,6 @@ class PebrelBrandingTests(unittest.TestCase):
             "UsePreviousAppDir=yes",
             r"Software\Pebrel",
             r"App Paths\pebrel.exe",
-            r"shell\Pebrel",
             r'Source: "{#BuildRoot}\pebrel.exe";',
             r'Source: "{#BuildRoot}\pebrel-hook.exe";',
             'RunOnceId: "RemovePebrelAiHooks"',
@@ -62,6 +61,12 @@ class PebrelBrandingTests(unittest.TestCase):
         migration = self.source("scripts/installer-migration.iss")
         self.assertIn(r"{localappdata}\Programs\Pebrel", migration)
         self.assertIn(r"Software\Nebula Terminal", migration)
+        self.assertIn('#include "installer-context-menu.iss"', migration)
+        context_menu = self.source("scripts/installer-context-menu.iss")
+        self.assertIn(r"Key := Root + '\Pebrel';", context_menu)
+        for root in (r"Software\Classes\Directory\shell", r"Software\Classes\Directory\Background\shell"):
+            with self.subTest(root=root):
+                self.assertIn(f"UpdateExplorerMenusAt('{root}', Executable,", context_menu)
 
     def test_pebrel_assets_are_default_and_keep_explicit_legacy_alias(self):
         for path in ("scripts/package-release.ps1", "scripts/build-installer.ps1"):

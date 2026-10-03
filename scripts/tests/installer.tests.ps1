@@ -11,6 +11,7 @@ $builderPath = Join-Path $repo 'scripts\build-installer.ps1'
 
 $installer = Get-Content -LiteralPath $installerPath -Raw -Encoding UTF8
 $migration = Get-Content -LiteralPath $migrationPath -Raw -Encoding UTF8
+$contextMenu = Get-Content -LiteralPath (Join-Path $repo 'scripts\installer-context-menu.iss') -Raw -Encoding UTF8
 $requiredPatterns = [ordered]@{
     'migration-aware installation directory' = 'DefaultDirName=\{code:DefaultInstallDir\}'
     'registered previous-directory reuse' = 'UsePreviousAppDir=yes'
@@ -39,12 +40,9 @@ $requiredPatterns = [ordered]@{
     'localized Chinese context menu label' = 'chinesesimplified\.OpenInPebrel=\S.+'
     'localized WSL context menu label' = 'english\.OpenInPebrelWsl=Open in Pebrel'
     'localized Chinese WSL context menu label' = 'chinesesimplified\.OpenInPebrelWsl=\S.+'
-    'WSL context menu uninstall cleanup' = 'RemoveOwnedWslContextMenus;'
-    'directory background context menu' = 'Software\\Classes\\Directory\\Background\\shell\\Pebrel'
-    'selected directory context menu' = 'Software\\Classes\\Directory\\shell\\Pebrel'
-    'context menu executable icon' = 'ValueName: "Icon"; ValueData: "\{app\}\\pebrel\.exe,0"'
-    'background working-directory command' = '--gpui --working-directory ""%V""'
-    'selected directory working-directory command' = '--gpui --working-directory ""%1""'
+    'owned context menu uninstall cleanup' = 'RemoveOwnedExplorerContextMenus;'
+    'localized Explorer menu master switch' = 'english\.ExplorerMenuEnabled=Enable Explorer context menu integration'
+    'localized Chinese Explorer menu master switch' = 'chinesesimplified\.ExplorerMenuEnabled=\S.+'
     'PATH task' = 'Name: "addtopath"; Description: "\{cm:AddToPath\}"'
     'PATH registry entry' = 'Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"'
     'PATH ownership marker' = 'ValueName: "InstallerAddedToPath"'
@@ -85,15 +83,23 @@ if ($uninstallRun -lt 0 -or $cleanup -lt $uninstallRun) {
     throw 'Hook cleanup must be an [UninstallRun] action so it executes before installed files are deleted.'
 }
 
-$contextMenuRoots = @(
-    'Software\Classes\Directory\Background\shell\Pebrel'
-    'Software\Classes\Directory\shell\Pebrel'
-)
-foreach ($root in $contextMenuRoots) {
-    $escapedRoot = [regex]::Escape($root)
-    if ($installer -notmatch "Subkey: `"$escapedRoot`";.*Flags: uninsdeletekey") {
-        throw "Context-menu key must be removed during uninstall: $root"
+$contextMenuPatterns = [ordered]@{
+    'directory background root' = 'Software\\Classes\\Directory\\Background\\shell'
+    'selected directory root' = 'Software\\Classes\\Directory\\shell'
+    'working-directory command' = '--gpui --working-directory'
+    'executable icon' = "'Icon', Executable \+ ',0'"
+    'master switch' = 'ExplorerMenuPage.Values\[0\]'
+    'saved choices' = 'SaveExplorerMenuChoices;'
+    'exact ordinary command ownership' = 'CompareText\(Existing, Command\) = 0'
+    'owned ordinary uninstall cleanup' = 'UpdateDefaultExplorerMenuAt.*False\);'
+}
+foreach ($entry in $contextMenuPatterns.GetEnumerator()) {
+    if ($contextMenu -notmatch $entry.Value) {
+        throw "Explorer context-menu implementation is missing $($entry.Key): $($entry.Value)"
     }
+}
+if ($installer -match 'Subkey: "Software\\Classes\\Directory.*shell\\Pebrel') {
+    throw 'Unconditional registry entries would overwrite the saved Explorer selection.'
 }
 
 $migrationPatterns = [ordered]@{
@@ -123,7 +129,7 @@ $wslPatterns = [ordered]@{
     'WSL distribution registry' = 'Software\\Microsoft\\Windows\\CurrentVersion\\Lxss'
     'plumbing distros are skipped' = "Pos\('docker-desktop'"
     'distinct verb namespace' = "'PebrelWsl' \+ IntToStr\(Index\)"
-    'registration runs at post-install' = 'RegisterWslContextMenus;'
+    'registration runs at post-install' = 'RegisterExplorerContextMenus;'
     'owned keys are reclaimed by prefix and command' = "Pos\('PebrelWsl', Names\[NameIndex\]\) = 1"
     'uninstall sweeps both roots' = "Directory\\Background\\shell'"
 }
