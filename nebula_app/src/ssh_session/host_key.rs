@@ -8,6 +8,9 @@ use russh::keys::ssh_key::{
     known_hosts::{Entry, HostPatterns},
 };
 
+#[cfg(windows)]
+mod windows;
+
 pub(super) struct Change {
     snapshot: Vec<u8>,
     replacement: Vec<u8>,
@@ -62,12 +65,19 @@ pub(super) fn inspect(
             replacement.push_str(line);
             continue;
         }
-        let entry: Entry =
-            normalized.parse().map_err(|_| denied("Cannot safely parse known_hosts"))?;
-        if !matches(entry.host_patterns(), &endpoint) {
+        let mut fields = content.split_whitespace();
+        let first = fields.next().expect("nonempty record");
+        let hosts = if first.starts_with('@') {
+            fields.next().ok_or_else(|| denied("Missing marked host patterns"))?
+        } else {
+            first
+        };
+        let patterns: HostPatterns = hosts.parse().map_err(|_| denied("Cannot safely parse host patterns"))?;
+        if !matches(&patterns, &endpoint) {
             replacement.push_str(line);
             continue;
         }
+        let entry: Entry = normalized.parse().map_err(|_| denied("Cannot safely parse matching known_hosts record"))?;
         if entry.marker().is_some() {
             return Err(denied(
                 "SSH host has a revoked or certificate-authority record; update it outside Pebrel",
@@ -151,7 +161,11 @@ impl Change {
                 "known_hosts changed during confirmation; reconnect to verify again",
             ));
         }
-        crate::atomic_file::replace(temporary.path(), path)
+        let temporary = temporary.into_temp_path();
+        #[cfg(windows)]
+        return windows::replace(&temporary, path);
+        #[cfg(not(windows))]
+        crate::atomic_file::replace(&temporary, path)
     }
 }
 

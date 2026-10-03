@@ -31,7 +31,7 @@ silently convert revocation into ordinary trust.
 Confirmation owns a file snapshot. The short application writer lock and two
 byte comparisons reject concurrent edits observed before replacement. Stage a
 regular sibling file, preserve file permissions, sync and use existing atomic
-replacement. Reject symlinks rather than replacing a user's indirection.
+replacement on Unix and DACL-preserving replacement on Windows. Reject symlinks rather than replacing a user's indirection.
 
 ## Rejected alternatives
 
@@ -45,13 +45,18 @@ replacement. Reject symlinks rather than replacing a user's indirection.
 Canceled, unattended and unavailable UI paths cannot update trust. Pattern and
 marked records require external known_hosts administration. Invalid input fails
 closed. Independent OpenSSH writers do not share Pebrel's lock: the comparison
-is not a cross-tool atomic compare-and-swap. Native ACLs beyond Rust file
-permissions are not claimed to be preserved.
+is not a cross-tool atomic compare-and-swap. Windows uses `ReplaceFileW` without ACL/merge-error bypass flags, preserving
+the target DACL. An explicit backup protects failure cases that move the original
+file; recovery never overwrites a concurrent destination and retains the backup
+if automatic recovery cannot complete.
 
 ## Validation
 
 Active regressions cover isolated files, shared host lines, hashed names, ports,
 other algorithms, comments/endings, markers, patterns and changed snapshots.
+Unrelated malformed keys and unknown algorithms cannot block a trusted host.
+Windows regressions compare a protected target DACL against a broader parent
+and verify replacement failure retains the original file.
 A real loopback SSH service rejects the old record, remains refused after
 cancellation, and connects after explicit confirmation saves the new key.
 The GPUI cancellation path and English/Chinese fingerprint formatting are covered.
@@ -64,4 +69,4 @@ None.
 ## Revisit when
 
 Safe wildcard replacement, certificate-authority policy, stronger cross-tool
-coordination or platform ACL preservation is requested.
+coordination is requested.
