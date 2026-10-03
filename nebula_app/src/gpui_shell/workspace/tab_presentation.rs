@@ -95,7 +95,14 @@ impl NebulaWorkspace {
             .unwrap_or((None, SidebarActivity::Idle));
         // 事件 vs 状态的唯一裁定处（侧栏与顶栏共用这份 presentation），规则与
         // 理由见 [`sidebar::resting_activity`]。
-        let activity = sidebar::resting_activity(activity, active, self.meta(ix).has_bell);
+        let show_status = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .is_none_or(|settings| settings.show_tab_status);
+        let activity = if show_status {
+            sidebar::resting_activity(activity, active, self.meta(ix).has_bell)
+        } else {
+            SidebarActivity::Idle
+        };
         let brand_logo = program.as_deref().and_then(crate::display::ai_logo_for_program);
         let logo_image =
             brand_logo.and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
@@ -119,10 +126,11 @@ impl NebulaWorkspace {
         // 的 shell，只贴其中一个（聚焦那个）是误导；数量胶囊「这是一组」才是
         // 此时该占这个槽位的信息。顺带把 28px 让回标题——顶栏挤到 120px 时，
         // 图标+胶囊+短标三样一起上，标题只剩两三个字符。
-        let shell_tag = (is_terminal && activity == SidebarActivity::Idle && pane_count <= 1)
-            .then_some(meta.shell_tag.clone())
-            .flatten()
-            .filter(|tag| !tag.is_empty());
+        let shell_tag =
+            (show_status && is_terminal && activity == SidebarActivity::Idle && pane_count <= 1)
+                .then_some(meta.shell_tag.clone())
+                .flatten()
+                .filter(|tag| !tag.is_empty());
         let renaming = self
             .tab_rename
             .as_ref()

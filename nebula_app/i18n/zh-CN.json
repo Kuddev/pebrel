@@ -17,6 +17,8 @@
     "en_us": "English"
   },
   "settings": {
+    "show_tab_status": "显示标签活动状态",
+    "show_tab_status_description": "显示运行、等待、完成状态与 Shell 短标。更改会立即应用到已打开的标签。",
     "completion": {
       "mode": "补齐模式",
       "cycle": "切换补齐模式",

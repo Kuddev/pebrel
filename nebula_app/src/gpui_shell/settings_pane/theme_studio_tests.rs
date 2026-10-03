@@ -1683,3 +1683,31 @@ fn theme_editor_save_only_forks_a_non_active_custom_template_without_publishing_
     assert_eq!(settings_file_snapshot(), before_save_settings);
     assert_eq!(settings_file_snapshot(), before_settings_file);
 }
+
+#[gpui::test]
+fn tab_status_switch_persists_and_hot_applies(cx: &mut TestAppContext) {
+    use crate::gpui_shell::config::Settings;
+    let _lock = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    std::fs::create_dir_all(nebula_settings::settings_dir()).unwrap();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS).unwrap();
+    let (pane, mut window) = open_settings(cx);
+    window.simulate_resize(size(px(1280.0), px(1800.0)));
+    for expected in [false, true] {
+        draw(&mut window);
+        let bounds = window.debug_bounds("nebula-switch-show_tab_status").unwrap();
+        window.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(bounds.center().x, px(900.0)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(900.0) - bounds.center().y)),
+            touch_phase: gpui::TouchPhase::Moved,
+            modifiers: Modifiers::default(),
+        });
+        draw(&mut window);
+        click("nebula-switch-show_tab_status", &mut window);
+        assert_eq!(RuntimeSettings::load().show_tab_status, expected);
+        assert_eq!(window.read(|cx| cx.global::<Settings>().show_tab_status), expected);
+        pane.read_with(&window, |pane, _| assert_eq!(pane.runtime.show_tab_status, expected));
+        let reopened = window.update(|window, cx| cx.new(|cx| SettingsPane::new(window, cx)));
+        reopened.read_with(&window, |pane, _| assert_eq!(pane.runtime.show_tab_status, expected));
+    }
+}
