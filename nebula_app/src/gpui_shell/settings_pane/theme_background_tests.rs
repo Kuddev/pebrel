@@ -5,7 +5,7 @@ fn reveal(selector: &'static str, window: &mut VisualTestContext) {
     reveal_editor_control(selector, window);
 }
 
-fn choose_image(path: &std::path::Path, window: &mut VisualTestContext) {
+pub(super) fn choose_image(path: &std::path::Path, window: &mut VisualTestContext) {
     reveal("theme-editor-image-choose", window);
     click("theme-editor-image-choose", window);
     assert!(window.did_prompt_for_paths());

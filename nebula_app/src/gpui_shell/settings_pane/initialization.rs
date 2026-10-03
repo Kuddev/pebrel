@@ -598,6 +598,8 @@ impl SettingsPane {
             theme_editor: None,
             theme_editor_seq: 0,
             theme_transfer: theme_transfer::ThemeTransferState::default(),
+            theme_package: None,
+            theme_package_seq: 0,
             theme_picker_trigger: cx.focus_handle(),
             icon_picker_trigger: cx.focus_handle(),
             expanded_setting_help: std::collections::HashSet::new(),
