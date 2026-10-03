@@ -22,6 +22,8 @@ Keep the handshake refused until the existing bounded prompt receives explicit
 trust and the changed record is saved successfully. Show host/port, old SHA256
 fingerprints, the new SHA256 fingerprint and the identity-change warning.
 
+A presented key already trusted in the same snapshot remains trusted even when
+another ordinary record retains an older key. This is not a reason to update.
 Use the library parser, preserve unrelated original lines, and split only the
 literal target from multi-host records. Preserve hashed names, comments, line
 endings and other algorithms. Marked matching records and changed wildcard or

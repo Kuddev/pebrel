@@ -529,22 +529,26 @@ impl client::Handler for ClientHandler {
         // Inspect marked records even on a first visit: russh's literal checker
         // otherwise treats @revoked / @cert-authority entries as unknown hosts.
         let path = self.host_key_path()?;
-        if let Some(change) = host_key::inspect(&path, &self.host, self.port, server_public_key)? {
-            if !self.allow_prompt {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "SSH host identity changed; explicit confirmation required",
-                )
-                .into());
-            }
-            let confirmation = crate::ssh_prompt::confirm_changed_host(
-                &self.host,
-                self.port,
-                change.fingerprints.join("\n"),
-                server_public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
-            );
-            let accepted = async { confirmation.await.unwrap_or(false) };
-            return Ok(self.confirm_changed_key(change, accepted).await?);
+        match host_key::inspect(&path, &self.host, self.port, server_public_key)? {
+            host_key::Verification::Trusted => return Ok(true),
+            host_key::Verification::Unknown => {},
+            host_key::Verification::Changed(change) => {
+                if !self.allow_prompt {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "SSH host identity changed; explicit confirmation required",
+                    )
+                    .into());
+                }
+                let confirmation = crate::ssh_prompt::confirm_changed_host(
+                    &self.host,
+                    self.port,
+                    change.fingerprints.join("\n"),
+                    server_public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+                );
+                let accepted = async { confirmation.await.unwrap_or(false) };
+                return Ok(self.confirm_changed_key(change, accepted).await?);
+            },
         }
         match self.verify_host_key(server_public_key) {
             Ok(true) => Ok(true),

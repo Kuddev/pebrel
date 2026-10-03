@@ -8,6 +8,12 @@ use russh::keys::ssh_key::{
     known_hosts::{Entry, HostPatterns},
 };
 
+pub(super) enum Verification {
+    Trusted,
+    Unknown,
+    Changed(Change),
+}
+
 pub(super) struct Change {
     snapshot: Vec<u8>,
     replacement: Vec<u8>,
@@ -44,16 +50,18 @@ pub(super) fn inspect(
     host: &str,
     port: u16,
     key: &ssh_key::PublicKey,
-) -> io::Result<Option<Change>> {
+) -> io::Result<Verification> {
     let snapshot = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Verification::Unknown),
         Err(error) => return Err(error),
     };
     let source = std::str::from_utf8(&snapshot).map_err(|_| denied("known_hosts is not UTF-8"))?;
     let endpoint = if port == 22 { host.to_owned() } else { format!("[{host}]:{port}") };
     let mut replacement = String::new();
     let mut fingerprints = Vec::new();
+    let mut trusted = false;
+    let mut unsupported_change = false;
     for line in source.split_inclusive('\n') {
         let content = line.trim_end_matches(['\r', '\n']);
         let ending = &line[content.len()..];
@@ -83,19 +91,18 @@ pub(super) fn inspect(
             replacement.push_str(line);
             continue;
         }
-        let entry: Entry = normalized
-            .parse()
-            .map_err(|_| denied("Cannot safely parse matching known_hosts record"))?;
-        if entry.marker().is_some() {
-            return Err(denied(
-                "SSH host has a revoked or certificate-authority record; update it outside Pebrel",
-            ));
+        if first.starts_with('@') {
+            return Err(denied("SSH host has a marked trust record; update it outside Pebrel"));
         }
-        if entry.public_key().algorithm() != key.algorithm() {
+        if fields.next() != Some(key.algorithm().as_str()) {
             replacement.push_str(line);
             continue;
         }
+        let entry: Entry = normalized
+            .parse()
+            .map_err(|_| denied("Cannot safely parse matching known_hosts record"))?;
         if entry.public_key().key_data() == key.key_data() {
+            trusted = true;
             replacement.push_str(line);
             continue;
         }
@@ -113,7 +120,9 @@ pub(super) fn inspect(
                     .iter()
                     .any(|pattern| pattern.contains(['*', '?']) || pattern.starts_with('!'))
                 {
-                    return Err(denied("Pattern-based SSH host records cannot be safely replaced"));
+                    unsupported_change = true;
+                    replacement.push_str(line);
+                    continue;
                 }
                 patterns.iter().filter(|pattern| *pattern != &endpoint).cloned().collect::<Vec<_>>()
             },
@@ -137,10 +146,20 @@ pub(super) fn inspect(
         replacement.push_str(&saved_key.to_openssh().map_err(io::Error::other)?);
         replacement.push_str(ending);
     }
-    if fingerprints.is_empty() {
-        return Ok(None);
+    if trusted {
+        return Ok(Verification::Trusted);
     }
-    Ok(Some(Change { snapshot, replacement: replacement.into_bytes(), fingerprints }))
+    if unsupported_change {
+        return Err(denied("Pattern-based SSH host records cannot be safely replaced"));
+    }
+    if fingerprints.is_empty() {
+        return Ok(Verification::Unknown);
+    }
+    Ok(Verification::Changed(Change {
+        snapshot,
+        replacement: replacement.into_bytes(),
+        fingerprints,
+    }))
 }
 
 impl Change {
@@ -208,7 +227,11 @@ mod tests {
         );
         let source = format!("{unrelated}{endpoint},other.example {old_line}\r\n{hash} {old_line}");
         std::fs::write(&path, &source).unwrap();
-        let change = inspect(&path, "fixture.example", 2200, new.public_key()).unwrap().unwrap();
+        let Verification::Changed(change) =
+            inspect(&path, "fixture.example", 2200, new.public_key()).unwrap()
+        else {
+            panic!("A different recorded key needs confirmation");
+        };
         assert_eq!(
             change.fingerprints,
             [old.public_key().fingerprint(ssh_key::HashAlg::Sha256).to_string()]
@@ -257,7 +280,11 @@ mod tests {
         let new = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
         let source = format!("fixture.example {}\n", old.public_key().to_openssh().unwrap());
         std::fs::write(&path, &source).unwrap();
-        let change = inspect(&path, "fixture.example", 22, new.public_key()).unwrap().unwrap();
+        let Verification::Changed(change) =
+            inspect(&path, "fixture.example", 22, new.public_key()).unwrap()
+        else {
+            panic!("A different recorded key needs confirmation");
+        };
         let concurrent = format!("{source}# another writer\n");
         std::fs::write(&path, &concurrent).unwrap();
         assert!(change.save(&path).is_err());
