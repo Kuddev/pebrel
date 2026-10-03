@@ -235,14 +235,7 @@ fn explicit_line_height_uses_natural_metrics_and_preserves_theme_in_auto() {
     use gpui::px;
     for multiplier in [0.5, 1.0, 1.46, 5.0] {
         assert_eq!(
-            typography::line_height_for_view(
-                px(15.0),
-                Some(1.5),
-                Some(multiplier),
-                20.0,
-                4.0,
-                1.5,
-            ),
+            typography::line_height_for_view(px(15.0), Some(1.5), Some(multiplier), 20.0, 4.0, 1.5,),
             typography::effective_line_height(20.0 * multiplier, 4.0, 1.5),
         );
     }
