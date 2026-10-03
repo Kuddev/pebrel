@@ -197,7 +197,7 @@ impl NebulaWorkspace {
                         cx.notify();
                         return;
                     }
-                    if workspace.save_clean_window_session(cx).is_err() {
+                    if workspace.save_clean_window_session(window, cx).is_err() {
                         workspace.window_close_pending = false;
                         let language = crate::gpui_shell::config::ui_language(cx);
                         crate::gpui_shell::toast::banner(

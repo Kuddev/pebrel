@@ -1014,6 +1014,7 @@ impl NebulaWorkspace {
             self.runtime_window_id,
             self.snapshot_session(cx),
             super::session_persistence::SaveReason::Checkpoint,
+            window,
             cx,
         ) {
             log::warn!("Could not checkpoint before hiding window: {error}");

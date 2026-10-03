@@ -469,7 +469,7 @@ fn default_font_family() -> &'static str {
     crate::font_install::REQUIRED_FONT_FAMILY
 }
 
-/// `config.window.dimensions`：启动窗口的网格行列。
+/// 显式窗口网格、物理坐标与首个普通窗口的冷启动恢复值。
 ///
 /// 单独驻留而不是并入 [`Settings`]，因为生命周期不同：`Settings` 随设置页写入
 /// 反复重载，启动网格按定义只在开窗时生效一次，而 Lua 配置求值不该出现在每次
@@ -478,6 +478,8 @@ fn default_font_family() -> &'static str {
 #[derive(Default)]
 pub(crate) struct StartupWindow {
     pub dimensions: Option<crate::config::window::Dimensions>,
+    pub position: Option<crate::config::ui_config::Delta<i32>>,
+    pub(crate) restored: Option<crate::session::WindowState>,
 }
 
 impl Global for StartupWindow {}
@@ -508,7 +510,11 @@ impl StartupWindow {
 
     /// `dimensions()` 自带「行列必须同时非零」的旧壳合同。
     fn from_config(config: &crate::config::UiConfig) -> Self {
-        Self { dimensions: config.window.dimensions() }
+        Self {
+            dimensions: config.window.dimensions(),
+            position: config.window.position,
+            restored: None,
+        }
     }
 }
 
@@ -879,7 +885,7 @@ mod tests {
             &path,
             "local pebrel = require 'pebrel'\n\
              local config = pebrel.config_builder()\n\
-             config.window = { dimensions = { columns = 123, lines = 37 } }\n\
+             config.window = { dimensions = { columns = 123, lines = 37 }, position = { x = 197, y = 102 } }\n\
              return config\n",
         )
         .unwrap();
@@ -890,10 +896,9 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(
-            StartupWindow::load(options.config_file).dimensions,
-            Some(Dimensions { columns: 123, lines: 37 })
-        );
+        let startup = StartupWindow::load(options.config_file);
+        assert_eq!(startup.dimensions, Some(Dimensions { columns: 123, lines: 37 }));
+        assert_eq!(startup.position, Some(crate::config::ui_config::Delta { x: 197, y: 102 }));
     }
 
     /// 用户写在 `pebrel.lua` 里的 `config.window.dimensions` 必须真的决定启动
@@ -931,6 +936,7 @@ mod tests {
         );
         let configured = |columns: usize, lines: usize| StartupWindow {
             dimensions: Some(Dimensions { columns, lines }),
+            ..Default::default()
         };
         cx.update(|cx| {
             assert_eq!(startup_grid(cx), builtin);
