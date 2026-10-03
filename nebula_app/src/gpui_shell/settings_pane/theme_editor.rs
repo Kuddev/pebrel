@@ -14,6 +14,7 @@ use crate::theme_library::{
 use nebula_settings::{Rgb8, ThemeDefinition, ThemeName, format_hex_rgb, parse_hex_rgb};
 use std::collections::{HashMap, HashSet};
 
+mod background;
 mod color_dialog;
 mod controls;
 mod view;
@@ -31,6 +32,8 @@ enum EditorInput {
     FontSize,
     LineHeight,
     Opacity,
+    ImagePath,
+    ImageOpacity,
 }
 
 struct ThemeSaveResult {
@@ -81,6 +84,8 @@ pub(super) struct ThemeEditor {
     pub(super) font_size_input: Entity<InputState>,
     pub(super) line_height_input: Entity<InputState>,
     pub(super) opacity_input: Entity<InputState>,
+    background_controls: background::ThemeBackgroundControls,
+    pub(super) background_preview: Entity<crate::gpui_shell::wallpaper::preview::ImagePreview>,
     pub(super) advanced: bool,
     advanced_editor: Option<ThemeAdvancedEditor>,
     pub(super) preview: usize,
@@ -103,6 +108,11 @@ pub(super) struct ThemeEditor {
 }
 
 impl ThemeEditor {
+    fn refresh_background_preview(&self, runtime: &RuntimeSettings, cx: &mut App) {
+        self.background_preview
+            .update(cx, |preview, cx| preview.configure(&self.draft.effects, runtime, cx));
+    }
+
     fn dirty(&self) -> bool {
         self.source_is_import
             || self.draft != self.baseline
@@ -174,11 +184,25 @@ impl ThemeEditor {
                     |value| format!("{}%", (value * 100.0).round() as u16),
                 ),
             ),
+            (
+                EditorInput::ImagePath,
+                &self.background_controls.image_path,
+                self.draft.effects.background_image.clone().unwrap_or_default(),
+            ),
+            (
+                EditorInput::ImageOpacity,
+                &self.background_controls.image_opacity,
+                self.draft
+                    .effects
+                    .background_image_opacity
+                    .map_or_else(String::new, |value| format!("{}%", value * 100.0)),
+            ),
         ];
         for (field, input, value) in values {
             self.input_values.insert(field, value.clone());
             input.update(cx, |state, cx| state.set_value(value, window, cx));
         }
+        self.background_controls.sync(&self.draft, window, cx);
     }
 
     fn sync_inherited_cursor_input(&mut self, window: &mut Window, cx: &mut App) {
@@ -289,6 +313,7 @@ impl SettingsPane {
             state.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
         });
         editor.sync_inputs(&current_font, current_size, window, cx);
+        editor.refresh_background_preview(&self.runtime, cx);
         self.refresh_theme_font_select(window, cx);
         cx.notify();
         Ok(())
@@ -491,6 +516,12 @@ impl SettingsPane {
             "100%",
         );
         let focus = cx.focus_handle();
+        let background_controls = background::ThemeBackgroundControls::new(&draft, window, cx);
+        let background_preview = cx.new(crate::gpui_shell::wallpaper::preview::ImagePreview::new);
+        background_preview
+            .update(cx, |preview, cx| preview.configure(&draft.effects, &self.runtime, cx));
+        let image_path_input = background_controls.image_path.clone();
+        let image_opacity_input = background_controls.image_opacity.clone();
         let advanced_editor = Some(ThemeAdvancedEditor::new(
             &draft,
             theme_advanced_labels(crate::gpui_shell::config::ui_language(cx)),
@@ -522,6 +553,8 @@ impl SettingsPane {
             font_size_input: font_size_input.clone(),
             line_height_input: line_height_input.clone(),
             opacity_input: opacity_input.clone(),
+            background_controls,
+            background_preview: background_preview.clone(),
             advanced: false,
             advanced_editor,
             preview: 0,
@@ -544,6 +577,8 @@ impl SettingsPane {
 
         let session_seq = self.theme_editor_seq;
         let mut subscriptions = Vec::new();
+        subscriptions.push(cx.observe(&background_preview, |_, _, cx| cx.notify()));
+        subscriptions.extend(self.subscribe_theme_background(session_seq, window, cx));
         subscriptions.push(cx.subscribe_in(
             &template_select,
             window,
@@ -602,6 +637,8 @@ impl SettingsPane {
             (font_size_input, EditorInput::FontSize),
             (line_height_input, EditorInput::LineHeight),
             (opacity_input, EditorInput::Opacity),
+            (image_path_input, EditorInput::ImagePath),
+            (image_opacity_input, EditorInput::ImageOpacity),
         ] {
             if let Some(editor) = self.theme_editor.as_mut() {
                 editor.input_values.insert(field, input.read(cx).value().to_string());
@@ -830,6 +867,7 @@ impl SettingsPane {
             state.set_selected_index(Some(IndexPath::default().row(index)), window, cx);
         });
         editor.sync_inputs(&current_font, current_size, window, cx);
+        editor.refresh_background_preview(&self.runtime, cx);
         editor.sync_advanced(window, cx);
         self.refresh_theme_font_select(window, cx);
         cx.notify();
@@ -855,6 +893,8 @@ impl SettingsPane {
             EditorInput::FontSize => &editor.font_size_input,
             EditorInput::LineHeight => &editor.line_height_input,
             EditorInput::Opacity => &editor.opacity_input,
+            EditorInput::ImagePath => &editor.background_controls.image_path,
+            EditorInput::ImageOpacity => &editor.background_controls.image_opacity,
         };
         let value = input.read(cx).value().to_string();
         if editor.input_values.get(&field) == Some(&value) {
@@ -908,6 +948,27 @@ impl SettingsPane {
                 .ok()
                 .map(|number| candidate.effects.opacity = Some(number / 100.0))
                 .is_some(),
+            EditorInput::ImagePath => {
+                candidate.effects.background_image = Some(value.trim().to_owned());
+                true
+            },
+            EditorInput::ImageOpacity => {
+                if value.trim().is_empty() {
+                    candidate.effects.background_image_opacity = None;
+                    true
+                } else {
+                    value
+                        .trim()
+                        .trim_end_matches('%')
+                        .trim()
+                        .parse::<f32>()
+                        .ok()
+                        .map(|number| {
+                            candidate.effects.background_image_opacity = Some(number / 100.0)
+                        })
+                        .is_some()
+                }
+            },
         };
         // The shared model is the authority for scalar bounds and finite values.
         // Only a fully valid candidate reaches preview layout or serialization.
@@ -932,6 +993,7 @@ impl SettingsPane {
             editor.advanced_editor.as_ref().and_then(|advanced| advanced.error().map(str::to_owned))
         };
         editor.sync_inherited_cursor_input(window, cx);
+        editor.refresh_background_preview(&self.runtime, cx);
         if editor.color_picker.is_some() {
             window.refresh();
         }
@@ -1217,6 +1279,7 @@ impl SettingsPane {
                         let current_size = pane.terminal_font_size_px(cx);
                         if let Some(editor) = pane.theme_editor.as_mut() {
                             editor.sync_inputs(&current_font, current_size, window, cx);
+                            editor.refresh_background_preview(&pane.runtime, cx);
                         }
                         pane.refresh_theme_font_select(window, cx);
                         if apply_now && draft_stayed_current {
@@ -1269,6 +1332,7 @@ impl SettingsPane {
         editor.error = None;
         editor.color_picker = None;
         editor.sync_inputs(&current_font, current_size, window, cx);
+        editor.refresh_background_preview(&self.runtime, cx);
         editor.sync_advanced(window, cx);
         self.refresh_theme_font_select(window, cx);
         cx.notify();

@@ -54,6 +54,23 @@ pub(crate) fn custom_theme_updates(
     if let Some(shape) = definition.effects.cursor_shape {
         updates.push(("cursor_shape", shape.settings_value().to_owned()));
     }
+    if let Some(path) = definition.effects.background_image {
+        // An explicit empty path removes the wallpaper; None preserves the
+        // personal preference, including when applying a colors-only theme.
+        updates.push(("background_image", path));
+    }
+    if let Some(opacity) = definition.effects.background_image_opacity {
+        updates.push(("background_image_opacity", opacity.to_string()));
+    }
+    if let Some(fit) = definition.effects.background_image_fit {
+        updates.push(("background_image_fit", fit));
+    }
+    if let Some(alignment) = definition.effects.background_image_alignment {
+        updates.push(("background_image_alignment", alignment));
+    }
+    if let Some(cover) = definition.effects.background_image_cover_chrome {
+        updates.push(("background_image_cover_chrome", if cover { "1" } else { "0" }.to_owned()));
+    }
     Ok(updates)
 }
 
@@ -128,6 +145,75 @@ fn save_at(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wallpaper_overrides_apply_independently_of_window_material() {
+        let mut definition =
+            nebula_settings::ThemeDefinition::from_builtin(nebula_settings::ThemeName::Nord);
+        definition.effects.background_image = Some("wallpapers/雪山.png".to_owned());
+        definition.effects.background_image_opacity = Some(0.42);
+        definition.effects.background_image_fit = Some("uniform".to_owned());
+        definition.effects.background_image_alignment = Some("top_right".to_owned());
+        definition.effects.background_image_cover_chrome = Some(false);
+        definition.effects.opacity = Some(0.8);
+        definition.effects.blur = Some(nebula_settings::BlurModeName::Aero);
+        let document = super::super::from_definition(&definition)
+            .unwrap()
+            .fork("wallpaper-test", "Wallpaper")
+            .unwrap();
+        let original = "background_image=old.png\nbackground_image_opacity=0.2\nbackground_image_fit=fill\nbackground_image_alignment=bottom\nbackground_image_cover_chrome=1\nopacity=1\nblur=none\nshell=cmd\n";
+        let text = nebula_settings::apply_updates(
+            original,
+            &custom_theme_updates(&document, None).unwrap(),
+        );
+        let runtime = nebula_settings::RuntimeSettings::from_raw(
+            &nebula_settings::RawSettings::from_text(&text),
+        );
+        assert_eq!(runtime.background_image.as_deref(), Some("wallpapers/雪山.png"));
+        assert_eq!(runtime.background_image_opacity, 0.42);
+        assert_eq!(runtime.background_image_fit.as_deref(), Some("uniform"));
+        assert_eq!(runtime.background_image_alignment.as_deref(), Some("top_right"));
+        assert!(!runtime.background_image_cover_chrome);
+        assert_eq!(runtime.opacity, 0.8);
+        assert_eq!(runtime.blur, nebula_settings::BlurModeName::Aero);
+        assert_eq!(runtime.shell.as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn wallpaper_inheritance_and_explicit_removal_have_different_meanings() {
+        let mut definition =
+            nebula_settings::ThemeDefinition::from_builtin(nebula_settings::ThemeName::Nord);
+        let original = "background_image=personal.png\nbackground_image_opacity=0.65\nbackground_image_fit=fill\nbackground_image_alignment=left\nbackground_image_cover_chrome=1\n";
+        let make_document = |definition: &nebula_settings::ThemeDefinition| {
+            super::super::from_definition(definition)
+                .unwrap()
+                .fork("wallpaper-inherit", "Inherited")
+                .unwrap()
+        };
+        let inherited = nebula_settings::apply_updates(
+            original,
+            &custom_theme_updates(&make_document(&definition), None).unwrap(),
+        );
+        let runtime = nebula_settings::RuntimeSettings::from_raw(
+            &nebula_settings::RawSettings::from_text(&inherited),
+        );
+        assert_eq!(runtime.background_image.as_deref(), Some("personal.png"));
+        assert_eq!(runtime.background_image_opacity, 0.65);
+        assert_eq!(runtime.background_image_fit.as_deref(), Some("fill"));
+        assert_eq!(runtime.background_image_alignment.as_deref(), Some("left"));
+        assert!(runtime.background_image_cover_chrome);
+        definition.effects.background_image = Some(String::new());
+        definition.effects.background_image_opacity = Some(0.0);
+        let cleared = nebula_settings::apply_updates(
+            original,
+            &custom_theme_updates(&make_document(&definition), None).unwrap(),
+        );
+        let runtime = nebula_settings::RuntimeSettings::from_raw(
+            &nebula_settings::RawSettings::from_text(&cleared),
+        );
+        assert_eq!(runtime.background_image, None);
+        assert_eq!(runtime.background_image_opacity, 0.0);
+    }
+
     use super::*;
 
     #[test]
