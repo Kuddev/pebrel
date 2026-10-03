@@ -123,6 +123,7 @@ pub struct SettingsPane {
     about_update: AboutUpdateState,
     about_update_seq: u64,
     about_last_checked: Option<String>,
+    release_notes: Option<Entity<super::release_notes::ReleaseNotesView>>,
     /// 首页「项目与支持」→ 赞助商：独立页面，不是外链行。切换分区时清掉。
     about_sponsor_open: bool,
     settings_search_input: Entity<InputState>,
@@ -1336,6 +1337,12 @@ impl SettingsPane {
             8 => self.section_advanced(cx),
             10 => self.section_agents(cx),
             MOBILE_SECTION => self.section_mobile(window, cx),
+            RELEASE_NOTES_SECTION => {
+                let view = self.release_notes.get_or_insert_with(|| {
+                    cx.new(|cx| super::release_notes::ReleaseNotesView::new(None, cx))
+                });
+                div().w_full().child(view.clone())
+            },
             _ => self.section_backup(window, cx),
         }
         .into_any_element()

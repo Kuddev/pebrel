@@ -35,6 +35,7 @@ pub mod math_view;
 mod molecule_view;
 pub mod network_settings;
 pub mod prelude;
+mod release_notes;
 mod scientific_render;
 pub mod session_restore;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -71,6 +72,7 @@ pub(crate) enum GpuiShellEvent {
     MuxAttach,
     RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
     UpdateAvailable(crate::update_check::UpdateCheckResult),
+    UpdateInstalled(crate::update_check::release_notes::ReleaseNotes),
     SshPrompt(std::sync::Arc<crate::ssh_prompt::Prompt>),
     OpenDirectories(Vec<String>),
 }

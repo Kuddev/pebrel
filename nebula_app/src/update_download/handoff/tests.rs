@@ -64,10 +64,27 @@ fn update_restore_tickets_cover_success_rollback_and_acknowledgement() {
             serde_json::json!({"transaction": "wrong", "success": !recovered, "recovered_original": recovered}),
         );
         assert!(restore_ticket().is_none());
+        assert!(completed_update_directory().is_none());
         save(
             "result.json",
             serde_json::json!({"transaction": plan.transaction, "success": !recovered, "recovered_original": recovered}),
         );
+        assert_eq!(completed_update_directory().is_some(), !recovered);
+        if !recovered {
+            crate::update_check::release_notes::remember(
+                &plan.version,
+                "# Installed release\n**Changes**",
+            );
+            crate::update_check::release_notes::snapshot(&plan.version, &directory).unwrap();
+            let notes = crate::update_check::release_notes::pending_installed().unwrap();
+            assert_eq!(notes.body, "# Installed release\n**Changes**");
+            assert!(crate::update_check::release_notes::claim(&plan.version).unwrap());
+            assert!(!crate::update_check::release_notes::claim(&plan.version).unwrap());
+            assert!(crate::update_check::release_notes::pending_installed().is_none());
+            assert_eq!(crate::update_check::release_notes::current().unwrap().body, notes.body);
+        } else {
+            assert!(crate::update_check::release_notes::pending_installed().is_none());
+        }
         assert_eq!(restore_ticket().unwrap().len(), 1);
         acknowledge_restore(2);
         assert!(!directory.join("restored.json").exists());
