@@ -76,6 +76,37 @@ pub(crate) fn snapshot_shell(
     configured
 }
 
+#[cfg(windows)]
+pub(super) fn prepare_startup_directory(options: &mut nebula_terminal::tty::Options) {
+    use std::path::{Component, Prefix};
+
+    let Some(Component::Prefix(prefix)) =
+        options.working_directory.as_ref().and_then(|path| path.components().next())
+    else {
+        return;
+    };
+    let server = match prefix.kind() {
+        Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => server,
+        _ => return,
+    };
+    if !server.to_str().is_some_and(|server| {
+        server.eq_ignore_ascii_case("wsl.localhost") || server.eq_ignore_ascii_case("wsl$")
+    }) {
+        return;
+    }
+    let shell = options.shell.clone().unwrap_or_else(nebula_terminal::tty::resolved_default_shell);
+    let name = shell.program().rsplit(['/', '\\']).next().unwrap_or_default();
+    if matches!(
+        name.to_ascii_lowercase().as_str(),
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
+    ) {
+        // CMD launchers cannot inherit a WSL UNC cwd and otherwise fall back to Windows.
+        if let Some(home) = super::dirs::home_dir() {
+            options.working_directory = Some(home);
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 const fn default_unix_shell_id() -> &'static str {
     "zsh"
@@ -234,6 +265,99 @@ pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_wsl_unc_startup_uses_home_without_changing_the_launch() {
+        use nebula_terminal::tty::{Options, Shell};
+
+        let home = super::super::dirs::home_dir().unwrap();
+        for program in ["powershell.exe", "C:/Program Files/PowerShell/7/pwsh.exe"] {
+            for cwd in [
+                r"\\wsl.localhost\Ubuntu\home\user",
+                r"\\wsl$\Ubuntu\home\user",
+                r"\\?\UNC\WSL.LOCALHOST\Ubuntu\home\user",
+            ] {
+                let shell = Shell::new(program.into(), vec!["-NoLogo".into()]);
+                let mut options = Options {
+                    shell: Some(shell.clone()),
+                    working_directory: Some(cwd.into()),
+                    ..Default::default()
+                };
+                prepare_startup_directory(&mut options);
+                assert_eq!(options.working_directory, Some(home.clone()));
+                assert_eq!(options.shell, Some(shell));
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_network_directories_and_wsl_launches_keep_their_startup_cwd() {
+        use nebula_terminal::tty::{Options, Shell};
+
+        for (program, cwd) in [
+            ("pwsh.exe", r"C:\work"),
+            ("powershell.exe", r"\\server\share\work"),
+            ("wsl.exe", r"\\wsl.localhost\Ubuntu\home\user"),
+            ("bash.exe", r"\\wsl$\Ubuntu\home\user"),
+        ] {
+            let mut options = Options {
+                shell: Some(Shell::new(program.into(), vec![])),
+                working_directory: Some(cwd.into()),
+                ..Default::default()
+            };
+            let original = options.clone();
+            prepare_startup_directory(&mut options);
+            assert_eq!(options, original);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_cmd_launchers_inherit_the_prepared_windows_directory() {
+        use nebula_terminal::tty::{Options, Shell};
+
+        let root = tempfile::tempdir().unwrap();
+        let shim = root.path().join("cwd-probe.cmd");
+        let result = root.path().join("cwd-result.txt");
+        std::fs::write(&shim, b"@echo off\r\ncd\r\n").unwrap();
+        let home = super::super::dirs::home_dir().unwrap();
+        let system = std::env::var_os("SystemRoot").unwrap();
+        let powershell =
+            std::path::Path::new(&system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        for program in [powershell.to_string_lossy().into_owned(), "pwsh.exe".into()] {
+            std::fs::write(&result, b"").unwrap();
+            let mut options = Options {
+                shell: Some(Shell::new(program.clone(), vec![])),
+                working_directory: Some(r"\\wsl.localhost\Ubuntu\home\user".into()),
+                ..Default::default()
+            };
+            super::super::environment::prepare_local_pty(&mut options);
+            assert_eq!(options.working_directory.as_ref(), Some(&home));
+            let output = std::process::Command::new(&program)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "$paths = @($PWD.ProviderPath; & $env:ComSpec /d /c cd; & $env:PEBREL_CWD_SHIM); [IO.File]::WriteAllLines($env:PEBREL_CWD_RESULT, [string[]]$paths, [Text.Encoding]::UTF8)",
+                ])
+                .current_dir(options.working_directory.unwrap())
+                .env("PEBREL_CWD_SHIM", &shim)
+                .env("PEBREL_CWD_RESULT", &result)
+                .env_remove("PSModulePath")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{program}: {:?}", output);
+            assert!(output.stderr.is_empty(), "{program}: {:?}", output);
+            let paths = std::fs::read_to_string(&result).unwrap();
+            assert_eq!(
+                paths.trim_start_matches('\u{feff}').lines().collect::<Vec<_>>(),
+                vec![home.to_str().unwrap(); 3],
+                "{program}: {paths}"
+            );
+        }
+    }
 
     #[cfg(windows)]
     #[test]
