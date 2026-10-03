@@ -194,6 +194,10 @@
       "save_failed": "Could not change startup settings: {error}"
     },
     "agents": {
+      "resume_title": "Automatic resume arguments",
+      "resume_description": "Enter a JSON array of literal arguments for each agent, such as [\"--flag\", \"value\"]. Empty keeps the default command. Saved values apply to the next automatic resume or retry; they never replay command history. CMD cannot accept arguments containing double quotes, % or !.",
+      "resume_invalid": "Use a JSON array of up to 32 strings, without control characters (at most 64 KiB after quoting).",
+      "resume_failed": "Could not save resume arguments: {error}",
       "title": "Coding agents",
       "description": "Show agent activity, completion and approval requests in Pebrel. Claude Code and Codex are enabled by default.",
       "refresh": "Refresh",

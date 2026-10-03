@@ -19,6 +19,8 @@ type TestOperation = std::sync::Arc<
 
 pub(super) struct AgentSettingsState {
     rows: Option<Vec<AgentIntegration>>,
+    pub(super) resume_inputs: Vec<Entity<InputState>>,
+    pub(super) resume_feedback: Option<(usize, Result<(), String>)>,
     loading: bool,
     busy: Option<AgentKind>,
     sequence: u64,
@@ -29,8 +31,43 @@ pub(super) struct AgentSettingsState {
 }
 
 impl AgentSettingsState {
-    pub(super) fn new(cx: &mut Context<SettingsPane>) -> Self {
+    pub(super) fn new(
+        runtime: &RuntimeSettings,
+        window: &mut Window,
+        subscriptions: &mut Vec<Subscription>,
+        cx: &mut Context<SettingsPane>,
+    ) -> Self {
+        let resume_inputs = nebula_settings::AGENT_RESUME_SETTINGS
+            .iter()
+            .enumerate()
+            .map(|(index, (source, _))| {
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(r#"["--flag", "value"]"#)
+                        .default_value(runtime.agent_resume_args.get(source))
+                });
+                subscriptions.push(cx.subscribe_in(
+                    &input,
+                    window,
+                    move |pane, _, event, _, cx| {
+                        if matches!(event, InputEvent::Change)
+                            && pane
+                                .agents
+                                .resume_feedback
+                                .as_ref()
+                                .is_some_and(|(row, _)| *row == index)
+                        {
+                            pane.agents.resume_feedback = None;
+                            cx.notify();
+                        }
+                    },
+                ));
+                input
+            })
+            .collect();
         Self {
+            resume_inputs,
+            resume_feedback: None,
             rows: None,
             loading: false,
             busy: None,
@@ -181,6 +218,7 @@ impl SettingsPane {
                     .text_color(muted)
                     .child(language.text(Message::SettingsAgentsRestart)),
             )
+            .child(self.agent_resume_settings(cx))
     }
 
     fn agent_hook_row(

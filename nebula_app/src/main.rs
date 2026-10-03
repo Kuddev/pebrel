@@ -36,6 +36,7 @@ use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use nebula_terminal::tty;
 
 mod agent_env;
+mod agent_resume;
 mod ai_agents;
 mod ai_assistant;
 mod ai_hook;

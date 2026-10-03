@@ -72,7 +72,7 @@ pub(crate) fn is_elevated() -> io::Result<bool> {
 }
 
 #[cfg(windows)]
-fn quoted_argument(argument: &OsStr) -> io::Result<Vec<u16>> {
+pub(super) fn quoted_argument(argument: &OsStr) -> io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
     let mut result = vec![b'"' as u16];
     let mut backslashes = 0;

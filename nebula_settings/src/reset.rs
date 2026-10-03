@@ -91,6 +91,9 @@ fn default_settings_text(text: &str) -> String {
         .filter(|line| {
             !line.split_once('=').is_some_and(|(key, _)| {
                 RESET_KEYS.iter().any(|known| key.trim().eq_ignore_ascii_case(known))
+                    || crate::AGENT_RESUME_SETTINGS
+                        .iter()
+                        .any(|(_, known)| key.trim().eq_ignore_ascii_case(known))
             })
         })
         .collect()
@@ -131,6 +134,15 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_removes_resume_arguments_for_every_supported_agent() {
+        let text: String = crate::AGENT_RESUME_SETTINGS
+            .iter()
+            .map(|(_, key)| format!("{key}=[\"--custom\"]\n"))
+            .collect();
+        assert_eq!(default_settings_text(&text), "");
+    }
 
     #[test]
     fn reset_preserves_explicit_hook_authorization_and_opt_out() {

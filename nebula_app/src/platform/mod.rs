@@ -11,6 +11,7 @@
 
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod acrylic;
+pub(crate) mod agent_resume;
 pub(crate) mod ai_session_identity;
 pub mod capabilities;
 pub mod credentials;
