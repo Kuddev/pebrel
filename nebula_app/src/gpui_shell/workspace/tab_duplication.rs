@@ -2,8 +2,8 @@
 
 use gpui::{Context, Window};
 
-use super::NebulaWorkspace;
-use crate::session::LaunchSession;
+use super::{NebulaWorkspace, WorkspaceTab, new_tab_insert_index};
+use crate::session::{LaunchSession, TabSession};
 
 pub(super) fn inherit_guest_directory(launch: &mut LaunchSession, cwd: &str) -> bool {
     let (program, args) = match launch {
@@ -20,37 +20,48 @@ pub(super) fn inherit_guest_directory(launch: &mut LaunchSession, cwd: &str) -> 
 
 impl NebulaWorkspace {
     pub(super) fn duplicate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(ix) else { return };
-        let Some(view) = tab.focused_view() else { return };
-        let (ssh, raw_cwd, remote_cwd, pane_id) = {
-            let view = view.read(cx);
-            (view.ssh_destination.clone(), view.cwd.clone(), view.remote_cwd(), view.pane_id)
+        let Some(WorkspaceTab::Terminal { panes, tree, focused, .. }) = self.tabs.get(ix) else {
+            return;
         };
         let meta = self.meta(ix);
-        if let Some(destination) = ssh {
-            let remote_cwd = remote_cwd.or_else(|| {
-                self.remote_browser.path_for(pane_id, &destination).map(ToOwned::to_owned)
-            });
-            self.add_ssh_terminal_at(destination, remote_cwd, window, cx);
-        } else {
-            // Old snapshots without an identity resolve the current default shell.
-            let mut launch = match meta.launch {
-                None | Some(LaunchSession::Default) => {
-                    super::shell_launch::configured_local_launch(cx)
-                },
-                Some(launch) => launch,
-            };
-            // A guest path must never become CreateProcess's host working directory.
-            let cwd = if inherit_guest_directory(&mut launch, &raw_cwd) {
-                None
+        let layout = crate::gpui_shell::session_restore::layout_from_tree(tree, &|id| {
+            let pane = panes.iter().find(|pane| pane.id == id).expect("split leaf owns a pane");
+            let view = pane.view.read(cx);
+            let mut launch = view.session_launch.clone();
+            let cwd = if let Some(destination) = &view.ssh_destination {
+                launch = LaunchSession::Ssh { host: destination.clone() };
+                view.remote_cwd()
+                    .or_else(|| {
+                        self.remote_browser.path_for(id, destination).map(ToOwned::to_owned)
+                    })
+                    .unwrap_or_default()
             } else {
-                crate::session::valid_dir(&raw_cwd)
+                // The current pane directory takes precedence over a profile's startup directory.
+                if let LaunchSession::Profile { cwd, .. } = &mut launch {
+                    *cwd = None;
+                }
+                view.cwd.clone()
             };
-            self.add_terminal_with(launch, cwd, None, window, cx);
+            (cwd, None, Some(launch), pane.custom_name.clone())
+        });
+        let duplicate = TabSession {
+            cwd: String::new(),
+            custom_name: meta.custom_name,
+            color: meta.color,
+            launch: meta.launch,
+            active_pane: tree.leaves().iter().position(|id| id == focused).unwrap_or(0),
+            layout: Some(layout),
+        };
+        if self.settings_open {
+            self.leave_settings(window, cx);
         }
-        if let Some(target) = self.tab_meta.get_mut(self.active) {
-            target.custom_name = meta.custom_name;
-            target.color = meta.color;
+        let position = nebula_settings::RuntimeSettings::load().new_tab_position;
+        let at = new_tab_insert_index(position, self.active, self.tabs.len());
+        if self.restore_tab_at(&duplicate, false, at, window, cx) {
+            self.active = at;
+            self.reveal_active_tab();
+            self.focus_active(window, cx);
+            self.sync_side_panel_to_active(true, cx);
         }
         cx.notify();
     }
@@ -111,3 +122,6 @@ mod tests {
         assert_eq!(launch, original);
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod layout_tests;

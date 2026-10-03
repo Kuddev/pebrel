@@ -79,6 +79,17 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.restore_tab_at(tab, resume_ai, self.tabs.len(), window, cx)
+    }
+
+    pub(super) fn restore_tab_at(
+        &mut self,
+        tab: &crate::session::TabSession,
+        resume_ai: bool,
+        at: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         use crate::session::{LaunchSession, LayoutSession};
 
         let layout = tab.layout.clone().unwrap_or(LayoutSession::Pane {
@@ -106,8 +117,21 @@ impl NebulaWorkspace {
             }
             let guest_directory =
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);
-            let local_cwd = if guest_directory { None } else { crate::session::valid_dir(cwd) };
-            let launch = Self::terminal_launch_from_session(&launch_session, local_cwd);
+            let local_cwd =
+                if guest_directory || matches!(launch_session, LaunchSession::Ssh { .. }) {
+                    None
+                } else {
+                    crate::session::valid_dir(cwd)
+                };
+            let launch = match &launch_session {
+                LaunchSession::Ssh { host } => {
+                    crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
+                        destination: host.clone(),
+                        cwd: (!cwd.is_empty()).then(|| cwd.clone()),
+                    }
+                },
+                _ => Self::terminal_launch_from_session(&launch_session, local_cwd),
+            };
             let mut pane = self.new_pane(grid, launch, None, window, cx);
             pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);
             if !matches!(launch_session, LaunchSession::Default) {
@@ -134,9 +158,8 @@ impl NebulaWorkspace {
         });
         let focused =
             panes.get(tab.active_pane).or_else(|| panes.first()).map(|pane| pane.id).unwrap_or(0);
-        // 恢复期保持文件里的既有次序，不套「新标签插入位置」策略。
+        // 冷恢复由调用方追加，复制标签则使用新标签插入位置。
         // 重命名与色标随会话一起回来（旧壳同合同）。
-        let at = self.tabs.len();
         self.insert_tab_at(
             at,
             WorkspaceTab::Terminal { panes, tree, focused, zoomed: false, broadcast: false },
