@@ -8,11 +8,7 @@ impl TerminalView {
     pub(super) fn handle_completion_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         use crate::display::CompletionStyle;
         let hybrid = self.completion_style == CompletionStyle::Hybrid;
-        if key == "tab"
-            && hybrid
-            && self.ghost_enabled
-            && self.suggest.screen_line.is_empty()
-        {
+        if key == "tab" && hybrid && self.ghost_enabled && self.suggest.screen_line.is_empty() {
             let snapshot = self.session.as_ref().and_then(|session| {
                 let term = session.term.lock();
                 let cursor = term.grid().cursor.point;

@@ -80,7 +80,8 @@ fn refresh_completion_from_grid(view: &mut TerminalView, cx: &mut Context<Termin
             &view.suggest.suggest_env,
         )
         .or_else(|| {
-            view.suggest.completion_popup_requested
+            view.suggest
+                .completion_popup_requested
                 .then(|| view.suggest.completion_prefix_from_raw_grid(&term, cursor))
                 .flatten()
         })
