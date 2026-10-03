@@ -478,23 +478,34 @@ impl SettingsPane {
         let preview = v_flex()
             .w(px(if compact { width } else { 230.0 }))
             .flex_shrink_0()
-            .child(preview)
+            .items_center()
+            .child(preview.debug_selector(|| "theme-picker-terminal-preview".into()))
             .child(
                 div()
+                    .debug_selector(|| "theme-preview-name".into())
+                    .max_w_full()
+                    .text_center()
                     .mt(px(if compact_preview { 11.0 } else { 19.0 }))
                     .text_size(px(13.0))
                     .font_semibold()
                     .child(picker.choice_label(draft, language)),
             )
-            .child(div().mt(px(5.0)).text_size(px(10.5)).text_color(colors.secondary).child(
-                if is_light {
-                    language.text(Message::ThemePickerLight)
-                } else {
-                    language.text(Message::ThemePickerDark)
-                },
-            ))
+            .child(
+                div()
+                    .debug_selector(|| "theme-preview-mode".into())
+                    .mt(px(5.0))
+                    .text_size(px(10.5))
+                    .text_color(colors.secondary)
+                    .child(if is_light {
+                        language.text(Message::ThemePickerLight)
+                    } else {
+                        language.text(Message::ThemePickerDark)
+                    }),
+            )
             .child(
                 h_flex()
+                    .w_full()
+                    .justify_center()
                     .mt(px(if compact_preview { 9.0 } else { 20.0 }))
                     .pt(px(if compact_preview { 9.0 } else { 17.0 }))
                     .gap(px(8.0))
@@ -600,6 +611,9 @@ impl SettingsPane {
             )
             .child(
                 div()
+                    .w_full()
+                    .px(px(6.0))
+                    .text_center()
                     .mt(px(if compact_preview { 9.0 } else { 20.0 }))
                     .text_size(px(10.5))
                     .line_height(gpui::relative(1.7))

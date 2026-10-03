@@ -60,7 +60,11 @@ impl SettingsPane {
             Message::CloudPassphrase,
             Message::CloudScope,
         ];
-        let progress = h_flex()
+        let compact = window.viewport_size().width < px(960.0);
+        let progress = div()
+            .debug_selector(|| "backup-wizard-progress".into())
+            .grid()
+            .grid_cols(if compact { 2 } else { 4 })
             .flex_shrink_0()
             .w_full()
             .px_6()
@@ -70,6 +74,7 @@ impl SettingsPane {
             .border_color(cx.theme().border)
             .children(steps.into_iter().enumerate().map(|(i, label)| {
                 h_flex()
+                    .debug_selector(move || format!("backup-wizard-step-{i}"))
                     .flex_1()
                     .min_w_0()
                     .gap_2()
@@ -106,8 +111,18 @@ impl SettingsPane {
                                 div().child((i + 1).to_string()).into_any_element()
                             }),
                     )
-                    .child(l.text(label))
-                    .when(i < 3, |row| row.child(div().flex_1().h(px(1.0)).bg(cx.theme().border)))
+                    .child(
+                        div()
+                            .debug_selector(move || format!("backup-wizard-step-label-{i}"))
+                            .flex_1()
+                            .min_w_0()
+                            .child(l.text(label)),
+                    )
+                    .when(i < 3 && !compact, |row| {
+                        row.child(
+                            div().w(px(12.0)).flex_shrink_0().h(px(1.0)).bg(cx.theme().border),
+                        )
+                    })
             }));
         let (title, lead) = match step {
             1 => (Message::BackupFlowChooseStorage, Message::BackupFlowChooseStorageHint),
@@ -158,12 +173,16 @@ impl SettingsPane {
                     |(i, (protocol, nutstore, title, hint, icon))| {
                         Button::new(("backup-provider", i))
                             .debug_selector(move || format!("backup-provider-{i}"))
+                            .map(|button| {
+                                crate::gpui_shell::widgets::settings_button(button, false, cx)
+                            })
+                            // Provider rows contain a title and a wrapping description.
+                            // Apply their geometry after the shared single-line button style.
                             .w_full()
                             .h_auto()
                             .py_3()
                             .px_4()
                             .justify_start()
-                            .ghost()
                             .selected(provider(&self.backup_ui.draft) == title)
                             .disabled(self.backup_busy)
                             .child(Icon::default().path(icon).size(px(18.0)).flex_shrink_0())
@@ -175,11 +194,16 @@ impl SettingsPane {
                                     .items_start()
                                     .child(
                                         div()
+                                            .debug_selector(move || {
+                                                format!("backup-provider-title-{i}")
+                                            })
                                             .text_size(px(14.0))
                                             .font_medium()
                                             .child(l.text(title)),
                                     )
-                                    .child(caption(l.text(hint), cx)),
+                                    .child(caption(l.text(hint), cx).debug_selector(move || {
+                                        format!("backup-provider-hint-{i}")
+                                    })),
                             )
                             .when(provider(&self.backup_ui.draft) == title, |b| {
                                 b.child(Icon::default().path(icons::CHECK).size(px(16.0)))
@@ -273,8 +297,9 @@ impl SettingsPane {
                             Button::new("backup-back")
                                 .debug_selector(|| "backup-back".into())
                                 .label(l.text(Message::BackupFlowBack))
-                                .small()
-                                .ghost()
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_button(button, false, cx)
+                                })
                                 .disabled(self.backup_busy)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.backup_ui.step -= 1;
@@ -298,9 +323,17 @@ impl SettingsPane {
                                         ))
                                         .child(
                                             Button::new("backup-export-setup")
+                                                .map(|button| {
+                                                    crate::gpui_shell::widgets::settings_button(
+                                                        button, true, cx,
+                                                    )
+                                                })
                                                 .label(l.text(Message::CloudExport))
-                                                .small()
-                                                .ghost()
+                                                .map(|button| {
+                                                    crate::gpui_shell::widgets::settings_button(
+                                                        button, false, cx,
+                                                    )
+                                                })
                                                 .disabled(self.backup_busy)
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.open_backup_sheet(
@@ -319,8 +352,9 @@ impl SettingsPane {
                             Button::new("backup-later")
                                 .debug_selector(|| "backup-later".into())
                                 .label(l.text(Message::BackupFlowFinishLater))
-                                .small()
-                                .ghost()
+                                .map(|button| {
+                                    crate::gpui_shell::widgets::settings_button(button, false, cx)
+                                })
                                 .disabled(self.backup_busy || self.backup_selection.is_empty())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.save_backup_storage(false, window, cx)

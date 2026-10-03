@@ -51,6 +51,7 @@ impl SettingsPane {
 
         let preview_surface = match preview_mode {
             1 => v_flex()
+                .relative()
                 .w_full()
                 .min_h(px(if compact { 260.0 } else { 340.0 }))
                 .p(px(14.0))
@@ -58,6 +59,7 @@ impl SettingsPane {
                 .rounded(px(6.0))
                 .bg(theme_color(draft.resolved_ui().background, opacity))
                 .text_color(theme_color(draft.resolved_ui().foreground, 1.0))
+                .child(editor.background_preview.read(cx).layer(px(50.0)))
                 .child(
                     h_flex()
                         .w_full()
@@ -113,6 +115,7 @@ impl SettingsPane {
             2 => {
                 let ansi = draft.terminal.palette.ansi_colors();
                 v_flex()
+                    .relative()
                     .w_full()
                     .min_h(px(if compact { 260.0 } else { 340.0 }))
                     .p(px(15.0))
@@ -120,6 +123,7 @@ impl SettingsPane {
                     .rounded(px(6.0))
                     .bg(background)
                     .text_color(foreground)
+                    .child(editor.background_preview.read(cx).layer(px(0.0)))
                     .child(
                         div()
                             .font(crate::font_install::gpui_font_with_fallbacks(&family))
@@ -156,6 +160,7 @@ impl SettingsPane {
                     .into_any_element()
             },
             _ => v_flex()
+                .relative()
                 .w_full()
                 .min_h(px(if compact { 260.0 } else { 340.0 }))
                 .px(px(15.0))
@@ -164,6 +169,7 @@ impl SettingsPane {
                 .rounded(px(6.0))
                 .bg(background)
                 .text_color(foreground)
+                .child(editor.background_preview.read(cx).layer(px(45.0)))
                 .font(crate::font_install::gpui_font_with_fallbacks(&family))
                 .text_size(px(font_size))
                 .line_height(gpui::relative(line_height))
@@ -321,6 +327,14 @@ impl SettingsPane {
                     ),
             )
             .child(preview_surface)
+            .when_some(editor.background_preview.read(cx).status_message(), |view, message| {
+                view.child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(colors.secondary)
+                        .child(language.text(message)),
+                )
+            })
             .child(h_flex().w_full().gap(px(12.0)).border_b_1().border_color(colors.line).children(
                 tabs.into_iter().map(|(index, selector, label)| {
                     Button::new(selector)
@@ -372,7 +386,9 @@ impl SettingsPane {
         let common =
             self.theme_editor_common_fields(editor, language, colors, save_busy, window, cx);
         let common = if editor.advanced {
-            common.child(self.theme_editor_advanced(editor, language, colors, cx))
+            common
+                .child(self.theme_editor_background_fields(editor, window, cx))
+                .child(self.theme_editor_advanced(editor, language, colors, cx))
         } else {
             common
         };
@@ -433,14 +449,19 @@ impl SettingsPane {
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 h_flex()
+                    .w_full()
+                    .flex_shrink_0()
                     .px(px(26.0))
                     .pt(px(24.0))
                     .pb(px(18.0))
+                    .gap(px(16.0))
                     .justify_between()
-                    .border_b_1()
-                    .border_color(colors.line)
+                    .when(compact, |header| header.flex_col().items_start().gap(px(12.0)))
                     .child(
                         h_flex()
+                            .min_w_0()
+                            .when(compact, |title| title.w_full())
+                            .when(!compact, |title| title.flex_1())
                             .gap(px(10.0))
                             .child(
                                 Button::new("theme-editor-back")
@@ -448,6 +469,7 @@ impl SettingsPane {
                                     .icon(IconName::ArrowLeft)
                                     .ghost()
                                     .size(px(32.0))
+                                    .flex_shrink_0()
                                     .tooltip(language.text(Message::ThemeEditorBack))
                                     .disabled(save_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -456,6 +478,8 @@ impl SettingsPane {
                             )
                             .child(
                                 v_flex()
+                                    .min_w_0()
+                                    .flex_1()
                                     .gap(px(3.0))
                                     .child(
                                         div()
@@ -473,13 +497,17 @@ impl SettingsPane {
                     )
                     .child(
                         h_flex()
+                            .flex_shrink_0()
                             .gap(px(7.0))
+                            .when(compact, |actions| actions.w_full().justify_end().flex_wrap())
                             .child(
                                 Button::new("theme-editor-import")
                                     .debug_selector(|| "theme-editor-import".to_owned())
                                     .label(language.text(Message::ThemeEditorImport))
                                     .ghost()
                                     .small()
+                                    .h(px(32.0))
+                                    .px(px(12.0))
                                     .disabled(save_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_theme_import(window, cx);
@@ -491,9 +519,28 @@ impl SettingsPane {
                                     .label(language.text(Message::ThemeEditorExport))
                                     .ghost()
                                     .small()
+                                    .h(px(32.0))
+                                    .px(px(12.0))
                                     .disabled(save_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_theme_export(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("theme-editor-package")
+                                    .debug_selector(|| "theme-editor-package".to_owned())
+                                    .label(language.text(if compact {
+                                        Message::ThemePackageShort
+                                    } else {
+                                        Message::ThemePackageEntry
+                                    }))
+                                    .tooltip(language.text(Message::ThemePackageEntry))
+                                    .ghost()
+                                    .h(px(32.0))
+                                    .px(px(12.0))
+                                    .disabled(save_busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_theme_package(window, cx)
                                     })),
                             )
                             .child(div().w(px(1.0)).h(px(20.0)).bg(colors.line))

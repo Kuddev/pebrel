@@ -506,26 +506,8 @@ impl SettingsPane {
         subscriptions.push(cx.subscribe_in(
             &font_family_cjk_input,
             window,
-            |this: &mut Self, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    let raw = input.read(cx).value();
-                    let normalized = crate::font_install::normalize_font_family_chain(&raw);
-                    let value = if normalized.is_empty() {
-                        crate::font_install::REQUIRED_FONT_FAMILY.to_owned()
-                    } else {
-                        normalized
-                    };
-                    let current = this
-                        .runtime
-                        .font_family_cjk
-                        .as_deref()
-                        .unwrap_or(crate::font_install::REQUIRED_FONT_FAMILY);
-                    let changed = current != value;
-                    input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
-                    if changed {
-                        this.persist(&[("font_family_cjk", value)], cx);
-                    }
-                }
+            |this: &mut Self, _, event: &InputEvent, window, cx| {
+                this.on_cjk_font_family_input_event(event, window, cx);
             },
         ));
 
@@ -569,6 +551,41 @@ impl SettingsPane {
             },
         ));
 
+        let font_size_input = cx.new(|cx| InputState::new(window, cx));
+        subscriptions.push(cx.subscribe_in(
+            &font_size_input,
+            window,
+            |this: &mut Self, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    this.finish_font_size_edit(true, window, cx);
+                }
+            },
+        ));
+        let font_size_interceptor =
+            cx.listener(|this, event: &gpui::KeystrokeEvent, window, cx| {
+                if this.font_size_editing.is_some()
+                    && this.font_size_input.read(cx).focus_handle(cx).is_focused(window)
+                {
+                    match event.keystroke.key.as_str() {
+                        "escape" => {
+                            cx.stop_propagation();
+                            this.finish_font_size_edit(false, window, cx);
+                        },
+                        "tab" => {
+                            cx.stop_propagation();
+                            if event.keystroke.modifiers.shift {
+                                window.focus_prev(cx);
+                            } else {
+                                window.focus_next(cx);
+                            }
+                            this.finish_font_size_edit(true, window, cx);
+                        },
+                        _ => {},
+                    }
+                }
+            });
+        subscriptions.push(cx.intercept_keystrokes(font_size_interceptor));
+
         Self {
             focus_handle: cx.focus_handle(),
             runtime,
@@ -581,6 +598,8 @@ impl SettingsPane {
             theme_editor: None,
             theme_editor_seq: 0,
             theme_transfer: theme_transfer::ThemeTransferState::default(),
+            theme_package: None,
+            theme_package_seq: 0,
             theme_picker_trigger: cx.focus_handle(),
             icon_picker_trigger: cx.focus_handle(),
             expanded_setting_help: std::collections::HashSet::new(),
@@ -647,12 +666,16 @@ impl SettingsPane {
             ssh_delete_undo: None,
             ssh_undo_seq: 0,
             font_picker_open: false,
+            font_picker_cjk: false,
             font_loading: false,
             font_system: None,
             font_imported: Vec::new(),
             font_family_input,
             font_family_cjk_input,
+            font_size_input,
+            font_size_editing: None,
             font_picker_trigger_bounds: None,
+            font_picker_cjk_bounds: None,
             backup_selection: backup_remote.selection,
             backup_ui: backup::BackupUiState::default(),
             backup_pass_input: cx.new(|cx| {

@@ -1,9 +1,9 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "2.1.0"
+  #define AppVersion "2.1.1"
 #endif
 
 #ifndef NumericVersion
-  #define NumericVersion "2.1.0.0"
+  #define NumericVersion "2.1.1.0"
 #endif
 
 #ifndef Configuration

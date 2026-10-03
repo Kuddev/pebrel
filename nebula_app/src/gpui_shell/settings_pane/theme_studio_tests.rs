@@ -11,6 +11,11 @@ use gpui::{Modifiers, TestAppContext, VisualTestContext, size};
 use gpui_component::Root;
 use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
+#[path = "theme_background_tests.rs"]
+mod background_tests;
+#[path = "theme_package_tests.rs"]
+mod package_tests;
+
 const TEST_SETTINGS: &str =
     "theme=Nord\nfollow_system_theme=0\napp_icon=graphite-violet\nfont_size=15\n";
 
@@ -805,6 +810,7 @@ fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_re
 
     open_theme_editor(&mut window);
     edit_input("theme-editor-name", &saved_name, &mut window);
+    reveal_editor_control("theme-editor-advanced-toggle", &mut window);
     click("theme-editor-advanced-toggle", &mut window);
     assert!(window.debug_bounds("theme-editor-preview-cursor").is_some());
 
@@ -1298,6 +1304,22 @@ fn theme_picker_foreground_swatches_fit_above_footer_in_a_short_window(cx: &mut 
     window.simulate_resize(size(px(900.0), px(590.0)));
     draw(&mut window);
     click("open-theme-picker", &mut window);
+
+    let preview = window.debug_bounds("theme-picker-terminal-preview").expect("theme preview");
+    for selector in ["theme-preview-name", "theme-preview-mode"] {
+        let label = window.debug_bounds(selector).expect("preview caption");
+        assert!(
+            f32::from(label.center().x - preview.center().x).abs() < 1.0,
+            "{selector} must be centered beneath the preview"
+        );
+    }
+    let first = window.debug_bounds("theme-foreground-swatch-0").unwrap();
+    let last = window.debug_bounds("theme-foreground-custom-swatch").unwrap();
+    let swatch_center = (first.left() + last.right()) / 2.0;
+    assert!(
+        f32::from(swatch_center - preview.center().x).abs() < 1.0,
+        "the swatches must be centered as a group"
+    );
 
     let footer =
         window.debug_bounds("apply-appearance-picker").expect("appearance picker apply button");

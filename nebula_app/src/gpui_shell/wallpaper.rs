@@ -26,6 +26,7 @@ use gpui::{
 use image::{Frame, RgbaImage};
 
 mod image_loader;
+pub(crate) mod preview;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 use nebula_settings::BlurModeName;

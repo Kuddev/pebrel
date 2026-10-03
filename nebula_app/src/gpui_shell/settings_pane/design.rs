@@ -1,20 +1,8 @@
 //! 设置页的设计 token 与行原语。
 //!
-//! 一处定义、全页生效。上一版整页只有一种字重、行距全程 8px、132 个设置项零
-//! 说明——那不是文案没写，是规格散落在四千行里、只能靠纪律维持一致性的直接
-//! 结果。这个模块就是那个"一处"：字号档数、字重档数、留白梯度、轨道与脏值
-//! 标记，改这里全页跟着变。
-//!
-//! 三条贯穿全页的规则：
-//!
-//! 1. **层次是正交维度的乘积，不是字号堆叠。** 字号只有两档（正文 / 说明），
-//!    层级交给字重（600/500/400）和位置（标题出线）。把标题一放大就会出现三
-//!    套字号，那是另一种病。
-//! 2. **留白表达归属，不表达距离。** 4 / 24 / 32 三级：4px 说"这两行是同一
-//!    件事"，24px 说"这是两件事"，32px 说"这是两组事"。均匀间距无论调多大都
-//!    只会得到一条稀疏的平线。
-//! 3. **说明写后果，不写定义。**「关掉后关窗即杀掉所有 shell」比「控制会话
-//!    保留行为」有用——用户在这一行要做的判断是"关掉会怎样"。
+//! 分组标题使用更大、加粗的主文本；设置项名称和说明留在左列，控件在右列
+//! 垂直居中。标准密度沿用原紧凑间距，紧凑档只再微收；字号、命中区域和窗口
+//! 标题栏不随内容密度缩小。分组通过留白表达，不添加标题下横线。
 
 use std::time::Duration;
 
@@ -25,15 +13,16 @@ use super::*;
 /// 说明文字相对正文的字号比。全页只有两档字号：正文走用户基准字号，说明小
 /// 一档。
 pub(super) const DESC_SCALE: f32 = 0.82;
+/// Parent headings stay above item labels in the visual hierarchy.
+const GROUP_TITLE_SCALE: f32 = 16.0 / 14.0;
 /// label ↔ 说明。这 4px 在说"这两行是同一件事"。
 const LABEL_DESC_GAP: f32 = 4.0;
-/// 行内上下留白，行与行之间因此是它的两倍。用 padding 而不是行间 gap，左侧
-/// 轨道才连得上——断成一截一截的话，"哪几段亮着"根本读不出来。
+/// 标准密度沿用原紧凑档的行留白；间距只由行内 padding 提供。
 const ROW_PAD_Y: f32 = 12.0;
-/// 紧凑密度下的同一个值（「界面外观」里的密度开关对设置页真实生效）。
-const ROW_PAD_Y_COMPACT: f32 = 8.0;
+/// 紧凑档只再收紧少量留白，字号与控件命中区域保持不变。
+const ROW_PAD_Y_COMPACT: f32 = 10.0;
 /// 组与组。
-pub(super) const GROUP_GAP: f32 = 32.0;
+pub(super) const GROUP_GAP: f32 = 48.0;
 /// 轨道宽度。
 const RAIL_W: f32 = 2.0;
 /// 内容相对轨道的缩进。标题左对齐轨道本身、行内容缩进这么多——标题是命名者
@@ -62,7 +51,28 @@ enum RowLayout {
     Standard,
 }
 
+/// One heading role for settings groups, including specialized feature pages.
+pub(super) fn group_heading(
+    title: impl Into<SharedString>,
+    item_font_size: f32,
+    cx: &App,
+) -> gpui::Div {
+    div()
+        .text_size(px(item_font_size * GROUP_TITLE_SCALE))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(cx.theme().foreground)
+        .child(title.into())
+}
+
 impl SettingsPane {
+    pub(super) fn row_padding_y(&self) -> f32 {
+        if self.runtime.density == nebula_settings::DensityName::Compact {
+            ROW_PAD_Y_COMPACT
+        } else {
+            ROW_PAD_Y
+        }
+    }
+
     /// 一组设置的开头：标题出线。轨道不在这里画——它由组内每一行自己接续，
     /// 这样才能做到"同一条线，某几段是亮的"。
     pub(crate) fn group(&self, title: &'static str, cx: &Context<Self>) -> gpui::Div {
@@ -77,14 +87,7 @@ impl SettingsPane {
         // 窄窗口反而齐，因为那时被可用宽度压住了）。
         //
         // 不设宽度则走 flex 交叉轴 stretch：布局算法直接拉伸，不依赖父宽解析。
-        v_flex().w_full().child(
-            div()
-                .pb(px(10.0))
-                .text_size(px(base_px * DESC_SCALE))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(cx.theme().muted_foreground)
-                .child(title),
-        )
+        v_flex().w_full().child(group_heading(title, base_px, cx).pb(px(20.0)))
     }
 
     /// 组与组之间的间隔。
@@ -210,11 +213,7 @@ impl SettingsPane {
         let theme = cx.theme();
         let base_px = self.font_size_px(cx);
         let expanded = self.expanded_setting_help.contains(label);
-        let pad_y = if self.runtime.density == nebula_settings::DensityName::Compact {
-            ROW_PAD_Y_COMPACT
-        } else {
-            ROW_PAD_Y
-        };
+        let pad_y = self.row_padding_y();
         let text = v_flex()
             .child(
                 h_flex()
@@ -279,7 +278,7 @@ impl SettingsPane {
         let columns = match layout {
             RowLayout::Standard => h_flex()
                 .w_full()
-                .items_start()
+                .items_center()
                 .gap_4()
                 .child(text.flex_1().min_w(px(TEXT_COL_MIN_W)))
                 .child(
@@ -300,10 +299,6 @@ impl SettingsPane {
             .pl(px(RAIL_INDENT))
             .pr_4()
             .py(px(pad_y))
-            // 四角都收。这里原来只圆右侧，是为了让 hover 底看起来"从灰轨道
-            // 上长出来"；轨道已经删掉，再留着左边两个直角就只是缺角。
-            .rounded(px(7.0))
-            .hover(|row| row.bg(theme.list_hover.opacity(0.55)))
             // 竖线整条让给状态，不再画常驻的灰轨道。
             //
             // 灰线原本表达"这几行是一组"，但那件事组标题说了一遍、24px 组间
