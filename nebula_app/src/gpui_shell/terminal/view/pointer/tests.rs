@@ -439,6 +439,7 @@ fn explicit_link_gesture_respects_disabled_hints_and_required_modifiers(cx: &mut
 
 /// 真实终端元素 + 可回滚的历史，滚轮手势才有可观察的落点。
 fn terminal_with_history(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
+    cx.update(crate::gpui_shell::math_view::register);
     let (probe, mut cx) = open(cx);
     let terminal = probe.read_with(&cx, |probe, _| probe.terminal.clone());
     terminal.update(&mut cx, |view, cx| {
@@ -515,6 +516,7 @@ fn scrollbar_modes_keep_live_drag_visible_and_preserve_hidden_selection(cx: &mut
     terminal.update(&mut window, |view, cx| {
         view.apply_settings(cx);
         view.error = None;
+        view.spawn_at -= TerminalView::STARTUP_GRID_GRACE;
         view.copy_on_select = false;
         let history = (0..5000).map(|line| format!("row-{line}\r\n")).collect::<String>();
         super::super::startup_tests::feed(view, history.as_bytes());
@@ -600,10 +602,12 @@ fn scrollbar_modes_never_capture_without_history_and_hover_clears_on_leave(
     use nebula_settings::ScrollbarVisibility;
 
     let (terminal, mut window, receiver) = link_fixture(cx, b"\x1b[?1000h");
+    terminal.update(&mut window, |view, _| view.spawn_at -= TerminalView::STARTUP_GRID_GRACE);
     for mode in [ScrollbarVisibility::Auto, ScrollbarVisibility::Hover, ScrollbarVisibility::Always]
     {
         window.update(|_, cx| cx.global_mut::<Settings>().scrollbar_visibility = mode);
         terminal.update(&mut window, |view, cx| view.apply_settings(cx));
+        draw(&mut window);
         let edge = terminal.read_with(&window, |view, _| view.scrollbar_hot_zone().center());
         window.simulate_mouse_move(edge, None, Modifiers::default());
         assert!(terminal.read_with(&window, |view, _| view.scrollbar_hovered));
