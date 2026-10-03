@@ -1,7 +1,8 @@
 use super::super::TabMeta;
 use super::*;
 use crate::gpui_shell::terminal::view::TerminalLaunch;
-use gpui::{Focusable as _, Modifiers, TestAppContext};
+use gpui::{AppContext as _, Focusable as _, Modifiers, TestAppContext};
+use gpui_component::Root;
 
 #[gpui::test]
 fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppContext) {
@@ -12,7 +13,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
         gpui_component::init(cx);
         crate::gpui_shell::math_view::register(cx);
         crate::gpui_shell::file_editor::init(cx);
-        super::super::super::init(cx);
+        super::super::init(cx);
         super::super::windowing::initialize(cx, hub.clone());
         cx.set_reduce_motion(true);
     });
