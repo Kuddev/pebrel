@@ -50,6 +50,7 @@ pub(crate) mod update_installation;
 pub(crate) mod window_chrome;
 #[cfg(all(unix, feature = "gpui-shell"))]
 pub(crate) mod window_visibility;
+pub(crate) mod wsl_guest_shell;
 pub(crate) mod wsl_hooks;
 
 pub use capabilities::CAPABILITIES;
