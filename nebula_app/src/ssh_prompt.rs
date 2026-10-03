@@ -35,7 +35,10 @@ impl Prompt {
 
     pub fn respond(&self, response: PromptResponse) -> bool {
         let response = match (&self.kind, response) {
-            (PromptKind::HostKey { .. } | PromptKind::ChangedHostKey { .. }, PromptResponse::Trust) => PromptResponse::Trust,
+            (
+                PromptKind::HostKey { .. } | PromptKind::ChangedHostKey { .. },
+                PromptResponse::Trust,
+            ) => PromptResponse::Trust,
             (PromptKind::Secret { allow_save, .. }, PromptResponse::Secret { value, save }) => {
                 PromptResponse::Secret { value, save: save && *allow_save }
             },
@@ -99,8 +102,15 @@ pub async fn confirm_host(host: &str, port: u16, fingerprint: String) -> io::Res
     Ok(matches!(response, PromptResponse::Trust))
 }
 
-pub async fn confirm_changed_host(host: &str, port: u16, previous: String, fingerprint: String) -> io::Result<bool> {
-    let response = request(PromptKind::ChangedHostKey { host: host.to_owned(), port, previous, fingerprint }).await?;
+pub async fn confirm_changed_host(
+    host: &str,
+    port: u16,
+    previous: String,
+    fingerprint: String,
+) -> io::Result<bool> {
+    let response =
+        request(PromptKind::ChangedHostKey { host: host.to_owned(), port, previous, fingerprint })
+            .await?;
     Ok(matches!(response, PromptResponse::Trust))
 }
 

@@ -28,8 +28,8 @@ use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, Pro
 mod agent;
 mod config;
 mod exec;
-mod integration;
 mod host_key;
+mod integration;
 mod lifecycle;
 mod route;
 mod transcript;
@@ -463,8 +463,11 @@ struct ClientHandler {
 impl ClientHandler {
     fn host_key_path(&self) -> io::Result<PathBuf> {
         #[cfg(test)]
-        if let Some(path) = &self.known_hosts_path { return Ok(path.clone()); }
-        home::home_dir().map(|home| home.join(".ssh/known_hosts"))
+        if let Some(path) = &self.known_hosts_path {
+            return Ok(path.clone());
+        }
+        home::home_dir()
+            .map(|home| home.join(".ssh/known_hosts"))
             .ok_or_else(|| io::Error::other("SSH home directory unavailable"))
     }
 
@@ -473,7 +476,9 @@ impl ClientHandler {
         change: host_key::Change,
         confirmation: impl std::future::Future<Output = bool>,
     ) -> io::Result<bool> {
-        if !self.allow_prompt || !self.handshake.confirm(confirmation).await { return Ok(false); }
+        if !self.allow_prompt || !self.handshake.confirm(confirmation).await {
+            return Ok(false);
+        }
         change.save(&self.host_key_path()?)?;
         Ok(true)
     }
@@ -534,9 +539,12 @@ impl client::Handler for ClientHandler {
                 )
                 .await),
             Err(russh::keys::Error::KeyChanged { .. }) if self.allow_prompt => {
-                let change = inspected.ok_or_else(|| io::Error::other("No changed SSH host record"))?;
+                let change =
+                    inspected.ok_or_else(|| io::Error::other("No changed SSH host record"))?;
                 let confirmation = crate::ssh_prompt::confirm_changed_host(
-                    &self.host, self.port, change.fingerprints.join("\n"),
+                    &self.host,
+                    self.port,
+                    change.fingerprints.join("\n"),
                     server_public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
                 );
                 let accepted = async { confirmation.await.unwrap_or(false) };
