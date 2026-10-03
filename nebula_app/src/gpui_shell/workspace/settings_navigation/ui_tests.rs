@@ -240,3 +240,86 @@ fn density_changes_real_tab_bounds_and_sidebar_drag_pitch(cx: &mut TestAppContex
         }
     }
 }
+
+#[gpui::test]
+fn hiding_tab_status_keeps_hover_close_selection_keyboard_and_collapsed_title(
+    cx: &mut TestAppContext,
+) {
+    use crate::gpui_shell::config::Settings;
+    use nebula_settings::TabsPositionName;
+    let (_directory, workspace, mut window) = open_workspace(2, cx);
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.close_settings(window, cx);
+            workspace.active = 0;
+            cx.global_mut::<Settings>().tab_close_visible = true;
+        });
+    });
+    for (position, row, status, close) in [
+        (
+            TabsPositionName::Sidebar,
+            "sidebar-tab-1",
+            "sidebar-tab-status-1",
+            "close-sidebar-tab-1",
+        ),
+        (TabsPositionName::Top, "top-tab-1", "top-tab-status-1", "close-top-tab-1"),
+    ] {
+        for visible in [true, false, true, false] {
+            window.update(|_, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.active = 0;
+                    workspace.tab_meta[1].has_bell = true;
+                    workspace.tabs_position = position;
+                    workspace.sidebar_collapsed = false;
+                    cx.global_mut::<Settings>().show_tab_status = visible;
+                    workspace.sync_settings_layout(false);
+                    cx.notify();
+                });
+            });
+            let bounds = tab_bounds(row, &mut window);
+            assert_eq!(window.debug_bounds(status).is_some(), visible);
+            workspace.read_with(&window, |workspace, cx| {
+                assert!(
+                    workspace.tab_meta[1].has_bell,
+                    "display preference does not clear observed state"
+                );
+                assert_eq!(
+                    workspace.tab_presentation(1, cx, true).activity,
+                    if visible { SidebarActivity::Done } else { SidebarActivity::Idle }
+                );
+            });
+            window.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+            tab_bounds(row, &mut window);
+            assert!(window.debug_bounds(close).is_some(), "the hover close button remains laid out");
+        }
+        click_tab(row, &mut window);
+        workspace.read_with(&window, |workspace, _| assert_eq!(workspace.active, 1));
+    }
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.active = 0;
+            workspace.tabs_position = TabsPositionName::Sidebar;
+            workspace.sidebar_collapsed = true;
+            workspace.focus_active(window, cx);
+            cx.notify();
+        });
+    });
+    let title = tab_bounds("collapsed-tab-title", &mut window);
+    assert!(title.size.width > px(0.0));
+    assert!(window.debug_bounds("sidebar-tab-1").is_none());
+    window.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.tabs_position = TabsPositionName::Top;
+            workspace.sidebar_collapsed = false;
+            cx.notify();
+        });
+    });
+    tab_bounds("top-tab-1", &mut window);
+    window.simulate_keystrokes("ctrl-tab");
+    workspace.read_with(&window, |workspace, _| assert_eq!(workspace.active, 1));
+    let row = tab_bounds("top-tab-1", &mut window);
+    window.simulate_mouse_move(row.center(), None, Modifiers::default());
+    tab_bounds("top-tab-1", &mut window);
+    click_tab("close-top-tab-1", &mut window);
+    workspace.read_with(&window, |workspace, _| assert_eq!(workspace.tabs.len(), 1));
+}

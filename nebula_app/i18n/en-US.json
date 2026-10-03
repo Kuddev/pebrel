@@ -17,6 +17,8 @@
     "en_us": "English"
   },
   "settings": {
+    "show_tab_status": "Show tab activity indicators",
+    "show_tab_status_description": "Show running, waiting, completion and shell status badges. Changes apply to open tabs.",
     "completion": {
       "mode": "Completion mode",
       "cycle": "Cycle completion mode",
