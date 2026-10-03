@@ -5435,6 +5435,8 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "unicode-properties",
+ "unicode-segmentation",
  "unicode-width",
  "vte",
  "windows-sys 0.59.0",
