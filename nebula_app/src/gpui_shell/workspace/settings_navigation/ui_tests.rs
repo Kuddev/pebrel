@@ -256,12 +256,7 @@ fn hiding_tab_status_keeps_hover_close_selection_keyboard_and_collapsed_title(
         });
     });
     for (position, row, status, close) in [
-        (
-            TabsPositionName::Sidebar,
-            "sidebar-tab-1",
-            "sidebar-tab-status-1",
-            "close-sidebar-tab-1",
-        ),
+        (TabsPositionName::Sidebar, "sidebar-tab-1", "sidebar-tab-status-1", "close-sidebar-tab-1"),
         (TabsPositionName::Top, "top-tab-1", "top-tab-status-1", "close-top-tab-1"),
     ] {
         for visible in [true, false, true, false] {
@@ -290,7 +285,10 @@ fn hiding_tab_status_keeps_hover_close_selection_keyboard_and_collapsed_title(
             });
             window.simulate_mouse_move(bounds.center(), None, Modifiers::default());
             tab_bounds(row, &mut window);
-            assert!(window.debug_bounds(close).is_some(), "the hover close button remains laid out");
+            assert!(
+                window.debug_bounds(close).is_some(),
+                "the hover close button remains laid out"
+            );
         }
         click_tab(row, &mut window);
         workspace.read_with(&window, |workspace, _| assert_eq!(workspace.active, 1));

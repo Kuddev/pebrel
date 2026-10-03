@@ -126,13 +126,11 @@ impl NebulaWorkspace {
         // 的 shell，只贴其中一个（聚焦那个）是误导；数量胶囊「这是一组」才是
         // 此时该占这个槽位的信息。顺带把 28px 让回标题——顶栏挤到 120px 时，
         // 图标+胶囊+短标三样一起上，标题只剩两三个字符。
-        let shell_tag = (show_status
-            && is_terminal
-            && activity == SidebarActivity::Idle
-            && pane_count <= 1)
-            .then_some(meta.shell_tag.clone())
-            .flatten()
-            .filter(|tag| !tag.is_empty());
+        let shell_tag =
+            (show_status && is_terminal && activity == SidebarActivity::Idle && pane_count <= 1)
+                .then_some(meta.shell_tag.clone())
+                .flatten()
+                .filter(|tag| !tag.is_empty());
         let renaming = self
             .tab_rename
             .as_ref()
