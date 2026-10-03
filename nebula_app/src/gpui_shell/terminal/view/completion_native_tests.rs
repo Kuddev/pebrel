@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
+#[cfg(windows)]
+mod editor;
+
 struct CompletionSurface(gpui::Entity<TerminalView>);
 
 impl gpui::Render for CompletionSurface {
@@ -42,12 +45,13 @@ async fn wait_for(
     cx.update_window(window, |_, _, cx| {
         let view = view.read(cx);
         format!(
-            "completion timeout: line={:?} ghost={:?} items={:?} error={:?} exited={:?} mode={:?}",
+            "completion timeout: line={:?} ghost={:?} items={:?} error={:?} exited={:?} editor={:?} mode={:?}",
             view.suggest.screen_line,
             view.suggest.suggestion,
             view.suggest.completion_items,
             view.error,
             view.exited,
+            view.completion_editor,
             view.term_mode()
         )
     })
@@ -76,6 +80,17 @@ async fn type_demo_line(
 #[test]
 #[ignore = "requires a native desktop, Node/npm, and fresh isolated PEBREL_COMPLETION_QA_DIR/config"]
 fn git_completion_native_shell_end_to_end() {
+    run_native_completion_fixture(false);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a native Windows desktop and an isolated QA shell/config"]
+fn editor_completion_native_shell_end_to_end() {
+    run_native_completion_fixture(true);
+}
+
+fn run_native_completion_fixture(editor_only: bool) {
     let output = PathBuf::from(std::env::var_os("PEBREL_COMPLETION_QA_DIR").expect("QA directory"));
     let demo = std::env::var("PEBREL_COMPLETION_DEMO").ok();
     assert!(output.is_absolute());
@@ -117,6 +132,18 @@ fn git_completion_native_shell_end_to_end() {
         "qa/value",
         "feature/search-panel",
         "feature/settings-sync",
+        "qa/editor-inline-中文😀",
+        "qa/editor-inline-basic-中文",
+        "qa/editor-popup-中文😀",
+        "qa/editor-popup-basic-中文",
+        "qa/editor-hybrid-中文😀",
+        "qa/editor-hybrid-basic-中文",
+        "qa/rapid-inline",
+        "qa/rapid-popup",
+        "qa/rapid-hybrid",
+        "qa/prediction-inline",
+        "qa/prediction-popup",
+        "qa/prediction-hybrid",
     ] {
         crate::git_completion::tests::git(repository.path(), &["branch", branch]);
     }
@@ -373,6 +400,7 @@ fn git_completion_native_shell_end_to_end() {
                 if demo.is_some() {
                     std::fs::write(output.join("case-count"), cases.len().to_string()).map_err(|e| e.to_string())?;
                 }
+                if editor_only { cases.clear(); }
                 for (mode, prefix, expected, suffix, branch, marker, right) in cases {
                     crate::gpui_shell::try_write_stderr(format_args!("native completion case: {mode:?} {prefix}"));
                     // Windows PowerShell 默认重定向为 UTF-16；证据文件统一显式 UTF-8。
@@ -479,13 +507,17 @@ fn git_completion_native_shell_end_to_end() {
                         })).await?;
                     }
                 }
-                if demo.is_none() {
+                if demo.is_none() && !editor_only {
                     for mode in ["inline", "popup", "hybrid"] {
                         let actual = crate::git_completion::tests::git_output(repository.path(), &["rev-parse", "--symbolic-full-name", &format!("track-{mode}@{{upstream}}")]);
                         assert_eq!(actual.trim(), format!("refs/remotes/origin/track-{mode}"));
                     }
                     assert_eq!(crate::git_completion::tests::git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "native-inherit@{upstream}"]).trim(), "refs/remotes/origin/track-inline");
                     assert!(crate::git_completion::tests::git_output(repository.path(), &["for-each-ref", "--format=%(upstream)", "refs/heads/no-track"]).trim().is_empty());
+                }
+                #[cfg(windows)]
+                if demo.is_none() {
+                    reports.extend(editor::run(cx, window.into(), &terminal, repository.path()).await?);
                 }
                 if demo.is_some() {
                     // 录制方先关闭编码器再释放窗口，避免把窗口关闭后的桌面收进末帧。
