@@ -1292,5 +1292,8 @@
       "failed": "Could not complete the operation: {detail}",
       "changed": "The package changed after inspection. Choose the file again before installing."
     }
-  }
+  },
+  "ssh.changedHost.title": "SSH host identity changed",
+  "ssh.changedHost.description": "{endpoint}\n\nPreviously saved SHA256 fingerprint(s):\n{previous}\n\nNew SHA256 fingerprint:\n{fingerprint}\n\nThis may mean the server was replaced or an attacker is impersonating it. Verify the new fingerprint through a trusted channel. Updating replaces this host’s saved key; cancel keeps the previous trust record and refuses the connection.",
+  "ssh.changedHost.confirm": "Update key and connect"
 }

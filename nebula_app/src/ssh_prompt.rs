@@ -7,6 +7,7 @@ use zeroize::Zeroizing;
 
 pub enum PromptKind {
     HostKey { host: String, port: u16, fingerprint: String },
+    ChangedHostKey { host: String, port: u16, previous: String, fingerprint: String },
     Secret { label: String, allow_save: bool },
 }
 
@@ -34,7 +35,7 @@ impl Prompt {
 
     pub fn respond(&self, response: PromptResponse) -> bool {
         let response = match (&self.kind, response) {
-            (PromptKind::HostKey { .. }, PromptResponse::Trust) => PromptResponse::Trust,
+            (PromptKind::HostKey { .. } | PromptKind::ChangedHostKey { .. }, PromptResponse::Trust) => PromptResponse::Trust,
             (PromptKind::Secret { allow_save, .. }, PromptResponse::Secret { value, save }) => {
                 PromptResponse::Secret { value, save: save && *allow_save }
             },
@@ -95,6 +96,11 @@ async fn request_with(
 pub async fn confirm_host(host: &str, port: u16, fingerprint: String) -> io::Result<bool> {
     let response =
         request(PromptKind::HostKey { host: host.to_owned(), port, fingerprint }).await?;
+    Ok(matches!(response, PromptResponse::Trust))
+}
+
+pub async fn confirm_changed_host(host: &str, port: u16, previous: String, fingerprint: String) -> io::Result<bool> {
+    let response = request(PromptKind::ChangedHostKey { host: host.to_owned(), port, previous, fingerprint }).await?;
     Ok(matches!(response, PromptResponse::Trust))
 }
 

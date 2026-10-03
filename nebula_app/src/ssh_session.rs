@@ -29,6 +29,7 @@ mod agent;
 mod config;
 mod exec;
 mod integration;
+mod host_key;
 mod lifecycle;
 mod route;
 mod transcript;
@@ -460,6 +461,23 @@ struct ClientHandler {
 }
 
 impl ClientHandler {
+    fn host_key_path(&self) -> io::Result<PathBuf> {
+        #[cfg(test)]
+        if let Some(path) = &self.known_hosts_path { return Ok(path.clone()); }
+        home::home_dir().map(|home| home.join(".ssh/known_hosts"))
+            .ok_or_else(|| io::Error::other("SSH home directory unavailable"))
+    }
+
+    async fn confirm_changed_key(
+        &self,
+        change: host_key::Change,
+        confirmation: impl std::future::Future<Output = bool>,
+    ) -> io::Result<bool> {
+        if !self.allow_prompt || !self.handshake.confirm(confirmation).await { return Ok(false); }
+        change.save(&self.host_key_path()?)?;
+        Ok(true)
+    }
+
     fn verify_host_key(&self, key: &ssh_key::PublicKey) -> Result<bool, russh::keys::Error> {
         #[cfg(test)]
         if let Some(path) = self.known_hosts_path.as_deref() {
@@ -503,6 +521,10 @@ impl client::Handler for ClientHandler {
         &mut self,
         server_public_key: &ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
+        // Inspect marked records even on a first visit: russh's literal checker
+        // otherwise treats @revoked / @cert-authority entries as unknown hosts.
+        let path = self.host_key_path()?;
+        let inspected = host_key::inspect(&path, &self.host, self.port, server_public_key)?;
         match self.verify_host_key(server_public_key) {
             Ok(true) => Ok(true),
             Ok(false) => Ok(self
@@ -511,6 +533,15 @@ impl client::Handler for ClientHandler {
                     confirm_new_host(&self.host, self.port, server_public_key),
                 )
                 .await),
+            Err(russh::keys::Error::KeyChanged { .. }) if self.allow_prompt => {
+                let change = inspected.ok_or_else(|| io::Error::other("No changed SSH host record"))?;
+                let confirmation = crate::ssh_prompt::confirm_changed_host(
+                    &self.host, self.port, change.fingerprints.join("\n"),
+                    server_public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+                );
+                let accepted = async { confirmation.await.unwrap_or(false) };
+                Ok(self.confirm_changed_key(change, accepted).await?)
+            },
             Err(err) => {
                 warn!("SSH 主机密钥验证失败: {err}");
                 // Return the verification error to the terminal/test status. A blocking

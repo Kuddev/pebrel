@@ -764,3 +764,29 @@ fn hung_channel_does_not_lock_reuse_and_fresh_connection_can_retry() {
         fixture.forget(&replacement.session).await;
     });
 }
+
+#[test]
+fn changed_loopback_host_refuses_before_confirmation_and_connects_only_after_saved_update() {
+    check(async {
+        let fixture = Fixture::new(Mode::Open).await;
+        let path = fixture.route.known_hosts_path.as_ref().unwrap();
+        let actual = std::fs::read_to_string(path).unwrap();
+        let entry: russh::keys::ssh_key::known_hosts::Entry = actual.trim().parse().unwrap();
+        let old = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        let source = format!("{} {}\n", entry.host_patterns().to_string(), old.public_key().to_openssh().unwrap());
+        std::fs::write(path, &source).unwrap();
+        assert!(authenticated_route(&fixture.route, None::<&NoopSshEventHost>, false, true).await.is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+        let destination = &fixture.route.destination;
+        let handler = super::super::ClientHandler {
+            host: "127.0.0.1".into(), port: destination.port, allow_prompt: true,
+            handshake: Handshake::default(), known_hosts_path: Some(path.clone()),
+        };
+        let change = || super::super::host_key::inspect(path, "127.0.0.1", destination.port, entry.public_key()).unwrap().unwrap();
+        assert!(!handler.confirm_changed_key(change(), async { false }).await.unwrap());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+        assert!(handler.confirm_changed_key(change(), async { true }).await.unwrap());
+        let acquired = fixture.connect().await;
+        fixture.forget(&acquired.session).await;
+    });
+}
