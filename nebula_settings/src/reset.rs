@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const RESET_KEYS: &[&str] = &[
     "scrollback_lines",
     "scroll_speed",
+    "scrollbar_visibility",
     "language",
     "theme",
     "app_icon",
@@ -131,6 +132,16 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_restores_auto_scrollbar_visibility() {
+        let text = default_settings_text("scrollbar_visibility=always\ncustom=keep\n");
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_text(&text)).scrollbar_visibility,
+            crate::ScrollbarVisibility::Auto,
+        );
+        assert!(text.contains("custom=keep"));
+    }
 
     #[test]
     fn reset_preserves_explicit_hook_authorization_and_opt_out() {

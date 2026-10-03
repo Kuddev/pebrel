@@ -365,6 +365,8 @@ pub struct TerminalView {
     /// 滚动条拖拽中：按下时记下的「指针在拇指内的 y 偏移」，拖动全程据此
     /// 反算 `display_offset`，拇指不会在按下那一刻跳到指针中心。
     scrollbar_drag: Option<f32>,
+    scrollbar_hovered: bool,
+    scrollbar_visibility: nebula_settings::ScrollbarVisibility,
     origin: Point<Pixels>,
     cell_width: Pixels,
     line_height: Pixels,
@@ -931,6 +933,7 @@ impl TerminalView {
         }
         self.palette = palette;
         self.copy_on_select = copy_on_select;
+        self.scrollbar_visibility = settings.scrollbar_visibility;
         self.default_cursor_style = default_cursor_style;
         if let Some(session) = &self.session {
             let mut term = session.term.lock();
@@ -1394,6 +1397,9 @@ impl Render for TerminalView {
             ))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if !*hovered {
+                    if std::mem::take(&mut this.scrollbar_hovered) {
+                        cx.notify();
+                    }
                     this.clear_link_hover(cx);
                     if this.completion_viewport.hovered.take().is_some() {
                         cx.notify();

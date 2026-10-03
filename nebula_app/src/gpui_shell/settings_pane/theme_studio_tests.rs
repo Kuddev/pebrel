@@ -155,6 +155,52 @@ fn scrolling_controls_persist_dropdown_and_slider_without_changing_existing_hist
     assert_eq!(existing.grid().history_size(), 10_000);
 }
 
+#[gpui::test]
+fn scrollbar_menu_persists_all_modes_and_reopens_with_the_selected_value(cx: &mut TestAppContext) {
+    use crate::gpui_shell::config::Settings;
+    use nebula_settings::ScrollbarVisibility;
+
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    std::fs::create_dir_all(nebula_settings::settings_dir()).unwrap();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS).unwrap();
+    let (pane, mut window) = open_settings(cx);
+    pane.update(&mut window, |pane, cx| {
+        pane.active_section = 1;
+        cx.notify();
+    });
+    window.simulate_resize(size(px(1280.0), px(1800.0)));
+    draw(&mut window);
+    for mode in [ScrollbarVisibility::Hover, ScrollbarVisibility::Always, ScrollbarVisibility::Auto] {
+        click("settings-select-scrollbar_visibility", &mut window);
+        if mode == ScrollbarVisibility::Auto {
+            press("up", &mut window);
+            press("up", &mut window);
+        } else {
+            press("down", &mut window);
+        }
+        press("enter", &mut window);
+        assert_eq!(RuntimeSettings::load().scrollbar_visibility, mode);
+        assert_eq!(window.read(|cx| cx.global::<Settings>().scrollbar_visibility), mode);
+        let reopened = window.update(|window, cx| cx.new(|cx| SettingsPane::new(window, cx)));
+        reopened.read_with(&mut window, |pane, cx| {
+            assert_eq!(pane.runtime.scrollbar_visibility, mode);
+            assert_eq!(
+                pane.select_of("scrollbar_visibility")
+                    .unwrap()
+                    .read(cx)
+                    .selected_index(cx)
+                    .unwrap()
+                    .row,
+                ScrollbarVisibility::VALUES
+                    .iter()
+                    .position(|value| *value == mode.settings_value())
+                    .unwrap(),
+            );
+        });
+    }
+}
+
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
