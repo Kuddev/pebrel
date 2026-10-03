@@ -1263,6 +1263,19 @@
     "relay_invalid": "配置格式有误。请导入 pebrel-relay 导出的连接信息，或补全地址、房间号、令牌和指纹。",
     "relay_read_failed": "读取未完成。请检查 SSH 主机连接，以及服务器是否已安装 pebrel-relay。"
   },
+  "startup": {
+    "portable": {
+      "title": "便携模式",
+      "description": "Pebrel 位于“应用程序”文件夹之外。是否将数据保存在应用旁的 {path}？",
+      "enable": "使用便携模式",
+      "normal": "使用普通模式",
+      "quit": "退出",
+      "translocated": "Pebrel 正在从 macOS 临时转译位置运行。请将应用移到可信文件夹后重新打开。",
+      "write_failed": "无法使用便携数据文件夹 {path}：{error}",
+      "linked_directory": "便携数据文件夹或其临时文件夹是符号链接。",
+      "error_title": "Pebrel 无法启动"
+    }
+  },
   "theme": {
     "package": {
       "entry": "主题包",
