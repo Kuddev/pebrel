@@ -18,7 +18,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
         cx.set_reduce_motion(true);
     });
     let mut fixture = None;
-    let (_, mut window) = cx.add_window_view(|window, cx| {
+    let (_, window) = cx.add_window_view(|window, cx| {
         let workspace = cx.new(|cx| {
             NebulaWorkspace::new(
                 window,
@@ -87,6 +87,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
         fixture = Some((workspace.clone(), ids));
         Root::new(workspace, window, cx)
     });
+    let mut window = window.clone();
     let (workspace, ids) = fixture.unwrap();
     window.update(|window, _| window.activate_window());
     window.run_until_parked();
