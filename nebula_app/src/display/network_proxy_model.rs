@@ -4,11 +4,21 @@
 pub(crate) enum ManualProxyProtocol {
     #[default]
     Socks5,
+    /// Remote DNS. curl and git treat this differently from [`Self::Socks5`].
+    Socks5h,
     Http,
 }
 
-pub(crate) const MANUAL_PROXY_PROTOCOL_OPTIONS: [ManualProxyProtocol; 2] =
-    [ManualProxyProtocol::Socks5, ManualProxyProtocol::Http];
+pub(crate) const MANUAL_PROXY_PROTOCOL_OPTIONS: [ManualProxyProtocol; 3] =
+    [ManualProxyProtocol::Socks5, ManualProxyProtocol::Socks5h, ManualProxyProtocol::Http];
+
+pub(crate) fn manual_proxy_protocol_label(protocol: ManualProxyProtocol) -> &'static str {
+    match protocol {
+        ManualProxyProtocol::Socks5 => "SOCKS5",
+        ManualProxyProtocol::Socks5h => "SOCKS5H",
+        ManualProxyProtocol::Http => "HTTP",
+    }
+}
 
 /// State of the network test for the settings currently persisted on disk.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -26,8 +36,8 @@ pub(crate) enum ProxyTestStatus {
 pub(crate) fn manual_proxy_parts(value: &str) -> (ManualProxyProtocol, &str) {
     let value = value.trim();
     for (prefix, protocol) in [
+        ("socks5h://", ManualProxyProtocol::Socks5h),
         ("socks5://", ManualProxyProtocol::Socks5),
-        ("socks5h://", ManualProxyProtocol::Socks5),
         ("socks://", ManualProxyProtocol::Socks5),
         ("http://", ManualProxyProtocol::Http),
     ] {
@@ -45,20 +55,33 @@ pub(crate) fn manual_proxy_value(protocol: ManualProxyProtocol, address: &str) -
     }
     match protocol {
         ManualProxyProtocol::Socks5 => format!("socks5://{address}"),
+        ManualProxyProtocol::Socks5h => format!("socks5h://{address}"),
         ManualProxyProtocol::Http => format!("http://{address}"),
     }
 }
 
+fn is_scheme_only(typed: &str) -> bool {
+    const PREFIXES: &[&str] = &["socks5h://", "socks5://", "socks://", "http://"];
+    PREFIXES.iter().any(|prefix| typed.eq_ignore_ascii_case(prefix))
+}
+
 /// A recognized scheme in the address box wins over the protocol dropdown.
 /// Pasting `http://127.0.0.1:7890` while SOCKS5 stays selected still persists HTTP.
+///
+/// `None` means the field is only a scheme (`http://`, `socks5://`, `socks5h://`,
+/// or `socks://`). That text stays in the box and is not saved as an empty URL.
+/// An empty field still returns an empty URL so the saved address can be cleared.
 pub(crate) fn compose_manual_proxy_url(
     dropdown: ManualProxyProtocol,
     typed: &str,
-) -> (ManualProxyProtocol, String) {
+) -> Option<(ManualProxyProtocol, String)> {
     let typed = typed.trim();
+    if is_scheme_only(typed) {
+        return None;
+    }
     let (parsed, host) = manual_proxy_parts(typed);
     let protocol = if host.len() == typed.len() { dropdown } else { parsed };
-    (protocol, manual_proxy_value(protocol, host))
+    Some((protocol, manual_proxy_value(protocol, host)))
 }
 
 #[cfg(test)]
@@ -80,8 +103,20 @@ mod tests {
             (ManualProxyProtocol::Socks5, "127.0.0.1:7890")
         );
         assert_eq!(
+            manual_proxy_parts("socks5h://127.0.0.1:1080"),
+            (ManualProxyProtocol::Socks5h, "127.0.0.1:1080")
+        );
+        assert_eq!(
+            manual_proxy_parts("socks://127.0.0.1:1080"),
+            (ManualProxyProtocol::Socks5, "127.0.0.1:1080")
+        );
+        assert_eq!(
             manual_proxy_value(ManualProxyProtocol::Socks5, "127.0.0.1:1080"),
             "socks5://127.0.0.1:1080"
+        );
+        assert_eq!(
+            manual_proxy_value(ManualProxyProtocol::Socks5h, "127.0.0.1:1080"),
+            "socks5h://127.0.0.1:1080"
         );
         assert_eq!(manual_proxy_value(ManualProxyProtocol::Http, ""), "");
     }
@@ -90,16 +125,49 @@ mod tests {
     fn typed_scheme_overrides_the_protocol_dropdown() {
         use super::compose_manual_proxy_url;
         let (protocol, url) =
-            compose_manual_proxy_url(ManualProxyProtocol::Socks5, "http://127.0.0.1:7890");
-        assert_eq!(protocol, ManualProxyProtocol::Http);
-        assert_eq!(url, "http://127.0.0.1:7890");
-        let (protocol, url) = compose_manual_proxy_url(ManualProxyProtocol::Http, "127.0.0.1:7890");
+            compose_manual_proxy_url(ManualProxyProtocol::Socks5, "http://127.0.0.1:7890")
+                .expect("full URL");
         assert_eq!(protocol, ManualProxyProtocol::Http);
         assert_eq!(url, "http://127.0.0.1:7890");
         let (protocol, url) =
-            compose_manual_proxy_url(ManualProxyProtocol::Http, "socks5://127.0.0.1:7890");
+            compose_manual_proxy_url(ManualProxyProtocol::Http, "127.0.0.1:7890").expect("host");
+        assert_eq!(protocol, ManualProxyProtocol::Http);
+        assert_eq!(url, "http://127.0.0.1:7890");
+        let (protocol, url) =
+            compose_manual_proxy_url(ManualProxyProtocol::Http, "socks5://127.0.0.1:7890")
+                .expect("full URL");
         assert_eq!(protocol, ManualProxyProtocol::Socks5);
         assert_eq!(url, "socks5://127.0.0.1:7890");
+        let (protocol, url) =
+            compose_manual_proxy_url(ManualProxyProtocol::Socks5, "socks5h://127.0.0.1:1080")
+                .expect("full URL");
+        assert_eq!(protocol, ManualProxyProtocol::Socks5h);
+        assert_eq!(url, "socks5h://127.0.0.1:1080");
+        let (protocol, url) =
+            compose_manual_proxy_url(ManualProxyProtocol::Socks5h, "127.0.0.1:1080").expect("host");
+        assert_eq!(protocol, ManualProxyProtocol::Socks5h);
+        assert_eq!(url, "socks5h://127.0.0.1:1080");
+        let (protocol, url) =
+            compose_manual_proxy_url(ManualProxyProtocol::Http, "socks://127.0.0.1:1080")
+                .expect("alias");
+        assert_eq!(protocol, ManualProxyProtocol::Socks5);
+        assert_eq!(url, "socks5://127.0.0.1:1080");
+    }
+
+    #[test]
+    fn scheme_without_a_host_is_not_saved_as_an_empty_url() {
+        use super::compose_manual_proxy_url;
+        for typed in ["http://", "HTTP://", " socks5:// ", "socks5h://", "SOCKS://"] {
+            assert_eq!(
+                compose_manual_proxy_url(ManualProxyProtocol::Socks5, typed),
+                None,
+                "{typed}"
+            );
+        }
+        let (protocol, url) =
+            compose_manual_proxy_url(ManualProxyProtocol::Http, "  ").expect("empty field");
+        assert_eq!(protocol, ManualProxyProtocol::Http);
+        assert_eq!(url, "");
     }
 
     #[test]
