@@ -6,6 +6,7 @@
 
 pub(crate) mod document;
 mod formats;
+pub(crate) mod package;
 pub(crate) mod preferences;
 mod store;
 
