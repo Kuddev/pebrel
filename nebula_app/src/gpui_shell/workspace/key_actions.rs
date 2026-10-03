@@ -15,6 +15,25 @@ pub(super) fn move_target(active: usize, len: usize, right: bool) -> Option<usiz
 }
 
 impl NebulaWorkspace {
+    pub(super) fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.tabs.len() {
+            return;
+        }
+        self.leave_settings(window, cx);
+        if ix < self.tabs.len() && ix != self.active {
+            self.cancel_pane_drag(cx);
+            self.clear_reader_focus(cx);
+            self.active = ix;
+            if let Some(meta) = self.tab_meta.get_mut(ix) {
+                meta.has_bell = false;
+            }
+            self.reveal_active_tab();
+            self.focus_active(window, cx);
+            self.sync_side_panel_to_active(true, cx);
+            cx.notify();
+        }
+    }
+
     pub(super) fn select_tab(
         &mut self,
         action: &super::keyboard_bindings::SelectTab,
