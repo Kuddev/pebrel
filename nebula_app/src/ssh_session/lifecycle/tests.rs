@@ -800,6 +800,18 @@ fn changed_loopback_host_refuses_before_confirmation_and_connects_only_after_sav
         };
         assert!(!handler.confirm_changed_key(change(), async { false }).await.unwrap());
         assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+        let concurrent = format!("{source}# independent writer\n");
+        assert!(
+            handler
+                .confirm_changed_key(change(), async {
+                    std::fs::write(path, &concurrent).unwrap();
+                    true
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), concurrent);
+        std::fs::write(path, &source).unwrap();
         assert!(handler.confirm_changed_key(change(), async { true }).await.unwrap());
         let acquired = fixture.connect().await;
         fixture.forget(&acquired.session).await;

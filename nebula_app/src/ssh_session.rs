@@ -529,7 +529,23 @@ impl client::Handler for ClientHandler {
         // Inspect marked records even on a first visit: russh's literal checker
         // otherwise treats @revoked / @cert-authority entries as unknown hosts.
         let path = self.host_key_path()?;
-        let inspected = host_key::inspect(&path, &self.host, self.port, server_public_key)?;
+        if let Some(change) = host_key::inspect(&path, &self.host, self.port, server_public_key)? {
+            if !self.allow_prompt {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "SSH host identity changed; explicit confirmation required",
+                )
+                .into());
+            }
+            let confirmation = crate::ssh_prompt::confirm_changed_host(
+                &self.host,
+                self.port,
+                change.fingerprints.join("\n"),
+                server_public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+            );
+            let accepted = async { confirmation.await.unwrap_or(false) };
+            return Ok(self.confirm_changed_key(change, accepted).await?);
+        }
         match self.verify_host_key(server_public_key) {
             Ok(true) => Ok(true),
             Ok(false) => Ok(self
@@ -538,18 +554,6 @@ impl client::Handler for ClientHandler {
                     confirm_new_host(&self.host, self.port, server_public_key),
                 )
                 .await),
-            Err(russh::keys::Error::KeyChanged { .. }) if self.allow_prompt => {
-                let change =
-                    inspected.ok_or_else(|| io::Error::other("No changed SSH host record"))?;
-                let confirmation = crate::ssh_prompt::confirm_changed_host(
-                    &self.host,
-                    self.port,
-                    change.fingerprints.join("\n"),
-                    server_public_key.fingerprint(ssh_key::HashAlg::Sha256).to_string(),
-                );
-                let accepted = async { confirmation.await.unwrap_or(false) };
-                Ok(self.confirm_changed_key(change, accepted).await?)
-            },
             Err(err) => {
                 warn!("SSH 主机密钥验证失败: {err}");
                 // Return the verification error to the terminal/test status. A blocking
