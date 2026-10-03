@@ -6,7 +6,7 @@
 
 mod shutdown;
 pub(crate) use shutdown::{quit_all, quit_for_update};
-mod startup_geometry;
+pub(super) mod startup_geometry;
 pub(super) use startup_geometry::prepare_initial_grid;
 
 #[cfg(windows)]
@@ -69,6 +69,7 @@ struct WindowEntry {
     last_activated: u64,
     native_hwnd: isize,
     role: WindowRole,
+    configured_position_pending: bool,
 }
 
 struct QuickTerminalWindow {
@@ -423,35 +424,10 @@ fn workspace_window_options(
     focus: bool,
     role: WindowRole,
     sidebar_width: f32,
+    id: u64,
 ) -> WindowOptions {
     match role {
-        WindowRole::Regular => {
-            let preferred = startup_geometry::preferred_size(cx, sidebar_width)
-                .unwrap_or_else(|| size(px(1080.0), px(720.0)));
-            let bounds = cx.primary_display().map_or_else(
-                || Bounds::centered(None, preferred, cx),
-                |display| {
-                    let visible = display.visible_bounds();
-                    let fitted = preferred.min(&visible.size);
-                    Bounds::new(
-                        point(
-                            visible.origin.x + (visible.size.width - fitted.width) / 2.0,
-                            visible.origin.y + (visible.size.height - fitted.height) / 2.0,
-                        ),
-                        fitted,
-                    )
-                },
-            );
-            crate::platform::window_chrome::configure_options(WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(760.0), px(540.0)).min(&bounds.size)),
-                titlebar: Some(TitleBar::title_bar_options()),
-                app_id: Some("pebrel".to_owned()),
-                window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
-                focus,
-                ..Default::default()
-            })
-        },
+        WindowRole::Regular => startup_geometry::regular_options(id, focus, sidebar_width, cx),
         WindowRole::QuickTerminal => {
             let (display_id, visible) = quick_terminal_anchor_display(cx)
                 .map(|(id, bounds)| (Some(id), bounds))
@@ -510,12 +486,14 @@ fn open_workspace_window(
     let start_hidden = shell_events.is_some()
         && matches!(startup, WorkspaceStartup::RestoreOrDefault)
         && crate::platform::startup::start_hidden(&runtime);
-    let mut options = workspace_window_options(cx, focus, role, runtime.sidebar_width);
+    startup_geometry::load_restore(runtime_window_id, &startup, role, cx);
+    let mut options = workspace_window_options(cx, focus, role, runtime.sidebar_width, runtime_window_id);
     if start_hidden {
         options.show = false;
         options.focus = false;
     }
     let deferred_show = crate::platform::startup::first_frame::defer_show(&mut options);
+    let configured_position_pending = !options.show && role == WindowRole::Regular;
     let workspace_slot = Rc::new(RefCell::new(None));
     let hwnd_slot = Rc::new(RefCell::new(0isize));
     let workspace_out = workspace_slot.clone();
@@ -523,6 +501,7 @@ fn open_workspace_window(
     let handle = cx.open_window(options, move |window, cx| {
         window.set_window_title(crate::brand::NAME);
         crate::platform::window_chrome::configure(window);
+        if role == WindowRole::Regular && !configured_position_pending { startup_geometry::apply_configured_position(window, cx); }
         *hwnd_out.borrow_mut() = native_hwnd(window).unwrap_or_default();
         #[cfg(windows)]
         crate::gpui_shell::set_native_window_icon(window);
@@ -564,6 +543,7 @@ fn open_workspace_window(
         last_activated,
         native_hwnd,
         role,
+        configured_position_pending,
     });
     crate::gpui_shell::wallpaper::refresh(cx);
     if deferred_show {
@@ -611,7 +591,11 @@ fn open_runtime_window(
     Ok((window_id, pane_id))
 }
 
-pub(crate) fn mark_active(runtime_window_id: u64, cx: &mut App) {
+pub(crate) fn mark_active(runtime_window_id: u64, window: &Window, cx: &mut App) {
+    if let Some(entry) = cx.global_mut::<WindowRegistry>().entries.iter_mut().find(|entry| entry.runtime_window_id == runtime_window_id)
+        && std::mem::take(&mut entry.configured_position_pending) {
+        startup_geometry::apply_configured_position(window, cx);
+    }
     let registry = cx.global_mut::<WindowRegistry>();
     if !registry.entries.iter().any(|entry| {
         entry.runtime_window_id == runtime_window_id && entry.role == WindowRole::Regular
@@ -1427,7 +1411,7 @@ pub(crate) fn autosave_tick(cx: &mut App) {
 
 fn combined_session(
     mut current: Option<(u64, crate::session::Session)>,
-    cx: &App,
+    cx: &mut App,
 ) -> Option<crate::session::Session> {
     let mut entries = cx
         .global::<WindowRegistry>()
@@ -1449,7 +1433,9 @@ fn combined_session(
             current.take().expect("current window snapshot exists").1
         } else {
             let Some(workspace) = entry.workspace.upgrade() else { continue };
-            workspace.read(cx).snapshot_session(cx)
+            let mut session = workspace.read(cx).snapshot_session(cx);
+            session.window = entry.handle.update(cx, |_, window, cx| startup_geometry::capture_window(window, cx)).ok();
+            session
         };
         sessions.push((active_handle == Some(entry.handle), session));
     }
@@ -1464,8 +1450,9 @@ fn save_combined_session(cx: &mut App, clean: bool) -> std::io::Result<()> {
 
 pub(super) fn save_current_window_session(
     runtime_window_id: u64,
-    session: crate::session::Session,
+    mut session: crate::session::Session,
     reason: SaveReason,
+    window: &Window,
     cx: &mut App,
 ) -> std::io::Result<()> {
     if !cx.global::<WindowRegistry>().entries.iter().any(|entry| {
@@ -1473,6 +1460,7 @@ pub(super) fn save_current_window_session(
     }) {
         return Ok(());
     }
+    session.window = Some(startup_geometry::capture_window(window, cx));
     let session = combined_session(Some((runtime_window_id, session)), cx);
     cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason)
 }
@@ -1548,7 +1536,7 @@ pub(super) fn close_saved_workspace_window(
     cx: &mut App,
 ) {
     if let Err(error) =
-        save_current_window_session(runtime_window_id, session, SaveReason::WindowClose, cx)
+        save_current_window_session(runtime_window_id, session, SaveReason::WindowClose, window, cx)
     {
         log::warn!("Could not checkpoint moved window: {error}");
     }

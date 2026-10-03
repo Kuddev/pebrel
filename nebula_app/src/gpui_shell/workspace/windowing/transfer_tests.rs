@@ -110,3 +110,21 @@ fn moving_one_of_two_tabs_preserves_source_and_identity(cx: &mut TestAppContext)
         assert_eq!(combined_session(None, cx).unwrap().tabs.len(), 2);
     });
 }
+
+#[gpui::test]
+fn ordinary_window_geometry_is_in_the_durable_snapshot(cx: &mut TestAppContext) {
+    initialize_test(cx);
+    cx.update(|cx| {
+        let (id, _) = open_test_window(cx, 1);
+        let entry = entry_by_id(id, cx).unwrap();
+        let expected = entry.handle.update(cx, |_, window, _| {
+            window.resize(size(px(1300.0), px(800.0)));
+            window.window_bounds().get_bounds().size
+        }).unwrap();
+        let saved = combined_session(None, cx).unwrap().into_update_windows().unwrap();
+        let geometry = saved[0].window.expect("ordinary window geometry must survive process exit");
+        assert_eq!(geometry.width, expected.width.as_f32().round() as u32);
+        assert_eq!(geometry.height, expected.height.as_f32().round() as u32);
+        assert!(!geometry.maximized);
+    });
+}

@@ -3,6 +3,16 @@
 use super::*;
 
 impl NebulaWorkspace {
+    pub(super) fn save_clean_window_session(&mut self, window: &Window, cx: &mut App) -> std::io::Result<()> {
+        windowing::save_current_window_session(
+            self.runtime_window_id,
+            self.snapshot_session(cx),
+            session_persistence::SaveReason::WindowClose,
+            window,
+            cx,
+        )
+    }
+
     pub(super) fn restore_update_session(
         &mut self,
         session: &crate::session::Session,

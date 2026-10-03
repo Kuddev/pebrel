@@ -162,3 +162,67 @@ mod tests {
         }
     }
 }
+
+/// GPUI Windows display ids are the borrowed HMONITOR value at the pinned backend.
+pub(crate) fn physical_display(point: (i32, i32)) -> Option<(u64, f32)> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
+        // SAFETY: this queries a borrowed monitor handle without retaining it.
+        let monitor = unsafe { MonitorFromPoint(POINT { x: point.0, y: point.1 }, MONITOR_DEFAULTTONEAREST) };
+        display_scale(monitor as u64).map(|scale| (monitor as u64, scale))
+    }
+    #[cfg(not(windows))]
+    { let _ = point; None }
+}
+
+pub(crate) fn display_scale(id: u64) -> Option<f32> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+        let (mut x, mut y) = (0, 0);
+        let monitor = id as *mut core::ffi::c_void;
+        // SAFETY: the borrowed monitor and local DPI output pointers stay valid.
+        if monitor.is_null() || unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) } < 0 || x == 0 || x != y {
+            None
+        } else { Some(x as f32 / 96.0) }
+    }
+    #[cfg(not(windows))]
+    { let _ = id; None }
+}
+
+pub(crate) fn placement_offset(id: u64) -> (i32, i32) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
+        // SAFETY: MONITORINFO is a plain output structure; cbSize is set below.
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        // SAFETY: the borrowed display handle and initialized output are valid.
+        if unsafe { GetMonitorInfoW(id as *mut core::ffi::c_void, &mut info) } != 0 {
+            return (info.rcWork.left - info.rcMonitor.left, info.rcWork.top - info.rcMonitor.top);
+        }
+    }
+    let _ = id;
+    (0, 0)
+}
+
+#[cfg(windows)]
+pub(crate) fn place_normal_window(hwnd: isize, desired: (i32, i32)) -> bool {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetWindowPos, SWP_NOSIZE, SWP_NOACTIVATE, SWP_NOZORDER};
+    let hwnd = hwnd as *mut core::ffi::c_void;
+    // SAFETY: both native output structures admit zero initialization.
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    let mut monitor: MONITORINFO = unsafe { std::mem::zeroed() };
+    monitor.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    // SAFETY: the caller owns the live HWND; the local outputs remain valid.
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0
+        || unsafe { GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut monitor) } == 0 { return false; }
+    let x = desired.0.clamp(monitor.rcWork.left, (monitor.rcWork.right - (rect.right - rect.left)).max(monitor.rcWork.left));
+    let y = desired.1.clamp(monitor.rcWork.top, (monitor.rcWork.bottom - (rect.bottom - rect.top)).max(monitor.rcWork.top));
+    // SAFETY: only the live window position changes; ownership and size are preserved.
+    unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER) != 0 }
+}

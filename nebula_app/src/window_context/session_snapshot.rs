@@ -26,6 +26,7 @@ impl WindowContext {
                 width: self.windowed_size.width,
                 height: self.windowed_size.height,
                 maximized,
+                ..Default::default()
             }
         } else {
             // Normal state: take the current size straight from the window.
@@ -34,7 +35,9 @@ impl WindowContext {
             // every relaunch.
             let logical: LogicalSize<u32> =
                 self.display.window.inner_size().to_logical(self.display.window.scale_factor);
-            session::WindowState { width: logical.width, height: logical.height, maximized }
+            session::WindowState {
+                width: logical.width, height: logical.height, maximized, ..Default::default()
+            }
         });
         session
     }
