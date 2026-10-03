@@ -66,6 +66,7 @@ pub struct Settings {
     /// Optional theme line-height multiplier. `None` keeps the shaped font
     /// metrics, while `Some(multiplier)` is resolved as multiplier * font size.
     pub(crate) theme_line_height: Option<f32>,
+    pub(crate) terminal_line_height: Option<f32>,
     /// Effective window material values after user settings and theme defaults
     /// have been merged once during settings loading.
     pub(crate) visual_opacity: f32,
@@ -281,6 +282,7 @@ impl Settings {
             font_offset_x: f32::from(offset.x),
             font_offset_y: f32::from(offset.y),
             theme_line_height,
+            terminal_line_height: runtime.terminal_line_height,
             visual_opacity,
             visual_blur,
             palette,

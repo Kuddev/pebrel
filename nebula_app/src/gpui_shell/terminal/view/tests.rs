@@ -229,3 +229,27 @@ fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
 
     assert!((f32::from(height) - 37.0 / 1.5).abs() < f32::EPSILON);
 }
+
+#[test]
+fn explicit_line_height_uses_natural_metrics_and_preserves_theme_in_auto() {
+    use gpui::px;
+    for multiplier in [0.5, 1.0, 1.46, 5.0] {
+        assert_eq!(
+            typography::line_height_for_view(
+                px(15.0),
+                Some(1.5),
+                Some(multiplier),
+                20.0,
+                4.0,
+                1.5,
+            ),
+            typography::effective_line_height(20.0 * multiplier, 4.0, 1.5),
+        );
+    }
+    for theme in [None, Some(1.5)] {
+        assert_eq!(
+            typography::line_height_for_view(px(15.0), theme, None, 20.0, 4.0, 1.5),
+            typography::effective_line_height_with_theme(20.0, 15.0, theme, 4.0, 1.5),
+        );
+    }
+}

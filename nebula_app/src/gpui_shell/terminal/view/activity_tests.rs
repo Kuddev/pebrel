@@ -273,3 +273,32 @@ fn claude_shift_enter_reaches_pty_without_committing_shell_history(cx: &mut Test
         .collect();
     assert_eq!(bytes, b"\n");
 }
+
+#[gpui::test]
+fn line_height_hot_apply_updates_grid_and_pointer_geometry(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.grid_synced = true;
+        let content = gpui::size(px(800.0), px(400.0));
+        for multiplier in [1.0, 2.0, 0.5] {
+            cx.global_mut::<Settings>().terminal_line_height = Some(multiplier);
+            view.apply_settings(cx);
+            let height = view.line_height_for_metrics(20.0, 1.0);
+            view.set_layout(
+                gpui::point(px(0.0), px(0.0)),
+                px(10.0),
+                height,
+                content,
+                1.0,
+                cx,
+            );
+            assert_eq!(view.rows, (400.0 / height.as_f32()).floor() as usize);
+            assert_eq!(view.line_height, height);
+            let (point, _) = view.grid_point(gpui::point(px(15.0), height * 2.5));
+            assert_eq!(point.line, nebula_terminal::index::Line(2));
+            assert_eq!(point.column, nebula_terminal::index::Column(1));
+            let term = view.session.as_ref().unwrap().term.lock();
+            assert_eq!(term.screen_lines(), view.rows);
+        }
+    });
+}
