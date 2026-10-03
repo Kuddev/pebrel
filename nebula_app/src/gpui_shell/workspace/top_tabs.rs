@@ -190,6 +190,7 @@ impl NebulaWorkspace {
                     color,
                     renaming,
                     pane_count,
+                    local_administrator,
                 } = self.top_tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
@@ -417,6 +418,13 @@ impl NebulaWorkspace {
                             )
                         },
                     )
+                    .when(local_administrator, |row| {
+                        row.child(super::tab_presentation::administrator_badge(
+                            format!("top-tab-admin-{ix}").into(),
+                            label_px,
+                            cx,
+                        ))
+                    })
                     .child(match renaming {
                         Some(input) => div()
                             .flex_1()

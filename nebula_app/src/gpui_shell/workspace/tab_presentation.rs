@@ -42,6 +42,7 @@ pub(super) struct TabPresentation {
     /// 本 tab 的分屏数（Terminal tab 才 > 0）。`> 1` 时行首图标换成 2×2 分屏
     /// 标记、行尾挂一枚数量胶囊；见 [`pane_header::split_badge`]。
     pub(super) pane_count: usize,
+    pub(super) local_administrator: bool,
 }
 
 impl NebulaWorkspace {
@@ -77,6 +78,10 @@ impl NebulaWorkspace {
         let title = self.tab_title(ix, cx);
         let is_settings = self.tabs[ix].is_settings();
         let is_terminal = self.tabs[ix].is_terminal();
+        let local_administrator = crate::platform::elevation::is_elevated().unwrap_or(false)
+            && self.tabs[ix]
+                .focused_view()
+                .is_some_and(|view| view.read(cx).inherits_windows_host_token());
         let pane_count = match &self.tabs[ix] {
             WorkspaceTab::Terminal { panes, .. } => panes.len(),
             _ => 0,
@@ -142,6 +147,7 @@ impl NebulaWorkspace {
             color: meta.color,
             renaming,
             pane_count,
+            local_administrator,
         }
     }
 }
@@ -151,4 +157,77 @@ pub(super) fn tooltip(text: SharedString, window: &mut Window, cx: &mut App) -> 
         div().max_w(px(560.0)).whitespace_normal().child(text.clone())
     })
     .build(window, cx)
+}
+
+pub(super) fn administrator_badge(
+    selector: SharedString,
+    label_px: f32,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let label = crate::gpui_shell::config::ui_language(cx)
+        .text(crate::i18n::Message::ChromeLocalAdministrator);
+    div()
+        .id(selector.clone())
+        .debug_selector(move || selector.to_string())
+        .role(gpui::accesskit::Role::Image)
+        .aria_label(label)
+        .flex_shrink_0()
+        .w(px(label_px.max(TAB_LABEL_ICON_W)))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(label_px))
+        .text_color(cx.theme().warning)
+        .child("🛡")
+        .tooltip(move |window, cx| tooltip(label.into(), window, cx))
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use gpui_component::Root;
+
+    struct BadgeSurface;
+
+    impl Render for BadgeSurface {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            h_flex()
+                .h(px(36.0))
+                .items_center()
+                .child(administrator_badge("test-administrator".into(), 15.0, cx))
+                .child(div().debug_selector(|| "test-admin-title".into()).child("pwsh"))
+        }
+    }
+
+    #[gpui::test]
+    fn administrator_badge_keeps_a_readable_slot_with_reduced_motion(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(crate::gpui_shell::config::Settings::load(
+                nebula_settings::ThemeName::Nord,
+            ));
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let surface = cx.new(|_| BadgeSurface);
+            Root::new(surface, window, cx)
+        });
+        let mut previous = None;
+        for reduced_motion in [false, true] {
+            window.update(|window, cx| {
+                cx.set_reduce_motion(reduced_motion);
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            let badge = window.debug_bounds("test-administrator").unwrap();
+            let title = window.debug_bounds("test-admin-title").unwrap();
+            assert!(badge.size.width >= px(15.0));
+            assert!(badge.size.height > px(0.0));
+            assert!(badge.right() <= title.left());
+            if let Some(previous) = previous {
+                assert_eq!(badge, previous);
+            }
+            previous = Some(badge);
+        }
+    }
 }

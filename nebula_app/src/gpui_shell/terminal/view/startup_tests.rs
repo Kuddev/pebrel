@@ -1231,3 +1231,36 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
         assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
     });
 }
+
+#[gpui::test]
+fn host_administrator_scope_excludes_remote_and_wsl_shells(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, _| {
+        let context = |program: &str| {
+            crate::runtime_exec::PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                ..Default::default()
+            })
+        };
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("pwsh.exe"));
+        assert!(view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Ssh("user@remote".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Wsl("Ubuntu".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("wsl.exe"));
+        assert!(!view.inherits_windows_host_token());
+        view.exec_context = Some(context("pwsh.exe"));
+        view.ssh_destination = Some("user@remote".into());
+        assert!(!view.inherits_windows_host_token());
+        view.ssh_destination = None;
+        view.exec_context = None;
+        assert!(!view.inherits_windows_host_token());
+    });
+}

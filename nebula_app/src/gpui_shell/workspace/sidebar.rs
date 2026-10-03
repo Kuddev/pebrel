@@ -241,6 +241,7 @@ impl NebulaWorkspace {
                     color: tab_color,
                     renaming,
                     pane_count,
+                    local_administrator,
                 } = self.tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("sidebar-tab-hover-{ix}").into();
                 let has_program_glyph = program_glyph.is_some();
@@ -475,6 +476,13 @@ impl NebulaWorkspace {
                         )
                     },
                 )
+                .when(local_administrator, |row| {
+                    row.child(tab_presentation::administrator_badge(
+                        format!("sidebar-admin-{ix}").into(),
+                        label_px,
+                        cx,
+                    ))
+                })
                 // GPUI truncates the actual shaped title within its flex column.
                 .child(match renaming {
                     Some(input) => div()
@@ -964,8 +972,15 @@ impl NebulaWorkspace {
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
-        let TabPresentation { title, logo_image, logo_pending, program_glyph, pane_count, .. } =
-            self.tab_presentation(self.active, cx, dark);
+        let TabPresentation {
+            title,
+            logo_image,
+            logo_pending,
+            program_glyph,
+            pane_count,
+            local_administrator,
+            ..
+        } = self.tab_presentation(self.active, cx, dark);
         slot.child(
             h_flex()
                 .absolute()
@@ -975,6 +990,13 @@ impl NebulaWorkspace {
                 .gap_2()
                 // 两侧工具靠 flex 天然让位，这点内缩只是别让长标题贴到按钮上。
                 .px_4()
+                .when(local_administrator, |row| {
+                    row.child(tab_presentation::administrator_badge(
+                        "collapsed-title-admin".into(),
+                        label_px,
+                        cx,
+                    ))
+                })
                 .when_some(logo_image, |row, image| {
                     row.child(
                         img(image)

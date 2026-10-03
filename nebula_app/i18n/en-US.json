@@ -1013,6 +1013,7 @@
     "tab_color": "Tab color"
   },
   "chrome": {
+    "local_administrator": "Local Pebrel process is running as Windows administrator",
     "new_terminal_ctrl_shift_t": "New terminal (Ctrl+Shift+T)",
     "more": "More",
     "scroll_tabs_left": "Scroll tabs left",

@@ -1013,6 +1013,7 @@
     "tab_color": "标签颜色"
   },
   "chrome": {
+    "local_administrator": "本机 Pebrel 进程正以 Windows 管理员身份运行",
     "new_terminal_ctrl_shift_t": "新建终端 (Ctrl+Shift+T)",
     "more": "更多",
     "scroll_tabs_left": "向左翻标签",

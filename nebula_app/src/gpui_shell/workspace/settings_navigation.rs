@@ -143,6 +143,7 @@ impl NebulaWorkspace {
             color: None,
             renaming: None,
             pane_count: 0,
+            local_administrator: false,
         }
     }
 
