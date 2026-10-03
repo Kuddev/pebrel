@@ -1657,8 +1657,8 @@ impl NebulaWorkspace {
         }
     }
 
-    /// 终端应用惯例：最后一个 Tab 关闭即退出应用。整 tab 关闭（侧栏 ×）
-    /// 逐 pane 回收会话；实体引用清零后 `TerminalView::drop` 再兜底。
+    /// 整 tab 关闭（侧栏 ×）逐 pane 回收会话；最后一个 tab 按驻留设置关窗。
+    /// 实体引用清零后 `TerminalView::drop` 再兜底。
     fn close_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.guard_file_tab_close(ix, window, cx) {
             return;
@@ -1686,7 +1686,7 @@ impl NebulaWorkspace {
             if self.settings_tab_open {
                 self.open_settings(window, cx);
             } else {
-                windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
+                self.close_empty_workspace(window, cx);
                 return;
             }
         }
