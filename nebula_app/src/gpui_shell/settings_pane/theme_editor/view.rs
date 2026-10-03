@@ -51,6 +51,7 @@ impl SettingsPane {
 
         let preview_surface = match preview_mode {
             1 => v_flex()
+                .relative()
                 .w_full()
                 .min_h(px(if compact { 260.0 } else { 340.0 }))
                 .p(px(14.0))
@@ -58,6 +59,7 @@ impl SettingsPane {
                 .rounded(px(6.0))
                 .bg(theme_color(draft.resolved_ui().background, opacity))
                 .text_color(theme_color(draft.resolved_ui().foreground, 1.0))
+                .child(editor.background_preview.read(cx).layer(px(50.0)))
                 .child(
                     h_flex()
                         .w_full()
@@ -113,6 +115,7 @@ impl SettingsPane {
             2 => {
                 let ansi = draft.terminal.palette.ansi_colors();
                 v_flex()
+                    .relative()
                     .w_full()
                     .min_h(px(if compact { 260.0 } else { 340.0 }))
                     .p(px(15.0))
@@ -120,6 +123,7 @@ impl SettingsPane {
                     .rounded(px(6.0))
                     .bg(background)
                     .text_color(foreground)
+                    .child(editor.background_preview.read(cx).layer(px(0.0)))
                     .child(
                         div()
                             .font(crate::font_install::gpui_font_with_fallbacks(&family))
@@ -156,6 +160,7 @@ impl SettingsPane {
                     .into_any_element()
             },
             _ => v_flex()
+                .relative()
                 .w_full()
                 .min_h(px(if compact { 260.0 } else { 340.0 }))
                 .px(px(15.0))
@@ -164,6 +169,7 @@ impl SettingsPane {
                 .rounded(px(6.0))
                 .bg(background)
                 .text_color(foreground)
+                .child(editor.background_preview.read(cx).layer(px(45.0)))
                 .font(crate::font_install::gpui_font_with_fallbacks(&family))
                 .text_size(px(font_size))
                 .line_height(gpui::relative(line_height))
@@ -321,6 +327,14 @@ impl SettingsPane {
                     ),
             )
             .child(preview_surface)
+            .when_some(editor.background_preview.read(cx).status_message(), |view, message| {
+                view.child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(colors.secondary)
+                        .child(language.text(message)),
+                )
+            })
             .child(h_flex().w_full().gap(px(12.0)).border_b_1().border_color(colors.line).children(
                 tabs.into_iter().map(|(index, selector, label)| {
                     Button::new(selector)
@@ -372,7 +386,9 @@ impl SettingsPane {
         let common =
             self.theme_editor_common_fields(editor, language, colors, save_busy, window, cx);
         let common = if editor.advanced {
-            common.child(self.theme_editor_advanced(editor, language, colors, cx))
+            common
+                .child(self.theme_editor_background_fields(editor, window, cx))
+                .child(self.theme_editor_advanced(editor, language, colors, cx))
         } else {
             common
         };
@@ -437,8 +453,6 @@ impl SettingsPane {
                     .pt(px(24.0))
                     .pb(px(18.0))
                     .justify_between()
-                    .border_b_1()
-                    .border_color(colors.line)
                     .child(
                         h_flex()
                             .gap(px(10.0))
