@@ -70,6 +70,8 @@ mod status;
 mod theme_advanced;
 mod theme_editor;
 mod theme_foreground;
+mod theme_package;
+mod theme_package_view;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod theme_studio_tests;
 mod theme_transfer;
@@ -113,6 +115,8 @@ pub struct SettingsPane {
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
     theme_editor_seq: u64,
     pub(super) theme_transfer: theme_transfer::ThemeTransferState,
+    pub(super) theme_package: Option<theme_package::PackageTransfer>,
+    theme_package_seq: u64,
     theme_picker_trigger: FocusHandle,
     icon_picker_trigger: FocusHandle,
     expanded_setting_help: std::collections::HashSet<&'static str>,
@@ -1470,6 +1474,7 @@ impl Render for SettingsPane {
         let appearance_picker_modal = self.appearance_picker_modal(window, cx);
         let theme_editor_modal = self.theme_editor_modal(window, cx);
         let theme_transfer_modal = self.theme_transfer_modal(window, cx);
+        let theme_package_modal = self.theme_package_modal(window, cx);
         let backup_drawer = self.backup_drawer(window, cx);
         let mobile_relay_modal = self.mobile_relay_modal(cx);
         let application_page = self.active_section == 0;
@@ -1592,6 +1597,7 @@ impl Render for SettingsPane {
             .when_some(appearance_picker_modal, |root, modal| root.child(modal))
             .when_some(theme_editor_modal, |root, modal| root.child(modal))
             .when_some(theme_transfer_modal, |root, modal| root.child(modal))
+            .when_some(theme_package_modal, |root, modal| root.child(modal))
             .when_some(mobile_relay_modal, |root, modal| root.child(modal))
             .when(font_picker_open, |root| {
                 root
