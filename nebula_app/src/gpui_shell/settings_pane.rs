@@ -123,6 +123,7 @@ pub struct SettingsPane {
     about_update: AboutUpdateState,
     about_update_seq: u64,
     about_last_checked: Option<String>,
+    update_release_input: Entity<InputState>,
     /// 首页「项目与支持」→ 赞助商：独立页面，不是外链行。切换分区时清掉。
     about_sponsor_open: bool,
     settings_search_input: Entity<InputState>,
@@ -338,6 +339,13 @@ impl SettingsPane {
             let placeholder = localized_input_placeholder(key, language);
             input.update(cx, |state, cx| state.set_placeholder(placeholder, window, cx));
         }
+        self.update_release_input.update(cx, |state, cx| {
+            state.set_placeholder(
+                language.text(crate::i18n::Message::UpdateSourcePlaceholder),
+                window,
+                cx,
+            )
+        });
         self.settings_search_input.update(cx, |state, cx| {
             state.set_placeholder(
                 language.text(crate::i18n::Message::CommonSearchSettings),
@@ -1075,15 +1083,23 @@ impl SettingsPane {
         }
         self.about_update_seq = self.about_update_seq.wrapping_add(1);
         let sequence = self.about_update_seq;
+        let source_generation = crate::update_check::release_source_generation();
         self.about_update = AboutUpdateState::Checking;
         let window_handle = window.window_handle();
         let task = cx.background_executor().spawn(async { crate::update_check::check_now() });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let prompt = result.as_ref().ok().filter(|result| result.update_available).cloned();
-            let _ = this.update(cx, |pane, cx| {
+            let current = this.update(cx, |pane, cx| {
                 if pane.about_update_seq != sequence {
-                    return;
+                    return false;
+                }
+                if !crate::update_check::release_source_is_current(source_generation) {
+                    pane.about_update_seq = pane.about_update_seq.wrapping_add(1);
+                    pane.about_update = AboutUpdateState::Idle;
+                    pane.about_last_checked = None;
+                    cx.notify();
+                    return false;
                 }
                 pane.about_last_checked =
                     Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string());
@@ -1095,9 +1111,16 @@ impl SettingsPane {
                     Err(error) => AboutUpdateState::Failed(error),
                 };
                 cx.notify();
+                true
             });
+            if !current.unwrap_or(false) {
+                return;
+            }
             if let Some(result) = prompt {
                 let _ = window_handle.update(cx, move |_, window, cx| {
+                    if !crate::update_check::release_source_is_current(source_generation) {
+                        return;
+                    }
                     crate::gpui_shell::workspace::open_update_dialog(result, window, cx);
                 });
             }

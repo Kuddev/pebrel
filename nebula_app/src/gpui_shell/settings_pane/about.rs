@@ -67,6 +67,41 @@ impl SettingsPane {
             .child(value)
     }
 
+    pub(super) fn invalidate_update_source(&mut self) {
+        self.about_update_seq = self.about_update_seq.wrapping_add(1);
+        crate::update_check::invalidate_release_source();
+        self.about_update = AboutUpdateState::Idle;
+        self.about_last_checked = None;
+        if let Some(asset) = crate::update_download::cached_asset() {
+            crate::update_download::cancel(&asset);
+        }
+    }
+
+    fn save_update_release_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let raw = self.update_release_input.read(cx).value();
+        match crate::update_check::normalize_setting(&raw) {
+            Some(value) => {
+                self.update_release_input
+                    .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
+                if value != self.runtime.update_release_url {
+                    self.persist(&[("update_release_url", value)], cx);
+                    self.invalidate_update_source();
+                } else {
+                    self.about_update = AboutUpdateState::Idle;
+                    self.about_last_checked = None;
+                }
+            },
+            None => crate::gpui_shell::toast::toast(
+                window,
+                cx,
+                crate::gpui_shell::toast::ToastKind::Warning,
+                language.text(crate::i18n::Message::UpdateSourceInvalid).to_owned(),
+            ),
+        }
+        cx.notify();
+    }
+
     pub(super) fn section_home(&mut self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
         let distribution = crate::platform::distribution::current();
@@ -224,6 +259,22 @@ impl SettingsPane {
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.persist(&[("auto_download_updates", (*checked as u8).to_string())], cx);
             }));
+        let update_source = h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .debug_selector(|| "update-release-source-input".to_owned())
+                    .w(px(240.0))
+                    .child(Input::new(&self.update_release_input).h(px(32.0))),
+            )
+            .child(
+                NebulaButton::new("save-update-release-source")
+                    .label(language.text(crate::i18n::Message::CommonSave))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.save_update_release_source(window, cx);
+                    })),
+            );
         let last_checked: SharedString = self
             .about_last_checked
             .clone()
@@ -260,15 +311,22 @@ impl SettingsPane {
                 cx,
             ))
             .when(!managed, |column| {
-                column.child(Self::about_value_row(
-                    language.pick("上次检查", "Last checked"),
-                    div().text_color(muted).child(last_checked),
-                    cx,
-                ))
+                column
+                    .child(Self::about_value_row(
+                        language.text(crate::i18n::Message::UpdateSourceLabel),
+                        update_source,
+                        cx,
+                    ))
+                    .child(Self::about_value_row(
+                        language.pick("上次检查", "Last checked"),
+                        div().text_color(muted).child(last_checked),
+                        cx,
+                    ))
             })
             .when_some(distribution.message(), |column, message| {
                 column.child(div().text_color(muted).child(language.text(message)))
             });
+        let release_page = crate::update_check::release_page();
         let actions = v_flex()
             .flex_1()
             .min_w(px(280.0))
@@ -291,7 +349,7 @@ impl SettingsPane {
                 "about-releases",
                 IconName::BookOpen,
                 language.pick("更新内容", "Release notes"),
-                crate::update_check::RELEASES_PAGE.to_owned(),
+                release_page,
                 cx,
             ))
             .child(Self::about_page_row(
