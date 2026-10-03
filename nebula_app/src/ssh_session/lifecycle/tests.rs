@@ -795,8 +795,13 @@ fn changed_loopback_host_refuses_before_confirmation_and_connects_only_after_sav
         };
         let change = || {
             let super::super::host_key::Verification::Changed(change) =
-                super::super::host_key::inspect(path, "127.0.0.1", destination.port, entry.public_key())
-                    .unwrap()
+                super::super::host_key::inspect(
+                    path,
+                    "127.0.0.1",
+                    destination.port,
+                    entry.public_key(),
+                )
+                .unwrap()
             else {
                 panic!("Loopback fixture has a different saved identity");
             };
