@@ -249,6 +249,8 @@ fn hiding_tab_status_keeps_hover_close_selection_keyboard_and_collapsed_title(
     use nebula_settings::TabsPositionName;
     let (_directory, workspace, mut window) = open_workspace(2, cx);
     window.update(|window, cx| {
+        window.activate_window();
+        cx.global_mut::<Settings>().tab_reveal = nebula_settings::TabRevealName::Instant;
         workspace.update(cx, |workspace, cx| {
             workspace.close_settings(window, cx);
             workspace.active = 0;
@@ -260,6 +262,7 @@ fn hiding_tab_status_keeps_hover_close_selection_keyboard_and_collapsed_title(
         (TabsPositionName::Top, "top-tab-1", "top-tab-status-1", "close-top-tab-1"),
     ] {
         for visible in [true, false, true, false] {
+            window.simulate_mouse_move(gpui::point(px(1.0), px(1.0)), None, Modifiers::default());
             window.update(|_, cx| {
                 workspace.update(cx, |workspace, cx| {
                     workspace.active = 0;
@@ -287,7 +290,7 @@ fn hiding_tab_status_keeps_hover_close_selection_keyboard_and_collapsed_title(
             tab_bounds(row, &mut window);
             assert!(
                 window.debug_bounds(close).is_some(),
-                "the hover close button remains laid out"
+                "{close} remains laid out with status={visible}, row={bounds:?}"
             );
         }
         click_tab(row, &mut window);
