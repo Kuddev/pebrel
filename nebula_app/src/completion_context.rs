@@ -57,6 +57,11 @@ impl CompletionContext {
             {
                 SuggestEnv::Wsl { distro: name.to_owned() }
             },
+            (SuggestEnv::Shell { scope: HistoryScope::Wsl(_) }, Some((name, _)))
+                if !name.is_empty() =>
+            {
+                SuggestEnv::WslCommand { distro: name.to_owned(), scope: env.history_scope() }
+            },
             _ => env.clone(),
         };
         if let Some(frame) = self.frames.last_mut()

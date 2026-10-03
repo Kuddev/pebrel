@@ -323,7 +323,8 @@ impl TerminalView {
             return;
         }
         match env.clone() {
-            crate::display::SuggestEnv::Wsl { distro } => {
+            crate::display::SuggestEnv::Wsl { distro }
+            | crate::display::SuggestEnv::WslCommand { distro, .. } => {
                 cx.spawn(async move |this, cx| {
                     let target = dir.clone();
                     // 子进程往返是阻塞的，必须落在后台线程池上。

@@ -31,6 +31,7 @@ to rename all existing directories or create abstract interfaces everywhere.
 | `nebula_app/src/platform/ssh_agent.rs` | Native agent endpoints, transport connection and bounded identity discovery | Host authentication policy or private key selection |
 | `nebula_app/src/ssh_session/agent.rs` | SSH agent identity selection, signing outcomes and total discovery budget; fresh scope per host | A second authentication plan, credential store or agent forwarding service |
 | `nebula_app/src/ssh_session/integration.rs` | Authenticated exec/PTY orchestration for remote hook installation and shell startup | Provider policy or a second Agent state machine |
+| `nebula_app/src/shell_detect.rs` | Installed-shell profile resolution and Windows-to-WSL guest environment construction | Per-shell prompt frameworks or non-Windows WSL host behavior |
 | `nebula_app/src/ai_agents` | Agent identity and structurally constrained screen observations | Authority to overwrite hook results or infer remote completion from silence |
 | `nebula_app/src/gpui_shell` | GPUI views, UI state, commands and subscriptions | A second settings/domain implementation |
 | `nebula_app/src/product_ui` | Feature-selected shared presentation facade | A route to legacy rendering dependencies |

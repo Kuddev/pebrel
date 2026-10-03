@@ -172,6 +172,41 @@ fn unnamed_wsl_uses_the_distro_reported_by_its_shell() {
 }
 
 #[test]
+fn typed_wsl_child_uses_guest_paths_and_its_own_history_then_restores_parent() {
+    let mut state = pane(SuggestEnv::Local, "pwsh:parent");
+    state.completion_submitted("wsl.exe -d Ubuntu");
+    let typed_scope = state.suggest_env.history_scope();
+    assert!(matches!(typed_scope, HistoryScope::Wsl(_)));
+
+    state.completion_shell_report(SHELL_VAR, "wsl|Ubuntu|bash:guest");
+    assert_eq!(
+        state.suggest_env,
+        SuggestEnv::WslCommand { distro: "Ubuntu".into(), scope: typed_scope.clone() }
+    );
+    assert!(state.suggest_env.can_query_remote_paths());
+    assert_eq!(state.suggest_env.history_scope(), typed_scope);
+
+    state.cwd = "/home/user".into();
+    state.completion_shell_report(SHELL_VAR, "pwsh:parent");
+    assert_eq!(state.suggest_env, SuggestEnv::Local);
+    assert_eq!(state.cwd, "/parent");
+}
+
+#[test]
+fn wsl_child_reports_from_unrelated_or_invalid_contexts_do_not_enable_guest_queries() {
+    let mut ssh = pane(SuggestEnv::Ssh { destination: "server".into() }, "ssh:parent");
+    let original = ssh.suggest_env.clone();
+    ssh.completion_shell_report(SHELL_VAR, "wsl|Ubuntu|bash:guest");
+    assert_eq!(ssh.suggest_env, original);
+
+    let mut typed_wsl =
+        pane(SuggestEnv::Shell { scope: HistoryScope::Wsl("typed-route".into()) }, "pwsh:parent");
+    typed_wsl.completion_shell_report(SHELL_VAR, "wsl||bash:guest");
+    assert!(matches!(typed_wsl.suggest_env, SuggestEnv::Shell { .. }));
+    assert!(!typed_wsl.suggest_env.can_query_remote_paths());
+}
+
+#[test]
 fn only_an_actual_ssh_or_wsl_invocation_changes_history_scope() {
     for line in [
         "ssh -p 2200 user@host",

@@ -101,7 +101,7 @@ impl server::Handler for Loopback {
             }
             return session.channel_failure(channel);
         }
-        if command.starts_with(b"exec ")
+        if (command.starts_with(b"exec ") || command.starts_with(b"PEBREL_REMOTE_POWERLINE="))
             && matches!(self.mode, Mode::Integration | Mode::RejectIntegration)
         {
             self.data.send(b"bootstrap".to_vec()).unwrap();
