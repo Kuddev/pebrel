@@ -39,6 +39,12 @@ using exact ordinary command ownership and the existing WSL owner validation.
 Keep foreign commands and unknown child subtrees; conflicting registration fails
 visibly. Save the selection after the registrations succeed.
 
+Executable ownership alone cannot authorize recursive deletion: the previous
+WSL check accepted a verb whose command still belonged to Pebrel even when a
+user added descendants below the verb or its `command` key. A shared structural
+check now requires one `command` child and no descendants below it for ordinary,
+WSL cascade and legacy flat verbs. Unknown descendants preserve the whole menu.
+
 ## Rejected alternatives
 
 - A second registry adapter in the application duplicates installer ownership
@@ -66,6 +72,8 @@ enumeration changes, new distributions and foreign/edited keys. The Windows
 input fixture drives the production checklist with mouse and keyboard events,
 checks registered results and captures its states. Remote execution and visual
 review are required; fixture compilation is not Explorer launch acceptance.
+The unknown-descendant regression covers both verb/command levels in both roots,
+for all-WSL deselection, master disable, legacy flat removal and submenu rebuild.
 
 ## Supersedes
 

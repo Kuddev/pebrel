@@ -44,6 +44,70 @@ begin
   Checks := Checks + 1;
 end;
 
+procedure CheckEditedWslSubtrees;
+var
+  Root, Argument, Verb, Custom, Value, Report: string;
+  RootIndex, Depth, Mode, Failures: Integer;
+  Failed, Preserved: Boolean;
+begin
+  Report := '';
+  Failures := 0;
+  for RootIndex := 0 to 1 do
+    for Depth := 0 to 1 do
+      for Mode := 0 to 3 do begin
+        Root := RegistryRoot + '\structure' + IntToStr(RootIndex);
+        if RootIndex = 0 then Argument := '%1' else Argument := '%V';
+        RegDeleteKeyIncludingSubkeys(HKCU, Root);
+        ExplorerMenuPage.Values[0] := True;
+        ExplorerMenuPage.Values[2] := True;
+        ExplorerMenuPage.Values[3] := True;
+        if Mode = 2 then begin
+          Verb := Root + '\PebrelWsl0';
+          Check(RegWriteStringValue(HKCU, Verb + '\command', '',
+            '"' + Executable + '" --gpui --shell "wsl:Ubuntu Test" --working-directory "' + Argument + '"'),
+            'seed owned legacy flat verb');
+        end else begin
+          UpdateExplorerMenusAt(Root, Executable, Argument);
+          Verb := Root + '\PebrelWslMenu\shell\PebrelWsl0';
+        end;
+        Custom := Verb;
+        if Depth = 1 then Custom := Custom + '\command';
+        Custom := Custom + '\Custom';
+        Check(RegWriteStringValue(HKCU, Custom, '', 'user data'), 'seed unknown WSL descendant');
+        Failed := False;
+        if Mode = 2 then
+          RemoveOwnedWslContextMenusAt(Root, Executable)
+        else begin
+          if Mode = 0 then begin
+            ExplorerMenuPage.Values[2] := False;
+            ExplorerMenuPage.Values[3] := False;
+          end else if Mode = 1 then
+            ExplorerMenuPage.Values[0] := False
+          else
+            ExplorerMenuPage.Values[3] := False;
+          try
+            UpdateExplorerMenusAt(Root, Executable, Argument);
+          except
+            Failed := True;
+          end;
+        end;
+        Preserved := RegQueryStringValue(HKCU, Custom, '', Value) and (Value = 'user data');
+        if Mode = 3 then Preserved := Preserved and Failed
+        else Preserved := Preserved and not Failed;
+        if Preserved then Report := Report + 'PASS: ' else begin
+          Report := Report + 'FAIL: ';
+          Failures := Failures + 1;
+        end;
+        Report := Report + 'root=' + IntToStr(RootIndex) + ' depth=' + IntToStr(Depth) +
+          ' mode=' + IntToStr(Mode) + #13#10;
+      end;
+  SaveStringToFile(ExpandConstant('{#FixtureRoot}') + '\wsl-structure-result.txt', Report, False);
+  ExplorerMenuPage.Values[0] := True;
+  ExplorerMenuPage.Values[2] := True;
+  ExplorerMenuPage.Values[3] := True;
+  Check(Failures = 0, 'unknown WSL verb/command descendants were deleted or overwritten');
+end;
+
 procedure CheckChoices;
 var
   Index: Integer;
@@ -144,6 +208,7 @@ begin
     Exit;
   try
     try
+      CheckEditedWslSubtrees;
       CheckChoices;
       Report := 'PASS: ' + IntToStr(Checks) + ' Explorer selection checks';
     except

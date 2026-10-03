@@ -85,17 +85,10 @@ end;
 function IsOwnedDefaultExplorerMenu(Key, Command: string): Boolean;
 var
   Existing: string;
-  Children: TArrayOfString;
 begin
-  Result := RegQueryStringValue(HKCU, Key + '\command', '', Existing) and
-    (CompareText(Existing, Command) = 0) and
-    RegGetSubkeyNames(HKCU, Key, Children);
-  if Result then
-    Result := (GetArrayLength(Children) = 1) and
-      (CompareText(Children[0], 'command') = 0);
-  if Result then
-    Result := RegGetSubkeyNames(HKCU, Key + '\command', Children) and
-      (GetArrayLength(Children) = 0);
+  Result := IsSingleCommandVerb(Key) and
+    RegQueryStringValue(HKCU, Key + '\command', '', Existing) and
+    (CompareText(Existing, Command) = 0);
 end;
 
 procedure UpdateDefaultExplorerMenuAt(Root, Executable, DirectoryArgument: string;

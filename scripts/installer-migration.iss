@@ -306,9 +306,31 @@ begin
   Result := CompareText(Copy(Command, 1, Length(Prefix)), Prefix) = 0;
 end;
 
+function IsSingleCommandVerb(Key: string): Boolean;
+var
+  Children: TArrayOfString;
+begin
+  Result := RegGetSubkeyNames(HKCU, Key, Children);
+  if Result then
+    Result := (GetArrayLength(Children) = 1) and
+      (CompareText(Children[0], 'command') = 0);
+  if Result then
+    Result := RegGetSubkeyNames(HKCU, Key + '\command', Children) and
+      (GetArrayLength(Children) = 0);
+end;
+
+function IsOwnedWslVerb(Key, Executable: string): Boolean;
+var
+  Command: string;
+begin
+  Result := IsSingleCommandVerb(Key) and
+    RegQueryStringValue(HKCU, Key + '\command', '', Command) and
+    IsOwnedWslCommand(Command, Executable);
+end;
+
 function IsOwnedWslMenu(Key, Executable: string): Boolean;
 var
-  Owner, Command: string;
+  Owner: string;
   Children, Subkeys: TArrayOfString;
   Index: Integer;
 begin
@@ -325,8 +347,7 @@ begin
     if not RegGetSubkeyNames(HKCU, Key + '\shell', Children) then
       Exit;
     for Index := 0 to GetArrayLength(Children) - 1 do begin
-      if not RegQueryStringValue(HKCU, Key + '\shell\' + Children[Index] + '\command', '', Command) or
-        not IsOwnedWslCommand(Command, Executable) then
+      if not IsOwnedWslVerb(Key + '\shell\' + Children[Index], Executable) then
         Exit;
     end;
   end;
@@ -335,7 +356,7 @@ end;
 
 procedure RemoveOwnedWslContextMenusAt(Root, Executable: string);
 var
-  Key, Command: string;
+  Key: string;
   Names: TArrayOfString;
   NameIndex: Integer;
 begin
@@ -343,10 +364,7 @@ begin
     for NameIndex := 0 to GetArrayLength(Names) - 1 do
       if Pos('PebrelWsl', Names[NameIndex]) = 1 then begin
         Key := Root + '\' + Names[NameIndex];
-        Command := '';
-        if IsOwnedWslMenu(Key, Executable) or
-          (RegQueryStringValue(HKCU, Key + '\command', '', Command) and
-            IsOwnedWslCommand(Command, Executable)) then
+        if IsOwnedWslMenu(Key, Executable) or IsOwnedWslVerb(Key, Executable) then
           if not RegDeleteKeyIncludingSubkeys(HKCU, Key) then
             RaiseException('Unable to remove an owned WSL context menu: ' + Key);
       end;
