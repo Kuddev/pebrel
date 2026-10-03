@@ -538,7 +538,8 @@ fn scrollbar_modes_keep_live_drag_visible_and_preserve_hidden_selection(cx: &mut
         view.session.as_ref().unwrap().term.lock().selection = None;
     });
 
-    for mode in [ScrollbarVisibility::Hover, ScrollbarVisibility::Always, ScrollbarVisibility::Auto] {
+    for mode in [ScrollbarVisibility::Hover, ScrollbarVisibility::Always, ScrollbarVisibility::Auto]
+    {
         window.update(|_, cx| cx.global_mut::<Settings>().scrollbar_visibility = mode);
         terminal.update(&mut window, |view, cx| {
             view.apply_settings(cx);
@@ -593,11 +594,14 @@ fn scrollbar_modes_keep_live_drag_visible_and_preserve_hidden_selection(cx: &mut
 }
 
 #[gpui::test]
-fn scrollbar_modes_never_capture_without_history_and_hover_clears_on_leave(cx: &mut TestAppContext) {
+fn scrollbar_modes_never_capture_without_history_and_hover_clears_on_leave(
+    cx: &mut TestAppContext,
+) {
     use nebula_settings::ScrollbarVisibility;
 
     let (terminal, mut window, receiver) = link_fixture(cx, b"\x1b[?1000h");
-    for mode in [ScrollbarVisibility::Auto, ScrollbarVisibility::Hover, ScrollbarVisibility::Always] {
+    for mode in [ScrollbarVisibility::Auto, ScrollbarVisibility::Hover, ScrollbarVisibility::Always]
+    {
         window.update(|_, cx| cx.global_mut::<Settings>().scrollbar_visibility = mode);
         terminal.update(&mut window, |view, cx| view.apply_settings(cx));
         let edge = terminal.read_with(&window, |view, _| view.scrollbar_hot_zone().center());

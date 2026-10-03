@@ -171,7 +171,8 @@ fn scrollbar_menu_persists_all_modes_and_reopens_with_the_selected_value(cx: &mu
     });
     window.simulate_resize(size(px(1280.0), px(1800.0)));
     draw(&mut window);
-    for mode in [ScrollbarVisibility::Hover, ScrollbarVisibility::Always, ScrollbarVisibility::Auto] {
+    for mode in [ScrollbarVisibility::Hover, ScrollbarVisibility::Always, ScrollbarVisibility::Auto]
+    {
         click("settings-select-scrollbar_visibility", &mut window);
         if mode == ScrollbarVisibility::Auto {
             press("up", &mut window);
