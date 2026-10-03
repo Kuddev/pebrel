@@ -324,8 +324,8 @@ mod tests {
         std::fs::write(&shim, b"@echo off\r\ncd\r\n").unwrap();
         let home = super::super::dirs::home_dir().unwrap();
         let system = std::env::var_os("SystemRoot").unwrap();
-        let powershell = std::path::Path::new(&system)
-            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let powershell =
+            std::path::Path::new(&system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
         for program in [powershell.to_string_lossy().into_owned(), "pwsh.exe".into()] {
             std::fs::write(&result, b"").unwrap();
             let mut options = Options {
