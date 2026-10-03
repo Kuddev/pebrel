@@ -2933,7 +2933,7 @@ impl Render for NebulaWorkspace {
                 }
                 // pane 拖拽先结算：它和 tab 拖拽互斥（起手位置不同），但待命态
                 // 必须在这里清掉，否则下一次点标题条会带着上一次的按点。
-                let pane_dragged = this.release_pane_drag(window, cx);
+                let pane_dragged = this.release_pane_drag(event.position, window, cx);
                 if this.release_tab_drag_at(event.position, window, cx) || pane_dragged {
                     // 真拖拽已经完成，不能再让源 tab 的 click 或终端选择收到释放。
                     cx.stop_propagation();

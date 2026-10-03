@@ -1028,6 +1028,7 @@
       "stop_broadcast_input": "关闭广播输入",
       "broadcast_input_tooltip": "广播输入到本标签全部分栏",
       "close": "关闭此分栏",
+      "swap_release": "松开以交换分屏位置",
       "extract_release": "松手：拉出为独立标签",
       "extract_drag_hint": "拖到终端区外可拉出",
       "broadcast_enabled": "广播输入已开启：键入将同步到本标签的 {count} 个分栏",
