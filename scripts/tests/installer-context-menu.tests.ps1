@@ -26,6 +26,9 @@ public static class ExplorerFixtureInput {
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr row, ref Rect rect);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr hwnd, IntPtr rect, IntPtr region, uint flags);
+    [DllImport("dwmapi.dll")] public static extern int DwmFlush();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
@@ -56,6 +59,8 @@ function Click-Row([IntPtr] $handle, [int] $row) {
 }
 
 function Save-Window([IntPtr] $windowHandle, [string] $name) {
+    [void][ExplorerFixtureInput]::RedrawWindow($windowHandle, [IntPtr]::Zero, [IntPtr]::Zero, 0x181)
+    [void][ExplorerFixtureInput]::DwmFlush()
     $rect = [ExplorerFixtureInput+Rect]::new()
     [void][ExplorerFixtureInput]::GetWindowRect($windowHandle, [ref]$rect)
     $bitmap = [Drawing.Bitmap]::new($rect.Right - $rect.Left, $rect.Bottom - $rect.Top)
@@ -76,6 +81,11 @@ function Run-Ui([string] $phase, [scriptblock] $actions) {
         Wait-ForFile (Join-Path $root 'ui-handle.txt') $process
         $handle = [IntPtr][long](Get-Content (Join-Path $root 'ui-handle.txt') -Raw)
         $windowHandle = [ExplorerFixtureInput]::GetAncestor($handle, 2)
+        $windowProcessId = [uint32]0
+        [void][ExplorerFixtureInput]::GetWindowThreadProcessId($windowHandle, [ref]$windowProcessId)
+        if (-not [Diagnostics.Process]::GetProcessById($windowProcessId).WaitForInputIdle(20000)) {
+            throw 'Installer did not complete its initial UI rendering.'
+        }
         [void][ExplorerFixtureInput]::SetForegroundWindow($windowHandle)
         Save-Window $windowHandle "$phase-before"
         & $actions $handle
