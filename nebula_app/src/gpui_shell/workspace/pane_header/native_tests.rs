@@ -1,5 +1,5 @@
-use super::*;
 use super::super::TabMeta;
+use super::*;
 use crate::gpui_shell::terminal::view::TerminalLaunch;
 use gpui::{Focusable as _, Modifiers, TestAppContext};
 
@@ -53,7 +53,8 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
             let other_id = other.id;
             let ids = [panes[0].id, panes[1].id, panes[2].id];
             let tree = SplitTree::leaf(ids[0]).joined(
-                SplitTree::leaf(ids[1]).joined(SplitTree::leaf(ids[2]), nebula_split::SplitNav::Right),
+                SplitTree::leaf(ids[1])
+                    .joined(SplitTree::leaf(ids[2]), nebula_split::SplitNav::Right),
                 nebula_split::SplitNav::Right,
             );
             workspace.insert_tab_at(

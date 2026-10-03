@@ -755,9 +755,10 @@ impl NebulaWorkspace {
     /// 意图提示。提示必须有：这个手势在界面上没有静态痕迹，不告诉用户「现在
     /// 松手会怎样」，拖出去就是一次赌博。
     pub(super) fn pane_drag_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let drag = self.pane_drag.as_ref().filter(|drag| {
-            drag.active && self.tab_of_pane(drag.pane) == Some(self.active)
-        })?;
+        let drag = self
+            .pane_drag
+            .as_ref()
+            .filter(|drag| drag.active && self.tab_of_pane(drag.pane) == Some(self.active))?;
         let (x, y, detach) = (drag.x, drag.y, drag.detach);
         let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
