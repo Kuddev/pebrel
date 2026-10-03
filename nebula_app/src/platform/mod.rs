@@ -45,6 +45,7 @@ pub(crate) mod ssh_agent;
 pub mod startup;
 #[cfg(unix)]
 pub(crate) mod tray_native;
+pub(crate) mod trust_file;
 pub(crate) mod update_installation;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod window_chrome;

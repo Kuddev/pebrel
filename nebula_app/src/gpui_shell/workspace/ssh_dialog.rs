@@ -22,6 +22,19 @@ pub(super) fn show(request: Arc<Prompt>, window: &mut Window, cx: &mut App) {
             false,
             false,
         ),
+        PromptKind::ChangedHostKey { host, port, previous, fingerprint } => (
+            language.text(crate::i18n::Message::SshChangedHostTitle),
+            language.format(
+                crate::i18n::Message::SshChangedHostDescription,
+                &[
+                    ("endpoint", &format!("{host}:{port}")),
+                    ("previous", previous),
+                    ("fingerprint", fingerprint),
+                ],
+            ),
+            false,
+            false,
+        ),
         PromptKind::Secret { label, allow_save } => {
             (language.pick("SSH 身份验证", "SSH authentication"), label.clone(), true, *allow_save)
         },
@@ -58,6 +71,8 @@ pub(super) fn show(request: Arc<Prompt>, window: &mut Window, cx: &mut App) {
             description.clone(),
             if is_secret {
                 language.pick("继续", "Continue")
+            } else if matches!(&request.kind, PromptKind::ChangedHostKey { .. }) {
+                language.text(crate::i18n::Message::SshChangedHostConfirm)
             } else {
                 language.pick("信任并连接", "Trust and connect")
             },
@@ -113,6 +128,43 @@ mod tests {
             ),
             Modifiers::default(),
         );
+    }
+
+    #[gpui::test]
+    fn changed_host_dialog_cancel_preserves_refusal(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| DialogProbe);
+            Root::new(view, window, cx)
+        });
+        let (request, mut response) = Prompt::for_test(PromptKind::ChangedHostKey {
+            host: "fixture.example".into(),
+            port: 2200,
+            previous: "SHA256:previous".into(),
+            fingerprint: "SHA256:new".into(),
+        });
+        cx.update(|window, cx| {
+            show(request, window, cx);
+            let _ = window.draw(cx);
+        });
+        click(cx, "confirm-dialog-cancel");
+        assert!(matches!(response.try_recv(), Ok(PromptResponse::Cancel)));
+        for language in [crate::i18n::UiLanguage::EnUs, crate::i18n::UiLanguage::ZhCn] {
+            let description = language.format(
+                crate::i18n::Message::SshChangedHostDescription,
+                &[
+                    ("endpoint", "fixture.example:2200"),
+                    ("previous", "SHA256:previous"),
+                    ("fingerprint", "SHA256:new"),
+                ],
+            );
+            for value in ["fixture.example:2200", "SHA256:previous", "SHA256:new"] {
+                assert!(description.contains(value));
+            }
+        }
     }
 
     #[gpui::test]
