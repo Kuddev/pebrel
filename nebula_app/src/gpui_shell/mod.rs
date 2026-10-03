@@ -208,6 +208,8 @@ pub fn run_shell(
 
 /// 组件库/主题/快捷键/用户配置的一次性初始化。
 fn init(cx: &mut App, config_file: Option<std::path::PathBuf>) {
+    #[cfg(target_os = "macos")]
+    crate::platform::notifications::init_gpui(cx);
     crate::platform::acrylic::init(cx);
     // 三端都注册内嵌 Maple：Linux/macOS 的系统等宽字体没有 NF 图标码点，
     // 侧栏与提示符会出方框；字形同源也是跨平台截图能互相比对的前提。
