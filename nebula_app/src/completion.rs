@@ -123,12 +123,7 @@ impl Session {
         });
         let semantic = SemanticContext::parse(&line, cursor, syntax).filter(|context| {
             // 无目录通道的嵌套 shell 仍能召回本会话历史；空路径来源不应把历史挡住。
-            !matches!(context.source, Source::Workspaces)
-                && !(matches!(context.source, Source::ProjectScripts)
-                    && (context.project.all || !context.project.selectors.is_empty()))
-                && (!matches!(context.source, Source::Paths { .. })
-                    || local
-                    || env.can_query_remote_paths())
+            !matches!(context.source, Source::Paths { .. }) || local || env.can_query_remote_paths()
         });
         // 只有需要本机 Git I/O 的请求才复制启动环境。
         let git = if semantic.as_ref().is_some_and(|c| {
@@ -148,10 +143,9 @@ impl Session {
         } else {
             None
         };
-        let scripts = if local
-            && semantic
-                .as_ref()
-                .is_some_and(|c| matches!(c.source, Source::ProjectScripts | Source::Workspaces))
+        let scripts = if semantic
+            .as_ref()
+            .is_some_and(|c| matches!(c.source, Source::ProjectScripts | Source::Workspaces))
         {
             metadata::Execution::from_scope(&env, execution)
                 .map(|execution| (self.scripts.clone(), execution))
@@ -208,8 +202,10 @@ impl Request {
                 .or_else(|| execution.is_host().then(Vec::new))
             }),
             Source::ProjectScripts | Source::Workspaces => {
-                self.scripts.as_ref().map(|(cache, _)| {
-                    cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
+                self.scripts.as_ref().and_then(|(cache, execution)| {
+                    cache
+                        .complete_in(&self.cwd, context, &|| cancellation.is_cancelled(), execution)
+                        .or_else(|| execution.is_host().then(Vec::new))
                 })
             },
             Source::SshHosts { .. } | Source::WslDistributions => {

@@ -875,7 +875,11 @@ fn completion_metadata_uses_authenticated_channels_and_closes_cancelled_queries(
         tokio::task::spawn_blocking(move || {
             let session = CompletionSession::default();
             let env = SuggestEnv::Ssh { destination: target };
-            for (line, suffix) in [("git switch feature/gue", "st")] {
+            for (line, suffix) in [
+                ("git switch feature/gue", "st"),
+                ("npm run gue", "st-task"),
+                ("npm -w app run work", "space-task"),
+            ] {
                 let result = session
                     .request(
                         "/remote".into(),
@@ -926,5 +930,104 @@ fn completion_metadata_uses_authenticated_channels_and_closes_cancelled_queries(
         }
         assert!(closed >= 4, "completed and cancelled query channels close");
         fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+#[ignore = "requires an owned loopback sshd fixture in PEBREL_COMPLETION_SSH_FIXTURE"]
+fn completion_real_ssh_git_and_project_scripts_end_to_end() {
+    check(async {
+        use crate::completion::{Cancellation, Session as CompletionSession};
+        use crate::display::{CompletionStyle, SuggestEnv};
+        let path = std::env::var_os("PEBREL_COMPLETION_SSH_FIXTURE").expect("owned fixture");
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let destination = fixture["destination"].as_str().unwrap().to_owned();
+        let cwd = fixture["cwd"].as_str().unwrap().to_owned();
+        let mut profile = crate::ssh_profiles::SshProfiles::default().for_destination(&destination);
+        profile.auth = crate::ssh_profiles::SshAuthMode::PublicKey;
+        profile.private_keys = vec![fixture["key"].as_str().unwrap().into()];
+        let route = ResolvedRoute {
+            destination: SshDestination::parse(&destination).unwrap(),
+            profile,
+            transport: RouteTransport::Direct,
+            known_hosts_path: Some(fixture["known_hosts"].as_str().unwrap().into()),
+        };
+        let acquired =
+            authenticated_route(&route, None::<&NoopSshEventHost>, false, false).await.unwrap();
+        let target = destination.clone();
+        let project = cwd.clone();
+        tokio::task::spawn_blocking(move || {
+            let session = CompletionSession::default();
+            let env = SuggestEnv::Ssh { destination: target };
+            for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+            {
+                for (line, expected) in [
+                    ("git switch feature/gue", "git switch feature/guest"),
+                    ("npm run gue", "npm run guest-task"),
+                    ("npm -w app run work", "npm -w app run workspace-task"),
+                ] {
+                    let result = session
+                        .request(project.clone(), env.clone(), line.into(), style, None)
+                        .calculate(&Cancellation::default());
+                    let edit = if style == CompletionStyle::Popup {
+                        result.completion_items.first().unwrap()
+                    } else {
+                        result.suggestion_edit.as_ref().unwrap()
+                    };
+                    let head: String =
+                        line.chars().take(line.chars().count() - edit.replace_chars).collect();
+                    assert_eq!(format!("{head}{}", edit.insert), expected, "{style:?}");
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        let before = format!(
+            "test ! -e {} && test ! -e {}",
+            quote(&format!("{cwd}/.qa-guest")),
+            quote(&format!("{cwd}/.qa-workspace"))
+        );
+        super::super::completion::read(
+            &destination,
+            &before,
+            &[],
+            Duration::from_secs(2),
+            8192,
+            &|| false,
+        )
+        .await
+        .unwrap();
+        let execute = format!(
+            "cd -- {} && git switch feature/guest && npm run guest-task && npm -w app run workspace-task",
+            quote(&cwd)
+        );
+        super::super::completion::read(
+            &destination,
+            &execute,
+            &[],
+            Duration::from_secs(5),
+            8192,
+            &|| false,
+        )
+        .await
+        .unwrap();
+        let after = format!(
+            "test -f {} && test -f {}",
+            quote(&format!("{cwd}/.qa-guest")),
+            quote(&format!("{cwd}/.qa-workspace"))
+        );
+        super::super::completion::read(
+            &destination,
+            &after,
+            &[],
+            Duration::from_secs(2),
+            8192,
+            &|| false,
+        )
+        .await
+        .unwrap();
+        super::super::evict_pooled_session(&route.pool_key(), &acquired.session).await;
     });
 }

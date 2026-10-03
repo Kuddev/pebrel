@@ -67,6 +67,97 @@ impl Execution {
         serde_json::from_slice(&bytes).ok()
     }
 
+    pub(super) fn project(
+        &self,
+        cwd: &str,
+        context: &pebrel_completions::semantic::Context,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Vec<String>> {
+        use base64::Engine as _;
+        use pebrel_completions::semantic::Source;
+        let workspace = context.project.all
+            || !context.project.selectors.is_empty()
+            || matches!(context.source, Source::Workspaces);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let probe = |config: serde_json::Value| -> Option<serde_json::Value> {
+            let encoded =
+                base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&config).ok()?);
+            let script = format!("INPUT = '{encoded}'\n{}", include_str!("project_probe.py"));
+            let argv = ["python3", "-I", "-S", "-"].map(str::to_owned);
+            let bytes = self.read(
+                cwd,
+                &argv,
+                script.as_bytes(),
+                deadline.saturating_duration_since(Instant::now()),
+                4 * 1024 * 1024,
+                false,
+                cancelled,
+            )?;
+            if cancelled() {
+                return None;
+            }
+            serde_json::from_slice(&bytes).ok()
+        };
+        let header = probe(
+            serde_json::json!({"mode":"root", "cwd":cwd, "directories":context.directories, "workspace":workspace, "manager":format!("{:?}", context.project.manager).to_ascii_lowercase()}),
+        )?;
+        if !workspace {
+            return Some(
+                header.get("manifest")?.get("scripts")?.as_object()?.keys().cloned().collect(),
+            );
+        }
+        let patterns = super::project_scripts::workspace::patterns(
+            header.get("manifest")?,
+            header.get("yaml").and_then(serde_json::Value::as_str),
+            context.project.manager,
+        )?;
+        let prefixes: Vec<_> = patterns
+            .iter()
+            .filter(|pattern| !pattern.starts_with('!'))
+            .map(|pattern| {
+                pattern.split(['*', '?', '[', '{']).next().unwrap_or_default().trim_end_matches('/')
+            })
+            .collect();
+        let mut catalog = probe(
+            serde_json::json!({"mode":"packages", "cwd":header.get("root")?, "prefixes":prefixes, "remaining":header.get("remaining").unwrap_or(&serde_json::Value::from(4 * 1024 * 1024))}),
+        )?;
+        let packages = catalog.as_array_mut()?;
+        packages.retain(|package| {
+            package.get("path").and_then(serde_json::Value::as_str).is_some_and(|path| {
+                patterns.iter().filter(|p| !p.starts_with('!')).any(|p| {
+                    glob::Pattern::new(p).is_ok_and(|p| {
+                        p.matches_with(
+                            path,
+                            glob::MatchOptions {
+                                require_literal_separator: true,
+                                require_literal_leading_dot: true,
+                                case_sensitive: true,
+                            },
+                        )
+                    })
+                }) && !patterns.iter().filter_map(|p| p.strip_prefix('!')).any(|p| {
+                    glob::Pattern::new(p).is_ok_and(|p| {
+                        p.matches_with(
+                            path,
+                            glob::MatchOptions {
+                                require_literal_separator: true,
+                                require_literal_leading_dot: true,
+                                case_sensitive: true,
+                            },
+                        )
+                    })
+                })
+            })
+        });
+        if context.project.include_root
+            || context.project.manager == pebrel_completions::semantic::PackageManager::Pnpm
+                && header.get("yaml").is_none_or(serde_json::Value::is_null)
+        {
+            packages.push(serde_json::json!({"path":".", "manifest":header.get("manifest")?}));
+        }
+        super::project_scripts::workspace::finish_catalog(&catalog, context)
+    }
+
     pub(crate) fn from_scope(
         scope: &SuggestEnv,
         execution: Option<&PaneExecContext>,
@@ -231,4 +322,244 @@ impl Execution {
 
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::completion::{Cancellation, Session};
+    use crate::display::CompletionStyle;
+
+    #[test]
+    #[ignore = "requires WSL, PEBREL_COMPLETION_QA_MANAGERS and PEBREL_COMPLETION_QA_GUEST_NODE"]
+    fn real_wsl_workspace_scripts_execute_the_accepted_pnpm_and_yarn_candidates() {
+        let distro = crate::platform::shell::registered_wsl_distros(&|| false)
+            .into_iter()
+            .find(|name| !name.starts_with("docker-desktop"))
+            .expect("WSL distro");
+        let managers = std::env::var("PEBREL_COMPLETION_QA_MANAGERS")
+            .expect("isolated package manager directory");
+        let node = std::env::var("PEBREL_COMPLETION_QA_GUEST_NODE").expect("guest Node binary");
+        assert!(managers.starts_with('/') && node.starts_with('/'));
+        let script = r#"import tempfile,pathlib,json,sys,shlex
+p=pathlib.Path(tempfile.mkdtemp(prefix='pebrel-completion-managers-qa-'))
+(p/'package.json').write_text(json.dumps({'name':'fixture-root','private':True,'workspaces':['packages/*']}))
+(p/'pnpm-workspace.yaml').write_text('packages:\n  - packages/*\n')
+q=p/'packages/app'; q.mkdir(parents=True)
+scripts={}
+for manager in ['pnpm','yarn']:
+ for mode in ['inline','popup','hybrid']:
+  name=manager+'-'+mode
+  scripts['qa-'+name]=shlex.quote(sys.argv[1])+' -e "require(\'fs\').writeFileSync(\'../../.qa-'+name+'\', \'executed\')"'
+(q/'package.json').write_text(json.dumps({'name':'@fixture/app','version':'1.0.0','scripts':scripts}))
+print(p)
+"#;
+        let output = std::process::Command::new("wsl.exe")
+            .args(["--distribution", &distro, "--exec", "python3", "-I", "-S", "-c", script, &node])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let cwd = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+        let env = SuggestEnv::Wsl { distro: distro.clone() };
+        let session = Session::default();
+        let execution = Execution::from_scope(&env, None).unwrap();
+        let markers: Vec<_> = ["pnpm", "yarn"]
+            .into_iter()
+            .flat_map(|manager| {
+                ["inline", "popup", "hybrid"].map(move |mode| format!(".qa-{manager}-{mode}"))
+            })
+            .collect();
+        for manager in ["pnpm", "yarn"] {
+            for (style, mode) in [
+                (CompletionStyle::Inline, "inline"),
+                (CompletionStyle::Popup, "popup"),
+                (CompletionStyle::Hybrid, "hybrid"),
+            ] {
+                let prefix = if manager == "pnpm" {
+                    format!("pnpm --filter app run qa-pnpm-{}", &mode[..2])
+                } else {
+                    format!("yarn workspace @fixture/app run qa-yarn-{}", &mode[..2])
+                };
+                let result = session
+                    .request_with_syntax(
+                        cwd.clone(),
+                        env.clone(),
+                        prefix.clone(),
+                        prefix.len(),
+                        style,
+                        None,
+                        Some(pebrel_completions::command_context::ShellSyntax::Posix),
+                    )
+                    .calculate(&Cancellation::default());
+                let edit = if style == CompletionStyle::Popup {
+                    result.completion_items.first().expect("workspace candidate")
+                } else {
+                    result.suggestion_edit.as_ref().expect("workspace candidate")
+                };
+                let head: String =
+                    prefix.chars().take(prefix.chars().count() - edit.replace_chars).collect();
+                let accepted = format!("{head}{}", edit.insert);
+                assert!(accepted.ends_with(&format!("qa-{manager}-{mode}")), "{accepted}");
+                let marker = format!(".qa-{manager}-{mode}");
+                assert!(
+                    execution
+                        .paths_not_found(&cwd, &[], std::slice::from_ref(&marker), &|| false)
+                        .unwrap()
+                        .contains(&marker),
+                    "candidate discovery never executes the script"
+                );
+                let launcher = if manager == "pnpm" {
+                    format!("{managers}/node_modules/pnpm/bin/pnpm.cjs")
+                } else {
+                    format!("{managers}/node_modules/yarn/bin/yarn.js")
+                };
+                let output = std::process::Command::new("wsl.exe")
+                    .args(["--distribution", &distro, "--cd", &cwd, "--exec", &node, &launcher])
+                    .args(accepted.split_whitespace().skip(1))
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{accepted}: {} {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(
+                    !execution
+                        .paths_not_found(&cwd, &[], std::slice::from_ref(&marker), &|| false)
+                        .unwrap()
+                        .contains(&marker)
+                );
+            }
+        }
+        assert!(execution.paths_not_found(&cwd, &[], &markers, &|| false).unwrap().is_empty());
+        let cleanup = std::process::Command::new("wsl.exe")
+            .args([
+                "--distribution",
+                &distro,
+                "--exec",
+                "python3",
+                "-I",
+                "-S",
+                "-c",
+                "import shutil,sys; shutil.rmtree(sys.argv[1])",
+                &cwd,
+            ])
+            .status()
+            .unwrap();
+        assert!(cleanup.success());
+    }
+
+    #[test]
+    #[ignore = "requires a runnable WSL distribution and guest git/python"]
+    fn real_wsl_metadata_and_accepted_git_command_end_to_end() {
+        let distro = crate::platform::shell::registered_wsl_distros(&|| false)
+            .into_iter()
+            .find(|name| !name.starts_with("docker-desktop"))
+            .expect("WSL distro");
+        let script = r#"import tempfile, pathlib, json, subprocess
+p=pathlib.Path(tempfile.mkdtemp(prefix='pebrel-completion-qa-'))
+(p/'package.json').write_text(json.dumps({'name':'fixture','workspaces':['packages/*'],'scripts':{'guest-task':'touch forbidden'}}))
+q=p/'packages/app'; q.mkdir(parents=True); (q/'package.json').write_text(json.dumps({'name':'app','scripts':{'workspace-task':'touch forbidden'}}))
+for args in [['init','-b','main'],['add','.'],['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture'],['branch','feature/guest']]:
+ subprocess.run(['git',*args],cwd=p,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+print(p)
+"#;
+        let output = std::process::Command::new("wsl.exe")
+            .args(["--distribution", &distro, "--exec", "python3", "-I", "-S", "-c", script])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "guest fixture creation");
+        let cwd = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+        let env = SuggestEnv::Wsl { distro: distro.clone() };
+        let session = Session::default();
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+            for (line, expected) in [
+                ("git switch feature/gue", "git switch feature/guest"),
+                ("npm run gue", "npm run guest-task"),
+                ("npm -w app run work", "npm -w app run workspace-task"),
+            ] {
+                let result = session
+                    .request(cwd.clone(), env.clone(), line.into(), style, None)
+                    .calculate(&Cancellation::default());
+                let edit = if style == CompletionStyle::Popup {
+                    result.completion_items.first().unwrap()
+                } else {
+                    result.suggestion_edit.as_ref().unwrap()
+                };
+                let head: String =
+                    line.chars().take(line.chars().count() - edit.replace_chars).collect();
+                assert_eq!(format!("{head}{}", edit.insert), expected, "{style:?}: {line}");
+            }
+        }
+        let before = std::process::Command::new("wsl.exe")
+            .args([
+                "--distribution",
+                &distro,
+                "--cd",
+                &cwd,
+                "--exec",
+                "git",
+                "branch",
+                "--show-current",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(before.stdout).unwrap().trim(), "main");
+        let applied = std::process::Command::new("wsl.exe")
+            .args([
+                "--distribution",
+                &distro,
+                "--cd",
+                &cwd,
+                "--exec",
+                "git",
+                "switch",
+                "feature/guest",
+            ])
+            .status()
+            .unwrap();
+        assert!(applied.success());
+        let after = std::process::Command::new("wsl.exe")
+            .args([
+                "--distribution",
+                &distro,
+                "--cd",
+                &cwd,
+                "--exec",
+                "git",
+                "branch",
+                "--show-current",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(after.stdout).unwrap().trim(), "feature/guest");
+        let absent = std::process::Command::new("wsl.exe")
+            .args([
+                "--distribution",
+                &distro,
+                "--exec",
+                "test",
+                "!",
+                "-e",
+                &format!("{cwd}/forbidden"),
+            ])
+            .status()
+            .unwrap();
+        assert!(absent.success(), "discovery never executes project scripts");
+        std::process::Command::new("wsl.exe")
+            .args([
+                "--distribution",
+                &distro,
+                "--exec",
+                "python3",
+                "-I",
+                "-S",
+                "-c",
+                "import shutil,sys; shutil.rmtree(sys.argv[1])",
+                &cwd,
+            ])
+            .status()
+            .unwrap();
+    }
 }
