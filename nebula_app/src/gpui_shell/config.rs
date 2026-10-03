@@ -81,6 +81,7 @@ pub struct Settings {
     pub copy_on_select: bool,
     pub scrollback_lines: usize,
     pub scroll_speed: f32,
+    pub scrollbar_visibility: nebula_settings::ScrollbarVisibility,
     /// Pointer handlers and split rendering only read these cached preferences.
     pub focus_follows_mouse: bool,
     pub dim_inactive_panes: bool,
@@ -296,6 +297,7 @@ impl Settings {
             copy_on_select: runtime.copy_on_select,
             scrollback_lines: runtime.scrollback_lines,
             scroll_speed: runtime.scroll_speed,
+            scrollbar_visibility: runtime.scrollbar_visibility,
             focus_follows_mouse: runtime
                 .focus_follows_mouse
                 .unwrap_or(raw.mouse.focus_follows_mouse),

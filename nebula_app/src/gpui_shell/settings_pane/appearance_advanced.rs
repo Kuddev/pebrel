@@ -149,6 +149,12 @@ impl SettingsPane {
                 cx,
             ))
             .child(self.scroll_speed_row(cx))
+            .child(self.select_row(
+                "scrollbar_visibility",
+                language.text(crate::i18n::Message::SettingsScrollingScrollbar),
+                language.text(crate::i18n::Message::SettingsScrollingScrollbarDescription),
+                cx,
+            ))
             .child(self.switch_row(
                 "fetch",
                 language.pick("启动欢迎信息", "Startup system information"),

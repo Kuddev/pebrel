@@ -963,12 +963,12 @@ impl Element for TerminalElement {
             }
         }
 
-        // Overlay 滚动条：贴着底部时拇指为 None 不画，滚进历史才浮在网格右缘。
+        // Overlay 滚动条：可见性由用户策略和拖拽状态共同决定。
         // 几何来自 view 的单一真值源——命中测试拿的是同一个矩形（旧壳
         // `draw_scrollbar` / `scrollbar_grab` 共用 `scrollbar_geometry` 同构）。
         let (dragging, thumb) = {
             let view = self.view.read(cx);
-            (view.scrollbar_dragging(), view.scrollbar_thumb(snap.display_offset, history))
+            (view.scrollbar_highlighted(), view.scrollbar_thumb(snap.display_offset, history))
         };
         if let Some(thumb) = thumb {
             let color = if dragging {
