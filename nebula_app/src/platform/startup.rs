@@ -168,13 +168,17 @@ pub(crate) fn physical_display(point: (i32, i32)) -> Option<(u64, f32)> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::POINT;
-        use windows_sys::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
+        use windows_sys::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
         // SAFETY: this queries a borrowed monitor handle without retaining it.
-        let monitor = unsafe { MonitorFromPoint(POINT { x: point.0, y: point.1 }, MONITOR_DEFAULTTONEAREST) };
+        let monitor =
+            unsafe { MonitorFromPoint(POINT { x: point.0, y: point.1 }, MONITOR_DEFAULTTONEAREST) };
         display_scale(monitor as u64).map(|scale| (monitor as u64, scale))
     }
     #[cfg(not(windows))]
-    { let _ = point; None }
+    {
+        let _ = point;
+        None
+    }
 }
 
 pub(crate) fn display_scale(id: u64) -> Option<f32> {
@@ -184,12 +188,21 @@ pub(crate) fn display_scale(id: u64) -> Option<f32> {
         let (mut x, mut y) = (0, 0);
         let monitor = id as *mut core::ffi::c_void;
         // SAFETY: the borrowed monitor and local DPI output pointers stay valid.
-        if monitor.is_null() || unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) } < 0 || x == 0 || x != y {
+        if monitor.is_null()
+            || unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) } < 0
+            || x == 0
+            || x != y
+        {
             None
-        } else { Some(x as f32 / 96.0) }
+        } else {
+            Some(x as f32 / 96.0)
+        }
     }
     #[cfg(not(windows))]
-    { let _ = id; None }
+    {
+        let _ = id;
+        None
+    }
 }
 
 pub(crate) fn placement_offset(id: u64) -> (i32, i32) {
@@ -211,8 +224,12 @@ pub(crate) fn placement_offset(id: u64) -> (i32, i32) {
 #[cfg(windows)]
 pub(crate) fn place_normal_window(hwnd: isize, desired: (i32, i32)) -> bool {
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetWindowPos, SWP_NOSIZE, SWP_NOACTIVATE, SWP_NOZORDER};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+    };
     let hwnd = hwnd as *mut core::ffi::c_void;
     // SAFETY: both native output structures admit zero initialization.
     let mut rect: RECT = unsafe { std::mem::zeroed() };
@@ -220,22 +237,50 @@ pub(crate) fn place_normal_window(hwnd: isize, desired: (i32, i32)) -> bool {
     monitor.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
     // SAFETY: the caller owns the live HWND; the local outputs remain valid.
     if unsafe { GetWindowRect(hwnd, &mut rect) } == 0
-        || unsafe { GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut monitor) } == 0 { return false; }
-    let x = desired.0.clamp(monitor.rcWork.left, (monitor.rcWork.right - (rect.right - rect.left)).max(monitor.rcWork.left));
-    let y = desired.1.clamp(monitor.rcWork.top, (monitor.rcWork.bottom - (rect.bottom - rect.top)).max(monitor.rcWork.top));
+        || unsafe {
+            GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut monitor)
+        } == 0
+    {
+        return false;
+    }
+    let x = desired.0.clamp(
+        monitor.rcWork.left,
+        (monitor.rcWork.right - (rect.right - rect.left)).max(monitor.rcWork.left),
+    );
+    let y = desired.1.clamp(
+        monitor.rcWork.top,
+        (monitor.rcWork.bottom - (rect.bottom - rect.top)).max(monitor.rcWork.top),
+    );
     // SAFETY: only the live window position changes; ownership and size are preserved.
-    unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER) != 0 }
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+        ) != 0
+    }
 }
 
 #[cfg(feature = "gpui-shell")]
-pub(crate) fn normal_position(origin: gpui::Point<gpui::Pixels>, scale: f32, display: Option<u64>) -> Option<(i32, i32)> {
+pub(crate) fn normal_position(
+    origin: gpui::Point<gpui::Pixels>,
+    scale: f32,
+    display: Option<u64>,
+) -> Option<(i32, i32)> {
     #[cfg(windows)]
     return display.map(|display| {
         let offset = placement_offset(display);
         desktop_position((origin.x.as_f32(), origin.y.as_f32()), scale, offset)
     });
     #[cfg(not(windows))]
-    { let _ = (origin, scale, display); None }
+    {
+        let _ = (origin, scale, display);
+        None
+    }
 }
 
 #[cfg(feature = "gpui-shell")]
@@ -248,7 +293,10 @@ pub(crate) fn place_configured_window(window: &gpui::Window, desired: (i32, i32)
         place_normal_window(handle.hwnd.get(), desired)
     }
     #[cfg(not(windows))]
-    { let _ = (window, desired); true }
+    {
+        let _ = (window, desired);
+        true
+    }
 }
 
 /// Convert the pinned Windows backend's client/workspace point to desktop pixels.
@@ -257,7 +305,11 @@ pub(crate) fn desktop_position(origin: (f32, f32), scale: f32, offset: (i32, i32
 }
 
 /// Convert desktop pixels to the client/workspace point accepted by GPUI placement.
-pub(crate) fn workspace_position(position: (i32, i32), scale: f32, offset: (i32, i32)) -> (f32, f32) {
+pub(crate) fn workspace_position(
+    position: (i32, i32),
+    scale: f32,
+    offset: (i32, i32),
+) -> (f32, f32) {
     ((position.0 - offset.0) as f32 / scale, (position.1 - offset.1) as f32 / scale)
 }
 
@@ -279,9 +331,14 @@ mod geometry_tests {
 #[cfg(all(test, windows, feature = "gpui-shell"))]
 mod native_geometry_tests {
     use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetClientRect, GetWindowRect, GetWindowPlacement, SetWindowPlacement, WINDOWPLACEMENT, WS_OVERLAPPEDWINDOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, GetClientRect, GetWindowPlacement, GetWindowRect,
+        SetWindowPlacement, WINDOWPLACEMENT, WS_OVERLAPPEDWINDOW,
+    };
 
     struct NativeWindow(isize);
     impl Drop for NativeWindow {
@@ -294,7 +351,22 @@ mod native_geometry_tests {
     #[test]
     fn physical_outer_position_and_backend_normal_placement_roundtrip() {
         // SAFETY: STATIC is a registered class; no pointer escapes the native call.
-        let hwnd = unsafe { CreateWindowExW(0, windows_core::w!("STATIC").as_ptr(), windows_core::w!("Pebrel geometry test").as_ptr(), WS_OVERLAPPEDWINDOW, 0, 0, 320, 240, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null()) };
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                windows_core::w!("STATIC").as_ptr(),
+                windows_core::w!("Pebrel geometry test").as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                320,
+                240,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            )
+        };
         assert!(!hwnd.is_null());
         let _window = NativeWindow(hwnd as isize);
         // SAFETY: plain native output structures admit zero initialization.
@@ -311,19 +383,28 @@ mod native_geometry_tests {
         assert_ne!(unsafe { GetClientRect(hwnd, &mut client) }, 0);
         assert_eq!((rect.left, rect.top), desired);
         let before = (rect.left, rect.top, rect.right, rect.bottom);
-        let border = ((rect.right - rect.left - client.right) / 2, (rect.bottom - rect.top - client.bottom) / 2);
+        let border = (
+            (rect.right - rect.left - client.right) / 2,
+            (rect.bottom - rect.top - client.bottom) / 2,
+        );
         let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
         placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
         assert_ne!(unsafe { GetWindowPlacement(hwnd, &mut placement) }, 0);
         let scale = super::display_scale(monitor as u64).unwrap();
         let native = placement.rcNormalPosition;
-        let logical = ((native.left + border.0) as f32 / scale, (native.top + border.1) as f32 / scale);
+        let logical =
+            ((native.left + border.0) as f32 / scale, (native.top + border.1) as f32 / scale);
         let offset = super::placement_offset(monitor as u64);
         let saved = super::desktop_position(logical, scale, offset);
         let restored = super::workspace_position(saved, scale, offset);
         let x = (restored.0 * scale).round() as i32 - border.0;
         let y = (restored.1 * scale).round() as i32 - border.1;
-        placement.rcNormalPosition = RECT { left: x, top: y, right: x + native.right - native.left, bottom: y + native.bottom - native.top };
+        placement.rcNormalPosition = RECT {
+            left: x,
+            top: y,
+            right: x + native.right - native.left,
+            bottom: y + native.bottom - native.top,
+        };
         assert_ne!(unsafe { SetWindowPlacement(hwnd, &placement) }, 0);
         assert_ne!(unsafe { GetWindowRect(hwnd, &mut rect) }, 0);
         assert_eq!((rect.left, rect.top, rect.right, rect.bottom), before);

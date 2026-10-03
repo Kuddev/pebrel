@@ -136,7 +136,8 @@ fn ordinary_window_geometry_is_in_the_durable_snapshot(cx: &mut TestAppContext) 
 fn ordinary_window_geometry_survives_closing_the_last_empty_window(cx: &mut TestAppContext) {
     initialize_test(cx);
     cx.update(|cx| {
-        cx.global_mut::<WindowRegistry>().session_persistence = SessionPersistence::ordinary_for_test();
+        cx.global_mut::<WindowRegistry>().session_persistence =
+            SessionPersistence::ordinary_for_test();
         let (id, _) = open_test_window(cx, 0);
         let entry = entry_by_id(id, cx).unwrap();
         let expected = entry

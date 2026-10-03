@@ -54,7 +54,8 @@ pub(super) fn preferred_size(cx: &App, sidebar_width: f32) -> Option<Size<Pixels
             TerminalView::startup_cell_metrics_at_scale(scale, cx),
             crate::gpui_shell::config::startup_grid(cx),
             sidebar_width,
-            cx.primary_display().map(|display| default_display_limit(display.visible_bounds().size)),
+            cx.primary_display()
+                .map(|display| default_display_limit(display.visible_bounds().size)),
         ),
         cx,
     ))
