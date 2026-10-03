@@ -68,12 +68,20 @@ pub(super) fn inspect(
         let mut fields = content.split_whitespace();
         let first = fields.next().expect("nonempty record");
         let hosts = if first.starts_with('@') {
-            fields.next().ok_or_else(|| denied("Missing marked host patterns"))?
+            let Some(hosts) = fields.next() else {
+                replacement.push_str(line);
+                continue;
+            };
+            hosts
         } else {
             first
         };
-        let patterns: HostPatterns =
-            hosts.parse().map_err(|_| denied("Cannot safely parse host patterns"))?;
+        let Ok(patterns) = hosts.parse::<HostPatterns>() else {
+            // An invalid pattern cannot establish trust for this endpoint.
+            // Preserve it without interpreting its unrelated key material.
+            replacement.push_str(line);
+            continue;
+        };
         if !matches(&patterns, &endpoint) {
             replacement.push_str(line);
             continue;

@@ -43,8 +43,8 @@ replacement on Unix and DACL-preserving replacement on Windows. Reject symlinks 
 ## Consequences
 
 Canceled, unattended and unavailable UI paths cannot update trust. Pattern and
-marked records require external known_hosts administration. Invalid input fails
-closed. Independent OpenSSH writers do not share Pebrel's lock: the comparison
+marked records require external known_hosts administration. Invalid matching keys
+fail closed; records without a valid matching pattern remain uninterpreted. Independent OpenSSH writers do not share Pebrel's lock: the comparison
 is not a cross-tool atomic compare-and-swap. Windows uses `ReplaceFileW` without ACL/merge-error bypass flags, preserving
 the target DACL. An explicit backup protects failure cases that move the original
 file; recovery never overwrites a concurrent destination and retains the backup

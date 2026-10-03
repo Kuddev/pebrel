@@ -372,7 +372,7 @@ fn trusted_host_is_not_blocked_by_unrelated_invalid_keys_or_unknown_algorithms()
     let path = directory.path().join("known_hosts");
     let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
     let source = format!(
-        "fixture.example {}\nother.example ssh-ed25519 NOT_BASE64\nunknown.example ssh-future-format opaque\n",
+        "fixture.example {}\nother.example ssh-ed25519 NOT_BASE64\nunknown.example ssh-future-format opaque\n|1|BAD|BAD ssh-ed25519 NOT_BASE64\n@revoked\n",
         key.public_key().to_openssh().unwrap()
     );
     std::fs::write(&path, &source).unwrap();
