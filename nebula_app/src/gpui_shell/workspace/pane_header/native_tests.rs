@@ -113,6 +113,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
     window.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
     workspace.read_with(&window, |workspace, _| {
         assert!(workspace.pane_drag.as_ref().is_some_and(|drag| drag.active));
+        assert_eq!(workspace.pane_drag.as_ref().unwrap().target, Some(ids[2]));
     });
     window.simulate_keystrokes("ctrl-tab");
     workspace.read_with(&window, |workspace, _| {

@@ -24,11 +24,18 @@ forwarding its initial movement through the workspace's hover listener therefore
 leaves the gesture pending. Window capture follows the existing terminal scrollbar
 and reader selection patterns and preserves header occlusion.
 
+Run [37116747192](https://github.com/Kuddev/pebrel/actions/runs/37116747192)
+then passed activation and cancellation, but still left the original leaf order
+on release. Tab docking reserves an outer rim (14px in this viewport) for whole-tree insertion and
+returns no leaf there. A 24px pane header's center lies 12px below the upper edge,
+so using the tab-docking decision for pane exchange discards a valid header target.
+
 ## Decision
 
 Exchange source and destination leaf IDs on release inside another pane. Preserve
 all split directions, ratios, pane metadata, broadcast state and source focus.
-Reuse the existing grip and dock hit geometry; terminal text and header buttons
+Reuse the existing grip and visible leaf geometry; pane exchange does not apply
+tab docking's whole-tree outer rim. Terminal text and header buttons
 remain outside the gesture's initiation area. A window capture listener owns
 movement and release after a real grip press, without depending on the workspace
 hitbox being hovered. Escape cancels before input actions.

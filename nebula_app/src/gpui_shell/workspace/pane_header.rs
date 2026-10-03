@@ -605,7 +605,7 @@ impl NebulaWorkspace {
             return;
         }
         let outside = self.active_terminal_area().is_some_and(|area| !area.contains(x, y));
-        let target = self.dock_nav_at(x, y).and_then(|target| target.pane).filter(|id| *id != pane);
+        let target = self.pane_at(x, y).filter(|id| *id != pane);
         let Some(drag) = self.pane_drag.as_mut() else { return };
         drag.x = x;
         drag.y = y;
@@ -709,7 +709,7 @@ impl NebulaWorkspace {
         let (x, y) = (f32::from(position.x), f32::from(position.y));
         if self.active_terminal_area().is_some_and(|area| !area.contains(x, y)) {
             self.detach_pane_to_new_tab(self.active, drag.pane, window, cx);
-        } else if let Some(target) = self.dock_nav_at(x, y).and_then(|target| target.pane)
+        } else if let Some(target) = self.pane_at(x, y)
             && let Some(WorkspaceTab::Terminal { tree, .. }) = self.tabs.get_mut(self.active)
             && tree.swap_leaves(drag.pane, target)
         {
