@@ -4,7 +4,7 @@ use std::os::windows::ffi::OsStrExt as _;
 use std::path::Path;
 use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
 
-pub(super) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     let backup = tempfile::Builder::new()
         .prefix(".known-hosts-backup-")
         .tempfile_in(destination.parent().ok_or_else(|| io::Error::other("No trust directory"))?)?
@@ -50,7 +50,6 @@ pub(super) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use russh::keys::ssh_key::{Algorithm, PrivateKey};
 
     fn acl(path: &Path, setup: bool) -> String {
         let script = if setup {
@@ -71,33 +70,17 @@ mod tests {
     fn changed_trust_file_keeps_its_stricter_windows_dacl() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("known_hosts");
-        let old = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
-        let new = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
-        std::fs::write(
-            &path,
-            format!("fixture.example {}\n", old.public_key().to_openssh().unwrap()),
-        )
-        .unwrap();
+        let replacement = directory.path().join("replacement");
+        std::fs::write(&path, "original trusted key\n").unwrap();
+        std::fs::write(&replacement, "new trusted key\n").unwrap();
         let before = acl(&path, true);
-        super::super::inspect(&path, "fixture.example", 22, new.public_key())
-            .unwrap()
-            .unwrap()
-            .save(&path)
-            .unwrap();
+        replace(&replacement, &path).unwrap();
         assert_eq!(
             acl(&path, false),
             before,
             "Parent's broader inherited DACL must not replace target DACL"
         );
-        assert!(
-            russh::keys::known_hosts::check_known_hosts_path(
-                "fixture.example",
-                22,
-                new.public_key(),
-                &path
-            )
-            .unwrap()
-        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new trusted key\n");
     }
 
     #[test]

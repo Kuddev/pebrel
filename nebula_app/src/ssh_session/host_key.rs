@@ -8,9 +8,6 @@ use russh::keys::ssh_key::{
     known_hosts::{Entry, HostPatterns},
 };
 
-#[cfg(windows)]
-mod windows;
-
 pub(super) struct Change {
     snapshot: Vec<u8>,
     replacement: Vec<u8>,
@@ -173,10 +170,7 @@ impl Change {
             ));
         }
         let temporary = temporary.into_temp_path();
-        #[cfg(windows)]
-        return windows::replace(&temporary, path);
-        #[cfg(not(windows))]
-        crate::atomic_file::replace(&temporary, path)
+        crate::platform::trust_file::replace(&temporary, path)
     }
 }
 
