@@ -11,6 +11,9 @@ use gpui::{Modifiers, TestAppContext, VisualTestContext, size};
 use gpui_component::Root;
 use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
+#[path = "theme_background_tests.rs"]
+mod background_tests;
+
 const TEST_SETTINGS: &str =
     "theme=Nord\nfollow_system_theme=0\napp_icon=graphite-violet\nfont_size=15\n";
 
@@ -805,6 +808,7 @@ fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_re
 
     open_theme_editor(&mut window);
     edit_input("theme-editor-name", &saved_name, &mut window);
+    reveal_editor_control("theme-editor-advanced-toggle", &mut window);
     click("theme-editor-advanced-toggle", &mut window);
     assert!(window.debug_bounds("theme-editor-preview-cursor").is_some());
 
