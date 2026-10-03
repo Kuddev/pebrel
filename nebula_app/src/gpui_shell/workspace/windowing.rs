@@ -26,10 +26,9 @@ use std::time::Duration;
 use super::DockTarget;
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, IntoElement, Render,
-    Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowOptions, div, point, px,
-    size,
+    Styled as _, Subscription, WeakEntity, Window, div, px,
 };
-use gpui_component::{Root, TitleBar};
+use gpui_component::Root;
 use nebula_split::SplitTree;
 use serde_json::json;
 
@@ -419,52 +418,6 @@ pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App)
     });
 }
 
-fn workspace_window_options(
-    cx: &mut App,
-    focus: bool,
-    role: WindowRole,
-    sidebar_width: f32,
-    id: u64,
-) -> WindowOptions {
-    match role {
-        WindowRole::Regular => startup_geometry::regular_options(id, focus, sidebar_width, cx),
-        WindowRole::QuickTerminal => {
-            let (display_id, visible) = quick_terminal_anchor_display(cx)
-                .map(|(id, bounds)| (Some(id), bounds))
-                .or_else(|| {
-                    cx.primary_display().map(|display| (Some(display.id()), display.bounds()))
-                })
-                .unwrap_or_else(|| (None, Bounds::centered(None, size(px(1080.0), px(720.0)), cx)));
-            let remembered = nebula_settings::RuntimeSettings::load()
-                .quick_terminal_size
-                .map(|size| size.fit(visible.size.width.into(), visible.size.height.into()));
-            let width = remembered.map_or(visible.size.width, |size| px(size.width));
-            let height = remembered.map_or_else(
-                || px((f32::from(visible.size.height) * 0.4).round().max(1.0)),
-                |size| px(size.height),
-            );
-            let bounds = Bounds {
-                origin: point(
-                    visible.origin.x + (visible.size.width - width) * 0.5,
-                    if cfg!(windows) { visible.origin.y - height } else { visible.origin.y },
-                ),
-                size: size(width, height),
-            };
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                // 与旧壳一致：无系统标题栏，但保留 Nebula 自绘标题栏及三枚
-                // 窗口按钮。TitleBar options 负责 Windows 客户区命中测试。
-                titlebar: Some(TitleBar::title_bar_options()),
-                app_id: Some("pebrel-quick-terminal".to_owned()),
-                window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
-                focus: !cfg!(windows),
-                show: !cfg!(windows),
-                display_id,
-                ..Default::default()
-            }
-        },
-    }
-}
 
 fn allocate_window(cx: &mut App) -> (u64, crate::runtime_api::RuntimeHub) {
     let registry = cx.global_mut::<WindowRegistry>();
@@ -487,7 +440,8 @@ fn open_workspace_window(
         && matches!(startup, WorkspaceStartup::RestoreOrDefault)
         && crate::platform::startup::start_hidden(&runtime);
     startup_geometry::load_restore(runtime_window_id, &startup, role, cx);
-    let mut options = workspace_window_options(cx, focus, role, runtime.sidebar_width, runtime_window_id);
+    let mut options =
+        startup_geometry::options(cx, focus, role, runtime.sidebar_width, runtime_window_id);
     if start_hidden {
         options.show = false;
         options.focus = false;
@@ -501,7 +455,9 @@ fn open_workspace_window(
     let handle = cx.open_window(options, move |window, cx| {
         window.set_window_title(crate::brand::NAME);
         crate::platform::window_chrome::configure(window);
-        if role == WindowRole::Regular && !configured_position_pending { startup_geometry::apply_configured_position(window, cx); }
+        if role == WindowRole::Regular && !configured_position_pending {
+            startup_geometry::apply_configured_position(window, cx);
+        }
         *hwnd_out.borrow_mut() = native_hwnd(window).unwrap_or_default();
         #[cfg(windows)]
         crate::gpui_shell::set_native_window_icon(window);
@@ -592,8 +548,13 @@ fn open_runtime_window(
 }
 
 pub(crate) fn mark_active(runtime_window_id: u64, window: &Window, cx: &mut App) {
-    if let Some(entry) = cx.global_mut::<WindowRegistry>().entries.iter_mut().find(|entry| entry.runtime_window_id == runtime_window_id)
-        && std::mem::take(&mut entry.configured_position_pending) {
+    if let Some(entry) = cx
+        .global_mut::<WindowRegistry>()
+        .entries
+        .iter_mut()
+        .find(|entry| entry.runtime_window_id == runtime_window_id)
+        && std::mem::take(&mut entry.configured_position_pending)
+    {
         startup_geometry::apply_configured_position(window, cx);
     }
     let registry = cx.global_mut::<WindowRegistry>();
@@ -1434,7 +1395,10 @@ fn combined_session(
         } else {
             let Some(workspace) = entry.workspace.upgrade() else { continue };
             let mut session = workspace.read(cx).snapshot_session(cx);
-            session.window = entry.handle.update(cx, |_, window, cx| startup_geometry::capture_window(window, cx)).ok();
+            session.window = entry
+                .handle
+                .update(cx, |_, window, cx| startup_geometry::capture_window(window, cx))
+                .ok();
             session
         };
         sessions.push((active_handle == Some(entry.handle), session));
@@ -1557,7 +1521,11 @@ pub(crate) fn close_empty_workspace_window(
         let session = combined_session(None, cx);
         let reason =
             if session.is_some() { SaveReason::TabsClosed } else { SaveReason::WindowClose };
-        let session = session.unwrap_or_else(|| crate::session::Session::new(0, Vec::new()));
+        let session = session.unwrap_or_else(|| {
+            let mut session = crate::session::Session::new(0, Vec::new());
+            session.window = Some(startup_geometry::capture_window(window, cx));
+            session
+        });
         if let Err(error) =
             cx.global_mut::<WindowRegistry>().session_persistence.save(Some(session), reason)
         {

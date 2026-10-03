@@ -226,3 +226,52 @@ pub(crate) fn place_normal_window(hwnd: isize, desired: (i32, i32)) -> bool {
     // SAFETY: only the live window position changes; ownership and size are preserved.
     unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER) != 0 }
 }
+
+#[cfg(feature = "gpui-shell")]
+pub(crate) fn normal_position(origin: gpui::Point<gpui::Pixels>, scale: f32, display: Option<u64>) -> Option<(i32, i32)> {
+    #[cfg(windows)]
+    return display.map(|display| {
+        let offset = placement_offset(display);
+        desktop_position((origin.x.as_f32(), origin.y.as_f32()), scale, offset)
+    });
+    #[cfg(not(windows))]
+    { let _ = (origin, scale, display); None }
+}
+
+#[cfg(feature = "gpui-shell")]
+pub(crate) fn place_configured_window(window: &gpui::Window, desired: (i32, i32)) -> bool {
+    #[cfg(windows)]
+    {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(handle) = HasWindowHandle::window_handle(window) else { return false };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else { return false };
+        place_normal_window(handle.hwnd.get(), desired)
+    }
+    #[cfg(not(windows))]
+    { let _ = (window, desired); true }
+}
+
+/// Convert the pinned Windows backend's client/workspace point to desktop pixels.
+pub(crate) fn desktop_position(origin: (f32, f32), scale: f32, offset: (i32, i32)) -> (i32, i32) {
+    ((origin.0 * scale).round() as i32 + offset.0, (origin.1 * scale).round() as i32 + offset.1)
+}
+
+/// Convert desktop pixels to the client/workspace point accepted by GPUI placement.
+pub(crate) fn workspace_position(position: (i32, i32), scale: f32, offset: (i32, i32)) -> (f32, f32) {
+    ((position.0 - offset.0) as f32 / scale, (position.1 - offset.1) as f32 / scale)
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    #[test]
+    fn windows_workspace_desktop_roundtrip_keeps_top_and_left_taskbars_at_fractional_dpi() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for offset in [(0, 0), (0, 60), (80, 0)] {
+                for position in [(-1700, 120), (197, 102), (0, 0)] {
+                    let origin = super::workspace_position(position, scale, offset);
+                    assert_eq!(super::desktop_position(origin, scale, offset), position);
+                }
+            }
+        }
+    }
+}

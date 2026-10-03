@@ -450,7 +450,8 @@ mod tests {
     #[test]
     fn window_state_round_trip_preserves_logical_size_and_maximize() {
         let mut session = Session::new(0, Vec::new());
-        session.window = Some(WindowState { width: 1280, height: 720, maximized: true, ..Default::default() });
+        session.window =
+            Some(WindowState { width: 1280, height: 720, maximized: true, ..Default::default() });
         let json = serde_json::to_string(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.window, session.window);

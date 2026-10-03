@@ -1,6 +1,6 @@
 use super::*;
 use crate::gpui_shell::terminal::view::TerminalLaunch;
-use gpui::TestAppContext;
+use gpui::{TestAppContext, size};
 
 fn initialize_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -117,14 +117,36 @@ fn ordinary_window_geometry_is_in_the_durable_snapshot(cx: &mut TestAppContext) 
     cx.update(|cx| {
         let (id, _) = open_test_window(cx, 1);
         let entry = entry_by_id(id, cx).unwrap();
-        let expected = entry.handle.update(cx, |_, window, _| {
-            window.resize(size(px(1300.0), px(800.0)));
-            window.window_bounds().get_bounds().size
-        }).unwrap();
+        let expected = entry
+            .handle
+            .update(cx, |_, window, _| {
+                window.resize(size(px(1300.0), px(800.0)));
+                window.window_bounds().get_bounds().size
+            })
+            .unwrap();
         let saved = combined_session(None, cx).unwrap().into_update_windows().unwrap();
         let geometry = saved[0].window.expect("ordinary window geometry must survive process exit");
         assert_eq!(geometry.width, expected.width.as_f32().round() as u32);
         assert_eq!(geometry.height, expected.height.as_f32().round() as u32);
         assert!(!geometry.maximized);
+    });
+}
+
+#[gpui::test]
+fn ordinary_window_geometry_survives_closing_the_last_empty_window(cx: &mut TestAppContext) {
+    initialize_test(cx);
+    cx.update(|cx| {
+        let (id, _) = open_test_window(cx, 0);
+        let entry = entry_by_id(id, cx).unwrap();
+        let expected = entry.handle.update(cx, |_, window, cx| {
+            let expected = window.window_bounds().get_bounds().size;
+            close_empty_workspace_window(id, window, cx);
+            expected
+        }).unwrap();
+        let saved = cx.global::<WindowRegistry>().session_persistence.update_windows().unwrap();
+        assert!(saved[0].tabs.is_empty(), "closing the last tab must not resurrect a shell");
+        let geometry = saved[0].window.expect("last empty window must preserve its native geometry");
+        assert_eq!(geometry.width, expected.width.as_f32().round() as u32);
+        assert_eq!(geometry.height, expected.height.as_f32().round() as u32);
     });
 }

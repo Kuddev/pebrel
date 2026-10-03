@@ -510,7 +510,11 @@ impl StartupWindow {
 
     /// `dimensions()` 自带「行列必须同时非零」的旧壳合同。
     fn from_config(config: &crate::config::UiConfig) -> Self {
-        Self { dimensions: config.window.dimensions(), position: config.window.position, restored: None }
+        Self {
+            dimensions: config.window.dimensions(),
+            position: config.window.position,
+            restored: None,
+        }
     }
 }
 

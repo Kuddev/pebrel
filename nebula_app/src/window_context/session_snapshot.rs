@@ -36,7 +36,10 @@ impl WindowContext {
             let logical: LogicalSize<u32> =
                 self.display.window.inner_size().to_logical(self.display.window.scale_factor);
             session::WindowState {
-                width: logical.width, height: logical.height, maximized, ..Default::default()
+                width: logical.width,
+                height: logical.height,
+                maximized,
+                ..Default::default()
             }
         });
         session

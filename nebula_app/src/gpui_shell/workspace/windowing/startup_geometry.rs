@@ -78,6 +78,54 @@ pub(in crate::gpui_shell::workspace) fn restored_size(id: u64, startup: &Workspa
         && cx.try_global::<StartupWindow>().is_some_and(|config| config.dimensions.is_none() && config.restored.is_some())
 }
 
+pub(super) fn options(
+    cx: &mut App,
+    focus: bool,
+    role: WindowRole,
+    sidebar_width: f32,
+    id: u64,
+) -> WindowOptions {
+    match role {
+        WindowRole::Regular => regular_options(id, focus, sidebar_width, cx),
+        WindowRole::QuickTerminal => {
+            let (display_id, visible) = super::quick_terminal_anchor_display(cx)
+                .map(|(id, bounds)| (Some(id), bounds))
+                .or_else(|| {
+                    cx.primary_display().map(|display| (Some(display.id()), display.bounds()))
+                })
+                .unwrap_or_else(|| (None, Bounds::centered(None, size(px(1080.0), px(720.0)), cx)));
+            let remembered = nebula_settings::RuntimeSettings::load()
+                .quick_terminal_size
+                .map(|size| size.fit(visible.size.width.into(), visible.size.height.into()));
+            let width = remembered.map_or(visible.size.width, |size| px(size.width));
+            let height = remembered.map_or_else(
+                || px((f32::from(visible.size.height) * 0.4).round().max(1.0)),
+                |size| px(size.height),
+            );
+            let bounds = Bounds {
+                origin: point(
+                    visible.origin.x + (visible.size.width - width) * 0.5,
+                    if cfg!(windows) { visible.origin.y - height } else { visible.origin.y },
+                ),
+                size: size(width, height),
+            };
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // 与旧壳一致：无系统标题栏，但保留 Nebula 自绘标题栏及三枚
+                // 窗口按钮。TitleBar options 负责 Windows 客户区命中测试。
+                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                app_id: Some("pebrel-quick-terminal".to_owned()),
+                window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
+                focus: !cfg!(windows),
+                show: !cfg!(windows),
+                display_id,
+                ..Default::default()
+            }
+        },
+    }
+}
+
+
 pub(super) fn regular_options(id: u64, focus: bool, sidebar_width: f32, cx: &mut App) -> WindowOptions {
     let config = cx.try_global::<StartupWindow>();
     let restored = (id == 1).then(|| config.and_then(|config| config.restored)).flatten();
@@ -102,7 +150,10 @@ pub(super) fn regular_options(id: u64, focus: bool, sidebar_width: f32, cx: &mut
     let mut bounds = fit_bounds(preferred, origin, visible);
     if let Some(scale) = scale {
         let offset = crate::platform::startup::placement_offset(u64::from(display_id.unwrap()));
-        bounds.origin -= point(px(offset.0 as f32 / scale), px(offset.1 as f32 / scale));
+        let desktop = (bounds.origin.x.as_f32(), bounds.origin.y.as_f32());
+        let origin = crate::platform::startup::workspace_position(
+            ((desktop.0 * scale).round() as i32, (desktop.1 * scale).round() as i32), scale, offset);
+        bounds.origin = point(px(origin.0), px(origin.1));
     }
     let maximized = !configured_dimensions && configured.is_none() && restored.is_some_and(|window| window.maximized);
     crate::platform::window_chrome::configure_options(WindowOptions {
@@ -121,14 +172,7 @@ pub(super) fn capture_window(window: &Window, cx: &App) -> crate::session::Windo
     let normal = window.window_bounds();
     let bounds = normal.get_bounds();
     let display = window.display(cx);
-    #[cfg(windows)]
-    let position = display.as_ref().map(|display| {
-        let offset = crate::platform::startup::placement_offset(u64::from(display.id()));
-        ((bounds.origin.x.as_f32() * window.scale_factor()).round() as i32 + offset.0,
-         (bounds.origin.y.as_f32() * window.scale_factor()).round() as i32 + offset.1)
-    });
-    #[cfg(not(windows))]
-    let position = None;
+    let position = crate::platform::startup::normal_position(bounds.origin, window.scale_factor(), display.as_ref().map(|display| u64::from(display.id())));
     crate::session::WindowState {
         width: bounds.size.width.as_f32().round().max(1.0) as u32,
         height: bounds.size.height.as_f32().round().max(1.0) as u32,
@@ -139,14 +183,10 @@ pub(super) fn capture_window(window: &Window, cx: &App) -> crate::session::Windo
 }
 
 pub(super) fn apply_configured_position(window: &Window, cx: &App) {
-    #[cfg(windows)]
     if let Some(position) = cx.try_global::<StartupWindow>().and_then(|config| config.position)
-        && let Some(hwnd) = super::native_hwnd(window)
-        && !crate::platform::startup::place_normal_window(hwnd, (position.x, position.y)) {
+        && !crate::platform::startup::place_configured_window(window, (position.x, position.y)) {
         log::warn!("Could not apply configured window position");
     }
-    #[cfg(not(windows))]
-    let _ = (window, cx);
 }
 
 fn same_device_size(actual: Size<Pixels>, requested: Size<Pixels>, scale: f32) -> bool {
