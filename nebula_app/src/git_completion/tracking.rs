@@ -76,6 +76,35 @@ impl Config {
         config
     }
 
+    pub fn remote_branches(
+        &self,
+        references: &[Reference],
+        cancelled: &dyn Fn() -> bool,
+    ) -> BTreeMap<String, Vec<String>> {
+        let mut names = BTreeMap::new();
+        for (remote_name, remote) in &self.remotes {
+            let mut branches = BTreeSet::new();
+            for reference in references.iter().filter(|r| r.commit && !r.symbolic) {
+                for (source, destination) in &remote.fetch {
+                    if cancelled() {
+                        return BTreeMap::new();
+                    }
+                    let Some(name) = substitute(destination, &reference.full_name, source) else {
+                        continue;
+                    };
+                    if remote.excluded.iter().any(|pattern| captures(pattern, &name).is_some()) {
+                        continue;
+                    }
+                    if let Some(branch) = name.strip_prefix("refs/heads/") {
+                        branches.insert(branch.to_owned());
+                    }
+                }
+            }
+            names.insert(remote_name.clone(), branches.into_iter().collect());
+        }
+        names
+    }
+
     pub fn guesses(&self, references: &[Reference], cancelled: &dyn Fn() -> bool) -> Vec<String> {
         let by_name: HashMap<_, _> = references.iter().map(|r| (r.full_name.as_str(), r)).collect();
         let mut shadowed = HashSet::new();

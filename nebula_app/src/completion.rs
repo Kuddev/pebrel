@@ -14,6 +14,7 @@ use pebrel_completions::command_context::ShellSyntax;
 use pebrel_completions::semantic::{Context as SemanticContext, Source};
 
 mod connections;
+pub(crate) mod metadata;
 pub(crate) mod paths;
 mod project_scripts;
 
@@ -71,6 +72,32 @@ impl Session {
         style: CompletionStyle,
         execution: Option<&PaneExecContext>,
     ) -> Request {
+        let cursor = line.len();
+        self.request_at(cwd, env, line, cursor, style, execution)
+    }
+
+    pub(crate) fn request_at(
+        &self,
+        cwd: String,
+        env: SuggestEnv,
+        line: String,
+        cursor: usize,
+        style: CompletionStyle,
+        execution: Option<&PaneExecContext>,
+    ) -> Request {
+        self.request_with_syntax(cwd, env, line, cursor, style, execution, None)
+    }
+
+    pub(crate) fn request_with_syntax(
+        &self,
+        cwd: String,
+        env: SuggestEnv,
+        line: String,
+        cursor: usize,
+        style: CompletionStyle,
+        execution: Option<&PaneExecContext>,
+        syntax_override: Option<ShellSyntax>,
+    ) -> Request {
         let env = if env.is_this_machine()
             && let Some(distro) = execution.and_then(PaneExecContext::wsl_distribution)
         {
@@ -82,50 +109,57 @@ impl Session {
         let local =
             env.is_this_machine() && execution.is_none_or(|e| e.wsl_distribution().is_none());
         // 方言是输入事实；远端/嵌套 shell 未证明方言时只接受通用字面量。
-        let syntax = if local {
-            execution
-                .and_then(PaneExecContext::shell_program)
-                .map(ShellSyntax::for_program)
-                .unwrap_or_else(|| {
-                    ShellSyntax::for_program(&crate::platform::shell::default_shell_id())
-                })
-        } else {
-            ShellSyntax::Literal
-        };
-        let semantic = SemanticContext::parse(&line, line.len(), syntax).filter(|context| {
+        let syntax = syntax_override.unwrap_or_else(|| {
+            if local {
+                execution
+                    .and_then(PaneExecContext::shell_program)
+                    .map(ShellSyntax::for_program)
+                    .unwrap_or_else(|| {
+                        ShellSyntax::for_program(&crate::platform::shell::default_shell_id())
+                    })
+            } else {
+                ShellSyntax::Literal
+            }
+        });
+        let semantic = SemanticContext::parse(&line, cursor, syntax).filter(|context| {
             // 无目录通道的嵌套 shell 仍能召回本会话历史；空路径来源不应把历史挡住。
-            // Grammar is shared; dynamic source admission is added with its I/O owner.
-            let deferred = matches!(
-                context.source,
-                Source::Remotes
-                    | Source::RemoteBranches
-                    | Source::PushRefs { .. }
-                    | Source::Workspaces
-            ) || matches!(context.source, Source::ProjectScripts)
-                && (context.project.all || !context.project.selectors.is_empty());
-            !deferred
+            !matches!(context.source, Source::Workspaces)
+                && !(matches!(context.source, Source::ProjectScripts)
+                    && (context.project.all || !context.project.selectors.is_empty()))
                 && (!matches!(context.source, Source::Paths { .. })
                     || local
                     || env.can_query_remote_paths())
         });
         // 只有需要本机 Git I/O 的请求才复制启动环境。
-        let git = if local
-            && semantic.as_ref().is_some_and(|c| {
-                matches!(
-                    c.source,
-                    Source::Branches { .. }
-                        | Source::Revisions { .. }
-                        | Source::RevisionsAndPaths { .. }
-                        | Source::Tracking { .. }
-                )
-            }) {
-            execution.cloned().map(|execution| (self.git.clone(), execution))
+        let git = if semantic.as_ref().is_some_and(|c| {
+            matches!(
+                c.source,
+                Source::Remotes
+                    | Source::RemoteBranches
+                    | Source::PushRefs { .. }
+                    | Source::Branches { .. }
+                    | Source::Revisions { .. }
+                    | Source::RevisionsAndPaths { .. }
+                    | Source::Tracking { .. }
+            )
+        }) {
+            metadata::Execution::from_scope(&env, execution)
+                .map(|execution| (self.git.clone(), execution))
         } else {
             None
         };
-        let scripts = local.then(|| self.scripts.clone());
+        let scripts = if local
+            && semantic
+                .as_ref()
+                .is_some_and(|c| matches!(c.source, Source::ProjectScripts | Source::Workspaces))
+        {
+            metadata::Execution::from_scope(&env, execution)
+                .map(|execution| (self.scripts.clone(), execution))
+        } else {
+            None
+        };
         let connections = local.then(|| self.connections.clone());
-        Request { cwd, env, line, style, git, semantic, scripts, connections, syntax }
+        Request { cwd, env, line, cursor, style, git, semantic, scripts, connections, syntax }
     }
 }
 
@@ -134,48 +168,62 @@ pub(crate) struct Request {
     cwd: String,
     env: SuggestEnv,
     line: String,
+    cursor: usize,
     style: CompletionStyle,
-    git: Option<(Arc<crate::git_completion::Cache>, PaneExecContext)>,
+    git: Option<(Arc<crate::git_completion::Cache>, metadata::Execution)>,
     semantic: Option<SemanticContext>,
-    scripts: Option<Arc<project_scripts::Cache>>,
+    scripts: Option<(Arc<project_scripts::Cache>, metadata::Execution)>,
     connections: Option<Arc<connections::Cache>>,
     syntax: ShellSyntax,
 }
 
 impl Request {
-    pub(crate) fn calculate(self, cancellation: &Cancellation) -> Candidates {
-        if cancellation.is_cancelled() {
+    pub(crate) fn calculate(mut self, cancellation: &Cancellation) -> Candidates {
+        if cancellation.is_cancelled() || self.semantic.is_none() && self.cursor != self.line.len()
+        {
             return Candidates::default();
         }
-        let semantic = self.semantic.as_ref().map(|context| match context.source {
-            Source::Words(_) | Source::Options => context.static_candidates(),
-            Source::Branches { .. }
+        if self.git.as_mut().is_some_and(|(_, execution)| !execution.prepare()) {
+            self.git = None;
+        }
+        if self.scripts.as_mut().is_some_and(|(_, execution)| !execution.prepare()) {
+            self.scripts = None;
+        }
+        let semantic = self.semantic.as_ref().and_then(|context| match context.source {
+            Source::Words(_) | Source::Options => Some(context.static_candidates()),
+            Source::Remotes
+            | Source::RemoteBranches
+            | Source::PushRefs { .. }
+            | Source::Branches { .. }
             | Source::Revisions { .. }
             | Source::RevisionsAndPaths { .. }
-            | Source::Tracking { .. } => {
-                self.git.as_ref().map_or_else(Vec::new, |(cache, execution)| {
-                    crate::git_completion::complete(cache, execution, &self.cwd, context, &|| {
-                        cancellation.is_cancelled()
-                    })
-                })
-            },
-            Source::ProjectScripts => self.scripts.as_ref().map_or_else(Vec::new, |cache| {
-                cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
+            | Source::Tracking { .. } => self.git.as_ref().and_then(|(cache, execution)| {
+                crate::git_completion::complete_available(
+                    cache,
+                    execution,
+                    &self.cwd,
+                    context,
+                    &|| cancellation.is_cancelled(),
+                )
+                .or_else(|| execution.is_host().then(Vec::new))
             }),
-            Source::SshHosts { .. } | Source::WslDistributions => {
-                self.connections.as_ref().map_or_else(Vec::new, |cache| {
+            Source::ProjectScripts | Source::Workspaces => {
+                self.scripts.as_ref().map(|(cache, _)| {
                     cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
                 })
             },
-            Source::None
-            | Source::Paths { .. }
-            | Source::Remotes
-            | Source::RemoteBranches
-            | Source::PushRefs { .. }
-            | Source::Workspaces => Vec::new(),
+            Source::SshHosts { .. } | Source::WslDistributions => {
+                Some(self.connections.as_ref().map_or_else(Vec::new, |cache| {
+                    cache.complete(&self.cwd, context, &|| cancellation.is_cancelled())
+                }))
+            },
+            Source::None | Source::Paths { .. } => Some(Vec::new()),
         });
         if cancellation.is_cancelled() {
             return Candidates::default();
+        }
+        if self.semantic.is_some() && semantic.is_none() {
+            return self.scoped_history(cancellation);
         }
         if let Some(candidates) = semantic {
             let mut candidates: Vec<pebrel_completions::SemanticSuggestion> =
@@ -219,8 +267,12 @@ impl Request {
             if cancellation.is_cancelled() {
                 return Candidates::default();
             }
-            let mut result =
-                suggest_engine::semantic_candidates(&self.line, self.style, candidates);
+            let mut result = suggest_engine::semantic_candidates_at(
+                &self.line,
+                self.cursor,
+                self.style,
+                candidates,
+            );
             result.pending_remote_dir = pending;
             return result;
         }
@@ -237,6 +289,44 @@ impl Request {
             self.syntax,
             &|| cancellation.is_cancelled(),
         )
+    }
+
+    fn scoped_history(&self, cancellation: &Cancellation) -> Candidates {
+        if self.cursor != self.line.len() {
+            return Candidates::default();
+        }
+        let scope = self.env.history_scope();
+        let history = shared().history.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let commands = if self.style == CompletionStyle::Popup {
+            history
+                .search_with_cancel(&scope, &self.line, 8, &|| cancellation.is_cancelled())
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        } else {
+            history
+                .hint_with_cancel(&scope, &self.line, &|| cancellation.is_cancelled())
+                .map(|suffix| format!("{}{suffix}", self.line))
+                .into_iter()
+                .collect()
+        };
+        drop(history);
+        if cancellation.is_cancelled() {
+            return Candidates::default();
+        }
+        let candidates = commands
+            .into_iter()
+            .filter(|line| line.len() <= 4096 && !line.chars().any(char::is_control))
+            .map(|value| {
+                pebrel_completions::Suggestion {
+                    value,
+                    span: pebrel_completions::Span::new(0, self.line.len()),
+                    ..Default::default()
+                }
+                .into()
+            })
+            .collect();
+        suggest_engine::semantic_candidates_at(&self.line, self.cursor, self.style, candidates)
     }
 }
 
@@ -273,6 +363,114 @@ pub(crate) fn history_hint_for_test(scope: &HistoryScope, prefix: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_foreign_metadata_keeps_scoped_history_without_host_fallback() {
+        let session = Session::default();
+        for env in [
+            SuggestEnv::Shell { scope: HistoryScope::Ssh("completion-nested-history-qa".into()) },
+            SuggestEnv::Ssh { destination: "completion-unavailable-history-qa.invalid".into() },
+        ] {
+            record_command(&env.history_scope(), "git switch guest-history-only", "/guest");
+            record_command(&env.history_scope(), "npm run guest-history-task", "/guest");
+            for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+            {
+                for (line, suffix) in
+                    [("git switch guest-h", "istory-only"), ("npm run guest-h", "istory-task")]
+                {
+                    let result = session
+                        .request("/guest".into(), env.clone(), line.into(), style, None)
+                        .calculate(&Cancellation::default());
+                    if style == CompletionStyle::Popup {
+                        assert_eq!(result.completion_items[0].insert, suffix);
+                    } else {
+                        assert_eq!(result.suggestion, suffix);
+                    }
+                    assert!(result.pending_remote_dir.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn network_completion_reads_configured_remotes_and_refspecs_without_network_access() {
+        use crate::git_completion::tests::{git, repository};
+        let repository = repository();
+        git(
+            repository.path(),
+            &["remote", "add", "origin", "https://example.invalid/not-contacted"],
+        );
+        git(
+            repository.path(),
+            &["config", "remote.push-only.url", "https://example.invalid/not-contacted"],
+        );
+        git(repository.path(), &["update-ref", "refs/remotes/origin/topic", "HEAD"]);
+        git(repository.path(), &["update-ref", "refs/remotes/origin/excluded", "HEAD"]);
+        git(repository.path(), &["config", "--add", "remote.origin.fetch", "^refs/heads/excluded"]);
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            working_directory: Some(repository.path().to_owned()),
+            shell: Some(nebula_terminal::tty::Shell::new("sh".into(), vec![])),
+            ..Default::default()
+        });
+        let session = Session::default();
+        let edits = |line: &str| {
+            session
+                .request(
+                    repository.path().to_str().unwrap().into(),
+                    SuggestEnv::Local,
+                    line.into(),
+                    CompletionStyle::Popup,
+                    Some(&execution),
+                )
+                .calculate(&Cancellation::default())
+                .completion_items
+        };
+        assert_eq!(edits("git push pu")[0].insert, "sh-only");
+        assert_eq!(edits("git fetch origin to")[0].insert, "pic");
+        assert!(edits("git pull origin ex").is_empty());
+        assert_eq!(edits("git push origin main:to")[0].insert, "pic");
+        assert!(edits("git fetch missing to").is_empty());
+        assert_eq!(
+            crate::git_completion::tests::git_output(
+                repository.path(),
+                &["branch", "--show-current"]
+            )
+            .trim(),
+            "main"
+        );
+    }
+
+    #[test]
+    fn editor_cursor_requests_replace_only_the_active_token_and_keep_following_options() {
+        use crate::git_completion::tests::repository;
+        let repository = repository();
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            working_directory: Some(repository.path().to_owned()),
+            shell: Some(nebula_terminal::tty::Shell::new("pwsh".into(), vec![])),
+            ..Default::default()
+        });
+        let session = Session::default();
+        let line = "git switch \"feature/中-old\" --quiet";
+        let cursor = "git switch \"feature/中".len();
+        let result = session
+            .request_at(
+                repository.path().to_str().unwrap().into(),
+                SuggestEnv::Local,
+                line.into(),
+                cursor,
+                CompletionStyle::Popup,
+                Some(&execution),
+            )
+            .calculate(&Cancellation::default());
+        let item = result.completion_items.iter().find(|item| item.insert.contains("文")).unwrap();
+        assert!(item.replace_after_chars > 0);
+        let head: String = line[..cursor]
+            .chars()
+            .take(line[..cursor].chars().count() - item.replace_chars)
+            .collect();
+        let tail: String = line[cursor..].chars().skip(item.replace_after_chars).collect();
+        assert_eq!(format!("{head}{}{tail}", item.insert), "git switch \"feature/中文\" --quiet");
+    }
 
     #[test]
     fn connection_completion_uses_config_includes_and_never_leaks_host_data() {
@@ -607,6 +805,7 @@ mod tests {
         let active = Cancellation::default();
         assert_eq!(query("git switch feature/", &active).completion_items.len(), 2);
         crate::git_completion::tests::git(repository.path(), &["branch", "feature/beta"]);
+        // Slow native Git must not make this invalidation assertion depend on the cache TTL.
         crate::git_completion::tests::retain_snapshot_for_test(&session.git);
         assert_eq!(query("git switch feature/", &active).completion_items.len(), 2);
         session.invalidate();

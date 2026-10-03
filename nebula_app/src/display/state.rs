@@ -38,6 +38,8 @@ pub struct NebulaCompletionItem {
     pub insert: String,
     /// Number of characters immediately before the cursor to replace.
     pub replace_chars: usize,
+    /// Characters after a cursor proven by the native line editor.
+    pub replace_after_chars: usize,
     pub kind: NebulaCompletionKind,
 }
 

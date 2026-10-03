@@ -69,6 +69,7 @@ fn transitions_drop_ghost_popup_suppression_mirrors_and_pending_directory() {
         label: "outer-path".into(),
         insert: "outer-path".into(),
         replace_chars: 0,
+        replace_after_chars: 0,
         kind: crate::display::NebulaCompletionKind::History,
     });
     state.completion_selected = Some(0);
