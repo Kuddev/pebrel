@@ -161,7 +161,7 @@ var
 begin
   if (ExpandConstant('{param:ExplorerUi|0}') = '1') and
     (CurPageID = ExplorerMenuPage.ID) then begin
-    ExplorerMenuPage.CheckListBox.SetFocus;
+    WizardForm.ActiveControl := ExplorerMenuPage.CheckListBox;
     Coordinates := IntToStr(ExplorerMenuPage.CheckListBox.Handle);
     SaveStringToFile(ExpandConstant('{#FixtureRoot}') + '\ui-handle.txt', Coordinates, False);
   end;
