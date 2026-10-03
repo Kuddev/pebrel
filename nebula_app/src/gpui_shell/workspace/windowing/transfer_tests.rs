@@ -136,16 +136,21 @@ fn ordinary_window_geometry_is_in_the_durable_snapshot(cx: &mut TestAppContext) 
 fn ordinary_window_geometry_survives_closing_the_last_empty_window(cx: &mut TestAppContext) {
     initialize_test(cx);
     cx.update(|cx| {
+        cx.global_mut::<WindowRegistry>().session_persistence = SessionPersistence::ordinary_for_test();
         let (id, _) = open_test_window(cx, 0);
         let entry = entry_by_id(id, cx).unwrap();
-        let expected = entry.handle.update(cx, |_, window, cx| {
-            let expected = window.window_bounds().get_bounds().size;
-            close_empty_workspace_window(id, window, cx);
-            expected
-        }).unwrap();
+        let expected = entry
+            .handle
+            .update(cx, |_, window, cx| {
+                let expected = window.window_bounds().get_bounds().size;
+                close_empty_workspace_window(id, window, cx);
+                expected
+            })
+            .unwrap();
         let saved = cx.global::<WindowRegistry>().session_persistence.update_windows().unwrap();
         assert!(saved[0].tabs.is_empty(), "closing the last tab must not resurrect a shell");
-        let geometry = saved[0].window.expect("last empty window must preserve its native geometry");
+        let geometry =
+            saved[0].window.expect("last empty window must preserve its native geometry");
         assert_eq!(geometry.width, expected.width.as_f32().round() as u32);
         assert_eq!(geometry.height, expected.height.as_f32().round() as u32);
     });

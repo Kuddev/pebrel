@@ -41,8 +41,10 @@ force a fullscreen startup; maximized state may be restored.
 Explicit Lua dimensions override saved size; explicit Lua position overrides
 saved position. Missing dimensions are not an implicit explicit default.
 Configured Windows position describes the outer window in physical desktop
-pixels, as the legacy configuration does. Apply it before first presentation
-using `SetWindowPos` because native border insets are known only after creation.
+pixels, as the legacy configuration does. Apply it using `SetWindowPos` because native border insets are known only after
+creation. Hidden Windows startup retains a one-shot position until its first
+active frame, after GPUI consumes its cached native placement; applying it
+in the builder would be overwritten by activation.
 Other platforms keep their existing position behavior pending an equivalent
 public/native placement contract.
 

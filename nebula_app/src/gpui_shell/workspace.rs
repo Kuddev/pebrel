@@ -836,12 +836,13 @@ impl NebulaWorkspace {
         let runtime = nebula_settings::RuntimeSettings::load();
         let sidebar_width = runtime.sidebar_width;
         windowing::observe_window_bounds(runtime_window_id, window, cx);
+        let fit_default_grid = window_role == windowing::WindowRole::Regular
+            && !windowing::startup_geometry::restored_size(runtime_window_id, &startup, cx);
         let initial_grid = windowing::prepare_initial_grid(
             window,
             cx,
             sidebar_width,
-            window_role == windowing::WindowRole::Regular
-                && !windowing::startup_geometry::restored_size(runtime_window_id, &startup, cx),
+            fit_default_grid,
         );
         let this = cx.entity().downgrade();
         let appearance_sub = window.observe_window_appearance(move |_, cx| {

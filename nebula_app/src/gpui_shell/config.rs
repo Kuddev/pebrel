@@ -885,7 +885,7 @@ mod tests {
             &path,
             "local pebrel = require 'pebrel'\n\
              local config = pebrel.config_builder()\n\
-             config.window = { dimensions = { columns = 123, lines = 37 } }\n\
+             config.window = { dimensions = { columns = 123, lines = 37 }, position = { x = 197, y = 102 } }\n\
              return config\n",
         )
         .unwrap();
@@ -896,10 +896,9 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(
-            StartupWindow::load(options.config_file).dimensions,
-            Some(Dimensions { columns: 123, lines: 37 })
-        );
+        let startup = StartupWindow::load(options.config_file);
+        assert_eq!(startup.dimensions, Some(Dimensions { columns: 123, lines: 37 }));
+        assert_eq!(startup.position, Some(crate::config::ui_config::Delta { x: 197, y: 102 }));
     }
 
     /// 用户写在 `pebrel.lua` 里的 `config.window.dimensions` 必须真的决定启动

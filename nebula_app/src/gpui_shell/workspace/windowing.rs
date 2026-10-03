@@ -418,7 +418,6 @@ pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App)
     });
 }
 
-
 fn allocate_window(cx: &mut App) -> (u64, crate::runtime_api::RuntimeHub) {
     let registry = cx.global_mut::<WindowRegistry>();
     let id = registry.next_window_id;

@@ -275,3 +275,57 @@ mod geometry_tests {
         }
     }
 }
+
+#[cfg(all(test, windows, feature = "gpui-shell"))]
+mod native_geometry_tests {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetClientRect, GetWindowRect, GetWindowPlacement, SetWindowPlacement, WINDOWPLACEMENT, WS_OVERLAPPEDWINDOW};
+
+    struct NativeWindow(isize);
+    impl Drop for NativeWindow {
+        fn drop(&mut self) {
+            // SAFETY: this test owns the native window until teardown.
+            assert_ne!(unsafe { DestroyWindow(self.0 as _) }, 0);
+        }
+    }
+
+    #[test]
+    fn physical_outer_position_and_backend_normal_placement_roundtrip() {
+        // SAFETY: STATIC is a registered class; no pointer escapes the native call.
+        let hwnd = unsafe { CreateWindowExW(0, windows_core::w!("STATIC").as_ptr(), windows_core::w!("Pebrel geometry test").as_ptr(), WS_OVERLAPPEDWINDOW, 0, 0, 320, 240, std::ptr::null_mut(), std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null()) };
+        assert!(!hwnd.is_null());
+        let _window = NativeWindow(hwnd as isize);
+        // SAFETY: plain native output structures admit zero initialization.
+        let (mut rect, mut client): (RECT, RECT) = unsafe { std::mem::zeroed() };
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        // SAFETY: the owned HWND and initialized output structure are valid.
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        assert_ne!(unsafe { GetMonitorInfoW(monitor, &mut info) }, 0);
+        let desired = (info.rcWork.left + 197, info.rcWork.top + 102);
+        assert!(super::place_normal_window(hwnd as isize, desired));
+        // SAFETY: all output pointers refer to initialized local structures.
+        assert_ne!(unsafe { GetWindowRect(hwnd, &mut rect) }, 0);
+        assert_ne!(unsafe { GetClientRect(hwnd, &mut client) }, 0);
+        assert_eq!((rect.left, rect.top), desired);
+        let before = (rect.left, rect.top, rect.right, rect.bottom);
+        let border = ((rect.right - rect.left - client.right) / 2, (rect.bottom - rect.top - client.bottom) / 2);
+        let mut placement: WINDOWPLACEMENT = unsafe { std::mem::zeroed() };
+        placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+        assert_ne!(unsafe { GetWindowPlacement(hwnd, &mut placement) }, 0);
+        let scale = super::display_scale(monitor as u64).unwrap();
+        let native = placement.rcNormalPosition;
+        let logical = ((native.left + border.0) as f32 / scale, (native.top + border.1) as f32 / scale);
+        let offset = super::placement_offset(monitor as u64);
+        let saved = super::desktop_position(logical, scale, offset);
+        let restored = super::workspace_position(saved, scale, offset);
+        let x = (restored.0 * scale).round() as i32 - border.0;
+        let y = (restored.1 * scale).round() as i32 - border.1;
+        placement.rcNormalPosition = RECT { left: x, top: y, right: x + native.right - native.left, bottom: y + native.bottom - native.top };
+        assert_ne!(unsafe { SetWindowPlacement(hwnd, &placement) }, 0);
+        assert_ne!(unsafe { GetWindowRect(hwnd, &mut rect) }, 0);
+        assert_eq!((rect.left, rect.top, rect.right, rect.bottom), before);
+    }
+}
