@@ -1708,24 +1708,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix >= self.tabs.len() {
-            return;
-        }
-        self.leave_settings(window, cx);
-        if ix < self.tabs.len() && ix != self.active {
-            self.clear_reader_focus(cx);
-            self.active = ix;
-            if let Some(meta) = self.tab_meta.get_mut(ix) {
-                meta.has_bell = false;
-            }
-            self.reveal_active_tab();
-            self.focus_active(window, cx);
-            self.sync_side_panel_to_active(true, cx);
-            cx.notify();
-        }
-    }
-
     /// ctrl+shift+w（对齐旧壳 CloseTab 语义）：tab 有分屏时关聚焦 pane，
     /// 单 pane 时关整个 tab；设置 tab 直接关 tab。
     fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {

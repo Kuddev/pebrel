@@ -23,7 +23,9 @@ all split directions, ratios, pane metadata, broadcast state and source focus.
 Reuse the existing grip and dock hit geometry; terminal text and header buttons
 remain outside the gesture's initiation area. Escape cancels before input actions.
 Resolve the source tab from its pane identity at release, and cancel when either
-pane disappears or the active tab changes. Outside drops retain tab extraction.
+pane disappears. The shared `activate_tab` transition cancels synchronously on
+switching, so keyboard navigation away and back cannot revive the gesture. Outside
+drops retain tab extraction.
 
 ## Rejected alternatives
 
@@ -41,7 +43,8 @@ No persistence format or runtime-hub identity changes.
 
 Shared-tree regression covers mixed axes, unequal ratios, missing targets and
 unchanged unrelated positions. GPUI mouse regression covers header drag, Escape,
-entity and focus retention, terminal-body initiation and closing the source.
+entity and focus retention, terminal-body initiation, closing the source and
+keyboard tab switching away and back before releasing.
 These tests are authored; they require fork Actions and native visual acceptance.
 
 ## Supersedes
