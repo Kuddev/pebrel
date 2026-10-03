@@ -79,6 +79,12 @@ fn refresh_completion_from_grid(view: &mut TerminalView, cx: &mut Context<Termin
             &view.suggest.line_buf,
             &view.suggest.suggest_env,
         )
+        .or_else(|| {
+            view.suggest
+                .completion_popup_requested
+                .then(|| view.suggest.completion_prefix_from_raw_grid(&term, cursor))
+                .flatten()
+        })
         .map(|line| line.input);
         (line, Some((cursor.line.0 as usize, cursor.column.0)))
     };
@@ -505,6 +511,98 @@ fn issue_358_history_popup_matches_a_command_prefix_without_a_trailing_space(
             assert_eq!(input, b";notepad", "accept the candidate without submitting the command");
         });
     });
+}
+
+#[gpui::test]
+fn hybrid_tab_opens_history_behind_native_prediction_without_writing(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        let scope = crate::nebula_history::HistoryScope::Wsl("issue358-prediction".into());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell { scope };
+        for command in ["cls;calc", "cls;notepad"] {
+            feed(view, format!("\x1b[2J\x1b[H❯ {command}").as_bytes());
+            view.commit_line(cx);
+            view.process_event(Event::CommandStart, cx);
+            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        }
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Hybrid;
+        feed(view, "\x1b[2J\x1b[H❯ ".as_bytes());
+        refresh_completion_from_grid(view, cx);
+        crate::display::nebula_input_text(&mut view.suggest, "cls");
+        feed(view, b"cls\x1b[90m;notepad\x1b[0m\x1b[8D");
+        refresh_completion_from_grid(view, cx);
+        assert!(view.suggest.screen_line.is_empty(), "normal capture rejects shell prediction");
+    });
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| view.on_terminal_tab(&TerminalTab, window, cx));
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert_eq!(view.suggest.screen_line, "cls");
+        assert_eq!(view.suggest.completion_items.len(), 2);
+        assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+        refresh_completion_from_grid(view, cx);
+        assert!(view.suggest.completion_popup_requested, "the next frame keeps the list open");
+    });
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.on_key_down(
+                &KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("enter").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b";notepad", "acceptance excludes the prediction and never submits");
+}
+
+#[gpui::test]
+fn hybrid_tab_yields_after_cursor_edit_or_history_even_when_typed_prefix_matches(
+    cx: &mut TestAppContext,
+) {
+    for key in ["home", "up", "ctrl-r"] {
+        let (view, window, receiver) = open(cx);
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.ghost_enabled = true;
+                view.completion_style = crate::display::CompletionStyle::Hybrid;
+                crate::display::nebula_input_text(&mut view.suggest, "existing");
+                feed(view, "❯ existing".as_bytes());
+                refresh_completion_from_grid(view, cx);
+                view.on_key_down(
+                    &KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse(key).unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                receiver.try_iter().for_each(drop);
+                // A frame before the control key echoes must not restore trust.
+                refresh_completion_from_grid(view, cx);
+                crate::display::nebula_input_text(&mut view.suggest, "cls");
+                feed(view, "\x1b[2J\x1b[H❯ clsexisting\x1b[8D".as_bytes());
+                refresh_completion_from_grid(view, cx);
+                view.on_terminal_tab(&TerminalTab, window, cx);
+                assert!(!view.suggest.completion_popup_requested, "{key} invalidates mirror trust");
+                assert!(receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+            });
+        });
+    }
 }
 
 #[gpui::test]

@@ -110,6 +110,12 @@ impl TerminalElement {
                 &view.suggest.line_buf,
                 &view.suggest.suggest_env,
             )
+            .or_else(|| {
+                if !view.suggest.completion_popup_requested {
+                    return None;
+                }
+                view.suggest.completion_prefix_from_raw_grid(&term, cursor)
+            })
             .map(|line| line.input)
         };
         // 分段只反映内容与宽度类，绝不掺入光标状态：per-cell 绘制下反色只是
