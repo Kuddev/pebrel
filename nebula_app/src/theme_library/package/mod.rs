@@ -1,6 +1,7 @@
 //! Portable ZIP themes. Cold, synchronous operations run outside render callbacks.
 
 mod archive;
+pub(crate) mod cli;
 mod envelope;
 #[cfg(test)]
 mod tests;
@@ -48,7 +49,7 @@ fn require(condition: bool, message: impl Into<String>) -> Result<()> {
     if condition { Ok(()) } else { Err(PackageError(message.into())) }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Author {
     pub name: String,
@@ -66,7 +67,7 @@ pub(crate) enum ResourceKind {
     Preview,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Resource {
     pub path: String,
@@ -75,7 +76,7 @@ pub(crate) struct Resource {
     pub sha256: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {
     pub package_version: u16,

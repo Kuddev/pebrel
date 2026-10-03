@@ -1262,5 +1262,35 @@
     "relay_imported": "Connection details imported. Check and save to apply them.",
     "relay_invalid": "Invalid configuration. Import connection details exported by pebrel-relay, or complete the address, room, tokens and fingerprint.",
     "relay_read_failed": "Reading did not complete. Check the SSH connection and that pebrel-relay is installed."
+  },
+  "theme": {
+    "package": {
+      "entry": "Theme package",
+      "short": "ZIP",
+      "title": "Theme package",
+      "description": "Share this theme with its images, or install a shared ZIP package.",
+      "author": "Author",
+      "github": "GitHub username (optional)",
+      "version": "Version",
+      "license": "License",
+      "metadata_hint": "Enter the author, version, and license under which you can share the theme and images.",
+      "preview": "Preview image (optional)",
+      "choose_preview": "Choose preview image",
+      "no_preview": "No preview image selected",
+      "choose_file": "Choose ZIP package",
+      "import_hint": "Review the package before installing it. Import adds a theme to your library without applying it.",
+      "identity": "{author} · Version {version} · {license}",
+      "resources": "{count} resource files",
+      "export_mode": "Export ZIP",
+      "import_mode": "Import ZIP",
+      "install": "Install theme",
+      "checking": "Checking package…",
+      "working": "Preparing theme and images…",
+      "exported": "Theme package exported.",
+      "imported": "{name} was added to your theme library. You can apply it in the theme picker or edit a copy.",
+      "edit_copy": "Edit a copy",
+      "failed": "Could not complete the operation: {detail}",
+      "changed": "The package changed after inspection. Choose the file again before installing."
+    }
   }
 }

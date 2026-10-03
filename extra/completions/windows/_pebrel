@@ -1188,6 +1188,93 @@ esac
     ;;
 esac
 ;;
+(theme)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_pebrel__theme_commands" \
+"*::: :->theme" \
+&& ret=0
+
+    case $state in
+    (theme)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-theme-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':path:_files' \
+&& ret=0
+;;
+(pack)
+_arguments "${_arguments_options[@]}" : \
+'--output=[]:OUTPUT:_files' \
+'--author=[]:AUTHOR:_default' \
+'--preview=[Include a preview image for community browsing]:PREVIEW:_files' \
+'--github=[]:GITHUB:_default' \
+'--license=[]:LICENSE:_default' \
+'--version=[]:VERSION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':theme:_files' \
+&& ret=0
+;;
+(import)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':path:_files' \
+&& ret=0
+;;
+(limits)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_pebrel__theme__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-theme-help-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pack)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(import)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(limits)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (notify-test)
 _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
@@ -1559,6 +1646,38 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(theme)
+_arguments "${_arguments_options[@]}" : \
+":: :_pebrel__help__theme_commands" \
+"*::: :->theme" \
+&& ret=0
+
+    case $state in
+    (theme)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:pebrel-help-theme-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pack)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(import)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(limits)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (notify-test)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1596,6 +1715,7 @@ _pebrel_commands() {
 'migrate:Migrate the configuration file' \
 'config:Validate or create the Pebrel configuration' \
 'plugin:Check or invoke a local plugin package without starting a GUI or plugin daemon' \
+'theme:Export, verify, or import a portable ZIP theme package' \
 'notify-test:Test system notification (toast) delivery' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
 'ssh:SSH with Pebrel shell integration bootstrapped on the remote host, so tab icons / spinner / cwd track the program running over the connection (claude, vim, cargo…). All arguments are forwarded to the system \`ssh\`' \
@@ -2145,6 +2265,7 @@ _pebrel__help_commands() {
 'migrate:Migrate the configuration file' \
 'config:Validate or create the Pebrel configuration' \
 'plugin:Check or invoke a local plugin package without starting a GUI or plugin daemon' \
+'theme:Export, verify, or import a portable ZIP theme package' \
 'notify-test:Test system notification (toast) delivery' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
 'ssh:SSH with Pebrel shell integration bootstrapped on the remote host, so tab icons / spinner / cwd track the program running over the connection (claude, vim, cargo…). All arguments are forwarded to the system \`ssh\`' \
@@ -2536,6 +2657,36 @@ _pebrel__help__tab__rename_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help tab rename commands' commands "$@"
 }
+(( $+functions[_pebrel__help__theme_commands] )) ||
+_pebrel__help__theme_commands() {
+    local commands; commands=(
+'check:Validate a ZIP theme and its resource hashes without installing it' \
+'pack:Export a native theme JSON with its local background image as a ZIP' \
+'import:Install a verified ZIP into the local theme library without applying it' \
+'limits:Print the authoritative package byte limits' \
+    )
+    _describe -t commands 'pebrel help theme commands' commands "$@"
+}
+(( $+functions[_pebrel__help__theme__check_commands] )) ||
+_pebrel__help__theme__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help theme check commands' commands "$@"
+}
+(( $+functions[_pebrel__help__theme__import_commands] )) ||
+_pebrel__help__theme__import_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help theme import commands' commands "$@"
+}
+(( $+functions[_pebrel__help__theme__limits_commands] )) ||
+_pebrel__help__theme__limits_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help theme limits commands' commands "$@"
+}
+(( $+functions[_pebrel__help__theme__pack_commands] )) ||
+_pebrel__help__theme__pack_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help theme pack commands' commands "$@"
+}
 (( $+functions[_pebrel__help__window_commands] )) ||
 _pebrel__help__window_commands() {
     local commands; commands=(
@@ -2792,6 +2943,73 @@ _pebrel__tab__move_commands() {
 _pebrel__tab__rename_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel tab rename commands' commands "$@"
+}
+(( $+functions[_pebrel__theme_commands] )) ||
+_pebrel__theme_commands() {
+    local commands; commands=(
+'check:Validate a ZIP theme and its resource hashes without installing it' \
+'pack:Export a native theme JSON with its local background image as a ZIP' \
+'import:Install a verified ZIP into the local theme library without applying it' \
+'limits:Print the authoritative package byte limits' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'pebrel theme commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__check_commands] )) ||
+_pebrel__theme__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme check commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__help_commands] )) ||
+_pebrel__theme__help_commands() {
+    local commands; commands=(
+'check:Validate a ZIP theme and its resource hashes without installing it' \
+'pack:Export a native theme JSON with its local background image as a ZIP' \
+'import:Install a verified ZIP into the local theme library without applying it' \
+'limits:Print the authoritative package byte limits' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'pebrel theme help commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__help__check_commands] )) ||
+_pebrel__theme__help__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme help check commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__help__help_commands] )) ||
+_pebrel__theme__help__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme help help commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__help__import_commands] )) ||
+_pebrel__theme__help__import_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme help import commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__help__limits_commands] )) ||
+_pebrel__theme__help__limits_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme help limits commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__help__pack_commands] )) ||
+_pebrel__theme__help__pack_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme help pack commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__import_commands] )) ||
+_pebrel__theme__import_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme import commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__limits_commands] )) ||
+_pebrel__theme__limits_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme limits commands' commands "$@"
+}
+(( $+functions[_pebrel__theme__pack_commands] )) ||
+_pebrel__theme__pack_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel theme pack commands' commands "$@"
 }
 (( $+functions[_pebrel__window_commands] )) ||
 _pebrel__window_commands() {

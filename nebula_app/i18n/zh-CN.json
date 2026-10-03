@@ -1262,5 +1262,35 @@
     "relay_imported": "已导入连接信息。检查并保存后生效。",
     "relay_invalid": "配置格式有误。请导入 pebrel-relay 导出的连接信息，或补全地址、房间号、令牌和指纹。",
     "relay_read_failed": "读取未完成。请检查 SSH 主机连接，以及服务器是否已安装 pebrel-relay。"
+  },
+  "theme": {
+    "package": {
+      "entry": "主题包",
+      "short": "ZIP",
+      "title": "主题包",
+      "description": "将主题和图片一起分享，或安装别人分享的 ZIP 主题包。",
+      "author": "作者",
+      "github": "GitHub 用户名（可选）",
+      "version": "版本",
+      "license": "许可",
+      "metadata_hint": "请填写作者、版本，以及允许分享此主题和图片的许可。",
+      "preview": "预览图（可选）",
+      "choose_preview": "选择预览图",
+      "no_preview": "未选择预览图",
+      "choose_file": "选择 ZIP 主题包",
+      "import_hint": "先检查主题包，再确认安装。导入只添加到主题库，不会自动应用。",
+      "identity": "{author} · 版本 {version} · {license}",
+      "resources": "包含 {count} 个资源文件",
+      "export_mode": "导出 ZIP",
+      "import_mode": "导入 ZIP",
+      "install": "安装主题",
+      "checking": "正在检查主题包…",
+      "working": "正在处理主题和图片…",
+      "exported": "主题包已导出。",
+      "imported": "{name} 已添加到主题库。你可以在主题选择器中应用，或编辑一个副本。",
+      "edit_copy": "编辑副本",
+      "failed": "操作未完成：{detail}",
+      "changed": "主题包在检查后发生了变化。请重新选择文件，再确认安装。"
+    }
   }
 }
