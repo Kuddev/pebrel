@@ -102,18 +102,6 @@ begin
     ExpandConstant('{localappdata}\Programs\Pebrel'));
 end;
 
-procedure InitializeWizard;
-begin
-  { Reuse the registered directory for normal upgrades, so Inno recognizes it
-    as an existing installation. Keep the old-brand relocation suggestion and
-    an explicit /DIR selection intact. }
-  if (PreviousInstallDir <> '') and
-    (CompareText(ExtractFileName(NormalizedDirectory(PreviousInstallDir)), 'Nebula Terminal') = 0) and
-    (ExpandConstant('{param:DIR|}') = '') then
-    WizardForm.DirEdit.Text := SuggestedInstallDir(PreviousInstallDir,
-      ExpandConstant('{localappdata}\Programs\Pebrel'));
-end;
-
 procedure DiscoverLegacyInstallation;
 var
   Pending, UninstallCommand: string;
@@ -410,16 +398,25 @@ begin
   end;
 end;
 
-procedure RegisterWslContextMenus;
-var
-  Distros: TArrayOfString;
-  Executable: string;
+#include "installer-context-menu.iss"
+
+#ifndef MigrationFixture
+procedure InitializeWizard;
 begin
-  Distros := WslDistroNames;
-  Executable := ExpandConstant('{app}\pebrel.exe');
-  RegisterWslContextMenuAt('Software\Classes\Directory\shell', Executable, '%1', Distros);
-  RegisterWslContextMenuAt('Software\Classes\Directory\Background\shell', Executable, '%V', Distros);
+  { Reuse the registered directory for normal upgrades, so Inno recognizes it
+    as an existing installation. Keep the old-brand relocation suggestion and
+    an explicit /DIR selection intact. }
+  if (PreviousInstallDir <> '') and
+    (CompareText(ExtractFileName(NormalizedDirectory(PreviousInstallDir)), 'Nebula Terminal') = 0) and
+    (ExpandConstant('{param:DIR|}') = '') then
+    WizardForm.DirEdit.Text := SuggestedInstallDir(PreviousInstallDir,
+      ExpandConstant('{localappdata}\Programs\Pebrel'));
+  #ifndef AcceptanceFixture
+  CreateExplorerMenuPage(ProductSettingsKey + '\ExplorerMenu', WslDistroNames);
+  #endif
 end;
+
+#endif
 
 procedure MigrateLegacyIntegrations;
 var
@@ -490,8 +487,9 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep <> ssPostInstall then
     Exit;
-  { 与旧版迁移无关，装完就要做：菜单项取决于本机装了哪些 WSL 发行版。 }
-  RegisterWslContextMenus;
+  #ifndef AcceptanceFixture
+  RegisterExplorerContextMenus;
+  #endif
   if LegacyInstallDir = '' then
     Exit;
   try
