@@ -1,10 +1,11 @@
 //! Bounded local Git discovery for the product's background completion request.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pebrel_completions::Suggestion;
-use pebrel_completions::semantic::{Context, Source};
+use pebrel_completions::semantic::{Context, Source, TrackingMode};
 
 use crate::runtime_exec::PaneExecContext;
 
@@ -17,6 +18,7 @@ struct Reference {
     busy: bool,
     commit: bool,
     symbolic: bool,
+    direct_tracking: bool,
 }
 
 #[derive(Debug, Default)]
@@ -24,6 +26,7 @@ struct Repository {
     references: Vec<Reference>,
     guesses: Vec<String>,
     guess_enabled: bool,
+    local_branches: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -55,6 +58,7 @@ pub(crate) fn complete(
 ) -> Vec<Suggestion> {
     let (branches_only, include_busy) = match context.source {
         Source::Branches { include_busy } => (true, include_busy),
+        Source::Tracking { .. } => (false, true),
         Source::Revisions { include_busy } | Source::RevisionsAndPaths { include_busy } => {
             (false, include_busy)
         },
@@ -91,6 +95,10 @@ pub(crate) fn complete(
         .references
         .iter()
         .filter(|r| r.commit && !r.symbolic && (include_busy || !r.busy))
+        .filter(|r| {
+            !matches!(context.source, Source::Tracking { mode: TrackingMode::Direct, .. })
+                || r.direct_tracking
+        })
         .filter_map(|reference| {
             let branch = reference.full_name.strip_prefix("refs/heads/");
             if branches_only {
@@ -104,6 +112,11 @@ pub(crate) fn complete(
             } else {
                 Some(reference.short_name.as_str())
             }
+        })
+        .filter(|value| {
+            !matches!(context.source, Source::Tracking { infer_name: true, .. })
+                || tracking::inferred_name(value)
+                    .is_some_and(|name| !repository.local_branches.contains(name))
         });
     let guess = context.guesses_branches(repository.guess_enabled);
     let mut directory = std::path::PathBuf::from(cwd);
@@ -200,16 +213,32 @@ fn query(
                 busy: !worktree.is_empty(),
                 commit: object_type == "commit" || peeled_type == "commit",
                 symbolic: !symref.is_empty(),
+                direct_tracking: config.can_track(full_name, &stopped),
             })
         })
         .collect();
     let guesses = config.guesses(&references, &stopped);
-    (!stopped()).then_some(Repository { references, guesses, guess_enabled: config.guess })
+    let local_branches = references
+        .iter()
+        .filter_map(|r| r.full_name.strip_prefix("refs/heads/").map(str::to_owned))
+        .collect();
+    (!stopped()).then_some(Repository {
+        references,
+        guesses,
+        guess_enabled: config.guess,
+        local_branches,
+    })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn retain_snapshot_for_test(cache: &Cache) {
+        let mut state = cache.0.lock().unwrap();
+        state.1.as_mut().expect("queried repository").fetched =
+            Instant::now() + Duration::from_secs(60);
+    }
     use pebrel_completions::command_context::ShellSyntax;
 
     pub(crate) fn git(cwd: &std::path::Path, args: &[&str]) {
@@ -249,6 +278,89 @@ pub(crate) mod tests {
         git(directory.path(), &["branch", "feature/中文"]);
         git(directory.path(), &["branch", "feature/alpha"]);
         directory
+    }
+
+    #[test]
+    fn real_explicit_tracking_creates_and_inherits_the_expected_upstream() {
+        let repository = repository();
+        let cwd = repository.path().to_str().unwrap();
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            working_directory: Some(repository.path().to_owned()),
+            ..Default::default()
+        });
+        let cache = Cache::default();
+        let values = |line: &str| {
+            let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
+            complete(&cache, &execution, cwd, &context, &|| false)
+                .into_iter()
+                .map(|s| s.value)
+                .collect::<Vec<_>>()
+        };
+        git(repository.path(), &["remote", "add", "origin", "https://example.invalid/tracking"]);
+        for name in ["only", "off", "source", "excluded"] {
+            git(repository.path(), &["update-ref", &format!("refs/remotes/origin/{name}"), "HEAD"]);
+        }
+        git(repository.path(), &["update-ref", "refs/remotes/unknown/unmapped", "HEAD"]);
+        git(repository.path(), &["branch", "--track", "local/source", "origin/source"]);
+        git(repository.path(), &["tag", "release/one"]);
+        git(repository.path(), &["config", "--add", "remote.origin.fetch", "^refs/heads/excluded"]);
+        assert_eq!(values("git switch -t origin/on"), ["origin/only"]);
+        assert_eq!(
+            values("git switch --track refs/remotes/origin/on"),
+            ["refs/remotes/origin/only"]
+        );
+        assert_eq!(values("git switch --track -c fresh ma"), ["main"]);
+        assert!(values("git switch --track -c fresh release/").is_empty());
+        assert!(values("git switch --track unknown/").is_empty());
+        assert!(values("git switch --track origin/excl").is_empty());
+        assert_eq!(values("git switch --no-track origin/excl"), ["origin/excluded"]);
+        assert_eq!(values("git switch --track=inherit -c fresh local/so"), ["local/source"]);
+        git(repository.path(), &["switch", "-t", "origin/only"]);
+        assert_eq!(
+            git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+                .trim(),
+            "refs/remotes/origin/only"
+        );
+        cache.invalidate();
+        assert!(
+            values("git switch -t origin/on").is_empty(),
+            "cannot infer an already-existing branch name"
+        );
+        let inherited = values("git switch --track=inherit -c inherited local/so");
+        assert_eq!(inherited, ["local/source"]);
+        git(repository.path(), &["switch", "--track=inherit", "-c", "inherited", &inherited[0]]);
+        assert_eq!(
+            git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+                .trim(),
+            "refs/remotes/origin/source"
+        );
+        assert_eq!(values("git switch --no-track origin/of"), ["origin/off"]);
+        git(repository.path(), &["switch", "--no-track", "origin/off"]);
+        assert!(
+            git_output(
+                repository.path(),
+                &["for-each-ref", "--format=%(upstream)", "refs/heads/off"]
+            )
+            .trim()
+            .is_empty()
+        );
+        git(repository.path(), &["switch", "--track", "-c", "local-direct", "main"]);
+        assert_eq!(
+            git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+                .trim(),
+            "refs/heads/main"
+        );
+        git(
+            repository.path(),
+            &["config", "remote.duplicate.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+        );
+        git(repository.path(), &["config", "checkout.defaultRemote", "origin"]);
+        cache.invalidate();
+        assert!(
+            values("git switch --track -c fresh origin/").is_empty(),
+            "explicit tracking cannot use defaultRemote to resolve duplicate destination mappings"
+        );
+        assert_eq!(values("git switch --no-track -c fresh origin/of"), ["origin/off"]);
     }
 
     #[test]
@@ -292,7 +404,7 @@ pub(crate) mod tests {
         assert!(values("git switch phantom").is_empty());
         assert!(values("git switch tag-shadow").is_empty());
         assert!(values("git switch excluded").is_empty());
-        assert!(values("git switch --no-track discover/").is_empty());
+        assert!(!values("git switch --no-track discover/").contains(&"discover/one".to_owned()));
         assert!(values("git switch --no-guess discover/").is_empty());
         git(repository.path(), &["config", "checkout.defaultRemote", "upstream"]);
         cache.invalidate();

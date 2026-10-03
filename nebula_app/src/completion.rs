@@ -104,6 +104,7 @@ impl Session {
                     Source::Branches { .. }
                         | Source::Revisions { .. }
                         | Source::RevisionsAndPaths { .. }
+                        | Source::Tracking { .. }
                 )
             }) {
             execution.cloned().map(|execution| (self.git.clone(), execution))
@@ -138,7 +139,8 @@ impl Request {
             Source::Words(_) | Source::Options => context.static_candidates(),
             Source::Branches { .. }
             | Source::Revisions { .. }
-            | Source::RevisionsAndPaths { .. } => {
+            | Source::RevisionsAndPaths { .. }
+            | Source::Tracking { .. } => {
                 self.git.as_ref().map_or_else(Vec::new, |(cache, execution)| {
                     crate::git_completion::complete(cache, execution, &self.cwd, context, &|| {
                         cancellation.is_cancelled()
@@ -498,6 +500,74 @@ mod tests {
     }
 
     #[test]
+    fn explicit_tracking_requests_keep_edits_scoped_and_do_not_execute() {
+        use crate::git_completion::tests::{git, git_output, repository};
+        let repository = repository();
+        let cwd = repository.path().to_str().unwrap();
+        git(repository.path(), &["remote", "add", "origin", "https://example.invalid/tracking"]);
+        git(repository.path(), &["update-ref", "refs/remotes/origin/topic", "HEAD"]);
+        let session = Session::default();
+        for program in ["sh", "pwsh", "cmd"] {
+            let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+                working_directory: Some(repository.path().to_owned()),
+                shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                ..Default::default()
+            });
+            for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid]
+            {
+                for (line, expected) in [
+                    ("git switch --track origin/to", "git switch --track origin/topic"),
+                    ("git checkout -t \"origin/to\"", "git checkout -t \"origin/topic\""),
+                    ("git switch --no-track origin/to", "git switch --no-track origin/topic"),
+                    ("git switch --track=inh", "git switch --track=inherit"),
+                ] {
+                    let result = session
+                        .request(
+                            cwd.into(),
+                            SuggestEnv::Local,
+                            line.into(),
+                            style,
+                            Some(&execution),
+                        )
+                        .calculate(&Cancellation::default());
+                    let edit = if style == CompletionStyle::Popup {
+                        assert_eq!(result.completion_items.len(), 1, "{program}: {line}");
+                        &result.completion_items[0]
+                    } else {
+                        result.suggestion_edit.as_ref().expect(line)
+                    };
+                    let accepted: String = line
+                        .chars()
+                        .take(line.chars().count() - edit.replace_chars)
+                        .chain(edit.insert.chars())
+                        .collect();
+                    assert_eq!(accepted, expected, "{program} {style:?}");
+                }
+            }
+            for env in [
+                SuggestEnv::Wsl { distro: "tracking-isolation".into() },
+                SuggestEnv::Ssh { destination: "tracking-isolation.invalid".into() },
+                SuggestEnv::Shell { scope: HistoryScope::Ssh("tracking-nested.invalid".into()) },
+            ] {
+                let result = session
+                    .request(
+                        cwd.into(),
+                        env,
+                        "git switch --track origin/to".into(),
+                        CompletionStyle::Popup,
+                        Some(&execution),
+                    )
+                    .calculate(&Cancellation::default());
+                assert!(result.completion_items.is_empty());
+                assert!(result.pending_remote_dir.is_none());
+            }
+        }
+        // 所有模式的请求只产生编辑；此处尚未显式提交命令，仓库应保持原状。
+        assert_eq!(git_output(repository.path(), &["branch", "--show-current"]).trim(), "main");
+        assert!(git_output(repository.path(), &["for-each-ref", "refs/heads/topic"]).is_empty());
+    }
+
+    #[test]
     fn completion_requests_work_without_a_view_and_keep_repository_invalidation() {
         let repository = crate::git_completion::tests::repository();
         let cwd = repository.path().to_str().unwrap();
@@ -520,6 +590,7 @@ mod tests {
         let active = Cancellation::default();
         assert_eq!(query("git switch feature/", &active).completion_items.len(), 2);
         crate::git_completion::tests::git(repository.path(), &["branch", "feature/beta"]);
+        crate::git_completion::tests::retain_snapshot_for_test(&session.git);
         assert_eq!(query("git switch feature/", &active).completion_items.len(), 2);
         session.invalidate();
         assert_eq!(query("git switch feature/", &active).completion_items.len(), 3);

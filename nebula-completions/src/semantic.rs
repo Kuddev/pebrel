@@ -6,6 +6,13 @@ use crate::{CandidateMatcher, CompletionOptions, CompletionSort, MatchAlgorithm,
 mod common;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackingMode {
+    Direct,
+    Inherit,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Words(&'static [&'static str]),
     Branches {
@@ -16,6 +23,10 @@ pub enum Source {
     },
     RevisionsAndPaths {
         include_busy: bool,
+    },
+    Tracking {
+        mode: TrackingMode,
+        infer_name: bool,
     },
     Paths {
         directories_only: bool,
@@ -188,12 +199,18 @@ impl Context {
         let mut reference_only = false;
         let mut terminal = false;
         let mut root = false;
-        let mut no_track = false;
+        let mut tracking = None;
+        let mut creates_branch = false;
+        let mut detach = false;
         index += 1;
         while let Some(arg) = args.get(index) {
             if parse_options && arg == "--" {
                 if command == "checkout" {
-                    return Some(Source::Paths { directories_only: false });
+                    return Some(if tracking.is_some() {
+                        Source::None
+                    } else {
+                        Source::Paths { directories_only: false }
+                    });
                 }
                 parse_options = false;
             } else if parse_options && arg.starts_with('-') {
@@ -205,15 +222,30 @@ impl Context {
                 revisions |=
                     matches!(name, "-c" | "-C" | "--create" | "--force-create" | "-d" | "--detach");
                 reference_only |= matches!(name, "-b" | "-B" | "-d" | "--detach");
+                creates_branch |=
+                    matches!(name, "-b" | "-B" | "-c" | "-C" | "--create" | "--force-create");
+                detach |= matches!(name, "-d" | "--detach");
                 terminal |= option.terminal;
                 root |= name == "--root";
                 match name {
                     "--guess" => self.branch_guess = Some(true),
                     "--no-guess" => self.branch_guess = Some(false),
-                    "--no-track" => no_track = true,
+                    "-t" | "--track" => {
+                        tracking = Some(match attached {
+                            None | Some("direct") => TrackingMode::Direct,
+                            Some("inherit") => TrackingMode::Inherit,
+                            _ => return Some(Source::None),
+                        })
+                    },
+                    "--no-track" => tracking = Some(TrackingMode::Disabled),
                     _ => {},
                 }
                 if let Some(value_source) = option.value {
+                    // --track 的可选值只能附在选项上；后面的单词仍是起点引用。
+                    if option.optional_value && attached.is_none() {
+                        index += 1;
+                        continue;
+                    }
                     let provided = if let Some(value) = attached {
                         value
                     } else {
@@ -240,7 +272,7 @@ impl Context {
             return Some(Source::None);
         }
         // Git 的自动建分支要求 tracking 未显式指定，--guess 不能覆盖 --no-track。
-        if no_track {
+        if tracking.is_some() {
             self.branch_guess = Some(false);
         }
         if parse_options && self.input.prefix().starts_with('-') {
@@ -250,6 +282,13 @@ impl Context {
                 return option.value;
             }
             return Some(Source::Options);
+        }
+        if let Some(mode) = tracking {
+            return Some(if detach || positional != 0 {
+                Source::None
+            } else {
+                Source::Tracking { mode, infer_name: !creates_branch }
+            });
         }
         // checkout 的首个无标记参数可指向分支或路径，后续参数只接受路径。
         if command == "checkout" && !reference_only {
@@ -332,17 +371,24 @@ struct OptionSpec {
     value: Option<Source>,
     include_busy: bool,
     terminal: bool,
+    optional_value: bool,
 }
 
 const fn flag(names: &'static [&'static str]) -> OptionSpec {
-    OptionSpec { names, value: None, include_busy: false, terminal: false }
+    OptionSpec { names, value: None, include_busy: false, terminal: false, optional_value: false }
 }
 const fn value(names: &'static [&'static str], source: Source) -> OptionSpec {
     OptionSpec { value: Some(source), ..flag(names) }
 }
 const CONFLICT: Source = Source::Words(&["merge", "diff3", "zdiff3"]);
 const REVISION: Source = Source::Revisions { include_busy: true };
+const TRACK: OptionSpec = OptionSpec {
+    optional_value: true,
+    ..value(&["--track"], Source::Words(&["direct", "inherit"]))
+};
 const SWITCH_OPTIONS: &[OptionSpec] = &[
+    TRACK,
+    flag(&["-t"]),
     OptionSpec {
         include_busy: true,
         ..value(&["-c", "-C", "--create", "--force-create"], Source::None)
@@ -368,6 +414,8 @@ const SWITCH_OPTIONS: &[OptionSpec] = &[
     ]),
 ];
 const CHECKOUT_OPTIONS: &[OptionSpec] = &[
+    TRACK,
+    flag(&["-t"]),
     OptionSpec { include_busy: true, ..value(&["-b", "-B"], Source::None) },
     OptionSpec { terminal: true, ..value(&["--orphan"], Source::None) },
     OptionSpec { include_busy: true, ..flag(&["-d", "--detach", "--ignore-other-worktrees"]) },

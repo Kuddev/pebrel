@@ -248,6 +248,44 @@ fn automatic_branch_creation_respects_explicit_flags_in_each_shell() {
 }
 
 #[test]
+fn explicit_tracking_uses_optional_values_and_new_branch_start_roles() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        for (line, mode, infer_name) in [
+            ("git switch --track origin/", TrackingMode::Direct, true),
+            ("git switch --track -- origin/", TrackingMode::Direct, true),
+            ("git checkout -t origin/", TrackingMode::Direct, true),
+            ("git switch --track=inherit local/", TrackingMode::Inherit, true),
+            ("git switch --no-track origin/", TrackingMode::Disabled, true),
+            ("git switch -c new --track main", TrackingMode::Direct, false),
+            ("git switch -c new --track -- main", TrackingMode::Direct, false),
+            ("git checkout --track=inherit -b new local/", TrackingMode::Inherit, false),
+            ("git switch --no-track --track origin/", TrackingMode::Direct, true),
+            ("git switch --track --no-track origin/", TrackingMode::Disabled, true),
+        ] {
+            let context = Context::parse(line, line.len(), syntax).unwrap();
+            assert_eq!(context.source, Source::Tracking { mode, infer_name }, "{syntax:?}: {line}");
+            assert!(!context.guesses_branches(true));
+        }
+        let line = "git switch --track=inh";
+        assert_eq!(
+            Context::parse(line, line.len(), syntax).unwrap().static_candidates()[0].value,
+            "--track=inherit"
+        );
+    }
+    for line in [
+        "git switch --track=wrong origin/",
+        "git switch --track --detach origin/",
+        "git checkout --track -- file",
+        "git checkout --track -b new -- origin/",
+        "git checkout --track origin/main -- file",
+        "git switch --track origin/main next",
+        "git switch --track direct origin/",
+    ] {
+        assert_eq!(context(line).source, Source::None, "{line}");
+    }
+}
+
+#[test]
 fn paths_and_ambiguous_arguments_retain_directory_scope() {
     for line in ["git checkout -- src", "git checkout main -- src", "git checkout main src"] {
         assert_eq!(context(line).source, Source::Paths { directories_only: false });
