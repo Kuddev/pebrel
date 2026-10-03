@@ -619,21 +619,50 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    /// 待命态的 move 由 workspace 根节点转发（罩层还不存在）。已激活时罩层
-    /// 独占指针，这里就不再重复喂。
-    pub(super) fn continue_pending_pane_drag(
-        &mut self,
-        event: &gpui::MouseMoveEvent,
-        cx: &mut Context<Self>,
-    ) {
-        if self.pane_drag.as_ref().is_some_and(|drag| !drag.active) {
-            self.update_pane_drag(event, cx);
-        }
+    /// Header occlusion blocks the workspace hitbox, so capture the gesture at
+    /// the window before hitbox-filtered handlers or terminal selection consume it.
+    pub(super) fn pane_drag_capture(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let owner = cx.entity().downgrade();
+        canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                let view = owner.clone();
+                window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                    if phase.capture()
+                        && view
+                            .update(cx, |this, cx| {
+                                if this.pane_drag.is_none() {
+                                    return false;
+                                }
+                                this.update_pane_drag(event, cx);
+                                true
+                            })
+                            .unwrap_or(false)
+                    {
+                        cx.stop_propagation();
+                    }
+                });
+                let view = owner.clone();
+                window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
+                    if phase.capture()
+                        && event.button == MouseButton::Left
+                        && view
+                            .update(cx, |this, cx| {
+                                this.release_pane_drag(event.position, window, cx)
+                            })
+                            .unwrap_or(false)
+                    {
+                        cx.stop_propagation();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
     }
 
-    /// 根节点 capture 阶段的释放兜底。返回是否**吃掉**了这次释放：只有真拖拽
-    /// 需要吃（否则源标题条的 click 和终端选区都会再收到一次）；未过阈值的
-    /// 按压是普通点击，清掉状态就放行。
+    /// Consume release only after crossing the threshold; an ordinary header
+    /// press clears its pending state and passes through as a click.
     pub(super) fn release_pane_drag(
         &mut self,
         position: gpui::Point<gpui::Pixels>,
@@ -774,15 +803,6 @@ impl NebulaWorkspace {
                 .inset_0()
                 .occlude()
                 .cursor_grab()
-                .on_mouse_move(cx.listener(|this, event, _, cx| {
-                    this.update_pane_drag(event, cx);
-                }))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
-                        this.finish_pane_drag(event.position, window, cx);
-                    }),
-                )
                 .child(
                     div()
                         .absolute()

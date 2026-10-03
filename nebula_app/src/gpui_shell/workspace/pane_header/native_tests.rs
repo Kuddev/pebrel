@@ -63,7 +63,7 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
                 WorkspaceTab::Terminal {
                     panes,
                     tree,
-                    focused: ids[0],
+                    focused: ids[1],
                     zoomed: false,
                     broadcast: true,
                 },
@@ -103,6 +103,13 @@ fn header_drag_exchanges_existing_views_and_escape_cancels(cx: &mut TestAppConte
         panes.iter().map(|pane| pane.view.clone()).collect::<Vec<_>>()
     });
     window.simulate_mouse_down(source, MouseButton::Left, Modifiers::default());
+    workspace.read_with(&window, |workspace, _| {
+        let WorkspaceTab::Terminal { focused, .. } = &workspace.tabs[0] else { panic!() };
+        assert_eq!(*focused, ids[0], "the actual source grip must receive the press");
+        let drag = workspace.pane_drag.as_ref().expect("header press must arm the gesture");
+        assert_eq!(drag.pane, ids[0]);
+        assert!(!drag.active, "the press alone must remain below the drag threshold");
+    });
     window.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
     workspace.read_with(&window, |workspace, _| {
         assert!(workspace.pane_drag.as_ref().is_some_and(|drag| drag.active));
