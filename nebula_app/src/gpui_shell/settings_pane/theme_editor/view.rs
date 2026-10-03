@@ -449,12 +449,19 @@ impl SettingsPane {
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 h_flex()
+                    .w_full()
+                    .flex_shrink_0()
                     .px(px(26.0))
                     .pt(px(24.0))
                     .pb(px(18.0))
+                    .gap(px(16.0))
                     .justify_between()
+                    .when(compact, |header| header.flex_col().items_start().gap(px(12.0)))
                     .child(
                         h_flex()
+                            .min_w_0()
+                            .when(compact, |title| title.w_full())
+                            .when(!compact, |title| title.flex_1())
                             .gap(px(10.0))
                             .child(
                                 Button::new("theme-editor-back")
@@ -462,6 +469,7 @@ impl SettingsPane {
                                     .icon(IconName::ArrowLeft)
                                     .ghost()
                                     .size(px(32.0))
+                                    .flex_shrink_0()
                                     .tooltip(language.text(Message::ThemeEditorBack))
                                     .disabled(save_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -470,6 +478,8 @@ impl SettingsPane {
                             )
                             .child(
                                 v_flex()
+                                    .min_w_0()
+                                    .flex_1()
                                     .gap(px(3.0))
                                     .child(
                                         div()
@@ -487,13 +497,17 @@ impl SettingsPane {
                     )
                     .child(
                         h_flex()
+                            .flex_shrink_0()
                             .gap(px(7.0))
+                            .when(compact, |actions| actions.w_full().justify_end().flex_wrap())
                             .child(
                                 Button::new("theme-editor-import")
                                     .debug_selector(|| "theme-editor-import".to_owned())
                                     .label(language.text(Message::ThemeEditorImport))
                                     .ghost()
                                     .small()
+                                    .h(px(32.0))
+                                    .px(px(12.0))
                                     .disabled(save_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_theme_import(window, cx);
@@ -505,9 +519,28 @@ impl SettingsPane {
                                     .label(language.text(Message::ThemeEditorExport))
                                     .ghost()
                                     .small()
+                                    .h(px(32.0))
+                                    .px(px(12.0))
                                     .disabled(save_busy)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_theme_export(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("theme-editor-package")
+                                    .debug_selector(|| "theme-editor-package".to_owned())
+                                    .label(language.text(if compact {
+                                        Message::ThemePackageShort
+                                    } else {
+                                        Message::ThemePackageEntry
+                                    }))
+                                    .tooltip(language.text(Message::ThemePackageEntry))
+                                    .ghost()
+                                    .h(px(32.0))
+                                    .px(px(12.0))
+                                    .disabled(save_busy)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_theme_package(window, cx)
                                     })),
                             )
                             .child(div().w(px(1.0)).h(px(20.0)).bg(colors.line))

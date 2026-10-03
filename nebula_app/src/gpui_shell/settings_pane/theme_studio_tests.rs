@@ -13,6 +13,8 @@ use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
 #[path = "theme_background_tests.rs"]
 mod background_tests;
+#[path = "theme_package_tests.rs"]
+mod package_tests;
 
 const TEST_SETTINGS: &str =
     "theme=Nord\nfollow_system_theme=0\napp_icon=graphite-violet\nfont_size=15\n";
