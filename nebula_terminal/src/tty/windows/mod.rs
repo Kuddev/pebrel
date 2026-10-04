@@ -943,7 +943,7 @@ __nebula_precmd() {
     NEBULA_CMD_STATUS=$? NEBULA_PIPE_STATUS=("${PIPESTATUS[@]}")
     local cmd_status="$NEBULA_CMD_STATUS" end_ms=""
     printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"
-    if [ "${__pebrel_editor_ready:-0}" = 1 ]; then printf '\033]1337;SetUserVar=pebrel_editor_ready=%s\007' "$__pebrel_shell_token"; fi
+    if typeset -f __pebrel_editor_ready_report >/dev/null; then __pebrel_editor_ready_report; fi
 
     if [[ -n ${NEBULA_COMMAND_START_MS-} ]]; then
         end_ms="$(__nebula_now_ms)"
