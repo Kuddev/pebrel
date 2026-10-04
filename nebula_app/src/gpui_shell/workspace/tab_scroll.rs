@@ -6,8 +6,8 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, Bounds, Context, InteractiveElement as _, IntoElement as _, MouseButton,
-    MouseDownEvent, ParentElement as _, Pixels, Point, ScrollWheelEvent,
+    AppContext as _, Bounds, ClickEvent, Context, InteractiveElement as _, IntoElement as _,
+    MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, ScrollWheelEvent,
     StatefulInteractiveElement as _, Styled as _, Window, canvas, div, px,
 };
 
@@ -100,6 +100,11 @@ pub(super) fn apply_wheel(scroll: usize, max: usize, rows: i32) -> usize {
     (scroll as i32 + rows).clamp(0, max as i32) as usize
 }
 
+/// 列表局部坐标 `y` 是否落在最后一个可见行下方：行间缝不算空白。
+pub(super) fn below_rows(y: f32, show: usize, pitch: f32, gap: f32) -> bool {
+    y > rows_h(show, pitch, gap)
+}
+
 fn point_in_rect((rx, ry, rw, rh): (f32, f32, f32, f32), x: f32, y: f32) -> bool {
     x >= rx && y >= ry && x < rx + rw && y < ry + rh
 }
@@ -173,6 +178,14 @@ impl NebulaWorkspace {
             window.scroll as f32 * self.tab_row_pitch(),
             1.0,
         )
+    }
+
+    /// 双击新建只认行下方的空白，覆盖式滚动条不算。
+    fn blank_below_tab_rows(&self, position: Point<Pixels>) -> bool {
+        let window = self.tabs_window();
+        let (x, y) = self.local_tabs_point(position);
+        below_rows(y, window.show, self.tab_row_pitch(), tab_row_gap(self.density))
+            && !self.tabs_overlay_bar().is_some_and(|bar| bar.hit_test(x, y))
     }
 
     fn local_tabs_point(&self, position: Point<Pixels>) -> (f32, f32) {
@@ -261,6 +274,13 @@ impl NebulaWorkspace {
             .overflow_hidden()
             .pr(px(TAB_SCROLL_GUTTER))
             .on_scroll_wheel(cx.listener(Self::on_tabs_wheel))
+            // 双击空白新建终端，与 TABS 标题上的 `+` 同一入口。行自己的双击
+            // 是重命名，已在行上截停冒泡。
+            .on_double_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                if this.blank_below_tab_rows(event.position()) {
+                    this.add_terminal(window, cx);
+                }
+            }))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if this.tabs_list_hot != *hovered {
                     this.tabs_list_hot = *hovered;
@@ -373,9 +393,19 @@ impl NebulaWorkspace {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_wheel, clamp_scroll, index_visible, max_scroll, reveal_index, rows_h, visible_count,
-        wheel_rows,
+        apply_wheel, below_rows, clamp_scroll, index_visible, max_scroll, reveal_index, rows_h,
+        visible_count, wheel_rows,
     };
+
+    #[test]
+    fn only_the_space_below_the_last_row_counts_as_blank() {
+        // 3 行：0..34、42..76、84..118；行间缝 34..42 不是空白。
+        assert!(!below_rows(20.0, 3, PITCH, GAP));
+        assert!(!below_rows(38.0, 3, PITCH, GAP));
+        assert!(!below_rows(118.0, 3, PITCH, GAP));
+        assert!(below_rows(118.5, 3, PITCH, GAP));
+        assert!(below_rows(1.0, 0, PITCH, GAP));
+    }
 
     #[test]
     fn compact_rows_fit_more_tabs_without_shrinking_hit_targets() {
