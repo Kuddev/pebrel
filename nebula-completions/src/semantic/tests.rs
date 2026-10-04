@@ -1,5 +1,142 @@
 use super::*;
 
+#[test]
+fn caret_roles_follow_later_options_without_consuming_later_positionals() {
+    for (line, prefix, expected) in [
+        ("git switch rel-old --detach", "git switch rel", Source::Revisions { include_busy: true }),
+        (
+            "git checkout main-old -- README",
+            "git checkout ma",
+            Source::Revisions { include_busy: false },
+        ),
+        ("git push origin topic-old --delete", "git push origin to", Source::RemoteBranches),
+        ("git switch topic-old --conflict", "git switch to", Source::None),
+    ] {
+        assert_eq!(
+            Context::parse(line, prefix.len(), ShellSyntax::Posix).unwrap().source,
+            expected,
+            "{line}"
+        );
+    }
+    let line = "git switch auto/in-old --no-track";
+    let context = Context::parse(line, "git switch auto/in".len(), ShellSyntax::Posix).unwrap();
+    assert_eq!(context.source, Source::Tracking { mode: TrackingMode::Disabled, infer_name: true });
+    assert!(!context.guesses_branches(true));
+    for line in ["npm run bu-old --prefix ~/project", "npm run bu-old --workspace 'unterminated"] {
+        assert!(Context::parse(line, "npm run bu".len(), ShellSyntax::Posix).is_none());
+    }
+}
+
+#[test]
+fn refspec_caret_edits_keep_the_explicit_destination_and_force_marker() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell] {
+        for command in ["push", "fetch"] {
+            let line =
+                format!("git {command} origin \"+feature/中-old:refs/heads/publish\" --quiet");
+            let cursor = format!("git {command} origin \"+feature/中").len();
+            let context = Context::parse(&line, cursor, syntax).unwrap();
+            let candidate = context.candidates(["feature/中文"]).remove(0);
+            assert_eq!(
+                format!(
+                    "{}{}{}",
+                    &line[..candidate.span.start],
+                    candidate.value,
+                    &line[candidate.span.end..]
+                ),
+                format!("git {command} origin \"+feature/中文:refs/heads/publish\" --quiet")
+            );
+        }
+    }
+}
+
+#[test]
+fn network_commands_keep_remote_refspec_and_option_roles_distinct() {
+    use crate::command_context::ShellSyntax;
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        let parse = |line: &str| Context::parse(line, line.len(), syntax).unwrap();
+        for line in ["git push or", "git fetch --multiple or", "git pull --rebase or"] {
+            assert!(matches!(parse(line).source, Source::Remotes), "{line}");
+        }
+        let context = parse("git push -u origin feat:to");
+        assert!(matches!(context.source, Source::PushRefs { destination: true }));
+        assert_eq!(context.remote.as_deref(), Some("origin"));
+        assert_eq!(context.candidate("topic").unwrap().value, "feat:topic");
+        assert!(matches!(
+            parse("git push origin fe").source,
+            Source::PushRefs { destination: false }
+        ));
+        for line in
+            ["git push --delete origin to", "git fetch origin to", "git pull --ff-only origin to"]
+        {
+            assert!(matches!(parse(line).source, Source::RemoteBranches), "{line}");
+        }
+        assert!(matches!(parse("git fetch --all to").source, Source::None));
+        assert!(matches!(parse("git push --force-with-lease=to").source, Source::None));
+    }
+}
+
+#[test]
+fn workspace_flags_and_script_positions_share_literal_edits() {
+    use crate::command_context::ShellSyntax;
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        let parse = |line: &str| Context::parse(line, line.len(), syntax).unwrap();
+        for line in [
+            "npm -w app run bu",
+            "npm run --workspace app bu",
+            "pnpm --filter app run bu",
+            "yarn workspace app bu",
+            "yarn workspace app run bu",
+        ] {
+            let context = parse(line);
+            assert!(matches!(context.source, Source::ProjectScripts), "{line}");
+            assert_eq!(context.project.selectors, ["app"]);
+        }
+        let context = parse("npm --workspace=ap");
+        assert!(matches!(context.source, Source::Workspaces));
+        assert_eq!(context.candidate("app").unwrap().value, "--workspace=app");
+        assert!(matches!(parse("yarn workspace ap").source, Source::Workspaces));
+        assert!(matches!(parse("pnpm --filter ap").source, Source::Workspaces));
+        let context = parse("npm --workspaces --if-present run bu");
+        assert!(context.project.all && context.project.allow_missing);
+    }
+}
+
+#[test]
+fn cursor_edits_preserve_suffix_arguments_and_utf8_boundaries() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        let line = "git switch fe-old --quiet";
+        let context = Context::parse(line, "git switch fe".len(), syntax).unwrap();
+        let candidate = context.candidate("feature/new").unwrap();
+        assert_eq!(
+            format!(
+                "{}{}{}",
+                &line[..candidate.span.start],
+                candidate.value,
+                &line[candidate.span.end..]
+            ),
+            "git switch feature/new --quiet"
+        );
+        let line = "npm run bu-old --workspace app";
+        let context = Context::parse(line, "npm run bu".len(), syntax).unwrap();
+        assert_eq!(context.project.selectors, ["app"]);
+        assert!(matches!(context.source, Source::ProjectScripts));
+    }
+    let line = "git switch \"feature/中-old\" --quiet";
+    let cursor = "git switch \"feature/中".len();
+    let context = Context::parse(line, cursor, ShellSyntax::PowerShell).unwrap();
+    let candidate = context.candidate("feature/中文").unwrap();
+    assert_eq!(
+        format!(
+            "{}{}{}",
+            &line[..candidate.span.start],
+            candidate.value,
+            &line[candidate.span.end..]
+        ),
+        "git switch \"feature/中文\" --quiet"
+    );
+    assert!(Context::parse(line, cursor - 1, ShellSyntax::PowerShell).is_none());
+}
+
 fn context(line: &str) -> Context {
     Context::parse(line, line.len(), ShellSyntax::Posix).unwrap()
 }
@@ -217,7 +354,9 @@ fn branches_respect_argument_roles_directories_and_worktrees() {
     ] {
         assert!(Context::parse(line, line.len(), ShellSyntax::Posix).is_none(), "{line}");
     }
-    assert!(Context::parse("git switch feat", 13, ShellSyntax::Posix).is_none());
+    let middle = Context::parse("git switch feat", 13, ShellSyntax::Posix).unwrap();
+    assert_eq!(middle.value_prefix(), "fe");
+    assert_eq!(middle.candidate("feature").unwrap().span.end, 15);
 }
 
 #[test]
@@ -244,6 +383,44 @@ fn automatic_branch_creation_respects_explicit_flags_in_each_shell() {
                 "{syntax:?}: {line}"
             );
         }
+    }
+}
+
+#[test]
+fn explicit_tracking_uses_optional_values_and_new_branch_start_roles() {
+    for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell, ShellSyntax::Cmd] {
+        for (line, mode, infer_name) in [
+            ("git switch --track origin/", TrackingMode::Direct, true),
+            ("git switch --track -- origin/", TrackingMode::Direct, true),
+            ("git checkout -t origin/", TrackingMode::Direct, true),
+            ("git switch --track=inherit local/", TrackingMode::Inherit, true),
+            ("git switch --no-track origin/", TrackingMode::Disabled, true),
+            ("git switch -c new --track main", TrackingMode::Direct, false),
+            ("git switch -c new --track -- main", TrackingMode::Direct, false),
+            ("git checkout --track=inherit -b new local/", TrackingMode::Inherit, false),
+            ("git switch --no-track --track origin/", TrackingMode::Direct, true),
+            ("git switch --track --no-track origin/", TrackingMode::Disabled, true),
+        ] {
+            let context = Context::parse(line, line.len(), syntax).unwrap();
+            assert_eq!(context.source, Source::Tracking { mode, infer_name }, "{syntax:?}: {line}");
+            assert!(!context.guesses_branches(true));
+        }
+        let line = "git switch --track=inh";
+        assert_eq!(
+            Context::parse(line, line.len(), syntax).unwrap().static_candidates()[0].value,
+            "--track=inherit"
+        );
+    }
+    for line in [
+        "git switch --track=wrong origin/",
+        "git switch --track --detach origin/",
+        "git checkout --track -- file",
+        "git checkout --track -b new -- origin/",
+        "git checkout --track origin/main -- file",
+        "git switch --track origin/main next",
+        "git switch --track direct origin/",
+    ] {
+        assert_eq!(context(line).source, Source::None, "{line}");
     }
 }
 
@@ -323,8 +500,8 @@ fn scripts_only_occupy_the_name_position_and_keep_explicit_directory_scope() {
     for line in [
         "npm run build --wa",
         "npm exec bu",
-        "npm --workspace missing run bu",
-        "pnpm --filter other run bu",
+        "npm run build -- argument",
+        "pnpm --filter other exec bu",
         "yarn run --top-level bu",
     ] {
         assert!(Context::parse(line, line.len(), ShellSyntax::Posix).is_none(), "{line}");

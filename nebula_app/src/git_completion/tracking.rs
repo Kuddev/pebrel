@@ -25,6 +25,27 @@ pub(super) struct Config {
 }
 
 impl Config {
+    pub fn can_track(&self, name: &str, cancelled: &dyn Fn() -> bool) -> bool {
+        let mut matches = 0;
+        for remote in self.remotes.values() {
+            if cancelled() {
+                return false;
+            }
+            let source = remote.fetch.iter().find_map(|(src, dst)| substitute(dst, name, src));
+            if let Some(source) = source {
+                if remote.excluded.iter().any(|pattern| captures(pattern, &source).is_some()) {
+                    return false;
+                }
+                matches += 1;
+                // 显式 --track 不使用 defaultRemote 消歧；两个远端映射到同一引用会报错。
+                if matches > 1 {
+                    return false;
+                }
+            }
+        }
+        matches == 1 || name.starts_with("refs/heads/")
+    }
+
     pub fn parse(text: &str) -> Self {
         let mut config = Self { guess: true, default_remote: None, remotes: BTreeMap::new() };
         for entry in text.split_terminator('\0') {
@@ -53,6 +74,35 @@ impl Config {
             }
         }
         config
+    }
+
+    pub fn remote_branches(
+        &self,
+        references: &[Reference],
+        cancelled: &dyn Fn() -> bool,
+    ) -> BTreeMap<String, Vec<String>> {
+        let mut names = BTreeMap::new();
+        for (remote_name, remote) in &self.remotes {
+            let mut branches = BTreeSet::new();
+            for reference in references.iter().filter(|r| r.commit && !r.symbolic) {
+                for (source, destination) in &remote.fetch {
+                    if cancelled() {
+                        return BTreeMap::new();
+                    }
+                    let Some(name) = substitute(destination, &reference.full_name, source) else {
+                        continue;
+                    };
+                    if remote.excluded.iter().any(|pattern| captures(pattern, &name).is_some()) {
+                        continue;
+                    }
+                    if let Some(branch) = name.strip_prefix("refs/heads/") {
+                        branches.insert(branch.to_owned());
+                    }
+                }
+            }
+            names.insert(remote_name.clone(), branches.into_iter().collect());
+        }
+        names
     }
 
     pub fn guesses(&self, references: &[Reference], cancelled: &dyn Fn() -> bool) -> Vec<String> {
@@ -130,6 +180,14 @@ impl Config {
             })
             .collect()
     }
+}
+
+pub(super) fn inferred_name(value: &str) -> Option<&str> {
+    // Git 按实际参数拼写去掉 refs/、remotes/，再去掉第一个路径分量。
+    let value = value.strip_prefix("refs/").unwrap_or(value);
+    let value = value.strip_prefix("remotes/").unwrap_or(value);
+    let (_, name) = value.split_once('/')?;
+    valid_branch(name).then_some(name)
 }
 
 fn captures<'a>(pattern: &str, name: &'a str) -> Option<&'a str> {

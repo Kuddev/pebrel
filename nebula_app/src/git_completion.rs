@@ -1,11 +1,13 @@
 //! Bounded local Git discovery for the product's background completion request.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pebrel_completions::Suggestion;
-use pebrel_completions::semantic::{Context, Source};
+use pebrel_completions::semantic::{Context, Source, TrackingMode};
 
+use crate::completion::metadata::Execution;
 use crate::runtime_exec::PaneExecContext;
 
 mod tracking;
@@ -15,15 +17,20 @@ struct Reference {
     full_name: String,
     short_name: String,
     busy: bool,
+    current: bool,
     commit: bool,
     symbolic: bool,
+    direct_tracking: bool,
 }
 
 #[derive(Debug, Default)]
 struct Repository {
     references: Vec<Reference>,
     guesses: Vec<String>,
+    remotes: Vec<String>,
+    remote_branches: std::collections::BTreeMap<String, Vec<String>>,
     guess_enabled: bool,
+    local_branches: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -46,24 +53,33 @@ impl Cache {
 }
 
 /// The application has already proven a reference argument and its execution scope.
-pub(crate) fn complete(
+pub(crate) fn complete_available(
     cache: &Cache,
-    execution: &PaneExecContext,
+    execution: &Execution,
     cwd: &str,
     context: &Context,
     cancelled: &dyn Fn() -> bool,
-) -> Vec<Suggestion> {
+) -> Option<Vec<Suggestion>> {
     let (branches_only, include_busy) = match context.source {
         Source::Branches { include_busy } => (true, include_busy),
+        Source::Tracking { .. }
+        | Source::Remotes
+        | Source::RemoteBranches
+        | Source::PushRefs { .. } => (false, true),
         Source::Revisions { include_busy } | Source::RevisionsAndPaths { include_busy } => {
             (false, include_busy)
         },
-        _ => return Vec::new(),
+        _ => return None,
     };
-    if cwd.is_empty() || execution.wsl_distribution().is_some() || cancelled() {
-        return Vec::new();
+    if cwd.is_empty() || cancelled() {
+        return None;
     }
-    let key = format!("{cwd}\0{:?}", context.directories);
+    let key = format!(
+        "{}\0{cwd}\0{:?}\0{}",
+        execution.key(),
+        context.directories,
+        matches!(context.source, Source::Remotes)
+    );
     let (generation, cached) = {
         let guard = cache.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (
@@ -77,8 +93,10 @@ pub(crate) fn complete(
                 .map(|snapshot| snapshot.repository.clone()),
         )
     };
-    let repository = cached.unwrap_or_else(|| {
-        let repository = Arc::new(query(execution, cwd, context, cancelled).unwrap_or_default());
+    let repository = if let Some(cached) = cached {
+        cached
+    } else {
+        let repository = Arc::new(query(execution, cwd, context, cancelled)?);
         let mut state = cache.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // 提交命令可能已使快照失效，较早请求不能把旧仓库状态重新放回缓存。
         if !cancelled() && state.0 == generation {
@@ -86,11 +104,60 @@ pub(crate) fn complete(
                 Some(Snapshot { key, repository: repository.clone(), fetched: Instant::now() });
         }
         repository
-    });
+    };
+    if matches!(context.source, Source::Remotes) {
+        return Some(context.candidates(
+            repository.remotes.iter().take_while(|_| !cancelled()).map(String::as_str),
+        ));
+    }
+    if matches!(context.source, Source::RemoteBranches | Source::PushRefs { destination: true }) {
+        return Some(
+            context.candidates(
+                context
+                    .remote
+                    .as_ref()
+                    .and_then(|remote| repository.remote_branches.get(remote))
+                    .into_iter()
+                    .flatten()
+                    .take_while(|_| !cancelled())
+                    .map(String::as_str),
+            ),
+        );
+    }
+    if matches!(context.source, Source::PushRefs { destination: false }) {
+        return Some(
+            context.candidates(
+                repository
+                    .references
+                    .iter()
+                    .filter(|r| !r.symbolic && r.commit)
+                    .filter_map(|r| {
+                        let name = r
+                            .full_name
+                            .strip_prefix("refs/heads/")
+                            .or_else(|| r.full_name.strip_prefix("refs/tags/"))?;
+                        Some(if context.value_prefix().starts_with("refs/") {
+                            r.full_name.as_str()
+                        } else if r.short_name.starts_with("heads/")
+                            || r.short_name.starts_with("tags/")
+                        {
+                            r.short_name.as_str()
+                        } else {
+                            name
+                        })
+                    })
+                    .take_while(|_| !cancelled()),
+            ),
+        );
+    }
     let references = repository
         .references
         .iter()
-        .filter(|r| r.commit && !r.symbolic && (include_busy || !r.busy))
+        .filter(|r| r.commit && !r.symbolic && (include_busy || !r.busy || r.current))
+        .filter(|r| {
+            !matches!(context.source, Source::Tracking { mode: TrackingMode::Direct, .. })
+                || r.direct_tracking
+        })
         .filter_map(|reference| {
             let branch = reference.full_name.strip_prefix("refs/heads/");
             if branches_only {
@@ -104,6 +171,11 @@ pub(crate) fn complete(
             } else {
                 Some(reference.short_name.as_str())
             }
+        })
+        .filter(|value| {
+            !matches!(context.source, Source::Tracking { infer_name: true, .. })
+                || tracking::inferred_name(value)
+                    .is_some_and(|name| !repository.local_branches.contains(name))
         });
     let guess = context.guesses_branches(repository.guess_enabled);
     let mut directory = std::path::PathBuf::from(cwd);
@@ -115,17 +187,44 @@ pub(crate) fn complete(
     let guesses = repository.guesses.iter().filter(|_| guess).map(String::as_str);
     let mut candidates = context.candidates(references.chain(guesses).take_while(|_| !cancelled()));
     if matches!(context.source, Source::RevisionsAndPaths { .. }) {
+        let missing = (!execution.is_host()).then(|| {
+            let names: Vec<_> = candidates
+                .iter()
+                .filter_map(|candidate| {
+                    repository
+                        .guesses
+                        .binary_search_by(|name| name.as_str().cmp(candidate.display_value()))
+                        .is_ok()
+                        .then(|| candidate.display_value().to_owned())
+                })
+                .collect();
+            execution
+                .paths_not_found(cwd, &context.directories, &names, cancelled)
+                .unwrap_or_default()
+        });
         // 先匹配再检查文件重名：磁盘探测最多覆盖本次返回的 256 个候选。
         candidates.retain(|candidate| {
             !cancelled() && (repository.guesses.binary_search_by(|name| name.as_str().cmp(candidate.display_value())).is_err()
-                || matches!(std::fs::symlink_metadata(directory.join(candidate.display_value())), Err(error) if error.kind() == std::io::ErrorKind::NotFound))
+                || if let Some(missing) = &missing { missing.contains(candidate.display_value()) }
+                else { matches!(std::fs::symlink_metadata(directory.join(candidate.display_value())), Err(error) if error.kind() == std::io::ErrorKind::NotFound) })
         });
     }
-    if cancelled() { Vec::new() } else { candidates }
+    (!cancelled()).then_some(candidates)
+}
+
+#[cfg(test)]
+fn complete(
+    cache: &Cache,
+    execution: &Execution,
+    cwd: &str,
+    context: &Context,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<Suggestion> {
+    complete_available(cache, execution, cwd, context, cancelled).unwrap_or_default()
 }
 
 fn query(
-    execution: &PaneExecContext,
+    execution: &Execution,
     cwd: &str,
     context: &Context,
     cancelled: &dyn Fn() -> bool,
@@ -138,30 +237,26 @@ fn query(
         if stopped() {
             return None;
         }
-        let mut argv =
-            ["git", "-c", "core.warnAmbiguousRefs=true", "-c", "completion.snapshot=true"]
-                .map(str::to_owned)
-                .to_vec();
-        for directory in &context.directories {
-            argv.extend(["-C".to_owned(), directory.clone()]);
-        }
-        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
-        let (mut command, _) = crate::runtime_exec::build_command(execution, cwd, &argv).ok()?;
-        command.env("GIT_OPTIONAL_LOCKS", "0").env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_NO_LAZY_FETCH", "1")
-            // 较旧 Git 不认识 NO_LAZY_FETCH；空协议白名单也禁止按需拉取访问远端。
-            .env("GIT_ALLOW_PROTOCOL", "");
-        let bytes = crate::platform::process_output::read_cancellable(
-            command,
-            deadline.saturating_duration_since(Instant::now()),
-            remaining,
-            &stopped,
-        )
-        .inspect_err(|error| log::debug!("Local Git completion query failed: {error}"))
-        .ok()?;
+        let bytes =
+            execution.git(cwd, &context.directories, args, deadline, remaining, &stopped)?;
         remaining -= bytes.len();
         String::from_utf8(bytes).ok()
     };
+    if matches!(context.source, Source::Remotes) {
+        let remotes = read(&["remote"])?;
+        return (!stopped()).then_some(Repository {
+            remotes: remotes
+                .lines()
+                .filter(|name| {
+                    !name.is_empty()
+                        && !name.starts_with('-')
+                        && !name.chars().any(char::is_control)
+                })
+                .map(str::to_owned)
+                .collect(),
+            ..Default::default()
+        });
+    }
     // 哨兵保证无相关配置也是成功的空结果；只读取所需键，不收集 URL、凭据等配置。
     let config = tracking::Config::parse(&read(&[
         "config",
@@ -171,7 +266,7 @@ fn query(
     ])?);
     let text = read(&[
         "for-each-ref",
-        "--format=%(refname)%00%(refname:short)%00%(symref)%00%(worktreepath)%00%(objecttype)%00%(*objecttype)",
+        "--format=%(refname)%00%(refname:short)%00%(symref)%00%(worktreepath)%00%(objecttype)%00%(*objecttype)%00%(HEAD)",
     ])?;
     let references: Vec<_> = text
         .lines()
@@ -184,6 +279,7 @@ fn query(
                 Some(worktree),
                 Some(object_type),
                 Some(peeled_type),
+                Some(head),
             ] = std::array::from_fn(|_| fields.next())
             else {
                 return None;
@@ -198,18 +294,38 @@ fn query(
                 full_name: full_name.to_owned(),
                 short_name: short_name.to_owned(),
                 busy: !worktree.is_empty(),
+                current: head == "*",
                 commit: object_type == "commit" || peeled_type == "commit",
                 symbolic: !symref.is_empty(),
+                direct_tracking: config.can_track(full_name, &stopped),
             })
         })
         .collect();
     let guesses = config.guesses(&references, &stopped);
-    (!stopped()).then_some(Repository { references, guesses, guess_enabled: config.guess })
+    let remote_branches = config.remote_branches(&references, &stopped);
+    let local_branches = references
+        .iter()
+        .filter_map(|r| r.full_name.strip_prefix("refs/heads/").map(str::to_owned))
+        .collect();
+    (!stopped()).then_some(Repository {
+        references,
+        guesses,
+        guess_enabled: config.guess,
+        remotes: Vec::new(),
+        remote_branches,
+        local_branches,
+    })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn retain_snapshot_for_test(cache: &Cache) {
+        let mut state = cache.0.lock().unwrap();
+        state.1.as_mut().expect("queried repository").fetched =
+            Instant::now() + Duration::from_secs(60);
+    }
     use pebrel_completions::command_context::ShellSyntax;
 
     pub(crate) fn git(cwd: &std::path::Path, args: &[&str]) {
@@ -252,6 +368,98 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn real_explicit_tracking_creates_and_inherits_the_expected_upstream() {
+        let repository = repository();
+        let cwd = repository.path().to_str().unwrap();
+        let execution = PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+            working_directory: Some(repository.path().to_owned()),
+            ..Default::default()
+        });
+        let cache = Cache::default();
+        let values = |line: &str| {
+            let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
+            complete(
+                &cache,
+                &Execution::Process {
+                    context: execution.clone(),
+                    scope: crate::display::SuggestEnv::Local,
+                },
+                cwd,
+                &context,
+                &|| false,
+            )
+            .into_iter()
+            .map(|s| s.value)
+            .collect::<Vec<_>>()
+        };
+        git(repository.path(), &["remote", "add", "origin", "https://example.invalid/tracking"]);
+        for name in ["only", "off", "source", "excluded"] {
+            git(repository.path(), &["update-ref", &format!("refs/remotes/origin/{name}"), "HEAD"]);
+        }
+        git(repository.path(), &["update-ref", "refs/remotes/unknown/unmapped", "HEAD"]);
+        git(repository.path(), &["branch", "--track", "local/source", "origin/source"]);
+        git(repository.path(), &["tag", "release/one"]);
+        git(repository.path(), &["config", "--add", "remote.origin.fetch", "^refs/heads/excluded"]);
+        assert_eq!(values("git switch -t origin/on"), ["origin/only"]);
+        assert_eq!(
+            values("git switch --track refs/remotes/origin/on"),
+            ["refs/remotes/origin/only"]
+        );
+        assert_eq!(values("git switch --track -c fresh ma"), ["main"]);
+        assert!(values("git switch --track -c fresh release/").is_empty());
+        assert!(values("git switch --track unknown/").is_empty());
+        assert!(values("git switch --track origin/excl").is_empty());
+        assert_eq!(values("git switch --no-track origin/excl"), ["origin/excluded"]);
+        assert_eq!(values("git switch --track=inherit -c fresh local/so"), ["local/source"]);
+        git(repository.path(), &["switch", "-t", "origin/only"]);
+        assert_eq!(
+            git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+                .trim(),
+            "refs/remotes/origin/only"
+        );
+        cache.invalidate();
+        assert!(
+            values("git switch -t origin/on").is_empty(),
+            "cannot infer an already-existing branch name"
+        );
+        let inherited = values("git switch --track=inherit -c inherited local/so");
+        assert_eq!(inherited, ["local/source"]);
+        git(repository.path(), &["switch", "--track=inherit", "-c", "inherited", &inherited[0]]);
+        assert_eq!(
+            git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+                .trim(),
+            "refs/remotes/origin/source"
+        );
+        assert_eq!(values("git switch --no-track origin/of"), ["origin/off"]);
+        git(repository.path(), &["switch", "--no-track", "origin/off"]);
+        assert!(
+            git_output(
+                repository.path(),
+                &["for-each-ref", "--format=%(upstream)", "refs/heads/off"]
+            )
+            .trim()
+            .is_empty()
+        );
+        git(repository.path(), &["switch", "--track", "-c", "local-direct", "main"]);
+        assert_eq!(
+            git_output(repository.path(), &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+                .trim(),
+            "refs/heads/main"
+        );
+        git(
+            repository.path(),
+            &["config", "remote.duplicate.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+        );
+        git(repository.path(), &["config", "checkout.defaultRemote", "origin"]);
+        cache.invalidate();
+        assert!(
+            values("git switch --track -c fresh origin/").is_empty(),
+            "explicit tracking cannot use defaultRemote to resolve duplicate destination mappings"
+        );
+        assert_eq!(values("git switch --no-track -c fresh origin/of"), ["origin/off"]);
+    }
+
+    #[test]
     fn real_remote_guesses_follow_configuration_and_refspecs() {
         let repository = repository();
         let cwd = repository.path().to_str().unwrap();
@@ -262,7 +470,27 @@ pub(crate) mod tests {
         let cache = Cache::default();
         let values = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
-            complete(&cache, &execution, cwd, &context, &|| false)
+            // Unavailable metadata is a valid bounded-request outcome, not an
+            // empty repository. Establish fixture readiness before asserting
+            // semantics; a successful empty result is never retried.
+            (1..=3)
+                .find_map(|read| {
+                    let result = complete_available(
+                        &cache,
+                        &Execution::Process {
+                            context: execution.clone(),
+                            scope: crate::display::SuggestEnv::Local,
+                        },
+                        cwd,
+                        &context,
+                        &|| false,
+                    );
+                    if result.is_none() {
+                        eprintln!("Git fixture metadata unavailable: read {read}/3, {line:?}");
+                    }
+                    result
+                })
+                .expect("valid Git fixture metadata must become available before assertions")
                 .into_iter()
                 .map(|s| s.value)
                 .collect::<Vec<_>>()
@@ -292,7 +520,7 @@ pub(crate) mod tests {
         assert!(values("git switch phantom").is_empty());
         assert!(values("git switch tag-shadow").is_empty());
         assert!(values("git switch excluded").is_empty());
-        assert!(values("git switch --no-track discover/").is_empty());
+        assert!(!values("git switch --no-track discover/").contains(&"discover/one".to_owned()));
         assert!(values("git switch --no-guess discover/").is_empty());
         git(repository.path(), &["config", "checkout.defaultRemote", "upstream"]);
         cache.invalidate();
@@ -382,7 +610,16 @@ pub(crate) mod tests {
         git(repository.path(), &["pack-refs", "--all"]);
         let query = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
-            complete(&cache, &execution, cwd, &context, &|| false)
+            complete(
+                &cache,
+                &Execution::Process {
+                    context: execution.clone(),
+                    scope: crate::display::SuggestEnv::Local,
+                },
+                cwd,
+                &context,
+                &|| false,
+            )
         };
         assert_eq!(query("git switch fe").len(), 2);
         git(repository.path(), &["branch", "feature/beta"]);
@@ -396,7 +633,11 @@ pub(crate) mod tests {
         assert_eq!(query("git switch fe").len(), 2, "exclude branches checked out elsewhere");
         assert_eq!(query("git switch --ignore-other-worktrees fe").len(), 3);
         assert_eq!(query("git switch --detach ma").len(), 1);
-        assert!(query("git switch ma").is_empty(), "checked-out branch is not a switch target");
+        assert_eq!(
+            query("git switch ma")[0].value,
+            "main",
+            "the current branch remains a valid switch target"
+        );
         assert!(
             query("git -C missing switch fe").is_empty(),
             "never fall back to the wrong repository"
@@ -404,7 +645,10 @@ pub(crate) mod tests {
         assert!(
             complete(
                 &cache,
-                &execution,
+                &Execution::Process {
+                    context: execution.clone(),
+                    scope: crate::display::SuggestEnv::Local
+                },
                 cwd,
                 &Context::parse("git switch fe", 13, ShellSyntax::Posix).unwrap(),
                 &|| true
