@@ -356,6 +356,8 @@ impl TerminalView {
             suggest_anchor: None,
             suggestion_task: None,
             completion_session: crate::completion::Session::default(),
+            completion_editor: super::editor::Editor::default(),
+            editor_query_task: None,
             completion_viewport: super::super::completion_viewport::CompletionViewport::default(),
             ghost_enabled,
             completion_style,

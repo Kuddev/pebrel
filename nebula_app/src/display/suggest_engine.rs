@@ -484,15 +484,27 @@ pub(crate) fn semantic_candidates(
     style: CompletionStyle,
     candidates: Vec<SemanticSuggestion>,
 ) -> Candidates {
+    semantic_candidates_at(line, line.len(), style, candidates)
+}
+
+pub(crate) fn semantic_candidates_at(
+    line: &str,
+    cursor: usize,
+    style: CompletionStyle,
+    candidates: Vec<SemanticSuggestion>,
+) -> Candidates {
     let mut result = Candidates::default();
     let items: Vec<_> = candidates
         .into_iter()
         .filter_map(|semantic| {
             let candidate = semantic.suggestion;
-            if candidate.span.end != line.len() {
+            if candidate.span.start > cursor
+                || candidate.span.end < cursor
+                || candidate.span.end > line.len()
+            {
                 return None;
             }
-            let token = line.get(candidate.span.start..candidate.span.end)?;
+            let token = line.get(candidate.span.start..cursor)?;
             // 只替换分歧后的尾部；已闭合引号也能接受，不删除整条命令或 UTF-8 半字符。
             let common: usize = token
                 .chars()
@@ -504,6 +516,7 @@ pub(crate) fn semantic_candidates(
                 label: elide_left(candidate.display_value(), 44),
                 insert: candidate.value[common..].to_owned(),
                 replace_chars: token[common..].chars().count(),
+                replace_after_chars: line.get(cursor..candidate.span.end)?.chars().count(),
                 kind: match semantic.kind {
                     Some(SuggestionKind::Directory) => NebulaCompletionKind::Dir,
                     Some(SuggestionKind::File) => NebulaCompletionKind::File,
@@ -511,12 +524,19 @@ pub(crate) fn semantic_candidates(
                 },
             })
         })
-        .filter(|item| item.replace_chars != 0 || !item.insert.is_empty())
+        .filter(|item| {
+            style == CompletionStyle::Popup
+                || item.replace_chars != 0
+                || item.replace_after_chars != 0
+                || !item.insert.is_empty()
+        })
         .take(256)
         .collect();
     if style == CompletionStyle::Popup {
         result.completion_items = items;
-    } else if let Some(item) = items.into_iter().find(|item| !item.insert.is_empty()) {
+    } else if let Some(item) =
+        items.into_iter().find(|item| !item.insert.is_empty() || item.replace_after_chars != 0)
+    {
         result.suggestion = clamp_ghost(&item.insert);
         result.suggestion_edit = Some(item);
     }
@@ -559,6 +579,7 @@ fn suggest_collect(
             &mut items,
             NebulaCompletionItem {
                 replace_chars,
+                replace_after_chars: 0,
                 label: elide_left(&full, LABEL_MAX),
                 insert,
                 kind: NebulaCompletionKind::History,
@@ -591,6 +612,7 @@ fn suggest_collect(
                 &mut items,
                 NebulaCompletionItem {
                     replace_chars,
+                    replace_after_chars: 0,
                     label: elide_left(command, LABEL_MAX),
                     insert,
                     kind: NebulaCompletionKind::Command,

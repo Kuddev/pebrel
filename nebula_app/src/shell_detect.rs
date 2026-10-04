@@ -712,7 +712,7 @@ pub fn wsl_cwd_report_env(
     // Runtime submit barrier 会拒绝把它错配给尚未真正提交的新命令。
     const REPORT: &str = r#"__nebula_status=$?; if [ -z "${__pebrel_shell_token:-}" ]; then __pebrel_shell_token=$(printf '%s' "wsl|${WSL_DISTRO_NAME:-}|bash:${HOSTNAME:-wsl}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n');
 __PEBREL_CONNECTION_HOOK__
-fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007\033]133;D;%s\007\033]7;file://%s%s\007\033]133;A\007' "$__pebrel_shell_token" "$__nebula_status" "${HOSTNAME:-wsl}" "$PWD""#;
+fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"; if typeset -f __pebrel_editor_ready_report >/dev/null; then __pebrel_editor_ready_report; fi; printf '\033]133;D;%s\007\033]7;file://%s%s\007\033]133;A\007' "$__nebula_status" "${HOSTNAME:-wsl}" "$PWD""#;
     // 宿主侧可能已经有 WSLENV（别的工具设的），必须追加而不是覆盖。
     let mut wslenv = current_wslenv
         .map(str::to_owned)

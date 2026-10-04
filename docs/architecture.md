@@ -86,11 +86,19 @@ process. Measure hot-path effects instead of extrapolating a tiny benchmark to t
 whole product.
 
 Completion follows this boundary: the terminal view captures a verified input line
-and owns its pending task; `completion::Session` prepares an owned request and
+and caret, including an advertised native editor snapshot, and owns its pending
+task; `completion::Session` prepares an owned request and
 selects permitted sources; shared calculation takes only input/cwd/environment and
 returns candidates plus any remote-directory demand. The UI applies results only
 after checking the current input, environment and mode. Popup selection and viewport
-state remain UI-owned. The existing legacy adapter still accepts pane state, then
+state remain UI-owned. Git and project-script metadata follow a captured host,
+WSL or authenticated SSH execution scope; SSH connection generations separate
+cached snapshots. Queries use owned background processes or channels. Workspace
+selection and command argument roles remain shared rules, with local and guest
+catalogs using the same selection code. See the
+[metadata boundary](../architecture/notes/nebula_app/completion/2026-10-03-scoped-metadata.md)
+and [editor ownership](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-03-editor-snapshots.md).
+The existing legacy adapter still accepts pane state, then
 calls the same candidate calculation; it does not gain local Git discovery through
 this extraction. See the [request boundary decision](../architecture/notes/nebula_app/completion/2026-09-30-request-boundary.md).
 

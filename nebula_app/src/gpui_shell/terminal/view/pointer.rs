@@ -338,13 +338,38 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> bool {
         let insert = item.insert;
+        if !self.completion_editor.permits_insert(&insert) {
+            return false;
+        }
         self.completion_viewport.clear();
-        let mut before = if self.suggest.screen_line.is_empty() {
-            self.suggest.line_buf.clone()
-        } else {
-            self.suggest.screen_line.clone()
-        };
-        if item.replace_chars > 0 {
+        let snapshot = self.completion_editor.snapshot(self.prompt_input_epoch).cloned();
+        if item.replace_after_chars > 0 && snapshot.is_none() {
+            return false;
+        }
+        let original =
+            snapshot.as_ref().map(|snapshot| snapshot.line.clone()).unwrap_or_else(|| {
+                if self.suggest.screen_line.is_empty() {
+                    self.suggest.line_buf.clone()
+                } else {
+                    self.suggest.screen_line.clone()
+                }
+            });
+        let cursor = snapshot.as_ref().map_or(original.len(), |snapshot| snapshot.cursor);
+        let Some(head) = original.get(..cursor) else { return false };
+        let Some(tail) = original.get(cursor..) else { return false };
+        let tail: String = tail.chars().skip(item.replace_after_chars).collect();
+        let mut before = head.to_owned();
+        if item.replace_after_chars > 0 {
+            // zsh need not bind Delete's CSI sequence. Traverse proven text,
+            // then use the same native Backspace path as end-of-line edits.
+            let right = super::super::keymap::encode(
+                &gpui::Keystroke::parse("right").unwrap(),
+                &self.term_mode(),
+            )
+            .unwrap_or_else(|| b"\x1b[C".to_vec());
+            self.write_bytes(right.repeat(item.replace_after_chars));
+        }
+        if item.replace_chars + item.replace_after_chars > 0 {
             let backspace = super::super::keymap::encode(
                 &gpui::Keystroke::parse("backspace").unwrap(),
                 &self
@@ -354,7 +379,7 @@ impl TerminalView {
                     .unwrap_or_default(),
             )
             .unwrap_or_else(|| vec![0x7f]);
-            self.write_bytes(backspace.repeat(item.replace_chars));
+            self.write_bytes(backspace.repeat(item.replace_chars + item.replace_after_chars));
             for _ in 0..item.replace_chars {
                 before.pop();
                 crate::display::nebula_input_backspace(&mut self.suggest);
@@ -363,10 +388,13 @@ impl TerminalView {
         for c in insert.chars() {
             crate::display::nebula_input_char(&mut self.suggest, c);
         }
-        self.suggest.completion_suppressed_line = Some(format!("{before}{insert}"));
+        let expected = format!("{before}{insert}{tail}");
+        self.suggest.completion_suppressed_line = Some(expected.clone());
         if !insert.is_empty() {
             self.write_user_text(insert.clone(), false, insert.into_bytes(), cx);
         }
+        self.suggest.expect_completion_echo(original, expected);
+        self.completion_editor.invalidate();
         true
     }
 

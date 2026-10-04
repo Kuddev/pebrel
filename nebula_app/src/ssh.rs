@@ -30,6 +30,7 @@ __nebula_branch=""
 __nebula_at_prompt=0
 __nebula_precmd() {
     printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"
+    if typeset -f __pebrel_editor_ready_report >/dev/null; then __pebrel_editor_ready_report; fi
     printf '\033]133;D\007'
     if command -v git >/dev/null 2>&1; then
         __nebula_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -73,6 +74,7 @@ __pebrel_shell_token=$(printf '%s' "zsh:${HOST:-remote}:$$:$RANDOM" | base64 | t
 __nebula_branch=""
 __nebula_precmd() {
     printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"
+    if typeset -f __pebrel_editor_ready_report >/dev/null; then __pebrel_editor_ready_report; fi
     printf '\033]133;D\007'
     if command -v git >/dev/null 2>&1; then
         __nebula_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
