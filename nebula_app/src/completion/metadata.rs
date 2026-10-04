@@ -281,13 +281,18 @@ impl Execution {
                     file.write_all(script).ok()?;
                     file.rewind().ok()?;
                     command.stdin(file);
-                    return crate::platform::process_output::read_cancellable_with_stdin(
+                    let result = crate::platform::process_output::read_cancellable_with_stdin(
                         command, budget, limit, cancelled,
-                    )
-                    .ok();
+                    );
+                    return acquisition_result(result, argv, budget);
                 }
-                crate::platform::process_output::read_cancellable(command, budget, limit, cancelled)
-                    .ok()
+                acquisition_result(
+                    crate::platform::process_output::read_cancellable(
+                        command, budget, limit, cancelled,
+                    ),
+                    argv,
+                    budget,
+                )
             },
             Self::Ssh { connection, .. } => {
                 if !cwd.starts_with('/') || cwd.chars().any(char::is_control) {
@@ -318,6 +323,24 @@ impl Execution {
             },
         }
     }
+}
+
+fn acquisition_result(
+    result: std::io::Result<Vec<u8>>,
+    _argv: &[String],
+    _budget: Duration,
+) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    if let Err(error) = &result {
+        eprintln!(
+            "metadata acquisition failed: tool={:?} budget_ms={} kind={:?} os_error={:?} reason={error}",
+            _argv.first(),
+            _budget.as_millis(),
+            error.kind(),
+            error.raw_os_error()
+        );
+    }
+    result.ok()
 }
 
 fn quote(value: &str) -> String {
