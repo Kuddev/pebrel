@@ -76,6 +76,16 @@ impl PaneExecContext {
         }
     }
 
+    pub(crate) fn for_wsl_distribution(&self, name: &str) -> Option<Self> {
+        let mut context = self.clone();
+        let ExecLocation::Wsl { distro, .. } = &mut context.location else { return None };
+        if distro.as_deref().is_some_and(|old| old != name) {
+            return None;
+        }
+        *distro = Some(name.to_owned());
+        Some(context)
+    }
+
     pub(crate) fn wsl_user(&self) -> Option<&str> {
         match &self.location {
             ExecLocation::Host => None,

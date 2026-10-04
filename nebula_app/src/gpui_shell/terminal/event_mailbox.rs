@@ -47,9 +47,12 @@ pub(super) fn channel() -> (EventSender, EventReceiver) {
 /// Editing a CMD input line does not invalidate a prompt already received from
 /// the PTY. Submission and unknown control sequences remain conservative.
 pub(super) fn preserves_native_prompt(mut bytes: &[u8]) -> bool {
+    let editing_control = |value| {
+        matches!(value, 1 | 2 | 5 | 6 | 8 | 9 | 11 | 12 | 14 | 16 | 18 | 21 | 23 | 25 | 27 | 127)
+    };
     while let Some((&byte, rest)) = bytes.split_first() {
         if byte != 0x1b {
-            if byte.is_ascii_control() && !matches!(byte, 8 | 9 | 127) {
+            if byte.is_ascii_control() && (byte == 27 || !editing_control(u16::from(byte))) {
                 return false;
             }
             bytes = rest;
@@ -77,7 +80,9 @@ pub(super) fn preserves_native_prompt(mut bytes: &[u8]) -> bool {
                     return false;
                 }
                 // Vk;Sc;Uc;Kd;Cs;Rc: Enter is a boundary even if Uc is zero.
-                if values[0] == 13 || (values[2] < 32 && !matches!(values[2], 0 | 8 | 9 | 27)) {
+                if values[0] == 13
+                    || (values[2] < 32 && values[2] != 0 && !editing_control(values[2]))
+                {
                     return false;
                 }
             },
@@ -157,6 +162,24 @@ impl Stream for EventReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_editor_controls_keep_the_prompt_but_submissions_and_interrupts_end_it() {
+        let prompt = NativePromptState::default();
+        prompt.observe_prompt();
+        for (epoch, bytes) in
+            [b"\x15".as_slice(), b"\x17", b"\x1b[85;22;21;1;8;1_"].into_iter().enumerate()
+        {
+            assert!(preserves_native_prompt(bytes));
+            prompt.observe_input(epoch as u64, preserves_native_prompt(bytes));
+            assert!(prompt.snapshot().pending);
+        }
+        for bytes in [b"\r".as_slice(), b"\x03", b"\x1b[13;28;0;1;0;1_"] {
+            assert!(!preserves_native_prompt(bytes));
+        }
+        prompt.observe_input(5, preserves_native_prompt(b"\r"));
+        assert!(!prompt.snapshot().pending);
+    }
 
     #[test]
     fn eighty_sessions_keep_all_agent_edges_through_a_repaint_flood() {
