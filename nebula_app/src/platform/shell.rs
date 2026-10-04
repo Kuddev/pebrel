@@ -212,7 +212,7 @@ pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal:
         let diagnostic = _output.join("editor-shell.json").to_string_lossy().replace('\'', "''");
         args.last_mut().unwrap().push_str(&format!("; @{{ready=$global:PebrelCompletionInputReady; version=(Get-Module PSReadLine).Version.ToString(); chordParameter=(Get-Command Get-PSReadLineKeyHandler).Parameters.ContainsKey('Chord'); binding=@(Get-PSReadLineKeyHandler | Where-Object {{ $_.Key -like '*F12*' }} | Select-Object Key,Function)}} | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath '{diagnostic}'"));
         if std::env::var("PEBREL_COMPLETION_QA_PREDICTION").as_deref() == Ok("1") {
-            args.last_mut().unwrap().push_str("; Set-PSReadLineOption -PredictionSource History -PredictionViewStyle InlineView; foreach ($mode in 'inline','popup','hybrid') { [Microsoft.PowerShell.PSConsoleReadLine]::AddToHistory(\"git switch qa/prediction-$mode\") }; (Get-PSReadLineOption).PredictionSource.ToString() | Set-Content -LiteralPath (Join-Path $env:PEBREL_COMPLETION_QA_DIR 'prediction-source.txt')");
+            args.last_mut().unwrap().push_str("; Set-PSReadLineOption -PredictionSource History -PredictionViewStyle InlineView; (Get-PSReadLineOption).PredictionSource.ToString() | Set-Content -LiteralPath (Join-Path $env:PEBREL_COMPLETION_QA_DIR 'prediction-source.txt')");
         }
         // Explicit PTY arguments are not Windows-escaped. Encode the complete
         // fixture startup so nested prediction strings survive both PowerShell hosts.

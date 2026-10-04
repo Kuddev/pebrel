@@ -470,19 +470,30 @@ pub(crate) mod tests {
         let cache = Cache::default();
         let values = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
-            complete(
-                &cache,
-                &Execution::Process {
-                    context: execution.clone(),
-                    scope: crate::display::SuggestEnv::Local,
-                },
-                cwd,
-                &context,
-                &|| false,
-            )
-            .into_iter()
-            .map(|s| s.value)
-            .collect::<Vec<_>>()
+            // Unavailable metadata is a valid bounded-request outcome, not an
+            // empty repository. Establish fixture readiness before asserting
+            // semantics; a successful empty result is never retried.
+            (1..=3)
+                .find_map(|read| {
+                    let result = complete_available(
+                        &cache,
+                        &Execution::Process {
+                            context: execution.clone(),
+                            scope: crate::display::SuggestEnv::Local,
+                        },
+                        cwd,
+                        &context,
+                        &|| false,
+                    );
+                    if result.is_none() {
+                        eprintln!("Git fixture metadata unavailable: read {read}/3, {line:?}");
+                    }
+                    result
+                })
+                .expect("valid Git fixture metadata must become available before assertions")
+                .into_iter()
+                .map(|s| s.value)
+                .collect::<Vec<_>>()
         };
         for remote in ["origin", "upstream"] {
             git(
