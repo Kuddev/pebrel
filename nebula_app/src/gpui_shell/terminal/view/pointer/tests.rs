@@ -439,6 +439,7 @@ fn explicit_link_gesture_respects_disabled_hints_and_required_modifiers(cx: &mut
 
 /// 真实终端元素 + 可回滚的历史，滚轮手势才有可观察的落点。
 fn terminal_with_history(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
+    cx.update(crate::gpui_shell::math_view::register);
     let (probe, mut cx) = open(cx);
     let terminal = probe.read_with(&cx, |probe, _| probe.terminal.clone());
     terminal.update(&mut cx, |view, cx| {
@@ -502,4 +503,121 @@ fn ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll(cx: &mut TestAppCo
     // 关闭开关只影响 Ctrl+滚轮：普通滚轮照旧滚动。
     wheel_over_terminal(&mut cx, 60.0, false);
     assert!(terminal.read_with(&cx, |view, _| view.scroll_state().0) > 0);
+}
+
+#[gpui::test]
+fn scrollbar_modes_keep_live_drag_visible_and_preserve_hidden_selection(cx: &mut TestAppContext) {
+    use nebula_settings::ScrollbarVisibility;
+
+    let (terminal, mut window) = terminal_with_history(cx);
+    window.update(|_, cx| {
+        cx.global_mut::<Settings>().scrollbar_visibility = ScrollbarVisibility::Auto;
+    });
+    terminal.update(&mut window, |view, cx| {
+        view.apply_settings(cx);
+        view.error = None;
+        view.spawn_at -= TerminalView::STARTUP_GRID_GRACE;
+        view.copy_on_select = false;
+        let history = (0..5000).map(|line| format!("row-{line}\r\n")).collect::<String>();
+        super::super::startup_tests::feed(view, history.as_bytes());
+        cx.notify();
+    });
+    draw(&mut window);
+    let (edge, center, top, history) = terminal.read_with(&window, |view, _| {
+        let (_, history) = view.scroll_state();
+        let thumb = view.scrollbar_geometry(0, history).unwrap();
+        assert_eq!(thumb.size.height, px(SCROLLBAR_MIN_THUMB));
+        (thumb.center(), view.origin + gpui::point(px(50.0), px(50.0)), view.origin.y, history)
+    });
+    terminal.update(&mut window, |view, _| view.scroll_to_offset(0, view.scroll_state().0));
+    window.simulate_mouse_move(edge, None, Modifiers::default());
+    assert!(terminal.read_with(&window, |view, _| view.scrollbar_thumb(0, history).is_none()));
+    window.simulate_mouse_down(edge, MouseButton::Left, Modifiers::default());
+    assert!(terminal.read_with(&window, |view, _| view.selecting));
+    assert!(!terminal.read_with(&window, |view, _| view.scrollbar_dragging()));
+    window.simulate_mouse_up(edge, MouseButton::Left, Modifiers::default());
+    terminal.update(&mut window, |view, _| {
+        view.session.as_ref().unwrap().term.lock().selection = None;
+    });
+
+    for mode in [ScrollbarVisibility::Hover, ScrollbarVisibility::Always, ScrollbarVisibility::Auto]
+    {
+        window.update(|_, cx| cx.global_mut::<Settings>().scrollbar_visibility = mode);
+        terminal.update(&mut window, |view, cx| {
+            view.apply_settings(cx);
+            view.scroll_to_offset(0, view.scroll_state().0);
+        });
+        window.simulate_mouse_move(center, None, Modifiers::default());
+        assert_eq!(
+            terminal.read_with(&window, |view, _| view.scrollbar_thumb(0, history).is_some()),
+            mode == ScrollbarVisibility::Always,
+        );
+        if mode == ScrollbarVisibility::Auto {
+            terminal.update(&mut window, |view, _| view.scroll_to_offset(20, 0));
+        }
+        window.simulate_mouse_move(edge, None, Modifiers::default());
+        let grab_point = terminal.read_with(&window, |view, _| {
+            view.scrollbar_thumb(view.scroll_state().0, history).unwrap().center()
+        });
+        let before = terminal.read_with(&window, |view, _| view.scroll_state().0);
+        window.simulate_mouse_down(grab_point, MouseButton::Left, Modifiers::default());
+        assert_eq!(terminal.read_with(&window, |view, _| view.scroll_state().0), before);
+        assert!(terminal.read_with(&window, |view, _| view.scrollbar_dragging()));
+        let grab = terminal.read_with(&window, |view, _| view.scrollbar_drag.unwrap());
+        // Leaving the edge during a drag must retain feedback and ownership.
+        window.simulate_mouse_move(
+            gpui::point(edge.x - px(50.0), top + px(grab)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        assert_eq!(terminal.read_with(&window, |view, _| view.scroll_state().0), history);
+        window.simulate_mouse_move(
+            gpui::point(edge.x - px(50.0), edge.y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        assert_eq!(terminal.read_with(&window, |view, _| view.scroll_state().0), 0);
+        assert!(terminal.read_with(&window, |view, _| view.scrollbar_thumb(0, history).is_some()));
+        assert!(terminal.read_with(&window, |view, _| {
+            view.session.as_ref().unwrap().term.lock().selection.is_none()
+        }));
+        window.simulate_mouse_up(
+            gpui::point(px(1.0), px(1.0)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        draw(&mut window);
+        assert!(!terminal.read_with(&window, |view, _| view.scrollbar_dragging()));
+        assert_eq!(
+            terminal.read_with(&window, |view, _| view.scrollbar_thumb(0, history).is_some()),
+            mode == ScrollbarVisibility::Always,
+        );
+    }
+}
+
+#[gpui::test]
+fn scrollbar_modes_never_capture_without_history_and_hover_clears_on_leave(
+    cx: &mut TestAppContext,
+) {
+    use nebula_settings::ScrollbarVisibility;
+
+    let (terminal, mut window, receiver) = link_fixture(cx, b"\x1b[?1000h");
+    terminal.update(&mut window, |view, _| view.spawn_at -= TerminalView::STARTUP_GRID_GRACE);
+    for mode in [ScrollbarVisibility::Auto, ScrollbarVisibility::Hover, ScrollbarVisibility::Always]
+    {
+        window.update(|_, cx| cx.global_mut::<Settings>().scrollbar_visibility = mode);
+        terminal.update(&mut window, |view, cx| view.apply_settings(cx));
+        draw(&mut window);
+        let edge = terminal.read_with(&window, |view, _| view.scrollbar_hot_zone().center());
+        window.simulate_mouse_move(edge, None, Modifiers::default());
+        assert!(terminal.read_with(&window, |view, _| view.scrollbar_hovered));
+        assert!(terminal.read_with(&window, |view, _| view.scrollbar_thumb(0, 0).is_none()));
+        window.simulate_mouse_down(edge, MouseButton::Left, Modifiers::default());
+        assert!(!terminal.read_with(&window, |view, _| view.scrollbar_dragging()));
+        window.simulate_mouse_up(edge, MouseButton::Left, Modifiers::default());
+        assert!(receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+        window.simulate_mouse_move(gpui::point(px(1.0), px(1.0)), None, Modifiers::default());
+        draw(&mut window);
+        assert!(!terminal.read_with(&window, |view, _| view.scrollbar_hovered));
+    }
 }

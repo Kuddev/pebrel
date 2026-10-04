@@ -38,6 +38,11 @@
       "save_failed": "无法保存光标动画设置：{error}"
     },
     "scrolling": {
+      "scrollbar": "滚动条显示方式",
+      "scrollbar_auto": "自动隐藏",
+      "scrollbar_hover": "悬停显示",
+      "scrollbar_always": "始终显示",
+      "scrollbar_description": "自动隐藏仅在回滚历史中显示；悬停在终端右缘时显示；始终显示在有回滚历史时常显。",
       "history": "回滚行数",
       "history_description": "每个窗格保留的历史行数。仅适用于新窗格。",
       "speed": "滚动速度",
