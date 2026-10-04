@@ -18,6 +18,9 @@ mod macos;
 #[cfg(all(target_os = "macos", feature = "gpui-shell"))]
 pub(crate) use macos::init as init_gpui;
 
+#[cfg(all(not(target_os = "macos"), feature = "gpui-shell"))]
+pub(crate) fn init_gpui(_cx: &mut gpui::App) {}
+
 pub(crate) fn toast_clickable(title: &str, body: &str, activation: Option<ToastActivation>) {
     toast_actionable(title, body, activation, Vec::new());
 }
