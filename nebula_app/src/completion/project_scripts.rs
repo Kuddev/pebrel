@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pebrel_completions::semantic::Context;
+use pebrel_completions::semantic::{Context, ProjectSelection, Source};
+
+pub(super) mod workspace;
 
 #[derive(Debug)]
 struct Snapshot {
-    key: (PathBuf, Vec<String>),
+    key: (PathBuf, Vec<String>, ProjectSelection, bool, String),
     fetched: Instant,
     names: Arc<[String]>,
 }
@@ -24,17 +26,47 @@ impl Cache {
         state.1 = None;
     }
 
+    #[cfg(test)]
     pub(super) fn complete(
         &self,
         cwd: &str,
         context: &Context,
         cancelled: &dyn Fn() -> bool,
     ) -> Vec<pebrel_completions::Suggestion> {
+        self.complete_source(cwd, context, cancelled, None).unwrap_or_default()
+    }
+
+    pub(super) fn complete_in(
+        &self,
+        cwd: &str,
+        context: &Context,
+        cancelled: &dyn Fn() -> bool,
+        execution: &super::metadata::Execution,
+    ) -> Option<Vec<pebrel_completions::Suggestion>> {
+        self.complete_source(cwd, context, cancelled, Some(execution))
+    }
+
+    fn complete_source(
+        &self,
+        cwd: &str,
+        context: &Context,
+        cancelled: &dyn Fn() -> bool,
+        execution: Option<&super::metadata::Execution>,
+    ) -> Option<Vec<pebrel_completions::Suggestion>> {
         let cwd = Path::new(cwd);
-        if !cwd.is_absolute() || cancelled() {
-            return Vec::new();
+        let guest = execution.is_some_and(|execution| !execution.is_host());
+        if (if guest { !cwd.to_string_lossy().starts_with('/') } else { !cwd.is_absolute() })
+            || cancelled()
+        {
+            return None;
         }
-        let key = (cwd.to_owned(), context.directories.clone());
+        let key = (
+            cwd.to_owned(),
+            context.directories.clone(),
+            context.project.clone(),
+            matches!(context.source, Source::Workspaces),
+            execution.map_or_else(String::new, super::metadata::Execution::key),
+        );
         let (generation, cached) = {
             let state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             (
@@ -46,17 +78,28 @@ impl Cache {
                     .map(|s| s.names.clone()),
             )
         };
-        let names = cached.unwrap_or_else(|| {
+        let names = if let Some(cached) = cached {
+            cached
+        } else {
             let names: Arc<[String]> =
-                read_names(cwd, &context.directories, cancelled).unwrap_or_default().into();
+                if let Some(execution) = execution.filter(|execution| !execution.is_host()) {
+                    execution.project(cwd.to_str().unwrap_or_default(), context, cancelled)?.into()
+                } else if context.project.all
+                    || !context.project.selectors.is_empty()
+                    || matches!(context.source, Source::Workspaces)
+                {
+                    workspace::read(cwd, context, cancelled)?.into()
+                } else {
+                    read_names(cwd, &context.directories, cancelled)?.into()
+                };
             let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // 不持锁读磁盘；提交或关闭期间返回的旧快照不能重新进入缓存。
             if !cancelled() && generation == state.0 {
                 state.1 = Some(Snapshot { key, names: names.clone(), fetched: Instant::now() });
             }
             names
-        });
-        context.candidates(names.iter().take_while(|_| !cancelled()).map(String::as_str))
+        };
+        (!cancelled()).then(|| context.candidates(names.iter().map(String::as_str)))
     }
 }
 
