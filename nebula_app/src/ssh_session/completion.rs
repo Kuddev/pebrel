@@ -28,6 +28,33 @@ pub(crate) async fn capture(destination: &str) -> Result<Connection, SessionErro
 }
 
 #[cfg(test)]
+pub(crate) async fn prepare_owned_fixture(
+    destination: &str,
+    key: &std::path::Path,
+    known_hosts: &std::path::Path,
+) -> Result<(), SessionError> {
+    let parsed = SshDestination::resolve(destination)?;
+    if parsed.host != "127.0.0.1" {
+        return Err("completion fixture must use the owned loopback server".into());
+    }
+    let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
+    let mut profiles = crate::ssh_profiles::SshProfiles::load(&path)?;
+    let mut profile = profiles.for_destination(destination);
+    profile.auth = crate::ssh_profiles::SshAuthMode::PublicKey;
+    profile.private_keys = vec![key.to_owned()];
+    profiles.upsert(profile.clone());
+    profiles.save(&path)?;
+    let route = route::ResolvedRoute {
+        destination: parsed,
+        profile,
+        transport: route::RouteTransport::Direct,
+        known_hosts_path: Some(known_hosts.to_owned()),
+    };
+    authenticated_route(&route, None::<&NoopSshEventHost>, false, false).await?;
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) async fn read(
     destination: &str,
     command: &str,

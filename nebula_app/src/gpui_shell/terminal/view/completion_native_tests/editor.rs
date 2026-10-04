@@ -34,11 +34,7 @@ async fn probe_buffer(
     cx.update_window(window, |_, _, cx| {
         view.update(cx, |view, _| {
             view.completion_editor.clear_report_for_test();
-            let query = super::super::super::keymap::encode(
-                &gpui::Keystroke::parse("ctrl-shift-f12").unwrap(),
-                &view.term_mode(),
-            )
-            .unwrap();
+            let query = view.completion_editor_query_bytes();
             view.write_bytes(query);
         })
     })

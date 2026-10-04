@@ -1,4 +1,10 @@
 # Private editor query; existing user bindings retain ownership of F24.
+__pebrel_editor_ready_report() {
+    if [ "${__pebrel_editor_ready:-0}" = 1 ] && [ -n "${__pebrel_shell_token:-}" ]; then
+        printf '\033]1337;SetUserVar=pebrel_editor_ready=%s\007' "$__pebrel_shell_token"
+    fi
+}
+
 __pebrel_editor_report() {
     local encoded owner cursor line prefix
     owner=$(printf '%s' "$__pebrel_shell_token" | base64 -d)
@@ -17,7 +23,8 @@ __pebrel_editor_report() {
     printf '\033]1337;SetUserVar=pebrel_editor=%s\007' "$encoded"
 }
 
-if [ -n "${BASH_VERSION-}" ] && [[ $- == *i* ]]; then
+# Bash 3 does not expose the native buffer/caret variables used by bind -x.
+if [ -n "${BASH_VERSION-}" ] && (( BASH_VERSINFO[0] >= 4 )) && [[ $- == *i* ]]; then
     __pebrel_editor_bound=0
     while IFS= read -r __pebrel_binding; do
         [[ $__pebrel_binding == '"\e[45~":'* ]] && __pebrel_editor_bound=1
