@@ -11,6 +11,7 @@ mod confirmation;
 mod conversation;
 pub(super) mod cursor;
 mod cwd_report;
+mod editor;
 mod image_paste;
 mod layout;
 #[cfg(all(test, windows, feature = "gpui-test-support"))]
@@ -440,6 +441,8 @@ pub struct TerminalView {
     pub(super) suggest_anchor: Option<(usize, usize)>,
     suggestion_task: Option<suggest::Pending>,
     completion_session: crate::completion::Session,
+    completion_editor: editor::Editor,
+    editor_query_task: Option<gpui::Task<()>>,
     ghost_enabled: bool,
     completion_style: crate::display::CompletionStyle,
     /// BEL 后暂停侧栏转圈，直到用户再往 PTY 打字（旧壳 `awaiting_input`）。
@@ -691,6 +694,7 @@ impl TerminalView {
                     self.on_native_cmd_prompt(cx);
                 }
                 self.suggest.completion_shell_report(&name, &value);
+                self.handle_completion_editor_report(&name, &value, cx);
                 cx.notify();
             },
         }
@@ -741,6 +745,8 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        self.completion_editor.invalidate();
+        self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
         self.prompt_input_epoch = self.prompt_input_epoch.wrapping_add(1);
         self.path_drop.invalidate();
@@ -904,6 +910,8 @@ impl TerminalView {
         self.suggestion_task = None;
         self.suggest.clear_completion_hints();
         self.suggest.completion_popup_requested = false;
+        self.completion_editor.invalidate();
+        self.editor_query_task = None;
 
         self.font =
             mono_font(&families[0], FontWeight::NORMAL, FontStyle::Normal, settings.ligatures);

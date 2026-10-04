@@ -1857,6 +1857,7 @@ mod tests {
     fn popup_keeps_a_single_short_exact_command_visible() {
         let items = [NebulaCompletionItem {
             replace_chars: 0,
+            replace_after_chars: 0,
             label: "cat".to_owned(),
             insert: " ".to_owned(),
             kind: NebulaCompletionKind::Command,
@@ -1882,6 +1883,7 @@ mod tests {
     fn popup_layout_preserves_the_unselected_state() {
         let items = [NebulaCompletionItem {
             replace_chars: 0,
+            replace_after_chars: 0,
             label: "git pull upstream".to_owned(),
             insert: " upstream".to_owned(),
             kind: NebulaCompletionKind::History,
@@ -1899,6 +1901,7 @@ mod tests {
         let items = (0..30)
             .map(|index| NebulaCompletionItem {
                 replace_chars: 0,
+                replace_after_chars: 0,
                 label: format!("command-{index}"),
                 insert: format!("{index}"),
                 kind: NebulaCompletionKind::Command,
@@ -1931,6 +1934,7 @@ mod tests {
     fn popup_flips_above_the_cursor_near_the_bottom_edge() {
         let items = [NebulaCompletionItem {
             replace_chars: 0,
+            replace_after_chars: 0,
             label: "completion.rs".to_owned(),
             insert: "ompletion.rs".to_owned(),
             kind: NebulaCompletionKind::File,
