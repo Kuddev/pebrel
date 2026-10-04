@@ -54,6 +54,7 @@ use keyboard_bindings::{
     STATIC_DEFAULT_COMBOS, custom_workspace_binding, default_workspace_bindings, gpui_binding_combo,
 };
 mod details_panel;
+mod directory_jump;
 mod documents;
 mod file_tree;
 mod key_actions;
@@ -427,6 +428,11 @@ enum WorkspacePaletteAction {
     },
     /// 在 frecency 目录中新建终端；已有目录中的 pane 由上面的 FocusPane 命中。
     OpenDirectory(std::path::PathBuf),
+    /// 提示符目录选择器：回到发起的 pane 里 `cd`。
+    ChangeDirectory {
+        pane: gpui::EntityId,
+        path: std::path::PathBuf,
+    },
     RunAiSession {
         command: String,
         cwd: Option<std::path::PathBuf>,
@@ -1951,44 +1957,7 @@ impl NebulaWorkspace {
             .get(self.command_palette_selected)
             .map(|item| item.action.clone());
         let Some(action) = action else { return };
-        match action {
-            WorkspacePaletteAction::Shared(action) => self.run_palette_action(action, window, cx),
-            WorkspacePaletteAction::LayoutRecipes => {
-                self.dismiss_palette_state();
-                self.open_layout_recipes(window, cx);
-            },
-            WorkspacePaletteAction::FocusTab(tab) => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::FocusPane { tab, pane } => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_pane(tab, pane, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::OpenDirectory(path) => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(Some(path), None, window, cx);
-            },
-            WorkspacePaletteAction::RunAiSession { command, cwd } => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(cwd, Some(command), window, cx);
-            },
-            WorkspacePaletteAction::LaunchSshHost(host) => {
-                self.dismiss_palette_state();
-                self.add_ssh_terminal(host, window, cx);
-            },
-            WorkspacePaletteAction::LaunchShell(detected) => {
-                self.launch_palette_shell(detected, window, cx);
-            },
-            WorkspacePaletteAction::LaunchProfile(profile) => {
-                self.launch_palette_profile(profile, window, cx);
-            },
-        }
+        self.run_workspace_palette_action(action, window, cx);
     }
 
     fn open_quick_jump_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {

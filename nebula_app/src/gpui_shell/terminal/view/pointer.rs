@@ -642,6 +642,15 @@ impl TerminalView {
             && self.link_hover.as_ref().is_some_and(|hover| hover.hint.bounds().contains(&point));
         if open_link {
             self.try_open_hovered_link(window, cx);
+        } else if let Some(directory) = (!pending_link_open
+            && event.click_count == 1
+            && !event.modifiers.modified()
+            && self.selection_is_click())
+        .then(|| self.prompt_directory_at(event.position, cx))
+        .flatten()
+        {
+            self.clear_selection();
+            cx.emit(TerminalViewEvent::DirectoryJumpRequested(directory));
         } else if self.copy_on_select {
             self.copy_selection(false, window, cx);
         }

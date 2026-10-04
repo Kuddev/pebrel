@@ -1292,5 +1292,11 @@
       "failed": "操作未完成：{detail}",
       "changed": "主题包在检查后发生了变化。请重新选择文件，再确认安装。"
     }
+  },
+  "directory_jump": {
+    "placeholder": "搜索目录…",
+    "here": "当前位置",
+    "subfolders": "子文件夹",
+    "frequent": "常用目录"
   }
 }

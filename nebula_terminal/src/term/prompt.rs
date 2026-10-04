@@ -50,6 +50,19 @@ impl<T> Term<T> {
         self.nebula_prompt_active && !self.mode.contains(TermMode::ALT_SCREEN)
     }
 
+    /// Grid line of the live prompt's first row (its OSC 133;A mark), while
+    /// the shell sits at that prompt and the row is still in the grid.
+    pub fn nebula_live_prompt_line(&self) -> Option<Line> {
+        if !self.nebula_prompt_active() {
+            return None;
+        }
+        let abs = *self.nebula_prompt_marks.back()?;
+        let relative =
+            abs as i64 - self.grid.scrolled_out() as i64 - self.grid.history_size() as i64;
+        let line = Line(i32::try_from(relative).ok()?);
+        (line >= self.grid.topmost_line() && line <= self.grid.bottommost_line()).then_some(line)
+    }
+
     /// Capture OSC 133;B between parser slices, before input is echoed.
     pub fn nebula_mark_prompt_input(&mut self) {
         if self.nebula_prompt_active() {

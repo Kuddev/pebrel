@@ -161,6 +161,57 @@ impl NebulaWorkspace {
         rows
     }
 
+    /// 命令面板选中一行后的唯一执行入口：键盘回车与鼠标点击共用，新增动作
+    /// 只在这里接一次。
+    pub(super) fn run_workspace_palette_action(
+        &mut self,
+        action: WorkspacePaletteAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            WorkspacePaletteAction::Shared(action) => self.run_palette_action(action, window, cx),
+            WorkspacePaletteAction::LayoutRecipes => {
+                self.dismiss_palette_state();
+                self.open_layout_recipes(window, cx);
+            },
+            WorkspacePaletteAction::FocusTab(tab) => {
+                self.dismiss_palette_state();
+                self.activate_tab(tab, window, cx);
+                self.focus_active(window, cx);
+                cx.notify();
+            },
+            WorkspacePaletteAction::FocusPane { tab, pane } => {
+                self.dismiss_palette_state();
+                self.activate_tab(tab, window, cx);
+                self.focus_pane(tab, pane, window, cx);
+                self.focus_active(window, cx);
+                cx.notify();
+            },
+            WorkspacePaletteAction::OpenDirectory(path) => {
+                self.dismiss_palette_state();
+                self.add_terminal_at(Some(path), None, window, cx);
+            },
+            WorkspacePaletteAction::ChangeDirectory { pane, path } => {
+                self.run_directory_jump(pane, path, window, cx);
+            },
+            WorkspacePaletteAction::RunAiSession { command, cwd } => {
+                self.dismiss_palette_state();
+                self.add_terminal_at(cwd, Some(command), window, cx);
+            },
+            WorkspacePaletteAction::LaunchSshHost(host) => {
+                self.dismiss_palette_state();
+                self.add_ssh_terminal(host, window, cx);
+            },
+            WorkspacePaletteAction::LaunchShell(detected) => {
+                self.launch_palette_shell(detected, window, cx);
+            },
+            WorkspacePaletteAction::LaunchProfile(profile) => {
+                self.launch_palette_profile(profile, window, cx);
+            },
+        }
+    }
+
     pub(super) fn render_command_palette(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         use crate::display::ui::tokens::{control, radius, space};
 
@@ -416,46 +467,7 @@ impl NebulaWorkspace {
                 })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.command_palette_selected = ix;
-                    match action.clone() {
-                        WorkspacePaletteAction::Shared(action) => {
-                            this.run_palette_action(action, window, cx);
-                        },
-                        WorkspacePaletteAction::LayoutRecipes => {
-                            this.dismiss_palette_state();
-                            this.open_layout_recipes(window, cx);
-                        },
-                        WorkspacePaletteAction::FocusTab(tab) => {
-                            this.dismiss_palette_state();
-                            this.activate_tab(tab, window, cx);
-                            this.focus_active(window, cx);
-                            cx.notify();
-                        },
-                        WorkspacePaletteAction::FocusPane { tab, pane } => {
-                            this.dismiss_palette_state();
-                            this.activate_tab(tab, window, cx);
-                            this.focus_pane(tab, pane, window, cx);
-                            this.focus_active(window, cx);
-                            cx.notify();
-                        },
-                        WorkspacePaletteAction::OpenDirectory(path) => {
-                            this.dismiss_palette_state();
-                            this.add_terminal_at(Some(path), None, window, cx);
-                        },
-                        WorkspacePaletteAction::RunAiSession { command, cwd } => {
-                            this.dismiss_palette_state();
-                            this.add_terminal_at(cwd, Some(command), window, cx);
-                        },
-                        WorkspacePaletteAction::LaunchSshHost(host) => {
-                            this.dismiss_palette_state();
-                            this.add_ssh_terminal(host, window, cx);
-                        },
-                        WorkspacePaletteAction::LaunchShell(detected) => {
-                            this.launch_palette_shell(detected, window, cx);
-                        },
-                        WorkspacePaletteAction::LaunchProfile(profile) => {
-                            this.launch_palette_profile(profile, window, cx);
-                        },
-                    }
+                    this.run_workspace_palette_action(action.clone(), window, cx);
                 }));
 
             rows.push(row_content.into_any_element());

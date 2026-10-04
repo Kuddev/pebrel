@@ -1292,5 +1292,11 @@
       "failed": "Could not complete the operation: {detail}",
       "changed": "The package changed after inspection. Choose the file again before installing."
     }
+  },
+  "directory_jump": {
+    "placeholder": "Search directories…",
+    "here": "Here",
+    "subfolders": "Subfolders",
+    "frequent": "Frequent directories"
   }
 }
