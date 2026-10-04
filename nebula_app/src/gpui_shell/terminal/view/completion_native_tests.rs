@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 mod editor;
+mod remote;
 
 struct CompletionSurface(gpui::Entity<TerminalView>);
 
