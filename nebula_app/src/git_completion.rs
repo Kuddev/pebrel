@@ -237,8 +237,16 @@ fn query(
         if stopped() {
             return None;
         }
-        let bytes =
-            execution.git(cwd, &context.directories, args, deadline, remaining, &stopped)?;
+        let result = execution.git(cwd, &context.directories, args, deadline, remaining, &stopped);
+        #[cfg(test)]
+        if result.is_none() {
+            eprintln!(
+                "Git metadata stage unavailable: {:?}, expired={}",
+                args.first(),
+                Instant::now() >= deadline
+            );
+        }
+        let bytes = result?;
         remaining -= bytes.len();
         String::from_utf8(bytes).ok()
     };
@@ -470,7 +478,7 @@ pub(crate) mod tests {
         let cache = Cache::default();
         let values = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
-            complete(
+            complete_available(
                 &cache,
                 &Execution::Process {
                     context: execution.clone(),
@@ -480,6 +488,7 @@ pub(crate) mod tests {
                 &context,
                 &|| false,
             )
+            .unwrap_or_else(|| panic!("valid Git fixture metadata must become available: {line:?}"))
             .into_iter()
             .map(|s| s.value)
             .collect::<Vec<_>>()
