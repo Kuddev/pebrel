@@ -38,6 +38,8 @@ pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
     SCROLL_SPEED_STEP, SCROLLBACK_VALUES, normalize_scroll_speed,
 };
+mod terminal_line_height;
+pub use terminal_line_height::{DEFAULT_TERMINAL_LINE_HEIGHT, normalize_terminal_line_height};
 mod themes;
 pub use language::{LanguageInfo, LanguagePref};
 pub use quick_terminal::{QuickTerminalMode, QuickTerminalSize};
@@ -991,6 +993,8 @@ pub struct RuntimeSettings {
     /// **逻辑像素**（旧壳写盘语义：设置页 spinner 与 Ctrl+滚轮缩放持久化时
     /// 已除以 scale factor）。`None` = 跟随 nebula.toml 的 `font.size`（pt）。
     pub font_size_px: Option<f32>,
+    /// Explicit natural-font-height multiplier; absent values follow theme typography.
+    pub terminal_line_height: Option<f32>,
     /// Ctrl+滚轮缩放终端字号。默认开启以保留既有行为；关闭时该手势被整体
     /// 消费：既不缩放，也不回落成普通滚动。不影响普通滚轮与键盘字号快捷键。
     pub ctrl_wheel_font_zoom: bool,
@@ -1169,6 +1173,10 @@ impl RuntimeSettings {
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
+            terminal_line_height: raw
+                .f32("terminal_line_height")
+                .filter(|value| value.is_finite())
+                .map(normalize_terminal_line_height),
             ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
             ligatures: raw
                 .value("ligatures")

@@ -1292,5 +1292,10 @@
       "failed": "Could not complete the operation: {detail}",
       "changed": "The package changed after inspection. Choose the file again before installing."
     }
+  },
+  "terminal_line_height": {
+    "label": "Line height",
+    "auto": "Auto",
+    "description": "0.50–5.00; 1.00 uses the font’s natural height. An explicit value overrides theme line height. Auto preserves the theme or natural height."
   }
 }
