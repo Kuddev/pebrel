@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory)][string]$TestBinary,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [ValidateSet('git', 'editor')][string]$Case = 'git',
+    [ValidateSet('git', 'editor', 'remote')][string]$Case = 'git',
+    [string]$RemoteFixture,
+    [string]$RuntimeDirectory,
     [string]$PowerShellProgram,
     [switch]$Prediction
 )
@@ -25,10 +27,34 @@ if ($Prediction) {
     $env:PEBREL_COMPLETION_QA_PREDICTION = '1'
 } else { Remove-Item Env:PEBREL_COMPLETION_QA_PREDICTION -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $env:PEBREL_CONFIG_DIR | Out-Null
+if ($Case -eq 'remote') {
+    if (-not $RemoteFixture) { throw 'Remote acceptance requires an owned WSL/SSH fixture' }
+    if ($PowerShellProgram -or $Prediction) { throw 'Remote acceptance uses the fixture shell' }
+    $env:PEBREL_COMPLETION_QA_REMOTE_FIXTURE = (Resolve-Path -LiteralPath $RemoteFixture).Path
+    $fixture = Get-Content -LiteralPath $env:PEBREL_COMPLETION_QA_REMOTE_FIXTURE -Raw | ConvertFrom-Json
+    if ($fixture.route -notin @('wsl', 'ssh')) { throw 'Remote fixture route must be wsl or ssh' }
+    if ($fixture.route -eq 'wsl') {
+        # Only this fresh QA config disables hook installation into the guest home.
+        Set-Content -LiteralPath (Join-Path $env:PEBREL_CONFIG_DIR 'pebrel_settings.txt') -Value 'ai_hooks=0' -Encoding utf8
+        $env:HISTFILE = $fixture.cwd.TrimEnd('/') + '/.qa-shell-history'
+        $env:WSLENV = (@($env:WSLENV, 'HISTFILE/u') | Where-Object { $_ }) -join ':'
+    }
+} else { Remove-Item Env:PEBREL_COMPLETION_QA_REMOTE_FIXTURE -ErrorAction SilentlyContinue }
 $executable = Join-Path $OutputDirectory 'pebrel-test.exe'
 # The owned copy prevents concurrent builds from linking over a running test image.
 Copy-Item -LiteralPath $TestBinary -Destination $executable
-$filter = if ($Case -eq 'git') { 'git_completion_native_shell_end_to_end' } else { 'editor_completion_native_shell_end_to_end' }
+if ($RuntimeDirectory) {
+    $runtime = Join-Path $OutputDirectory 'runtime'
+    New-Item -ItemType Directory -Path $runtime | Out-Null
+    foreach ($name in @('conpty.dll', 'OpenConsole.exe')) {
+        Copy-Item -LiteralPath (Join-Path $RuntimeDirectory $name) -Destination (Join-Path $runtime $name)
+    }
+}
+$filter = switch ($Case) {
+    'git' { 'git_completion_native_shell_end_to_end' }
+    'editor' { 'editor_completion_native_shell_end_to_end' }
+    'remote' { 'remote::remote_editor_completion_native_shell_end_to_end' }
+}
 $arguments = "gpui_shell::terminal::view::completion_native_tests::$filter --exact --ignored --test-threads=1 --nocapture"
 Add-Type -TypeDefinition @'
 using System;
@@ -93,7 +119,13 @@ try {
         input_path='product EntityInputHandler and keyboard handler'
         case=$Case
         prediction_enabled=[bool]$Prediction
+        console_runtime=if ($RuntimeDirectory) { 'supplied pair' } else { 'in-box' }
+        console_runtime_sha256=if ($RuntimeDirectory) { @(Get-FileHash -LiteralPath (Join-Path $runtime 'conpty.dll'), (Join-Path $runtime 'OpenConsole.exe') -Algorithm SHA256 | Select-Object @{Name='name'; Expression={Split-Path $_.Path -Leaf}},Hash) } else { @() }
     } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $OutputDirectory 'desktop-result.json')
     Get-Content (Join-Path $OutputDirectory 'native.log') -Tail 18
+    if ($code -eq 0) {
+        $result = Get-Content -LiteralPath (Join-Path $OutputDirectory 'result.json') -Raw | ConvertFrom-Json
+        if (-not $result.Ok -or $result.Ok.Count -eq 0) { throw 'Native acceptance produced no successful scenario evidence' }
+    }
 } finally { Remove-Item -LiteralPath $executable -ErrorAction SilentlyContinue }
 exit $code
