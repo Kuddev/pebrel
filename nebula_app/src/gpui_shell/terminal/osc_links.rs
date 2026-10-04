@@ -28,6 +28,16 @@ pub(super) fn link_modifier(mods: &gpui::Modifiers) -> bool {
     }
 }
 
+/// 按住打开链接修饰键时的修饰键状态，供不经指针事件的 hint 查询使用。
+pub(super) fn link_modifiers() -> gpui::Modifiers {
+    match Platform::current() {
+        Platform::MacOS => gpui::Modifiers { platform: true, ..Default::default() },
+        Platform::Windows | Platform::Linux => {
+            gpui::Modifiers { control: true, ..Default::default() }
+        },
+    }
+}
+
 /// 悬停目标：旧壳 `highlighted_hint` + 已经解码好的预览文案。
 #[derive(Clone)]
 pub(super) struct LinkHover {

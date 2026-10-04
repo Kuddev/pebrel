@@ -132,11 +132,7 @@ impl TerminalView {
             return Some(cwd);
         }
         // 自定义提示符可能缩写路径：退回到可点路径 hint，只接受本机已有目录。
-        let mods = gpui::Modifiers {
-            control: !cfg!(target_os = "macos"),
-            platform: cfg!(target_os = "macos"),
-            ..Default::default()
-        };
+        let mods = super::super::osc_links::link_modifiers();
         let config = super::super::osc_links::hint_config();
         let hint = super::super::osc_links::highlighted_at(&*term, &config, point, &mods)?;
         let raw = hint.text(&*term)?.into_owned();
