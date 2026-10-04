@@ -1013,5 +1013,11 @@
     "empty": "此目錄為空。",
     "error_retry": "{error}（點選右上角重新讀取）",
     "busy_other": "另一主機正在傳輸：{destination}"
+  },
+  "directory_jump": {
+    "placeholder": "搜尋目錄…",
+    "here": "目前位置",
+    "subfolders": "子資料夾",
+    "frequent": "常用目錄"
   }
 }

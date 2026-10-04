@@ -1101,6 +1101,23 @@ mod tests {
     }
 
     #[test]
+    fn live_prompt_line_follows_marks_and_resize_keeps_the_prompt_active() {
+        use crate::index::Line;
+
+        let mut terminal = Term::new(Config::default(), &TermSize::new(20, 4), VoidListener);
+        let mut stream = StreamProcessor::default();
+        assert_eq!(terminal.nebula_live_prompt_line(), None);
+        stream.feed(&mut terminal, &VoidListener, b"out\r\n\x1b]133;A\x07[cwd]\r\n> ");
+        assert_eq!(terminal.nebula_live_prompt_line(), Some(Line(1)));
+        // Reflow drops the marks, yet the shell still waits at this prompt.
+        terminal.resize(TermSize::new(30, 4));
+        assert_eq!(terminal.nebula_live_prompt_line(), None);
+        assert!(terminal.nebula_prompt_active());
+        stream.feed(&mut terminal, &VoidListener, b"\x1b]133;C\x07");
+        assert!(!terminal.nebula_prompt_active());
+    }
+
+    #[test]
     fn shell_semantic_events_track_the_active_prompt() {
         let size = TermSize::new(80, 24);
         let mut terminal = Term::new(Config::default(), &size, VoidListener);

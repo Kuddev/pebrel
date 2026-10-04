@@ -66,6 +66,9 @@ impl NebulaWorkspace {
                 }
             },
             TerminalViewEvent::FontSizeChanged => self.apply_runtime_settings(cx),
+            TerminalViewEvent::DirectoryJumpRequested(directory) => {
+                self.open_directory_jump(view, directory.clone(), window, cx);
+            },
             // 任务栏是窗口级的，只反映**正被看着的那个 pane**：后台 tab 里的
             // 构建进度投到同一个按钮上只会互相覆盖，读数还不如没有。
             TerminalViewEvent::ProgressChanged(progress) => {

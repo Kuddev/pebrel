@@ -11,6 +11,7 @@ mod confirmation;
 mod conversation;
 pub(super) mod cursor;
 mod cwd_report;
+mod directory_jump;
 mod editor;
 mod image_paste;
 mod layout;
@@ -193,6 +194,8 @@ pub enum TerminalViewEvent {
     /// 程序上报的任务进度（OSC 9;4）变了。宿主把 pane 级状态投到 tab badge，
     /// 并且只把当前聚焦 pane 投到窗口级任务栏。
     ProgressChanged(crate::taskbar::TaskProgress),
+    /// 单击了当前提示符上的目录：宿主弹出目录选择器，选中项回到本 pane `cd`。
+    DirectoryJumpRequested(std::path::PathBuf),
 }
 
 /// 会话种类：本地 shell 或 SSH 直连（russh，共享旧壳业务层）。
