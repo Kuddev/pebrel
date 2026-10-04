@@ -14,3 +14,14 @@ test-group = 'theme-studio'
 [[profile.default.overrides]]
 filter = 'test(=gpui_shell::terminal::view::startup_tests::git_completion_real_repository_reaches_all_modes_and_preserves_quoted_edits)'
 threads-required = 'num-test-threads'
+
+# 这些语义夹具同样要求真实 Git 在产品的 3 秒预算内成功；并发绘制负载
+# 可以合法耗尽该预算，不能把这种回退结果当成候选语义的反例。
+# 只预留这七个完整名称；取消、失败/超时和普通纯规则测试继续并发执行。
+[[profile.default.overrides]]
+filter = 'test(=git_completion::tests::real_explicit_tracking_creates_and_inherits_the_expected_upstream) or test(=git_completion::tests::real_remote_guesses_follow_configuration_and_refspecs) or test(=git_completion::tests::real_branches_cache_invalidation_and_directory_context)'
+threads-required = 'num-test-threads'
+
+[[profile.default.overrides]]
+filter = 'test(=completion::tests::completion_requests_work_without_a_view_and_keep_repository_invalidation) or test(=completion::tests::editor_cursor_requests_replace_only_the_active_token_and_keep_following_options) or test(=completion::tests::checkout_completion_combines_branches_and_paths_and_scopes_remote_demand) or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)'
+threads-required = 'num-test-threads'

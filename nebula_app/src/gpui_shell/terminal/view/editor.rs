@@ -221,6 +221,16 @@ impl TerminalView {
         }
     }
 
+    pub(super) fn completion_editor_query_bytes(&self) -> Vec<u8> {
+        let powershell =
+            self.completion_editor.owner.as_deref().is_some_and(|owner| owner.starts_with("pwsh:"));
+        let key =
+            gpui::Keystroke::parse(if powershell { "ctrl-shift-f12" } else { "f24" }).unwrap();
+        super::super::keymap::encode(&key, &self.term_mode()).unwrap_or_else(|| {
+            if powershell { b"\x1b[24;6~".to_vec() } else { b"\x1b[45~".to_vec() }
+        })
+    }
+
     pub(super) fn query_completion_editor(&mut self, cx: &mut Context<Self>) -> bool {
         if self.completion_editor.is_querying() {
             return true;
@@ -255,17 +265,7 @@ impl TerminalView {
         self.suggest.completion_suppressed_line = None;
         self.suggest.clear_completion_hints();
         if send {
-            let powershell = self
-                .completion_editor
-                .owner
-                .as_deref()
-                .is_some_and(|owner| owner.starts_with("pwsh:"));
-            let key =
-                gpui::Keystroke::parse(if powershell { "ctrl-shift-f12" } else { "f24" }).unwrap();
-            let bytes =
-                super::super::keymap::encode(&key, &self.term_mode()).unwrap_or_else(|| {
-                    if powershell { b"\x1b[24;6~".to_vec() } else { b"\x1b[45~".to_vec() }
-                });
+            let bytes = self.completion_editor_query_bytes();
             self.write_bytes(bytes);
         }
         let revision = self.completion_editor.revision;
