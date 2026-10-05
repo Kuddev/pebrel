@@ -188,7 +188,7 @@ pub(crate) fn caret_blink_on() -> bool {
 #[cfg(feature = "gpui-shell")]
 pub(crate) use network_proxy_model::{
     MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, compose_manual_proxy_url,
-    manual_proxy_parts, manual_proxy_value,
+    manual_proxy_parts, manual_proxy_protocol_label, manual_proxy_value,
 };
 pub use settings::{NebulaSettingsSection, SettingsDropdown, SettingsHit, settings_hit};
 pub(crate) use settings::{NewTabPosition, SettingsOpacityTarget};
