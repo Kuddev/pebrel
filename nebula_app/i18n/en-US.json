@@ -17,6 +17,8 @@
     "en_us": "English"
   },
   "settings": {
+    "split_shell_picker": "Choose a shell when splitting",
+    "split_shell_picker_description": "Off: new splits inherit the focused pane’s shell. On: choose a shell before creating a split. Applies immediately; Escape cancels without opening a pane.",
     "completion": {
       "mode": "Completion mode",
       "cycle": "Cycle completion mode",
@@ -1023,6 +1025,7 @@
     "settings_shortcut": "Settings (Ctrl+,)"
   },
   "workspace": {
+    "split_failed": "Could not create split: {error}",
     "pane": {
       "rename_hint": "Double-click to rename; Enter or click outside to save, Esc to cancel. Clear for an automatic title. Reopen to undo a saved name.",
       "stop_broadcast_input": "Stop broadcasting input",

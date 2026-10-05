@@ -17,6 +17,8 @@
     "en_us": "English"
   },
   "settings": {
+    "split_shell_picker": "分屏时选择 Shell",
+    "split_shell_picker_description": "关闭时，新分屏继承焦点窗格的 Shell；开启时，先选择 Shell 再创建分屏。即时生效，按 Esc 取消，不创建新窗格。",
     "completion": {
       "mode": "补齐模式",
       "cycle": "切换补齐模式",
@@ -1023,6 +1025,7 @@
     "settings_shortcut": "设置 (Ctrl+,)"
   },
   "workspace": {
+    "split_failed": "无法创建分屏：{error}",
     "pane": {
       "rename_hint": "双击重命名；Enter 或点击外部保存，Esc 取消。清空恢复自动标题，重新编辑可撤销已保存的名称。",
       "stop_broadcast_input": "关闭广播输入",
