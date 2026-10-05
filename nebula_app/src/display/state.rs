@@ -38,6 +38,8 @@ pub struct NebulaCompletionItem {
     pub insert: String,
     /// Number of characters immediately before the cursor to replace.
     pub replace_chars: usize,
+    /// Characters after a cursor proven by the native line editor.
+    pub replace_after_chars: usize,
     pub kind: NebulaCompletionKind,
 }
 
@@ -194,6 +196,7 @@ pub struct NebulaPaneState {
     pub suggestion: String,
     pub(crate) suggestion_edit: Option<NebulaCompletionItem>,
     pub(super) suggestion_key: String,
+    pub(super) completion_result_ready: bool,
     /// Popup-style completion candidates for the current line. A non-empty list
     /// stays visible so users can discover completion without an extra action.
     /// Mutually exclusive with `suggestion`: which one fills depends on the
@@ -314,6 +317,14 @@ impl NebulaPaneState {
         self.suggestion_key == key
     }
 
+    pub(crate) fn completion_query_ready(&self, key: &str) -> bool {
+        self.completion_query_matches(key) && self.completion_result_ready
+    }
+
+    pub(crate) fn finish_completion_query(&mut self) {
+        self.completion_result_ready = true;
+    }
+
     pub(crate) fn begin_completion_query(&mut self, key: String) {
         self.clear_completion_hints();
         self.suggestion_key = key;
@@ -325,6 +336,7 @@ impl NebulaPaneState {
         self.suggestion.clear();
         self.suggestion_edit = None;
         self.suggestion_key.clear();
+        self.completion_result_ready = false;
         self.completion_items.clear();
         self.completion_selected = None;
     }

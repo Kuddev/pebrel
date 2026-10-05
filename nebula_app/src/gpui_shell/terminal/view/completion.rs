@@ -8,10 +8,19 @@ impl TerminalView {
     pub(super) fn handle_completion_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         use crate::display::CompletionStyle;
         let hybrid = self.completion_style == CompletionStyle::Hybrid;
-        if key == "escape" && hybrid && self.suggest.completion_popup_requested {
+        if key == "escape"
+            && (hybrid && self.suggest.completion_popup_requested
+                || self.completion_editor.is_querying())
+        {
+            self.completion_editor.invalidate();
+            self.editor_query_task = None;
             self.suggestion_task = None;
             self.suggest.completion_popup_dismiss();
             self.completion_viewport.clear();
+            return true;
+        }
+        if self.completion_editor.is_querying() && matches!(key, "enter" | "tab") {
+            // Acceptance cannot submit an unedited line while its list is loading.
             return true;
         }
         if suggest::popup_active(&self.suggest) {
@@ -33,6 +42,8 @@ impl TerminalView {
                     return true;
                 },
                 "escape" => {
+                    self.completion_editor.invalidate();
+                    self.editor_query_task = None;
                     self.completion_viewport.clear();
                     return suggest::popup_dismiss(&mut self.suggest);
                 },
@@ -41,10 +52,22 @@ impl TerminalView {
             }
         }
         if key == "tab"
+            && self.ghost_enabled
+            && (self.completion_style != CompletionStyle::Inline
+                || self.suggest.suggestion.is_empty())
+            && self.query_completion_editor(cx)
+        {
+            return true;
+        }
+        if key == "tab"
             && hybrid
             && self.ghost_enabled
-            && self.suggest_anchor.is_some()
-            && !self.suggest.screen_line.is_empty()
+            && (self.suggest_anchor.is_some() && !self.suggest.screen_line.is_empty()
+                || self.suggest.pending_completion_line().is_some_and(|line| !line.is_empty())
+                    && self
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.term.lock().nebula_prompt_active()))
         {
             // Tab 请求只改变呈现，不向 PTY 写入；原有后台任务与过期检查继续负责候选。
             self.suggest.request_completion_popup();
@@ -208,6 +231,9 @@ impl TerminalView {
         anchor: Option<(usize, usize)>,
         cx: &mut Context<Self>,
     ) {
+        let editor = self.completion_editor.snapshot(self.prompt_input_epoch).cloned();
+        let line = editor.as_ref().map(|snapshot| snapshot.line.clone()).or(line);
+        let cursor = editor.as_ref().map(|snapshot| snapshot.cursor);
         if self.exited.is_some()
             || !self.ghost_enabled
             || self.session.is_none()
@@ -229,6 +255,16 @@ impl TerminalView {
             return;
         }
         let Some(line) = line.filter(|line| !line.is_empty()) else {
+            if self.completion_editor.is_querying()
+                || self.suggest.completion_popup_requested
+                    && self.suggest.pending_completion_line().is_some_and(|line| !line.is_empty())
+                    && self
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.term.lock().nebula_prompt_active())
+            {
+                return;
+            }
             self.suggestion_task = None;
             self.suggest_anchor = None;
             self.suggest.screen_line.clear();
@@ -241,13 +277,22 @@ impl TerminalView {
         self.suggest.screen_line = line.clone();
         let mode = self.completion_style;
         let style = mode.active_style(self.suggest.completion_popup_requested);
-        let key = crate::completion::cache_key(
-            &self.suggest.cwd,
-            &self.suggest.suggest_env,
-            &line,
-            style,
+        let cursor = cursor.unwrap_or(line.len());
+        let revision = self.completion_editor.revision();
+        let key = format!(
+            "{}\0cursor={cursor}\0syntax={:?}",
+            crate::completion::cache_key(
+                &self.suggest.cwd,
+                &self.suggest.suggest_env,
+                &line,
+                style,
+            ),
+            editor.as_ref().map(|snapshot| snapshot.syntax),
         );
         if self.suggest.completion_query_matches(&key) {
+            if self.suggest.completion_query_ready(&key) {
+                self.finish_editor_action(cx);
+            }
             return;
         }
         self.suggestion_task = None;
@@ -261,12 +306,14 @@ impl TerminalView {
         let env = self.suggest.suggest_env.clone();
         let cancellation = suggest::Cancellation::default();
         let worker_cancellation = cancellation.clone();
-        let request = self.completion_session.request(
+        let request = self.completion_session.request_with_syntax(
             cwd.clone(),
             env.clone(),
             line,
+            cursor,
             style,
             self.exec_context.as_ref(),
+            editor.as_ref().map(|snapshot| snapshot.syntax),
         );
         // 本地目录也可能位于慢盘/网络挂载；扫描和历史首次加载都不能进入绘制回调。
         let calculation =
@@ -281,9 +328,22 @@ impl TerminalView {
                     || view.completion_style != mode
                     || mode.active_style(view.suggest.completion_popup_requested) != style
                     || !view.ghost_enabled
+                    || view.completion_editor.revision() != revision
                     || view.exited.is_some()
                 {
                     return;
+                }
+                let mut result = result;
+                result
+                    .completion_items
+                    .retain(|item| view.completion_editor.permits_insert(&item.insert));
+                if result
+                    .suggestion_edit
+                    .as_ref()
+                    .is_some_and(|item| !view.completion_editor.permits_insert(&item.insert))
+                {
+                    result.suggestion.clear();
+                    result.suggestion_edit = None;
                 }
                 view.suggest.suggestion = result.suggestion;
                 view.suggest.suggestion_edit = result.suggestion_edit;
@@ -293,10 +353,15 @@ impl TerminalView {
                 {
                     view.suggest.completion_selected = Some(0);
                 }
+                let awaiting_directory = result.pending_remote_dir.is_some();
                 view.suggest.pending_remote_dir = result.pending_remote_dir;
                 view.completion_viewport
                     .update_query(&view.suggest.screen_line, view.suggest.completion_items.len());
                 view.drive_pending_remote_dir(cx);
+                if !awaiting_directory {
+                    view.suggest.finish_completion_query();
+                    view.finish_editor_action(cx);
+                }
                 cx.notify();
             });
         });
@@ -318,6 +383,7 @@ impl TerminalView {
     ) {
         let Some(dir) = self.suggest.pending_remote_dir.take() else { return };
         let env = self.suggest.suggest_env.clone();
+        let revision = self.completion_editor.revision();
         // 连按 Tab 不该排出一串子进程 / 往返。
         if !crate::remote_dirs::begin_fetch(&env, &dir) {
             return;
@@ -332,9 +398,14 @@ impl TerminalView {
                             async move { crate::remote_dirs::fetch_wsl(&distro, &target) },
                         )
                         .await;
+                    let available = entries.is_some();
                     crate::remote_dirs::finish_fetch(&env, &dir, entries);
                     let _ = this.update(cx, |view, cx| {
                         if view.suggest.suggest_env == env {
+                            if !available && view.completion_editor.take_action(revision).is_some()
+                            {
+                                view.fallback_completion_tab(cx);
+                            }
                             cx.notify();
                         }
                     });
@@ -360,9 +431,14 @@ impl TerminalView {
                             .map(|(is_dir, name)| crate::remote_dirs::RemoteEntry { name, is_dir })
                             .collect()
                     });
+                    let available = entries.is_some();
                     crate::remote_dirs::finish_fetch(&env, &dir, entries);
                     let _ = this.update(cx, |view, cx| {
                         if view.suggest.suggest_env == env {
+                            if !available && view.completion_editor.take_action(revision).is_some()
+                            {
+                                view.fallback_completion_tab(cx);
+                            }
                             cx.notify();
                         }
                     });
