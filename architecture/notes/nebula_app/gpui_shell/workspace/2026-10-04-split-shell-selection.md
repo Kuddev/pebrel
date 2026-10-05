@@ -14,7 +14,8 @@ Issue [#372](https://github.com/Kuddev/pebrel/issues/372) describes this need.
 An optional picker also allows deliberately choosing another shell for the split.
 
 Complete split-layout tab duplication is a separate behavior covered by upstream
-[PR #455](https://github.com/Kuddev/pebrel/pull/455); it is not part of this PR.
+[PR #455](https://github.com/Kuddev/pebrel/pull/455), subsequently merged on main.
+This submission preserves that upstream behavior; it does not claim its changes.
 
 ## Evidence
 
@@ -26,8 +27,9 @@ is insufficient for a tab containing several shells.
 
 Shared launch-copy rules remain in `workspace/tab_duplication.rs`; split UI
 orchestration and pending request lifetime belong to `workspace/splitting.rs`.
-Existing duplication stays single-pane; sharing guest-identity rules does not
-introduce the separate layout-reconstruction feature.
+The initial submission retained single-pane duplication. The later ordinary merge
+of upstream `b6e7b78d` brings its accepted layout reconstruction; sharing guest
+identity rules does not introduce an independently authored duplication feature.
 
 ## Decision
 
@@ -132,6 +134,18 @@ load. Both latter cases passed isolated probes. Preparing the standard pinned
 runtime, using a fresh test settings directory and four local runner threads
 allowed the complete entry to pass without modifying those unrelated tests.
 Temporary tools/settings and raw evidence remain uncommitted under `tmp/`.
+
+Upstream advanced during validation, including #455, empty-workspace residency,
+pane-scoped SSH forwarding and prompt ownership. Preserve these changes by an
+ordinary merge, not a force-pushed rebase. The sole textual conflict is restoration
+cwd policy: retain upstream SSH remote cwd and the WSL guest-path no-host-probe
+rule together. This does not reset either kind of guest path to a host directory.
+The merged tree passed the complete Windows native entry: 2820 Rust tests passed,
+35 skipped, one doctest passed, and the Python/production checks passed. Ten
+focused split/picker/layout cases also passed. Architecture, format, fixture
+registration and diff checks passed; the latest-base source count is 1459.
+An earlier merged-tree run ended without an exit result; preserve it as incomplete
+execution evidence rather than attributing an unobserved failure to a test.
 
 ## Supersedes
 
