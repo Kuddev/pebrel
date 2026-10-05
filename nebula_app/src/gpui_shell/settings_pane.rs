@@ -65,6 +65,8 @@ mod notifications;
 mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod split_shell_tests;
 mod sponsor;
 mod status;
 mod theme_advanced;
@@ -392,7 +394,11 @@ impl SettingsPane {
         }
         if matches!(
             key,
-            "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes" | "refresh_environment"
+            "ai_toasts"
+                | "focus_follows_mouse"
+                | "dim_inactive_panes"
+                | "refresh_environment"
+                | "split_shell_picker"
         ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
                 let language = crate::gpui_shell::config::ui_language(cx);
@@ -756,6 +762,7 @@ impl SettingsPane {
             "copy_on_select" => flag!(copy_on_select),
             "focus_follows_mouse" => Some((cur.focus_follows_mouse.is_some(), String::new())),
             "dim_inactive_panes" => flag!(dim_inactive_panes),
+            "split_shell_picker" => flag!(split_shell_picker),
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
             "terminal_proxy" => flag!(terminal_proxy),
@@ -1111,6 +1118,13 @@ impl SettingsPane {
         let terminal = self
             .group(language.pick("启动", "Startup"), cx)
             .child(self.shell_select_row(cx))
+            .child(self.switch_row(
+                "split_shell_picker",
+                language.text(crate::i18n::Message::SettingsSplitShellPicker),
+                language.text(crate::i18n::Message::SettingsSplitShellPickerDescription),
+                self.runtime.split_shell_picker,
+                cx,
+            ))
             .child(self.startup_directory_row(cx))
             .when(
                 crate::platform::Platform::current() == crate::platform::Platform::Windows,

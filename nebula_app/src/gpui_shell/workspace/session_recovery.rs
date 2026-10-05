@@ -106,7 +106,16 @@ impl NebulaWorkspace {
             }
             let guest_directory =
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);
-            let local_cwd = if guest_directory { None } else { crate::session::valid_dir(cwd) };
+            let guest_path = match &launch_session {
+                LaunchSession::Shell { program, .. }
+                | LaunchSession::Profile { command: program, .. } => {
+                    crate::shell_detect::is_wsl_launcher(program)
+                        && crate::shell_detect::wsl_guest_cwd(cwd).is_some()
+                },
+                _ => false,
+            };
+            let local_cwd =
+                if guest_directory || guest_path { None } else { crate::session::valid_dir(cwd) };
             let launch = Self::terminal_launch_from_session(&launch_session, local_cwd);
             let mut pane = self.new_pane(grid, launch, None, window, cx);
             pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);

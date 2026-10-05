@@ -974,6 +974,12 @@ impl TerminalView {
         path.is_dir().then_some(path)
     }
 
+    /// WSL 发行版：spawn 时 pin 进启动参数的 [`crate::shell_detect::wsl_spawn_distro`]
+    /// 快照，裸 `wsl` / 默认 shell 也有确定的来宾身份，事后改默认发行版不会串台。
+    pub(crate) fn wsl_distro(&self) -> Option<&str> {
+        self.exec_context.as_ref()?.wsl_distribution().flatten()
+    }
+
     /// Absolute remote cwd reported by OSC 7/title integration. Unlike
     /// [`Self::local_cwd`], this deliberately does not consult the host
     /// filesystem; a POSIX path belongs to the SSH endpoint.

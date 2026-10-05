@@ -103,6 +103,7 @@ pub struct Settings {
     /// 默认 shell 的稳定 id（`nebula_settings.txt` 的 `shell=`，如
     /// "pwsh" / "cmd" / "wsl:Ubuntu"）。None = 引擎默认。
     pub shell_id: Option<String>,
+    pub split_shell_picker: bool,
     /// 配置装载时吞掉的第一个错误（toml 解析失败/字段形状不符）。解析
     /// 保持宽容——任何用户配置都不能阻止启动——但错误必须有去处：
     /// 开窗后由工作区放进驻留消息栏（提示三层裁定：这是有待办的事）。
@@ -309,6 +310,7 @@ impl Settings {
             cell_width_mode: runtime.cell_width_mode,
             cjk_bold_regular: runtime.cjk_bold_regular,
             shell_id: runtime.shell.clone(),
+            split_shell_picker: runtime.split_shell_picker,
             font_family: normal_family,
             font_cjk: Some({
                 let family = runtime

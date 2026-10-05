@@ -121,16 +121,26 @@ impl TerminalView {
                 // 身份时才回退当前设置。这正是共享 v4 的 Default 语义。
                 let effective = launch_shell.or(shell);
                 startup_intro = accepts_startup_intro(effective.as_ref());
+                let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
+                // The WSL distribution is resolved once, at spawn, and pinned into
+                // the spawn while `session_launch` stays as configured.
+                let wsl_distro = snapshot_shell.as_ref().and_then(|shell| {
+                    crate::shell_detect::wsl_spawn_distro(shell.program(), shell.args())
+                });
+                let spawn_shell = crate::shell_detect::spawn_shell(
+                    effective,
+                    snapshot_shell.as_ref(),
+                    wsl_distro.as_deref(),
+                );
                 // 补齐要知道这个 pane 面对**哪台机器**：`wsl.exe -d <发行版>`
                 // 启动的 tab，文件系统和命令集都在来宾里，本进程的 `std::fs`
                 // 和 PATH 描述的是另一台机器。
-                let suggest_env = effective
+                let suggest_env = spawn_shell
                     .as_ref()
                     .map(|shell| {
                         crate::completion_context::launch_environment(shell.program(), shell.args())
                     })
                     .unwrap_or_default();
-                let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
                 let session_launch = snapshot_shell.as_ref().map_or(
                     crate::session::LaunchSession::Default,
                     |shell| crate::session::LaunchSession::Shell {
@@ -139,7 +149,7 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(effective, pane_id, cwd);
+                let options = session::local_options(spawn_shell, pane_id, cwd);
                 let history_cwd = startup_history_directory(&options, &suggest_env);
                 completion_cwd = history_cwd
                     .as_ref()

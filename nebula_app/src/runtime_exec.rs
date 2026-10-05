@@ -238,6 +238,19 @@ pub(crate) fn build_command(
             execution = json!({ "environment": "host", "cwd": cwd });
         },
         ExecLocation::Wsl { distro, user } => {
+            let guest_cwd = crate::shell_detect::wsl_guest_cwd(reported_cwd);
+            // Refuse what `wsl.exe` cannot receive rather than run something else.
+            if let Some(value) = guest_cwd
+                .into_iter()
+                .chain(argv.iter().map(String::as_str))
+                .find(|value| !crate::shell_detect::wsl_accepts_arg(value))
+            {
+                return Err(ApiError::new(
+                    "exec_argument_unsupported",
+                    "WSL cannot receive a double quote inside an argument or working directory",
+                )
+                .details(json!({ "argument": value })));
+            }
             command = Command::new("wsl.exe");
             if let Some(distro) = distro {
                 command.args(["--distribution", distro]);
@@ -245,7 +258,6 @@ pub(crate) fn build_command(
             if let Some(user) = user {
                 command.args(["--user", user]);
             }
-            let guest_cwd = crate::shell_detect::wsl_guest_cwd(reported_cwd);
             if let Some(cwd) = guest_cwd {
                 command.args(["--cd", cwd]);
             } else if !reported_cwd.trim().is_empty() {
@@ -422,6 +434,25 @@ mod tests {
             Some(Some("Debian"))
         );
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_user(), Some("hello"));
+    }
+
+    /// A `"` in a guest cwd (an OSC 7 report) or argv would end `wsl.exe`'s quote.
+    #[test]
+    fn wsl_exec_refuses_what_wsl_cannot_receive() {
+        let mut options = nebula_terminal::tty::Options::default();
+        options.shell = Some(nebula_terminal::tty::Shell::new(
+            "wsl.exe".into(),
+            vec!["-d".into(), "Ubuntu".into()],
+        ));
+        let context = PaneExecContext::from_pty_options(&options);
+        let argv = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let refused = |cwd: &str, argv: &[String]| {
+            build_command(&context, cwd, argv)
+                .is_err_and(|error| error.code == "exec_argument_unsupported")
+        };
+        assert!(refused("/tmp/i\" touch /tmp/x #", &argv(&["pwd"])));
+        assert!(refused("/srv", &argv(&["git", "commit", "-m", "say \"hi\""])));
+        assert!(!refused("/srv/my project", &argv(&["git", "status"])));
     }
 
     #[test]

@@ -83,6 +83,7 @@ mod terminal_activity;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
 mod sidebar;
+mod splitting;
 mod ssh_dialog;
 mod tab_drag;
 mod tab_duplication;
@@ -701,6 +702,7 @@ pub struct NebulaWorkspace {
     /// 三点 / Ctrl+K 打开的是旧壳 `PaletteMode::Profiles`，要画
     /// 全部/SSH/Shell 芯片；Ctrl+Shift+P 的命令目录不走这条。
     shell_picker_open: bool,
+    pending_split: Option<splitting::PendingSplit>,
     launcher_menu: Option<launcher_menu::LauncherContextMenu>,
     launcher_admin_task: Option<gpui::Task<()>>,
     launcher_filter: crate::display::command_palette::LauncherFilter,
@@ -958,6 +960,7 @@ impl NebulaWorkspace {
             vcs_discard_confirm: None,
             palette_override: None,
             shell_picker_open: false,
+            pending_split: None,
             launcher_menu: None,
             launcher_admin_task: None,
             launcher_filter: crate::display::command_palette::LauncherFilter::All,
@@ -1230,6 +1233,9 @@ impl NebulaWorkspace {
         let grid = self.inherited_grid(cx);
         let launch = Self::terminal_launch_from_session(&launch_session, cwd);
         let pane = self.new_pane(grid, launch, command, window, cx);
+        if !matches!(launch_session, crate::session::LaunchSession::Default) {
+            pane.view.update(cx, |view, _| view.session_launch = launch_session.clone());
+        }
         let focused = pane.id;
         let tab = WorkspaceTab::Terminal {
             tree: SplitTree::leaf(pane.id),
@@ -1380,72 +1386,6 @@ impl NebulaWorkspace {
             self.sync_side_panel_to_active(true, cx);
         }
         cx.notify();
-    }
-
-    /// 在聚焦 pane 上开分屏（ctrl+shift+d / ctrl+shift+s，对齐旧壳
-    /// SplitRight/SplitDown）：新 pane 继承聚焦 pane 的 cwd，spawn 网格按
-    /// 切割方向对半预估——首帧 prepaint 回写真实矩形后自动收敛。
-    fn split_focused(
-        &mut self,
-        direction: SplitDirection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<u64, crate::runtime_api::ApiError> {
-        let active = self.active;
-        let Some(WorkspaceTab::Terminal { panes, focused, .. }) = self.tabs.get(active) else {
-            return Err(crate::runtime_api::ApiError::new(
-                "invalid_state",
-                "the active tab cannot be split",
-            ));
-        };
-        let focused = *focused;
-        let Some(anchor) = panes.iter().find(|pane| pane.id == focused) else {
-            return Err(crate::runtime_api::ApiError::new(
-                "action_failed",
-                "the focused pane is missing from the active split tree",
-            ));
-        };
-        let (cols, rows, cwd) = {
-            let view = anchor.view.read(cx);
-            (view.grid_cols() as u16, view.grid_rows() as u16, view.local_cwd())
-        };
-        let grid = match direction {
-            SplitDirection::LeftRight => ((cols / 2).max(2), rows.max(2)),
-            SplitDirection::TopBottom => (cols.max(2), (rows / 2).max(2)),
-        };
-        let launch = crate::gpui_shell::terminal::view::TerminalLaunch::Local {
-            cwd,
-            shell: None,
-            shell_name: None,
-        };
-        let pane = self.new_pane(grid, launch, None, window, cx);
-        let new_id = pane.id;
-        let Some(WorkspaceTab::Terminal { panes, tree, focused, zoomed, .. }) =
-            self.tabs.get_mut(active)
-        else {
-            // new_pane 之后 tab 结构不可能已变（同一同步调用栈），但防御住：
-            // 树上挂不进去就立即回收，不留孤儿 PTY。
-            pane.view.read(cx).shutdown();
-            return Err(crate::runtime_api::ApiError::new(
-                "action_failed",
-                "the active terminal tab changed while creating a split",
-            ));
-        };
-        if !tree.split_leaf(*focused, new_id, direction, 0.5) {
-            pane.view.read(cx).shutdown();
-            return Err(crate::runtime_api::ApiError::new(
-                "action_failed",
-                "the focused pane could not be attached to the split tree",
-            ));
-        }
-        panes.push(pane);
-        *focused = new_id;
-        *zoomed = false;
-        self.mark_structural_resize(active, cx);
-        self.focus_active(window, cx);
-        self.sync_side_panel_to_active(true, cx);
-        cx.notify();
-        Ok(new_id)
     }
 
     /// 结构性布局变化：让 tab 内每个 pane 的下一次网格观测直接下发到 Term 与
@@ -1780,18 +1720,14 @@ impl NebulaWorkspace {
         view.read(cx).local_cwd()
     }
 
-    /// 聚焦 tab 所在的 WSL 发行版 + 来宾目录；不是 WSL、或发行版无从确定
-    /// （裸 `wsl` 启动）时为 `None`。Git 视图拿它在来宾里直接跑 git，不经
+    /// 聚焦 pane 的 WSL 发行版（spawn 快照）+ 来宾目录；不是 WSL 时为 `None`。
+    /// Git 视图拿它在来宾里直接跑 git，不经
     /// 任何 UNC 映射，所以宿主看不见 WSL 文件系统时依然有效。
     fn active_wsl_cwd(&self, cx: &App) -> Option<crate::shell_detect::WslCwd> {
-        let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)?;
-        let raw = view.read(cx).cwd.clone();
-        let Some(crate::session::LaunchSession::Shell { program, args, .. }) =
-            self.meta(self.active).launch
-        else {
-            return None;
-        };
-        crate::shell_detect::wsl_cwd(&raw, &program, &args)
+        let view = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view)?.read(cx);
+        let distro = view.wsl_distro()?.to_owned();
+        let guest = crate::shell_detect::wsl_guest_cwd(&view.cwd)?;
+        Some(crate::shell_detect::WslCwd { distro, guest: guest.to_owned() })
     }
 
     /// 抽屉这一帧该跟随的位置。WSL 先分流：只有 `/mnt/<盘>` 映射到宿主盘，
@@ -1808,7 +1744,9 @@ impl NebulaWorkspace {
         if let Some(wsl) = self.active_wsl_cwd(cx) {
             return match crate::shell_detect::wsl_mounted_host_cwd(&wsl) {
                 Some(cwd) => (Some(cwd), None),
-                None => (None, Some(wsl)),
+                // Guest git/find take the directory as one `wsl.exe` argument.
+                None if crate::shell_detect::wsl_accepts_arg(&wsl.guest) => (None, Some(wsl)),
+                None => (None, None),
             };
         }
         (self.active_local_cwd(cx), None)
@@ -1893,6 +1831,7 @@ impl NebulaWorkspace {
             self.close_command_palette(window, cx);
             return;
         }
+        self.pending_split = None;
         self.command_manager_open = false;
         self.command_palette_open = true;
         self.command_palette_selected = 0;
@@ -1909,6 +1848,7 @@ impl NebulaWorkspace {
     }
 
     fn dismiss_palette_state(&mut self) {
+        self.pending_split = None;
         self.launcher_menu = None;
         self.command_palette_open = false;
         self.palette_override = None;
@@ -1979,8 +1919,7 @@ impl NebulaWorkspace {
                 self.add_terminal_at(cwd, Some(command), window, cx);
             },
             WorkspacePaletteAction::LaunchSshHost(host) => {
-                self.dismiss_palette_state();
-                self.add_ssh_terminal(host, window, cx);
+                self.launch_palette_ssh(host, window, cx);
             },
             WorkspacePaletteAction::LaunchShell(detected) => {
                 self.launch_palette_shell(detected, window, cx);
@@ -1992,6 +1931,7 @@ impl NebulaWorkspace {
     }
 
     fn open_quick_jump_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_split = None;
         self.command_manager_open = false;
         self.shell_picker_open = false;
         self.launcher_filter = crate::display::command_palette::LauncherFilter::All;
@@ -2009,6 +1949,7 @@ impl NebulaWorkspace {
 
     /// 三点 / Ctrl+K：旧壳 `NewTabMenu` → `open_shell_menu` → `PaletteMode::Profiles`。
     fn open_shell_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_split = None;
         self.command_manager_open = false;
         let default_shell_id = crate::platform::shell::effective_shell_id(
             cx.try_global::<crate::gpui_shell::config::Settings>()
@@ -2118,13 +2059,16 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dismiss_palette_state();
         let shell = detected.shell();
         let launch = crate::session::LaunchSession::Shell {
             name: detected.name.clone(),
             program: shell.program().to_owned(),
             args: shell.args().to_vec(),
         };
+        if self.finish_split_choice(launch.clone(), window, cx) {
+            return;
+        }
+        self.dismiss_palette_state();
         let cwd = Self::startup_directory().or_else(|| {
             self.tabs
                 .get(self.active)
@@ -2140,8 +2084,11 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dismiss_palette_state();
         let launch = shell_launch::profile_launch_session(profile);
+        if self.finish_split_choice(launch.clone(), window, cx) {
+            return;
+        }
+        self.dismiss_palette_state();
         let cwd = Self::startup_directory().or_else(|| {
             self.tabs
                 .get(self.active)
@@ -2188,10 +2135,10 @@ impl NebulaWorkspace {
             },
             PaletteAction::CloseTab => self.close_active(window, cx),
             PaletteAction::SplitRight => {
-                let _ = self.split_focused(SplitDirection::LeftRight, window, cx);
+                self.request_split(SplitDirection::LeftRight, window, cx);
             },
             PaletteAction::SplitDown => {
-                let _ = self.split_focused(SplitDirection::TopBottom, window, cx);
+                self.request_split(SplitDirection::TopBottom, window, cx);
             },
             PaletteAction::LaunchSsh(host) => {
                 self.add_ssh_terminal(host, window, cx);
@@ -2985,10 +2932,10 @@ impl Render for NebulaWorkspace {
                 this.toggle_file_tree(cx);
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
-                let _ = this.split_focused(SplitDirection::LeftRight, window, cx);
+                this.request_split(SplitDirection::LeftRight, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
-                let _ = this.split_focused(SplitDirection::TopBottom, window, cx);
+                this.request_split(SplitDirection::TopBottom, window, cx);
             }))
             .on_action(cx.listener(|this, _: &RenameActiveTab, window, cx| {
                 let ix = this.active;
