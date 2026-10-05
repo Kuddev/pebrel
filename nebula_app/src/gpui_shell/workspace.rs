@@ -1721,9 +1721,7 @@ impl NebulaWorkspace {
         if let Some(wsl) = self.active_wsl_cwd(cx) {
             return match crate::shell_detect::wsl_mounted_host_cwd(&wsl) {
                 Some(cwd) => (Some(cwd), None),
-                // Guest git/find take the directory as one `wsl.exe` argument.
-                None if crate::shell_detect::wsl_accepts_arg(&wsl.guest) => (None, Some(wsl)),
-                None => (None, None),
+                None => (None, Some(wsl)),
             };
         }
         (self.active_local_cwd(cx), None)
