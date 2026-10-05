@@ -82,7 +82,8 @@ OSC links 1, completion context 13 and file budgets 2. Architecture unit tests
 ran 54 cases (3 skipped); the baseline-relative architecture check passed.
 Production GPUI compile checks, the actual `cargo build --locked -p nebula
 --bin pebrel --features gpui-shell`, formatting and diff checks passed.
-The full application suite and other native platforms were not run locally.
+These initial selected checks did not run the full application suite or other
+native platforms locally.
 
 The operator reported successful real PowerShell/WSL splitting and shell selection
 using the local Windows `target/debug/pebrel.exe` before scope separation. This is
@@ -97,6 +98,40 @@ lock; teardown restores the user's original settings bytes. No production
 platform-specific workaround was added. The closed-source case retains another
 tab, proving selection cannot fall back to the new focus. Both cases passed again
 in the focused submission, independently of the prior integrated run.
+
+CI on `8d6443a` then exposed a different fixture-ownership gap: Windows x64 ran
+2809 tests with one failing split-shortcut assertion (the picker opened despite
+being disabled), while Linux ran 2646 with one settings persistence assertion
+failing (memory was enabled but disk was disabled). The new fixtures held the
+process-local mutex but were missing from nextest's existing `theme-studio` group.
+Multiple fixture processes could overwrite or restore the same settings file.
+With CI's pinned nextest 0.9.146, the saved pre-fix config and four test threads,
+the first local run reproduced the identical shortcut assertion at line 151.
+The runner's group report placed all four new rendered cases in `@global`.
+
+Register both rendered test modules in the existing one-thread fixture group and
+update its exact-list contract test. The registration test fails without the fix
+and passes with it. Do not serialize the whole suite, add retries, relax assertions
+or change production persistence. The local reproduction uses the existing
+`PEBREL_CONFIG_DIR` override so no real user settings are touched.
+
+After registration, all four rendered cases passed eight consecutive nextest
+runs (32 passes). The exact fixture-group contract ran 18 tests successfully;
+ordinary shell-rule tests stayed in `@global`. The complete Windows native entry
+`python scripts/ci_native_tests.py --runner nextest` subsequently passed with
+CI's pinned runner/profile and four local test threads: 2809 Rust tests passed,
+35 skipped, one doctest passed, and Python suites ran 283/47 cases with 64/11
+platform skips. Its separate production GPUI check and final architecture,
+formatting and diff checks passed. CI's default parallelism and zero retries
+remain unchanged; this is not a guarantee for every resource-load condition.
+
+Retain first-failure evidence: the local Python prerequisite pass initially lacked
+UTF-8/default C preprocessing; the first complete Rust attempt lacked the pinned
+ConPTY pair and also hit the existing formula-frame assertion under concurrent
+load. Both latter cases passed isolated probes. Preparing the standard pinned
+runtime, using a fresh test settings directory and four local runner threads
+allowed the complete entry to pass without modifying those unrelated tests.
+Temporary tools/settings and raw evidence remain uncommitted under `tmp/`.
 
 ## Supersedes
 
