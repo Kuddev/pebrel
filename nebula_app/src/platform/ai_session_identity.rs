@@ -578,7 +578,32 @@ mod tests {
             if let Some(value) = &codex_home {
                 command.env("CODEX_HOME", value);
             }
-            let _child = OwnedChild(command.spawn().unwrap());
+            let mut child = OwnedChild(command.spawn().unwrap());
+            // spawn 的 exec 错误管道可先于 /proc 名称和环境切换关闭。
+            // 等夹具身份与样本句柄就绪，不重试产品探测或放宽其期限。
+            let proc_dir = std::path::PathBuf::from(format!("/proc/{}", child.0.id()));
+            let physical_rollout = rollout.canonicalize().unwrap();
+            let ready_deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                assert!(child.0.try_wait().unwrap().is_none(), "fixture exited before readiness");
+                let named = std::fs::read_to_string(proc_dir.join("comm"))
+                    .is_ok_and(|name| name.trim() == "codex");
+                let owned = std::fs::read(proc_dir.join("environ")).is_ok_and(|environment| {
+                    environment_has_value(&environment, b"PEBREL_PANE_ID", pane.as_bytes())
+                        && environment_has_value(
+                            &environment,
+                            crate::agent_env::PROCESS_ENV.as_bytes(),
+                            instance.as_bytes(),
+                        )
+                });
+                let opened = std::fs::read_link(proc_dir.join("fd/0"))
+                    .is_ok_and(|path| path == physical_rollout);
+                if named && owned && opened {
+                    break;
+                }
+                assert!(Instant::now() < ready_deadline, "fixture did not finish exec");
+                std::thread::sleep(Duration::from_millis(1));
+            }
             for (query_pane, query_instance, matches) in [
                 (pane, instance.as_str(), expected),
                 ("other-pane", instance.as_str(), false),
@@ -586,10 +611,11 @@ mod tests {
             ] {
                 let mut guest = Command::new("sh");
                 guest.args(["-c", PROBE_SCRIPT, "probe", query_pane, query_instance]);
-                for found in
-                    [probe_local_proc(query_pane, query_instance), run_probe_command(guest)]
-                {
-                    assert_eq!(found.is_some(), matches, "home={codex_home:?}");
+                for (backend, found) in [
+                    ("native", probe_local_proc(query_pane, query_instance)),
+                    ("guest", run_probe_command(guest)),
+                ] {
+                    assert_eq!(found.is_some(), matches, "home={codex_home:?} backend={backend}");
                     if let Some(found) = found {
                         assert_eq!(found.session_id, ROOT_ID);
                         assert_eq!(Path::new(&found.session_file), rollout);
