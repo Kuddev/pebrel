@@ -144,6 +144,7 @@ impl NebulaWorkspace {
                 }
             });
         let paste_item = PopupMenuItem::new(language.text(crate::i18n::Message::CommonPaste))
+            .icon(Icon::default().path(crate::gpui_shell::assets::nav::CLIPBOARD_PASTE))
             .on_click(move |_, window, cx| {
                 if let Some(source) = paste_source.upgrade() {
                     source.update(cx, |view, cx| view.paste(window, cx));

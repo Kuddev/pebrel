@@ -269,3 +269,31 @@ fn root_search_finds_nested_commands_while_folder_search_stays_in_that_folder(
     draw(&mut cx);
     workspace.read_with(&cx, |this, cx| assert!(this.command_manager_rows(cx).is_empty()));
 }
+
+#[gpui::test]
+fn backup_restore_refreshes_an_open_command_manager(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(crate::saved_commands::STORE_FILE);
+    let mut saved = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    saved.insert("Before restore", "echo before", false).unwrap();
+    let (workspace, mut window) = open_manager(saved, cx);
+    std::fs::write(
+        &path,
+        br#"{"version":1,"commands":[{"id":"restored","name":"After restore","command":"echo after","append_enter":false}]}"#,
+    )
+    .unwrap();
+    let pane = window.update(|window, cx| cx.new(|cx| SettingsPane::new(window, cx)));
+    let _subscription = window.update(|window, cx| {
+        workspace
+            .update(cx, |_, cx| cx.subscribe_in(&pane, window, NebulaWorkspace::on_settings_event))
+    });
+    pane.update(&mut window, |_, cx| cx.emit(SettingsPaneEvent::BackupRestored));
+    draw(&mut window);
+    workspace.read_with(&window, |this, _| {
+        assert!(this.command_manager_open);
+        assert_eq!(this.saved_commands.commands()[0].name, "After restore");
+        assert!(this.command_manager_group.is_none());
+        assert_eq!(this.command_manager_selected, 0);
+    });
+    assert!(window.debug_bounds("saved-command-row-0").is_some());
+}

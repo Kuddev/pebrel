@@ -10,6 +10,23 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class NativeRelayDeploymentTest {
+    @Test fun everyDeploymentReconnectReadsTheSelectedPrivateKey() = kotlinx.coroutines.runBlocking {
+        val host = HostProfile("key-host", "Key host", "192.0.2.1", user = "root",
+            keyUri = "content://fixture/private-key")
+        var reads = 0
+        DeploymentSsh(host, charArrayOf(), { _, _ -> false }, {
+            reads++
+            // 在 JNI 前终止，验证重连接线，不让单测依赖真实网络和密钥文件。
+            throw io.github.kuddev.pebrel.ssh.NativeSshException("KEY")
+        }).use { ssh ->
+            repeat(2) {
+                val failure = runCatching { ssh.open(5_000) }.exceptionOrNull()
+                assertEquals(SshFailureKind.KEY, classifySshFailure(checkNotNull(failure)))
+            }
+        }
+        assertEquals(2, reads)
+    }
+
     @Test fun fourStepsKeepTheExactFailureAndIgnoreLateOrRegressiveProgress() {
         var progress = RelayInstallProgress()
         assertEquals(InstallStepState.ACTIVE, progress.state(1))
