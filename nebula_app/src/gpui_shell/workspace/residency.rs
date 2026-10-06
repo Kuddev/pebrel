@@ -39,10 +39,11 @@ fn runtime_close_confirmation(process: String, details: Value) -> ApiError {
 pub(super) fn residency_close_action(
     keep_session: bool,
     has_live_panes: bool,
+    empty_workspace: bool,
     tray: bool,
 ) -> ResidencyCloseAction {
     let _ = tray;
-    if keep_session && has_live_panes {
+    if keep_session && (has_live_panes || empty_workspace) {
         ResidencyCloseAction::Hide
     } else {
         ResidencyCloseAction::Close
@@ -988,6 +989,13 @@ impl NebulaWorkspace {
         }
     }
 
+    pub(super) fn close_empty_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.keep_session_on_close(window, cx) {
+            super::windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
+        }
+        cx.notify();
+    }
+
     /// 旧壳 detach：关窗不杀 PTY、不弹忙进程确认。GPUI 用 hide 代替拆 pane。
     pub(super) fn keep_session_on_close(
         &mut self,
@@ -995,7 +1003,9 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> bool {
         // Private administrator windows have no public resident discovery path.
-        if crate::platform::elevation::requires_isolation() {
+        if self.window_role != super::windowing::WindowRole::Regular
+            || crate::platform::elevation::requires_isolation()
+        {
             return false;
         }
         let runtime = nebula_settings::RuntimeSettings::load();
@@ -1005,6 +1015,7 @@ impl NebulaWorkspace {
         if residency_close_action(
             runtime.keep_session && can_hide,
             self.has_live_terminal_panes(),
+            self.tabs.is_empty(),
             runtime.tray,
         ) != ResidencyCloseAction::Hide
         {
@@ -1013,7 +1024,11 @@ impl NebulaWorkspace {
         if let Err(error) = super::windowing::save_current_window_session(
             self.runtime_window_id,
             self.snapshot_session(cx),
-            super::session_persistence::SaveReason::Checkpoint,
+            if self.tabs.is_empty() {
+                super::session_persistence::SaveReason::TabsClosed
+            } else {
+                super::session_persistence::SaveReason::Checkpoint
+            },
             cx,
         ) {
             log::warn!("Could not checkpoint before hiding window: {error}");
@@ -1091,14 +1106,25 @@ mod tests {
     use super::{ResidencyCloseAction, residency_close_action};
 
     #[test]
+    fn closing_last_tab_can_reside_without_preserving_a_terminal_process() {
+        for tray in [false, true] {
+            assert_eq!(residency_close_action(true, false, true, tray), ResidencyCloseAction::Hide);
+            assert_eq!(
+                residency_close_action(false, false, true, tray),
+                ResidencyCloseAction::Close
+            );
+        }
+    }
+
+    #[test]
     fn keep_session_hides_even_when_tray_is_off() {
         assert_eq!(
-            residency_close_action(true, true, false),
+            residency_close_action(true, true, false, false),
             ResidencyCloseAction::Hide,
             "tray=false must still hide, never minimize"
         );
-        assert_eq!(residency_close_action(true, true, true), ResidencyCloseAction::Hide);
-        assert_eq!(residency_close_action(false, true, false), ResidencyCloseAction::Close);
-        assert_eq!(residency_close_action(true, false, true), ResidencyCloseAction::Close);
+        assert_eq!(residency_close_action(true, true, false, true), ResidencyCloseAction::Hide);
+        assert_eq!(residency_close_action(false, true, false, false), ResidencyCloseAction::Close);
+        assert_eq!(residency_close_action(true, false, false, true), ResidencyCloseAction::Close);
     }
 }

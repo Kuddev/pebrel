@@ -1,7 +1,7 @@
 use super::*;
 use crate::gpui_shell::terminal::view::TerminalLaunch;
 use crate::gpui_shell::workspace::{TabMeta, windowing};
-use gpui::{TestAppContext, VisualTestContext, point, size};
+use gpui::{AssetSource as _, TestAppContext, VisualTestContext, point, size};
 use gpui_component::Root;
 use nebula_split::SplitTree;
 
@@ -15,6 +15,11 @@ fn draw(cx: &mut VisualTestContext) {
 
 #[gpui::test]
 fn terminal_menu_renders_without_a_selection_and_escape_restores_focus(cx: &mut TestAppContext) {
+    let paste_icon = crate::gpui_shell::assets::NebulaAssets
+        .load(crate::gpui_shell::assets::nav::CLIPBOARD_PASTE)
+        .unwrap()
+        .expect("paste icon must be embedded in the product asset source");
+    assert!(std::str::from_utf8(&paste_icon).unwrap().contains("viewBox=\"0 0 24 24\""));
     let hub = crate::runtime_api::RuntimeHub::new();
     cx.update(|cx| {
         gpui_component::init(cx);
