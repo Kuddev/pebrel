@@ -108,6 +108,28 @@ class AndroidReleaseTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", android_workflow)
         self.assertNotIn("assembleDebug", android_workflow)
         self.assertNotIn("keytool -genkey", android_workflow)
+        self.assertIn("dist/*-relay-manual.tar.gz", android_workflow)
+
+    def test_manual_kit_evidence_is_required_only_after_the_published_211_manifest(self):
+        self.assertIsNone(android.manual_asset_name("2.1.1"))
+        version, commit = "2.1.2", "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apk = root / android.asset_name(version)
+            apk.write_bytes(b"APK identity fixture")
+            kit = root / android.manual_asset_name(version)
+            kit.write_bytes(b"manual kit identity fixture")
+            data = {"schema_version": 1, "status": "passed", "commit": commit, "version": version,
+                    "application_id": android.APPLICATION_ID, "version_code": 21,
+                    "certificate_sha256": android.CERTIFICATE_SHA256, "apk": apk.name, "sha256": sha256(apk),
+                    "tests": {"unit": {"passed": 1}, "instrumented": {"passed": 1}},
+                    "relay_kit": {"file": kit.name, "sha256": sha256(kit)}}
+            report = root / "report.json"
+            report.write_text(json.dumps(data), encoding="utf-8")
+            android.validate_evidence(report, root, version, commit)
+            kit.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "Manual relay"):
+                android.validate_evidence(report, root, version, commit)
 
 
 if __name__ == "__main__":

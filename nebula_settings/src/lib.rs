@@ -1148,6 +1148,16 @@ impl RuntimeSettings {
         Self::from_raw(&RawSettings::load())
     }
 
+    /// 启动时再检查目录：保存后可能被删除，各启动入口应使用同一有效性规则。
+    pub fn startup_directory_path(&self) -> Option<std::path::PathBuf> {
+        let directory = self.startup_directory.as_deref()?.trim();
+        if directory.is_empty() {
+            return None;
+        }
+        let path = std::path::PathBuf::from(directory);
+        path.is_dir().then_some(path)
+    }
+
     pub fn from_raw(raw: &RawSettings) -> Self {
         let blur = raw.value("blur").and_then(BlurModeName::from_settings).unwrap_or_default();
         let blur_explicit = raw.value("blur").and_then(BlurModeName::from_settings).is_some();

@@ -123,6 +123,7 @@ internal class DeploymentSsh(
     private val host: HostProfile,
     private val password: CharArray,
     private val verifyHost: (HostProfile, String) -> Boolean,
+    private val keySource: (() -> ByteArray)?,
 ) : Closeable {
     private val guard = Any()
     @Volatile private var active: SshConnection? = null
@@ -132,7 +133,9 @@ internal class DeploymentSsh(
     suspend fun open(timeoutMs: Long): SshConnection {
         val connection = synchronized(guard) {
             check(!closed) { "closed" }
-            SshConnection(host.copy(fingerprint = trustedFingerprint), password.copyOf(), ::verify)
+            // 部署会为每条命令重连；每次都复用普通 SSH 的按需私钥读取和清零流程。
+            SshConnection(host.copy(fingerprint = trustedFingerprint), password.copyOf(), ::verify,
+                keySource = keySource)
                 .also { active = it }
         }
         return try {
@@ -191,7 +194,7 @@ internal class DeploymentSsh(
     }
 }
 
-/** Android adapter for deploying the existing user-hosted relay over password SSH. */
+/** Android adapter for deploying the existing user-hosted relay over authenticated SSH. */
 object RelayDeployment {
     const val ASSET_NAME = "relay-kit.bin"
 
@@ -227,7 +230,8 @@ object RelayDeployment {
         } catch (error: Exception) {
             throw RelayDeploymentException(RelayDeploymentErrorCode.ASSET_MISSING, cause = error)
         }
-        return deploy(host, password, verify, request, archive, onProgress)
+        return deploy(host, password, verify, request, archive,
+            keySource = sshKeySource(context, host), onProgress = onProgress)
     }
 
     /** Entry point useful to tests and to build tooling that already has the asset bytes. */
@@ -237,6 +241,7 @@ object RelayDeployment {
         verify: (HostProfile, String) -> Boolean,
         request: RelayDeploymentRequest,
         archive: ByteArray,
+        keySource: (() -> ByteArray)? = null,
         onProgress: (RelayDeploymentProgress) -> Unit = {},
     ): RelayDeploymentResult {
         if (archive.isEmpty() || archive.size > MAX_ARCHIVE_BYTES) {
@@ -245,7 +250,7 @@ object RelayDeployment {
         val config = validate(request)
         emit(onProgress, RelayDeploymentStage.VALIDATING, 1)
 
-        val ssh = DeploymentSsh(host, password, verify)
+        val ssh = DeploymentSsh(host, password, verify, keySource)
         val parentJob = currentCoroutineContext().job
         val closeOnCancel = parentJob.invokeOnCompletion { cause ->
             if (cause is CancellationException) ssh.close()

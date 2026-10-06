@@ -1152,13 +1152,7 @@ impl NebulaWorkspace {
 
     /// 设置页「启动目录」：非空且确实存在的目录才生效（旧壳同判定）。
     fn startup_directory() -> Option<std::path::PathBuf> {
-        let dir = nebula_settings::RuntimeSettings::load().startup_directory?;
-        let dir = dir.trim();
-        if dir.is_empty() {
-            return None;
-        }
-        let path = std::path::PathBuf::from(dir);
-        path.is_dir().then_some(path)
+        nebula_settings::RuntimeSettings::load().startup_directory_path()
     }
 
     /// 创建一个 pane 实体（分配 id、spawn 会话、挂宿主订阅）；调用方决定
