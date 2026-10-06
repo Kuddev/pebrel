@@ -409,7 +409,7 @@ fn backup_provider_rows_contain_titles_and_wrapped_hints(cx: &mut gpui::TestAppC
                         );
                     }
                 }
-                let mut previous_bottom = None;
+                let mut rows: Vec<gpui::Bounds<gpui::Pixels>> = Vec::new();
                 let mut wrapped = false;
                 for (row_selector, title_selector, hint_selector) in [
                     ("backup-provider-0", "backup-provider-title-0", "backup-provider-hint-0"),
@@ -437,10 +437,14 @@ fn backup_provider_rows_contain_titles_and_wrapped_hints(cx: &mut gpui::TestAppC
                         hint.left() >= row.left() && hint.right() <= row.right(),
                         "hint exceeds row width"
                     );
-                    if let Some(bottom) = previous_bottom {
-                        assert!(bottom + px(4.0) <= row.top(), "provider rows overlap");
+                    for other in &rows {
+                        assert!(
+                            other.right() + px(4.0) <= row.left()
+                                || other.bottom() + px(4.0) <= row.top(),
+                            "provider rows overlap: {other:?}, {row:?}"
+                        );
                     }
-                    previous_bottom = Some(row.bottom());
+                    rows.push(row);
                     wrapped |= hint.size.height > px(30.0);
                 }
                 if width == 600.0 {
