@@ -939,7 +939,7 @@
     "assistant": "助手設定",
     "sessions": "工作區中的工作階段",
     "directories": "目錄歷史紀錄",
-    "commands": "命令歷史紀錄",
+    "commands": "命令與歷史紀錄",
     "fonts": "自訂字型"
   },
   "ai_hooks": {

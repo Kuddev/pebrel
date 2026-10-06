@@ -19,6 +19,12 @@ mod agent_hooks;
 pub use agent_hooks::AgentHook;
 mod app_icon;
 pub use app_icon::{AppIconName, AppIconPalette};
+mod background_media;
+pub use background_media::BackgroundMediaKind;
+mod background_effects;
+pub use background_effects::{BackgroundEffectRequest, BackgroundEffects};
+mod terminal_effects;
+pub use terminal_effects::{EffectAnimation, TerminalEffects};
 mod cursor_motion;
 mod custom_theme;
 pub use cursor_motion::CursorMotion;
@@ -1078,12 +1084,16 @@ pub struct RuntimeSettings {
     /// 壁纸路径（空 = 无壁纸）。fit/alignment 存原文，解析归渲染层
     /// （旧壳 `renderer::image` 的 parse 是权威记号表）。
     pub background_image: Option<String>,
+    pub background_media_kind: BackgroundMediaKind,
     /// 壁纸自身透明度，独立于窗口 opacity（保文字对比度，旧壳同语义）。
     pub background_image_opacity: f32,
     pub background_image_fit: Option<String>,
     pub background_image_alignment: Option<String>,
     /// 壁纸铺满整窗（含侧栏/标题栏）而非仅终端卡。
     pub background_image_cover_chrome: bool,
+    /// Local opt-in only; theme packages cannot authorize shader execution.
+    pub background_effects: BackgroundEffects,
+    pub terminal_effects: TerminalEffects,
     pub panel_resize: bool,
     /// 左侧 Tab 栏逻辑宽；与旧壳的持久化键、钳制范围共用。
     pub sidebar_width: f32,
@@ -1145,6 +1155,16 @@ pub const MAX_PANE_CARD_DIVIDER: f32 = 4.0;
 impl RuntimeSettings {
     pub fn load() -> Self {
         Self::from_raw(&RawSettings::load())
+    }
+
+    /// 启动时再检查目录：保存后可能被删除，各启动入口应使用同一有效性规则。
+    pub fn startup_directory_path(&self) -> Option<std::path::PathBuf> {
+        let directory = self.startup_directory.as_deref()?.trim();
+        if directory.is_empty() {
+            return None;
+        }
+        let path = std::path::PathBuf::from(directory);
+        path.is_dir().then_some(path)
     }
 
     pub fn from_raw(raw: &RawSettings) -> Self {
@@ -1258,6 +1278,10 @@ impl RuntimeSettings {
                 .filter(|v| !v.is_empty())
                 .map(str::to_owned),
             // 默认 0.38：旧壳 display/settings 同值（壁纸压不过文字）。
+            background_media_kind: raw
+                .value("background_media_kind")
+                .and_then(BackgroundMediaKind::parse)
+                .unwrap_or_default(),
             background_image_opacity: raw
                 .f32("background_image_opacity")
                 .map(|o| o.clamp(0.0, 1.0))
@@ -1267,6 +1291,8 @@ impl RuntimeSettings {
             background_image_cover_chrome: raw
                 .bool_on("background_image_cover_chrome")
                 .unwrap_or(false),
+            background_effects: BackgroundEffects::from_raw(raw),
+            terminal_effects: TerminalEffects::from_raw(raw),
             panel_resize: raw.bool_on("panel_resize").unwrap_or(true),
             sidebar_width: raw
                 .f32("sidebar_w")
