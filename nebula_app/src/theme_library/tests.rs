@@ -3,6 +3,19 @@ use super::*;
 use nebula_settings::{CursorShapeName, ThemeDefinition, ThemeEffects, ThemeName, ThemeTypography};
 
 #[test]
+fn video_kind_roundtrips_without_changing_legacy_path_or_optional_effects() {
+    let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+    definition.effects.background_image = Some("scene.mp4".into());
+    definition.effects.background_media_kind = Some(nebula_settings::BackgroundMediaKind::Video);
+    let document = from_definition(&definition).unwrap();
+    assert_eq!(document.definition().unwrap(), definition);
+    assert_eq!(document.to_value()["effects"]["background_media_kind"], "video");
+    definition.effects.background_media_kind = None;
+    let old = from_definition(&definition).unwrap();
+    assert_eq!(old.definition().unwrap().effects.background_media_kind, None);
+}
+
+#[test]
 fn every_builtin_round_trips_through_the_native_envelope() {
     assert_eq!(builtin_documents().len(), ThemeName::BUILTIN.len());
     for theme in ThemeName::BUILTIN {

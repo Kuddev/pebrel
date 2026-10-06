@@ -54,10 +54,16 @@ for proc in /proc/[0-9]*; do
         [ -n "$guest_home" ] || continue
         codex_root="$guest_home/.codex"
     fi
+    case "$codex_root" in
+        /*) ;;
+        *) codex_root="$proc/cwd/$codex_root" ;;
+    esac
+    # fd 返回真实路径；每个已匹配进程只解析一次目录，避免逐句柄重复 I/O。
+    sessions_root=$(CDPATH= cd -P "$codex_root/sessions" 2>/dev/null && pwd -P) || continue
     for fd in "$proc"/fd/*; do
         link=$(readlink "$fd" 2>/dev/null || true)
         case "$link" in
-            "$codex_root"/sessions/*/rollout-*.jsonl)
+            "$sessions_root"/*/rollout-*.jsonl)
                 first=$(head -c 65536 "$fd" 2>/dev/null | head -n 1)
                 [ -n "$first" ] || continue
                 printf '%s\t%s\t%s\t%s\n' "$pid" "${fd##*/}" "$link" "$first"
@@ -310,11 +316,17 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
         let Some(codex_home) = codex_home_from_environment(&environment) else {
             continue;
         };
+        // /proc/fd 返回真实路径；先统一目录身份，再做词法边界检查，且不逐句柄访问磁盘。
+        let Ok(sessions_root) =
+            proc_dir.join("cwd").join(codex_home).join("sessions").canonicalize()
+        else {
+            continue;
+        };
         let Ok(fds) = std::fs::read_dir(proc_dir.join("fd")) else { continue };
         for fd in fds.flatten() {
             let fd_path = fd.path();
             let Ok(link) = std::fs::read_link(&fd_path) else { continue };
-            if !is_rollout_link(&link, &codex_home) {
+            if !is_rollout_link(&link, &sessions_root) {
                 continue;
             }
             let Ok(first_line) = read_first_line(&fd_path) else { continue };
@@ -373,9 +385,8 @@ fn codex_home_from_environment(environment: &[u8]) -> Option<std::path::PathBuf>
 }
 
 #[cfg(unix)]
-fn is_rollout_link(link: &Path, codex_home: &Path) -> bool {
-    let sessions = codex_home.join("sessions");
-    link.strip_prefix(sessions).is_ok_and(|relative| {
+fn is_rollout_link(link: &Path, sessions_root: &Path) -> bool {
+    link.strip_prefix(sessions_root).is_ok_and(|relative| {
         relative.components().count() >= 2
             && link
                 .file_name()
@@ -507,5 +518,84 @@ mod tests {
             codex_home_from_environment(environment).as_deref(),
             Some(Path::new("/home/hello/.codex"))
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_probes_resolve_session_symlinks_and_preserve_ownership_boundaries() {
+        use std::os::unix::fs::symlink;
+
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("user");
+        let physical = root.path().join("physical data");
+        let sessions = physical.join("sessions/2026/10/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        symlink(&physical, home.join(".codex")).unwrap();
+        let linked_sessions = root.path().join("linked sessions");
+        std::fs::create_dir(&linked_sessions).unwrap();
+        symlink(physical.join("sessions"), linked_sessions.join("sessions")).unwrap();
+        let unrelated = root.path().join("unrelated");
+        std::fs::create_dir_all(unrelated.join("sessions")).unwrap();
+        let rollout = sessions.join(format!("rollout-x-{ROOT_ID}.jsonl"));
+        let metadata = serde_json::json!({"type":"session_meta", "payload": {
+            "id": ROOT_ID, "source": "cli", "thread_source": "user",
+        }});
+        std::fs::write(&rollout, format!("{metadata}\n")).unwrap();
+        // 只启动持有样本文件的休眠进程，不运行真实 CLI 或读取用户会话。
+        let program = root.path().join("codex");
+        symlink("/bin/sleep", &program).unwrap();
+        let pane = "session-symlink-fixture";
+        let instance = std::process::id().to_string();
+        for (codex_home, expected) in [
+            (Some(physical.clone()), true),
+            (Some(home.join(".codex")), true),
+            (None, true),
+            (Some(linked_sessions), true),
+            (Some(std::path::PathBuf::from("physical data")), true),
+            (Some(unrelated), false),
+        ] {
+            let mut command = Command::new(&program);
+            command
+                .arg("30")
+                .current_dir(root.path())
+                .env("HOME", &home)
+                .env_remove("CODEX_HOME")
+                .env("PEBREL_PANE_ID", pane)
+                .env("NEBULA_PANE_ID", pane)
+                .env(crate::agent_env::PROCESS_ENV, &instance)
+                .stdin(std::fs::File::open(&rollout).unwrap())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if let Some(value) = &codex_home {
+                command.env("CODEX_HOME", value);
+            }
+            let _child = OwnedChild(command.spawn().unwrap());
+            for (query_pane, query_instance, matches) in [
+                (pane, instance.as_str(), expected),
+                ("other-pane", instance.as_str(), false),
+                (pane, "other-instance", false),
+            ] {
+                let mut guest = Command::new("sh");
+                guest.args(["-c", PROBE_SCRIPT, "probe", query_pane, query_instance]);
+                for found in
+                    [probe_local_proc(query_pane, query_instance), run_probe_command(guest)]
+                {
+                    assert_eq!(found.is_some(), matches, "home={codex_home:?}");
+                    if let Some(found) = found {
+                        assert_eq!(found.session_id, ROOT_ID);
+                        assert_eq!(Path::new(&found.session_file), rollout);
+                    }
+                }
+            }
+        }
     }
 }

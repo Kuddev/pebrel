@@ -23,6 +23,8 @@ parking_lot = "0.12.0"
 polling = "3.8.0"
 regex-automata = "0.4.3"
 unicode-width = "0.2.0"
+unicode-segmentation = "1.13.3"
+unicode-properties = { version = "0.1.4", default-features = false, features = ["emoji"] }
 vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"] }
 serde = { version = "1", features = ["derive", "rc"], optional = true }
 
