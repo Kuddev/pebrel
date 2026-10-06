@@ -496,6 +496,16 @@ class ConformanceContext:
         log_path = self.artifact_dir / f"pebrel-{self._launch_number}.log"
         self._log_handle = log_path.open("wb")
         env = os.environ.copy()
+        # 独立配置目录不覆盖显式 Runtime 地址；先移除父实例身份，避免验收操作被转发。
+        for name in (
+            "PEBREL_RUNTIME_ENDPOINT", "PEBREL_PROCESS_ID",
+            "PEBREL_PANE_ID", "NEBULA_PANE_ID",
+            "PEBREL_CLI", "NEBULA_CLI", "PEBREL_BIN_DIR", "NEBULA_BIN_DIR",
+            "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
+            "PEBREL_CONFIG_FILE", "NEBULA_CONFIG_FILE",
+            "PEBREL_GPUI_CONFIG", "NEBULA_GPUI_CONFIG",
+        ):
+            env.pop(name, None)
         env["PEBREL_CONFIG_DIR"] = os.fspath(self.config_dir)
         env["NEBULA_CONFIG_DIR"] = os.fspath(self.config_dir)
         env["RUST_BACKTRACE"] = "1"

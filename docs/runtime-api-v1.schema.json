@@ -84,6 +84,7 @@
             "pane.read",
             "pane.procs",
             "pane.send_key",
+            "pane.scroll",
             "pane.run",
             "pane.exec",
             "pane.wait",
@@ -537,6 +538,22 @@
             "properties": {
               "params": {
                 "$ref": "#/$defs/send_key_params"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "pane.scroll"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/scroll_params"
               }
             }
           }
@@ -1658,9 +1675,38 @@
           "type": "boolean",
           "default": false,
           "description": "Include the live screen v1 color grid, independently of the text tail and desktop scrollback offset."
+        },
+        "screen_viewport": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt in to the controlled desktop viewport, including scrollback. Requires screen=true and the pane.read.screen.viewport.v1 feature. Text tail semantics are unchanged."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "screen_viewport"
+            ],
+            "properties": {
+              "screen_viewport": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "screen"
+            ],
+            "properties": {
+              "screen": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
     },
     "pane_target_params": {
       "type": "object",
@@ -3187,6 +3233,44 @@
       },
       "additionalProperties": false,
       "description": "At most 40000 cells and 128 KiB UTF-8 glyphs; each glyph <=256 UTF-8 bytes. Row widths must equal columns. Color <0 references -(palette index+1); otherwise RGB. Flags: bold=1, italic=2, underline=4, strike=8, dim=16, hidden=32. Cursor is [x,y,visible]. Oversized grids return screen_too_large, never a silently cropped frame."
+    },
+    "scroll_params": {
+      "type": "object",
+      "required": [
+        "pane_id",
+        "lines",
+        "column",
+        "row"
+      ],
+      "properties": {
+        "window_id": {
+          "$ref": "#/$defs/nullable_window_id"
+        },
+        "pane_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": -32,
+          "maximum": 32,
+          "not": {
+            "const": 0
+          },
+          "description": "Positive scrolls up; uses the native terminal wheel routing without activating the window."
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 399
+        },
+        "row": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 199
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

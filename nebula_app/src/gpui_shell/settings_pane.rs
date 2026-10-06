@@ -117,6 +117,8 @@ pub struct SettingsPane {
     appearance_picker_seq: u64,
     shader_picker: Option<Task<()>>,
     terminal_effect_picker: Option<Task<()>>,
+    shader_custom_open: bool,
+    effect_settings_open: bool,
     media_picker: Option<Task<()>>,
     media_picker_generation: u64,
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
@@ -849,9 +851,14 @@ impl SettingsPane {
         control: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let layout = if segmented::supports(key) {
+            design::RowLayout::IntrinsicControl
+        } else {
+            design::RowLayout::Standard
+        };
         match self.setting_override(key) {
             Some((dirty, factory)) => self
-                .row_with_reset(
+                .row_with_reset_layout(
                     label,
                     desc,
                     dirty,
@@ -874,11 +881,14 @@ impl SettingsPane {
                         // 必须显式拉回，否则撤销只改了值不改显示。
                         this.sync_select(key, &factory, window, cx);
                     },
+                    layout,
                     control,
                     cx,
                 )
                 .into_any_element(),
-            None => self.row(label, desc, control, cx).into_any_element(),
+            None => self
+                .row_shell(label, desc.into(), None, false, layout, control, cx)
+                .into_any_element(),
         }
     }
 

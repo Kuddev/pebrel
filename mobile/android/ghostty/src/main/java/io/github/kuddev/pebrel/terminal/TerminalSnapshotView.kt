@@ -74,6 +74,13 @@ class TerminalSnapshotView(context: Context) : View(context) {
     var pinchZoom = true
     var onZoomChanged: ((Int, Boolean) -> Unit)? = null
     var pasteTarget: TerminalInputTarget? = null
+    private var scrollRemainder = 0f
+    var scrollTarget: TerminalInputTarget? = null
+        set(value) {
+            if (field === value) return
+            field = value
+            scrollRemainder = 0f
+        }
     private val selection: TerminalSelection = TerminalSelection(this,
         canPaste = { (pasteTarget ?: inputTarget) != null },
         paste = { (pasteTarget ?: inputTarget)?.paste(it) == true },
@@ -226,10 +233,28 @@ class TerminalSnapshotView(context: Context) : View(context) {
         override fun onScroll(first: MotionEvent?, current: MotionEvent, dx: Float, dy: Float): Boolean {
             if (multiTouch) return true
             followInputCursor = false
+            val previousY = offsetY
             offsetX += dx
             offsetY += dy
             constrainOffsets()
             followOutput = maxY() - offsetY < cellHeight * 2
+            val target = scrollTarget
+            val source = frame
+            // 先平移手机未显示的网格部分；越过边缘后才把剩余位移交给桌面滚轮。
+            // 重排阅读模式没有一一对应的桌面坐标，仍保留纯本地滚动。
+            if (!wrapLines && source != null && target?.supportsScroll == true) {
+                val remaining = dy - (offsetY - previousY)
+                scrollRemainder = (scrollRemainder - remaining / cellHeight).coerceIn(-32f, 32f)
+                val lines = scrollRemainder.toInt()
+                if (lines != 0) {
+                    val column = ((current.x + offsetX) / cellWidth).toInt().coerceIn(0, source.columns - 1)
+                    val row = ((current.y + offsetY) / cellHeight).toInt().coerceIn(0, source.rows.size - 1)
+                    if (target.scroll(lines, column, row)) {
+                        scrollRemainder -= lines
+                        followOutput = false
+                    } else scrollRemainder = 0f
+                }
+            }
             invalidate()
             return true
         }
@@ -275,7 +300,10 @@ class TerminalSnapshotView(context: Context) : View(context) {
             parent?.requestDisallowInterceptTouchEvent(false)
             return true
         }
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) multiTouch = false
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            multiTouch = false
+            scrollRemainder = 0f
+        }
         if (event.pointerCount >= 2) multiTouch = true
         parent?.requestDisallowInterceptTouchEvent(true)
         selection.geometry(cellWidth, cellHeight, offsetX, offsetY)
