@@ -37,6 +37,8 @@ struct Word {
 pub struct CommandContext {
     pub(crate) arguments: Vec<String>,
     home_arguments: Vec<usize>,
+    following: Vec<String>,
+    full_word: Option<String>,
     target: Word,
     syntax: ShellSyntax,
 }
@@ -54,20 +56,50 @@ impl CommandContext {
         self.home_arguments.contains(&index)
     }
 
+    pub fn following_arguments(&self) -> &[String] {
+        &self.following
+    }
+
+    pub(crate) fn full_word(&self) -> &str {
+        self.full_word.as_deref().unwrap_or(&self.target.value)
+    }
+
     fn parse_words(
         line: &str,
         cursor: usize,
         syntax: ShellSyntax,
         allow_home: bool,
     ) -> Option<Self> {
-        // 终端目前只证明行尾输入，不能借补齐覆盖光标右侧的未知内容。
-        if cursor != line.len() || line.len() > 4096 {
+        if cursor > line.len() || !line.is_char_boundary(cursor) || line.len() > 4096 {
             return None;
         }
-        let mut words = words(line, syntax)?;
-        let target = words.pop()?;
+        let all = words(line, syntax)?;
+        let mut words = words(&line[..cursor], syntax)?;
+        let mut target = words.pop()?;
+        let mut full_word = None;
+        let following = if let Some(full) =
+            all.iter().find(|word| word.span.start == target.span.start)
+        {
+            target.span.end = full.span.end;
+            if full.value != target.value {
+                full_word = Some(full.value.clone());
+            }
+            all.iter()
+                .filter(|word| word.span.start > full.span.start && word.span.end > word.span.start)
+                .map(|word| word.value.clone())
+                .collect()
+        } else {
+            all.iter()
+                .filter(|word| word.span.start >= cursor && word.span.end > word.span.start)
+                .map(|word| word.value.clone())
+                .collect()
+        };
         // 已完成参数若含展开，无法证明它指向哪个目录；目标词的 home 由路径来源处理。
-        if words.iter().any(|word| !word.closed || word.home && !allow_home) {
+        if words.iter().any(|word| !word.closed || word.home && !allow_home)
+            || all
+                .iter()
+                .any(|word| word.span.start > target.span.start && (!word.closed || word.home))
+        {
             return None;
         }
         let home_arguments =
@@ -75,6 +107,8 @@ impl CommandContext {
         Some(Self {
             arguments: words.into_iter().map(|word| word.value).collect(),
             home_arguments,
+            following,
+            full_word,
             target,
             syntax,
         })

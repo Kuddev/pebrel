@@ -1,8 +1,11 @@
 <resources>
     <string name="service_intro">选择要使用的服务器，Pebrel 通过 SSH 安装轻量加密中转服务，无需 Docker、Node.js 或域名。</string>
     <string name="service_title">Pebrel 中转服务</string>
+    <string name="service_add_ssh_host">添加 SSH 主机或私钥</string>
     <string name="service_manual_commands">手动安装命令</string>
-    <string name="service_manual_hint">先上传并解压配套的离线中转安装包，以 root 进入其中的 pebrel-relay-manual 目录，再执行以下命令。若显示 SERVER_IP 或 PORT，请替换成实际值。脚本显示四个步骤，失败即停止；无需 Docker 或 Node.js。</string>
+    <string name="service_manual_download">打开中转下载页</string>
+    <string name="service_manual_download_failed">下载页未打开，请在浏览器访问 Pebrel Releases 页面。</string>
+    <string name="service_manual_hint">在下载页选择与当前版本对应、以 -relay-manual.tar.gz 结尾的安装包。上传并解压后，以 root 进入其中的 pebrel-relay-manual 目录，再执行以下命令。若显示 SERVER_IP 或 PORT，请替换成实际值。脚本显示四个步骤，失败即停止；无需 Docker 或 Node.js。</string>
     <string name="service_advanced">高级连接设置</string>
     <string name="service_port">中转端口</string>
     <string name="service_address">连接地址覆盖（可选）</string>

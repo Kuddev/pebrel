@@ -76,6 +76,16 @@ impl PaneExecContext {
         }
     }
 
+    pub(crate) fn for_wsl_distribution(&self, name: &str) -> Option<Self> {
+        let mut context = self.clone();
+        let ExecLocation::Wsl { distro, .. } = &mut context.location else { return None };
+        if distro.as_deref().is_some_and(|old| old != name) {
+            return None;
+        }
+        *distro = Some(name.to_owned());
+        Some(context)
+    }
+
     pub(crate) fn wsl_user(&self) -> Option<&str> {
         match &self.location {
             ExecLocation::Host => None,
@@ -228,6 +238,18 @@ pub(crate) fn build_command(
             execution = json!({ "environment": "host", "cwd": cwd });
         },
         ExecLocation::Wsl { distro, user } => {
+            let guest_cwd = crate::shell_detect::wsl_guest_cwd(reported_cwd);
+            // --cd 由启动选项解析器处理；--exec 后的 argv 由原生参数边界保留，
+            // 不把前者的限制扩展到 Python 字符串、提交说明等合法参数。
+            if let Some(value) =
+                guest_cwd.filter(|value| !crate::shell_detect::wsl_accepts_startup_arg(value))
+            {
+                return Err(ApiError::new(
+                    "exec_argument_unsupported",
+                    "WSL startup working directories containing a double quote are not supported",
+                )
+                .details(json!({ "argument": value })));
+            }
             command = Command::new("wsl.exe");
             if let Some(distro) = distro {
                 command.args(["--distribution", distro]);
@@ -235,7 +257,6 @@ pub(crate) fn build_command(
             if let Some(user) = user {
                 command.args(["--user", user]);
             }
-            let guest_cwd = crate::shell_detect::wsl_guest_cwd(reported_cwd);
             if let Some(cwd) = guest_cwd {
                 command.args(["--cd", cwd]);
             } else if !reported_cwd.trim().is_empty() {
@@ -412,6 +433,30 @@ mod tests {
             Some(Some("Debian"))
         );
         assert_eq!(PaneExecContext::from_pty_options(&options).wsl_user(), Some("hello"));
+    }
+
+    /// 启动目录和直接执行参数是不同的解析边界。
+    #[test]
+    fn wsl_exec_preserves_argv_and_checks_startup_directory() {
+        let mut options = nebula_terminal::tty::Options::default();
+        options.shell = Some(nebula_terminal::tty::Shell::new(
+            "wsl.exe".into(),
+            vec!["-d".into(), "Ubuntu".into()],
+        ));
+        let context = PaneExecContext::from_pty_options(&options);
+        let argv = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let unsupported = |cwd: &str, argv: &[String]| {
+            build_command(&context, cwd, argv)
+                .is_err_and(|error| error.code == "exec_argument_unsupported")
+        };
+        assert!(unsupported("/tmp/i\" touch /tmp/x #", &argv(&["pwd"])));
+        assert!(!unsupported("/srv/my project", &argv(&["git", "status"])));
+        let expected = argv(&["git", "commit", "-m", "say \"hi\"", "trailing \\"]);
+        let (command, _) = build_command(&context, "/srv", &expected).unwrap();
+        let args: Vec<_> =
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        let delimiter = args.iter().position(|arg| arg == "--exec").unwrap();
+        assert_eq!(&args[delimiter + 1..], &expected);
     }
 
     #[test]
