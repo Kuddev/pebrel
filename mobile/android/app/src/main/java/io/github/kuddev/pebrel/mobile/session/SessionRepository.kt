@@ -703,6 +703,7 @@ class SessionRepository(private val context: Context,
             dispatch = { method, params ->
                 checkNotNull(client).dispatchInput(method, params.put("window_id", pane.window).put("pane_id", pane.id))
             },
+            remoteScrollSupported = client?.terminalScrollSupported == true,
         )
     }
 

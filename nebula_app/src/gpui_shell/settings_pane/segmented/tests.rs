@@ -6,10 +6,9 @@ struct SegmentsHost(Entity<SettingsPane>, &'static str);
 impl Render for SegmentsHost {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.0.read(cx).focus_handle.clone();
-        div()
-            .size_full()
-            .track_focus(&focus)
-            .child(self.0.update(cx, |pane, cx| pane.segmented_setting(self.1, cx).unwrap()))
+        div().size_full().track_focus(&focus).child(self.0.update(cx, |pane, cx| {
+            pane.select_row(self.1, "Choice", "Description", cx).into_any_element()
+        }))
     }
 }
 
@@ -36,7 +35,7 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
     });
     let pane = pane.unwrap();
     window.simulate_resize(gpui::size(px(500.0), px(200.0)));
-    // Short choices stay segmented; long-label dropdown behavior is covered below.
+    // Short and long labels keep the same capsule interaction.
     for (value, selector) in [
         ("slide", "settings-choice-tab_reveal-slide"),
         ("instant", "settings-choice-tab_reveal-instant"),
@@ -57,6 +56,8 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
         });
         let track = window.debug_bounds("settings-choices-tab_reveal").unwrap();
         let thumb = window.debug_bounds("settings-indicator-tab_reveal").unwrap();
+        // 点击后行内撤销控件可能出现，浮块与按钮必须用同一帧的布局比较。
+        let slot = window.debug_bounds(selector).unwrap();
         assert!((f32::from(thumb.left() - slot.left())).abs() < 0.1);
         assert!((f32::from(thumb.size.width - slot.size.width)).abs() < 0.1);
         assert_eq!(thumb.top(), slot.top());
@@ -86,13 +87,14 @@ fn capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection(cx: &mut gpu
 }
 
 #[gpui::test]
-fn long_segments_use_a_real_dropdown_without_losing_preference_updates(
-    cx: &mut gpui::TestAppContext,
-) {
+fn completion_capsules_keep_all_chinese_choices_at_large_font_size(cx: &mut gpui::TestAppContext) {
     let _lock = lock_theme_studio();
     let _settings = SettingsBytesGuard::capture();
-    nebula_settings::persist_keys(&[("vcs_display", "auto".into()), ("language", "en-US".into())])
-        .unwrap();
+    nebula_settings::persist_keys(&[
+        ("completion_style", "hybrid".into()),
+        ("language", "zh-CN".into()),
+    ])
+    .unwrap();
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_reduce_motion(true);
@@ -103,27 +105,28 @@ fn long_segments_use_a_real_dropdown_without_losing_preference_updates(
         let pane = cx.new(|cx| SettingsPane::new(window, cx));
         let host = cx.new(|cx| {
             cx.observe(&pane, |_, _, cx| cx.notify()).detach();
-            SegmentsHost(pane, "vcs_display")
+            SegmentsHost(pane, "completion_style")
         });
         gpui_component::Root::new(host, window, cx)
     });
     window.simulate_resize(gpui::size(px(500.0), px(400.0)));
-    window.update(|window, cx| {
-        let _ = window.draw(cx);
-    });
-    assert!(window.debug_bounds("settings-choices-vcs_display").is_none());
-    let trigger = window.debug_bounds("settings-segments-dropdown-vcs_display").unwrap();
-    window.simulate_click(trigger.center(), gpui::Modifiers::default());
-    window.run_until_parked();
-    window.simulate_keystrokes("down enter");
-    window.run_until_parked();
-    assert_eq!(RuntimeSettings::load().vcs_display.settings_value(), "git");
-    for (keys, expected) in [("down enter", "svn"), ("up up enter", "auto")] {
-        window.simulate_click(trigger.center(), gpui::Modifiers::default());
+    for (value, selector) in [
+        ("inline", "settings-choice-completion_style-inline"),
+        ("popup", "settings-choice-completion_style-popup"),
+        ("hybrid", "settings-choice-completion_style-hybrid"),
+    ] {
+        window.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(window.debug_bounds("settings-segments-dropdown-completion_style").is_none());
+        let track = window.debug_bounds("settings-choices-completion_style").unwrap();
+        assert!(track.right() <= px(500.0));
+        assert!(track.size.width > px(SETTINGS_SELECT_WIDTH));
+        let slot = window.debug_bounds(selector).unwrap();
+        assert!(slot.left() >= track.left() && slot.right() <= track.right());
+        window.simulate_click(slot.center(), gpui::Modifiers::default());
         window.run_until_parked();
-        window.simulate_keystrokes(keys);
-        window.run_until_parked();
-        assert_eq!(RuntimeSettings::load().vcs_display.settings_value(), expected);
+        assert_eq!(RuntimeSettings::load().completion_style.settings_value(), value);
     }
 }
 
@@ -141,7 +144,6 @@ fn rapid_retarget_keeps_the_visible_thumb_position(cx: &mut gpui::TestAppContext
                 selected: self.selected,
                 height: px(28.0),
                 labels: vec!["A".into(), "B".into(), "C".into()],
-                fallback: None,
                 buttons: (0usize..3).map(|ix| Button::new(ix).flex_1().h(px(28.0))).collect(),
             }
             .render(window, cx)

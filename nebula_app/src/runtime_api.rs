@@ -41,8 +41,10 @@ pub use server::{
     RuntimeServer, try_open_default_tab_existing, try_open_directory_existing,
     try_open_window_existing,
 };
-pub use terminal_read::RuntimePaneRead;
-pub(crate) use terminal_read::{capture_terminal_screen, capture_terminal_tail};
+pub use terminal_read::{RuntimePaneRead, ScreenMode};
+pub(crate) use terminal_read::{
+    capture_terminal_screen, capture_terminal_tail, capture_terminal_viewport,
+};
 
 use std::error::Error;
 use std::fmt;
@@ -831,7 +833,14 @@ pub enum RuntimeCommand {
         window_id: Option<u64>,
         pane_id: u64,
         lines: usize,
-        screen: bool,
+        screen: Option<ScreenMode>,
+    },
+    ScrollPane {
+        window_id: Option<u64>,
+        pane_id: u64,
+        lines: i16,
+        column: u16,
+        row: u16,
     },
     Procs {
         window_id: Option<u64>,
@@ -1940,7 +1949,7 @@ pub(crate) fn read_pane_tail_text(
 ) -> Option<(String, usize)> {
     let requested = lines.saturating_add(TAIL_SCAN_EXTRA_LINES).min(MAX_READ_LINES);
     let result = dispatch_runtime_command(
-        RuntimeCommand::ReadPane { window_id, pane_id, lines: requested, screen: false },
+        RuntimeCommand::ReadPane { window_id, pane_id, lines: requested, screen: None },
         sink,
         hub,
     )

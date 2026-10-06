@@ -626,6 +626,8 @@ impl SettingsPane {
             appearance_picker_seq: 0,
             shader_picker: None,
             terminal_effect_picker: None,
+            shader_custom_open: false,
+            effect_settings_open: false,
             media_picker: None,
             media_picker_generation: 0,
             theme_editor: None,
