@@ -54,6 +54,10 @@ pub(crate) fn custom_theme_updates(
     if let Some(shape) = definition.effects.cursor_shape {
         updates.push(("cursor_shape", shape.settings_value().to_owned()));
     }
+    let media_kind = definition.effects.background_kind_override();
+    if let Some(kind) = media_kind {
+        updates.push(("background_media_kind", kind.settings_value().to_owned()));
+    }
     if let Some(path) = definition.effects.background_image {
         // An explicit empty path removes the wallpaper; None preserves the
         // personal preference, including when applying a colors-only theme.

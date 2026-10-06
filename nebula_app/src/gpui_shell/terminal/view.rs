@@ -274,6 +274,8 @@ pub struct TerminalView {
     pub focus_handle: FocusHandle,
     /// 公式覆盖层（探测/持久化状态复用旧壳 `terminal_math`，每 pane 一份）。
     pub math: super::math_overlay::MathOverlay,
+
+    pub(super) effect: Option<gpui::Entity<super::effects::TerminalEffect>>,
     pub font: Font,
     pub font_bold: Font,
     pub font_italic: Font,
@@ -514,6 +516,14 @@ impl TerminalView {
         typography::startup_cell_metrics_at_scale(scale, cx)
     }
 
+    pub(super) fn effect_output_visible(&self) -> bool {
+        self.output_visible && self.answer_reader.is_none()
+    }
+
+    pub(super) fn effect_pane_focused(&self) -> bool {
+        self.cursor_pane_focused
+    }
+
     pub(in crate::gpui_shell) fn set_output_visible(
         &mut self,
         visible: bool,
@@ -521,6 +531,8 @@ impl TerminalView {
     ) {
         if self.output_visible != visible {
             self.cursor_animation.reset();
+
+            super::effects::visibility_changed(self, cx);
         }
         if std::mem::replace(&mut self.output_visible, visible) != visible && visible {
             // Hidden output deliberately did not invalidate the cached view.

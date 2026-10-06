@@ -265,6 +265,8 @@ impl TerminalView {
             session,
             focus_handle,
             math: super::super::math_overlay::MathOverlay::default(),
+
+            effect: None,
             answers: crate::assistant_answer::AnswerInbox::default(),
             answer_reader: None,
             confirmation: super::super::confirmation::ConfirmationState::default(),
