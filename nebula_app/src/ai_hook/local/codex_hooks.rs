@@ -422,4 +422,29 @@ mod tests {
         assert!(remove(root.path()).is_err());
         assert_eq!(read(&path).unwrap().unwrap(), edited);
     }
+
+    #[test]
+    fn unchanged_reconciliation_preserves_external_formatting_and_hook_positions() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.toml");
+        std::fs::write(&config, "# original\n[features]\nhooks = true\n").unwrap();
+        let helper = "C:/Pebrel/runtime/pebrel-hook.exe";
+        assert!(install(root.path(), helper, CodexHookMode::Full).unwrap());
+        let path = root.path().join("hooks.json");
+        let mut value: Value = serde_json::from_str(&read(&path).unwrap().unwrap()).unwrap();
+        value["user_metadata"] = json!({"keep": true});
+        value["hooks"]["Stop"].as_array_mut().unwrap().push(json!({
+            "hooks": [{"type": "command", "command": "user-hook-after-managed"}]
+        }));
+        let external = format!("{}\r\n", serde_json::to_string(&value).unwrap());
+        std::fs::write(&path, &external).unwrap();
+        let marker = read(&root.path().join(MARKER)).unwrap().unwrap();
+        let original_config = read(&config).unwrap().unwrap();
+
+        assert!(current_for_mode(root.path(), helper, Some(CodexHookMode::Full)).unwrap());
+        assert!(!install(root.path(), helper, CodexHookMode::Full).unwrap());
+        assert_eq!(read(&path).unwrap().unwrap(), external);
+        assert_eq!(read(&root.path().join(MARKER)).unwrap().unwrap(), marker);
+        assert_eq!(read(&config).unwrap().unwrap(), original_config);
+    }
 }

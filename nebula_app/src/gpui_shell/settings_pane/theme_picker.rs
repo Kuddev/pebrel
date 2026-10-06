@@ -627,7 +627,32 @@ impl SettingsPane {
         if compact {
             v_flex().w(px(width)).gap(px(20.0)).child(preview).child(grid_column)
         } else {
-            h_flex().w(px(width)).items_start().gap(px(25.0)).child(grid_column).child(preview)
+            h_flex()
+                .w(px(width))
+                .h_full()
+                .min_h_0()
+                .items_start()
+                .gap(px(25.0))
+                .child(
+                    div()
+                        .id("appearance-theme-list-scroll")
+                        .debug_selector(|| "appearance-theme-list-scroll".to_owned())
+                        .w(px(grid_width))
+                        .flex_shrink_0()
+                        .h_full()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(grid_column),
+                )
+                .child(
+                    div()
+                        .id("appearance-theme-preview-scroll")
+                        .h_full()
+                        .min_h_0()
+                        .flex_shrink_0()
+                        .overflow_y_scroll()
+                        .child(preview),
+                )
         }
     }
 }

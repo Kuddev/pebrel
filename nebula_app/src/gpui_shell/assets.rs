@@ -40,6 +40,8 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "backup-check",
     "pin",
     "pencil",
+    "clipboard-paste",
+    "shield",
     "trash-2",
     "refresh",
     "phone",
@@ -107,6 +109,8 @@ pub mod nav {
     pub const KEYMAP: &str = "icons/nebula-keymap.svg";
     /// Lucide pencil；固定组件资产集未收录，命令行内编辑动作需要明确图形语义。
     pub const PENCIL: &str = "icons/nebula-pencil.svg";
+    pub const CLIPBOARD_PASTE: &str = "icons/nebula-clipboard-paste.svg";
+    pub const SHIELD: &str = "icons/nebula-shield.svg";
     /// Lucide trash-2；删除保存命令不能借用表示 Backspace 的 `IconName::Delete`。
     pub const TRASH: &str = "icons/nebula-trash-2.svg";
     pub const REFRESH: &str = "icons/nebula-refresh.svg";

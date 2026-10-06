@@ -737,8 +737,18 @@ fn wsl_file_tree_terminal_changes_directory_without_forcing_bash() {
     };
 
     assert_eq!(program, "wsl.exe");
-    assert_eq!(args, ["-d", "Ubuntu", "--cd", "/home/user/project"]);
+    assert_eq!(args, ["--cd", "/home/user/project", "-d", "Ubuntu"]);
     assert!(!args.iter().any(|arg| arg == "--exec" || arg.eq_ignore_ascii_case("bash")));
+
+    // A path wsl.exe cannot receive only enters the distribution.
+    let launch = super::file_tree::wsl_terminal_launch_at(
+        String::new(),
+        "wsl.exe".to_owned(),
+        "Ubuntu".to_owned(),
+        "/tmp/i\" touch /tmp/x #".to_owned(),
+    );
+    let crate::session::LaunchSession::Shell { args, .. } = launch else { unreachable!() };
+    assert_eq!(args, ["-d", "Ubuntu"]);
 }
 
 #[test]
