@@ -26,12 +26,15 @@ use crate::event::EventProxy;
 use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, ProxyTestRoute};
 
 mod agent;
+pub(crate) mod completion;
 mod config;
 mod exec;
+mod forward;
 mod integration;
 mod lifecycle;
 mod route;
 mod transcript;
+pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
 pub use transcript::TranscriptReader;
@@ -538,8 +541,21 @@ pub(crate) fn runtime() -> io::Result<&'static tokio::runtime::Runtime> {
     }
 }
 
-fn connection_pool() -> &'static tokio::sync::Mutex<HashMap<String, SharedSession>> {
-    static POOL: OnceLock<tokio::sync::Mutex<HashMap<String, SharedSession>>> = OnceLock::new();
+struct PooledSession {
+    session: SharedSession,
+    destination: String,
+    id: u64,
+}
+
+impl PooledSession {
+    fn new(session: SharedSession, destination: String) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self { session, destination, id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
+    }
+}
+
+fn connection_pool() -> &'static tokio::sync::Mutex<HashMap<String, PooledSession>> {
+    static POOL: OnceLock<tokio::sync::Mutex<HashMap<String, PooledSession>>> = OnceLock::new();
     POOL.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
@@ -589,7 +605,7 @@ fn initial_remote_cd_command(path: Option<&str>) -> Option<Vec<u8>> {
 
 async fn evict_pooled_session(key: &str, session: &SharedSession) -> bool {
     let mut pool = connection_pool().lock().await;
-    let matches = pool.get(key).is_some_and(|pooled| Arc::ptr_eq(pooled, session));
+    let matches = pool.get(key).is_some_and(|pooled| Arc::ptr_eq(&pooled.session, session));
     if matches {
         pool.remove(key);
     }
@@ -656,8 +672,11 @@ async fn authenticated_route<H: SshEventHost>(
     allow_host_key_prompt: bool,
 ) -> Result<AcquiredSession, SessionError> {
     let key = route.pool_key();
-    let existing =
-        if unattended { None } else { connection_pool().lock().await.get(&key).cloned() };
+    let existing = if unattended {
+        None
+    } else {
+        connection_pool().lock().await.get(&key).map(|entry| entry.session.clone())
+    };
     if let Some(existing) = existing {
         if !existing.is_closed() {
             info!("复用已认证 SSH 连接: {key}");
@@ -705,7 +724,7 @@ async fn authenticated_route<H: SshEventHost>(
         });
     }
     let mut pool = connection_pool().lock().await;
-    if let Some(existing) = pool.get(&key).cloned() {
+    if let Some(existing) = pool.get(&key).map(|entry| entry.session.clone()) {
         if !existing.is_closed() {
             return Ok(AcquiredSession {
                 key,
@@ -715,7 +734,10 @@ async fn authenticated_route<H: SshEventHost>(
             });
         }
     }
-    pool.insert(key.clone(), session.clone());
+    pool.insert(
+        key.clone(),
+        PooledSession::new(session.clone(), route.destination.original.clone()),
+    );
     Ok(AcquiredSession { key, session, reused: false, jump_sessions: transport.jump_sessions })
 }
 

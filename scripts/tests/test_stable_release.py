@@ -186,6 +186,20 @@ class StableReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(StableReleaseError, "manifest or DEX"):
                 validate_assets(root, version)
 
+    def test_offline_relay_is_required_for_future_releases_not_existing_211_assets(self) -> None:
+        self.assertFalse(any("relay-manual" in name for name in expected_asset_names("2.1.1")))
+        version = "2.1.2"
+        name = f"Pebrel-v{version}-relay-manual.tar.gz"
+        self.assertIn(name, expected_asset_names(version))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in expected_asset_names(version):
+                write_fake_asset(root / asset)
+            self.assertEqual(len(validate_assets(root, version)), 11)
+            (root / name).unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing:"):
+                validate_assets(root, version)
+
     def test_post_191_requires_native_windows_arm64_installer(self) -> None:
         for version in ("1.9.0", "1.9.1"):
             with self.subTest(historical_version=version):

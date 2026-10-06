@@ -42,6 +42,15 @@ impl NebulaPaneState {
         (line.input == self.line_buf).then_some(line)
     }
 
+    pub(crate) fn pending_completion_line(&self) -> Option<&str> {
+        self.completion_pending_input.as_ref().map(|pending| pending.expected.as_str())
+    }
+
+    pub(crate) fn expect_completion_echo(&mut self, before: String, expected: String) {
+        self.line_buf = expected.clone();
+        self.completion_pending_input = Some(PendingEcho { before, expected });
+    }
+
     fn pending_edit(&mut self) -> &mut String {
         let echoed = &self.screen_line;
         &mut self

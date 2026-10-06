@@ -61,7 +61,10 @@ impl NebulaWorkspace {
     pub(super) fn filtered_palette_rows(&self, cx: &App) -> Vec<WorkspacePaletteRow> {
         let query = self.command_palette_input.read(cx).value().to_ascii_lowercase();
         let words: Vec<_> = query.split_whitespace().collect();
-        let has_local_cwd = self.active_local_cwd(cx).is_some();
+        // Rendering must not stat `\\wsl.localhost\…` (it can start the guest or wait
+        // on the redirector): a WSL pane offers the action and the handler maps it.
+        let has_local_cwd =
+            self.active_wsl_cwd(cx).is_some() || self.active_local_cwd(cx).is_some();
         let has_cwd = self
             .tabs
             .get(self.active)
