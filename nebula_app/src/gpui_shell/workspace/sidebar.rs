@@ -924,8 +924,7 @@ impl NebulaWorkspace {
             )
             .child(self.render_collapsed_tab_title(cx))
             .child(
-                title_bar_panel_controls()
-                    .gap(px(8.0))
+                window_titlebar::title_bar_right_controls()
                     .child(
                         toolbar_button(
                             "toggle-command-manager",

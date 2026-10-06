@@ -20,8 +20,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _,
-    Window, div, px,
+    AnyElement, App, Entity, InteractiveElement as _, IntoElement as _, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 use gpui_component::notification::Notification;
 use gpui_component::{Root, WindowExt as _};
@@ -35,6 +35,10 @@ pub use crate::display::ToastKind;
 const DUPLICATE_COOLDOWN: Duration = Duration::from_millis(600);
 const TOAST_TTL: Duration = Duration::from_secs(5);
 const MAX_NOTIFICATIONS: usize = 3;
+
+/// 组件库的关闭按钮固定为 20px 且不可配置；在它之上叠一块与其同心的透明
+/// 命中区，视觉不变，只放大可点击面积。
+const CLOSE_TARGET_SIZE: f32 = 28.0;
 
 /// 组件库 Notification 默认固定 `w_112`，短短一句也会铺成近半个窗口。
 /// Nebula 的 toast 按内容收缩；过长消息到此上限后自然换行。
@@ -146,6 +150,26 @@ pub(crate) fn push_notification(
     push_with_duration(window, cx, notification, default_timeout, false);
 }
 
+fn with_close_target(note: Entity<Notification>) -> gpui::Div {
+    let id = note.entity_id();
+    let dismissed = note.clone();
+    v_flex().relative().child(note).child(
+        div()
+            .id(("notification-close-target", id))
+            .debug_selector(|| "notification-close-target".to_owned())
+            .absolute()
+            .top_0()
+            .right_0()
+            .size(px(CLOSE_TARGET_SIZE))
+            .cursor_pointer()
+            .on_click(move |_, window, cx| {
+                // 卡片自身的 on_click 会聚焦 pane，关闭按钮不应触发它。
+                cx.stop_propagation();
+                dismissed.update(cx, |note, cx| note.dismiss(window, cx));
+            }),
+    )
+}
+
 /// Nebula 的通知层定位：右下角固定 20px 安全边距，最新一条在最下，旧的
 /// 向上堆叠。组件库默认 `NotificationList` 写死在右上角且拉满视口高度；
 /// 这里继续复用它的 Notification 实体、生命周期、关闭和动画，只替换宿主
@@ -175,7 +199,7 @@ pub fn render_layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
             .overflow_hidden()
             // 用全视口透明宿主明确右下锚点；宿主不注册命中，只有实际
             // Notification 卡片会 occlude/接收鼠标，周围终端仍可正常点击。
-            .child(v_flex().items_end().gap_2().children(items))
+            .child(v_flex().items_end().gap_2().children(items.into_iter().map(with_close_target)))
             .into_any_element(),
     )
 }
@@ -523,20 +547,21 @@ mod tests {
             cx.run_until_parked();
         }
 
+        struct NotificationSurface;
+        impl Render for NotificationSurface {
+            fn render(
+                &mut self,
+                window: &mut Window,
+                cx: &mut Context<Self>,
+            ) -> impl gpui::IntoElement {
+                div().relative().size_full().children(render_layer(window, cx))
+            }
+        }
+
         #[gpui::test]
         fn numbered_choice_buttons_have_real_hit_targets_and_report_a_closed_pane(
             cx: &mut TestAppContext,
         ) {
-            struct NotificationSurface;
-            impl Render for NotificationSurface {
-                fn render(
-                    &mut self,
-                    window: &mut Window,
-                    cx: &mut Context<Self>,
-                ) -> impl gpui::IntoElement {
-                    div().relative().size_full().children(render_layer(window, cx))
-                }
-            }
             initialize(cx, true);
             cx.update(|cx| {
                 cx.set_reduce_motion(true);
@@ -596,6 +621,34 @@ mod tests {
                 1,
                 "the closed source produces visible expired-request feedback"
             );
+        }
+
+        #[gpui::test]
+        fn close_target_is_larger_than_the_library_button_and_dismisses(cx: &mut TestAppContext) {
+            initialize(cx, true);
+            let mut surface = None;
+            let (_, cx) = cx.add_window_view(|window, cx| {
+                let view = cx.new(|_| NotificationSurface);
+                surface = Some(view.clone());
+                Root::new(view, window, cx)
+            });
+            let surface = surface.unwrap();
+            cx.update(|window, cx| banner(window, cx, ToastKind::Info, "Close me"));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                surface.update(cx, |_, cx| cx.notify());
+                let _ = window.draw(cx);
+            });
+            let target = cx.debug_bounds("notification-close-target").expect("close target");
+            assert_eq!(target.size, gpui::size(px(CLOSE_TARGET_SIZE), px(CLOSE_TARGET_SIZE)));
+            assert_eq!(ids(cx).len(), 1);
+            // The corner lies outside the library's 20px button inset by 4px.
+            cx.simulate_click(
+                gpui::point(target.right() - px(1.0), target.top() + px(1.0)),
+                gpui::Modifiers::default(),
+            );
+            settle_dismissal(cx);
+            assert!(ids(cx).is_empty());
         }
 
         #[gpui::test]
