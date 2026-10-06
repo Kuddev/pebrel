@@ -197,11 +197,19 @@ mod tests {
 
     #[test]
     fn explicitly_closing_all_tabs_does_not_resurrect_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.json");
+        let expected = sample_session();
         let mut state = ordinary_window();
-        let _ = state.save_with(Some(sample_session()), SaveReason::Checkpoint, |_| Ok(()));
-        let _ = state.save_with(Some(Session::new(0, vec![])), SaveReason::TabsClosed, |_| Ok(()));
-        let _ = state.save_with(None, SaveReason::Quit, |_| Ok(()));
-        let saved = state.saved.unwrap();
+        save_to(&mut state, &path, Some(expected.clone()), SaveReason::Checkpoint);
+        save_to(&mut state, &path, Some(Session::new(0, vec![])), SaveReason::Checkpoint);
+        assert_eq!(crate::session::load_from(&path).unwrap().tabs, expected.tabs);
+        save_to(&mut state, &path, Some(Session::new(0, vec![])), SaveReason::TabsClosed);
+        assert!(crate::session::load_from(&path).unwrap().tabs.is_empty());
+        save_to(&mut state, &path, Some(Session::new(0, vec![])), SaveReason::Checkpoint);
+        save_to(&mut state, &path, None, SaveReason::Quit);
+        let saved = crate::session::load_from(&path).unwrap();
+        assert!(saved.tabs.is_empty());
         assert!(!crate::session::should_restore(&saved));
         assert!(saved.clean_exit);
     }

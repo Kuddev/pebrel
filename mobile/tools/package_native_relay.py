@@ -7,6 +7,8 @@ from pathlib import Path
 import shutil
 import struct
 
+from relay_notices import package as package_notices
+
 
 def package(binary: Path, output: Path, arch: str, commit: str) -> None:
     data = binary.read_bytes()
@@ -17,6 +19,7 @@ def package(binary: Path, output: Path, arch: str, commit: str) -> None:
     if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
         raise ValueError("Expected exact source commit")
     destination = output / arch
+    package_notices(Path(__file__).resolve().parents[2], destination / "licenses", commit, arch)
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(binary, destination / "pebrel-relay")
     (destination / "manifest.json").write_text(json.dumps({
