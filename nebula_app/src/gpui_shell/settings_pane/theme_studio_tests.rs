@@ -15,6 +15,9 @@ use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 mod background_tests;
 #[path = "theme_package_tests.rs"]
 mod package_tests;
+#[cfg(all(windows, feature = "shader-background"))]
+#[path = "terminal_effect_tests.rs"]
+mod terminal_effect_tests;
 
 const TEST_SETTINGS: &str =
     "theme=Nord\nfollow_system_theme=0\napp_icon=graphite-violet\nfont_size=15\n";
@@ -1730,4 +1733,50 @@ fn update_source_form_rejects_invalid_urls_and_persists_keyboard_edits(cx: &mut 
     draw(&mut window);
     click("nebula-btn-save-update-release-source", &mut window);
     assert!(RuntimeSettings::load().update_release_url.is_empty());
+}
+
+#[gpui::test]
+fn theme_list_scroll_keeps_preview_visible_and_narrow_picker_accessible(cx: &mut TestAppContext) {
+    let _fixture_guard = lock_theme_studio();
+    let (pane, mut window) = open_settings(cx);
+    window.simulate_resize(size(px(900.0), px(590.0)));
+    draw(&mut window);
+    click("open-theme-picker", &mut window);
+    click_first_theme_option(&mut window);
+    let preview_before = window.debug_bounds("theme-picker-terminal-preview").unwrap();
+    let grid_before = window.debug_bounds("appearance-theme-grid").unwrap();
+    let list = window.debug_bounds("appearance-theme-list-scroll").unwrap();
+    let footer = window.debug_bounds("apply-appearance-picker").unwrap();
+    assert!(preview_before.bottom() < footer.top());
+    window.simulate_event(gpui::ScrollWheelEvent {
+        position: list.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-350.0))),
+        touch_phase: gpui::TouchPhase::Moved,
+        modifiers: Modifiers::default(),
+    });
+    draw(&mut window);
+    assert!(window.debug_bounds("appearance-theme-grid").unwrap().top() < grid_before.top());
+    assert_eq!(window.debug_bounds("theme-picker-terminal-preview").unwrap(), preview_before);
+    assert_eq!(window.debug_bounds("apply-appearance-picker").unwrap(), footer);
+
+    press("end", &mut window);
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().unwrap();
+        assert_eq!(Some(&picker.draft), picker.choices().last());
+    });
+    assert_eq!(window.debug_bounds("theme-picker-terminal-preview").unwrap(), preview_before);
+    window.simulate_resize(size(px(620.0), px(590.0)));
+    draw(&mut window);
+    assert!(window.debug_bounds("appearance-theme-list-scroll").is_none());
+    let preview = window.debug_bounds("theme-picker-terminal-preview").unwrap();
+    let grid = window.debug_bounds("appearance-theme-grid").unwrap();
+    assert!(grid.top() > preview.bottom(), "narrow layout retains the stacked preview");
+    let dialog = window.debug_bounds("appearance-picker-dialog").unwrap();
+    let apply = window.debug_bounds("apply-appearance-picker").unwrap();
+    assert!(apply.bottom() <= dialog.bottom(), "the footer remains reachable");
+    press("home", &mut window);
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().unwrap();
+        assert_eq!(Some(&picker.draft), picker.choices().first());
+    });
 }

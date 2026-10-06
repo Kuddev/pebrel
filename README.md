@@ -187,6 +187,23 @@ macOS provide native update installation; Linux upgrades use its package manager
 or a new package. See [installation details](INSTALL.md) for platform requirements
 and upgrading an existing Nebula installation.
 
+## Self-hosted relay
+
+On your phone, save an SSH host with password or private-key authentication, then
+select that host in relay setup. For key authentication, the credential field is
+the private-key passphrase; leave it empty for an unencrypted key. It is not a
+relay password. After installation, select the SSH host under desktop
+**Settings → Phone connection → Relay**, then generate the phone pairing QR code.
+
+See [offline relay installation](mobile/relay-native/INSTALL.md) for server
+requirements, verification and management. The original v2.1.1 Release assets
+did not include an offline relay kit. A source checkout containing that installer
+can use `mobile/tools/package_manual_relay.py` to generate a two-architecture Linux
+kit and SHA256 sidecar from a verified APK. The tool does not download executables
+or publish or replace Release assets.
+Older APKs also need Cargo dependency notices collected from their matching source;
+the installation guide includes those commands.
+
 ## Configure
 
 ```sh

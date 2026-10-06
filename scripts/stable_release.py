@@ -52,6 +52,9 @@ def expected_asset_names(version: str) -> tuple[str, ...]:
         names += (f"Pebrel-v{version}-windows-arm64-setup.exe",)
     if version_parts >= (2, 0, 0):
         names += (f"Pebrel-v{version}-android-universal-preview.apk",)
+    # 已发布的 2.1.1 及更早资产集合保持不变；后续发布必须带上配套离线中转包。
+    if version_parts >= (2, 1, 2):
+        names += (f"Pebrel-v{version}-relay-manual.tar.gz",)
     # The old-name installer was retired from 1.7.0; retain historical manifests.
     if version_parts < (1, 7, 0):
         names += (f"NebulaTerminal-{version}-windows-x64-setup.exe",)

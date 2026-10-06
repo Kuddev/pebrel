@@ -13,6 +13,31 @@ impl Render for Surface {
     }
 }
 
+impl TerminalView {
+    // 工作区级按键回归复用同一个终端夹具，避免另造一套输入/会话状态。
+    pub(crate) fn install_completion_test_session(&mut self) -> Receiver<Msg> {
+        let (session, receiver) = session::test_session();
+        self.session = Some(session);
+        self.error = None;
+        self.exited = None;
+        self.exec_context = None;
+        self.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
+        receiver
+    }
+
+    pub(crate) fn completion_test_state(
+        &self,
+    ) -> (String, bool, usize, bool, crate::display::CompletionStyle) {
+        (
+            self.suggest.screen_line.clone(),
+            self.suggest.completion_popup_requested,
+            self.suggest.completion_items.len(),
+            self.completion_popup_geometry().is_some(),
+            self.completion_style,
+        )
+    }
+}
+
 pub(super) fn open(
     cx: &mut TestAppContext,
 ) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
@@ -45,15 +70,7 @@ fn open_at(
                 cx,
             )
         });
-        let receiver = view.update(cx, |view, _| {
-            let (session, receiver) = session::test_session();
-            view.session = Some(session);
-            view.error = None;
-            view.exited = None;
-            view.exec_context = None;
-            view.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
-            receiver
-        });
+        let receiver = view.update(cx, |view, _| view.install_completion_test_session());
         result = Some((view, receiver));
         Root::new(cx.new(|_| Surface), window, cx)
     });
@@ -1229,5 +1246,38 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
         assert_eq!(view.session_agent(), Some(saved));
         assert!(view.can_retry_recovery());
         assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+    });
+}
+
+#[gpui::test]
+fn host_administrator_scope_excludes_remote_and_wsl_shells(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, _| {
+        let context = |program: &str| {
+            crate::runtime_exec::PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                ..Default::default()
+            })
+        };
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("pwsh.exe"));
+        assert!(view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Ssh("user@remote".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Wsl("Ubuntu".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("wsl.exe"));
+        assert!(!view.inherits_windows_host_token());
+        view.exec_context = Some(context("pwsh.exe"));
+        view.ssh_destination = Some("user@remote".into());
+        assert!(!view.inherits_windows_host_token());
+        view.ssh_destination = None;
+        view.exec_context = None;
+        assert!(!view.inherits_windows_host_token());
     });
 }

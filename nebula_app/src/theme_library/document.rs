@@ -264,6 +264,10 @@ impl ThemeDocument {
         };
         definition.effects.background_image =
             effects.get("background_image").and_then(Value::as_str).map(str::to_owned);
+        definition.effects.background_media_kind = effects
+            .get("background_media_kind")
+            .and_then(Value::as_str)
+            .and_then(nebula_settings::BackgroundMediaKind::parse);
         definition.effects.background_image_opacity = effects
             .get("background_image_opacity")
             .filter(|value| !value.is_null())
@@ -486,6 +490,7 @@ pub fn from_definition(definition: &ThemeDefinition) -> Result<ThemeDocument, Do
             "blur": definition.effects.blur.map(BlurModeName::settings_value),
             "opacity": definition.effects.opacity.map(|value| value * 100.0),
             "background_image": definition.effects.background_image.as_deref(),
+            "background_media_kind": definition.effects.background_media_kind.map(|kind| kind.settings_value()),
             "background_image_opacity": definition.effects.background_image_opacity.map(|value| value * 100.0),
             "background_image_fit": definition.effects.background_image_fit.as_deref(),
             "background_image_alignment": definition.effects.background_image_alignment.as_deref(),
@@ -670,6 +675,13 @@ fn validate_effects(value: &Value) -> Result<(), DocumentError> {
     // Other effect strings retain their nonempty-value contract.
     if !object.get("background_image").is_some_and(|value| value.as_str() == Some("")) {
         optional_string_with_limit(object, "background_image", 4096)?;
+    }
+    if let Some(value) = object.get("background_media_kind").filter(|v| !v.is_null()) {
+        if value.as_str().and_then(nebula_settings::BackgroundMediaKind::parse).is_none() {
+            return Err(DocumentError::Invalid(
+                "effects.background_media_kind must be image or video".to_owned(),
+            ));
+        }
     }
     optional_string_with_limit(object, "background_image_fit", 64)?;
     optional_string_with_limit(object, "background_image_alignment", 64)?;

@@ -406,13 +406,19 @@ function global:Test-NebulaUserPrompt {
 
 # 脚本可能在已有集成之后被 source。只在第一次安装时保存原 prompt，
 # 之后重载 Nebula 脚本也不能把自己的 wrapper 当成“用户 prompt”递归调用。
+$existingPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
 if (-not $global:NebulaPromptInstalled) {
-    $existingPrompt = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
     $global:NebulaPreviousPrompt = if ($existingPrompt) { $existingPrompt.ScriptBlock } else { $null }
     # 视觉归属。用户已经有提示符时，Nebula 只补协议标记，不画自己的 powerline：
     # 终端只负责补充协议标记，不替 shell 决定提示符外观。
     $global:NebulaUserOwnsPrompt = Test-NebulaUserPrompt $global:NebulaPreviousPrompt
     $global:NebulaPromptInstalled = $true
+} elseif ($existingPrompt -and $existingPrompt.ScriptBlock.Module -and
+    $existingPrompt.ScriptBlock.ToString().Contains('NebulaPreviousPrompt')) {
+    # Re-sourcing after venv deactivation must retain the restored closure's owner.
+    $variables = $existingPrompt.ScriptBlock.Module.SessionState.PSVariable
+    $global:NebulaPreviousPrompt = $variables.GetValue('NebulaPreviousPrompt')
+    $global:NebulaUserOwnsPrompt = [bool]$variables.GetValue('NebulaUserOwnsPrompt')
 }
 
 # A shell instance owns its completion context; children must get a new token.
@@ -421,7 +427,7 @@ if (-not $global:PebrelShellToken) {
         "pwsh:$PID`:$([Guid]::NewGuid().ToString('N'))"))
 }
 
-function global:prompt {
+$global:NebulaPromptTemplate = {
     # Same principle as Oh My Posh: prompt rendering may execute external
     # commands, so preserve the previous command status. Errors inside the
     # prompt must stay silent — but ONLY inside: assigning here is scoped to
@@ -429,119 +435,128 @@ function global:prompt {
     # eating every user-facing error, e.g. a failed `cd`.)
     $originalDollarQuestion = $global:?
     $originalLastExitCode = $global:LASTEXITCODE
-    [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_shell=$global:PebrelShellToken$([char]7)")
-    if ($global:PebrelCompletionInputReady) { [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_ready=$global:PebrelEditorReady$([char]7)") }
-    $ErrorActionPreference = 'SilentlyContinue'
-    $global:NebulaLastCommandSucceeded = $originalDollarQuestion
-    $global:NebulaLastCommandExitCode = $originalLastExitCode
-    $global:NebulaLastCommandDurationMs = $null
+    $outermost = -not $global:NebulaPromptRenderDepth
+    $global:NebulaPromptRenderDepth = [int]$global:NebulaPromptRenderDepth + 1
     try {
-        $lastHistory = Get-History -Count 1 -ErrorAction SilentlyContinue
-        if ($lastHistory -and $lastHistory.EndExecutionTime -ge $lastHistory.StartExecutionTime) {
-            $global:NebulaLastCommandDurationMs = [math]::Max(
-                0,
-                [math]::Round(($lastHistory.EndExecutionTime - $lastHistory.StartExecutionTime).TotalMilliseconds)
-            )
+        $ErrorActionPreference = 'SilentlyContinue'
+        if ($outermost) {
+            [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_shell=$global:PebrelShellToken$([char]7)")
+            if ($global:PebrelCompletionInputReady) { [Console]::Write("$([char]27)]1337;SetUserVar=pebrel_editor_ready=$global:PebrelEditorReady$([char]7)") }
+            $global:NebulaPromptCount = [int]$global:NebulaPromptCount + 1
+            $global:NebulaLastCommandSucceeded = $originalDollarQuestion
+            $global:NebulaLastCommandExitCode = $originalLastExitCode
+            $global:NebulaLastCommandDurationMs = $null
+            try {
+                $lastHistory = Get-History -Count 1 -ErrorAction SilentlyContinue
+                if ($lastHistory -and $lastHistory.EndExecutionTime -ge $lastHistory.StartExecutionTime) {
+                    $global:NebulaLastCommandDurationMs = [math]::Max(
+                        0,
+                        [math]::Round(($lastHistory.EndExecutionTime - $lastHistory.StartExecutionTime).TotalMilliseconds)
+                    )
+                }
+            } catch {}
         }
-    } catch {}
 
-    # 旧 prompt 的环境管理器、历史或目录 hook 等副作用要保留。它的视觉输出则
-    # 分两种：用户自己的提示符继续可见（Nebula 只在它前面补协议标记），内置的
-    # 默认提示符才丢掉、由 Nebula 渲染——否则两个提示符会叠在一起。
-    $userPrompt = ''
-    if ($global:NebulaPreviousPrompt -and -not $global:NebulaPreviousPromptRunning) {
-        $global:NebulaPreviousPromptRunning = $true
-        try {
-            $global:LASTEXITCODE = $originalLastExitCode
-            if (-not $originalDollarQuestion) {
-                Write-Error '' -ErrorAction Ignore
+        # 旧 prompt 的环境管理器、历史或目录 hook 等副作用要保留。它的视觉输出则
+        # 分两种：用户自己的提示符继续可见（Nebula 只在它前面补协议标记），内置的
+        # 默认提示符才丢掉、由 Nebula 渲染——否则两个提示符会叠在一起。
+        $userPrompt = ''
+        if ($script:NebulaPreviousPrompt -and -not $script:NebulaPreviousPromptRunning) {
+            $script:NebulaPreviousPromptRunning = $true
+            try {
+                $global:LASTEXITCODE = $originalLastExitCode
+                if (-not $originalDollarQuestion) {
+                    Write-Error '' -ErrorAction Ignore
+                }
+                $previousOutput = & $script:NebulaPreviousPrompt
+                if ($script:NebulaUserOwnsPrompt) {
+                    # 提示符函数可以返回多个对象，宿主是按顺序拼起来显示的。
+                    $userPrompt = (@($previousOutput) | ForEach-Object { [string]$_ }) -join ''
+                }
+            } catch {
+            } finally {
+                $script:NebulaPreviousPromptRunning = $false
             }
-            $previousOutput = & $global:NebulaPreviousPrompt
-            if ($global:NebulaUserOwnsPrompt) {
-                # 提示符函数可以返回多个对象，宿主是按顺序拼起来显示的。
-                $userPrompt = (@($previousOutput) | ForEach-Object { [string]$_ }) -join ''
+        }
+
+        $e = $NebE
+        # OSC 133;D;<code> — the previous command just finished (this prompt proves
+        # it), carrying its exit status for the assistant's error recovery. `$?` is
+        # the arbiter (it is False for BOTH failed cmdlets and non-zero native
+        # commands, and unlike $LASTEXITCODE it resets every command — a stale
+        # non-zero $LASTEXITCODE after a successful cmdlet must not read as
+        # failure). The code detail comes from $LASTEXITCODE when it agrees,
+        # otherwise a plain 1. First prompt of a session: $? is True → 0.
+        $nebExit = 0
+        if (-not $originalDollarQuestion) {
+            $nebExit = if ($null -ne $originalLastExitCode -and $originalLastExitCode -ne 0) { $originalLastExitCode } else { 1 }
+        }
+        if ($outermost) { [Console]::Write("$e]133;D;$nebExit$([char]7)") }
+        $reset = "$e[0m"
+        $cwd = (Get-Location).Path
+        $loc = $cwd
+        $hp = $env:USERPROFILE
+        # `loc` 只负责提示符的紧凑显示；功能协议必须发送绝对 cwd。否则 home
+        # 下的 `~\repo` 会被宿主文件树与 Git 当成无法解析的相对路径。
+        if ($hp -and $loc.StartsWith($hp)) { $loc = '~' + $loc.Substring($hp.Length) }
+        $branch = ''
+        $b = git rev-parse --abbrev-ref HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $b) { $branch = $b }
+        $time = Get-Date -Format 'HH:mm:ss'
+
+        $boundary = if ($outermost) { "$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)" } else { '' }
+        $leadingNewline = ''
+        try {
+            # PowerShell cursor Y is zero-based. Like Oh My Posh's cancelNewline,
+            # do not add a leading spacer for the first prompt or when at top.
+            if ($global:NebulaPromptCount -gt 1 -and $Host.UI.RawUI.CursorPosition.Y -gt 0) {
+                $leadingNewline = "`n"
             }
         } catch {
-        } finally {
-            $global:NebulaPreviousPromptRunning = $false
+            if ($global:NebulaPromptCount -gt 1) { $leadingNewline = "`n" }
         }
-    }
 
-    $e = $NebE
-    # OSC 133;D;<code> — the previous command just finished (this prompt proves
-    # it), carrying its exit status for the assistant's error recovery. `$?` is
-    # the arbiter (it is False for BOTH failed cmdlets and non-zero native
-    # commands, and unlike $LASTEXITCODE it resets every command — a stale
-    # non-zero $LASTEXITCODE after a successful cmdlet must not read as
-    # failure). The code detail comes from $LASTEXITCODE when it agrees,
-    # otherwise a plain 1. First prompt of a session: $? is True → 0.
-    $nebExit = 0
-    if (-not $originalDollarQuestion) {
-        $nebExit = if ($null -ne $originalLastExitCode -and $originalLastExitCode -ne 0) { $originalLastExitCode } else { 1 }
-    }
-    [Console]::Write("$e]133;D;$nebExit$([char]7)")
-    $reset = "$e[0m"
-    $cwd = (Get-Location).Path
-    $loc = $cwd
-    $hp = $env:USERPROFILE
-    # `loc` 只负责提示符的紧凑显示；功能协议必须发送绝对 cwd。否则 home
-    # 下的 `~\repo` 会被宿主文件树与 Git 当成无法解析的相对路径。
-    if ($hp -and $loc.StartsWith($hp)) { $loc = '~' + $loc.Substring($hp.Length) }
-    $branch = ''
-    $b = git rev-parse --abbrev-ref HEAD 2>$null
-    if ($LASTEXITCODE -eq 0 -and $b) { $branch = $b }
-    $time = Get-Date -Format 'HH:mm:ss'
+        # 使用主题的 ANSI-16 索引，历史提示符仍随主题换色；不占用应用所需的
+        # xterm 扩展色槽。路径和时间用默认前景/背景，避免浅色主题的 ANSI 灰阶低对比。
 
-    $global:NebulaPromptCount = [int]$global:NebulaPromptCount + 1
-    $leadingNewline = ''
-    try {
-        # PowerShell cursor Y is zero-based. Like Oh My Posh's cancelNewline,
-        # do not add a leading spacer for the first prompt or when at top.
-        if ($global:NebulaPromptCount -gt 1 -and $Host.UI.RawUI.CursorPosition.Y -gt 0) {
-            $leadingNewline = "`n"
-        }
-    } catch {
-        if ($global:NebulaPromptCount -gt 1) { $leadingNewline = "`n" }
-    }
+        if ($userPrompt) {
+            # 视觉全部来自用户提示符；Nebula 只补协议：133;A 标出提示符起点，标题
+            # 里带上宿主需要的绝对 cwd 与分支。换行留给用户提示符自己决定。
+            $output = "$boundary$userPrompt"
+        } elseif (-not (Get-NebulaBoolSetting 'powerline' $true)) {
+            $branchText = if ($branch) { " ($branch)" } else { "" }
+            $output = "$leadingNewline$boundary$e[38;5;6m$loc$branchText $e[35m$NebPromptArrow $reset"
+        } else {
+            $segs = New-Object System.Collections.ArrayList
+            [void]$segs.Add(@{ bg=4; fg='38;5;0'; t=" $NebFolderIcon " })
+            [void]$segs.Add(@{ bg=$null; fg='39'; t="  $loc  " })
+            if ($branch) { [void]$segs.Add(@{ bg=$null; fg='38;5;6'; t=" $NebGitBranchIcon $branch  " }) }
+            [void]$segs.Add(@{ bg=$null; fg='39'; t=" $NebClockIcon $time  " })
 
-    # 使用主题的 ANSI-16 索引，历史提示符仍随主题换色；不占用应用所需的
-    # xterm 扩展色槽。路径和时间用默认前景/背景，避免浅色主题的 ANSI 灰阶低对比。
-
-    if ($userPrompt) {
-        # 视觉全部来自用户提示符；Nebula 只补协议：133;A 标出提示符起点，标题
-        # 里带上宿主需要的绝对 cwd 与分支。换行留给用户提示符自己决定。
-        $output = "$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$userPrompt"
-    } elseif (-not (Get-NebulaBoolSetting 'powerline' $true)) {
-        $branchText = if ($branch) { " ($branch)" } else { "" }
-        $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$e[38;5;6m$loc$branchText $e[35m$NebPromptArrow $reset"
-    } else {
-        $segs = New-Object System.Collections.ArrayList
-        [void]$segs.Add(@{ bg=4; fg='38;5;0'; t=" $NebFolderIcon " })
-        [void]$segs.Add(@{ bg=$null; fg='39'; t="  $loc  " })
-        if ($branch) { [void]$segs.Add(@{ bg=$null; fg='38;5;6'; t=" $NebGitBranchIcon $branch  " }) }
-        [void]$segs.Add(@{ bg=$null; fg='39'; t=" $NebClockIcon $time  " })
-
-        # 49 = default background on both caps: the cap cell's square corners
-        # always match the real terminal bg (any theme / wallpaper).
-        $out = "$reset$e[38;5;$($segs[0].bg)m$e[49m$NebLeftRound$reset"
-        for ($i = 0; $i -lt $segs.Count; $i++) {
-            $s = $segs[$i]
-            $bg = if ($null -eq $s.bg) { '49' } else { "48;5;$($s.bg)" }
-            $out += "$e[${bg}m$e[$($s.fg)m$($s.t)"
-            if ($null -ne $s.bg) {
-                $out += "$reset$e[38;5;$($s.bg)m$e[49m$NebArrow$reset"
-            } else {
-                $out += $reset
+            # 49 = default background on both caps: the cap cell's square corners
+            # always match the real terminal bg (any theme / wallpaper).
+            $out = "$reset$e[38;5;$($segs[0].bg)m$e[49m$NebLeftRound$reset"
+            for ($i = 0; $i -lt $segs.Count; $i++) {
+                $s = $segs[$i]
+                $bg = if ($null -eq $s.bg) { '49' } else { "48;5;$($s.bg)" }
+                $out += "$e[${bg}m$e[$($s.fg)m$($s.t)"
+                if ($null -ne $s.bg) {
+                    $out += "$reset$e[38;5;$($s.bg)m$e[49m$NebArrow$reset"
+                } else {
+                    $out += $reset
+                }
             }
+            $output = "$leadingNewline$boundary$out`n`n$e[35m$NebPromptArrow $reset"
         }
-        $output = "$leadingNewline$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)$out`n`n$e[35m$NebPromptArrow $reset"
-    }
 
-    try { Set-PSReadLineOption -ExtraPromptLineCount (($output | Measure-Object -Line).Lines - 1) } catch {}
+        if ($outermost) {
+            try { Set-PSReadLineOption -ExtraPromptLineCount (($output | Measure-Object -Line).Lines - 1) } catch {}
+        }
 
-    # prompt 返回值先输出，状态恢复必须放到整个函数的最后；否则任意一次
-    # Measure-Object、git 或赋值都会让下一条命令看到错误的 $?。
-    $output
+        # prompt 返回值先输出，状态恢复必须放到整个函数的最后；否则任意一次
+        # Measure-Object、git 或赋值都会让下一条命令看到错误的 $?。
+        $output
+    } finally { $global:NebulaPromptRenderDepth-- }
     $global:LASTEXITCODE = $originalLastExitCode
     if ($global:? -ne $originalDollarQuestion) {
         if ($originalDollarQuestion) {
@@ -552,9 +567,19 @@ function global:prompt {
     }
 }
 
-# 重新安装用的引用：下面的 ReadLine wrapper 发现 prompt 被别人换掉时，用它把
-# Nebula 的 wrapper 包回去。
-$global:NebulaPromptScriptBlock = (Get-Command prompt -CommandType Function).ScriptBlock
+# Each saved prompt retains its original owner when an environment restores it.
+function global:Install-NebulaPrompt {
+    param([scriptblock]$PreviousPrompt, [bool]$UserOwnsPrompt)
+
+    $NebulaPreviousPrompt = $PreviousPrompt
+    $NebulaUserOwnsPrompt = $UserOwnsPrompt
+    $NebulaPreviousPromptRunning = $false
+    $global:NebulaPreviousPrompt = $PreviousPrompt
+    $global:NebulaUserOwnsPrompt = $UserOwnsPrompt
+    $global:NebulaPromptScriptBlock = $global:NebulaPromptTemplate.GetNewClosure()
+    Set-Item -Path function:global:prompt -Value $global:NebulaPromptScriptBlock
+}
+Install-NebulaPrompt $global:NebulaPreviousPrompt $global:NebulaUserOwnsPrompt
 
 # Build a spec-correct file:// URI from a Windows path for OSC 8 hyperlinks.
 # RFC 3986: escape every segment (UTF-8 + surrogate pairs via EscapeDataString),
@@ -747,9 +772,7 @@ if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) {
             $installed = Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue
             if ($global:NebulaPromptScriptBlock -and $installed -and
                 -not $installed.ScriptBlock.ToString().Contains('NebulaPreviousPrompt')) {
-                $global:NebulaPreviousPrompt = $installed.ScriptBlock
-                $global:NebulaUserOwnsPrompt = Test-NebulaUserPrompt $installed.ScriptBlock
-                Set-Item -Path function:global:prompt -Value $global:NebulaPromptScriptBlock
+                Install-NebulaPrompt $installed.ScriptBlock (Test-NebulaUserPrompt $installed.ScriptBlock)
             }
         } catch {}
 
@@ -1247,11 +1270,14 @@ mod test {
             .find("Get-NebulaBoolSetting 'powerline'")
             .expect("powerline visual branch");
         let done = NEBULA_PROMPT_PS1.find("]133;D;").expect("OSC command done");
-        let prompt = NEBULA_PROMPT_PS1[toggle..].find("]133;A").expect("plain prompt mark");
+        let prompt = NEBULA_PROMPT_PS1.find("]133;A").expect("prompt boundary");
         let start = NEBULA_PROMPT_PS1[toggle..].find("]133;C").expect("OSC command start");
 
         assert!(done < toggle, "command completion must not depend on the visual branch");
-        assert!(prompt < start, "the powerline-off prompt and ReadLine wrapper must both stay");
+        assert!(
+            prompt < toggle + start,
+            "the powerline-off prompt and ReadLine wrapper must both stay"
+        );
     }
 
     #[test]
@@ -1498,6 +1524,136 @@ if ($words.Count -ne 6 -or $words[-1] -ne $argument) { exit 89 }
 exit 0
 "#,
         );
+    }
+
+    #[test]
+    fn powershell_python_environment_conda_hook_preserves_active_prefix() {
+        // Conda.psm1 prompt management: rename the old prompt, emit its
+        // modifier through Write-Host, then call the saved prompt.
+        let hook = r#"
+$env:CONDA_PROMPT_MODIFIER = '(issue278-conda) '
+Rename-Item Function:\prompt CondaPromptBackup
+function global:prompt {
+    if ($env:CONDA_PROMPT_MODIFIER) {
+        $env:CONDA_PROMPT_MODIFIER | Write-Host -NoNewline
+    }
+    CondaPromptBackup
+}
+"#;
+        for before_startup in [true, false] {
+            let prelude = format!("{PS_PRELUDE}{}", if before_startup { hook } else { "" });
+            let checks = format!(
+                r#"
+{}
+$global:NebulaPreviousPSConsoleHostReadLine = {{ '' }}
+$initial = (@(prompt 6>&1) | ForEach-Object {{ [string]$_ }}) -join ''
+if (-not $initial.Contains('(issue278-conda) ')) {{ throw 'Conda prefix missing before ReadLine' }}
+$null = PSConsoleHostReadLine
+foreach ($powerline in @($true, $false)) {{
+    $global:ProbePowerline = $powerline
+    function global:Get-NebulaBoolSetting {{ param($key, $default); if ($key -eq 'powerline') {{ $global:ProbePowerline }} else {{ $default }} }}
+    $rendered = (@(prompt 6>&1) | ForEach-Object {{ [string]$_ }}) -join ''
+    if (-not $rendered.Contains('(issue278-conda) ')) {{ throw 'Conda prefix missing after ReadLine' }}
+    if (-not $rendered.Contains("$([char]27)]133;A")) {{ throw 'Prompt boundary missing' }}
+}}
+$env:CONDA_PROMPT_MODIFIER = ''
+$rendered = (@(prompt 6>&1) | ForEach-Object {{ [string]$_ }}) -join ''
+if ($rendered.Contains('(issue278-conda) ')) {{ throw 'Inactive Conda prefix remains' }}
+"#,
+                if before_startup { "" } else { hook },
+            );
+            run_powershell_integration_case(&prelude, &checks);
+        }
+    }
+
+    #[test]
+    fn powershell_python_environment_real_venv_activate_and_deactivate() {
+        for user_prompt in [false, true] {
+            let prelude = format!(
+                "{PS_PRELUDE}$global:ExpectedOriginalUser = ${user_prompt}\n$global:ProbeBootstrap = {{\n{NEBULA_PROMPT_PS1}\n}}\n{}",
+                if user_prompt {
+                    "function global:prompt { 'ORIGINAL-USER-PROMPT> ' }\n"
+                } else {
+                    ""
+                },
+            );
+            run_powershell_integration_case(
+                &prelude,
+                r#"
+$activate = $env:PEBREL_QA_VENV_ACTIVATE
+$temporaryVenv = $null
+if (-not $activate) {
+    $temporaryVenv = Join-Path $env:TEMP "pebrel-venv-test-$PID"
+    & python -m venv $temporaryVenv
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create real Python venv' }
+    $activate = Join-Path $temporaryVenv 'Scripts\Activate.ps1'
+}
+try {
+    if (-not (Test-Path -LiteralPath $activate)) { throw 'Real venv activation script is required' }
+    $expected = if ($global:ExpectedOriginalUser) { 'ORIGINAL-USER-PROMPT> ' } else { '❯' }
+    $env:VIRTUAL_ENV_DISABLE_PROMPT = ''
+    . $activate -Prompt issue278-venv
+    $global:NebulaPreviousPSConsoleHostReadLine = { '' }
+    $initial = (@(prompt 6>&1) | ForEach-Object { [string]$_ }) -join ''
+    if (-not $initial.Contains('(issue278-venv) ')) { throw 'venv prefix missing before ReadLine' }
+    $null = PSConsoleHostReadLine
+    $rendered = (@(prompt 6>&1) | ForEach-Object { [string]$_ }) -join ''
+    if (-not $rendered.Contains('(issue278-venv) ')) { throw 'venv prefix missing after ReadLine' }
+    if (-not $rendered.Contains($expected)) { throw 'Original prompt lost during venv activation' }
+    $activeCapture = New-Object System.IO.StringWriter
+    $activeOutput = [Console]::Out
+    try {
+        [Console]::SetOut($activeCapture)
+        & $env:COMSPEC /d /c 'exit 7'
+        $activePrompt = prompt 6>&1
+        $activeSucceeded = $?
+        $activeCode = $LASTEXITCODE
+    } finally { [Console]::SetOut($activeOutput) }
+    $completePrompt = $activeCapture.ToString() + ((@($activePrompt) | ForEach-Object { [string]$_ }) -join '')
+    $done = [regex]::Matches($completePrompt, '\x1b\]133;D;([^\x07]+)\x07')
+    if ($done.Count -ne 1 -or $done[0].Groups[1].Value -ne '7') { throw 'Nested prompt published an incorrect completion' }
+    if ([regex]::Matches($completePrompt, '\x1b\]133;A\x07').Count -ne 1) { throw 'Nested prompt published extra prompt boundaries' }
+    if ([regex]::Matches($completePrompt, 'SetUserVar=pebrel_shell=').Count -ne 1) { throw 'Nested prompt published extra shell identities' }
+    if ([regex]::Matches($completePrompt, '\x1b\]2;NEBULA\|').Count -ne 1) { throw 'Nested prompt published extra titles' }
+    if ($global:NebulaLastCommandSucceeded -or $global:NebulaLastCommandExitCode -ne 7) { throw 'Nested prompt overwrote completion snapshot' }
+    # Ordinary functions can restore $? internally while the caller resets it.
+    # Compare the same documented function-call semantics, without changing prompt ABI.
+    function Probe-CallerFailureStatus { Write-Error '' -ErrorAction Ignore }
+    $referenceOutput = Probe-CallerFailureStatus 6>&1
+    $referenceSucceeded = $?
+    if ($activeSucceeded -ne $referenceSucceeded -or $activeCode -ne 7) { throw 'Prompt changed caller status semantics or native exit code' }
+    if ($global:NebulaPromptRenderDepth -ne 0) { throw 'Prompt rendering depth leaked' }
+    if (-not $rendered.Contains("$([char]27)]133;A")) { throw 'Prompt boundary missing' }
+    deactivate
+    $null = PSConsoleHostReadLine
+    $rendered = (@(prompt 6>&1) | ForEach-Object { [string]$_ }) -join ''
+    if ($rendered.Contains('(issue278-venv) ') -or $rendered.Contains('() ')) { throw 'Inactive venv prefix remains' }
+    if (-not $rendered.Contains($expected)) { throw 'Original prompt not restored after deactivate' }
+    & $global:ProbeBootstrap
+    $rendered = (@(prompt 6>&1) | ForEach-Object { [string]$_ }) -join ''
+    if ($rendered.Contains('(issue278-venv) ') -or $rendered.Contains('() ')) { throw 'Re-source revived an inactive venv' }
+    if (-not $rendered.Contains($expected)) { throw 'Re-source replaced restored prompt owner' }
+    $env:VIRTUAL_ENV_DISABLE_PROMPT = '1'
+    . $activate -Prompt issue278-disabled
+    $null = PSConsoleHostReadLine
+    $rendered = (@(prompt 6>&1) | ForEach-Object { [string]$_ }) -join ''
+    if ($rendered.Contains('(issue278-disabled) ')) { throw 'Disabled venv prompt changed' }
+    if (-not $rendered.Contains($expected)) { throw 'Disabled venv replaced original prompt' }
+    $capture = New-Object System.IO.StringWriter
+    $originalOutput = [Console]::Out
+    try {
+        [Console]::SetOut($capture)
+        & $env:COMSPEC /d /c 'exit 7'
+        $rendered = prompt
+        $code = $LASTEXITCODE
+    } finally { [Console]::SetOut($originalOutput) }
+    if ($code -ne 7 -or -not $capture.ToString().Contains("$([char]27)]133;D;7")) { throw 'Native failure status changed by prompt' }
+} finally {
+    if ($temporaryVenv) { Remove-Item -LiteralPath $temporaryVenv -Recurse -Force -ErrorAction SilentlyContinue }
+}
+"#,
+            );
+        }
     }
 
     /// #80 的第二半：用户 `$PROFILE` 里的提示符（oh-my-posh/starship/手写）会
