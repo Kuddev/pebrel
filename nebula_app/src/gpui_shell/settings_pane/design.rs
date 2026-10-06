@@ -27,21 +27,9 @@ pub(super) const GROUP_GAP: f32 = 48.0;
 const RAIL_W: f32 = 2.0;
 /// 内容相对轨道的缩进。标题左对齐轨道本身、行内容缩进这么多——标题是命名者
 /// 而不是组员，这个位置差比任何字重都更能表达层级。
-const RAIL_INDENT: f32 = 13.0;
-/// 文字列的**最小**宽度。
-///
-/// 一开始写的是"文本区 flex_1 + 控件右对齐"，实机怎么改都对不齐：
-/// `overflow_y_scroll` 那层给子项的横向可用空间是 max-content，于是文本列取
-/// 自然宽、行宽跟着文字长度走，控件右缘成了"说明右缘 + 一个常数"——说明越长
-/// 的行控件越靠右，差到 280px。靠 `w_full` / stretch 都救不回来，因为根子在
-/// 可用空间本身。
-///
-/// 所以两列都给定宽：文字列固定，控件列固定并在内部右对齐。行的总宽从此与
-/// 文字长度无关，控件左右缘各自成一条竖线。代价是说明在这个宽���处换行（约
-/// 32 个汉字），比之前的 640 上限窄——换来的是全页对齐，值。
-const TEXT_COL_MIN_W: f32 = 320.0;
+pub(super) const RAIL_INDENT: f32 = 13.0;
 /// 控件列宽。够放下最宽的下拉（220）加一点余量；开关这类窄控件在列内右对齐，
-/// ���此右缘与下拉严丝合缝。
+/// 右缘与下拉保持一致。文字列允许收缩换行，避免窄窗口被旧的 320px 下限撑宽。
 const CTRL_COL_W: f32 = 232.0;
 /// 脏值段升起的时长。
 const MARK_RISE: Duration = Duration::from_millis(260);
@@ -276,19 +264,16 @@ impl SettingsPane {
             });
         let control = control.into_any_element();
         let columns = match layout {
-            RowLayout::Standard => h_flex()
-                .w_full()
-                .items_center()
-                .gap_4()
-                .child(text.flex_1().min_w(px(TEXT_COL_MIN_W)))
-                .child(
+            RowLayout::Standard => {
+                h_flex().w_full().items_center().gap_4().child(text.flex_1().min_w_0()).child(
                     h_flex()
                         .w(px(CTRL_COL_W))
                         .flex_shrink_0()
                         .justify_end()
                         .items_center()
                         .child(control),
-                ),
+                )
+            },
         };
         div()
             .id(label)

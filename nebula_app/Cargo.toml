@@ -75,6 +75,7 @@ path = "../nebula-completions"
 version = "2.1.1"
 
 [dependencies]
+anyhow = { version = "=1.0.104", optional = true }
 ahash = { version = "0.8.6", features = ["no-rng"] }
 ab_glyph_rasterizer = "=0.1.10"
 base64 = "0.22.0"
@@ -149,6 +150,10 @@ regex = "1.13.1"
 image = { version = "0.25.8", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha1 = "0.11.0"
+
+raw-window-handle = { version = "=0.6.2", optional = true }
+naga = { version = "=29.0.4", optional = true, features = ["wgsl-in", "hlsl-out"] }
+gif = { version = "=0.14.2", optional = true }
 
 [build-dependencies]
 nebula-settings = { path = "../nebula_settings", version = "2.1.1" }
@@ -273,7 +278,8 @@ embed-resource = "3.0.2"
 [features]
 # 正式产品只有 GPUI 壳。旧 winit/glutin/crossfont 壳只在显式请求
 # `legacy-shell` 时进入依赖图，不能再被 workspace 默认构建误打进发布包。
-default = ["gpui-shell"]
+# 默认产品带媒体与着色器能力；实际播放/执行仍由用户的独立设置显式开启。
+default = ["gpui-shell", "shader-background"]
 legacy-shell = [
     "dep:crossfont",
     "dep:glutin",
@@ -311,6 +317,9 @@ gpui-shell = [
 ]
 # 真实 GPUI hitbox / 鼠标路由测试显式启用；不能放进 dev-dependencies，
 # 否则不带 gpui-shell 的默认 `cargo test -p nebula` 也会编译整棵 GPUI。
+video-background = ["gpui-shell", "dep:anyhow", "dep:raw-window-handle", "windows/Win32_Media_MediaFoundation"]
+gif-background = ["video-background", "dep:gif"]
+shader-background = ["gif-background", "dep:naga", "windows/Win32_Graphics_Direct3D_Fxc"]
 gpui-test-support = ["gpui-shell", "gpui/test-support", "gpui-component/test-support"]
 # Explicit local updater acceptance harness; compile-rejected in release builds.
 update-test-source = ["gpui-shell"]

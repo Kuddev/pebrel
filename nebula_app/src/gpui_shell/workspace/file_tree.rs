@@ -53,11 +53,12 @@ pub(super) fn wsl_terminal_launch_at(
     distro: String,
     guest_path: String,
 ) -> crate::session::LaunchSession {
-    crate::session::LaunchSession::Shell {
-        name,
-        program,
-        args: vec!["-d".to_owned(), distro, "--cd".to_owned(), guest_path],
-    }
+    let distro_args = vec!["-d".to_owned(), distro];
+    // The same encoding as splits; a path `wsl.exe` cannot receive (one with `"`)
+    // only enters the distribution.
+    let args = crate::shell_detect::wsl_args_at(&program, &distro_args, &guest_path)
+        .unwrap_or(distro_args);
+    crate::session::LaunchSession::Shell { name, program, args }
 }
 
 impl NebulaWorkspace {

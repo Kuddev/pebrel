@@ -926,7 +926,7 @@
     "assistant": "アシスタントの設定",
     "sessions": "ワークスペースのセッション",
     "directories": "ディレクトリ履歴",
-    "commands": "コマンド履歴",
+    "commands": "保存済みコマンドと履歴",
     "fonts": "カスタムフォント"
   },
   "ai_hooks": {

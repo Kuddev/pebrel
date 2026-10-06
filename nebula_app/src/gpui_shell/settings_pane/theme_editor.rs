@@ -950,6 +950,8 @@ impl SettingsPane {
                 .is_some(),
             EditorInput::ImagePath => {
                 candidate.effects.background_image = Some(value.trim().to_owned());
+                candidate.effects.background_media_kind =
+                    Some(nebula_settings::BackgroundMediaKind::Image);
                 true
             },
             EditorInput::ImageOpacity => {

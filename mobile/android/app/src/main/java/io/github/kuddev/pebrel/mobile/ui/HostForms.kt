@@ -35,6 +35,7 @@ fun HostForm(
     passwordSaved: Boolean,
     busy: Boolean,
     onClearPassword: () -> Unit,
+    allowConnect: Boolean = true,
     onSave: (HostProfile, CharArray?, Boolean, Boolean) -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf(initial?.name.orEmpty()) }
@@ -162,7 +163,7 @@ fun HostForm(
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
                 Text(stringResource(R.string.save))
             }
-            Button({ submit(true) }, enabled = valid && !busy,
+            if (allowConnect) Button({ submit(true) }, enabled = valid && !busy,
                 modifier = Modifier.weight(1.6f).heightIn(min = 48.dp), shape = MaterialTheme.shapes.medium) {
                 Text(stringResource(R.string.save_connect))
             }
