@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 if __package__:
@@ -30,6 +31,10 @@ def asset_name(version: str) -> str:
     if len(names) != 1:
         raise ValueError("This release requires exactly one Android Preview APK")
     return names[0]
+
+
+def manual_asset_name(version: str) -> str | None:
+    return next((name for name in expected_asset_names(version) if name.endswith("-relay-manual.tar.gz")), None)
 
 
 def validate_identity(metadata: dict, badging: str, signature: str, version: str) -> int:
@@ -96,7 +101,7 @@ def package(version: str, commit: str, sdk: Path, output: Path, report: Path) ->
     from verify_ghostty_apk import verify as verify_native
     from verify_native_relay_apk import verify as verify_relay
     native = verify_native(apk)
-    verify_relay(apk, commit)
+    verify_relay(apk, commit, require_licenses=True)
     tests = {
         "unit": test_summary(app / "test-results/testDebugUnitTest"),
         "instrumented": test_summary(app / "outputs/androidTest-results/connected"),
@@ -108,11 +113,26 @@ def package(version: str, commit: str, sdk: Path, output: Path, report: Path) ->
     shutil.copyfile(apk, target)
     if sha256(target) != native["sha256"]:
         raise ValueError("APK changed during release collection")
+    relay_kit = None
+    if name := manual_asset_name(version):
+        from package_manual_relay import package as package_manual
+        if (output / name).exists():
+            raise ValueError("Manual relay release output already exists")
+        # 单包校验文件只留在暂存目录，公开集合统一由 SHA256SUMS 管理。
+        with tempfile.TemporaryDirectory(prefix="relay-kit-", dir=output.parent) as temporary:
+            staging = Path(temporary).resolve()
+            if not staging.is_relative_to(output.parent.resolve()):
+                raise ValueError("Manual kit staging escaped its output directory")
+            package_manual(apk, staging / name, commit)
+            shutil.copyfile(staging / name, output / name)
+            if sha256(output / name) != sha256(staging / name):
+                raise ValueError("Manual relay kit changed during collection")
+        relay_kit = {"file": name, "sha256": sha256(output / name)}
     write_atomic(report, json.dumps({
         "schema_version": 1, "status": "passed", "commit": commit,
         "version": version, "application_id": APPLICATION_ID, "version_code": code,
         "certificate_sha256": CERTIFICATE_SHA256, "apk": target.name,
-        "sha256": sha256(target), "tests": tests, "native": native,
+        "sha256": sha256(target), "tests": tests, "native": native, "relay_kit": relay_kit,
     }, indent=2) + "\n")
 
 
@@ -131,6 +151,9 @@ def validate_evidence(report: Path, directory: Path, version: str, commit: str) 
         count = data.get("tests", {}).get(kind, {}).get("passed")
         if type(count) is not int or count < 1:
             raise ValueError(f"Missing passed Android {kind} tests")
+    if kit := manual_asset_name(version):
+        if data.get("relay_kit") != {"file": kit, "sha256": sha256(directory / kit)}:
+            raise ValueError("Manual relay evidence differs from the collected archive")
 
 
 def main() -> None:

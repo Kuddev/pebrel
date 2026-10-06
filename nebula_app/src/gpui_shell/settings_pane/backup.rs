@@ -402,7 +402,7 @@ impl SettingsPane {
         let (runtime, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
         self.runtime = runtime;
         cx.set_global(settings);
-        cx.emit(SettingsPaneEvent::Changed);
+        cx.emit(SettingsPaneEvent::BackupRestored);
         cx.notify();
     }
 }

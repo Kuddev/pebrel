@@ -37,7 +37,10 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
     var advertisedAddress by remember { mutableStateOf("") }
     var advanced by remember { mutableStateOf(false) }
     var manual by remember { mutableStateOf(false) }
+    var manualLinkFailed by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
+    var addingHost by remember { mutableStateOf(false) }
+    var savingHost by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<RelayServiceResult?>(null) }
     var stage by remember { mutableStateOf<String?>(null) }
     var installProgress by remember { mutableStateOf<RelayInstallProgress?>(null) }
@@ -49,12 +52,13 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
     var purge by remember { mutableStateOf(false) }
     var exportFeedback by remember { mutableStateOf<Int?>(null) }
     var exportText by remember { mutableStateOf("") }
-    val busy = running
+    val busy = running || savingHost
     val host = hosts.find { it.id == selectedId }
     val endpoint = runCatching { parseSshEndpoint(address, user) }.getOrNull()
     val savedPassword = credentials.isNotEmpty() && host != null && repository.hasSavedPassword(host)
+    val keyAuthentication = host?.keyUri?.isNotBlank() == true
     val valid = (host != null || endpoint != null && (sshPort.toIntOrNull() ?: 0) in 1..65535) &&
-        (password.isNotEmpty() || savedPassword) && (servicePort.toIntOrNull() ?: 0) in 1..65535
+        (keyAuthentication || password.isNotEmpty() || savedPassword) && (servicePort.toIntOrNull() ?: 0) in 1..65535
     val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val text = exportText
         exportText = ""
@@ -83,7 +87,8 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
         job = scope.launch {
             var secret = entered
             try {
-                if (secret == null) secret = repository.loadSavedPassword(selected)
+                // 与普通 SSH 共用凭据解析：未加密私钥可空口令，已存口令读取失败仍阻止连接。
+                if (secret == null) secret = repository.passwordForConnection(selected, null)
                 if (secret == null) throw RelayServiceFailure("missing_credentials")
                 result = NativeRelayDeployment.execute(context, selected, checkNotNull(secret),
                     { h, fingerprint -> repository.verifySshOperation(owner, h, fingerprint) },
@@ -121,6 +126,9 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             HelperText(stringResource(R.string.service_intro))
             if (!busy) {
+                OutlinedButton({ addingHost = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.service_add_ssh_host))
+                }
                 if (hosts.isNotEmpty()) OutlinedButton({ choosing = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(host?.name ?: stringResource(R.string.deploy_choose_host))
                 }
@@ -128,9 +136,10 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
                     ConnectionField(address, { address = it; resetStatus() }, R.string.host_address, keyboard = KeyboardType.Uri)
                     ConnectionField(user, { user = it; resetStatus() }, R.string.username)
                 }
-                ConnectionField(password, { password = it }, R.string.password, keyboard = KeyboardType.Password,
+                ConnectionField(password, { password = it }, if (keyAuthentication) R.string.ssh_key_passphrase else R.string.credential_password, keyboard = KeyboardType.Password,
                     placeholder = if (savedPassword) stringResource(R.string.password_saved_placeholder) else "",
                     transformation = PasswordVisualTransformation(), limit = 1024)
+                if (keyAuthentication) HelperText(stringResource(R.string.ssh_key_passphrase_hint))
                 TextButton({ advanced = !advanced }) { Text(stringResource(R.string.service_advanced)) }
                 if (advanced) {
                     if (host == null) ConnectionField(sshPort, { sshPort = it; resetStatus() }, R.string.port, keyboard = KeyboardType.Number, limit = 5)
@@ -173,6 +182,14 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
             installProgress?.let { RelayInstallSteps(it, failure) }
             if (!busy) TextButton({ manual = !manual }) { Text(stringResource(R.string.service_manual_commands)) }
             if (manual) {
+                TextButton({
+                    manualLinkFailed = false
+                    try {
+                        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/Kuddev/pebrel/releases")))
+                    } catch (_: Exception) { manualLinkFailed = true }
+                }) { Text(stringResource(R.string.service_manual_download)) }
+                if (manualLinkFailed) Text(stringResource(R.string.service_manual_download_failed), color = MaterialTheme.colorScheme.error)
                 HelperText(stringResource(R.string.service_manual_hint))
                 val relayAddress = runCatching {
                     NativeRelayDeployment.validatedAddress(advertisedAddress.ifBlank { host?.address ?: endpoint?.address.orEmpty() })
@@ -183,6 +200,29 @@ fun RelayDeploymentFlow(repository: SessionRepository, onCancel: () -> Unit) {
             }
         }
     }
+    if (addingHost) HostForm(
+        initial = null,
+        onCancel = { addingHost = false },
+        passwordSaved = false,
+        busy = savingHost,
+        onClearPassword = {},
+        allowConnect = false,
+        onSave = save@ { entry, secret, rememberPassword, _ ->
+            if (savingHost) { secret?.fill('\u0000'); return@save }
+            savingHost = true
+            scope.launch {
+                try {
+                    // 复用 SSH 主机表单及其文档授权/凭据事务，保存后回到安装而非启动终端。
+                    if (repository.saveHostWithCredentials(entry, secret, rememberPassword)) {
+                        selectedId = entry.id
+                        password = if (rememberPassword) "" else secret?.concatToString().orEmpty()
+                        addingHost = false
+                        resetStatus()
+                    }
+                } finally { secret?.fill('\u0000'); savingHost = false }
+            }
+        },
+    )
     if (choosing) AlertDialog(onDismissRequest = { choosing = false }, title = { Text(stringResource(R.string.deploy_choose_host)) },
         text = { Column { hosts.forEach { entry -> TextButton({ selectedId = entry.id; password = ""; choosing = false; resetStatus() }) { Text(entry.name) } }
             TextButton({ selectedId = null; password = ""; choosing = false; resetStatus() }) { Text(stringResource(R.string.deploy_manual)) } } },

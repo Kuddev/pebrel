@@ -297,8 +297,10 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 
 `pane.exec` 与 `pane.run` 是两种刻意分开的执行语义：它直接接收 argv，不经过 shell 展开，
 在 Pane 当前上报的本地 cwd 中启动独立 non-TTY child，不写入 Grid、history 或交互 shell
-环境。WSL Pane 通过对应 distribution 和 guest cwd 执行；SSH Pane 返回
-`remote_exec_unsupported`。stdout/stderr 始终并行排水，每条默认最多保留 1 MiB、可配置上限
+环境。WSL Pane 通过对应 distribution 和 guest cwd 执行；argv 通过 `--exec` 保留原生参数边界，
+包括参数内部的双引号。当前启动目录模型不接收含 `"` 的 guest cwd，此时返回
+`exec_argument_unsupported`（`details.argument` 为该目录），不会改写后执行。
+SSH Pane 返回 `remote_exec_unsupported`。stdout/stderr 始终并行排水，每条默认最多保留 1 MiB、可配置上限
 16 MiB；响应的 `stdout`/`stderr` 是直接字符串，`capture` 分别报告 encoding、总字节数、保留
 字节数和截断状态。超时会回收整个子进程树，并保留已捕获输出与 `timed_out: true`。
 

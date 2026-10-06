@@ -117,3 +117,18 @@ fn vcs_messages_follow_resolved_english_and_fall_back_for_partial_locales() {
     assert_eq!(i18n::UiLanguage::FrFr.tr("vcs.changes"), "Changes");
     assert_eq!(english.tr_args("vcs.refresh_status", &[("vcs", "Git")]), "Refresh Git status");
 }
+
+#[test]
+fn background_messages_keep_chinese_text_through_catalog_generation() {
+    let catalog: serde_json::Value =
+        serde_json::from_str(include_str!("../i18n/zh-CN.json")).unwrap();
+    for (key, value) in catalog["wallpaper"].as_object().unwrap() {
+        let text = value.as_str().unwrap();
+        // 问号替换仍是合法 UTF-8/JSON，结构校验单独通过也不能证明中文未损坏。
+        assert!(text.chars().any(|ch| ('\u{3400}'..='\u{9fff}').contains(&ch)), "{key}");
+        assert!(!text.contains("??") && !text.contains('\u{fffd}'), "{key}");
+    }
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperShaderSource), "WGSL 文件");
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperGif), "GIF 动图");
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperMediaSelecting), "选择中…");
+}

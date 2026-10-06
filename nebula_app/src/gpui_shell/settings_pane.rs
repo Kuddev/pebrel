@@ -43,6 +43,7 @@ mod appearance_advanced;
 mod appearance_picker;
 #[path = "background_color.rs"]
 mod background_color;
+mod background_shader;
 mod backup;
 mod cursor_motion;
 mod design;
@@ -53,6 +54,7 @@ mod scrolling;
 mod search_header;
 mod segmented;
 mod setting_help;
+mod terminal_effect;
 mod theme_picker;
 
 mod initialization;
@@ -90,6 +92,7 @@ pub enum SettingsPaneEvent {
     /// Explicitly close Settings and return to the workspace.
     Close,
     Changed,
+    BackupRestored,
     /// 导入 Profile 已落盘；Tab 的 Shell 面板若正打开，需要重建候选快照。
     TerminalProfilesChanged,
     /// 设置页"连接"按钮：宿主开 SSH tab（连接语义在业务层）。
@@ -112,6 +115,10 @@ pub struct SettingsPane {
     mobile: mobile::MobileState,
     appearance_picker: Option<appearance_picker::AppearancePicker>,
     appearance_picker_seq: u64,
+    shader_picker: Option<Task<()>>,
+    terminal_effect_picker: Option<Task<()>>,
+    media_picker: Option<Task<()>>,
+    media_picker_generation: u64,
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
     theme_editor_seq: u64,
     pub(super) theme_transfer: theme_transfer::ThemeTransferState,
@@ -775,6 +782,14 @@ impl SettingsPane {
             "tray" => flag!(tray),
             "panel_resize" => flag!(panel_resize),
             "background_image_cover_chrome" => flag!(background_image_cover_chrome),
+            "background_media_kind" => pick!(background_media_kind),
+            "terminal_effect_animation" => Some((
+                cur.terminal_effects.animation != def.terminal_effects.animation,
+                def.terminal_effects.animation.settings_value().to_owned(),
+            )),
+            "background_shader_preset" => {
+                Some((cur.background_effects.preset() != "off", "off".to_owned()))
+            },
             "language" => pick!(language),
             "accept" => pick!(accept),
             "completion_style" => pick!(completion_style),
@@ -844,6 +859,15 @@ impl SettingsPane {
                     move |this, window, cx| {
                         if key == "scrollback_lines" {
                             this.commit_scrollback_lines(&factory, window, cx);
+                            return;
+                        }
+                        if key == "background_media_kind" {
+                            this.set_background_kind(&factory, window, cx);
+                            this.sync_select(key, &factory, window, cx);
+                            return;
+                        }
+                        if key == "background_shader_preset" {
+                            this.set_shader_preset(&factory, window, cx);
                             return;
                         }
                         this.persist(&[(key, factory.clone())], cx);
@@ -1005,29 +1029,117 @@ impl SettingsPane {
         )
     }
 
+    fn set_background_kind(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(kind) = nebula_settings::BackgroundMediaKind::parse(value) else { return };
+        if kind == self.runtime.background_media_kind {
+            return;
+        }
+        if !super::wallpaper::media_available(kind) {
+            super::wallpaper::show_media_error(kind, cx);
+            self.sync_select(
+                "background_media_kind",
+                self.runtime.background_media_kind.settings_value(),
+                window,
+                cx,
+            );
+            return;
+        }
+        self.media_picker_generation = self.media_picker_generation.wrapping_add(1);
+        self.media_picker.take();
+        self.persist(
+            &[
+                ("background_media_kind", kind.settings_value().to_owned()),
+                ("background_image", String::new()),
+            ],
+            cx,
+        );
+        self.sync_select(
+            "background_media_kind",
+            self.runtime.background_media_kind.settings_value(),
+            window,
+            cx,
+        );
+    }
+
     fn choose_background_image(&mut self, cx: &mut Context<Self>) {
+        if self.media_picker.is_some() {
+            return;
+        }
         let language = crate::gpui_shell::config::ui_language(cx);
+        let kind = self.runtime.background_media_kind;
+        if !super::wallpaper::media_available(kind) {
+            super::wallpaper::show_media_error(kind, cx);
+            return;
+        }
+        let old_path = self.runtime.background_image.clone();
+        self.media_picker_generation = self.media_picker_generation.wrapping_add(1);
+        let generation = self.media_picker_generation;
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
             prompt: Some(
-                language.pick("选择终端背景图片", "Select a terminal background image").into(),
+                if kind == nebula_settings::BackgroundMediaKind::Gif {
+                    language.text(crate::i18n::Message::WallpaperGifPrompt)
+                } else if kind == nebula_settings::BackgroundMediaKind::Video {
+                    language.text(crate::i18n::Message::WallpaperVideoPrompt)
+                } else {
+                    language.text(crate::i18n::Message::ThemeEditorChooseImage)
+                }
+                .into(),
             ),
         });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
-            let Some(path) = paths.into_iter().next() else { return };
-            let value = path.to_string_lossy().into_owned();
+        self.media_picker = Some(cx.spawn(async move |this, cx| {
+            let result = picked.await;
             let _ = this.update(cx, |pane, cx| {
-                pane.persist(&[("background_image", value)], cx);
+                if generation != pane.media_picker_generation {
+                    return;
+                }
+                if let Some(task) = pane.media_picker.take() {
+                    task.detach();
+                }
+                if pane.runtime.background_media_kind != kind
+                    || pane.runtime.background_image != old_path
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.first() {
+                            if let Some(value) = path.to_str() {
+                                pane.persist(
+                                    &[
+                                        ("background_image", value.to_owned()),
+                                        ("background_media_kind", kind.settings_value().to_owned()),
+                                    ],
+                                    cx,
+                                );
+                                if kind.is_animated()
+                                    && old_path.as_deref() == Some(value)
+                                    && pane.runtime.background_image.as_deref() == Some(value)
+                                {
+                                    super::wallpaper::reload_media(cx);
+                                }
+                            } else {
+                                super::wallpaper::show_media_error(kind, cx);
+                            }
+                        }
+                    },
+                    Ok(Ok(None)) => {},
+                    _ => super::wallpaper::show_media_error(kind, cx),
+                }
+                cx.notify();
             });
-        })
-        .detach();
+        }));
+        cx.notify();
     }
 
     fn background_image_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let language = crate::gpui_shell::config::ui_language(cx);
+        let video =
+            self.runtime.background_media_kind == nebula_settings::BackgroundMediaKind::Video;
+        let gif = self.runtime.background_media_kind == nebula_settings::BackgroundMediaKind::Gif;
         let current = self.runtime.background_image.clone();
         let has_image = current.as_ref().is_some_and(|path| !path.trim().is_empty());
         let path_label: Option<SharedString> =
@@ -1040,10 +1152,24 @@ impl SettingsPane {
                     .into()
             });
         self.row_with_reset(
-            language.pick("背景图片", "Background image"),
-            help("background_image", language),
+            if gif {
+                language.text(crate::i18n::Message::WallpaperGif)
+            } else if video {
+                language.text(crate::i18n::Message::WallpaperVideo)
+            } else {
+                language.pick("背景图片", "Background image")
+            },
+            if gif {
+                language.text(crate::i18n::Message::WallpaperGifDescription).into()
+            } else if video {
+                language.text(crate::i18n::Message::WallpaperVideoDescription).into()
+            } else {
+                help("background_image", language)
+            },
             has_image,
             |this, _, cx| {
+                this.media_picker_generation = this.media_picker_generation.wrapping_add(1);
+                this.media_picker.take();
                 this.persist(&[("background_image", String::new())], cx);
             },
             h_flex()
@@ -1051,11 +1177,40 @@ impl SettingsPane {
                 .gap_2()
                 .child(
                     NebulaButton::new("background-image-choose")
-                        .label(language.pick("选择图片", "Choose image"))
+                        .label(if self.media_picker.is_some() {
+                            language.text(crate::i18n::Message::WallpaperMediaSelecting)
+                        } else if gif {
+                            language.text(crate::i18n::Message::WallpaperChooseGif)
+                        } else if video {
+                            language.text(crate::i18n::Message::WallpaperChooseVideo)
+                        } else {
+                            language.text(crate::i18n::Message::ThemeEditorChooseImage)
+                        })
+                        .disabled(
+                            self.media_picker.is_some()
+                                || !super::wallpaper::media_available(
+                                    self.runtime.background_media_kind,
+                                ),
+                        )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.choose_background_image(cx);
                         })),
                 )
+                .when((video || gif) && has_image, |row| {
+                    row.child(
+                        NebulaButton::new("background-media-reload")
+                            .label(language.text(crate::i18n::Message::WallpaperMediaReload))
+                            .disabled(
+                                self.media_picker.is_some()
+                                    || !super::wallpaper::media_available(
+                                        self.runtime.background_media_kind,
+                                    ),
+                            )
+                            .on_click(
+                                cx.listener(|_, _, _, cx| super::wallpaper::reload_media(cx)),
+                            ),
+                    )
+                })
                 .when_some(path_label, |row, name| {
                     row.child(
                         div()

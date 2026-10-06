@@ -32,6 +32,14 @@ impl SettingsPane {
                     if let SelectEvent::Confirm(Some(_)) = event {
                         let row = entity.read(cx).selected_index(cx).map(|path| path.row);
                         if let Some(value) = row.and_then(|row| values.get(row)) {
+                            if key == "background_media_kind" {
+                                this.set_background_kind(value, window, cx);
+                                return;
+                            }
+                            if key == "background_shader_preset" {
+                                this.set_shader_preset(value, window, cx);
+                                return;
+                            }
                             if key == "cursor_motion" {
                                 this.set_cursor_motion(value, window, cx);
                                 return;
@@ -56,6 +64,13 @@ impl SettingsPane {
             selects.push((key, select, values));
         };
 
+        add_select(
+            "terminal_effect_animation",
+            nebula_settings::EffectAnimation::VALUES,
+            runtime.terminal_effects.animation.settings_value(),
+            window,
+            cx,
+        );
         let cursor_current =
             runtime.cursor_shape.map(|shape| shape.settings_value()).unwrap_or("beam");
         add_select(
@@ -185,7 +200,21 @@ impl SettingsPane {
             window,
             cx,
         );
+        add_select(
+            "background_media_kind",
+            nebula_settings::BackgroundMediaKind::VALUES,
+            runtime.background_media_kind.settings_value(),
+            window,
+            cx,
+        );
         // 壁纸 fit/对齐：存原文，经旧壳 renderer::image 的 parse 归一化
+        add_select(
+            "background_shader_preset",
+            nebula_settings::BackgroundEffects::PRESETS,
+            runtime.background_effects.preset(),
+            window,
+            cx,
+        );
         // （兼容 cover/contain 等别名），展示用规范记号。
         let bgimg_fit = crate::renderer::image::BackgroundImageFit::parse(
             runtime.background_image_fit.as_deref().unwrap_or(""),
@@ -595,6 +624,10 @@ impl SettingsPane {
             mobile: mobile::MobileState::new(window, cx),
             appearance_picker: None,
             appearance_picker_seq: 0,
+            shader_picker: None,
+            terminal_effect_picker: None,
+            media_picker: None,
+            media_picker_generation: 0,
             theme_editor: None,
             theme_editor_seq: 0,
             theme_transfer: theme_transfer::ThemeTransferState::default(),
