@@ -2,6 +2,8 @@
 
 ## Status
 
+Preference/default decisions superseded by [the three-way source proposal](../../../nebula_settings/split_shell_source/2026-10-06-three-way-source.md). Historical rationale and evidence below remain unchanged.
+
 Proposed focused-shell split behavior and optional interactive shell preference.
 Adapted WSL identity rules from MomentDerek's upstream
 [PR #351](https://github.com/Kuddev/pebrel/pull/351).

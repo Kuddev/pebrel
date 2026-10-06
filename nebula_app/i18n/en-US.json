@@ -17,8 +17,11 @@
     "en_us": "English"
   },
   "settings": {
-    "split_shell_picker": "Choose a shell when splitting",
-    "split_shell_picker_description": "Off: new splits inherit the focused pane’s shell. On: choose a shell before creating a split. Applies immediately; Escape cancels without opening a pane.",
+    "split_shell_source": "Split shell source",
+    "split_shell_source_description": "Default uses the configured default shell and inherits only a host directory. Focused follows the current pane’s Shell, Profile or SSH identity. Ask opens the launcher for each split. Applies immediately to split shortcuts; Escape cancels without creating a pane.",
+    "split_shell_source_focused": "Focused pane",
+    "split_shell_source_default": "Default shell",
+    "split_shell_source_ask": "Ask each time",
     "completion": {
       "mode": "Completion mode",
       "cycle": "Cycle completion mode",

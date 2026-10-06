@@ -36,6 +36,10 @@ impl SettingsPane {
                                 this.set_cursor_motion(value, window, cx);
                                 return;
                             }
+                            if key == "split_shell_source" {
+                                this.set_split_shell_source(value, window, cx);
+                                return;
+                            }
                             if key == "notification_duration" {
                                 this.set_notification_duration(value, window, cx);
                                 return;
@@ -66,6 +70,13 @@ impl SettingsPane {
             cx,
         );
         let shell_current = crate::platform::shell::effective_shell_id(runtime.shell.as_deref());
+        add_select(
+            "split_shell_source",
+            nebula_settings::SplitShellSource::VALUES,
+            runtime.split_shell_source.settings_value(),
+            window,
+            cx,
+        );
 
         add_select(
             "language",

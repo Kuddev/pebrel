@@ -17,8 +17,11 @@
     "en_us": "English"
   },
   "settings": {
-    "split_shell_picker": "分屏时选择 Shell",
-    "split_shell_picker_description": "关闭时，新分屏继承焦点窗格的 Shell；开启时，先选择 Shell 再创建分屏。即时生效，按 Esc 取消，不创建新窗格。",
+    "split_shell_source": "分屏 Shell 来源",
+    "split_shell_source_description": "使用默认：启动设置中的默认 Shell，仅继承宿主机目录。跟随焦点：沿用当前窗格的 Shell、Profile 或 SSH 身份。每次选择：分屏前打开启动选择器。对分屏快捷键即时生效，按 Esc 取消，不创建新窗格。",
+    "split_shell_source_focused": "跟随焦点",
+    "split_shell_source_default": "使用默认",
+    "split_shell_source_ask": "每次选择",
     "completion": {
       "mode": "补齐模式",
       "cycle": "切换补齐模式",

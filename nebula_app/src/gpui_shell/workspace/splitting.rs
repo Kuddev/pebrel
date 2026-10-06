@@ -4,11 +4,32 @@ use super::*;
 use crate::gpui_shell::terminal::view::TerminalLaunch;
 use crate::runtime_api::ApiError;
 use crate::session::LaunchSession;
+use nebula_settings::SplitShellSource;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PendingSplit {
     pane_id: u64,
     direction: SplitDirection,
+}
+
+enum SplitLaunch {
+    Focused,
+    Default,
+    Selected(LaunchSession),
+}
+
+/// Default splits never copy a source guest/user/remote directory. The existing
+/// pane-origin adapter alone decides whether a source directory is host-visible.
+fn default_split_launch(
+    mut launch: LaunchSession,
+    origin: tab_duplication::PaneOrigin<'_>,
+) -> (LaunchSession, Option<std::path::PathBuf>) {
+    if origin.host_cwd.is_some()
+        && let LaunchSession::Profile { cwd, .. } = &mut launch
+    {
+        *cwd = None;
+    }
+    (launch, origin.host_cwd)
 }
 
 impl NebulaWorkspace {
@@ -23,13 +44,20 @@ impl NebulaWorkspace {
             return;
         };
         let request = PendingSplit { pane_id: *focused, direction };
-        if cx
+        let source = cx
             .try_global::<crate::gpui_shell::config::Settings>()
-            .is_some_and(|settings| settings.split_shell_picker)
-        {
-            self.open_shell_palette(window, cx);
-            self.pending_split = Some(request);
-        } else if let Err(error) = self.split_at(request, None, window, cx) {
+            .map(|settings| settings.split_shell_source)
+            .unwrap_or_default();
+        let launch = match source {
+            SplitShellSource::Ask => {
+                self.open_shell_palette(window, cx);
+                self.pending_split = Some(request);
+                return;
+            },
+            SplitShellSource::Focused => SplitLaunch::Focused,
+            SplitShellSource::Default => SplitLaunch::Default,
+        };
+        if let Err(error) = self.split_at(request, launch, window, cx) {
             self.report_split_error(error, window, cx);
         }
     }
@@ -54,7 +82,7 @@ impl NebulaWorkspace {
     ) -> bool {
         let Some(request) = self.pending_split.take() else { return false };
         self.dismiss_palette_state();
-        if let Err(error) = self.split_at(request, Some(launch), window, cx) {
+        if let Err(error) = self.split_at(request, SplitLaunch::Selected(launch), window, cx) {
             self.report_split_error(error, window, cx);
             self.focus_active(window, cx);
         }
@@ -83,13 +111,18 @@ impl NebulaWorkspace {
         let Some(WorkspaceTab::Terminal { focused, .. }) = self.tabs.get(self.active) else {
             return Err(ApiError::new("invalid_state", "the active tab cannot be split"));
         };
-        self.split_at(PendingSplit { pane_id: *focused, direction }, None, window, cx)
+        self.split_at(
+            PendingSplit { pane_id: *focused, direction },
+            SplitLaunch::Focused,
+            window,
+            cx,
+        )
     }
 
     fn split_at(
         &mut self,
         request: PendingSplit,
-        selected: Option<LaunchSession>,
+        source: SplitLaunch,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<u64, ApiError> {
@@ -105,10 +138,18 @@ impl NebulaWorkspace {
         })?;
         let (cols, rows, identity, launch) = {
             let view = anchor.view.read(cx);
-            let explicit = selected.is_some();
-            let mut identity = selected.unwrap_or_else(|| view.session_launch.clone());
-            // Inheritance uses the live pane directory, not a profile's startup directory.
-            if !explicit && let LaunchSession::Profile { cwd, .. } = &mut identity {
+            let explicit = matches!(source, SplitLaunch::Selected(_));
+            let use_default = matches!(source, SplitLaunch::Default);
+            let mut identity = match source {
+                SplitLaunch::Focused => view.session_launch.clone(),
+                SplitLaunch::Default => super::shell_launch::configured_local_launch(cx),
+                SplitLaunch::Selected(launch) => launch,
+            };
+            // Focused inheritance uses the live pane directory, not profile startup cwd.
+            if !explicit
+                && !use_default
+                && let LaunchSession::Profile { cwd, .. } = &mut identity
+            {
                 *cwd = None;
             }
             let (identity, launch) = match &identity {
@@ -130,11 +171,12 @@ impl NebulaWorkspace {
                     } else {
                         tab_duplication::CopyKind::Split
                     };
-                    let (identity, cwd) = tab_duplication::copy_launch(
-                        identity,
-                        kind,
-                        tab_duplication::PaneOrigin::of(view),
-                    );
+                    let origin = tab_duplication::PaneOrigin::of(view);
+                    let (identity, cwd) = if use_default {
+                        default_split_launch(identity, origin)
+                    } else {
+                        tab_duplication::copy_launch(identity, kind, origin)
+                    };
                     let launch = Self::terminal_launch_from_session(&identity, cwd);
                     (identity, launch)
                 },
