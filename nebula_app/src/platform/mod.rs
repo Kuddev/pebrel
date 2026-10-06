@@ -12,6 +12,8 @@
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod acrylic;
 pub(crate) mod ai_session_identity;
+#[cfg(all(feature = "gpui-shell", feature = "video-background"))]
+pub(crate) mod background_media;
 pub mod capabilities;
 pub mod credentials;
 pub mod dirs;
@@ -49,6 +51,8 @@ pub(crate) mod trust_file;
 pub(crate) mod update_installation;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod window_chrome;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod window_material;
 #[cfg(all(unix, feature = "gpui-shell"))]
 pub(crate) mod window_visibility;
 pub(crate) mod wsl_hooks;
