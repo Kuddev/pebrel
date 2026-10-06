@@ -65,9 +65,27 @@ real persisted settings across fixture processes. No retry or assertion relaxati
 
 Regression source covers default/parse/round-trip/reset, ignored old-key inputs,
 real dropdown selection and live settings, both shortcuts, target/host-only default
-inheritance, cancellation and closed-source handling. These tests were updated but
-not executed in this revision, as requested. Production compilation and manual UI
-acceptance are separate evidence and cannot substitute for future native tests.
+inheritance, cancellation and closed-source handling. The initial local delivery
+compiled the Windows product without running behavior tests, as requested;
+manual UI acceptance remains separate evidence.
+
+The subsequently authorized fork CI on `3ceb349a` passed architecture, lint, size
+and Linux native validation. Both Windows and both macOS native jobs failed only
+`default_source_uses_the_configured_shell_for_both_split_shortcuts`. Its invalid
+in-memory shell preference was not a controlled configured target: reloads could
+restore an unspecified default. Windows froze a concrete integrated PowerShell
+identity but the test compared it to the `Default` request sentinel; macOS started
+a real PTY whose reader violated the deterministic GPUI scheduler's thread owner.
+The other split/dropdown cases passed on all five hosts. This is not evidence that
+the failed contract or full regression succeeded.
+
+Use a real saved, synthetic profile with a discoverable but non-executable image,
+restore both settings files under the existing serial fixture contract, and assert
+the exact resolved profile identity rather than a fallback sentinel. Refocus the
+original distinct shell before each shortcut so the second cannot pass merely by
+inheriting the first default pane. No production thread/launch rules, assertion
+relaxation, runner retries or platform skips are introduced. Preserve first-failure
+logs; this correction still requires native verification.
 
 ## Supersedes
 

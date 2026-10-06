@@ -254,16 +254,57 @@ fn closed_source_choice_cannot_split_the_new_focus_or_open_a_tab(cx: &mut TestAp
 fn default_source_uses_the_configured_shell_for_both_split_shortcuts(cx: &mut TestAppContext) {
     let _lock = lock_theme_studio();
     let _guard = SettingsBytesGuard::capture();
+    let _profiles_guard = SettingsBytesGuard::capture_at(crate::terminal_profiles::store_path());
+    let default_directory = tempfile::tempdir().unwrap();
+    let command = default_directory.path().join("non-executable-default.exe");
+    // The real profile loader requires a compatible PE header on Windows. This
+    // deliberately incomplete image is discoverable on every host but cannot
+    // execute, so a real PTY reader never races GPUI's deterministic scheduler.
+    let mut header = vec![0_u8; 0x86];
+    header[..2].copy_from_slice(b"MZ");
+    header[0x3c..0x40].copy_from_slice(&0x80_u32.to_le_bytes());
+    header[0x80..0x84].copy_from_slice(b"PE\0\0");
+    header[0x84..0x86].copy_from_slice(&0x014c_u16.to_le_bytes());
+    std::fs::write(&command, header).unwrap();
+    let mut profiles = crate::terminal_profiles::TerminalProfiles::default();
+    profiles
+        .upsert(crate::terminal_profiles::TerminalProfile {
+            id: "split-default-fixture".into(),
+            name: "Configured default fixture".into(),
+            command: command.clone(),
+            args: vec!["--configured-default".into()],
+            cwd: None,
+            shell_id: "fixture".into(),
+        })
+        .unwrap();
+    let profile = profiles.as_config_profiles().pop().unwrap();
+    let settings_id = profile.settings_id().unwrap();
+    let expected = super::super::shell_launch::profile_launch_session(profile);
+    profiles.save().unwrap();
+    nebula_settings::persist_keys(&[("shell", settings_id.clone())]).unwrap();
     let (_directory, workspace, mut cx) = fixture(cx, SplitShellSource::Default);
-    let before = workspace
-        .read_with(&cx, |w, cx| w.tabs[0].focused_view().unwrap().read(cx).session_launch.clone());
-    let expected = cx.update(|_, cx| super::super::shell_launch::configured_local_launch(cx));
+    // The fixture's deliberate unrelated in-memory default must not obscure the
+    // real saved preference; appearance reloads see the same configured identity.
+    cx.update(|_, cx| {
+        cx.global_mut::<crate::gpui_shell::config::Settings>().shell_id = Some(settings_id);
+        assert_eq!(super::super::shell_launch::configured_local_launch(cx), expected);
+    });
+    let (source, before) = workspace.read_with(&cx, |w, cx| {
+        let view = w.tabs[0].focused_view().unwrap().read(cx);
+        (view.pane_id, view.session_launch.clone())
+    });
     assert_ne!(before, expected, "fixture must distinguish focused and default identities");
     for shortcut in ["ctrl-shift-d", "ctrl-shift-s"] {
+        // Both shortcuts must start from the original, distinct focused shell.
+        // Otherwise the second could inherit the first default pane and pass.
+        cx.update(|window, cx| workspace.update(cx, |w, cx| w.focus_pane(0, source, window, cx)));
         press(shortcut, &mut cx);
         workspace.read_with(&cx, |w, cx| {
             assert!(!w.command_palette_open && w.pending_split.is_none());
-            assert_eq!(w.tabs[0].focused_view().unwrap().read(cx).session_launch, expected);
+            let view = w.tabs[0].focused_view().unwrap().read(cx);
+            assert_ne!(view.pane_id, source);
+            assert_eq!(view.session_launch, expected);
+            assert_ne!(view.session_launch, before);
         });
     }
     assert_eq!(count(&workspace, &cx), 3);

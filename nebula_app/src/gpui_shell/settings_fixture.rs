@@ -26,7 +26,11 @@ pub(crate) struct SettingsBytesGuard {
 
 impl SettingsBytesGuard {
     pub(crate) fn capture() -> Self {
-        let path = nebula_settings::settings_path();
+        Self::capture_at(nebula_settings::settings_path())
+    }
+
+    /// Also restore ancillary settings files, under the same fixture lock/group.
+    pub(crate) fn capture_at(path: std::path::PathBuf) -> Self {
         Self { bytes: std::fs::read(&path).ok(), path }
     }
 }
