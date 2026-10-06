@@ -718,6 +718,7 @@ impl SettingsPane {
         let colors = AppearanceColors::current(cx);
         let viewport = window.viewport_size();
         let compact = f32::from(viewport.width) <= 720.0;
+        let fixed_preview = draft.is_theme() && !compact;
         let padding = if compact { 19.0 } else { 27.0 };
         let width = (f32::from(viewport.width) - if compact { 24.0 } else { 40.0 }).min(770.0);
         let height = f32::from(viewport.height) - 48.0;
@@ -750,6 +751,7 @@ impl SettingsPane {
             .aria_label(title)
             .w(px(width.max(1.0)))
             .max_h(px(height.max(1.0)))
+            .when(fixed_preview, |dialog| dialog.h(px(height.max(1.0))))
             .flex_shrink_0()
             .rounded(px(14.0))
             .border_1()
@@ -800,7 +802,8 @@ impl SettingsPane {
                     .id("appearance-picker-scroll")
                     .min_h_0()
                     .flex_shrink(1.0)
-                    .overflow_y_scroll()
+                    .when(fixed_preview, |body| body.flex_1().h_full().overflow_hidden())
+                    .when(!fixed_preview, |body| body.overflow_y_scroll())
                     .px(px(padding))
                     .pt(px(21.0))
                     .pb(px(24.0))

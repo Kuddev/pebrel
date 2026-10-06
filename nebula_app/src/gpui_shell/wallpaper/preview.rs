@@ -17,6 +17,7 @@ pub(crate) struct ImagePreview {
     loading: bool,
     image: Option<PreparedImage>,
     error: Option<image_loader::LoadError>,
+    video_source: bool,
     opacity: f32,
     fit: BackgroundImageFit,
     alignment: BackgroundImageAlignment,
@@ -36,6 +37,7 @@ impl ImagePreview {
             loading: false,
             image: None,
             error: None,
+            video_source: false,
             opacity: 0.38,
             fit: BackgroundImageFit::default(),
             alignment: BackgroundImageAlignment::default(),
@@ -64,11 +66,14 @@ impl ImagePreview {
             .unwrap_or_default();
         self.cover_chrome =
             effects.background_image_cover_chrome.unwrap_or(runtime.background_image_cover_chrome);
+        let kind = effects.background_kind_override().unwrap_or(runtime.background_media_kind);
+        self.video_source = kind == nebula_settings::BackgroundMediaKind::Video;
         let path = effects
             .background_image
             .as_deref()
             .or(runtime.background_image.as_deref())
             .filter(|path| !path.trim().is_empty())
+            .filter(|_| !self.video_source)
             .map(PathBuf::from);
         if self.path != path {
             self.path = path;
@@ -148,7 +153,9 @@ impl ImagePreview {
 
     pub(crate) fn status_message(&self) -> Option<crate::i18n::Message> {
         use crate::i18n::Message;
-        if self.loading && self.path.is_some() && self.image.is_none() {
+        if self.video_source {
+            Some(Message::WallpaperVideoPreview)
+        } else if self.loading && self.path.is_some() && self.image.is_none() {
             Some(Message::ThemeEditorImageLoading)
         } else {
             self.error.as_ref().map(|error| match error {

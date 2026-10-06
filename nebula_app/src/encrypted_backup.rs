@@ -266,7 +266,10 @@ fn collect_from(root: &Path, selection: BackupSelection) -> Result<BackupArchive
                 add_file(root, category, "directory_history.json", &mut entries, identity)?
             },
             BackupCategory::CommandHistory => {
-                for file_name in crate::nebula_history::history_file_names() {
+                for file_name in crate::nebula_history::history_file_names()
+                    .into_iter()
+                    .chain([crate::saved_commands::STORE_FILE])
+                {
                     add_file(root, category, file_name, &mut entries, identity)?;
                 }
             },
@@ -486,6 +489,12 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
             BackupCategory::DirectoryHistory => entry.name == "directory_history.json",
             BackupCategory::CommandHistory => {
                 crate::nebula_history::history_file_names().contains(&canonical)
+                    || (canonical == crate::saved_commands::STORE_FILE
+                        && crate::saved_commands::SavedCommands::from_bytes(
+                            Path::new(canonical),
+                            &entry.bytes,
+                        )
+                        .is_ok())
             },
             BackupCategory::Fonts => {
                 entry.name.starts_with("fonts/") && entry.name.len() > "fonts/".len()
