@@ -707,6 +707,7 @@ impl NebulaWorkspace {
                             "top-toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                            false,
                         )
                             .selected(self.command_manager_open)
                             .tooltip(language.text(Message::ChromeCommandList))

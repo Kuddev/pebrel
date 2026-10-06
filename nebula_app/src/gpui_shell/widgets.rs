@@ -101,9 +101,18 @@ pub(crate) fn settings_select_frame(
 }
 
 /// Toolbar glyphs and their hover/hit surfaces have independent logical sizes.
-/// Ghost buttons default to an arrow cursor, so the pointer is set explicitly.
-pub(crate) fn toolbar_button(id: impl Into<ElementId>, icon: impl Into<Icon>) -> Button {
-    Button::new(id).icon(Icon::new(icon).size(px(18.0))).ghost().size(px(32.0)).cursor_pointer()
+/// Ghost buttons default to an arrow cursor, so only enabled ones get the pointer.
+pub(crate) fn toolbar_button(
+    id: impl Into<ElementId>,
+    icon: impl Into<Icon>,
+    disabled: bool,
+) -> Button {
+    Button::new(id)
+        .icon(Icon::new(icon).size(px(18.0)))
+        .ghost()
+        .size(px(32.0))
+        .disabled(disabled)
+        .when(!disabled, |button| button.cursor_pointer())
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]

@@ -20,8 +20,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, Entity, InteractiveElement as _, IntoElement as _, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    AnyElement, App, InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _,
+    Window, div, px,
 };
 use gpui_component::notification::Notification;
 use gpui_component::{Root, WindowExt as _};
@@ -35,10 +35,6 @@ pub use crate::display::ToastKind;
 const DUPLICATE_COOLDOWN: Duration = Duration::from_millis(600);
 const TOAST_TTL: Duration = Duration::from_secs(5);
 const MAX_NOTIFICATIONS: usize = 3;
-
-/// 组件库的关闭按钮固定为 20px 且不可配置；在它之上叠一块与其同心的透明
-/// 命中区，视觉不变，只放大可点击面积。
-const CLOSE_TARGET_SIZE: f32 = 28.0;
 
 /// 组件库 Notification 默认固定 `w_112`，短短一句也会铺成近半个窗口。
 /// Nebula 的 toast 按内容收缩；过长消息到此上限后自然换行。
@@ -131,7 +127,8 @@ fn note(kind: ToastKind, text: String) -> Notification {
     };
     // `refine_style` 在组件自身的 `w_112` 之后应用，所以这里能可靠覆盖
     // 固定宽度；auto 让短消息收紧，max_w 给长路径/错误信息提供换行约束。
-    note.w_auto().min_w(px(TOAST_MIN_WIDTH)).max_w(px(TOAST_MAX_WIDTH))
+    // 整张卡片点击即关闭（见 `toast` / `banner`），指针要和可点击保持一致。
+    note.w_auto().min_w(px(TOAST_MIN_WIDTH)).max_w(px(TOAST_MAX_WIDTH)).cursor_pointer()
 }
 
 /// 窗口构造闭包里 `NebulaWorkspace::new` 早于外层 `Root::new` 返回；此时
@@ -148,26 +145,6 @@ pub(crate) fn push_notification(
     default_timeout: Option<Duration>,
 ) {
     push_with_duration(window, cx, notification, default_timeout, false);
-}
-
-fn with_close_target(note: Entity<Notification>) -> gpui::Div {
-    let id = note.entity_id();
-    let dismissed = note.clone();
-    v_flex().relative().child(note).child(
-        div()
-            .id(("notification-close-target", id))
-            .debug_selector(|| "notification-close-target".to_owned())
-            .absolute()
-            .top_0()
-            .right_0()
-            .size(px(CLOSE_TARGET_SIZE))
-            .cursor_pointer()
-            .on_click(move |_, window, cx| {
-                // 卡片自身的 on_click 会聚焦 pane，关闭按钮不应触发它。
-                cx.stop_propagation();
-                dismissed.update(cx, |note, cx| note.dismiss(window, cx));
-            }),
-    )
 }
 
 /// Nebula 的通知层定位：右下角固定 20px 安全边距，最新一条在最下，旧的
@@ -199,7 +176,7 @@ pub fn render_layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
             .overflow_hidden()
             // 用全视口透明宿主明确右下锚点；宿主不注册命中，只有实际
             // Notification 卡片会 occlude/接收鼠标，周围终端仍可正常点击。
-            .child(v_flex().items_end().gap_2().children(items.into_iter().map(with_close_target)))
+            .child(v_flex().items_end().gap_2().children(items))
             .into_any_element(),
     )
 }
@@ -211,7 +188,9 @@ pub fn toast(window: &mut Window, cx: &mut App, kind: ToastKind, text: impl Into
         return;
     }
     log::info!("toast [{kind:?}]: {text}");
-    push_notification(window, cx, note(kind, text), Some(TOAST_TTL));
+    // 组件库的关闭按钮只有 20px 且不可配置；挂上空的 `on_click` 后整张卡片
+    // 都能点掉它，命中区随卡片自身的位移动画移动。
+    push_notification(window, cx, note(kind, text).on_click(|_, _, _| {}), Some(TOAST_TTL));
 }
 
 /// 驻留一条消息（消息栏层）：默认停留远长于 toast，但**有上限**，见
@@ -624,7 +603,7 @@ mod tests {
         }
 
         #[gpui::test]
-        fn close_target_is_larger_than_the_library_button_and_dismisses(cx: &mut TestAppContext) {
+        fn clicking_a_toast_card_dismisses_only_that_card(cx: &mut TestAppContext) {
             initialize(cx, true);
             let mut surface = None;
             let (_, cx) = cx.add_window_view(|window, cx| {
@@ -633,22 +612,23 @@ mod tests {
                 Root::new(view, window, cx)
             });
             let surface = surface.unwrap();
-            cx.update(|window, cx| banner(window, cx, ToastKind::Info, "Close me"));
+            cx.update(|window, cx| {
+                toast(window, cx, ToastKind::Info, "first card");
+                toast(window, cx, ToastKind::Info, "second card");
+            });
             cx.run_until_parked();
             cx.update(|window, cx| {
                 surface.update(cx, |_, cx| cx.notify());
                 let _ = window.draw(cx);
             });
-            let target = cx.debug_bounds("notification-close-target").expect("close target");
-            assert_eq!(target.size, gpui::size(px(CLOSE_TARGET_SIZE), px(CLOSE_TARGET_SIZE)));
-            assert_eq!(ids(cx).len(), 1);
-            // The corner lies outside the library's 20px button inset by 4px.
-            cx.simulate_click(
-                gpui::point(target.right() - px(1.0), target.top() + px(1.0)),
-                gpui::Modifiers::default(),
-            );
+            let original = ids(cx);
+            assert_eq!(original.len(), 2);
+            // The newest card is anchored 20px from the bottom-right corner.
+            let size = cx.update(|window, _| window.viewport_size());
+            let body = gpui::point(size.width - px(40.0), size.height - px(30.0));
+            cx.simulate_click(body, gpui::Modifiers::default());
             settle_dismissal(cx);
-            assert!(ids(cx).is_empty());
+            assert_eq!(ids(cx), vec![original[0]]);
         }
 
         #[gpui::test]
