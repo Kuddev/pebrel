@@ -180,7 +180,7 @@ pub(crate) fn completion_qa_ssh_config_permissions(path: &std::path::Path) {
     #[cfg(windows)]
     {
         // 临时目录可继承 OWNER RIGHTS；OpenSSH 拒绝它，夹具应只授权当前所有者。
-        let script = r#"$ErrorActionPreference='Stop'; $owner=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=[System.Security.AccessControl.FileSecurity]::new(); $acl.SetOwner($owner); $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($owner,[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.AccessControlType]::Allow)); Set-Acl -LiteralPath $env:PEBREL_QA_SSH_CONFIG -AclObject $acl"#;
+        let script = r#"$ErrorActionPreference='Stop'; $owner=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=[System.Security.AccessControl.FileSecurity]::new(); $acl.SetOwner($owner); $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($owner,[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.AccessControlType]::Allow)); $bytes=[System.IO.File]::ReadAllBytes($env:PEBREL_QA_SSH_CONFIG); [System.IO.File]::Delete($env:PEBREL_QA_SSH_CONFIG); $file=[System.IO.FileStream]::new($env:PEBREL_QA_SSH_CONFIG,[System.IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]::FullControl,[System.IO.FileShare]::Read,4096,[System.IO.FileOptions]::None,$acl); try { $file.Write($bytes,0,$bytes.Length) } finally { $file.Dispose() }"#;
         let mut command = std::process::Command::new("powershell.exe");
         command.args(["-NoProfile", "-Command", script]).env("PEBREL_QA_SSH_CONFIG", path);
         assert!(super::process::hidden_command(&mut command).status().unwrap().success());
@@ -204,11 +204,24 @@ pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal:
     #[cfg(windows)]
     {
         let integrated = nebula_terminal::tty::powershell_with_nebula_integration(
-            "powershell.exe".into(),
+            std::env::var("PEBREL_COMPLETION_QA_PWSH").unwrap_or_else(|_| "powershell.exe".into()),
             vec!["-NoLogo".into(), "-NoProfile".into()],
         );
         let mut args = integrated.args().to_vec();
         args.last_mut().unwrap().push_str("; Set-PSReadLineOption -HistorySaveStyle SaveNothing; if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource')) { Set-PSReadLineOption -PredictionSource None }");
+        let diagnostic = _output.join("editor-shell.json").to_string_lossy().replace('\'', "''");
+        args.last_mut().unwrap().push_str(&format!("; @{{ready=$global:PebrelCompletionInputReady; version=(Get-Module PSReadLine).Version.ToString(); chordParameter=(Get-Command Get-PSReadLineKeyHandler).Parameters.ContainsKey('Chord'); binding=@(Get-PSReadLineKeyHandler | Where-Object {{ $_.Key -like '*F12*' }} | Select-Object Key,Function)}} | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath '{diagnostic}'"));
+        if std::env::var("PEBREL_COMPLETION_QA_PREDICTION").as_deref() == Ok("1") {
+            args.last_mut().unwrap().push_str("; Set-PSReadLineOption -PredictionSource History -PredictionViewStyle InlineView; (Get-PSReadLineOption).PredictionSource.ToString() | Set-Content -LiteralPath (Join-Path $env:PEBREL_COMPLETION_QA_DIR 'prediction-source.txt')");
+        }
+        // 原生验收中编码命令的启动曾静默停住；文件入口保留同一初始化内容，
+        // 避免把启动器故障误判为补全失败。BOM 让 PowerShell 5.1 也按 UTF-8 读取。
+        let startup = args.pop().unwrap();
+        let startup_path = _output.join("editor-startup.ps1");
+        std::fs::write(&startup_path, format!("\u{feff}{startup}\n")).unwrap();
+        *args.last_mut().unwrap() = "-File".into();
+        // PTY 接收的参数已经是 Windows 命令行文本，路径中的空格需要保留引号。
+        args.push(format!("\"{}\"", startup_path.display()));
         nebula_terminal::tty::Shell::new(integrated.program().to_owned(), args)
     }
     #[cfg(unix)]

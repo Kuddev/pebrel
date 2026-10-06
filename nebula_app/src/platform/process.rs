@@ -70,7 +70,8 @@ pub(crate) fn configure_process_group(command: &mut Command) {
 /// 控制台——和 wsl/git 那些 spawn 用 `CREATE_NO_WINDOW` 是同一条规矩。
 #[cfg(windows)]
 pub(crate) fn configure_process_group(command: &mut Command) {
-    crate::platform::process::hidden_command(command);
+    // Attach the owned job before the child can execute or create descendants.
+    hidden_command_with(command, windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -122,7 +123,9 @@ impl ProcessGroup {
                     CloseHandle(job);
                     return Err(error);
                 }
-                return Ok(Self { job });
+                let group = Self { job };
+                resume_owned_child(child.id())?;
+                return Ok(group);
             }
         }
         #[cfg(unix)]
@@ -158,6 +161,47 @@ impl ProcessGroup {
     }
 }
 
+#[cfg(windows)]
+fn resume_owned_child(process_id: u32) -> io::Result<()> {
+    use std::mem::{size_of, zeroed};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    // CREATE_SUSPENDED leaves only the initial thread executable by this owner.
+    // The snapshot is used solely to find that thread in our new child process.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let mut entry: THREADENTRY32 = zeroed();
+        entry.dwSize = size_of::<THREADENTRY32>() as u32;
+        let mut found = Thread32First(snapshot, &mut entry);
+        let mut result =
+            Err(io::Error::new(io::ErrorKind::NotFound, "owned child thread not found"));
+        while found != 0 {
+            if entry.th32OwnerProcessID == process_id {
+                let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                if thread.is_null() {
+                    result = Err(io::Error::last_os_error());
+                } else {
+                    let resumed = ResumeThread(thread);
+                    result =
+                        if resumed == u32::MAX { Err(io::Error::last_os_error()) } else { Ok(()) };
+                    CloseHandle(thread);
+                }
+                break;
+            }
+            found = Thread32Next(snapshot, &mut entry);
+        }
+        CloseHandle(snapshot);
+        result
+    }
+}
+
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
         #[cfg(windows)]
@@ -183,6 +227,29 @@ mod tests {
     use super::*;
     use std::io::Write as _;
     use std::process::Stdio;
+
+    #[test]
+    fn owned_fast_child_waits_for_job_attachment_before_executing() {
+        use std::io::{Read as _, Seek as _};
+        let mut output = tempfile::tempfile().unwrap();
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/d", "/c", "echo owned-probe"])
+            .stdout(output.try_clone().unwrap())
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(child.try_wait().unwrap().is_none(), "the child must wait for its job owner");
+        assert_eq!(output.metadata().unwrap().len(), 0, "no output before attachment");
+        let group = ProcessGroup::attach(&child).unwrap();
+        assert!(child.wait().unwrap().success());
+        group.finish();
+        output.rewind().unwrap();
+        let mut bytes = String::new();
+        output.read_to_string(&mut bytes).unwrap();
+        assert_eq!(bytes, "owned-probe\r\n");
+    }
 
     #[test]
     fn hidden_console_children_keep_pipes_and_exit_status() {

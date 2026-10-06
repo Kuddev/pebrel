@@ -13,12 +13,22 @@ pub(crate) fn read_cancellable(
     limit: usize,
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<Vec<u8>> {
+    command.stdin(Stdio::null());
+    read_cancellable_with_stdin(command, timeout, limit, cancelled)
+}
+
+pub(crate) fn read_cancellable_with_stdin(
+    mut command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<Vec<u8>> {
     if cancelled() {
         return Err(io::ErrorKind::Interrupted.into());
     }
     // 临时文件避免子进程继承 stdout 后让读管道线程永不退出。
     let mut output = tempfile::tempfile()?;
-    command.stdin(Stdio::null()).stdout(output.try_clone()?).stderr(Stdio::null());
+    command.stdout(output.try_clone()?).stderr(Stdio::null());
     super::process::configure_process_group(&mut command);
     let mut child = command.spawn()?;
     let group = match super::process::ProcessGroup::attach(&child) {

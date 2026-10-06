@@ -326,14 +326,14 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let Some(view) = self.tabs.get(ix).and_then(WorkspaceTab::focused_view) else { return };
-        let (command, cwd, agent) = {
+        let (command, agent) = {
             let view = view.read(cx);
             let Some(command) = view.ai_fork_command() else { return };
             let agent = view
                 .ai_session
                 .as_ref()
                 .and_then(|identity| crate::ai_agents::AgentKind::parse(&identity.source));
-            (command, view.local_cwd(), agent)
+            (command, agent)
         };
         let launch_session = match self.meta(ix).launch {
             // Default 与旧壳一致取「分叉这一刻」的默认 shell，不是源 tab
@@ -349,6 +349,12 @@ impl NebulaWorkspace {
                 | crate::session::LaunchSession::Ssh { .. },
             ) => return,
         };
+        // A WSL session continues in the same guest and directory, as a duplicate does.
+        let (launch_session, cwd) = super::tab_duplication::copy_launch(
+            launch_session,
+            super::tab_duplication::CopyKind::Duplicate,
+            super::tab_duplication::PaneOrigin::of(view.read(cx)),
+        );
         let color = self.meta(ix).color;
         self.activate_tab(ix, window, cx);
 

@@ -3,6 +3,12 @@
 use super::*;
 
 impl NebulaWorkspace {
+    /// 冷启动回退（没有恢复出任何标签）时首个终端的 cwd：与 `add_terminal`
+    /// 同一合同，设置页「启动目录」优先，未设置或失效时才继承进程启动目录。
+    pub(super) fn cold_start_cwd() -> Option<std::path::PathBuf> {
+        cold_start_cwd(Self::startup_directory(), std::env::current_dir().ok())
+    }
+
     pub(super) fn restore_update_session(
         &mut self,
         session: &crate::session::Session,
@@ -79,6 +85,17 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.restore_tab_at(tab, resume_ai, self.tabs.len(), window, cx)
+    }
+
+    pub(super) fn restore_tab_at(
+        &mut self,
+        tab: &crate::session::TabSession,
+        resume_ai: bool,
+        at: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         use crate::session::{LaunchSession, LayoutSession};
 
         let layout = tab.layout.clone().unwrap_or(LayoutSession::Pane {
@@ -106,8 +123,21 @@ impl NebulaWorkspace {
             }
             let guest_directory =
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);
-            let local_cwd = if guest_directory { None } else { crate::session::valid_dir(cwd) };
-            let launch = Self::terminal_launch_from_session(&launch_session, local_cwd);
+            let local_cwd =
+                if guest_directory || matches!(launch_session, LaunchSession::Ssh { .. }) {
+                    None
+                } else {
+                    crate::session::valid_dir(cwd)
+                };
+            let launch = match &launch_session {
+                LaunchSession::Ssh { host } => {
+                    crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
+                        destination: host.clone(),
+                        cwd: (!cwd.is_empty()).then(|| cwd.clone()),
+                    }
+                },
+                _ => Self::terminal_launch_from_session(&launch_session, local_cwd),
+            };
             let mut pane = self.new_pane(grid, launch, None, window, cx);
             pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);
             if !matches!(launch_session, LaunchSession::Default) {
@@ -134,9 +164,8 @@ impl NebulaWorkspace {
         });
         let focused =
             panes.get(tab.active_pane).or_else(|| panes.first()).map(|pane| pane.id).unwrap_or(0);
-        // 恢复期保持文件里的既有次序，不套「新标签插入位置」策略。
+        // 冷恢复由调用方追加，复制标签则使用新标签插入位置。
         // 重命名与色标随会话一起回来（旧壳同合同）。
-        let at = self.tabs.len();
         self.insert_tab_at(
             at,
             WorkspaceTab::Terminal { panes, tree, focused, zoomed: false, broadcast: false },
@@ -219,5 +248,34 @@ impl NebulaWorkspace {
             });
         }
         Session::new(active_out, tabs)
+    }
+}
+
+/// 开机自启动快捷方式把进程启动目录固定为 `%USERPROFILE%`；只看进程 cwd
+/// 会让首个终端无视「启动目录」，与 Ctrl+T 新标签不一致（#479）。
+fn cold_start_cwd(
+    startup_directory: Option<std::path::PathBuf>,
+    launch_cwd: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    startup_directory.or(launch_cwd)
+}
+
+#[cfg(test)]
+mod cold_start_tests {
+    use super::cold_start_cwd;
+    use std::path::PathBuf;
+
+    #[test]
+    fn configured_startup_directory_wins_over_the_launch_directory() {
+        let home = PathBuf::from("C:/Users/fixture");
+        let configured = PathBuf::from("C:/Users/fixture/workspace");
+        assert_eq!(cold_start_cwd(Some(configured.clone()), Some(home)), Some(configured));
+    }
+
+    #[test]
+    fn unset_startup_directory_keeps_inheriting_the_launch_directory() {
+        let home = PathBuf::from("C:/Users/fixture");
+        assert_eq!(cold_start_cwd(None, Some(home.clone())), Some(home));
+        assert_eq!(cold_start_cwd(None, None), None);
     }
 }

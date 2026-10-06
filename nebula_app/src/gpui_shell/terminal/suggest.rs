@@ -78,12 +78,14 @@ mod tests {
         state.completion_items = vec![
             NebulaCompletionItem {
                 replace_chars: 0,
+                replace_after_chars: 0,
                 label: "git pull upstream".to_owned(),
                 insert: " upstream".to_owned(),
                 kind: NebulaCompletionKind::History,
             },
             NebulaCompletionItem {
                 replace_chars: 0,
+                replace_after_chars: 0,
                 label: "git pull --rebase".to_owned(),
                 insert: " --rebase".to_owned(),
                 kind: NebulaCompletionKind::Command,
