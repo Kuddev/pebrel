@@ -209,15 +209,12 @@ fn typed_environment(parent: &SuggestEnv, words: &[String], wsl: bool) -> Sugges
 }
 
 pub(crate) fn launch_environment(program: &str, args: &[String]) -> SuggestEnv {
+    if crate::shell_detect::is_wsl_launcher(program) {
+        let distro = crate::shell_detect::wsl_spawn_distro(program, args).unwrap_or_default();
+        return SuggestEnv::Wsl { distro };
+    }
     let program_name = program.rsplit(['/', '\\']).next().unwrap_or(program);
     match crate::display::extract_program(program_name).as_deref() {
-        Some("wsl") => {
-            let distro = crate::shell_detect::wsl_launch_distro(program, args)
-                .map(str::to_owned)
-                .or_else(crate::platform::shell::default_wsl_distro)
-                .unwrap_or_default();
-            SuggestEnv::Wsl { distro }
-        },
         Some("ssh") => {
             let words: Vec<_> =
                 std::iter::once(program.to_owned()).chain(args.iter().cloned()).collect();

@@ -215,4 +215,15 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn shader_and_media_search_find_the_appearance_controls() {
+        for query in
+            ["WGSL", "shader", "terminal effects", "终端效果", "着色器", "视频", "GIF", "动图"]
+        {
+            for language in [crate::display::UiLanguage::ZhCn, crate::display::UiLanguage::EnUs] {
+                assert_eq!(matching_sections(query, language).first(), Some(&1), "{query}");
+            }
+        }
+    }
 }
