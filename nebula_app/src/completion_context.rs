@@ -11,6 +11,7 @@ use crate::nebula_history::{HistoryScope, NebulaHistory};
 pub(crate) const SHELL_VAR: &str = "pebrel_shell";
 pub(crate) const COMMAND_VAR: &str = "pebrel_command";
 pub(crate) const ARGV_VAR: &str = "pebrel_connection";
+pub(crate) const INPUT_VAR: &str = "pebrel_input";
 
 #[derive(Clone, Debug)]
 struct Frame {
@@ -25,6 +26,10 @@ pub(crate) struct CompletionContext {
 }
 
 impl CompletionContext {
+    pub(crate) fn owns_current(&self, token: &str) -> bool {
+        self.frames.last().is_some_and(|frame| frame.token.as_deref() == Some(token))
+    }
+
     fn submit(&mut self, env: &SuggestEnv, cwd: &str, line: &str) -> Option<SuggestEnv> {
         self.submit_argv(env, cwd, &crate::ssh::command_words(line)?)
     }
@@ -90,7 +95,23 @@ impl NebulaPaneState {
     }
 
     pub(crate) fn completion_shell_report(&mut self, name: &str, value: &str) {
-        if name == COMMAND_VAR || name == ARGV_VAR {
+        if name == INPUT_VAR {
+            let Some((token, line)) = value.split_once('\n') else { return };
+            if line.len() > 4096 || line.chars().any(char::is_control) {
+                return;
+            }
+            let Some(frame) = self
+                .completion_context
+                .frames
+                .iter()
+                .find(|frame| frame.token.as_deref() == Some(token))
+            else {
+                return;
+            };
+            let cwd = if frame.env == self.suggest_env { &self.cwd } else { &frame.cwd };
+            crate::completion::record_command(&frame.env.history_scope(), line, cwd);
+            self.last_committed = line.trim().to_owned();
+        } else if name == COMMAND_VAR || name == ARGV_VAR {
             let Some((token, line)) = value.split_once('\n') else { return };
             let Some(index) = self
                 .completion_context
@@ -188,15 +209,12 @@ fn typed_environment(parent: &SuggestEnv, words: &[String], wsl: bool) -> Sugges
 }
 
 pub(crate) fn launch_environment(program: &str, args: &[String]) -> SuggestEnv {
+    if crate::shell_detect::is_wsl_launcher(program) {
+        let distro = crate::shell_detect::wsl_spawn_distro(program, args).unwrap_or_default();
+        return SuggestEnv::Wsl { distro };
+    }
     let program_name = program.rsplit(['/', '\\']).next().unwrap_or(program);
     match crate::display::extract_program(program_name).as_deref() {
-        Some("wsl") => {
-            let distro = crate::shell_detect::wsl_launch_distro(program, args)
-                .map(str::to_owned)
-                .or_else(crate::platform::shell::default_wsl_distro)
-                .unwrap_or_default();
-            SuggestEnv::Wsl { distro }
-        },
         Some("ssh") => {
             let words: Vec<_> =
                 std::iter::once(program.to_owned()).chain(args.iter().cloned()).collect();

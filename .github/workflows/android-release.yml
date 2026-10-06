@@ -190,7 +190,9 @@ jobs:
         with:
           compression-level: 0
           name: stable-package-android
-          path: dist/*.apk
+          path: |
+            dist/*.apk
+            dist/*-relay-manual.tar.gz
           if-no-files-found: error
           retention-days: 14
       - name: Upload Android release evidence

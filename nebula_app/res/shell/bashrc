@@ -65,6 +65,7 @@ _nebula_capture_status() {
 
 _nebula_precmd() {
     printf '\e]1337;SetUserVar=pebrel_shell=%s\a' "$__pebrel_shell_token"
+    if typeset -f __pebrel_editor_ready_report >/dev/null; then __pebrel_editor_ready_report; fi
     if [[ ${_nebula_command_running:-0} == 1 ]]; then
         printf '\e]133;D;%s\a' "$_nebula_last_status"
     fi

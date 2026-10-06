@@ -37,7 +37,7 @@ object NativeRelayDeployment {
         require(port in 1..65535)
         val endpoint = validatedAddress(address)
         val stage: (String) -> Unit = { progress(RelayServiceProgress(it)) }
-        DeploymentSsh(host, password, verify).use { ssh ->
+        DeploymentSsh(host, password, verify, sshKeySource(context, host)).use { ssh ->
             stage("connecting")
             val preflight = command(ssh, preflightCommand(), progress = stage, connected = { stage("checking") })
             val arch = preflight.last().getString("arch")

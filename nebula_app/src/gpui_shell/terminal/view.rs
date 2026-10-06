@@ -11,6 +11,7 @@ mod confirmation;
 mod conversation;
 pub(super) mod cursor;
 mod cwd_report;
+mod editor;
 mod image_paste;
 mod layout;
 #[cfg(all(test, windows, feature = "gpui-test-support"))]
@@ -273,6 +274,8 @@ pub struct TerminalView {
     pub focus_handle: FocusHandle,
     /// 公式覆盖层（探测/持久化状态复用旧壳 `terminal_math`，每 pane 一份）。
     pub math: super::math_overlay::MathOverlay,
+
+    pub(super) effect: Option<gpui::Entity<super::effects::TerminalEffect>>,
     pub font: Font,
     pub font_bold: Font,
     pub font_italic: Font,
@@ -340,6 +343,9 @@ pub struct TerminalView {
     path_drop: path_drop::PathDropState,
     /// SSH 直连目的地（`user@host[:port]`）；本地会话为 None。
     pub ssh_destination: Option<String>,
+    /// 本 pane 拥有的本地端口转发；pane 销毁即停止监听。
+    pub(crate) port_forwards: Vec<crate::ssh_session::LocalForward>,
+    pub(crate) port_forward_task: Option<gpui::Task<()>>,
     ssh_label: Option<String>,
     /// 创建本地 PTY 时冻结的受控环境，供独立 `pane.exec` child 复用。
     pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
@@ -440,6 +446,8 @@ pub struct TerminalView {
     pub(super) suggest_anchor: Option<(usize, usize)>,
     suggestion_task: Option<suggest::Pending>,
     completion_session: crate::completion::Session,
+    completion_editor: editor::Editor,
+    editor_query_task: Option<gpui::Task<()>>,
     ghost_enabled: bool,
     completion_style: crate::display::CompletionStyle,
     /// BEL 后暂停侧栏转圈，直到用户再往 PTY 打字（旧壳 `awaiting_input`）。
@@ -508,6 +516,14 @@ impl TerminalView {
         typography::startup_cell_metrics_at_scale(scale, cx)
     }
 
+    pub(super) fn effect_output_visible(&self) -> bool {
+        self.output_visible && self.answer_reader.is_none()
+    }
+
+    pub(super) fn effect_pane_focused(&self) -> bool {
+        self.cursor_pane_focused
+    }
+
     pub(in crate::gpui_shell) fn set_output_visible(
         &mut self,
         visible: bool,
@@ -515,6 +531,8 @@ impl TerminalView {
     ) {
         if self.output_visible != visible {
             self.cursor_animation.reset();
+
+            super::effects::visibility_changed(self, cx);
         }
         if std::mem::replace(&mut self.output_visible, visible) != visible && visible {
             // Hidden output deliberately did not invalidate the cached view.
@@ -691,6 +709,7 @@ impl TerminalView {
                     self.on_native_cmd_prompt(cx);
                 }
                 self.suggest.completion_shell_report(&name, &value);
+                self.handle_completion_editor_report(&name, &value, cx);
                 cx.notify();
             },
         }
@@ -715,6 +734,8 @@ impl TerminalView {
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
+        self.port_forward_task = None;
+        self.port_forwards.clear();
         self.confirmation.invalidate();
         self.pending_runtime_submit = None;
         self.pending_shell_command = None;
@@ -741,6 +762,8 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        self.completion_editor.invalidate();
+        self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
         self.prompt_input_epoch = self.prompt_input_epoch.wrapping_add(1);
         self.path_drop.invalidate();
@@ -904,6 +927,8 @@ impl TerminalView {
         self.suggestion_task = None;
         self.suggest.clear_completion_hints();
         self.suggest.completion_popup_requested = false;
+        self.completion_editor.invalidate();
+        self.editor_query_task = None;
 
         self.font =
             mono_font(&families[0], FontWeight::NORMAL, FontStyle::Normal, settings.ligatures);
@@ -966,6 +991,12 @@ impl TerminalView {
         path.is_dir().then_some(path)
     }
 
+    /// WSL 发行版：spawn 时 pin 进启动参数的 [`crate::shell_detect::wsl_spawn_distro`]
+    /// 快照，裸 `wsl` / 默认 shell 也有确定的来宾身份，事后改默认发行版不会串台。
+    pub(crate) fn wsl_distro(&self) -> Option<&str> {
+        self.exec_context.as_ref()?.wsl_distribution().flatten()
+    }
+
     /// Absolute remote cwd reported by OSC 7/title integration. Unlike
     /// [`Self::local_cwd`], this deliberately does not consult the host
     /// filesystem; a POSIX path belongs to the SSH endpoint.
@@ -982,6 +1013,9 @@ impl TerminalView {
     /// 通道，撞上一个还没建立的传输——用户看到的是文件面板先报一个错，然后
     /// 终端才连上。
     pub fn ready_ssh_destination(&self) -> Option<&str> {
+        if self.exited.is_some() {
+            return None;
+        }
         let destination = self.ssh_destination.as_deref()?;
         matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Ready)).then_some(destination)
     }
