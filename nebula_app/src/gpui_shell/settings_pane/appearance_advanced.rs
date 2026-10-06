@@ -8,6 +8,7 @@ impl SettingsPane {
     ) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
         let font_picker = self.font_picker_dropdown(window, cx);
+        let cjk_font_picker = self.cjk_font_picker_dropdown(window, cx);
         let opacity: SharedString = format!("{:.0}%", self.runtime.opacity * 100.0).into();
         let wallpaper_opacity: SharedString =
             format!("{:.0}%", self.runtime.background_image_opacity * 100.0).into();
@@ -46,6 +47,12 @@ impl SettingsPane {
             ));
         let cursor = self
             .group(language.pick("光标", "Cursor"), cx)
+            .child(self.select_row(
+                "cursor_motion",
+                language.text(crate::i18n::Message::SettingsCursorMotionTitle),
+                language.text(crate::i18n::Message::SettingsCursorMotionDescription),
+                cx,
+            ))
             .child(self.select_row(
                 "cursor_shape",
                 language.pick("光标形状", "Cursor shape"),
@@ -109,23 +116,20 @@ impl SettingsPane {
                 font_picker,
                 cx,
             ))
-            .child(
-                self.row(
-                    language.text(crate::i18n::Message::SettingsFontChinese),
-                    language.text(crate::i18n::Message::SettingsFontChineseDescription),
-                    div()
-                        .debug_selector(|| "font-family-cjk-input".to_owned())
-                        .w(px(SETTINGS_SELECT_WIDTH))
-                        .h(px(36.0))
-                        .child(
-                            Input::new(&self.font_family_cjk_input).w_full().h_full().aria_label(
-                                language.text(crate::i18n::Message::SettingsFontChinese),
-                            ),
-                        ),
-                    cx,
-                ),
-            )
+            .child(self.row(
+                language.text(crate::i18n::Message::SettingsFontChinese),
+                language.text(crate::i18n::Message::SettingsFontChineseDescription),
+                cjk_font_picker,
+                cx,
+            ))
             .child(self.font_size_row(false, cx))
+            .child(self.switch_row(
+                "ctrl_wheel_font_zoom",
+                language.text(crate::i18n::Message::SettingsFontCtrlWheelZoom),
+                language.text(crate::i18n::Message::SettingsFontCtrlWheelZoomDescription),
+                self.runtime.ctrl_wheel_font_zoom,
+                cx,
+            ))
             .child(self.select_row(
                 "ligatures",
                 language.text(crate::i18n::Message::SettingsFontLigatures),

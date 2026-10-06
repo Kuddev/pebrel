@@ -666,7 +666,11 @@ fn validate_effects(value: &Value) -> Result<(), DocumentError> {
             }
         }
     }
-    optional_string_with_limit(object, "background_image", 4096)?;
+    // Null inherits the user's wallpaper; an empty path explicitly removes it.
+    // Other effect strings retain their nonempty-value contract.
+    if !object.get("background_image").is_some_and(|value| value.as_str() == Some("")) {
+        optional_string_with_limit(object, "background_image", 4096)?;
+    }
     optional_string_with_limit(object, "background_image_fit", 64)?;
     optional_string_with_limit(object, "background_image_alignment", 64)?;
     optional_bounded_number(object, "background_image_opacity", 0.0, 100.0)?;
@@ -987,9 +991,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtins_produce_fifteen_valid_documents() {
+    fn builtins_produce_one_valid_document_per_catalog_entry() {
         let documents = builtin_documents();
-        assert_eq!(documents.len(), 15);
+        assert_eq!(documents.len(), ThemeName::BUILTIN.len());
+        assert!(documents.iter().any(|document| document.name() == "NordLight"));
+        assert!(documents.iter().any(|document| document.name() == "WarmSand"));
+        assert!(documents.iter().any(|document| document.name() == "SlateLight"));
         assert!(documents.iter().all(|document| document.palette().is_some()));
     }
 

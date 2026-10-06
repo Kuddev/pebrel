@@ -1,4 +1,5 @@
 use super::*;
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
 
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
@@ -187,6 +188,8 @@ impl NebulaWorkspace {
     }
 
     fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let row_height = tab_scroll::tab_row_height(self.density);
+        let row_pitch = self.tab_row_pitch();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         // 数量 chip 数字：旧壳独用 ink_faint（比 ink_dim 再暗一档），chip 背
@@ -330,10 +333,10 @@ impl NebulaWorkspace {
                 let (dragged, shift) = match drag {
                     Some((src, _, _)) if ix == src => (true, 0.0),
                     Some((src, tgt, _)) if src < tgt && ix > src && ix <= tgt => {
-                        (false, -TAB_ROW_PITCH)
+                        (false, -row_pitch)
                     },
                     Some((src, tgt, _)) if src > tgt && ix >= tgt && ix < src => {
-                        (false, TAB_ROW_PITCH)
+                        (false, row_pitch)
                     },
                     _ => (false, 0.0),
                 };
@@ -359,7 +362,7 @@ impl NebulaWorkspace {
                 .overflow_hidden()
                 .gap_2()
                 .px_2()
-                .h(px(TAB_ROW_H))
+                .h(px(row_height))
                 .items_center()
                 // 旧壳 pill 圆角 = UI_CORNER_RADIUS_LOGICAL(8)，rounded_md(6)
                 // 偏小一圈，选中水洗的轮廓形状会不一样。
@@ -389,7 +392,7 @@ impl NebulaWorkspace {
                             press_x: f32::from(event.position.x),
                             press_y: f32::from(event.position.y),
                             axis: TabDragAxis::Vertical,
-                            pitch: TAB_ROW_PITCH,
+                            pitch: row_pitch,
                             offset: 0.0,
                             active: false,
                             dock: None,
@@ -415,7 +418,7 @@ impl NebulaWorkspace {
                             .left(px(4.0))
                             .top(px(7.0))
                             .w(px(2.5))
-                            .h(px(TAB_ROW_H - 14.0))
+                            .h(px(row_height - 14.0))
                             .rounded_full()
                             .bg(color),
                     )
@@ -621,7 +624,7 @@ impl NebulaWorkspace {
             // 仍是旧壳的 8px。
             .px_2()
             .pb_2()
-            .gap_2()
+            .gap(px(tab_scroll::tab_row_gap(self.density)))
             // 待命阶段（未过阈值）的指针跟踪；激活后由根部罩层独占接管。
             .on_mouse_move(cx.listener(|this, event, window, cx| {
                 this.update_tab_drag(event, window, cx);
@@ -631,7 +634,7 @@ impl NebulaWorkspace {
                     .id("sidebar-tabs-toggle")
                     .group(header_group.clone())
                     .w_full()
-                    .h(px(34.0))
+                    .h(px(row_height))
                     .pb_1()
                     // 旧壳标题文字从 panel_x + 16px 起；侧栏根已有 8px
                     // padding，这里再补 8px，箭头不会贴住左边缘。
@@ -831,7 +834,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let collapsed = self.sidebar_collapsed;
-        if !self.sidebar_fold_armed {
+        if tab_reveal_instant(cx) || !self.sidebar_fold_armed {
             return if collapsed {
                 div().into_any_element()
             } else {
@@ -868,21 +871,19 @@ impl NebulaWorkspace {
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
         let language = crate::gpui_shell::config::ui_language(cx);
+        let port_forward_button = self.render_port_forward_button(cx);
         h_flex()
             .size_full()
             .items_center()
             .justify_between()
             .child(
                 h_flex()
-                    // 旧壳两枚 32px 命中块之间固定留 8px；默认 Button 正好是
-                    // 32px，`.small()` 会把热区缩成 24px。
-                    .gap_2()
+                    // Keep toolbar gaps independent of the UI font/rem size.
+                    .gap(px(8.0))
                     .items_center()
                     .occlude()
                     .child(
-                        Button::new("toggle-sidebar")
-                            .icon(IconName::PanelLeft)
-                            .ghost()
+                        toolbar_button("toggle-sidebar", IconName::PanelLeft)
                             .disabled(settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
@@ -897,14 +898,12 @@ impl NebulaWorkspace {
                                 } else {
                                     this.sidebar_collapsed = !this.sidebar_collapsed;
                                 }
-                                this.sidebar_fold_armed = true;
+                                this.sidebar_fold_armed = !tab_reveal_instant(cx);
                                 cx.notify();
                             })),
                     )
                     .child(
-                        Button::new("open-settings")
-                            .icon(IconName::Settings)
-                            .ghost()
+                        toolbar_button("open-settings", IconName::Settings)
                             .selected(settings_active)
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
@@ -918,20 +917,20 @@ impl NebulaWorkspace {
             .child(self.render_collapsed_tab_title(cx))
             .child(
                 title_bar_panel_controls()
-                    .gap_2()
+                    .gap(px(8.0))
                     .child(
-                        Button::new("toggle-command-manager")
-                            .icon(
-                                Icon::new(Icon::empty())
-                                    .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
-                            )
-                            .ghost()
-                            .selected(self.command_manager_open)
-                            .tooltip(language.text(Message::ChromeCommandList))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_command_manager(window, cx);
-                            })),
+                        toolbar_button(
+                            "toggle-command-manager",
+                            Icon::new(Icon::empty())
+                                .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                        )
+                        .selected(self.command_manager_open)
+                        .tooltip(language.text(Message::ChromeCommandList))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_command_manager(window, cx);
+                        })),
                     )
+                    .when_some(port_forward_button, |controls, button| controls.child(button))
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()
@@ -1042,7 +1041,7 @@ mod tests {
                     .id("status-probe-row")
                     .debug_selector(|| "status-probe-row".to_owned())
                     .w(px(200.0))
-                    .h(px(TAB_ROW_H))
+                    .h(px(tab_scroll::tab_row_height(nebula_settings::DensityName::Standard)))
                     .px_2()
                     .overflow_hidden()
                     .child(div().flex_1())

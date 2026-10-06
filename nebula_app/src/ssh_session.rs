@@ -26,13 +26,18 @@ use crate::event::EventProxy;
 use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, ProxyTestRoute};
 
 mod agent;
+pub(crate) mod completion;
 mod config;
 mod exec;
+mod forward;
 mod integration;
 mod lifecycle;
 mod route;
+mod transcript;
+pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
+pub use transcript::TranscriptReader;
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
 pub(crate) fn terminal_config(
@@ -68,6 +73,9 @@ struct OpenedTransport {
 pub trait SshEventHost:
     nebula_terminal::event::EventListener + Clone + Send + Sync + 'static
 {
+    /// A read capability belongs to this pane's live authenticated transport.
+    fn ssh_transcript_reader(&self, _reader: Option<TranscriptReader>) {}
+
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
         let _ = stage;
@@ -223,6 +231,23 @@ impl SshDestination {
     /// 使用系统 SSH 的离线配置展开能力解析别名、用户名、端口和 IdentityFile。
     /// 这能保持用户现有 `~/.ssh/config` 行为，同时网络连接仍完全由 Rust 传输层承担。
     fn resolve(value: &str) -> io::Result<Self> {
+        let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
+        let profiles = crate::ssh_profiles::SshProfiles::load(&path)?;
+        Self::resolve_profile(value, &profiles)
+    }
+
+    fn resolve_profile(
+        value: &str,
+        profiles: &crate::ssh_profiles::SshProfiles,
+    ) -> io::Result<Self> {
+        let identity = value.trim();
+        let mut resolved = Self::resolve_address(profiles.connection_destination(identity))?;
+        // 连接目标展开后仍保留独立身份，使密码、连接池与断线恢复继续指向该副本。
+        resolved.original = identity.to_owned();
+        Ok(resolved)
+    }
+
+    fn resolve_address(value: &str) -> io::Result<Self> {
         let original = value.trim().to_owned();
         crate::ssh_profiles::validate_ssh_destination(&original)
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
@@ -280,7 +305,7 @@ impl SshDestination {
 /// 给 `ssh -G` 的离线配置探测目标。Nebula 历史存盘格式允许
 /// `user@host:port`，而 OpenSSH 只会从 `ssh://user@host:port` URI 中拆出
 /// 端口；无显式端口、已有 URI 与裸 IPv6 都保持原样，避免改变 Host 匹配。
-fn ssh_config_probe_target(value: &str) -> Cow<'_, str> {
+pub(crate) fn ssh_config_probe_target(value: &str) -> Cow<'_, str> {
     if value.starts_with("ssh://") {
         return Cow::Borrowed(value);
     }
@@ -516,8 +541,21 @@ pub(crate) fn runtime() -> io::Result<&'static tokio::runtime::Runtime> {
     }
 }
 
-fn connection_pool() -> &'static tokio::sync::Mutex<HashMap<String, SharedSession>> {
-    static POOL: OnceLock<tokio::sync::Mutex<HashMap<String, SharedSession>>> = OnceLock::new();
+struct PooledSession {
+    session: SharedSession,
+    destination: String,
+    id: u64,
+}
+
+impl PooledSession {
+    fn new(session: SharedSession, destination: String) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self { session, destination, id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
+    }
+}
+
+fn connection_pool() -> &'static tokio::sync::Mutex<HashMap<String, PooledSession>> {
+    static POOL: OnceLock<tokio::sync::Mutex<HashMap<String, PooledSession>>> = OnceLock::new();
     POOL.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
@@ -567,7 +605,7 @@ fn initial_remote_cd_command(path: Option<&str>) -> Option<Vec<u8>> {
 
 async fn evict_pooled_session(key: &str, session: &SharedSession) -> bool {
     let mut pool = connection_pool().lock().await;
-    let matches = pool.get(key).is_some_and(|pooled| Arc::ptr_eq(pooled, session));
+    let matches = pool.get(key).is_some_and(|pooled| Arc::ptr_eq(&pooled.session, session));
     if matches {
         pool.remove(key);
     }
@@ -634,8 +672,11 @@ async fn authenticated_route<H: SshEventHost>(
     allow_host_key_prompt: bool,
 ) -> Result<AcquiredSession, SessionError> {
     let key = route.pool_key();
-    let existing =
-        if unattended { None } else { connection_pool().lock().await.get(&key).cloned() };
+    let existing = if unattended {
+        None
+    } else {
+        connection_pool().lock().await.get(&key).map(|entry| entry.session.clone())
+    };
     if let Some(existing) = existing {
         if !existing.is_closed() {
             info!("复用已认证 SSH 连接: {key}");
@@ -683,7 +724,7 @@ async fn authenticated_route<H: SshEventHost>(
         });
     }
     let mut pool = connection_pool().lock().await;
-    if let Some(existing) = pool.get(&key).cloned() {
+    if let Some(existing) = pool.get(&key).map(|entry| entry.session.clone()) {
         if !existing.is_closed() {
             return Ok(AcquiredSession {
                 key,
@@ -693,7 +734,10 @@ async fn authenticated_route<H: SshEventHost>(
             });
         }
     }
-    pool.insert(key.clone(), session.clone());
+    pool.insert(
+        key.clone(),
+        PooledSession::new(session.clone(), route.destination.original.clone()),
+    );
     Ok(AcquiredSession { key, session, reused: false, jump_sessions: transport.jump_sessions })
 }
 
@@ -933,6 +977,27 @@ pub(crate) async fn exec_capture(
     script: &[u8],
     budget: Duration,
 ) -> Result<String, SessionError> {
+    let channel = open_exec_channel(raw_destination).await?;
+    exec::capture(channel, command, script, budget, raw_destination).await
+}
+
+/// 中转配置含访问令牌，复用既有认证连接，但不把任何远端输出写入日志。
+pub(crate) async fn exec_private(
+    raw_destination: &str,
+    command: &str,
+    budget: Duration,
+) -> Result<Vec<u8>, SessionError> {
+    tokio::time::timeout(budget, async {
+        let channel = open_exec_channel(raw_destination).await?;
+        exec::capture_private(channel, command).await
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "private_exec_timeout"))?
+}
+
+async fn open_exec_channel(
+    raw_destination: &str,
+) -> Result<russh::Channel<russh::client::Msg>, SessionError> {
     let profiles_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
     let raw = raw_destination.to_owned();
     let (destination, profile) = tokio::task::spawn_blocking(move || {
@@ -945,8 +1010,7 @@ pub(crate) async fn exec_capture(
     .map_err(|err| format!("SSH 地址解析任务失败: {err}"))??;
 
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
-    let channel = lifecycle::network("exec channel", session.channel_open_session()).await?;
-    exec::capture(channel, command, script, budget, raw_destination).await
+    Ok(lifecycle::network("exec channel", session.channel_open_session()).await?)
 }
 
 /// 在现有认证连接上打开独立 SFTP 子系统；连接池和认证策略仍只有一份。

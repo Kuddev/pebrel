@@ -1,11 +1,7 @@
 //! 快速终端全局热键。
 //!
-//! 与旧壳保持同一产品合同：进程内只有一扇独立窗口，位于最近活跃显示器
-//! 顶部、全宽、屏高 40%，显示/隐藏时从屏幕上缘滑入/滑出。窗口只隐藏不
-//! 销毁，因此 PTY 和终端状态跨切换保留。
-//!
-//! 缺的一直是**系统注册**这一层：`settings_pane/keymap.rs` 能捕获并持久化组合键，
-//! 但 GPUI 壳从未调用 `GlobalHotKeyManager::register`，所以用户设了键、按下去没反应。
+//! 进程内持有一扇独立窗口，切换时保留 PTY 与终端状态。
+//! 窗口系统决定显示位置和动画能力；全局键注册与窗口生命周期分开管理。
 //!
 //! 为什么用轮询而不是阻塞接收：`global_hotkey` 的事件走进程级 channel，而 GPUI 主线程
 //! 不能阻塞。这里沿用仓库既有的 `start_ai_hook_pump` / `start_agent_screen_watchdog`
@@ -15,7 +11,7 @@ use std::time::Duration;
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use gpui::{App, Context, Global};
+use gpui::{App, Context, Global, Window};
 
 use super::NebulaWorkspace;
 
@@ -23,160 +19,8 @@ use super::NebulaWorkspace;
 /// 80ms 的可感知迟滞。窗口位移动画本身由 GPUI 帧回调驱动，不使用这个 timer。
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 
-/// 旧壳 `Display::configure_quick_terminal` 的几何合同。
 #[cfg(windows)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct QuickTerminalGeometry {
-    pub(super) x: i32,
-    pub(super) y: i32,
-    pub(super) width: i32,
-    pub(super) height: i32,
-}
-
-#[cfg(windows)]
-impl QuickTerminalGeometry {
-    fn animated_y(self, hidden_fraction: f32) -> i32 {
-        self.y - (self.height as f32 * hidden_fraction.clamp(0.0, 1.0)).round() as i32
-    }
-}
-
-/// 以普通工作区 HWND 所在显示器为目标；没有锚点时 Win32 回退主显示器。
-#[cfg(windows)]
-pub(super) fn native_geometry(
-    anchor_hwnd: isize,
-    remembered: Option<nebula_settings::QuickTerminalSize>,
-) -> Option<QuickTerminalGeometry> {
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
-        MonitorFromWindow,
-    };
-
-    let anchor = anchor_hwnd as *mut core::ffi::c_void;
-    let fallback =
-        if anchor.is_null() { MONITOR_DEFAULTTOPRIMARY } else { MONITOR_DEFAULTTONEAREST };
-    // SAFETY: anchor 来自当前进程已注册的 GPUI 窗口；失效或为空时 API 按
-    // fallback 选择主/最近显示器。失败统一返回 None，不解引用 HWND。
-    let monitor = unsafe { MonitorFromWindow(anchor, fallback) };
-    if monitor.is_null() {
-        return None;
-    }
-    let zero = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: zero,
-        rcWork: zero,
-        dwFlags: 0,
-    };
-    // 旧壳使用 monitor.size/position，即完整屏幕而非扣掉任务栏的 work area。
-    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-        return None;
-    }
-    let width = (info.rcMonitor.right - info.rcMonitor.left).max(1);
-    let monitor_height = (info.rcMonitor.bottom - info.rcMonitor.top).max(1);
-    let height = ((monitor_height as f64) * 0.4).round().max(1.0) as i32;
-    let scale = if anchor_hwnd != 0 {
-        (unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForWindow(anchor) }) as f32 / 96.0
-    } else {
-        1.0
-    };
-    let scale = scale.max(1.0);
-    let saved =
-        remembered.map(|size| size.fit(width as f32 / scale, monitor_height as f32 / scale));
-    let saved_width = saved.map_or(width, |size| (size.width * scale).round() as i32);
-    let saved_height = saved.map_or(height, |size| (size.height * scale).round() as i32);
-    Some(QuickTerminalGeometry {
-        x: info.rcMonitor.left + (width - saved_width) / 2,
-        y: info.rcMonitor.top,
-        width: saved_width,
-        height: saved_height,
-    })
-}
-
-/// 创建时一次性设置旧壳的完整几何和 topmost，再把窗口显示在屏幕上缘之外。
-/// 后续动画不能再走这个入口，否则每帧重排 z-order/重复 SHOW 会造成明显卡顿。
-#[cfg(windows)]
-pub(super) fn configure_native_window(
-    hwnd: isize,
-    geometry: QuickTerminalGeometry,
-    hidden_fraction: f32,
-    show: bool,
-) -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos,
-    };
-
-    if hwnd == 0 {
-        return false;
-    }
-    let mut flags = SWP_NOACTIVATE;
-    if show {
-        flags |= SWP_SHOWWINDOW;
-    }
-    // SAFETY: HWND 由 GPUI 窗口创建回调发布；SetWindowPos 对已失效窗口安全
-    // 失败。SWP_NOACTIVATE 保证动画帧本身不反复抢前台，显式热键另行激活。
-    unsafe {
-        SetWindowPos(
-            hwnd as *mut core::ffi::c_void,
-            HWND_TOPMOST,
-            geometry.x,
-            geometry.animated_y(hidden_fraction),
-            geometry.width,
-            geometry.height,
-            flags,
-        ) != 0
-    }
-}
-
-/// 对齐旧壳 `set_quick_terminal_slide`：动画帧只改变外窗 Y，既不改尺寸、
-/// 不改 topmost 层级，也不重复 show。PTY、GPUI swapchain 和 DComp surface
-/// 因此不会在 90-120ms 动画期间参与 resize。
-#[cfg(windows)]
-pub(super) fn slide_native_window(
-    hwnd: isize,
-    geometry: QuickTerminalGeometry,
-    hidden_fraction: f32,
-) -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
-    };
-
-    if hwnd == 0 {
-        return false;
-    }
-    // SAFETY: HWND 由 GPUI 窗口注册表持有；失效时 SetWindowPos 安全失败。
-    unsafe {
-        SetWindowPos(
-            hwnd as *mut core::ffi::c_void,
-            std::ptr::null_mut(),
-            geometry.x,
-            geometry.animated_y(hidden_fraction),
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
-        ) != 0
-    }
-}
-
-#[cfg(windows)]
-pub(super) fn show_native_window(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
-
-    if hwnd != 0 {
-        // 激活只属于显式热键路径，由 GPUI `activate_window` 单独完成。
-        unsafe { ShowWindow(hwnd as *mut core::ffi::c_void, SW_SHOWNOACTIVATE) };
-    }
-}
-
-#[cfg(windows)]
-pub(super) fn hide_native_window(hwnd: isize) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
-
-    if hwnd != 0 {
-        // SAFETY: HWND 由 GPUI 创建；窗口已关闭时 ShowWindow 只会安全失败。
-        unsafe { ShowWindow(hwnd as *mut core::ffi::c_void, SW_HIDE) };
-    }
-}
+pub(super) use crate::platform::quick_window::*;
 
 /// 每多少次轮询回读一次设置里的组合键（约 2 秒）。
 ///
@@ -197,11 +41,19 @@ struct QuickTerminalHotkey {
 
 impl Global for QuickTerminalHotkey {}
 
+#[cfg(target_os = "linux")]
+struct PortalHotkey(crate::platform::global_shortcut::Portal);
+#[cfg(target_os = "linux")]
+impl Global for PortalHotkey {}
+
 impl NebulaWorkspace {
     /// 注册快速终端热键并启动事件泵。只应由初始窗口调用一次。
-    pub(super) fn start_quick_terminal_hotkey(cx: &mut Context<Self>) {
-        // 窗口显隐/贴边几何只有 Windows 实现；其余平台先不注册热键，
-        // 免得热键响应了却没有窗口出来。
+    pub(super) fn start_quick_terminal_hotkey(window: &Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        if crate::platform::window_visibility::is_wayland(window) {
+            Self::start_portal_hotkey(cx);
+            return;
+        }
         if !crate::platform::CAPABILITIES.quick_terminal_hotkey
             || cx.has_global::<QuickTerminalHotkey>()
         {
@@ -235,6 +87,40 @@ impl NebulaWorkspace {
                 if pressed {
                     cx.update(super::windowing::toggle_quick_terminal_window);
                 }
+            }
+        })
+        .detach();
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl NebulaWorkspace {
+    fn start_portal_hotkey(cx: &mut Context<Self>) {
+        if cx.has_global::<PortalHotkey>() {
+            return;
+        }
+        let portal = match crate::platform::global_shortcut::Portal::start(current_combo()) {
+            Ok(portal) => portal,
+            Err(error) => {
+                log::warn!("Could not start shortcut portal: {error}");
+                return;
+            },
+        };
+        cx.set_global(PortalHotkey(portal));
+        cx.spawn(async move |_, cx| {
+            let mut ticks = 0u32;
+            loop {
+                cx.background_executor().timer(POLL_INTERVAL).await;
+                ticks = ticks.wrapping_add(1);
+                cx.update(|cx| {
+                    let portal = &cx.global::<PortalHotkey>().0;
+                    if ticks % RESYNC_EVERY == 0 {
+                        portal.set_combo(current_combo());
+                    }
+                    if portal.take_pressed() {
+                        super::windowing::toggle_quick_terminal_window(cx);
+                    }
+                });
             }
         })
         .detach();
@@ -313,18 +199,4 @@ fn drain_pressed(cx: &mut App) -> bool {
         }
     }
     pressed
-}
-
-#[cfg(all(test, windows))]
-mod tests {
-    use super::QuickTerminalGeometry;
-
-    #[test]
-    fn slide_geometry_handles_negative_monitor_origins() {
-        let geometry = QuickTerminalGeometry { x: -1920, y: -200, width: 1920, height: 480 };
-        assert_eq!(geometry.animated_y(0.0), -200);
-        assert_eq!(geometry.animated_y(0.5), -440);
-        assert_eq!(geometry.animated_y(1.0), -680);
-        assert_eq!(geometry.animated_y(2.0), -680);
-    }
 }

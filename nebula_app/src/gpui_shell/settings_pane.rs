@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use crate::gpui_shell::config::{DEFAULT_CURSOR_BLINK, effective_cursor_blink};
 use crate::gpui_shell::prelude::*;
-use crate::gpui_shell::widgets::NebulaButton;
+use crate::gpui_shell::widgets::{NebulaButton, settings_control_height};
 
 mod about;
 mod agents;
@@ -44,6 +44,7 @@ mod appearance_picker;
 #[path = "background_color.rs"]
 mod background_color;
 mod backup;
+mod cursor_motion;
 mod design;
 mod font_picker;
 mod providers;
@@ -58,6 +59,7 @@ mod initialization;
 mod keymap;
 mod launcher_actions;
 mod localization;
+mod mobile;
 mod navigation;
 mod notifications;
 mod shell_picker;
@@ -68,6 +70,8 @@ mod status;
 mod theme_advanced;
 mod theme_editor;
 mod theme_foreground;
+mod theme_package;
+mod theme_package_view;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod theme_studio_tests;
 mod theme_transfer;
@@ -86,6 +90,7 @@ pub enum SettingsPaneEvent {
     /// Explicitly close Settings and return to the workspace.
     Close,
     Changed,
+    BackupRestored,
     /// 导入 Profile 已落盘；Tab 的 Shell 面板若正打开，需要重建候选快照。
     TerminalProfilesChanged,
     /// 设置页"连接"按钮：宿主开 SSH tab（连接语义在业务层）。
@@ -105,11 +110,14 @@ pub struct SettingsPane {
     /// 当前分区（`SECTIONS` 下标）；默认落在应用主页。
     active_section: usize,
     agents: agents::AgentSettingsState,
+    mobile: mobile::MobileState,
     appearance_picker: Option<appearance_picker::AppearancePicker>,
     appearance_picker_seq: u64,
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
     theme_editor_seq: u64,
     pub(super) theme_transfer: theme_transfer::ThemeTransferState,
+    pub(super) theme_package: Option<theme_package::PackageTransfer>,
+    theme_package_seq: u64,
     theme_picker_trigger: FocusHandle,
     icon_picker_trigger: FocusHandle,
     expanded_setting_help: std::collections::HashSet<&'static str>,
@@ -157,6 +165,7 @@ pub struct SettingsPane {
     provider_status: Option<ProviderStatus>,
     provider_test_seq: u64,
     provider_test_running: bool,
+    provider_key_task: Option<Task<()>>,
     provider_codex_confirm: Option<String>,
     /// SSH 主机列表（共享三键 + merge 权威）；操作后整体重载防漂移。
     /// SSH 区的行为实现拆在 `ssh_settings.rs`（同类型第二个 impl 块）。
@@ -198,6 +207,7 @@ pub struct SettingsPane {
     pub(super) ssh_undo_seq: u64,
     /// 可直接编辑的字体链及其建议弹层；逗号分隔主字体与 fallback 字体。
     pub(super) font_picker_open: bool,
+    font_picker_cjk: bool,
     font_loading: bool,
     /// None = 尚未枚举；首次展开时在后台线程装配（几百字体的机器上
     /// `IsMonospacedFont` 逐族探询是实打实的开销，不挡 UI 帧）。
@@ -206,9 +216,12 @@ pub struct SettingsPane {
     font_imported: Vec<String>,
     font_family_input: Entity<InputState>,
     font_family_cjk_input: Entity<InputState>,
+    font_size_input: Entity<InputState>,
+    font_size_editing: Option<bool>,
     /// 字体输入框上一帧的窗口坐标。字体目录是宽弹层，不能把整条设置行当
     /// 锚点；否则输入框在右侧、菜单却会从正文左缘展开。
     font_picker_trigger_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    font_picker_cjk_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     /// 备份类别选择（本地 UI 态；出厂默认 = 共享 `BackupSelection::default`）。
     backup_selection: crate::encrypted_backup::BackupSelection,
     backup_ui: backup::BackupUiState,
@@ -319,6 +332,7 @@ impl SettingsPane {
             (&self.ssh_jump_host_input, "ssh_jump_host"),
             (&self.ssh_icon_filter_input, "ssh_icon_filter"),
             (&self.font_family_input, "font_family"),
+            (&self.font_family_cjk_input, "font_family"),
             (&self.backup_pass_input, "backup_password"),
             (&self.backup_secret_input, "backup_secret"),
         ] {
@@ -327,10 +341,7 @@ impl SettingsPane {
         }
         self.settings_search_input.update(cx, |state, cx| {
             state.set_placeholder(
-                language.pick(
-                    "搜索全部设置，例如「字号」「透明度」「更新」",
-                    "Search all settings, e.g. font, opacity, update",
-                ),
+                language.text(crate::i18n::Message::CommonSearchSettings),
                 window,
                 cx,
             )
@@ -380,7 +391,10 @@ impl SettingsPane {
             cx.notify();
             return;
         }
-        if matches!(key, "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes") {
+        if matches!(
+            key,
+            "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes" | "refresh_environment"
+        ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
                 let language = crate::gpui_shell::config::ui_language(cx);
                 super::toast::toast(
@@ -675,16 +689,18 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let select = self.select_of(key);
-        // 闭态选中值 = accent（旧壳 combobox_value 15 处调用 14 处传
-        // sk.accent）。闭框/背景都不带文字色，包一层就能继承下去；右侧
-        // chevron 在组件内自带 muted，不会被染色。
         let control = self.segmented_setting(key, cx).unwrap_or_else(|| {
-            div()
-                .debug_selector(move || format!("settings-select-{key}"))
-                .w(px(SETTINGS_SELECT_WIDTH))
-                .text_color(cx.theme().link)
-                .children(select.map(|state| Select::new(&state)))
-                .into_any_element()
+            let Some(state) = select else {
+                return div().into_any_element();
+            };
+            crate::gpui_shell::widgets::settings_select_frame(
+                SharedString::from(format!("settings-select-{key}")),
+                Select::new(&state).appearance(false).h_full().rounded(px(6.0)),
+                cx,
+            )
+            .debug_selector(move || format!("settings-select-{key}"))
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .into_any_element()
         });
         self.maybe_marked(key, label, desc, control, cx)
     }
@@ -694,11 +710,13 @@ impl SettingsPane {
         self.row(
             language.pick("默认 Shell", "Default shell"),
             help("shell", language),
-            div()
-                .w(px(SETTINGS_SELECT_WIDTH))
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_color(cx.theme().link)
-                .child(Select::new(&self.shell_select)),
+            crate::gpui_shell::widgets::settings_select_frame(
+                "settings-shell-select",
+                Select::new(&self.shell_select).appearance(false).h_full().rounded(px(6.0)),
+                cx,
+            )
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .font_family(cx.theme().mono_font_family.clone()),
             cx,
         )
     }
@@ -742,10 +760,13 @@ impl SettingsPane {
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
             "terminal_proxy" => flag!(terminal_proxy),
+            "refresh_environment" => flag!(refresh_environment),
             "powerline" => flag!(powerline),
             "ghost" => flag!(ghost),
             "ai_toasts" => flag!(ai_toasts),
+            "ctrl_wheel_font_zoom" => flag!(ctrl_wheel_font_zoom),
             "notification_duration" => pick!(notification_duration),
+            "cursor_motion" => pick!(cursor_motion),
             "cjk_bold_regular" => flag!(cjk_bold_regular),
             "fetch" => flag!(fetch),
             "keep_session" => flag!(keep_session),
@@ -1091,7 +1112,19 @@ impl SettingsPane {
         let terminal = self
             .group(language.pick("启动", "Startup"), cx)
             .child(self.shell_select_row(cx))
-            .child(self.startup_directory_row(cx));
+            .child(self.startup_directory_row(cx))
+            .when(
+                crate::platform::Platform::current() == crate::platform::Platform::Windows,
+                |group| {
+                    group.child(self.switch_row(
+                        "refresh_environment",
+                        language.text(crate::i18n::Message::SettingsEnvironmentRefresh),
+                        language.text(crate::i18n::Message::SettingsEnvironmentRefreshDescription),
+                        self.runtime.refresh_environment,
+                        cx,
+                    ))
+                },
+            );
         let alerts = self
             .group(language.pick("提醒", "Alerts"), cx)
             .child(self.switch_row(
@@ -1123,14 +1156,8 @@ impl SettingsPane {
                 cx,
             ))
             .child(self.select_row(
-                "accept",
-                language.pick("补全接受键", "Completion accept key"),
-                help("accept", language),
-                cx,
-            ))
-            .child(self.select_row(
                 "completion_style",
-                language.pick("补全样式", "Completion style"),
+                language.text(crate::i18n::Message::SettingsCompletionMode),
                 help("completion_style", language),
                 cx,
             ));
@@ -1303,13 +1330,14 @@ impl SettingsPane {
             1 => self.section_appearance(window, cx),
             2 => self.section_profiles(window, cx),
             3 => self.section_providers(cx),
-            4 => self.section_ssh(cx),
+            4 => self.section_ssh(window, cx),
             5 => self.section_network(cx),
             6 => self.section_interaction(cx),
             7 => self.section_keymap(cx),
             8 => self.section_advanced(cx),
             10 => self.section_agents(cx),
-            _ => self.section_backup(cx),
+            MOBILE_SECTION => self.section_mobile(window, cx),
+            _ => self.section_backup(window, cx),
         }
         .into_any_element()
     }
@@ -1335,7 +1363,7 @@ impl SettingsPane {
             .px_2()
             .pt(px(12.0))
             .pb(px(8.0))
-            .gap(px(4.0))
+            .gap(px(2.0))
             .text_sm()
             .line_height(px(20.0))
             .border_r_1()
@@ -1359,7 +1387,14 @@ impl SettingsPane {
                     .child(language.pick("返回工作区", "Back to workspace")),
             )
             .child(self.render_nav_search(window, cx));
+        let searching = !self.settings_search_input.read(cx).value().trim().is_empty();
+        let mut previous_group = None;
         for ix in self.matching_settings_sections(cx) {
+            let group = NAV_GROUPS.iter().position(|(_, sections)| sections.contains(&ix));
+            if !searching && previous_group.is_some() && previous_group != group {
+                nav = nav.child(div().h(px(10.0)).flex_shrink_0());
+            }
+            previous_group = group;
             let active = ix == self.active_section;
             nav = nav.child(
                 div()
@@ -1370,7 +1405,7 @@ impl SettingsPane {
                     .h(px(SETTINGS_NAV_ROW_HEIGHT))
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(10.0))
                     .rounded_md()
                     .cursor_pointer()
                     // 选中态同时改变底色、墨色和字重，余光扫过也能确认当前位置。
@@ -1440,7 +1475,11 @@ impl Render for SettingsPane {
         let appearance_picker_modal = self.appearance_picker_modal(window, cx);
         let theme_editor_modal = self.theme_editor_modal(window, cx);
         let theme_transfer_modal = self.theme_transfer_modal(window, cx);
+        let theme_package_modal = self.theme_package_modal(window, cx);
+        let backup_drawer = self.backup_drawer(window, cx);
+        let mobile_relay_modal = self.mobile_relay_modal(cx);
         let application_page = self.active_section == 0;
+        let mobile_page = self.active_section == MOBILE_SECTION;
 
         div()
             .size_full()
@@ -1507,6 +1546,7 @@ impl Render for SettingsPane {
                             .pt(px(20.0))
                             .pb(px(22.0))
                             .when(!application_page, |content| content.pt(px(28.0)).pb(px(30.0)))
+                            .when(mobile_page, |content| content.p_0())
                             // 注意这层包装 `v_flex` 的 `w_full` 不能删（2026-08-23
                             // 又栽了一次）：`overflow_y_scrollbar` 把内容层清成
                             // `Display::Block`，而 flex 容器在 block 父里
@@ -1544,7 +1584,7 @@ impl Render for SettingsPane {
                                     .child(
                                         v_flex()
                                             .w_full()
-                                            .when(matches!(self.active_section, 9 | 10), |content| {
+                                            .when(matches!(self.active_section, 4 | 9 | 10 | MOBILE_SECTION), |content| {
                                                 content.items_center()
                                             })
                                             .when(application_page, |content| content.max_w(px(960.0)))
@@ -1553,10 +1593,13 @@ impl Render for SettingsPane {
                             ),
                     ),
             )
+            .when_some(backup_drawer, |root, drawer| root.child(drawer))
             .when_some(ssh_editor_modal, |root, modal| root.child(modal))
             .when_some(appearance_picker_modal, |root, modal| root.child(modal))
             .when_some(theme_editor_modal, |root, modal| root.child(modal))
             .when_some(theme_transfer_modal, |root, modal| root.child(modal))
+            .when_some(theme_package_modal, |root, modal| root.child(modal))
+            .when_some(mobile_relay_modal, |root, modal| root.child(modal))
             .when(font_picker_open, |root| {
                 root
                     // 搜索框是当前焦点时 Escape 仍沿元素树冒泡到设置根；

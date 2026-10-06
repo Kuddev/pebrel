@@ -302,9 +302,8 @@ fn run(args: &[String]) {
         // Retry briefly, then give up silently: notifications are best-effort.
         outcome = Outcome::PipeUnavailable;
         for _ in 0..20 {
-            match std::fs::OpenOptions::new().write(true).open(&pipe) {
-                Ok(mut file) => {
-                    let _ = file.write_all(&message);
+            match send_local(&pipe, &message) {
+                Ok(()) => {
                     outcome = Outcome::Sent;
                     break;
                 },
@@ -327,6 +326,24 @@ fn run(args: &[String]) {
         }
     }
     log_outcome(source, &pane, payload.len(), &outcome);
+}
+
+fn send_local(endpoint: &std::ffi::OsStr, message: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixStream;
+        let mut stream = UnixStream::connect(endpoint)?;
+        stream.set_write_timeout(Some(FORWARD_TIMEOUT))?;
+        stream.set_read_timeout(Some(FORWARD_TIMEOUT))?;
+        stream.write_all(message)?;
+        stream.shutdown(std::net::Shutdown::Write)?;
+        let mut acknowledgement = [0];
+        stream.read_exact(&mut acknowledgement)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::OpenOptions::new().write(true).open(endpoint)?.write_all(message)
+    }
 }
 
 fn chain_notifier(args: &[String]) {

@@ -22,63 +22,58 @@ fn on_solid_rgb(color: [u8; 3]) -> Hsla {
     if luma < 150.0 { rgb_hsla(248, 250, 252) } else { rgb_hsla(15, 23, 42) }
 }
 
-/// The GPUI overflow mask is rectangular. Paint the rainbow inside circular
-/// paths instead of relying on a rounded parent to clip rectangular children.
+/// 色盘是固定的小型 UI 资源：一次生成抗锯齿圆面，避免逐帧拼接色带产生接缝。
 fn rainbow_swatch() -> gpui::Div {
-    div().size_full().child(
-        gpui::canvas(
-            |_, _, _| (),
-            |bounds, _, window, _| {
-                let radius = f32::from(bounds.size.width.min(bounds.size.height)) * 0.5;
-                let center = bounds.center();
-                let colors = [
-                    rgb_hsla(238, 88, 105),
-                    rgb_hsla(240, 188, 69),
-                    rgb_hsla(119, 192, 97),
-                    rgb_hsla(66, 182, 178),
-                    rgb_hsla(80, 143, 225),
-                    rgb_hsla(165, 102, 212),
-                ];
-                for index in 0..colors.len() - 1 {
-                    let left = -radius + radius * 2.0 * index as f32 / 5.0;
-                    let right = -radius + radius * 2.0 * (index + 1) as f32 / 5.0;
-                    let edge = |x: f32, lower: bool| {
-                        let y = (radius * radius - x * x).max(0.0).sqrt();
-                        gpui::point(center.x + px(x), center.y + px(if lower { y } else { -y }))
-                    };
-                    let mut path = gpui::PathBuilder::fill();
-                    path.move_to(edge(left, false));
-                    path.arc_to(
-                        gpui::point(px(radius), px(radius)),
-                        px(0.0),
-                        false,
-                        true,
-                        edge(right, false),
-                    );
-                    path.line_to(edge(right, true));
-                    path.arc_to(
-                        gpui::point(px(radius), px(radius)),
-                        px(0.0),
-                        false,
-                        true,
-                        edge(left, true),
-                    );
-                    path.close();
-                    if let Ok(path) = path.build() {
-                        window.paint_path(
-                            path,
-                            gpui::linear_gradient(
-                                90.0,
-                                gpui::linear_color_stop(colors[index], 0.0),
-                                gpui::linear_color_stop(colors[index + 1], 1.0),
-                            ),
-                        );
-                    }
-                }
-            },
-        )
-        .size_full(),
-    )
+    static IMAGE: std::sync::OnceLock<std::sync::Arc<gpui::RenderImage>> =
+        std::sync::OnceLock::new();
+    let image = IMAGE.get_or_init(|| {
+        std::sync::Arc::new(gpui::RenderImage::new([image::Frame::new(rainbow_pixels())]))
+    });
+    div().size_full().child(gpui::img(image.clone()).size_full())
+}
+
+fn rainbow_pixels() -> image::RgbaImage {
+    const SIZE: u32 = 96;
+    let center = (SIZE as f32 - 1.0) * 0.5;
+    let radius = center - 0.5;
+    image::RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let dx = x as f32 - center;
+        let dy = y as f32 - center;
+        let distance = dx.hypot(dy);
+        let alpha = ((radius - distance + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
+        let hue = (dy.atan2(dx).to_degrees() + 90.0).rem_euclid(360.0);
+        let saturation = (distance / radius).clamp(0.0, 1.0) * 0.85;
+        let rgb = crate::display::hsv_to_rgb(hue, saturation, 0.96);
+        // RenderImage 的上传顺序为 BGRA，透明圆角不能依赖 GPUI 的矩形裁剪。
+        image::Rgba([rgb.b, rgb.g, rgb.r, alpha])
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn color_wheel_has_transparent_corners_and_bgra_red_at_the_top() {
+        let pixels = super::rainbow_pixels();
+        assert_eq!(pixels.dimensions(), (96, 96));
+        assert_eq!(pixels.get_pixel(0, 0).0[3], 0);
+        assert_eq!(pixels.get_pixel(47, 47).0[3], 255);
+        let top = pixels.get_pixel(47, 4).0;
+        assert!(top[2] > top[0] + 100, "BGRA upload must keep the red hue red");
+        let neighbor = pixels.get_pixel(48, 4).0;
+        for channel in 0..3 {
+            assert!(top[channel].abs_diff(neighbor[channel]) < 12, "no striped hue seams");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ThemeSampleColors {
+    background: [u8; 3],
+    foreground: [u8; 3],
+    accent: [u8; 3],
+    modified: [u8; 3],
+    ready: [u8; 3],
+    cursor: [u8; 3],
 }
 
 pub(super) fn theme_sample(name: ThemeName, token: bool, compact: bool) -> gpui::Div {
@@ -91,15 +86,24 @@ pub(super) fn theme_sample_with_foreground(
     token: bool,
     compact: bool,
 ) -> gpui::Div {
-    let theme = chrome_theme(name);
-    let palette = theme.palette();
-    let background = name.term_theme().background;
+    let theme = name.term_theme();
+    let palette = name.reviewed_palette();
     let foreground = foreground_override.unwrap_or_else(|| theme_foreground(name));
     theme_sample_values(
-        background,
-        [palette.shell_bg.r, palette.shell_bg.g, palette.shell_bg.b],
-        [theme.accent().r, theme.accent().g, theme.accent().b],
-        foreground,
+        ThemeSampleColors {
+            background: theme.background,
+            foreground,
+            accent: palette.accent,
+            modified: theme.exact.map_or_else(
+                || if theme.is_light { nebula_settings::LIGHT_ANSI[3] } else { palette.yellow },
+                |exact| exact.ansi[3],
+            ),
+            ready: theme.exact.map_or_else(
+                || if theme.is_light { nebula_settings::LIGHT_ANSI[2] } else { palette.green },
+                |exact| exact.ansi[2],
+            ),
+            cursor: theme.exact.and_then(|exact| exact.cursor).unwrap_or(foreground),
+        },
         token,
         compact,
     )
@@ -116,26 +120,56 @@ pub(super) fn theme_definition_sample(
 ) -> gpui::Div {
     let ui = definition.resolved_ui();
     theme_sample_values(
-        definition.terminal.background,
-        ui.shell,
-        ui.accent,
-        foreground_override.unwrap_or(definition.terminal.foreground),
+        ThemeSampleColors {
+            background: definition.terminal.background,
+            foreground: foreground_override.unwrap_or(definition.terminal.foreground),
+            accent: ui.accent,
+            modified: definition.terminal.ansi(3).unwrap_or(ui.warning),
+            ready: definition.terminal.ansi(2).unwrap_or(ui.success),
+            cursor: definition.terminal.cursor.unwrap_or(definition.terminal.foreground),
+        },
         token,
         compact,
     )
 }
 
-fn theme_sample_values(
-    background: [u8; 3],
-    chrome: [u8; 3],
-    accent: [u8; 3],
-    foreground: [u8; 3],
-    token: bool,
-    compact: bool,
-) -> gpui::Div {
-    let chrome = rgb_hsla(chrome[0], chrome[1], chrome[2]);
-    let ink = rgb_hsla(foreground[0], foreground[1], foreground[2]);
-    let accent = rgb_hsla(accent[0], accent[1], accent[2]);
+fn theme_sample_values(colors: ThemeSampleColors, token: bool, compact: bool) -> gpui::Div {
+    let color = |rgb: [u8; 3]| rgb_hsla(rgb[0], rgb[1], rgb[2]);
+    let ink = color(colors.foreground);
+    let accent = color(colors.accent);
+    let background = color(colors.background);
+    if !token {
+        let row = || h_flex().w_full().min_w_0().gap(px(4.0)).overflow_hidden();
+        return v_flex()
+            .w_full()
+            .h(px(if compact { 68.0 } else { 76.0 }))
+            .px(px(8.0))
+            .py(px(7.0))
+            .rounded(px(3.0))
+            .border_1()
+            .border_color(ink.opacity(0.10))
+            .bg(background)
+            .font(crate::font_install::gpui_font_with_fallbacks(
+                "Maple Mono Normal NF CN, Cascadia Code, Consolas, monospace",
+            ))
+            .text_size(px(if compact { 9.5 } else { 10.0 }))
+            .line_height(gpui::relative(1.5))
+            .text_color(ink)
+            .justify_between()
+            .child(row().child(div().text_color(accent).child("❯")).child("git status"))
+            .child(
+                row()
+                    .child(div().text_color(color(colors.modified)).child("M"))
+                    .child(div().min_w_0().truncate().child("src/main.rs")),
+            )
+            .child(
+                row()
+                    .child(div().text_color(color(colors.ready)).child("✓"))
+                    .child(div().flex_1().text_color(ink.opacity(0.75)).child("ready"))
+                    .child(div().w(px(4.0)).h(px(8.0)).bg(color(colors.cursor))),
+            );
+    }
+    // 设置入口中的小图标仍保留色带；完整主题卡使用上面的终端内容。
     let line = |width, color| {
         div().w(gpui::relative(width)).h(px(if token { 3.0 } else { 4.0 })).rounded_full().bg(color)
     };
@@ -150,7 +184,7 @@ fn theme_sample_values(
         }))
         .p(px(0.0))
         .rounded(px(8.0))
-        .bg(chrome)
+        .bg(background)
         .child(
             v_flex()
                 .size_full()
@@ -158,7 +192,7 @@ fn theme_sample_values(
                 .gap(px(if token { 4.0 } else { 6.0 }))
                 .p(px(if token { 5.0 } else { 8.0 }))
                 .rounded(px(0.0))
-                .bg(rgb_hsla(background[0], background[1], background[2]))
+                .bg(background)
                 .child(
                     h_flex()
                         .w_full()
@@ -341,14 +375,35 @@ impl SettingsPane {
                             .justify_between()
                             .gap(px(3.0))
                             .text_size(px(if compact { 10.0 } else { 11.5 }))
-                            .text_color(if selected { colors.ink } else { colors.secondary })
+                            .text_color(colors.ink)
+                            .font_medium()
                             .when(selected, |caption| caption.font_semibold())
                             .child(div().truncate().child(picker.choice_label(choice, language)))
-                            .child(
+                            .child(if selected {
                                 Icon::new(IconName::Check)
                                     .size(px(12.0))
-                                    .when(!selected, |icon| icon.invisible()),
-                            ),
+                                    .text_color(colors.primary)
+                                    .into_any_element()
+                            } else {
+                                let light = match choice {
+                                    AppearanceSelection::Theme(name) => name.term_theme().is_light,
+                                    AppearanceSelection::Custom(index) => picker
+                                        .custom_definitions
+                                        .get(index)
+                                        .is_some_and(|definition| definition.appearance.is_light()),
+                                    AppearanceSelection::Icon(_) => false,
+                                };
+                                div()
+                                    .flex_shrink_0()
+                                    .text_size(px(10.0))
+                                    .text_color(colors.secondary)
+                                    .child(language.text(if light {
+                                        Message::ThemePickerLight
+                                    } else {
+                                        Message::ThemePickerDark
+                                    }))
+                                    .into_any_element()
+                            }),
                     );
                 self.appearance_option(choice, option_width, content, window, cx)
             }));
@@ -423,21 +478,24 @@ impl SettingsPane {
         let preview = v_flex()
             .w(px(if compact { width } else { 230.0 }))
             .flex_shrink_0()
-            .child(preview)
+            .items_center()
+            .child(preview.debug_selector(|| "theme-picker-terminal-preview".into()))
             .child(
                 div()
+                    .debug_selector(|| "theme-preview-name".into())
+                    .max_w_full()
+                    .text_center()
                     .mt(px(if compact_preview { 11.0 } else { 19.0 }))
                     .text_size(px(13.0))
                     .font_semibold()
-                    .when(!compact, |title| title.text_center())
                     .child(picker.choice_label(draft, language)),
             )
             .child(
                 div()
+                    .debug_selector(|| "theme-preview-mode".into())
                     .mt(px(5.0))
                     .text_size(px(10.5))
                     .text_color(colors.secondary)
-                    .when(!compact, |text| text.text_center())
                     .child(if is_light {
                         language.text(Message::ThemePickerLight)
                     } else {
@@ -446,10 +504,11 @@ impl SettingsPane {
             )
             .child(
                 h_flex()
+                    .w_full()
+                    .justify_center()
                     .mt(px(if compact_preview { 9.0 } else { 20.0 }))
                     .pt(px(if compact_preview { 9.0 } else { 17.0 }))
-                    .justify_center()
-                    .gap(px(9.0))
+                    .gap(px(8.0))
                     .border_t_1()
                     .border_color(colors.line)
                     .children(recommendations.iter().copied().enumerate().map(|(index, color)| {
@@ -467,8 +526,9 @@ impl SettingsPane {
                         div()
                             .id(("theme-foreground-swatch", index))
                             .debug_selector(move || format!("theme-foreground-swatch-{index}"))
-                            .size(px(28.0))
-                            .rounded_full()
+                            .size(px(32.0))
+                            .rounded(px(6.0))
+                            .p(px(3.0))
                             .track_focus(&focus.clone().tab_stop(true))
                             .role(gpui::accesskit::Role::RadioButton)
                             .aria_label(description.clone())
@@ -482,7 +542,13 @@ impl SettingsPane {
                             .when(focus.is_focused(window), |swatch| {
                                 swatch.border_color(colors.ink)
                             })
-                            .bg(rgb_hsla(color[0], color[1], color[2]))
+                            .hover(move |swatch| swatch.border_color(colors.primary))
+                            .child(
+                                div()
+                                    .size_full()
+                                    .rounded(px(3.0))
+                                    .bg(rgb_hsla(color[0], color[1], color[2])),
+                            )
                             .cursor_pointer()
                             .tooltip(move |window, cx| {
                                 gpui_component::tooltip::Tooltip::new(description.clone())
@@ -510,19 +576,20 @@ impl SettingsPane {
                         div()
                             .id("theme-foreground-custom-swatch")
                             .debug_selector(|| "theme-foreground-custom-swatch".to_owned())
-                            .size(px(28.0))
+                            .size(px(32.0))
                             .rounded_full()
                             .track_focus(&focus.clone().tab_stop(true))
                             .role(gpui::accesskit::Role::Button)
                             .aria_label(description)
                             .overflow_hidden()
                             .border_1()
-                            .p(px(1.0))
+                            .p(px(3.0))
                             .border_color(if custom { colors.primary } else { colors.control })
                             .when(focus.is_focused(window), |swatch| {
                                 swatch.border_color(colors.ink)
                             })
                             .cursor_pointer()
+                            .hover(move |swatch| swatch.border_color(colors.primary))
                             .tooltip(move |window, cx| {
                                 gpui_component::tooltip::Tooltip::new(description).build(window, cx)
                             })
@@ -544,6 +611,9 @@ impl SettingsPane {
             )
             .child(
                 div()
+                    .w_full()
+                    .px(px(6.0))
+                    .text_center()
                     .mt(px(if compact_preview { 9.0 } else { 20.0 }))
                     .text_size(px(10.5))
                     .line_height(gpui::relative(1.7))
@@ -557,7 +627,32 @@ impl SettingsPane {
         if compact {
             v_flex().w(px(width)).gap(px(20.0)).child(preview).child(grid_column)
         } else {
-            h_flex().w(px(width)).items_start().gap(px(25.0)).child(grid_column).child(preview)
+            h_flex()
+                .w(px(width))
+                .h_full()
+                .min_h_0()
+                .items_start()
+                .gap(px(25.0))
+                .child(
+                    div()
+                        .id("appearance-theme-list-scroll")
+                        .debug_selector(|| "appearance-theme-list-scroll".to_owned())
+                        .w(px(grid_width))
+                        .flex_shrink_0()
+                        .h_full()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(grid_column),
+                )
+                .child(
+                    div()
+                        .id("appearance-theme-preview-scroll")
+                        .h_full()
+                        .min_h_0()
+                        .flex_shrink_0()
+                        .overflow_y_scroll()
+                        .child(preview),
+                )
         }
     }
 }

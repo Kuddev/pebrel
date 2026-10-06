@@ -184,12 +184,15 @@ impl TerminalView {
             hover.hint.text(&*term).map(|t| t.into_owned())
         };
         let Some(text) = text else { return };
-        let cwd = self.local_cwd();
+        let cwd =
+            super::super::osc_links::link_base_directory(&self.cwd, self.wsl_distro(), || {
+                self.local_cwd()
+            });
         super::super::osc_links::open_hint_match(
             &hover.hint,
             &text,
             cwd.as_deref(),
-            &self.session_launch,
+            self.wsl_distro(),
             window,
             cx,
         );
@@ -329,14 +332,47 @@ impl TerminalView {
     /// 继续透传成一次命令执行。
     pub(super) fn accept_completion_popup(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(item) = suggest::popup_take(&mut self.suggest) else { return false };
+        self.accept_completion_item(item, cx)
+    }
+
+    pub(super) fn accept_completion_item(
+        &mut self,
+        item: crate::display::NebulaCompletionItem,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let insert = item.insert;
+        if !self.completion_editor.permits_insert(&insert) {
+            return false;
+        }
         self.completion_viewport.clear();
-        let mut before = if self.suggest.screen_line.is_empty() {
-            self.suggest.line_buf.clone()
-        } else {
-            self.suggest.screen_line.clone()
-        };
-        if item.replace_chars > 0 {
+        let snapshot = self.completion_editor.snapshot(self.prompt_input_epoch).cloned();
+        if item.replace_after_chars > 0 && snapshot.is_none() {
+            return false;
+        }
+        let original =
+            snapshot.as_ref().map(|snapshot| snapshot.line.clone()).unwrap_or_else(|| {
+                if self.suggest.screen_line.is_empty() {
+                    self.suggest.line_buf.clone()
+                } else {
+                    self.suggest.screen_line.clone()
+                }
+            });
+        let cursor = snapshot.as_ref().map_or(original.len(), |snapshot| snapshot.cursor);
+        let Some(head) = original.get(..cursor) else { return false };
+        let Some(tail) = original.get(cursor..) else { return false };
+        let tail: String = tail.chars().skip(item.replace_after_chars).collect();
+        let mut before = head.to_owned();
+        if item.replace_after_chars > 0 {
+            // zsh need not bind Delete's CSI sequence. Traverse proven text,
+            // then use the same native Backspace path as end-of-line edits.
+            let right = super::super::keymap::encode(
+                &gpui::Keystroke::parse("right").unwrap(),
+                &self.term_mode(),
+            )
+            .unwrap_or_else(|| b"\x1b[C".to_vec());
+            self.write_bytes(right.repeat(item.replace_after_chars));
+        }
+        if item.replace_chars + item.replace_after_chars > 0 {
             let backspace = super::super::keymap::encode(
                 &gpui::Keystroke::parse("backspace").unwrap(),
                 &self
@@ -346,7 +382,7 @@ impl TerminalView {
                     .unwrap_or_default(),
             )
             .unwrap_or_else(|| vec![0x7f]);
-            self.write_bytes(backspace.repeat(item.replace_chars));
+            self.write_bytes(backspace.repeat(item.replace_chars + item.replace_after_chars));
             for _ in 0..item.replace_chars {
                 before.pop();
                 crate::display::nebula_input_backspace(&mut self.suggest);
@@ -355,10 +391,13 @@ impl TerminalView {
         for c in insert.chars() {
             crate::display::nebula_input_char(&mut self.suggest, c);
         }
-        self.suggest.completion_suppressed_line = Some(format!("{before}{insert}"));
+        let expected = format!("{before}{insert}{tail}");
+        self.suggest.completion_suppressed_line = Some(expected.clone());
         if !insert.is_empty() {
             self.write_user_text(insert.clone(), false, insert.into_bytes(), cx);
         }
+        self.suggest.expect_completion_echo(original, expected);
+        self.completion_editor.invalidate();
         true
     }
 
@@ -739,8 +778,8 @@ impl TerminalView {
         true
     }
 
-    /// 右键行为：有选区直接复制，无选区直接粘贴。
-    /// Ctrl+右键保留选区菜单，供显式调用 Send to Chat。
+    /// Manual selection uses the context menu. Copy-on-select keeps quick
+    /// copy/paste, while Ctrl+right-click always requests the menu.
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -771,20 +810,17 @@ impl TerminalView {
             .as_ref()
             .and_then(|session| session.term.lock().selection_to_string())
             .filter(|text| !text.is_empty());
-        if let Some(text) = selected_text {
-            if event.modifiers.control {
-                cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
-                    position: event.position,
-                    text,
-                });
-            } else {
-                self.copy_selection(true, window, cx);
-            }
-            cx.stop_propagation();
+        if event.modifiers.control || !self.copy_on_select {
+            cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
+                position: event.position,
+                text: selected_text.unwrap_or_default(),
+            });
+        } else if selected_text.is_some() {
+            self.copy_selection(true, window, cx);
         } else {
             self.paste(window, cx);
-            cx.stop_propagation();
         }
+        cx.stop_propagation();
     }
 
     pub(super) fn on_right_up(
@@ -860,9 +896,12 @@ impl TerminalView {
         // 旧壳 `mouse_wheel_input`：Ctrl+滚轮先于一切滚动消费者，一步 1
         // 逻辑像素，钳在 4–64。设置页步进会写盘；这里同样写 `font_size=`，
         // 让下次启动跟上（旧壳只在其它设置落盘时顺便带走当前字号）。
+        // 开关关闭时手势仍被整体消费：既不缩放，也不回落给下面的滚动逻辑。
         if event.modifiers.control && !event.modifiers.alt && delta_y != 0.0 {
-            let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
-            self.zoom_font_size(step, cx);
+            if crate::gpui_shell::config::ctrl_wheel_font_zoom(cx) {
+                let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
+                self.zoom_font_size(step, cx);
+            }
             cx.stop_propagation();
             return;
         }

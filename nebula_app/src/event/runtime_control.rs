@@ -101,6 +101,10 @@ impl Processor {
         command: &RuntimeCommand,
     ) -> Result<Value, ApiError> {
         match command {
+            RuntimeCommand::Tab { .. } | RuntimeCommand::Conversation { .. } => Err(ApiError::new(
+                "method_not_found",
+                "shared files and conversations require the GPUI runtime",
+            )),
             RuntimeCommand::Snapshot => serde_json::to_value(self.publish_runtime_snapshot())
                 .map_err(|error| ApiError::new("serialization_failed", error.to_string())),
             // 旧壳（winit/GL）没有"按 id 选 shell"的能力。显式拒绝而不是忽略：
@@ -289,13 +293,13 @@ impl Processor {
                     "input": "paste"
                 }))
             },
-            RuntimeCommand::ReadPane { window_id, pane_id, lines } => {
+            RuntimeCommand::ReadPane { window_id, pane_id, lines, screen } => {
                 let id = self.runtime_target_window(*window_id, Some(*pane_id))?;
                 let read = self
                     .windows
                     .get(&id)
                     .expect("resolved runtime window exists")
-                    .runtime_read(*pane_id, *lines)?;
+                    .runtime_read(*pane_id, *lines, *screen)?;
                 serde_json::to_value(read)
                     .map_err(|error| ApiError::new("serialization_failed", error.to_string()))
             },
@@ -337,7 +341,7 @@ impl Processor {
                     "run_id": run_id
                 }))
             },
-            RuntimeCommand::Exec { .. } => Err(ApiError::new(
+            RuntimeCommand::Exec { .. } | RuntimeCommand::Git { .. } => Err(ApiError::new(
                 "invalid_runtime_command",
                 "pane.exec must be prepared before entering the synchronous UI dispatcher",
             )),
@@ -377,7 +381,7 @@ impl Processor {
                         format!("agent {:?} no longer has a live window", managed.name),
                     ));
                 };
-                let read = window.runtime_read(managed.pane_id, *lines)?;
+                let read = window.runtime_read(managed.pane_id, *lines, false)?;
                 Ok(serde_json::json!({ "agent": managed, "read": read }))
             },
         }
@@ -388,24 +392,15 @@ impl Processor {
         event_loop: &ActiveEventLoop,
         dispatch: &std::sync::Arc<RuntimeDispatch>,
     ) {
-        if let RuntimeCommand::Exec { window_id, pane_id, argv, timeout_ms, max_output_bytes } =
-            &dispatch.command
-        {
-            let prepared = self.runtime_target_window(*window_id, Some(*pane_id)).and_then(|id| {
+        if let Some((window_id, pane_id)) = dispatch.command.execution_target() {
+            let prepared = self.runtime_target_window(window_id, Some(pane_id)).and_then(|id| {
                 self.windows
                     .get(&id)
                     .expect("resolved runtime window exists")
-                    .runtime_exec_context(*pane_id)
+                    .runtime_exec_context(pane_id)
             });
             match prepared {
-                Ok((context, cwd)) => crate::runtime_exec::spawn(
-                    dispatch.clone(),
-                    context,
-                    cwd,
-                    argv.clone(),
-                    *timeout_ms,
-                    *max_output_bytes,
-                ),
+                Ok((context, cwd)) => crate::runtime_exec::spawn(dispatch.clone(), context, cwd),
                 Err(error) => dispatch.respond(Err(error)),
             }
             return;

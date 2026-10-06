@@ -516,7 +516,7 @@ pub fn settings_hover_bg(cx: &App, strong: bool) -> Hsla {
 
 /// 按运行时主题重建窗口 chrome：先切组件库深浅模式垫底（未映射的长尾
 /// token 落在正确的底色系上），再用旧壳 [`Skin`] 覆写全部关键 token——
-/// 所有主题（含 Nord/Paper）共用同一条 token 应用路径。启动、设置变更、系统外观变化
+/// 所有主题（含 Nord / Nord Light / Warm Sand）共用同一条 token 应用路径。启动、设置变更、系统外观变化
 /// 都走这里；主题名先经 [`effective_theme_name`] 折算 follow_system。
 pub fn apply_chrome_theme(cx: &mut App) {
     // 视效（模糊/透明度/壁纸）与主题同一时机刷新：设置热应用、系统外观
@@ -640,8 +640,8 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     let list_selected = selected;
     theme.accent = hover;
     theme.accent_foreground = ink(sk.ink_strong);
-    theme.list_hover = hover;
-    theme.list_active = list_selected;
+    theme.list_hover = ink(sk.ink).opacity(if sk.is_light { 0.06 } else { 0.08 });
+    theme.list_active = ink(sk.accent).opacity(0.08);
     theme.list_active_border = transparent;
     theme.sidebar_foreground = ink(sk.ink);
     theme.sidebar_accent = selected;
@@ -686,16 +686,39 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     theme.warning_active = shift3(sk.warn.r, sk.warn.g, sk.warn.b, 0.18);
     theme.warning_foreground = on_solid(sk.warn);
 
-    // 1.16 为 Button 增加了独立 token。继续沿用 Nebula 原有的语义配色，
-    // 只接新版组件的取色入口，不改变 variant、尺寸、文字或交互。
-    theme.button = theme.secondary;
-    theme.button_hover = theme.secondary_hover;
-    theme.button_active = theme.secondary_active;
+    // Button tokens are independent of the accent used by switches and links.
+    // Default actions remain transparent; primary actions choose solid/soft below.
+    theme.button = transparent;
+    theme.button_hover = ink(sk.ink).opacity(0.045);
+    theme.button_active = ink(sk.ink).opacity(0.08);
     theme.button_foreground = theme.secondary_foreground;
     theme.button_primary = theme.primary;
     theme.button_primary_hover = theme.primary_hover;
     theme.button_primary_active = theme.primary_active;
     theme.button_primary_foreground = theme.primary_foreground;
+    if !chrome.is_custom() && chrome.base_name() == ThemeName::Nord {
+        // Keep frost blue readable under dark text in every pointer state.
+        theme.button_primary_hover = theme.primary.blend(theme.foreground.opacity(0.08));
+        theme.button_primary_active = theme.primary.blend(theme.foreground.opacity(0.14));
+    }
+    // Nord's solid frost blue is intentional. Other themes use a soft wash;
+    // keep the accent itself unchanged for switches, links and custom themes.
+    if chrome.is_custom() || chrome.base_name() != ThemeName::Nord {
+        theme.button_primary = theme.primary.opacity(0.10);
+        theme.button_primary_hover = theme.primary.opacity(0.15);
+        theme.button_primary_active = theme.primary.opacity(0.20);
+        let pressed = crate::display::ui::surface::over(
+            Rgba::new(sk.accent.r, sk.accent.g, sk.accent.b, 51),
+            sk.panel,
+        );
+        theme.button_primary_foreground = ink(crate::display::terminal_color::ensure_contrast(
+            sk.accent,
+            Rgb::new(pressed.r, pressed.g, pressed.b),
+            sk.ink,
+            Rgb::new(sk.panel.r, sk.panel.g, sk.panel.b),
+            4.5,
+        ));
+    }
     theme.button_secondary = theme.secondary;
     theme.button_secondary_hover = theme.secondary_hover;
     theme.button_secondary_active = theme.secondary_active;
@@ -768,7 +791,7 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
             ".SystemUIFont"
         };
     theme.font_family = ui_font_family.unwrap_or_else(|| default_ui_font.to_owned()).into();
-    theme.radius = px(crate::display::UI_CORNER_RADIUS_LOGICAL);
+    theme.radius = px(6.0);
     theme.radius_lg = px(12.0);
 
     // 1.16 的 Button、Slider、Switch 等背景统一读取 ThemeTokens。Nebula 的
@@ -831,7 +854,9 @@ mod tests {
         assert_eq!(resolve_theme_name(ThemeName::BreezeDark, true, true), ThemeName::BreezeLight);
         assert_eq!(resolve_theme_name(ThemeName::MintLight, true, false), ThemeName::MintDark);
         assert_eq!(resolve_theme_name(ThemeName::MintDark, true, true), ThemeName::MintLight);
-        assert_eq!(resolve_theme_name(ThemeName::Nord, true, true), ThemeName::Paper);
+        assert_eq!(resolve_theme_name(ThemeName::Nord, true, true), ThemeName::NordLight);
+        assert_eq!(resolve_theme_name(ThemeName::NordLight, true, false), ThemeName::Nord);
+        assert_eq!(resolve_theme_name(ThemeName::Paper, true, true), ThemeName::Paper);
         assert_eq!(resolve_theme_name(ThemeName::Paper, true, false), ThemeName::Nord);
     }
 

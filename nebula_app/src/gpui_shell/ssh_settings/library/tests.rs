@@ -10,12 +10,12 @@ fn pairing_design_ssh_auth_description_uses_metadata_not_a_saved_password_claim(
     assert_eq!(host_auth_label(&profile, language), "Password");
     profile.auth = crate::ssh_profiles::SshAuthMode::PublicKey;
     profile.private_keys.push(std::path::PathBuf::from("private/location/id_ed25519"));
-    assert_eq!(host_auth_label(&profile, language), "id_ed25519");
+    assert_eq!(host_auth_label(&profile, language), "Private key id_ed25519");
 }
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
-fn pairing_design_ssh_cards_keep_icon_anchors_and_compact_filter(cx: &mut gpui::TestAppContext) {
+fn prototype_ssh_rows_keep_icon_anchors_and_compact_filter(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_global(crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord));
@@ -29,6 +29,8 @@ fn pairing_design_ssh_cards_keep_icon_anchors_and_compact_filter(cx: &mut gpui::
             pane.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists {
                 saved: vec!["nebula-test".into(), "second-host".into()],
                 pinned: vec!["second-host".into()],
+                configured: vec!["hidden-config".into()],
+                hidden: vec!["hidden-config".into()],
                 ..Default::default()
             };
             let mut profile = pane.ssh_hosts.profiles.for_destination("nebula-test");
@@ -47,39 +49,99 @@ fn pairing_design_ssh_cards_keep_icon_anchors_and_compact_filter(cx: &mut gpui::
             window.draw(cx).clear(cx);
         });
         let icon = cx.debug_bounds("ssh-host-icon-0").expect("card anchor");
-        assert_eq!(icon.size, gpui::size(px(36.0), px(36.0)));
+        assert_eq!(icon.size, gpui::size(px(32.0), px(32.0)));
         let first = cx.debug_bounds("ssh-host-row-0").unwrap();
-        assert_eq!(icon.center().y, first.center().y);
+        assert!(cx.debug_bounds("ssh-host-time-0").is_none(), "unknown time column is removed");
+        // A one-pixel bottom divider shifts the content center by half a pixel.
+        assert!((f32::from(icon.center().y - first.center().y)).abs() <= 0.5);
         let next = cx.debug_bounds("ssh-host-row-1").unwrap();
         let next_icon = cx.debug_bounds("ssh-host-icon-1").unwrap();
         assert_eq!(icon.center().x, next_icon.center().x);
-        assert!(next.origin.y - first.bottom() >= px(8.0));
+        assert_eq!(next.origin.y, first.bottom(), "rows share one panel without card gutters");
         let filter = cx.debug_bounds("ssh-inline-filter").unwrap();
-        assert!(filter.size.width <= px(210.0));
+        assert!(filter.size.width <= px(240.0));
+        assert!(filter.size.height >= px(32.0), "single-line search keeps the toolbar height");
         assert!(filter.right() <= px(width));
-        for name in ["ssh-edit-0", "ssh-pin-0", "ssh-delete-0"] {
+        let controls = cx.debug_bounds("ssh-library-controls").unwrap();
+        assert!(controls.bottom() <= first.top(), "filters stay above the list panel");
+        let footer = cx.debug_bounds("ssh-config-banner").unwrap();
+        assert!(footer.top() >= next.bottom());
+        assert!(cx.debug_bounds("host-scope-2").is_some());
+        assert!(cx.debug_bounds("host-scope-3").is_none());
+        assert!(cx.debug_bounds("ssh-toggle-hidden").is_some());
+        for name in ["ssh-more-0", "ssh-connect-0"] {
             let action = cx.debug_bounds(name).expect("visible management action");
             assert!(action.size.width >= px(32.0) && action.size.height >= px(32.0));
             assert!(action.right() <= first.right());
         }
     }
+    let more = cx.debug_bounds("ssh-more-1").unwrap();
+    let connect_before = cx.debug_bounds("ssh-connect-1").unwrap();
+    let hovered_row = cx.debug_bounds("ssh-host-row-1").unwrap();
+    cx.simulate_mouse_move(hovered_row.center(), None, gpui::Modifiers::default());
+    cx.run_until_parked();
     cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert_eq!(cx.debug_bounds("ssh-connect-1").unwrap(), connect_before);
+    cx.simulate_click(more.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    // Move away from the row into the menu area; the open dropdown owns its
+    // visibility and keyboard navigation must continue to work.
+    cx.simulate_mouse_move(gpui::point(px(10.0), px(10.0)), None, gpui::Modifiers::default());
+    cx.run_until_parked();
+    // 复制失败也不能退回编辑弹窗；用明确的加载错误阻止测试触碰用户凭据和磁盘。
+    pane.update(cx, |pane, _| pane.ssh_hosts.load_error = Some("fixture load failure".into()));
+    cx.simulate_keystrokes("down down down enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
         pane.update(cx, |pane, cx| {
-            pane.duplicate_ssh_host("nebula-test".into(), window, cx);
-            let editor = pane.ssh_editor.as_ref().expect("copied host draft");
-            assert!(editor.original_destination.is_none());
-            assert!(
-                editor
-                    .jump_choices
-                    .iter()
-                    .any(|(host, label)| host == "nebula-test" && label == "Alpha"),
-                "the copied-from host remains available as a jump host"
-            );
-            assert_eq!(pane.ssh_destination_input.read(cx).value(), "");
-            assert_eq!(pane.ssh_label_input.read(cx).value(), "Alpha 1");
-            pane.close_ssh_editor(window, cx);
+            assert!(pane.ssh_editor.is_none(), "copy does not open an editor");
+            assert_eq!(pane.ssh_hosts.profiles.destinations().count(), 1);
+            assert!(matches!(&pane.ssh_status, Some(SshStatus::Error(error)) if error == "fixture load failure"));
+            pane.ssh_hosts.load_error = None;
+            cx.notify();
         });
     });
+
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    let row = cx.debug_bounds("ssh-host-row-0").unwrap();
+    cx.simulate_mouse_down(row.center(), MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(row.center(), MouseButton::Right, gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down down down down down enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    pane.read_with(cx, |pane, _| {
+        assert_eq!(pane.ssh_delete_confirm.as_deref(), Some("second-host"));
+        assert_eq!(pane.ssh_hosts.saved.len(), 2, "menu only requests confirmation");
+        assert!(pane.ssh_delete_undo.is_none());
+    });
+    let cancel = cx.debug_bounds("ssh-cancel-delete-0").unwrap();
+    cx.simulate_click(cancel.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_delete_confirm.is_none()));
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    let hidden = cx.debug_bounds("ssh-toggle-hidden").unwrap();
+    cx.simulate_click(hidden.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("ssh-hidden-row-0").is_some());
+    assert!(pane.read_with(cx, |pane, _| pane.ssh_show_hidden));
 
     let pin_filter = cx.debug_bounds("host-scope-1").unwrap();
     let point = gpui::point(pin_filter.origin.x + px(4.0), pin_filter.center().y);
@@ -122,9 +184,14 @@ fn native_ssh_copy_context_menu_preview() {
     gpui_platform::application().with_assets(crate::gpui_shell::assets::NebulaAssets).run(
         move |cx| {
             gpui_component::init(cx);
-            cx.set_global(crate::gpui_shell::config::Settings::load(
-                nebula_settings::ThemeName::Nord,
-            ));
+            let theme = if std::env::var("PEBREL_SSH_QA_THEME").as_deref() == Ok("paper") {
+                nebula_settings::ThemeName::Paper
+            } else {
+                nebula_settings::ThemeName::Nord
+            };
+            let mut settings = crate::gpui_shell::config::Settings::load(theme);
+            settings.ui_language = crate::display::UiLanguage::ZhCn;
+            cx.set_global(settings);
             crate::gpui_shell::theme::apply_chrome_theme(cx);
 
             let mut pane = None;
@@ -142,25 +209,54 @@ fn native_ssh_copy_context_menu_preview() {
                     |window, cx| {
                         let view = cx.new(|cx| SettingsPane::new(window, cx));
                         view.update(cx, |pane, cx| {
-                            pane.manage_launcher_ssh("root@192.0.2.10".into(), false, window, cx);
+                            pane.manage_launcher_ssh(String::new(), false, window, cx);
                             pane.ssh_delete_confirm = None;
+                            let fixtures = [
+                                ("kud@nas.example", "家里 NAS", "家里"),
+                                ("deploy@192.0.2.21", "生产 API", "公司"),
+                                ("bastion", "bastion", "公司"),
+                                ("kud@relay.example", "中转服务器", ""),
+                                ("gpu-box", "gpu-box", "家里"),
+                                ("pi@raspberrypi.example", "raspberrypi", "家里"),
+                            ];
                             pane.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists {
-                                saved: vec![
-                                    "root@192.0.2.10".into(),
-                                    "deploy@198.51.100.20".into(),
+                                saved: fixtures.iter().map(|(host, _, _)| (*host).into()).collect(),
+                                pinned: fixtures[..2]
+                                    .iter()
+                                    .map(|(host, _, _)| (*host).into())
+                                    .collect(),
+                                configured: vec![
+                                    "bastion".into(),
+                                    "gpu-box".into(),
+                                    "old-vps".into(),
                                 ],
+                                hidden: vec!["old-vps".into()],
                                 ..Default::default()
                             };
-                            let mut alpha =
-                                pane.ssh_hosts.profiles.for_destination("root@192.0.2.10");
-                            alpha.label = Some("Alpha".into());
-                            alpha.auth = crate::ssh_profiles::SshAuthMode::PublicKey;
-                            alpha.private_keys.push("C:\\Keys\\alpha_ed25519".into());
-                            pane.ssh_hosts.profiles.upsert(alpha);
-                            let mut beta =
-                                pane.ssh_hosts.profiles.for_destination("deploy@198.51.100.20");
-                            beta.label = Some("Beta".into());
-                            pane.ssh_hosts.profiles.upsert(beta);
+                            for (index, (host, label, group)) in fixtures.into_iter().enumerate() {
+                                let mut profile = pane.ssh_hosts.profiles.for_destination(host);
+                                profile.label = Some(label.into());
+                                if matches!(index, 0 | 3) {
+                                    profile.auth = crate::ssh_profiles::SshAuthMode::PublicKey;
+                                    profile.private_keys.push("C:\\Keys\\id_ed25519".into());
+                                }
+                                if index == 1 {
+                                    profile.connection.jump_mode =
+                                        crate::ssh_profiles::SshHostJumpMode::Host;
+                                    profile.connection.jump_host = "bastion".into();
+                                }
+                                pane.ssh_hosts.profiles.upsert(profile);
+                                pane.ssh_hosts
+                                    .profiles
+                                    .set_organization(
+                                        host,
+                                        crate::ssh_profiles::HostOrganization {
+                                            group: group.into(),
+                                            ..Default::default()
+                                        },
+                                    )
+                                    .unwrap();
+                            }
                         });
                         pane = Some(view.clone());
                         cx.new(|cx| gpui_component::Root::new(view, window, cx))
@@ -185,7 +281,7 @@ fn native_ssh_copy_context_menu_preview() {
                         serde_json::to_vec(&serde_json::json!({
                             "pid": std::process::id(),
                             "state": "host-row-ready",
-                            "host": "Alpha",
+                            "host": "家里 NAS",
                         }))
                         .unwrap(),
                     )

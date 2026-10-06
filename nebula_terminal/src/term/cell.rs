@@ -221,16 +221,16 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// Zerowidth characters stored in this cell.
+    /// Additional codepoints sharing this cell, including emoji continuations.
     #[inline]
     pub fn zerowidth(&self) -> Option<&[char]> {
         self.extra.as_ref().map(|extra| extra.text().zerowidth.as_slice())
     }
 
-    /// Write a new zerowidth character to this cell.
+    /// Append a codepoint without allocating another terminal cell.
     #[inline]
     pub fn push_zerowidth(&mut self, character: char) {
-        let extra = self.extra.get_or_insert(Default::default());
+        let extra = self.extra.get_or_insert_with(Default::default);
         Arc::make_mut(extra).text_mut().zerowidth.push(character);
     }
 

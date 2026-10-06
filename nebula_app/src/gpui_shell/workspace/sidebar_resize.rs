@@ -127,7 +127,7 @@ impl NebulaWorkspace {
         self.sidebar_width = if drag.close { drag.start_width } else { drag.open_width };
         if drag.close {
             self.sidebar_collapsed = true;
-            self.sidebar_fold_armed = true;
+            self.sidebar_fold_armed = !tab_reveal_instant(cx);
         } else if let Err(error) =
             nebula_settings::persist_keys(&[("sidebar_w", format!("{:.0}", self.sidebar_width))])
         {

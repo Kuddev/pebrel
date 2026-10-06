@@ -29,7 +29,7 @@ pub enum Event {
     /// bundled PowerShell prompt emits).
     CwdReport(String),
 
-    /// An iTerm2 OSC 1337 inline image, sniffed out of the PTY stream.
+    /// An OSC 1337 inline image, sniffed out of the PTY stream.
     ///
     /// Grid cells own placement and lifetime; frontends only decode/cache pixels.
     InlineImage { data: Arc<Vec<u8>>, placement: crate::inline_image::ImagePlacement },
@@ -45,7 +45,7 @@ pub enum Event {
     /// queries and future channels).
     UserVar { name: String, value: String },
 
-    /// OSC 9 — free-text notification from a program (iTerm style).
+    /// OSC 9 — free-text notification from a program.
     Notify(String),
 
     /// OSC 9;4 — ConEmu 任务进度（`state` 原始码，`value` 为 0..=100）。

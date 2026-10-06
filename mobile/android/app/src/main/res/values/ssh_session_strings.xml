@@ -1,0 +1,6 @@
+<resources>
+    <string name="ssh_terminal_mode">Terminal</string>
+    <string name="ssh_persistent_session">Persistent session</string>
+    <string name="ssh_multiplexer_hint">Runs on the SSH host. Leave the name empty for the default session. Disconnecting detaches the client; remote processes keep running. The host needs the selected session manager installed.</string>
+    <string name="ssh_session_name_invalid">Use up to 64 letters, numbers, underscores or hyphens; dots are also accepted by session types that support them.</string>
+</resources>

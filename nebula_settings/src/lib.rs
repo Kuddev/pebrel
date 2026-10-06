@@ -225,12 +225,12 @@ pub enum ThemeName {
     MossDark,
     /// 深色：Nord 配色（Arctic Ice Studio 公开色板）。出厂默认。
     ///
-    /// 跟随系统外观时它的浅色对应是 [`Self::Paper`]（配对表在旧壳
-    /// `display/ui/theme.rs::for_system_appearance`，两壳同一来源），所以改这一个
-    /// `#[default]` 就同时定下了「默认深色 = Nord、默认浅色 = Paper」。
+    /// 跟随系统时与 Nord Light 配对；显式主题选择保持独立。
     #[default]
     Nord,
-    /// 浅色：暖纸面 Paper 配色。跟随系统时作为 [`Self::Nord`] 的浅色成员。
+    /// 浅色：基于 Nord 色板的浅色适配。
+    NordLight,
+    /// Warm Sand；保留 Rust 变体名与旧 Paper 配置的兼容读取。
     Paper,
     BreezeLight,
     BreezeDark,
@@ -240,6 +240,7 @@ pub enum ThemeName {
     CatppuccinLatte,
     CatppuccinFrappe,
     CatppuccinMacchiato,
+    /// Slate Light；兼容旧 GlassLight 标识。
     GlassLight,
     GlassDark,
 }
@@ -255,7 +256,8 @@ impl ThemeName {
             "LinenLight" => Self::LinenLight,
             "MossDark" => Self::MossDark,
             "Nord" => Self::Nord,
-            "Paper" => Self::Paper,
+            "Paper" | "WarmSand" => Self::Paper,
+            "NordLight" => Self::NordLight,
             "BreezeLight" => Self::BreezeLight,
             "BreezeDark" => Self::BreezeDark,
             "MintLight" => Self::MintLight,
@@ -264,7 +266,7 @@ impl ThemeName {
             "CatppuccinLatte" => Self::CatppuccinLatte,
             "CatppuccinFrappe" => Self::CatppuccinFrappe,
             "CatppuccinMacchiato" => Self::CatppuccinMacchiato,
-            "GlassLight" => Self::GlassLight,
+            "GlassLight" | "SlateLight" => Self::GlassLight,
             "GlassDark" => Self::GlassDark,
 
             _ => return None,
@@ -281,7 +283,8 @@ impl ThemeName {
             Self::LinenLight => "LinenLight",
             Self::MossDark => "MossDark",
             Self::Nord => "Nord",
-            Self::Paper => "Paper",
+            Self::Paper => "WarmSand",
+            Self::NordLight => "NordLight",
             Self::BreezeLight => "BreezeLight",
             Self::BreezeDark => "BreezeDark",
             Self::MintLight => "MintLight",
@@ -290,7 +293,7 @@ impl ThemeName {
             Self::CatppuccinLatte => "CatppuccinLatte",
             Self::CatppuccinFrappe => "CatppuccinFrappe",
             Self::CatppuccinMacchiato => "CatppuccinMacchiato",
-            Self::GlassLight => "GlassLight",
+            Self::GlassLight => "SlateLight",
             Self::GlassDark => "GlassDark",
         }
     }
@@ -300,7 +303,9 @@ impl ThemeName {
         // 背景与 is_light 来自各主题 palette()；powerline 为提示符段色
         // （icon bg/fg、path bg/fg、branch bg/fg、time bg/fg）。
         match self {
-            Self::BreezeLight
+            Self::NordLight
+            | Self::Paper
+            | Self::BreezeLight
             | Self::BreezeDark
             | Self::MintLight
             | Self::MintDark
@@ -457,48 +462,6 @@ impl ThemeName {
                     [0x7b, 0x82, 0x94],
                 ],
             },
-            Self::Paper => TermTheme {
-                background: [0xfc, 0xfb, 0xf9],
-                is_light: true,
-                exact: Some(ExactTermColors {
-                    foreground: [0x1a, 0x1a, 0x1a],
-                    ansi: [
-                        [0x1a, 0x1a, 0x1a],
-                        [0xa3, 0x3a, 0x3a],
-                        [0x2b, 0x5a, 0x38],
-                        [0xa8, 0x5a, 0x20],
-                        [0x4a, 0x7a, 0x8a],
-                        [0x4a, 0x3a, 0x6a],
-                        [0x3a, 0x7a, 0x6a],
-                        [0x47, 0x46, 0x46],
-                        [0x8c, 0x8a, 0x80],
-                        [0xc3, 0x6a, 0x6a],
-                        [0x6b, 0x9a, 0x78],
-                        [0xc8, 0x8a, 0x50],
-                        [0x7a, 0x9a, 0xaa],
-                        [0x8a, 0x7a, 0x9a],
-                        [0x6a, 0xba, 0xaa],
-                        [0x2f, 0x2e, 0x2e],
-                    ],
-                    // Paper 色板没有声明 cursor / selection；None 必须保留，
-                    // 不能把截图近似值冒充成主题自带数据。
-                    cursor: None,
-                    cursor_text: None,
-                    cursor_stroke: None,
-                    selection_foreground: None,
-                    selection_background: None,
-                }),
-                powerline: [
-                    [0xe0, 0xdf, 0xd5],
-                    [0x1a, 0x1a, 0x1a],
-                    [0xf5, 0xf4, 0xf0],
-                    [0x47, 0x46, 0x46],
-                    [0xc1, 0xbe, 0xb5],
-                    [0x2b, 0x5a, 0x38],
-                    [0xfc, 0xfb, 0xf9],
-                    [0x8c, 0x8a, 0x80],
-                ],
-            },
         }
     }
 
@@ -624,13 +587,35 @@ pub enum CompletionStyleName {
     #[default]
     Inline,
     Popup,
+    Hybrid,
 }
 
 impl CompletionStyleName {
+    pub const ALL: [Self; 3] = [Self::Inline, Self::Popup, Self::Hybrid];
+    pub const VALUES: [&'static str; 3] = ["inline", "popup", "hybrid"];
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Inline => Self::Popup,
+            Self::Popup => Self::Hybrid,
+            Self::Hybrid => Self::Inline,
+        }
+    }
+
+    /// 混合模式仅在用户请求后显示列表，候选生成仍复用已有两种呈现。
+    pub fn active_style(self, popup_requested: bool) -> Self {
+        match self {
+            Self::Hybrid if popup_requested => Self::Popup,
+            Self::Hybrid => Self::Inline,
+            style => style,
+        }
+    }
+
     pub fn from_settings(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "inline" | "ghost" => Some(Self::Inline),
             "popup" | "menu" | "list" => Some(Self::Popup),
+            "hybrid" => Some(Self::Hybrid),
             _ => None,
         }
     }
@@ -639,7 +624,36 @@ impl CompletionStyleName {
         match self {
             Self::Inline => "inline",
             Self::Popup => "popup",
+            Self::Hybrid => "hybrid",
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_mode_tests {
+    use super::*;
+
+    #[test]
+    fn modes_round_trip_preserve_other_settings_and_reset_to_inline() {
+        for mode in CompletionStyleName::ALL {
+            let input = "accept=right\nunknown=keep\ncompletion_style=inline\n";
+            let saved = apply_updates(input, &[("completion_style", mode.settings_value().into())]);
+            assert_eq!(
+                RuntimeSettings::from_raw(&RawSettings::from_text(&saved)).completion_style,
+                mode
+            );
+            assert!(saved.contains("unknown=keep"));
+            assert!(saved.contains("accept=right"));
+            assert_eq!(CompletionStyleName::from_settings(mode.settings_value()), Some(mode));
+        }
+        assert_eq!(CompletionStyleName::Hybrid.cycle(), CompletionStyleName::Inline);
+        assert_eq!(CompletionStyleName::from_settings("ghost"), Some(CompletionStyleName::Inline));
+        assert_eq!(CompletionStyleName::from_settings("list"), Some(CompletionStyleName::Popup));
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_text("completion_style=invalid"))
+                .completion_style,
+            CompletionStyleName::Inline
+        );
     }
 }
 
@@ -977,6 +991,9 @@ pub struct RuntimeSettings {
     /// **逻辑像素**（旧壳写盘语义：设置页 spinner 与 Ctrl+滚轮缩放持久化时
     /// 已除以 scale factor）。`None` = 跟随 nebula.toml 的 `font.size`（pt）。
     pub font_size_px: Option<f32>,
+    /// Ctrl+滚轮缩放终端字号。默认开启以保留既有行为；关闭时该手势被整体
+    /// 消费：既不缩放，也不回落成普通滚动。不影响普通滚轮与键盘字号快捷键。
+    pub ctrl_wheel_font_zoom: bool,
     /// Enabled by default; explicit theme mode follows the selected theme.
     pub ligatures: Ligatures,
     pub cursor_shape: Option<CursorShapeName>,
@@ -995,9 +1012,12 @@ pub struct RuntimeSettings {
     pub multiline_paste_confirm: bool,
     /// 标签页关闭按钮（叉号）是否渲染：关 = 不渲染，仍可用中键关闭。
     pub tab_close_visible: bool,
-    /// 终端网络代理：新会话启动时把当前系统代理写入 HTTP_PROXY/HTTPS_PROXY。
-    /// 上游默认关 (false) —— fork 侧另起本地 commit 翻成默认开。
+    /// 新建本地终端是否把 Windows 系统代理写入代理环境变量。自定义代理地址
+    /// 不看这个开关：网络页填了地址就会写入新终端。默认关。已打开的会话不改。
     pub terminal_proxy: bool,
+    /// Refresh Windows registry variables for new panes. Disable to inherit the
+    /// launching process environment, including its temporary PATH additions.
+    pub refresh_environment: bool,
     pub powerline: bool,
     /// 默认 shell 的原始 id（`shell=` 原文：powershell/bash/cmd/pwsh/WSL
     /// 发行版等）。解析归 shell 检测层，这里只做持久化往返。
@@ -1126,6 +1146,16 @@ impl RuntimeSettings {
         Self::from_raw(&RawSettings::load())
     }
 
+    /// 启动时再检查目录：保存后可能被删除，各启动入口应使用同一有效性规则。
+    pub fn startup_directory_path(&self) -> Option<std::path::PathBuf> {
+        let directory = self.startup_directory.as_deref()?.trim();
+        if directory.is_empty() {
+            return None;
+        }
+        let path = std::path::PathBuf::from(directory);
+        path.is_dir().then_some(path)
+    }
+
     pub fn from_raw(raw: &RawSettings) -> Self {
         let blur = raw.value("blur").and_then(BlurModeName::from_settings).unwrap_or_default();
         let blur_explicit = raw.value("blur").and_then(BlurModeName::from_settings).is_some();
@@ -1149,6 +1179,7 @@ impl RuntimeSettings {
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
+            ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
             ligatures: raw
                 .value("ligatures")
                 .and_then(Ligatures::from_settings)
@@ -1169,6 +1200,7 @@ impl RuntimeSettings {
             multiline_paste_confirm: raw.bool_on("multiline_paste_confirm").unwrap_or(true),
             tab_close_visible: raw.bool_on("tab_close_visible").unwrap_or(true),
             terminal_proxy: raw.bool_on("terminal_proxy").unwrap_or(false),
+            refresh_environment: raw.bool_on("refresh_environment").unwrap_or(true),
             powerline: raw.bool_on("powerline").unwrap_or(true),
             shell: raw.value("shell").or_else(|| raw.value("executor")).map(str::to_owned),
             startup_directory: raw.value("startup_directory").map(str::to_owned),
@@ -1319,6 +1351,20 @@ pub fn format_hex_rgb(rgb: Rgb8) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn environment_refresh_defaults_and_round_trips() {
+        for text in ["", "refresh_environment=\n", "refresh_environment=invalid\n"] {
+            assert!(RuntimeSettings::from_raw(&RawSettings::from_text(text)).refresh_environment);
+        }
+        let original = "theme=Nord\nrefresh_environment=1\ncustom=keep\n";
+        let disabled = apply_updates(original, &[("refresh_environment", "0".into())]);
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&disabled)).refresh_environment);
+        assert!(disabled.contains("custom=keep"));
+        let enabled = apply_updates(&disabled, &[("refresh_environment", "1".into())]);
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).refresh_environment);
+        assert_eq!(enabled, original);
+    }
+
     #[test]
     fn pane_preferences_round_trip_and_allow_a_missing_mouse_override() {
         let defaults = RuntimeSettings::from_raw(&RawSettings::default());
@@ -1614,6 +1660,22 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_wheel_font_zoom_defaults_on_and_accepts_all_boolean_spellings() {
+        assert!(RuntimeSettings::from_raw(&RawSettings::default()).ctrl_wheel_font_zoom);
+        for value in ["", "invalid", "1", "true", "YES", "On"] {
+            let raw = RawSettings::from_text(&format!("ctrl_wheel_font_zoom={value}\n"));
+            assert!(RuntimeSettings::from_raw(&raw).ctrl_wheel_font_zoom, "{value:?}");
+        }
+        for value in ["0", "false", "NO", "Off"] {
+            let raw = RawSettings::from_text(&format!("ctrl_wheel_font_zoom={value}\n"));
+            let settings = RuntimeSettings::from_raw(&raw);
+            assert!(!settings.ctrl_wheel_font_zoom, "{value:?}");
+            assert_eq!(settings.bell, BellModeName::Both);
+            assert!(settings.font_size_px.is_none());
+        }
+    }
+
+    #[test]
     fn bell_mode_parses_known_values_and_rejects_junk() {
         assert_eq!(BellModeName::from_settings("none"), Some(BellModeName::None));
         assert_eq!(BellModeName::from_settings("off"), Some(BellModeName::None));
@@ -1792,7 +1854,7 @@ mod tests {
     }
 
     #[test]
-    fn nord_and_paper_keep_their_declared_terminal_palettes() {
+    fn nord_and_warm_sand_keep_their_declared_terminal_palettes() {
         let nord = ThemeName::Nord.term_theme().exact.expect("Nord exact colors");
         assert_eq!(nord.foreground, [0xf1, 0xf6, 0xff]);
         assert_eq!(nord.ansi[0], [0x3b, 0x42, 0x52]);
@@ -1801,10 +1863,10 @@ mod tests {
         assert_eq!(nord.cursor_stroke, Some([0x88, 0xc0, 0xd0]));
         assert_eq!(nord.selection_background, Some([0xe5, 0xe9, 0xf0]));
 
-        let paper = ThemeName::Paper.term_theme().exact.expect("Paper exact colors");
-        assert_eq!(paper.foreground, [0x1a, 0x1a, 0x1a]);
-        assert_eq!(paper.ansi[0], [0x1a, 0x1a, 0x1a]);
-        assert_eq!(paper.ansi[15], [0x2f, 0x2e, 0x2e]);
+        let paper = ThemeName::Paper.term_theme().exact.expect("Warm Sand exact colors");
+        assert_eq!(paper.foreground, [0x2f, 0x2e, 0x2b]);
+        assert_eq!(paper.ansi[0], [0x2f, 0x2e, 0x2b]);
+        assert_eq!(paper.ansi[15], [0x4a, 0x43, 0x3b]);
         assert_eq!(paper.cursor, None);
         assert_eq!(paper.selection_background, None);
     }
