@@ -81,10 +81,12 @@ def check(site: Path, output: Path):
                 pages = {item['slug']: item for group in manifest['groups'] for item in group['pages']}
                 for slug in ('completions', 'backups', 'mobile'):
                     page.goto(base + slug + '/index.html')
-                    expect(page.locator('.article-footer')).to_contain_text(pages[slug]['version'])
+                    version = pages[slug].get('version', manifest['version'])
+                    commit = pages[slug].get('source_commit', manifest['source_commit'])
+                    expect(page.locator('.article-footer')).to_contain_text(version)
                     page.locator('.source-details summary').click()
                     expect(page.locator('.source-details a').first).to_have_attribute(
-                        'href', __import__('re').compile(f"/blob/{pages[slug]['source_commit']}/"))
+                        'href', __import__('re').compile(f"/blob/{commit}/"))
                     assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
                     page.screenshot(path=str(output / f'docs-{slug}-mobile.png'), full_page=True)
                 page.goto(base)
