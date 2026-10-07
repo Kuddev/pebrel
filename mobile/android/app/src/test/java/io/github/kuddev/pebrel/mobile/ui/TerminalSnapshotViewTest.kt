@@ -38,6 +38,41 @@ import java.io.File
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class TerminalSnapshotViewTest {
+    @Test fun boundarySwipeForwardsWheelInComposerModeWithoutTypingOrResizing() {
+        val view = view(row("abcd"), height = 200)
+        val original = view.frame
+        val scrolls = mutableListOf<Triple<Int, Int, Int>>()
+        view.scrollTarget = object : TerminalInputTarget {
+            override val supportsScroll = true
+            override fun scroll(lines: Int, column: Int, row: Int): Boolean {
+                scrolls += Triple(lines, column, row)
+                return true
+            }
+            override fun text(text: String): Boolean = error("swipe must not type")
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int): Boolean =
+                error("swipe must not send Page Up or cursor keys from the phone")
+        }
+        assertNull(view.inputTarget)
+        fun swipe(from: Float, to: Float) {
+            val down = eventTime
+            touch(view, down, MotionEvent.ACTION_DOWN, 16f to from)
+            touch(view, down, MotionEvent.ACTION_MOVE, 16f to to)
+            touch(view, down, MotionEvent.ACTION_UP, 16f to to)
+        }
+        swipe(24f, 160f)
+        assertTrue(scrolls.any { it.first > 0 })
+        swipe(160f, 24f)
+        assertTrue(scrolls.any { it.first < 0 })
+        assertTrue(scrolls.all { it.second in 0..3 && it.third == 0 })
+        val count = scrolls.size
+        pinch(view)
+        assertEquals(count, scrolls.size)
+        view.scrollTarget = null
+        swipe(24f, 160f)
+        assertEquals(count, scrolls.size)
+        assertSame(original, view.frame)
+    }
+
     @Test fun doubleTapCopiesWordAndTripleTapCopiesOnlyItsVisualRow() {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         val view = TerminalSnapshotView(activity).apply {

@@ -239,6 +239,10 @@ pub(super) fn runtime_description() -> Value {
             .expect("features array")
             .push(json!("tab.identity_and_read"));
     }
+    if cfg!(feature = "gpui-shell") {
+        description["capabilities"].as_array_mut().unwrap().push(json!("pane.scroll"));
+        description["features"].as_array_mut().unwrap().push(json!("pane.read.screen.viewport.v1"));
+    }
     description
 }
 
