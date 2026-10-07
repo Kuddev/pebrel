@@ -13,12 +13,16 @@ pub enum AgentHook {
     OhMyPi,
     Cursor,
     Kimi,
+    Qoder,
+    CodeBuddy,
+    Qwen,
+    Droid,
 }
 
 impl AgentHook {
     pub const DEFAULT: [Self; 2] = [Self::Claude, Self::Codex];
 
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 13] = [
         Self::Claude,
         Self::Codex,
         Self::OpenCode,
@@ -28,6 +32,10 @@ impl AgentHook {
         Self::OhMyPi,
         Self::Cursor,
         Self::Kimi,
+        Self::Qoder,
+        Self::CodeBuddy,
+        Self::Qwen,
+        Self::Droid,
     ];
 
     pub const fn settings_key(self) -> &'static str {
@@ -41,6 +49,10 @@ impl AgentHook {
             Self::OhMyPi => "ai_hooks_omp",
             Self::Cursor => "ai_hooks_cursor",
             Self::Kimi => "ai_hooks_kimi",
+            Self::Qoder => "ai_hooks_qoder",
+            Self::CodeBuddy => "ai_hooks_codebuddy",
+            Self::Qwen => "ai_hooks_qwen",
+            Self::Droid => "ai_hooks_droid",
         }
     }
 

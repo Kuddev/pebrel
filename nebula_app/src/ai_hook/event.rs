@@ -1,6 +1,7 @@
 //! Normalized provider facts. No terminal scanning, I/O or pane mutation.
 
 use super::payload::{MESSAGE_MAX_CHARS, truncate};
+use super::protocol::claude_style;
 
 /// What a lifecycle event means for the pane's turn state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,6 +97,15 @@ pub fn capabilities_for(source: &str) -> AiHookCapabilities {
             serialized_delivery: false,
         },
         "kimi" | "copilot" | "grok" => AiHookCapabilities {
+            lifecycle: true,
+            attention_events: true,
+            attention_context: true,
+            background_tasks: false,
+            bridge_sequence: false,
+            serialized_delivery: false,
+        },
+        // Claude Code's lifecycle and attention contract without its background-task payload.
+        source if claude_style(source) => AiHookCapabilities {
             lifecycle: true,
             attention_events: true,
             attention_context: true,

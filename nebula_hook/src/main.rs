@@ -26,6 +26,7 @@
 //! ```text
 //! nebula-hook claude                              # payload on stdin
 //! nebula-hook kimi                                # payload on stdin
+//! nebula-hook qoder|codebuddy|qwen|droid          # payload on stdin, claude-style
 //! nebula-hook codex <json>                        # payload as last arg
 //! nebula-hook codex --hooks=full                  # native hooks, stdin
 //! nebula-hook codex --chain <exe> <fixed…> <json> # + exec previous notifier
@@ -212,7 +213,19 @@ fn read_payload(mut reader: impl Read) -> std::io::Result<Option<Vec<u8>>> {
 fn known_source(source: &str) -> bool {
     matches!(
         source,
-        "claude" | "codex" | "opencode" | "pi" | "kimi" | "omp" | "copilot" | "grok" | "cursor"
+        "claude"
+            | "codex"
+            | "opencode"
+            | "pi"
+            | "kimi"
+            | "omp"
+            | "copilot"
+            | "grok"
+            | "cursor"
+            | "qoder"
+            | "codebuddy"
+            | "qwen"
+            | "droid"
     )
 }
 
@@ -221,7 +234,18 @@ fn known_source(source: &str) -> bool {
 /// 无论如何都抽干管道（约束 1：未读的管道会在 CLI 侧变成 hook write error）。
 /// 其余 CLI 把载荷追加为末位参数。
 fn payload_on_stdin(source: &str) -> bool {
-    matches!(source, "claude" | "kimi" | "copilot" | "grok" | "cursor")
+    matches!(
+        source,
+        "claude"
+            | "kimi"
+            | "copilot"
+            | "grok"
+            | "cursor"
+            | "qoder"
+            | "codebuddy"
+            | "qwen"
+            | "droid"
+    )
 }
 
 fn native_event(args: &[String]) -> Option<&str> {
@@ -442,6 +466,15 @@ mod tests {
         let header: &[u8] = b"nebula-hook/1 source=kimi pane=11\n";
         assert!(message.starts_with(header));
         assert_eq!(&message[header.len()..], stdin_json);
+    }
+
+    #[test]
+    fn claude_style_sources_are_known_and_drain_stdin_without_an_event_contract() {
+        for source in ["qoder", "codebuddy", "qwen", "droid"] {
+            assert!(super::known_source(source) && super::payload_on_stdin(source), "{source}");
+            let args = [source.to_owned(), "--event".to_owned(), "done".to_owned()];
+            assert_eq!(super::native_event(&args), None);
+        }
     }
 
     #[test]

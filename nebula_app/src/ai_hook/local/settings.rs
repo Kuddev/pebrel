@@ -43,6 +43,9 @@ pub(super) fn configuration(agent: AgentHook) -> Option<(PathBuf, bool)> {
             let footprint = path.parent()?.is_dir();
             (path, footprint)
         },
+        AgentHook::Qoder | AgentHook::CodeBuddy | AgentHook::Qwen | AgentHook::Droid => {
+            (claude_style::path(agent)?, claude_style::directory(agent)?.is_dir())
+        },
         _ => (extended::path(agent)?, extended::directory(agent)?.is_dir()),
     };
     Some((path, footprint))
@@ -121,6 +124,9 @@ fn installed_at(agent: AgentHook, path: &Path, helper: &str) -> io::Result<bool>
             Ok(kimi::inspect(&raw, Path::new(helper))?.0)
         },
         AgentHook::Cursor => cursor::installed_at(path),
+        AgentHook::Qoder | AgentHook::CodeBuddy | AgentHook::Qwen | AgentHook::Droid => {
+            claude_style::installed_at(agent, path)
+        },
         AgentHook::OpenCode | AgentHook::Pi => {
             let bridge = if agent == AgentHook::Pi { Bridge::Pi } else { Bridge::Opencode };
             let (name, legacy, content, hashes) = bridge.files();
@@ -138,6 +144,9 @@ fn current_at(agent: AgentHook, path: &Path, helper: &str) -> io::Result<bool> {
     let Some(raw) = read_optional(path)? else { return Ok(false) };
     match agent {
         AgentHook::Cursor => cursor::current(&raw, helper),
+        AgentHook::Qoder | AgentHook::CodeBuddy | AgentHook::Qwen | AgentHook::Droid => {
+            claude_style::current(agent, &raw, helper)
+        },
         AgentHook::Kimi => Ok(kimi::inspect(&raw, Path::new(helper))?.1),
         AgentHook::Claude => {
             let mut value: Value = serde_json::from_str(&raw).map_err(io::Error::other)?;
@@ -250,6 +259,11 @@ pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
             let path = cursor::path()
                 .ok_or_else(|| io::Error::other("Cursor configuration unavailable"))?;
             cursor::apply_at(&path, &helper_command().unwrap_or_default(), enabled)?;
+        },
+        (AgentHook::Qoder | AgentHook::CodeBuddy | AgentHook::Qwen | AgentHook::Droid, _) => {
+            let path = claude_style::path(agent)
+                .ok_or_else(|| io::Error::other("Agent configuration unavailable"))?;
+            claude_style::apply_at(agent, &path, &helper_command().unwrap_or_default(), enabled)?;
         },
         (_, _) => extended::apply(agent, &helper_command().unwrap_or_default(), enabled)?,
     }

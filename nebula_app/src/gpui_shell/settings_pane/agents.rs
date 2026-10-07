@@ -268,6 +268,9 @@ impl SettingsPane {
             AgentKind::OhMyPi => Some(nav::AGENT_OMP),
             AgentKind::Copilot => Some(nav::AGENT_COPILOT),
             AgentKind::Grok => Some(nav::AGENT_GROK),
+            AgentKind::Qoder => Some(nav::AGENT_QODER),
+            AgentKind::Qwen => Some(nav::AGENT_QWEN),
+            AgentKind::CodeBuddy => Some(nav::AGENT_CODEBUDDY),
             _ => None,
         } {
             Icon::default()
