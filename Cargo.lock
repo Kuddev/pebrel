@@ -5445,6 +5445,7 @@ dependencies = [
  "rustix-openpty",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "signal-hook",
  "unicode-properties",
  "unicode-segmentation",
