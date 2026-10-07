@@ -31,11 +31,14 @@ The Windows installed-shell detection (registry lookup order and the
 shell brand icon artwork) derives from Tabby (github.com/Eugeny/tabby),
 distributed under the MIT License, whose text is reproduced below.
 
-The Cursor and GitHub Copilot settings icons are adapted from LobeHub's
+The Cursor and GitHub Copilot settings icons, and the sidebar logos for Gemini,
+Amp, Cursor, GitHub Copilot, Goose, Qwen, Cline, Devin, Kiro, Kilo Code and Qoder,
+are adapted from LobeHub's
 @lobehub/icons-static-svg 1.95.0 (github.com/lobehub/lobe-icons),
 distributed under the MIT License, whose text is reproduced below.
-Copyright (c) 2023 LobeHub. Unused SVG metadata was removed; path geometry
-is unchanged. Product names and trademarks belong to their respective
+Copyright (c) 2023 LobeHub. Unused SVG metadata was removed from the settings
+icons; path geometry is unchanged, and the sidebar logos are PNG renderings of
+the unmodified marks (extra/logo/README.md). Product names and trademarks belong to their respective
 owners and identify the tools without implying endorsement.
 
 The bundled conpty.dll and OpenConsole.exe come from the Windows

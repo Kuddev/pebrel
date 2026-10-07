@@ -234,3 +234,43 @@ does not make the logo an open-source asset or imply endorsement. The icon is
 used to identify running `antigravity`, `antigravity-cli` and `agy` processes.
 Both UI shells keep its original colors on light and dark themes and resize it
 only for rendering. No LobeHub asset is embedded for Antigravity.
+
+### Gemini, Amp, Cursor, Copilot, Goose, Qwen, Cline, Devin, Kiro, Kilo Code and Qoder
+
+These eleven sidebar and tab logos are 256 x 256 transparent exports of LobeHub
+marks, retrieved on 2026-10-07 from the fixed npm package
+`@lobehub/icons-static-svg` 1.95.0 (`icons/{source}.svg`) and rendered with
+`@resvg/resvg-js` 2.6.2 and `fitTo: { mode: 'width', value: 256 }`, without changing
+geometry or colors. Every logo is decoded for both themes at startup and drawn at
+tab-icon size (tens of physical pixels), so 256px keeps a wide margin without the
+decode cost of the 1024px exports above. The collection is under the
+[MIT license](LICENSE-lobe-icons); product names and trademarks remain with their
+owners, and use identifies running programs without implying endorsement.
+
+| PNG | Source | SHA-256 |
+| --- | --- | --- |
+| `ai_gemini.png` | `gemini-color` | `E26B96CF682F98D6791457FD920395BD572852C9ED1CC4EAB242D7B8532A35E6` |
+| `ai_amp.png` | `amp-color` | `480561790E34DD60E28944C002BB7D96211FD7763B9B479EB5965AE56A60EB8D` |
+| `ai_qwen.png` | `qwen-color` | `DBE96E43C8567F94863E170B9DC8306CFF0FA41BA0885BD6761D95F27B98A513` |
+| `ai_devin.png` | `devin-color` | `20A13776425174E087BD1B47EB87EFA61710199059C72CB0EC22293DBD0664C7` |
+| `ai_kiro.png` | `kiro-color` | `9397014E6D33F760C07A53EA102A36F7309583601AF8961C4FC6BC7441E70061` |
+| `ai_cursor.png` | `cursor` | `CD74269E12CB1CD93669FF38694CB6E8BF39C151979D612904A846A5009C3EB8` |
+| `ai_copilot.png` | `githubcopilot` | `42D89FE0802E0396A62E6EDC0037503041FB574D7682EAA42FDEC0CC1ECA3BB7` |
+| `ai_goose.png` | `goose` | `C3D0356CD33C9CC45F2822164E423D5E1057816DABBA327E35537C1094B682F3` |
+| `ai_cline.png` | `cline` | `E61E0BF7A077C5C73BB68D9C7C7DB51F55C5AF86302EBA0B75CB00084AF5281B` |
+| `ai_kilo.png` | `kilocode` | `5F0153E75429B69B2B6394A3754280F464A62969D811A1357F236033BCDEACDE` |
+| `ai_qoder_dark.png` | `qoder-color`, `currentColor` = `#232832` | `417EA03B73A1C5BB2EED8EB5B72F9EA94718FEFB589DC746BCFFF2B6A2CA248A` |
+| `ai_qoder_light.png` | `qoder-color`, `currentColor` = `#ECEFF5` | `2BEE33E69825513B7A87FBFF2FAABE3784399B1F69DCCC8C16912C48695A17B6` |
+
+The first five keep their source colors on both themes (Qwen's gradient is 84%
+opaque by design). Cursor, Copilot, Goose, Cline and Kilo Code are single-colour
+`currentColor` marks exported as black alpha masks; both shells recolor them with
+the theme ink. Qoder mixes a theme-ink body with a fixed green accent, so the body
+is baked into the dark and light files and selected like Grok's.
+
+Cursor's CLI is named `agent`, which Grok also installs, so a bare `agent` command
+does not show the Cursor logo; `cursor-agent` and the process identity `cursor` do.
+Hermes (`hermesagent`) is not embedded: its illustration is unreadable at tab size.
+Aider, Droid, Auggie, Vibe and Maki have no LobeHub mark in this package and keep
+their glyph until an official asset is reviewed. Recognition and logos do not imply
+Hook, cold-start, resume or fork support.

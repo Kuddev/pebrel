@@ -14,10 +14,21 @@ pub enum AiLogo {
     OhMyPi,
     CodeBuddy,
     Kimi,
+    Gemini,
+    Amp,
+    Cursor,
+    Copilot,
+    Goose,
+    Qwen,
+    Cline,
+    Devin,
+    Kiro,
+    Kilo,
+    Qoder,
 }
 
 impl AiLogo {
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 21] = [
         Self::Claude,
         Self::OpenAi,
         Self::OpenCode,
@@ -28,6 +39,17 @@ impl AiLogo {
         Self::OhMyPi,
         Self::CodeBuddy,
         Self::Kimi,
+        Self::Gemini,
+        Self::Amp,
+        Self::Cursor,
+        Self::Copilot,
+        Self::Goose,
+        Self::Qwen,
+        Self::Cline,
+        Self::Devin,
+        Self::Kiro,
+        Self::Kilo,
+        Self::Qoder,
     ];
 
     /// One source catalog for both shells. Official color assets are embedded unchanged.
@@ -44,12 +66,37 @@ impl AiLogo {
             Self::OhMyPi => include_bytes!("../../../extra/logo/ai_omp.png"),
             Self::CodeBuddy => include_bytes!("../../../extra/logo/ai_codebuddy.png"),
             Self::Kimi => include_bytes!("../../../extra/logo/ai_kimi.png"),
+            Self::Gemini => include_bytes!("../../../extra/logo/ai_gemini.png"),
+            Self::Amp => include_bytes!("../../../extra/logo/ai_amp.png"),
+            Self::Cursor => include_bytes!("../../../extra/logo/ai_cursor.png"),
+            Self::Copilot => include_bytes!("../../../extra/logo/ai_copilot.png"),
+            Self::Goose => include_bytes!("../../../extra/logo/ai_goose.png"),
+            Self::Qwen => include_bytes!("../../../extra/logo/ai_qwen.png"),
+            Self::Cline => include_bytes!("../../../extra/logo/ai_cline.png"),
+            Self::Devin => include_bytes!("../../../extra/logo/ai_devin.png"),
+            Self::Kiro => include_bytes!("../../../extra/logo/ai_kiro.png"),
+            Self::Kilo => include_bytes!("../../../extra/logo/ai_kilo.png"),
+            // Mixed mark: a theme-ink body beside a fixed green accent cannot ride the
+            // tint, so the body is baked per theme.
+            Self::Qoder if light_ink => include_bytes!("../../../extra/logo/ai_qoder_light.png"),
+            Self::Qoder => include_bytes!("../../../extra/logo/ai_qoder_dark.png"),
         }
+    }
+
+    pub(crate) fn tints_with_ink(self) -> bool {
+        self.tint_preserves_luma().is_some()
     }
 
     fn tint_preserves_luma(self) -> Option<bool> {
         match self {
-            Self::OpenAi | Self::Pi => Some(false),
+            // Single-colour marks exported as alpha masks take the theme ink.
+            Self::OpenAi
+            | Self::Pi
+            | Self::Cursor
+            | Self::Copilot
+            | Self::Goose
+            | Self::Cline
+            | Self::Kilo => Some(false),
             // OpenCode stores a luma map: the frame is white, the inner block gray.
             // Kimi's letterform is solid white with a small blue accent: embedded
             // unchanged it vanishes on light themes, so it rides the luma map too —
@@ -60,7 +107,13 @@ impl AiLogo {
             | Self::Antigravity
             | Self::Trae
             | Self::OhMyPi
-            | Self::CodeBuddy => None,
+            | Self::CodeBuddy
+            | Self::Gemini
+            | Self::Amp
+            | Self::Qwen
+            | Self::Devin
+            | Self::Kiro
+            | Self::Qoder => None,
         }
     }
 
@@ -148,6 +201,19 @@ pub(crate) fn ai_logo_for_program(program: &str) -> Option<AiLogo> {
         AgentKind::OhMyPi => Some(AiLogo::OhMyPi),
         AgentKind::CodeBuddy => Some(AiLogo::CodeBuddy),
         AgentKind::Kimi => Some(AiLogo::Kimi),
+        AgentKind::Gemini => Some(AiLogo::Gemini),
+        AgentKind::Amp => Some(AiLogo::Amp),
+        // Cursor's CLI is called `agent`, a name Grok also installs; a bare `agent`
+        // cannot claim Cursor's brand.
+        AgentKind::Cursor if normalized != "agent" => Some(AiLogo::Cursor),
+        AgentKind::Copilot => Some(AiLogo::Copilot),
+        AgentKind::Goose => Some(AiLogo::Goose),
+        AgentKind::Qwen => Some(AiLogo::Qwen),
+        AgentKind::Cline => Some(AiLogo::Cline),
+        AgentKind::Devin => Some(AiLogo::Devin),
+        AgentKind::Kiro => Some(AiLogo::Kiro),
+        AgentKind::Kilo => Some(AiLogo::Kilo),
+        AgentKind::Qoder => Some(AiLogo::Qoder),
         _ => None,
     }
 }
@@ -340,12 +406,31 @@ mod tests {
     fn shared_tint_preserves_color_assets_and_luminance_maps() {
         let source = [255, 255, 255, 128, 128, 128, 128, 64];
         let ink = [100, 200, 240];
-        for logo in [AiLogo::Claude, AiLogo::Grok, AiLogo::Antigravity, AiLogo::Trae] {
+        for logo in [
+            AiLogo::Claude,
+            AiLogo::Grok,
+            AiLogo::Antigravity,
+            AiLogo::Trae,
+            AiLogo::Gemini,
+            AiLogo::Amp,
+            AiLogo::Qwen,
+            AiLogo::Devin,
+            AiLogo::Kiro,
+            AiLogo::Qoder,
+        ] {
             let mut pixels = source;
             logo.tint_pixels(&mut pixels, ink);
             assert_eq!(pixels, source);
         }
-        for logo in [AiLogo::OpenAi, AiLogo::Pi] {
+        for logo in [
+            AiLogo::OpenAi,
+            AiLogo::Pi,
+            AiLogo::Cursor,
+            AiLogo::Copilot,
+            AiLogo::Goose,
+            AiLogo::Cline,
+            AiLogo::Kilo,
+        ] {
             let mut pixels = source;
             logo.tint_pixels(&mut pixels, ink);
             assert_eq!(pixels, [100, 200, 240, 128, 100, 200, 240, 64]);
@@ -442,6 +527,55 @@ mod tests {
                 logo.tint_pixels(&mut tinted, ink);
                 assert_eq!(tinted, pixels);
             }
+        }
+    }
+
+    #[test]
+    fn agent_commands_resolve_to_their_logo_without_claiming_generic_names() {
+        for (command, logo) in [
+            ("gemini", AiLogo::Gemini),
+            ("amp", AiLogo::Amp),
+            ("cursor-agent", AiLogo::Cursor),
+            ("copilot", AiLogo::Copilot),
+            ("goose", AiLogo::Goose),
+            ("qwen", AiLogo::Qwen),
+            ("cline", AiLogo::Cline),
+            ("devin", AiLogo::Devin),
+            ("kiro-cli", AiLogo::Kiro),
+            ("kilo", AiLogo::Kilo),
+            ("qodercli", AiLogo::Qoder),
+            (r"C:\tools\QWEN.CMD --help", AiLogo::Qwen),
+        ] {
+            assert_eq!(logo_for_command(command), Some(logo), "{command}");
+        }
+        // Grok installs an `agent` command too, so the bare name proves nothing.
+        assert_eq!(logo_for_command("agent"), None);
+        assert_eq!(logo_for_command("qwen-helper"), None);
+    }
+
+    #[test]
+    fn small_exports_decode_and_only_qoder_changes_with_the_theme() {
+        for logo in [
+            AiLogo::Gemini,
+            AiLogo::Amp,
+            AiLogo::Cursor,
+            AiLogo::Copilot,
+            AiLogo::Goose,
+            AiLogo::Qwen,
+            AiLogo::Cline,
+            AiLogo::Devin,
+            AiLogo::Kiro,
+            AiLogo::Kilo,
+            AiLogo::Qoder,
+        ] {
+            for light_ink in [false, true] {
+                let (width, height, rgba) = decode_png(logo.png(light_ink));
+                assert_eq!((width, height), (256, 256), "{logo:?}");
+                assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 0), "{logo:?}");
+                // Qwen's source gradient tops out at alpha 214 by design.
+                assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] >= 200), "{logo:?}");
+            }
+            assert_eq!(logo.png(false) != logo.png(true), logo == AiLogo::Qoder, "{logo:?}");
         }
     }
 }
