@@ -25,10 +25,13 @@ pub enum AiLogo {
     Kiro,
     Kilo,
     Qoder,
+    Junie,
+    OpenHands,
+    OpenClaw,
 }
 
 impl AiLogo {
-    pub(crate) const ALL: [Self; 21] = [
+    pub(crate) const ALL: [Self; 24] = [
         Self::Claude,
         Self::OpenAi,
         Self::OpenCode,
@@ -50,6 +53,9 @@ impl AiLogo {
         Self::Kiro,
         Self::Kilo,
         Self::Qoder,
+        Self::Junie,
+        Self::OpenHands,
+        Self::OpenClaw,
     ];
 
     /// One source catalog for both shells. Official color assets are embedded unchanged.
@@ -80,6 +86,9 @@ impl AiLogo {
             // tint, so the body is baked per theme.
             Self::Qoder if light_ink => include_bytes!("../../../extra/logo/ai_qoder_light.png"),
             Self::Qoder => include_bytes!("../../../extra/logo/ai_qoder_dark.png"),
+            Self::Junie => include_bytes!("../../../extra/logo/ai_junie.png"),
+            Self::OpenHands => include_bytes!("../../../extra/logo/ai_openhands.png"),
+            Self::OpenClaw => include_bytes!("../../../extra/logo/ai_openclaw.png"),
         }
     }
 
@@ -96,7 +105,8 @@ impl AiLogo {
             | Self::Copilot
             | Self::Goose
             | Self::Cline
-            | Self::Kilo => Some(false),
+            | Self::Kilo
+            | Self::OpenHands => Some(false),
             // OpenCode stores a luma map: the frame is white, the inner block gray.
             // Kimi's letterform is solid white with a small blue accent: embedded
             // unchanged it vanishes on light themes, so it rides the luma map too —
@@ -113,7 +123,9 @@ impl AiLogo {
             | Self::Qwen
             | Self::Devin
             | Self::Kiro
-            | Self::Qoder => None,
+            | Self::Qoder
+            | Self::Junie
+            | Self::OpenClaw => None,
         }
     }
 
@@ -214,6 +226,9 @@ pub(crate) fn ai_logo_for_program(program: &str) -> Option<AiLogo> {
         AgentKind::Kiro => Some(AiLogo::Kiro),
         AgentKind::Kilo => Some(AiLogo::Kilo),
         AgentKind::Qoder => Some(AiLogo::Qoder),
+        AgentKind::Junie => Some(AiLogo::Junie),
+        AgentKind::OpenHands => Some(AiLogo::OpenHands),
+        AgentKind::OpenClaw => Some(AiLogo::OpenClaw),
         _ => None,
     }
 }
@@ -417,6 +432,8 @@ mod tests {
             AiLogo::Devin,
             AiLogo::Kiro,
             AiLogo::Qoder,
+            AiLogo::Junie,
+            AiLogo::OpenClaw,
         ] {
             let mut pixels = source;
             logo.tint_pixels(&mut pixels, ink);
@@ -430,6 +447,7 @@ mod tests {
             AiLogo::Goose,
             AiLogo::Cline,
             AiLogo::Kilo,
+            AiLogo::OpenHands,
         ] {
             let mut pixels = source;
             logo.tint_pixels(&mut pixels, ink);
@@ -544,6 +562,9 @@ mod tests {
             ("kiro-cli", AiLogo::Kiro),
             ("kilo", AiLogo::Kilo),
             ("qodercli", AiLogo::Qoder),
+            ("junie", AiLogo::Junie),
+            ("openhands", AiLogo::OpenHands),
+            ("openclaw", AiLogo::OpenClaw),
             (r"C:\tools\QWEN.CMD --help", AiLogo::Qwen),
         ] {
             assert_eq!(logo_for_command(command), Some(logo), "{command}");
@@ -567,6 +588,9 @@ mod tests {
             AiLogo::Kiro,
             AiLogo::Kilo,
             AiLogo::Qoder,
+            AiLogo::Junie,
+            AiLogo::OpenHands,
+            AiLogo::OpenClaw,
         ] {
             for light_ink in [false, true] {
                 let (width, height, rgba) = decode_png(logo.png(light_ink));

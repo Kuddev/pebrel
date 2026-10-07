@@ -136,7 +136,7 @@ mod tests {
             let images = sidebar_logo_images(target, &AtomicBool::new(false)).unwrap();
             assert_eq!(images.len(), AiLogo::ALL.len() * 2);
             let unique = images.values().map(Arc::as_ptr).collect::<std::collections::HashSet<_>>();
-            assert_eq!(unique.len(), 32, "ten color assets must not be prepared twice");
+            assert_eq!(unique.len(), 36, "twelve color assets must not be prepared twice");
             for logo in AiLogo::ALL {
                 let light = &images[&(logo, false)];
                 let dark = &images[&(logo, true)];

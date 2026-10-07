@@ -235,9 +235,9 @@ used to identify running `antigravity`, `antigravity-cli` and `agy` processes.
 Both UI shells keep its original colors on light and dark themes and resize it
 only for rendering. No LobeHub asset is embedded for Antigravity.
 
-### Gemini, Amp, Cursor, Copilot, Goose, Qwen, Cline, Devin, Kiro, Kilo Code and Qoder
+### Gemini, Amp, Cursor, Copilot, Goose, Qwen, Cline, Devin, Kiro, Kilo Code, Qoder, Junie, OpenHands and OpenClaw
 
-These eleven sidebar and tab logos are 256 x 256 transparent exports of LobeHub
+These fourteen sidebar and tab logos are 256 x 256 transparent exports of LobeHub
 marks, retrieved on 2026-10-07 from the fixed npm package
 `@lobehub/icons-static-svg` 1.95.0 (`icons/{source}.svg`) and rendered with
 `@resvg/resvg-js` 2.6.2 and `fitTo: { mode: 'width', value: 256 }`, without changing
@@ -259,17 +259,22 @@ owners, and use identifies running programs without implying endorsement.
 | `ai_goose.png` | `goose` | `C3D0356CD33C9CC45F2822164E423D5E1057816DABBA327E35537C1094B682F3` |
 | `ai_cline.png` | `cline` | `E61E0BF7A077C5C73BB68D9C7C7DB51F55C5AF86302EBA0B75CB00084AF5281B` |
 | `ai_kilo.png` | `kilocode` | `5F0153E75429B69B2B6394A3754280F464A62969D811A1357F236033BCDEACDE` |
+| `ai_junie.png` | `junie-color` | `B4FD09A9F6705A58E4A1DF94A78CF381D2C7A07542096F79A7C9F4A7F0BB2AC7` |
+| `ai_openclaw.png` | `openclaw-color` | `D078ABC603D32DB0682CAB85484EAF0C034FD6F3906A38DD727A487351EFF0F6` |
+| `ai_openhands.png` | `openhands` | `9D243CCC272BCB3FEAC296646EE45842ACE2CA44860F55D50CC4738E55767851` |
 | `ai_qoder_dark.png` | `qoder-color`, `currentColor` = `#232832` | `417EA03B73A1C5BB2EED8EB5B72F9EA94718FEFB589DC746BCFFF2B6A2CA248A` |
 | `ai_qoder_light.png` | `qoder-color`, `currentColor` = `#ECEFF5` | `2BEE33E69825513B7A87FBFF2FAABE3784399B1F69DCCC8C16912C48695A17B6` |
 
-The first five keep their source colors on both themes (Qwen's gradient is 84%
-opaque by design). Cursor, Copilot, Goose, Cline and Kilo Code are single-colour
+The colour marks keep their source colors on both themes (Qwen's gradient is 84%
+opaque by design). Cursor, Copilot, Goose, Cline, Kilo Code and OpenHands are single-colour
 `currentColor` marks exported as black alpha masks; both shells recolor them with
 the theme ink. Qoder mixes a theme-ink body with a fixed green accent, so the body
 is baked into the dark and light files and selected like Grok's.
 
 Cursor's CLI is named `agent`, which Grok also installs, so a bare `agent` command
 does not show the Cursor logo; `cursor-agent` and the process identity `cursor` do.
+OpenHands uses its monochrome outline because the colour version draws black outlines
+that vanish on dark themes. Crush has no mark in the package and keeps its glyph.
 Hermes (`hermesagent`) is not embedded: its illustration is unreadable at tab size.
 Aider, Droid, Auggie, Vibe and Maki have no LobeHub mark in this package and keep
 their glyph until an official asset is reviewed. Recognition and logos do not imply
