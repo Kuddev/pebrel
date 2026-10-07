@@ -24,6 +24,13 @@ pub struct RuntimePaneRead {
     pub screen: Option<RuntimeTerminalScreen>,
 }
 
+/// 单一模式避免把“不读取 screen”与“读取 viewport”组合成矛盾状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenMode {
+    Live,
+    Viewport,
+}
+
 /// Screen v1 uses logical cells, not ANSI replay; wide spacers never become extra glyphs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuntimeTerminalScreen {
@@ -40,6 +47,22 @@ pub(crate) fn capture_terminal_screen<T: EventListener>(
     term: &Term<T>,
     palette_color: impl Fn(usize) -> Rgb,
 ) -> Result<RuntimeTerminalScreen, ApiError> {
+    capture_terminal_grid(term, palette_color, 0)
+}
+
+/// 手机显式跟随被控制的桌面视口；普通 Agent 读取仍固定在实时网格。
+pub(crate) fn capture_terminal_viewport<T: EventListener>(
+    term: &Term<T>,
+    palette_color: impl Fn(usize) -> Rgb,
+) -> Result<RuntimeTerminalScreen, ApiError> {
+    capture_terminal_grid(term, palette_color, term.grid().display_offset())
+}
+
+fn capture_terminal_grid<T: EventListener>(
+    term: &Term<T>,
+    palette_color: impl Fn(usize) -> Rgb,
+    display_offset: usize,
+) -> Result<RuntimeTerminalScreen, ApiError> {
     let columns = term.columns();
     let lines = term.screen_lines();
     if !(1..=400).contains(&columns) || !(1..=200).contains(&lines) || columns * lines > 40_000 {
@@ -54,7 +77,7 @@ pub(crate) fn capture_terminal_screen<T: EventListener>(
         let mut row = Vec::with_capacity(columns);
         let mut x = 0;
         while x < columns {
-            let cell = &term.grid()[Point::new(Line(y as i32), Column(x))];
+            let cell = &term.grid()[Point::new(Line(y as i32 - display_offset as i32), Column(x))];
             let spacer =
                 cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
             let width = if !spacer && cell.flags.contains(Flags::WIDE_CHAR) && x + 1 < columns {
@@ -91,17 +114,15 @@ pub(crate) fn capture_terminal_screen<T: EventListener>(
         rows.push(row);
     }
     let cursor = term.renderable_content().cursor;
-    let visible = cursor.shape != CursorShape::Hidden
-        && cursor.point.line.0 >= 0
-        && (cursor.point.line.0 as usize) < lines;
-    // 始终读取当前网格，不随电脑端上翻历史改变手机的实时画面。
+    let cursor_y = i64::from(cursor.point.line.0) + display_offset as i64;
+    let visible = cursor.shape != CursorShape::Hidden && cursor_y >= 0 && cursor_y < lines as i64;
     Ok(RuntimeTerminalScreen {
         version: 1,
         columns,
         rows,
         wrapped: (0..lines)
             .map(|y| {
-                term.grid()[Point::new(Line(y as i32), Column(columns - 1))]
+                term.grid()[Point::new(Line(y as i32 - display_offset as i32), Column(columns - 1))]
                     .flags
                     .contains(Flags::WRAPLINE)
             })
@@ -111,7 +132,7 @@ pub(crate) fn capture_terminal_screen<T: EventListener>(
             .collect(),
         cursor: (
             cursor.point.column.0.min(columns - 1),
-            cursor.point.line.0.max(0) as usize,
+            cursor_y.clamp(0, lines as i64 - 1) as usize,
             u8::from(visible),
         ),
     })
@@ -256,6 +277,61 @@ mod tests {
     }
 
     #[test]
+    fn controlled_viewport_reads_history_without_changing_live_grid_or_tail() {
+        let mut term = terminal(12, 2, "old\r\nsecond\r\nlatest");
+        let live = capture(&term);
+        let tail = capture_terminal_tail(&term, 1, 2, 3, RuntimeTaskState::Idle, false, None);
+        term.scroll_display(Scroll::Top);
+        let viewport = capture_terminal_viewport(&term, |_| Rgb { r: 0, g: 0, b: 0 }).unwrap();
+        assert_eq!(viewport.rows[0][0].0, "o");
+        assert_eq!(viewport.rows[1][0].0, "s");
+        assert_eq!(viewport.cursor.2, 0);
+        assert!(viewport.cursor.1 < viewport.rows.len());
+        assert_eq!(capture(&term), live);
+        assert_eq!(
+            capture_terminal_tail(&term, 1, 2, 3, RuntimeTaskState::Idle, false, None),
+            tail
+        );
+    }
+
+    #[test]
+    fn scroll_request_bounds_and_viewport_opt_in_are_explicit() {
+        use crate::runtime_api::{ApiRequest, RuntimeCommand};
+        for lines in [-32, -1, 1, 32] {
+            let request = ApiRequest::new(
+                "fixture".into(),
+                "pane.scroll",
+                serde_json::json!({"window_id":1,"pane_id":2,"lines":lines,"column":79,"row":23}),
+            );
+            assert!(matches!(
+                RuntimeCommand::from_request(&request).unwrap(),
+                RuntimeCommand::ScrollPane { .. }
+            ));
+        }
+        for params in [
+            serde_json::json!({"pane_id":2,"lines":0,"column":0,"row":0}),
+            serde_json::json!({"pane_id":2,"lines":33,"column":0,"row":0}),
+            serde_json::json!({"pane_id":2,"lines":1,"column":400,"row":0}),
+            serde_json::json!({"pane_id":2,"lines":1,"column":0,"row":200}),
+        ] {
+            assert!(
+                RuntimeCommand::from_request(&ApiRequest::new(
+                    "fixture".into(),
+                    "pane.scroll",
+                    params
+                ))
+                .is_err()
+            );
+        }
+        let invalid = ApiRequest::new(
+            "fixture".into(),
+            "pane.read",
+            serde_json::json!({"pane_id":2,"screen_viewport":true}),
+        );
+        assert!(RuntimeCommand::from_request(&invalid).is_err());
+    }
+
+    #[test]
     fn screen_limits_are_explicit_and_plain_text_remains_compatible() {
         let term = terminal(401, 2, "latest");
         assert_eq!(
@@ -278,7 +354,7 @@ mod tests {
                 serde_json::json!({"pane_id": 2, "screen":screen}),
             );
             assert!(
-                matches!(RuntimeCommand::from_request(&request).unwrap(), RuntimeCommand::ReadPane { screen: value, .. } if value == screen)
+                matches!(RuntimeCommand::from_request(&request).unwrap(), RuntimeCommand::ReadPane { screen: value, .. } if value.is_some() == screen)
             );
         }
         assert!(

@@ -19,6 +19,17 @@ fn open_effect_settings(
     });
     window.update(|_, cx| crate::gpui_shell::wallpaper::refresh(cx));
     draw(&mut window);
+    assert!(window.debug_bounds("nebula-btn-terminal-effect-choose").is_none());
+    let disclosure = window.debug_bounds("custom-effects-disclosure").unwrap();
+    window.simulate_event(gpui::ScrollWheelEvent {
+        position: gpui::point(px(900.0), px(700.0)),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(400.0) - disclosure.center().y)),
+        touch_phase: gpui::TouchPhase::Moved,
+        modifiers: Modifiers::default(),
+    });
+    draw(&mut window);
+    click("custom-effects-disclosure", &mut window);
+    draw(&mut window);
     let bounds = window.debug_bounds("nebula-btn-terminal-effect-choose").unwrap();
     window.simulate_event(gpui::ScrollWheelEvent {
         position: gpui::point(px(900.0), px(700.0)),
@@ -30,6 +41,27 @@ fn open_effect_settings(
     let bounds = window.debug_bounds("nebula-btn-terminal-effect-choose").unwrap();
     assert!(bounds.top() >= px(0.0) && bounds.bottom() <= px(1000.0));
     (pane, window)
+}
+
+#[gpui::test]
+fn collapsing_advanced_effects_preserves_sources_and_enabled_state(cx: &mut TestAppContext) {
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    let (_, mut window) = open_effect_settings(
+        cx,
+        "terminal_effect_enabled=true\nterminal_effect_path=existing.wgsl\n",
+    );
+    let before = settings_file_snapshot();
+    click("custom-effects-disclosure", &mut window);
+    draw(&mut window);
+    assert!(window.debug_bounds("nebula-btn-terminal-effect-choose").is_none());
+    assert!(window.debug_bounds("settings-select-terminal_effect_animation").is_none());
+    assert!(window.debug_bounds("nebula-btn-background-shader-choose").is_none());
+    assert_eq!(settings_file_snapshot(), before);
+    click("custom-effects-disclosure", &mut window);
+    draw(&mut window);
+    assert!(window.debug_bounds("nebula-btn-terminal-effect-choose").is_some());
+    assert_eq!(settings_file_snapshot(), before);
 }
 
 #[gpui::test]

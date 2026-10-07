@@ -40,13 +40,17 @@ class DesktopRuntimeClient(
     @Volatile private var screenUnsupported = false
     @Volatile private var screenDelta = false
     @Volatile private var screenStream = false
+    @Volatile var terminalScrollSupported = false
+        private set
     private val streaming = DesktopScreenStream(::request, acknowledge = { params ->
         val call = startRequest("pane.screen.ack", params)
         scope.async(start = CoroutineStart.UNDISPATCHED) { finishRequest(call); Unit }
     })
     suspend fun streamPane(params: JSONObject, consume: suspend (DesktopPaneRead) -> Unit): Boolean {
         if (!screenStream) return false
-        streaming.run(params, consume)
+        val query = JSONObject(params.toString())
+        if (terminalScrollSupported) query.put("screen_viewport", true)
+        streaming.run(query, consume)
         return true
     }
     private val screenSync = DesktopScreenSync()
@@ -57,6 +61,7 @@ class DesktopRuntimeClient(
         if (screenUnsupported) return@withLock DesktopPaneRead(request("pane.read", params))
         val identity = "${params.getLong("window_id")}:${params.getLong("pane_id")}"
         val query = JSONObject(params.toString()).put("screen", true)
+        if (terminalScrollSupported) query.put("screen_viewport", true)
         if (screenDelta) query.put("screen_since", screenSync.since(identity))
         try {
             val response = request("pane.read", query)
@@ -70,7 +75,7 @@ class DesktopRuntimeClient(
         } catch (failure: DesktopRpcFailure) {
             // Old desktop runtimes reject unknown parameters. Do not silently
             // downgrade malformed snapshots, transport errors or authorization.
-            if (failure.code != "invalid_params") throw failure
+            if (failure.code != "invalid_params" || terminalScrollSupported) throw failure
             screenUnsupported = true
             DesktopPaneRead(request("pane.read", params))
         }
@@ -122,6 +127,7 @@ class DesktopRuntimeClient(
             }
             screenDelta = hello.optJSONObject("capabilities")?.optBoolean("screen_delta") == true
             screenStream = hello.optJSONObject("capabilities")?.optBoolean("terminal_grid_stream") == true
+            terminalScrollSupported = hello.optJSONObject("capabilities")?.optBoolean("terminal_scroll") == true
             try { request("events.subscribe") }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {
@@ -173,7 +179,8 @@ class DesktopRuntimeClient(
      * The input owner bounds this pipeline and must cancel abandoned receipts.
      */
     internal suspend fun dispatchInput(method: String, params: JSONObject): Deferred<Unit> {
-        require(method == "pane.prompt" || method == "pane.send_key")
+        require(method == "pane.prompt" || method == "pane.send_key" ||
+            method == "pane.scroll" && terminalScrollSupported)
         val call = startRequest(method, params)
         return scope.async(start = CoroutineStart.UNDISPATCHED) { finishRequest(call); Unit }
     }

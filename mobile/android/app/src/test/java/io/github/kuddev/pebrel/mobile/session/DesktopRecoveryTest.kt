@@ -66,20 +66,22 @@ class DesktopRecoveryTest {
         assertEquals(listOf("Ctrl+C"), sent)
     }
 
-    private class Link(private val autoSnapshot: Boolean = true) : DesktopTransport {
+    private class Link(private val autoSnapshot: Boolean = true, private val scrollSupported: Boolean = false) : DesktopTransport {
         lateinit var receive: (JSONObject) -> Unit
         lateinit var lost: (Throwable?) -> Unit
         var closed = false
         val methods = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val requests = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
         override suspend fun open(allowInput: Boolean, receive: (JSONObject) -> Unit, disconnected: (Throwable?) -> Unit) {
             this.receive = receive
             lost = disconnected
             receive(JSONObject().put("type", "mobile.ready").put("protocol", "pebrel.mobile.relay").put("version", 1)
-                .put("capabilities", JSONObject().put("input", true)))
+                .put("capabilities", JSONObject().put("input", true).put("terminal_scroll", scrollSupported)))
         }
         override fun send(frame: JSONObject) {
             val method = frame.getString("method")
             methods += method
+            requests += JSONObject(frame.toString())
             receive(JSONObject().put("id", frame.getString("id")).put("ok", true).put("result", JSONObject()))
             if (method == "events.subscribe" && autoSnapshot) receive(JSONObject("""{
                 "event":"runtime.snapshot","data":{"process_id":11,"windows":[{"id":1,"tabs":[
@@ -87,6 +89,24 @@ class DesktopRecoveryTest {
             """))
         }
         override fun close() { closed = true }
+    }
+
+    @Test fun negotiatedWheelReachesTheTransportAndRequestsTheControlledViewport() = runBlocking {
+        val link = Link(scrollSupported = true)
+        val client = DesktopRuntimeClient(link, {}, {})
+        try {
+            client.connect(true)
+            assertTrue(client.terminalScrollSupported)
+            client.dispatchInput("pane.scroll", JSONObject().put("window_id", 1).put("pane_id", 2)
+                .put("lines", 3).put("column", 4).put("row", 5)).await()
+            client.readPane(JSONObject().put("window_id", 1).put("pane_id", 2))
+            val scroll = link.requests.single { it.getString("method") == "pane.scroll" }.getJSONObject("params")
+            assertEquals(3, scroll.getInt("lines"))
+            assertEquals(2, scroll.getInt("pane_id"))
+            val read = link.requests.single { it.getString("method") == "pane.read" }.getJSONObject("params")
+            assertTrue(read.getBoolean("screen"))
+            assertTrue(read.getBoolean("screen_viewport"))
+        } finally { client.close() }
     }
 
     private suspend fun TestScope.awaitState(condition: () -> Boolean) {

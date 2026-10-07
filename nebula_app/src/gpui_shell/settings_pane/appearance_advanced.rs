@@ -28,14 +28,9 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::WallpaperShaderDescription),
                 cx,
             ))
-            .child(self.shader_source_row(cx))
-            .child(self.terminal_effect_row(cx))
-            .child(self.select_row(
-                "terminal_effect_animation",
-                language.text(crate::i18n::Message::TerminalEffectAnimation),
-                language.text(crate::i18n::Message::TerminalEffectAnimationDescription),
-                cx,
-            ))
+            .when(self.shader_custom_open || self.runtime.background_effects.wgsl, |group| {
+                group.child(self.shader_source_row(cx))
+            })
             .child(self.select_row(
                 "background_image_fit",
                 language.pick("背景图像拉伸模式", "Background image fit"),
@@ -64,7 +59,8 @@ impl SettingsPane {
                 help("background_image_cover_chrome", language),
                 self.runtime.background_image_cover_chrome,
                 cx,
-            ));
+            ))
+            .child(self.custom_effect_settings(cx));
         let cursor = self
             .group(language.pick("光标", "Cursor"), cx)
             .child(self.select_row(
@@ -191,5 +187,38 @@ impl SettingsPane {
             .child(cursor)
             .child(interface)
             .child(custom_background)
+    }
+
+    pub(super) fn custom_effect_settings(&self, cx: &mut Context<Self>) -> gpui::Div {
+        use crate::i18n::Message;
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let expanded = self.effect_settings_open;
+        // 展开状态只属于设置页；收起高级入口不能停用或改写用户的效果配置。
+        v_flex()
+            .w_full()
+            .child(
+                Button::new("custom-effects-disclosure")
+                    .debug_selector(|| "custom-effects-disclosure".to_owned())
+                    .ghost()
+                    .icon(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .label(language.text(if self.runtime.terminal_effects.enabled {
+                        Message::TerminalEffectAdvancedActive
+                    } else {
+                        Message::TerminalEffectAdvanced
+                    }))
+                    .toggled(expanded)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.effect_settings_open = !this.effect_settings_open;
+                        cx.notify();
+                    })),
+            )
+            .when(expanded, |group| {
+                group.child(self.terminal_effect_row(cx)).child(self.select_row(
+                    "terminal_effect_animation",
+                    language.text(Message::TerminalEffectAnimation),
+                    language.text(Message::TerminalEffectAnimationDescription),
+                    cx,
+                ))
+            })
     }
 }
