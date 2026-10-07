@@ -58,7 +58,8 @@ class LaunchEnvironmentTests(unittest.TestCase):
             )
         }
         with tempfile.TemporaryDirectory(prefix="pebrel-launch-env-") as temporary:
-            root = Path(temporary)
+            # Windows 临时目录可能使用 8.3 别名；预期路径与启动器一样先规范化。
+            root = Path(temporary).resolve()
             context = ConformanceContext(
                 SimpleNamespace(executable=root / "fixture-app.exe"), "fixture",
                 root / "config", root / "work", root / "artifacts",
