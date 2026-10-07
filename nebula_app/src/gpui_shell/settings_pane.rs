@@ -1310,7 +1310,7 @@ impl SettingsPane {
             .child(self.select_row(
                 "split_shell_source",
                 language.text(crate::i18n::Message::SettingsSplitShellSource),
-                language.text(crate::i18n::Message::SettingsSplitShellSourceDescription),
+                help("split_shell_source", language),
                 cx,
             ))
             .child(self.startup_directory_row(cx))

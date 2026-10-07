@@ -9,8 +9,8 @@ pub enum SplitShellSource {
 }
 
 impl SplitShellSource {
-    pub const ALL: [Self; 3] = [Self::Focused, Self::Default, Self::Ask];
-    pub const VALUES: &'static [&'static str] = &["focused", "default", "ask"];
+    pub const ALL: [Self; 3] = [Self::Default, Self::Focused, Self::Ask];
+    pub const VALUES: &'static [&'static str] = &["default", "focused", "ask"];
 
     pub fn from_settings(value: &str) -> Option<Self> {
         Self::ALL
@@ -45,7 +45,14 @@ mod tests {
                 source
             );
         }
-        assert_eq!(SplitShellSource::VALUES, ["focused", "default", "ask"]);
+        assert_eq!(
+            SplitShellSource::ALL,
+            [SplitShellSource::Default, SplitShellSource::Focused, SplitShellSource::Ask]
+        );
+        assert_eq!(SplitShellSource::VALUES, ["default", "focused", "ask"]);
+        for (source, value) in SplitShellSource::ALL.into_iter().zip(SplitShellSource::VALUES) {
+            assert_eq!(source.settings_value(), *value);
+        }
     }
 
     #[test]
