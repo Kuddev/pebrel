@@ -256,6 +256,11 @@ impl NebulaWorkspace {
         dock_target_at(self.active_terminal_area()?, &areas, x, y)
     }
 
+    /// Pane exchange targets a visible leaf, including its header at the outer rim.
+    pub(super) fn pane_at(&self, x: f32, y: f32) -> Option<u64> {
+        pane_at_point(&self.dock_pane_areas(), x, y)
+    }
+
     fn dock_pane_areas(&self) -> Vec<(u64, nebula_split::Rect)> {
         let Some(area) = self.active_terminal_area() else { return vec![] };
         let Some(WorkspaceTab::Terminal { tree, zoomed, .. }) = self.tabs.get(self.active) else {
@@ -363,6 +368,10 @@ pub(crate) struct DockTarget {
     pub(crate) nav: SplitNav,
 }
 
+fn pane_at_point(panes: &[(u64, nebula_split::Rect)], x: f32, y: f32) -> Option<u64> {
+    panes.iter().find(|(_, area)| area.contains(x, y)).map(|(pane, _)| *pane)
+}
+
 fn dock_target_at(
     area: nebula_split::Rect,
     panes: &[(u64, nebula_split::Rect)],
@@ -423,6 +432,23 @@ mod tests {
             Some(DockTarget { pane: None, nav: SplitNav::Right })
         );
         assert_eq!(dock_target_at(area, &panes, 1250.0, 600.0), None);
+    }
+
+    #[test]
+    fn pane_header_exchange_keeps_a_leaf_target_inside_the_tab_docking_rim() {
+        let area = nebula_split::Rect::new(0.0, 0.0, 1200.0, 800.0);
+        let panes = [
+            (1, nebula_split::Rect::new(0.0, 0.0, 599.0, 800.0)),
+            (2, nebula_split::Rect::new(601.0, 0.0, 599.0, 800.0)),
+        ];
+        let (x, y) = (900.0, super::super::pane_header::PANE_HEADER_H / 2.0);
+        assert_eq!(pane_at_point(&panes, x, y), Some(2));
+        assert_eq!(
+            dock_target_at(area, &panes, x, y),
+            Some(DockTarget { pane: None, nav: SplitNav::Up })
+        );
+        assert_eq!(pane_at_point(&panes, 600.0, y), None);
+        assert_eq!(pane_at_point(&panes, x, -1.0), None);
     }
 
     #[test]

@@ -1068,6 +1068,7 @@
       "stop_broadcast_input": "Stop broadcasting input",
       "broadcast_input_tooltip": "Broadcast input to every pane in this tab",
       "close": "Close this pane",
+      "swap_release": "Release to exchange pane positions",
       "extract_release": "Release to extract as a new tab",
       "extract_drag_hint": "Drag outside the terminal to extract",
       "broadcast_enabled": "Broadcasting input to {count} panes in this tab",

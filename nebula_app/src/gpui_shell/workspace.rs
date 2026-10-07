@@ -1680,24 +1680,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix >= self.tabs.len() {
-            return;
-        }
-        self.leave_settings(window, cx);
-        if ix < self.tabs.len() && ix != self.active {
-            self.clear_reader_focus(cx);
-            self.active = ix;
-            if let Some(meta) = self.tab_meta.get_mut(ix) {
-                meta.has_bell = false;
-            }
-            self.reveal_active_tab();
-            self.focus_active(window, cx);
-            self.sync_side_panel_to_active(true, cx);
-            cx.notify();
-        }
-    }
-
     /// ctrl+shift+w（对齐旧壳 CloseTab 语义）：tab 有分屏时关聚焦 pane，
     /// 单 pane 时关整个 tab；设置 tab 直接关 tab。
     fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2885,9 +2867,6 @@ impl Render for NebulaWorkspace {
                 this.update_details_panel_resize(event, window, cx);
                 this.update_left_sidebar_resize(event, window, cx);
                 this.continue_pending_tab_drag(event, window, cx);
-                // pane 拖拽的待命态同理：罩层只在激活后才存在，越阈值那一下
-                // 的 move 必须由根节点喂进去。
-                this.continue_pending_pane_drag(event, cx);
             }))
             // 旧壳在窗口级 mouse-up 无条件结束 tab drag。这里必须走 capture：
             // TerminalView 可能在 bubble phase 消费释放，导致 dock 永远不提交。
@@ -2899,10 +2878,7 @@ impl Render for NebulaWorkspace {
                     cx.stop_propagation();
                     return;
                 }
-                // pane 拖拽先结算：它和 tab 拖拽互斥（起手位置不同），但待命态
-                // 必须在这里清掉，否则下一次点标题条会带着上一次的按点。
-                let pane_dragged = this.release_pane_drag(window, cx);
-                if this.release_tab_drag_at(event.position, window, cx) || pane_dragged {
+                if this.release_tab_drag_at(event.position, window, cx) {
                     // 真拖拽已经完成，不能再让源 tab 的 click 或终端选择收到释放。
                     cx.stop_propagation();
                 }
@@ -3159,6 +3135,7 @@ impl Render for NebulaWorkspace {
             .children(self.render_details_panel_resize_handle(window, cx))
             .children(self.render_details_panel_resize_overlay(cx))
             .children(self.tabs_scrollbar_drag_overlay(cx))
+            .child(self.pane_drag_capture(cx))
             .children(self.pane_drag_overlay(cx))
             .children(self.split_drag_visual(cx))
             .children(self.render_left_sidebar_resize_overlay(cx))

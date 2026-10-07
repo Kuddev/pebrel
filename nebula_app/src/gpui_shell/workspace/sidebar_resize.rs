@@ -45,7 +45,9 @@ impl NebulaWorkspace {
             // must consume Escape first without taking the editor's focus.
             if window.window_handle() == owner_window
                 && event.keystroke.key == "escape"
-                && (view.cancel_details_panel_resize(cx) | view.cancel_left_sidebar_resize(cx))
+                && (view.cancel_details_panel_resize(cx)
+                    | view.cancel_left_sidebar_resize(cx)
+                    | view.cancel_pane_drag(cx))
             {
                 cx.stop_propagation();
             }
