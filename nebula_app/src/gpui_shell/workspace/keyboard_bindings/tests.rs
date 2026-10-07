@@ -32,23 +32,24 @@ mod macos_command_keys {
     #[test]
     fn command_close_and_quit_dispatch_to_distinct_actions() {
         use gpui::{KeyContext, Keymap, Keystroke};
-        // 合并后仍按共享别名表分派，防止配置中的 ⌘W/Quit 抢走关闭标签页动作。
-        let bindings = crate::display::keymap::MACOS_COMMAND_ALIASES
-            .iter()
-            .filter_map(|(combo, action)| workspace_binding_in_context(combo, action, None))
-            .collect();
-        let keymap = Keymap::new(bindings);
+        let mut keymap = Keymap::new(macos_command_bindings());
+        keymap.add_bindings(
+            crate::display::keymap::default_shortcuts()
+                .into_iter()
+                .filter(|(_, action)| *action == crate::config::Action::Quit)
+                .filter_map(|(combo, action)| workspace_binding_in_context(&combo, &action, None)),
+        );
         for context in ["Root", crate::gpui_shell::terminal::KEY_CONTEXT] {
             let contexts = [KeyContext::parse(context).unwrap()];
-            for (combo, quit) in [("cmd-w", false), ("cmd-q", true)] {
+            for combo in ["cmd-w", "cmd-shift-w", "cmd-q"] {
                 let input = [Keystroke::parse(combo).unwrap()];
                 let (bindings, pending) = keymap.bindings_for_input(&input, &contexts);
                 assert!(!pending);
                 let action = bindings.first().expect("命令键必须有明确动作").action();
-                if quit {
-                    assert!(action.as_any().is::<QuitApp>());
-                } else {
-                    assert!(action.as_any().is::<CloseActiveTerminal>());
+                match combo {
+                    "cmd-q" => assert!(action.as_any().is::<QuitApp>()),
+                    "cmd-w" => assert!(action.as_any().is::<CloseWindow>()),
+                    _ => assert!(action.as_any().is::<CloseActiveTerminal>()),
                 }
             }
         }

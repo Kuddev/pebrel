@@ -63,7 +63,7 @@ pub(super) fn init(cx: &mut App) {
     cx.bind_keys(default_workspace_bindings());
     // 平台判定复用已有入口；共享表不意味着给其他平台注册 ⌘ 快捷键。
     if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
-        bind_macos_command_keys(cx);
+        cx.bind_keys(macos_command_bindings());
     }
     // 退出不属于任何视图，挂全局兜底：⌘Q 与用户自定义的 `keybind=…:Quit`
     // 都落到与托盘退出同一条「先落盘会话与草稿，再停 PTY」的路径。
@@ -136,7 +136,8 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
     bindings
 }
 
-/// macOS 的原生修饰键是 ⌘：在 Ctrl 绑定之外**追加**一套 ⌘ 绑定，不替换。
+/// macOS 的原生修饰键是 ⌘：在 Ctrl 绑定之外追加一套 ⌘ 绑定。⌘W 关闭窗口，
+/// 活动终端改用 ⌘⇧W，避免与系统关闭窗口命令冲突。
 /// 追加而非替换有两个原因：Ctrl+Shift 组合在 Mac 终端里没有别的含义，留着
 /// 不碍事；而 ⌘C/⌘V 必须存在，否则 Mac 用户第一反应就是「复制粘贴坏了」。
 /// 终端里的 Ctrl+C 仍然是 SIGINT——这里只绑 ⌘，不碰 Ctrl 的语义。
@@ -144,19 +145,23 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
 /// 键位来自 `display::keymap::MACOS_COMMAND_ALIASES`：设置页的反查、解绑与
 /// 恢复读的是同一张表，两处不会再各自漂移。注册必须留在这里、且早于用户
 /// 自定义键，这样 `clear_action` 注入的 NoAction 才压得住静态默认绑定。
-fn bind_macos_command_keys(cx: &mut App) {
+fn macos_command_bindings() -> Vec<KeyBinding> {
     let mut bindings: Vec<KeyBinding> = crate::display::keymap::MACOS_COMMAND_ALIASES
         .iter()
         .filter_map(|(combo, action)| workspace_binding_in_context(combo, action, None))
         .collect();
     // 剩下这些没有对应的 `config::Action`，或者需要单独的作用域。
     bindings.extend([
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-h", HideApplication, None),
+        KeyBinding::new("cmd-alt-h", HideOtherApplications, None),
+        KeyBinding::new("cmd-m", MinimizeWindow, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         // 设置页与对话框的输入框自带 ⌘V，作用域必须和终端分开。
         KeyBinding::new("cmd-v", gpui_component::input::Paste, Some("Input")),
     ]);
-    cx.bind_keys(bindings);
+    bindings
 }
 
 /// Typed GPUI adapter for the shared numbered/last-tab actions. The existing
