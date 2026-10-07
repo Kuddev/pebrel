@@ -101,6 +101,19 @@ struct ReadParams {
     lines: usize,
     #[serde(default)]
     screen: bool,
+    #[serde(default)]
+    screen_viewport: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScrollParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    lines: i16,
+    column: u16,
+    row: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -345,11 +358,37 @@ impl RuntimeCommand {
                         "lines must be between 1 and {MAX_READ_LINES}"
                     )));
                 }
+                if params.screen_viewport && !params.screen {
+                    return Err(ApiError::invalid_params("screen_viewport requires screen=true"));
+                }
                 Ok(Self::ReadPane {
                     window_id: params.window_id,
                     pane_id: params.pane_id,
                     lines: params.lines,
-                    screen: params.screen,
+                    screen: params.screen.then_some(if params.screen_viewport {
+                        ScreenMode::Viewport
+                    } else {
+                        ScreenMode::Live
+                    }),
+                })
+            },
+            "pane.scroll" => {
+                let params: ScrollParams = parse_params(&request.params)?;
+                if params.lines == 0
+                    || params.lines.unsigned_abs() > 32
+                    || params.column >= 400
+                    || params.row >= 200
+                {
+                    return Err(ApiError::invalid_params(
+                        "scroll requires 1..32 signed lines and a valid screen cell",
+                    ));
+                }
+                Ok(Self::ScrollPane {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    lines: params.lines,
+                    column: params.column,
+                    row: params.row,
                 })
             },
             "pane.procs" => {

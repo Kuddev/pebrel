@@ -303,6 +303,9 @@ impl Processor {
                 serde_json::to_value(read)
                     .map_err(|error| ApiError::new("serialization_failed", error.to_string()))
             },
+            RuntimeCommand::ScrollPane { .. } => {
+                Err(ApiError::new("method_not_found", "remote scrolling requires the GPUI shell"))
+            },
             RuntimeCommand::Procs { window_id, pane_id } => {
                 let id = self.runtime_target_window(*window_id, Some(*pane_id))?;
                 let processes = self
@@ -381,7 +384,7 @@ impl Processor {
                         format!("agent {:?} no longer has a live window", managed.name),
                     ));
                 };
-                let read = window.runtime_read(managed.pane_id, *lines, false)?;
+                let read = window.runtime_read(managed.pane_id, *lines, None)?;
                 Ok(serde_json::json!({ "agent": managed, "read": read }))
             },
         }

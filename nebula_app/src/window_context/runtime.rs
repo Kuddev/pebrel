@@ -516,7 +516,7 @@ impl WindowContext {
         &self,
         pane_id: u64,
         lines: usize,
-        screen: bool,
+        screen: Option<crate::runtime_api::ScreenMode>,
     ) -> Result<RuntimePaneRead, ApiError> {
         let Some(pane) = self.pane(pane_id) else {
             return Err(ApiError::new(
@@ -534,8 +534,13 @@ impl WindowContext {
             false,
             None,
         );
-        if screen {
-            read.screen = Some(crate::runtime_api::capture_terminal_screen(&term, |index| {
+        if let Some(screen) = screen {
+            let capture = if screen == crate::runtime_api::ScreenMode::Viewport {
+                crate::runtime_api::capture_terminal_viewport
+            } else {
+                crate::runtime_api::capture_terminal_screen
+            };
+            read.screen = Some(capture(&term, |index| {
                 term.colors()[index].unwrap_or(*self.display.colors[index])
             })?);
         }

@@ -1281,3 +1281,54 @@ fn host_administrator_scope_excludes_remote_and_wsl_shells(cx: &mut TestAppConte
         assert!(!view.inherits_windows_host_token());
     });
 }
+
+#[gpui::test]
+fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut TestAppContext) {
+    use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.line_height = px(20.0);
+            view.cell_width = px(10.0);
+            let mut parser = Processor::<StdSyncHandler>::default();
+            parser.advance(
+                &mut *view.session.as_ref().unwrap().term.lock(),
+                b"\x1b[?1000h\x1b[?1006h",
+            );
+            receiver.try_iter().for_each(drop);
+            view.runtime_scroll(2, 3, 4, window, cx).unwrap();
+            let bytes: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|m| match m {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(bytes, b"\x1b[<64;4;5M\x1b[<64;4;5M");
+            parser.advance(
+                &mut *view.session.as_ref().unwrap().term.lock(),
+                b"\x1b[?1000l\x1b[?1006l\x1b[?1049h\x1b[?1007h",
+            );
+            view.runtime_scroll(-2, 3, 4, window, cx).unwrap();
+            let bytes: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|m| match m {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(bytes, b"\x1b[B\x1b[B");
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?1049l");
+            for _ in 0..40 {
+                parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"history\r\n");
+            }
+            view.runtime_scroll(3, 3, 4, window, cx).unwrap();
+            assert_eq!(view.session.as_ref().unwrap().term.lock().grid().display_offset(), 3);
+            assert!(receiver.try_iter().all(|m| !matches!(m, Msg::Input(_))));
+            assert!(view.runtime_scroll(1, 400, 0, window, cx).is_err());
+        });
+    });
+}
