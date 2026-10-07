@@ -271,6 +271,7 @@ impl SettingsPane {
             AgentKind::Qoder => Some(nav::AGENT_QODER),
             AgentKind::Qwen => Some(nav::AGENT_QWEN),
             AgentKind::CodeBuddy => Some(nav::AGENT_CODEBUDDY),
+            AgentKind::Antigravity => Some(nav::AGENT_ANTIGRAVITY),
             _ => None,
         } {
             Icon::default()

@@ -71,6 +71,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         "codex" if native_codex => &["session_id"],
         "codex" => &["thread-id"],
         "cursor" => &["conversation_id", "session_id"],
+        "antigravity" => &["conversationId"],
         "copilot" | "grok" => &["sessionId"],
         // opencode/pi 由我们自己的 bridge 规范化成 snake_case；camelCase 是
         // provider SDK 原样透传时的兼容路径。
@@ -210,7 +211,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             _ => return None,
         },
         "cursor" if payload.get("hookEventName").is_some() => return None,
-        "cursor" | "copilot" | "grok" => {
+        "cursor" | "copilot" | "grok" | "antigravity" => {
             super::native_events::parse(&source, native_event?, &payload)?
         },
         _ => return None,
@@ -231,7 +232,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         && payload.get("hook_event_name").and_then(Value::as_str) == Some("Interrupt")
     {
         AiTurnOutcome::Cancelled
-    } else if matches!(source.as_str(), "cursor" | "copilot" | "grok")
+    } else if matches!(source.as_str(), "cursor" | "copilot" | "grok" | "antigravity")
         && kind == AiHookKind::TurnDone
     {
         super::native_events::outcome(&source, native_event?, &payload)

@@ -113,7 +113,7 @@ pub fn capabilities_for(source: &str) -> AiHookCapabilities {
             bridge_sequence: false,
             serialized_delivery: false,
         },
-        "cursor" => AiHookCapabilities {
+        "cursor" | "antigravity" => AiHookCapabilities {
             lifecycle: true,
             attention_events: false,
             attention_context: false,

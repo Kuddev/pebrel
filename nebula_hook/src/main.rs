@@ -27,6 +27,7 @@
 //! nebula-hook claude                              # payload on stdin
 //! nebula-hook kimi                                # payload on stdin
 //! nebula-hook qoder|codebuddy|qwen|droid          # payload on stdin, claude-style
+//! nebula-hook antigravity --event <event>         # payload on stdin, event in argv
 //! nebula-hook codex <json>                        # payload as last arg
 //! nebula-hook codex --hooks=full                  # native hooks, stdin
 //! nebula-hook codex --chain <exe> <fixed…> <json> # + exec previous notifier
@@ -195,6 +196,10 @@ fn main() {
     {
         let _ = std::io::stdout().lock().write_all(b"{\"continue\":true}\n");
     }
+    // Antigravity parses a hook's stdout as its decision; an empty object decides nothing.
+    if args.first().is_some_and(|source| source == "antigravity") {
+        let _ = std::io::stdout().lock().write_all(b"{}\n");
+    }
 }
 
 fn read_payload(mut reader: impl Read) -> std::io::Result<Option<Vec<u8>>> {
@@ -226,6 +231,7 @@ fn known_source(source: &str) -> bool {
             | "codebuddy"
             | "qwen"
             | "droid"
+            | "antigravity"
     )
 }
 
@@ -245,12 +251,13 @@ fn payload_on_stdin(source: &str) -> bool {
             | "codebuddy"
             | "qwen"
             | "droid"
+            | "antigravity"
     )
 }
 
 fn native_event(args: &[String]) -> Option<&str> {
     if args.len() != 3
-        || !matches!(args[0].as_str(), "copilot" | "grok" | "cursor")
+        || !matches!(args[0].as_str(), "copilot" | "grok" | "cursor" | "antigravity")
         || args[1] != "--event"
     {
         return None;
@@ -310,7 +317,7 @@ fn run(args: &[String]) {
     let pane = hook_env("PANE_ID").and_then(|value| value.into_string().ok()).unwrap_or_default();
     let contract = if native_codex {
         format!(" codex_hooks={}", args[1].strip_prefix("--hooks=").unwrap())
-    } else if matches!(source.as_str(), "copilot" | "grok" | "cursor") {
+    } else if matches!(source.as_str(), "copilot" | "grok" | "cursor" | "antigravity") {
         let Some(event) = native_event(args) else { return };
         format!(" event={event}")
     } else {
@@ -487,7 +494,7 @@ mod tests {
     #[test]
     fn native_event_contract_accepts_only_known_sources_and_single_header_fields() {
         let args = |source: &str, event: &str| vec![source.into(), "--event".into(), event.into()];
-        for source in ["copilot", "grok", "cursor"] {
+        for source in ["copilot", "grok", "cursor", "antigravity"] {
             assert!(super::known_source(source) && super::payload_on_stdin(source));
             assert_eq!(super::native_event(&args(source, "prompt")), Some("prompt"));
             assert_eq!(super::native_event(&args(source, "done\npane=9")), None);

@@ -46,6 +46,7 @@ pub(super) fn configuration(agent: AgentHook) -> Option<(PathBuf, bool)> {
         AgentHook::Qoder | AgentHook::CodeBuddy | AgentHook::Qwen | AgentHook::Droid => {
             (claude_style::path(agent)?, claude_style::directory(agent)?.is_dir())
         },
+        AgentHook::Antigravity => (antigravity::path()?, antigravity::directory()?.is_dir()),
         _ => (extended::path(agent)?, extended::directory(agent)?.is_dir()),
     };
     Some((path, footprint))
@@ -127,6 +128,7 @@ fn installed_at(agent: AgentHook, path: &Path, helper: &str) -> io::Result<bool>
         AgentHook::Qoder | AgentHook::CodeBuddy | AgentHook::Qwen | AgentHook::Droid => {
             claude_style::installed_at(agent, path)
         },
+        AgentHook::Antigravity => antigravity::installed_at(path),
         AgentHook::OpenCode | AgentHook::Pi => {
             let bridge = if agent == AgentHook::Pi { Bridge::Pi } else { Bridge::Opencode };
             let (name, legacy, content, hashes) = bridge.files();
@@ -147,6 +149,7 @@ fn current_at(agent: AgentHook, path: &Path, helper: &str) -> io::Result<bool> {
         AgentHook::Qoder | AgentHook::CodeBuddy | AgentHook::Qwen | AgentHook::Droid => {
             claude_style::current(agent, &raw, helper)
         },
+        AgentHook::Antigravity => antigravity::current(&raw, helper),
         AgentHook::Kimi => Ok(kimi::inspect(&raw, Path::new(helper))?.1),
         AgentHook::Claude => {
             let mut value: Value = serde_json::from_str(&raw).map_err(io::Error::other)?;
@@ -264,6 +267,11 @@ pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
             let path = claude_style::path(agent)
                 .ok_or_else(|| io::Error::other("Agent configuration unavailable"))?;
             claude_style::apply_at(agent, &path, &helper_command().unwrap_or_default(), enabled)?;
+        },
+        (AgentHook::Antigravity, _) => {
+            let path = antigravity::path()
+                .ok_or_else(|| io::Error::other("Antigravity configuration unavailable"))?;
+            antigravity::apply_at(&path, &helper_command().unwrap_or_default(), enabled)?;
         },
         (_, _) => extended::apply(agent, &helper_command().unwrap_or_default(), enabled)?,
     }
