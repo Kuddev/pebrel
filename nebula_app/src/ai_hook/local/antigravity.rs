@@ -29,9 +29,9 @@ fn command(helper: &str, event: &str) -> String {
 
 fn owned(entry: &Value) -> bool {
     entry.get("command").and_then(Value::as_str).is_some_and(|command| {
-        EVENTS.iter().any(|(_, event)| {
-            owns_command(command, &format!("antigravity --event {event}"))
-        })
+        EVENTS
+            .iter()
+            .any(|(_, event)| owns_command(command, &format!("antigravity --event {event}")))
     })
 }
 
@@ -146,7 +146,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config/hooks.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let original = r#"{"lint":{"enabled":true,"Stop":[{"type":"command","command":"foreign"}]},"note":1}"#;
+        let original =
+            r#"{"lint":{"enabled":true,"Stop":[{"type":"command","command":"foreign"}]},"note":1}"#;
         std::fs::write(&path, original).unwrap();
         apply_at(&path, "C:/old/nebula-hook.exe", true).unwrap();
         assert!(installed_at(&path).unwrap());
