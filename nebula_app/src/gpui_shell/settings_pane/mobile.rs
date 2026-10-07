@@ -179,7 +179,7 @@ impl SettingsPane {
                 let mut preferences = this.mobile.preferences();
                 preferences.address = this.mobile_selected_address(cx).or(preferences.address);
                 if preferences.enabled && preferences.lan_enabled {
-                    this.mobile_apply(preferences, None, false, window, cx);
+                    this.mobile_apply(preferences, None, Some(Mode::Lan), false, window, cx);
                 }
             }
         }));
@@ -196,7 +196,7 @@ impl SettingsPane {
                     Ok(port) if port != this.mobile.preferences().port => {
                         let mut preferences = this.mobile.preferences();
                         preferences.port = port;
-                        this.mobile_apply(preferences, None, false, window, cx);
+                        this.mobile_apply(preferences, None, Some(Mode::Lan), false, window, cx);
                     },
                     Err(_) => {
                         this.mobile.failure = Some(Failure::Invalid);
@@ -311,7 +311,27 @@ impl SettingsPane {
                         }
                     },
                     Err(Failure::Cancelled) => {},
-                    Err(error) => this.mobile.failure = Some(error),
+                    Err(error) => {
+                        this.mobile.failure = Some(error);
+                        // 事务回滚后显示已提交的网卡，不能让草稿地址看起来已经生效。
+                        if let Some(snapshot) = this.mobile.snapshot.as_ref() {
+                            let selected = snapshot.preferences.address.and_then(|address| {
+                                this.mobile
+                                    .addresses
+                                    .iter()
+                                    .position(|entry| entry.address == address)
+                            });
+                            this.mobile.syncing = true;
+                            this.mobile.address_select.update(cx, |select, cx| {
+                                select.set_selected_index(
+                                    selected.map(|row| IndexPath::default().row(row)),
+                                    window,
+                                    cx,
+                                );
+                            });
+                            this.mobile.syncing = false;
+                        }
+                    },
                 }
                 cx.notify();
             });
@@ -324,6 +344,7 @@ impl SettingsPane {
         &mut self,
         preferences: Preferences,
         relay: Option<String>,
+        route: Option<Mode>,
         close_relay: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -332,7 +353,7 @@ impl SettingsPane {
         self.mobile_run(
             Some(generation),
             close_relay,
-            move || connection::apply(generation, preferences, relay),
+            move || connection::apply(generation, preferences, relay, route),
             window,
             cx,
         );
@@ -362,14 +383,14 @@ impl SettingsPane {
             .as_ref()
             .map(|s| s.devices.iter().map(|d| d.id.clone()).collect())
             .unwrap_or_default();
-        self.mobile_apply(preferences, None, false, window, cx);
+        self.mobile_apply(preferences, None, None, false, window, cx);
     }
 
     fn mobile_pause(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut preferences = self.mobile.preferences();
         preferences.enabled = false;
         self.mobile.pairing_open = false;
-        self.mobile_apply(preferences, None, false, window, cx);
+        self.mobile_apply(preferences, None, None, false, window, cx);
     }
 
     fn mobile_pair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -407,7 +428,7 @@ impl SettingsPane {
                 },
                 Mode::Relay => preferences.relay_enabled = true,
             }
-            self.mobile_apply(preferences, None, false, window, cx);
+            self.mobile_apply(preferences, None, Some(mode), false, window, cx);
         } else {
             cx.notify();
         }

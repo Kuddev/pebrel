@@ -529,7 +529,7 @@ impl SettingsPane {
                                 } else {
                                     let mut preferences = this.mobile.preferences();
                                     preferences.default_input = value;
-                                    this.mobile_apply(preferences, None, false, window, cx);
+                                    this.mobile_apply(preferences, None, None, false, window, cx);
                                 }
                             });
                         },
@@ -715,7 +715,7 @@ impl SettingsPane {
                     .on_click(cx.listener(|this, enabled: &bool, window, cx| {
                         let mut preferences = this.mobile.preferences();
                         preferences.lan_enabled = *enabled;
-                        this.mobile_apply(preferences, None, false, window, cx);
+                        this.mobile_apply(preferences, None, Some(Mode::Lan), false, window, cx);
                     })),
                 cx,
             ));
@@ -769,7 +769,7 @@ impl SettingsPane {
                     .on_click(cx.listener(|this, enabled: &bool, window, cx| {
                         let mut preferences = this.mobile.preferences();
                         preferences.notifications = *enabled;
-                        this.mobile_apply(preferences, None, false, window, cx);
+                        this.mobile_apply(preferences, None, None, false, window, cx);
                     })),
                 cx,
             ))

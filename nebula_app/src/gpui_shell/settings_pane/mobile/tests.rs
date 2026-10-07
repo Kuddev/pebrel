@@ -81,6 +81,40 @@ fn refreshing_interfaces_never_selects_a_replacement_for_saved_tailscale(
 }
 
 #[gpui::test]
+fn failed_network_change_restores_the_committed_interface(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut owner = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, cx| {
+            pane.mobile.initialized = true;
+            let mut snapshot = fixture(true, false);
+            snapshot.preferences.address = Some("192.0.2.1".parse().unwrap());
+            pane.mobile.display_snapshot(snapshot);
+            pane.mobile_set_addresses(fixture_addresses(), window, cx);
+            pane.mobile.address_select.update(cx, |select, cx| {
+                select.set_selected_index(Some(IndexPath::default().row(1)), window, cx);
+            });
+            assert_eq!(pane.mobile_selected_address(cx), Some("100.64.0.8".parse().unwrap()));
+            pane.mobile_run(None, false, || Err(Failure::Connection), window, cx);
+        });
+        owner = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = owner.unwrap();
+    cx.run_until_parked();
+    pane.read_with(cx, |pane, cx| {
+        assert_eq!(pane.mobile.failure, Some(Failure::Connection));
+        assert!(!pane.mobile.operation);
+        assert_eq!(pane.mobile_selected_address(cx), Some("192.0.2.1".parse().unwrap()));
+        assert_eq!(pane.mobile_selected_address(cx), pane.mobile.preferences().address);
+    });
+}
+
+#[gpui::test]
 fn mobile_three_states_and_manual_copy_use_the_rendered_controls(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
