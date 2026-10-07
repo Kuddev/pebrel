@@ -605,6 +605,7 @@ mod tests {
         #[gpui::test]
         fn clicking_a_toast_card_dismisses_only_that_card(cx: &mut TestAppContext) {
             initialize(cx, true);
+            cx.update(|cx| cx.set_reduce_motion(true));
             let mut surface = None;
             let (_, cx) = cx.add_window_view(|window, cx| {
                 let view = cx.new(|_| NotificationSurface);
@@ -616,6 +617,8 @@ mod tests {
                 toast(window, cx, ToastKind::Info, "first card");
                 toast(window, cx, ToastKind::Info, "second card");
             });
+            cx.run_until_parked();
+            cx.background_executor.advance_clock(Duration::from_millis(200));
             cx.run_until_parked();
             cx.update(|window, cx| {
                 surface.update(cx, |_, cx| cx.notify());
