@@ -56,6 +56,8 @@
   const systemDark = matchMedia('(prefers-color-scheme: dark)');
   function applyPalette(choice, remember) {
     const id = choice === 'system' ? (systemDark.matches ? 'Nord' : 'NordLight') : choice;
+    html.dataset.switching = '';
+    requestAnimationFrame(() => requestAnimationFrame(() => delete html.dataset.switching));
     html.dataset.palette = id;
     html.dataset.theme = darkPalettes.has(id) ? 'dark' : 'light';
     if (choice === 'system') html.dataset.follow = 'system'; else delete html.dataset.follow;

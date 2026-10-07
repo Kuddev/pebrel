@@ -58,6 +58,14 @@ a,button {
   transition:background .18s,color .18s,border-color .18s,transform .18s;
 }
 
+/* A palette change repaints everything at once; per-element fades would leave
+   rounded cards and pills in the old colours for a moment. */
+html[data-switching] *,
+html[data-switching] *::before,
+html[data-switching] *::after {
+  transition:none!important;
+}
+
 button:active {
   transform:translateY(1px);
 }

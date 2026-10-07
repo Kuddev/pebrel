@@ -122,6 +122,13 @@ class SiteTests(unittest.TestCase):
                     self.assertGreaterEqual(palettes.contrast(values[ink], values['code']), 4.5, f'{ink} on code')
         self.assertIn('data-palette-option="system"', index)
 
+    def test_palette_switch_suspends_transitions(self):
+        css = (self.root / 'assets' / 'site.css').read_text()
+        script = (self.root / 'assets' / 'site.js').read_text()
+        self.assertIn('html[data-switching] *', css)
+        self.assertIn('transition:none!important', css.split('html[data-switching] *', 1)[1].split('}', 1)[0])
+        self.assertIn('html.dataset.switching', script)
+
     def test_page_specific_version_and_sources(self):
         config = json.loads((HERE / 'site.json').read_text())
         for group in config['groups']:
