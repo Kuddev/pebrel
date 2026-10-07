@@ -1,5 +1,5 @@
 > [!NOTE]
-> 本页按 2026-09-30 的 `main`（`5ff2f3e`）核对，面向带有 **手机远程** 设置的桌面版本和匹配的 Android 客户端。它不表示 1.9.1 或任意旧 APK 已支持这些流程；下载内容以[项目发行版](https://github.com/Kuddev/pebrel/releases)实际提供的文件为准。
+> 本页按 Pebrel 2.1.1 核对，面向带有 **手机远程** 设置的桌面版本（2.0 起提供）和匹配的 Android 客户端。2.1.1 的发行版提供 `Pebrel-v2.1.1-android-universal-preview.apk`，下载见[项目发行版](https://github.com/Kuddev/pebrel/releases)。桌面和手机端的版本需要匹配，旧版本不支持这些流程。
 
 ## 准备连接
 

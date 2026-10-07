@@ -53,3 +53,28 @@ None.
 Multiple maintained languages or versioned manuals make the current navigation
 manifest insufficient, or the small local search index no longer meets users'
 needs. Re-evaluate on measured behavior rather than adding services in advance.
+
+## Colour themes (2026-10-07)
+
+The guide takes its colours from the application's built-in themes instead of a
+site-specific palette, so the documentation reads as part of the product and
+readers can choose the theme they already use. `docs/site/palettes.py` parses the
+catalog from `nebula_settings/src/themes.rs` at build time; the build fails when
+that source changes shape. A hand-copied colour table was rejected because it would
+drift from the application. A fixed light/dark pair was rejected because the
+application ships sixteen themes and a toggle cannot express them. Where a theme's
+accent or muted colour is too faint for text, the site darkens or lightens it toward
+the theme foreground until it reaches 4.5:1; the application's own colours are
+unchanged. The choice is stored in browser storage only.
+
+## Release baseline (2026-10-07)
+
+The base pages were re-audited against the `v2.1.1` tag and the manifest now records
+that version and commit for every page; the earlier page-level `main` overrides were
+removed. The tag, not `main`, is the baseline because the guide describes what readers
+can install: `main` carries features that are not in any release. Pages whose behaviour
+changed between 1.9.1 and 2.1.1 were updated from the code at the tag (platform
+integrations on macOS and Linux, Windows ARM64 installer, release asset names, update
+channels, settings navigation) and from the release notes for 2.0.0, 2.1.0 and 2.1.1.
+Differences that are only translation refactors were not treated as behaviour changes.
+

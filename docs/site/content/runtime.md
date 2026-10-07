@@ -65,8 +65,31 @@ pebrel agent read codex --lines 80
 
 自动化应使用列表返回的身份，而不是仅根据窗口焦点猜测目标。命名 Agent 和隔离目录的完整示例见[隔离 AI 工作目录](agent-worktrees.md)。
 
+## 管理标签页
+
+标签页的编号按窗口计算，所以必须指定窗口。编号从 0 开始，以 `pebrel ctl snapshot --pretty` 里的值为准：
+
+```sh
+pebrel tab rename 2 "API 日志" --window 1
+pebrel tab move 2 0 --window 1
+pebrel tab close 2 --window 1
+```
+
+`rename` 传入空字符串可以恢复自动标题。`close` 只关闭空闲的标签，里面还有程序在运行时会被拒绝。
+
+## 校验和运行本地插件命令
+
+2.0 起，`pebrel plugin` 可以在不启动窗口的情况下检查或调用一个本地命令插件包：
+
+```sh
+pebrel plugin check ./my-plugin --pretty
+pebrel plugin run ./my-plugin summary --args '{"label":"示例"}' --timeout-ms 3000
+```
+
+`check` 只校验插件的清单和入口路径，不执行 Lua。`run` 每次只调用一个已声明的命令，`--timeout-ms` 取值 1 到 30000，默认 3000。命令按需运行，结束后不会留下常驻的插件进程。这个版本支持命令插件，不包含常驻的插件面板。
+
 ## 超时后如何处理
 
 先读取目标状态和最近输出。如果任务已经收到但仍在执行，继续查看或等待；不要立即重复发送同一条任务，以免执行两次。
 
-参数和能力相关错误，可以用 `pebrel ctl describe --pretty`检查当前版本，并参阅[运行时控制参考](https://github.com/Kuddev/pebrel/blob/9dc058d12765893553d5fc7a2c37c870c96168b0/docs/runtime-control-api.md)。运行时发现文件包含本机控制凭据，不应公开、同步给他人或转发端口。
+参数和能力相关错误，可以用 `pebrel ctl describe --pretty`检查当前版本，并参阅[运行时控制参考](https://github.com/Kuddev/pebrel/blob/d574856dae42f7a5142045e0b05f3eb43106fa3d/docs/runtime-control-api.md)。运行时发现文件包含本机控制凭据，不应公开、同步给他人或转发端口。

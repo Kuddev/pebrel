@@ -222,6 +222,7 @@ NebulaTerminal-*/
 !/docs/site/assets/site.css
 !/docs/site/assets/site.js
 !/docs/site/build.py
+!/docs/site/palettes.py
 !/docs/site/check_browser.py
 !/docs/site/content/index.md
 !/docs/site/content/installation.md
@@ -256,6 +257,7 @@ NebulaTerminal-*/
 !/docs/site/content/ai-start.md
 !/docs/site/content/hooks.md
 !/docs/site/content/ai-history.md
+!/docs/site/content/agents.md
 !/docs/site/content/send-to-chat.md
 !/docs/site/content/appearance.md
 !/docs/site/content/themes.md

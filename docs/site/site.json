@@ -1,6 +1,6 @@
 {
-  "version": "1.9.1",
-  "source_commit": "9dc058d12765893553d5fc7a2c37c870c96168b0",
+  "version": "2.1.1",
+  "source_commit": "d574856dae42f7a5142045e0b05f3eb43106fa3d",
   "groups": [
     {
       "title": "开始使用",
@@ -111,9 +111,7 @@
             "nebula_app/src/completion/connections.rs",
             "nebula_app/src/completion/project_scripts.rs",
             "nebula-completions/src/semantic/common.rs"
-          ],
-          "version": "main（2026-09-30）",
-          "source_commit": "5ff2f3eea54b9c66e416149e17e823b8d72b1dee"
+          ]
         },
         {
           "slug": "palette",
@@ -270,8 +268,6 @@
           "slug": "mobile",
           "title": "Android 连接电脑",
           "description": "配对自己的手机、核对校验码、选择只看或允许输入，并撤销不用的设备。",
-          "version": "main（2026-09-30）",
-          "source_commit": "5ff2f3eea54b9c66e416149e17e823b8d72b1dee",
           "sources": [
             "nebula_app/src/gpui_shell/settings_pane/mobile/view.rs",
             "nebula_app/src/mobile_connection/preferences.rs",
@@ -384,7 +380,20 @@
             "nebula_app/src/gpui_shell/workspace/agents.rs",
             "nebula_app/src/ai_hook/integrations.rs",
             "nebula_app/src/gpui_shell/terminal/view.rs",
-            "nebula_app/src/gpui_shell/terminal/view/agent_activity.rs"
+            "nebula_app/src/gpui_shell/terminal/view/agent_activity.rs",
+            "nebula_app/src/display/program_identity.rs"
+          ]
+        },
+        {
+          "slug": "agents",
+          "title": "支持的 AI 命令行工具",
+          "description": "查看 Pebrel 能识别哪些 AI CLI 和 TUI，以及每个工具有哪些状态、图标和会话功能。",
+          "sources": [
+            "nebula_app/src/ai_agents.rs",
+            "nebula_app/src/ai_hook/integrations.rs",
+            "nebula_app/src/display/program_identity.rs",
+            "nebula_app/src/agent_detection/_shared.toml",
+            "nebula_app/src/gpui_shell/settings_pane/agents.rs"
           ]
         },
         {
@@ -394,7 +403,12 @@
           "sources": [
             "nebula_app/src/ai_hook/integrations.rs",
             "nebula_app/src/gpui_shell/settings_pane/agents.rs",
-            "nebula_app/src/ai_hook/local/settings.rs"
+            "nebula_app/src/ai_hook/local/settings.rs",
+            "nebula_app/src/platform/capabilities.rs",
+            "nebula_app/src/cli.rs",
+            "nebula_app/src/ssh_session/integration.rs",
+            "nebula_settings/src/agent_hooks.rs",
+            "nebula_app/src/ai_hook/local/runtime_skills.rs"
           ]
         },
         {
@@ -404,7 +418,9 @@
           "sources": [
             "nebula_app/src/ai_sessions.rs",
             "nebula_app/src/gpui_shell/workspace/session_recovery.rs",
-            "nebula_app/src/gpui_shell/workspace/tab_menu.rs"
+            "nebula_app/src/gpui_shell/workspace/tab_menu.rs",
+            "nebula_app/src/ai_agents.rs",
+            "nebula_app/src/gpui_shell/workspace/agents.rs"
           ]
         },
         {
@@ -561,8 +577,6 @@
           "slug": "backups",
           "title": "加密备份与恢复",
           "description": "创建加密快照、导出迁移文件、选择恢复内容，检查密码与存储平台限制。",
-          "version": "main（2026-09-30）",
-          "source_commit": "5ff2f3eea54b9c66e416149e17e823b8d72b1dee",
           "sources": [
             "nebula_app/src/gpui_shell/settings_pane/backup.rs",
             "nebula_app/src/gpui_shell/settings_pane/backup/setup.rs",

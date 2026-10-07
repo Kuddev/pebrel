@@ -19,13 +19,34 @@ For the browser smoke check, install `playwright==1.57.0`, run
 The check serves the site under `/pebrel/`, exercising project-site path handling.
 `CHROMIUM_PATH` optionally selects an existing Chromium executable.
 
-The manifest currently contains 55 user-facing guides, organized by tasks rather
+The manifest currently contains 56 user-facing guides, organized by tasks rather
 than implementation modules. Source links are pinned to the documented commit.
+
+The documented baseline is the `v2.1.1` release (commit `d574856`). Pages were checked
+against that tag, not against later `main`: UI labels, platform availability and file
+names such as release assets follow what 2.1.1 shipped. When a later release changes a
+page, update that page, its evidence and `site.json` together, or record a page-level
+`version` and `source_commit` as described below.
 
 The generated `dist/` is disposable and ignored. Publish that directory's contents,
 not this source directory. Open `index.html` directly for offline reading; browser
 clipboard policies may require HTTP(S), in which case select and copy the text.
 Search loads a local JavaScript index rather than requiring a backend or CDN.
+
+## Colour themes
+
+The site uses the desktop application's own palettes. `palettes.py` parses the 16
+built-in themes from `nebula_settings/src/themes.rs` (and their names from
+`nebula_app/src/display/ui/theme.rs`) at build time and writes `assets/palettes.css`
+plus the syntax colours in `assets/highlight.css`. Nothing is copied by hand, so a
+theme added or retuned in the application reaches the site on the next build, and the
+build fails if the source no longer has the expected shape.
+
+Readers pick a theme from the palette button in the header. **Follow system** mirrors the
+application's default pair, Nord Light and Nord. The choice is stored in the browser
+only. Accent, muted and syntax colours are nudged toward the theme's foreground when
+they would fall below a 4.5:1 contrast ratio on the page or code surface; the tests
+check this for every theme.
 
 ## GitHub Pages
 

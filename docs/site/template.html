@@ -1,28 +1,31 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="$description">
-  <meta name="theme-color" content="#fafbf9">
+  <meta name="theme-color" content="#eceff4">
   <title>$title · Pebrel 文档</title>
   $canonical
   <link rel="icon" type="image/png" href="${root}assets/pebrel.png">
-  <script>try{document.documentElement.dataset.theme=localStorage.getItem('pebrel-docs-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')}catch{}</script>
+  <script>try{const r=document.documentElement,d=[$dark_palettes],s=localStorage.getItem('pebrel-docs-palette'),o=localStorage.getItem('pebrel-docs-theme'),k=s&&s!=='system'?s:o==='dark'?'Nord':o==='light'?'NordLight':'',q=matchMedia('(prefers-color-scheme: dark)').matches,i=k||(q?'Nord':'NordLight');r.dataset.palette=i;r.dataset.theme=d.includes(i)?'dark':'light';if(!k)r.dataset.follow='system'}catch{}</script>
+  <link rel="stylesheet" href="${root}assets/palettes.css">
   <link rel="stylesheet" href="${root}assets/site.css">
   <link rel="stylesheet" href="${root}assets/highlight.css">
   <script src="${root}assets/site.js" defer></script>
 </head>
 <body data-root="$root" data-page="$slug">
 <a class="skip" href="#main">跳到正文</a>
-<div class="reading-progress" aria-hidden="true"></div>
 <header class="header">
-  <a class="brand" href="${root}index.html" aria-label="Pebrel 文档首页"><img src="${root}assets/pebrel.png" width="30" height="30" alt=""><span>Pebrel</span><span class="brand-divider"></span><span class="brand-docs">文档</span></a>
+  <a class="brand" href="${root}index.html" aria-label="Pebrel 文档首页"><img src="${root}assets/pebrel.png" width="30" height="30" alt=""><span>Pebrel</span><span class="brand-docs">文档</span></a>
   <nav class="header-links" aria-label="站点导航"><a class="selected" href="${root}index.html">指南</a><a href="${root}installation/index.html">下载</a><a href="https://github.com/Kuddev/pebrel" target="_blank" rel="noopener">GitHub <span aria-hidden="true">↗</span></a></nav>
   <div class="header-actions">
     <button class="search-trigger" data-search aria-label="搜索文档"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><span>搜索文档</span><kbd data-shortcut>⌘ K</kbd></button>
-    <button class="icon-button" id="theme-toggle" aria-label="切换深浅主题" title="切换深浅主题"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button>
+    <div class="palette-picker">
+      <button class="icon-button" id="theme-toggle" aria-label="选择配色" title="选择配色" aria-haspopup="menu" aria-expanded="false" aria-controls="palette-menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.8 2-1.8 0-.5-.2-.9-.5-1.300-.3-.4-.5-.8-.5-1.300 0-1 .8-1.600 1.800-1.600H17a4 4 0 0 0 4-4C21 6.500 17 3 12 3Z"/><circle cx="7.500" cy="11" r="1"/><circle cx="10" cy="7.500" r="1"/><circle cx="15" cy="7.500" r="1"/></svg></button>
+      <div class="palette-menu" id="palette-menu" role="menu" aria-label="Pebrel 内置配色" hidden>$palette_menu</div>
+    </div>
     <button class="icon-button menu-toggle" id="menu-toggle" aria-label="打开文档导航" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
   </div>
 </header>

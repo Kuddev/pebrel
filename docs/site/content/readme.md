@@ -24,18 +24,19 @@
 
 | 平台 | 当前支持 | 安装包 |
 | --- | --- | --- |
-| Windows 10 1809+ / 11 | 正式版，x64 | .exe 安装器或 .zip 便携包 |
+| Windows 10 1809+ / 11 | 正式版，x64 / ARM64 | .exe 安装器或 .zip 便携包 |
 | macOS 14+ | Preview，Apple Silicon / Intel | .dmg |
 | Linux，glibc 2.35+ | Preview，x64 | .AppImage、.deb 或 .tar.gz |
+| Android 8.0+ | Preview，手机端 | .apk，用于[连接电脑](mobile.md) |
 
-Windows 还提供系统托盘驻留、全局快速终端热键、本地 AI hook 自动配置和自动更新安装。macOS 与 Linux 的可用能力以[安装与平台支持](installation.md)为准。
+Pebrel 2.1 在 Windows、macOS 和 Linux 上都提供系统托盘、全局快速终端热键、登录启动和本地 AI 集成自动配置；Windows 和 macOS 还可以在应用内安装更新，Linux 通过包管理器或新安装包升级。细节见[安装与平台支持](installation.md)。
 
 ## 终端与会话
 
 - 侧栏或顶部标签管理终端，并可拖拽调整分屏。
 - 每个窗格可以拥有独立工作目录；复制部分远端或子系统标签时会保留已知目录。
-- 支持历史和路径补全、快捷键及集成 Shell 提示。
-- Windows 可选择关窗后继续保留后台会话；应用真正退出后的对话恢复属于另一套机制。
+- 内置智能补全：从当前 Git 仓库、项目脚本、SSH 配置别名、文件目录获取候选（Windows 还包括已注册的 WSL 发行版），也支持历史补全，见[命令补全](completions.md)。
+- 可选择关窗后继续保留后台会话；应用真正退出后的对话恢复属于另一套机制。
 
 要实际配置这些行为，参见[标签页与分屏](workspace.md)、[保存与恢复会话](sessions.md)和[快捷键速查](keyboard.md)。
 
@@ -47,9 +48,13 @@ SFTP 面板用于浏览远端目录、上传与下载文件或文件夹、查看
 
 <figure><img src="@ROOT@assets/screenshots/hero.png" alt="Pebrel 工作区示例" width="1040" loading="lazy"><figcaption>终端、文件与远端连接围绕同一工作区组织。</figcaption></figure>
 
+## 手机与备份
+
+2.0 起，Android 客户端可以连接电脑，查看正在运行的任务、在获准后发送输入并接收提醒，命令仍在电脑上执行，见[Android 连接电脑](mobile.md)。设置、SSH 主机和工作区布局可以先在本机加密，再备份到本地目录、WebDAV、S3 兼容存储或 SSH 主机，见[加密备份](backups.md)。
+
 ## AI CLI 工作流
 
-Pebrel 会识别多种 AI CLI，并在受支持时显示活动状态与更精确的任务提示。通知与来源窗格关联，点击后可以回到对应终端。
+Pebrel 会识别多种 AI CLI，并在受支持时显示活动状态与更精确的任务提示，各工具的支持范围见[支持的 AI 命令行工具](agents.md)。通知与来源窗格关联，点击后可以回到对应终端。
 
 已捕获的回答可以在阅读器中查看 Markdown、公式、原文和本地图片。向终端粘贴图片时，Pebrel 会把图片保存为文件并把路径交给当前会话；终端内联显示是否可用取决于命令行工具输出的协议和内容。
 

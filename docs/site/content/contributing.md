@@ -24,6 +24,10 @@ cargo build --locked -p nebula --bin pebrel --features gpui-shell
 
 如果只是修文档，应优先运行文档自己的构建与测试，不需要为了文字改动制造无关的产品代码变化。
 
+## 不要用于推广
+
+PR、Issue 及其评论不能用于广告、商业推广或引流，包括以功能贡献为名加入服务商推广、返利链接或注册优惠。确认属于未经授权的推广后，对应提交会被直接关闭。商业合作和赞助请发邮件到 [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)，不要在 PR 或 Issue 里洽谈。完整规则见[贡献指南](https://github.com/Kuddev/pebrel/blob/main/CONTRIBUTING.md#commercial-promotion-policy)。
+
 ## 保持改动容易审查
 
 - 一个 PR 只承担一个概念上的改动；不要顺便重构无关文件。

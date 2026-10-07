@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+import palettes
 from build import build, HERE, home_header, page_url, source_details
 
 
@@ -101,6 +102,25 @@ class SiteTests(unittest.TestCase):
         self.assertIn('quickstart/index.html', hero)
         self.assertIn('installation/index.html', hero)
         self.assertEqual(header.count('https://github.com/Kuddev/pebrel/releases/latest'), 3)
+
+    def test_every_builtin_theme_is_selectable_and_readable(self):
+        themes = palettes.load()
+        catalog = palettes.THEMES_RS.read_text(encoding='utf-8')
+        declared = __import__('re').search(r'BUILTIN: \[Self; (\d+)\]', catalog).group(1)
+        self.assertEqual(len(themes), int(declared))
+        stylesheet = (self.root / 'assets' / 'palettes.css').read_text()
+        index = (self.root / 'index.html').read_text()
+        for theme in themes:
+            values = {name: tuple(int(value[i:i + 2], 16) for i in (1, 3, 5)) for name, value in palettes.tokens(theme).items()}
+            with self.subTest(theme=theme['id']):
+                self.assertIn(f'html[data-palette="{theme["id"]}"]', stylesheet)
+                self.assertIn(f'data-palette-option="{theme["id"]}"', index)
+                for surface in ('bg', 'soft'):
+                    for ink in ('text', 'muted', 'accent'):
+                        self.assertGreaterEqual(palettes.contrast(values[ink], values[surface]), 4.5, f'{ink} on {surface}')
+                for ink in ('red', 'green', 'yellow', 'blue', 'purple', 'cyan'):
+                    self.assertGreaterEqual(palettes.contrast(values[ink], values['code']), 4.5, f'{ink} on code')
+        self.assertIn('data-palette-option="system"', index)
 
     def test_page_specific_version_and_sources(self):
         config = json.loads((HERE / 'site.json').read_text())

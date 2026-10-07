@@ -13,6 +13,7 @@ from urllib.parse import quote
 from xml.sax.saxutils import escape as xml_escape
 
 import mistune
+import palettes
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name
@@ -21,6 +22,7 @@ from pygments.util import ClassNotFound
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 UPSTREAM = "https://github.com/Kuddev/pebrel"
+SITE_VERSION = json.loads((Path(__file__).resolve().parent / "site.json").read_text(encoding="utf-8"))["version"]
 
 
 def plain(text: str) -> str:
@@ -103,7 +105,6 @@ def navigation(groups: list[dict], active: str, root: str) -> str:
 def home_header() -> str:
     release = f"{UPSTREAM}/releases/latest"
     return f'''<section class="hero">
-<div class="hero-art" aria-hidden="true"><i></i><i></i><i></i></div>
 <h1>从一个终端开始。<br><span>把工作连成一体。</span></h1>
 <div class="hero-actions"><a class="button-primary" href="quickstart/index.html">开始使用 <span aria-hidden="true">→</span></a><a class="text-link" href="installation/index.html">下载 Pebrel ↗</a></div></section>
 <div class="platform-strip"><span>为你的桌面而来</span><a href="{release}" target="_blank" rel="noopener">Windows</a><a href="{release}" target="_blank" rel="noopener">macOS <small>Preview</small></a><a href="{release}" target="_blank" rel="noopener">Linux <small>Preview</small></a></div>'''
@@ -114,7 +115,7 @@ def source_details(page: dict, commit: str) -> str:
     sources = page.get("sources", [])
     links = "".join(f'<li><a href="{UPSTREAM}/blob/{commit}/{quote(path, safe="/#")}" target="_blank" rel="noopener">{html.escape(path)}</a></li>' for path in sources)
     return (f'<details class="source-details"><summary>版本与参考 · {commit[:7]}</summary>'
-            f'<p>适用版本：Pebrel {html.escape(page.get("version", "1.9.1"))}。以下链接提供相关设置与功能的参考。</p><ul>{links}</ul></details>')
+            f'<p>适用版本：Pebrel {html.escape(page.get("version", SITE_VERSION))}。以下链接提供相关设置与功能的参考。</p><ul>{links}</ul></details>')
 
 
 def build(destination: Path, base_url: str) -> dict:
@@ -157,9 +158,10 @@ def build(destination: Path, base_url: str) -> dict:
     shutil.copy2(HERE / "screenshots.json", screenshot_dir / "sources.json")
     for filename in config["images"]:
         shutil.copy2(REPO / "docs/screenshots" / filename, screenshot_dir / filename)
-    light_css = HtmlFormatter(style="default", nobackground=True).get_style_defs("[data-theme=light] .code-block")
-    dark_css = HtmlFormatter(style="github-dark", nobackground=True).get_style_defs("[data-theme=dark] .code-block")
-    (assets / "highlight.css").write_text(light_css + "\n" + dark_css, encoding="utf-8")
+    themes = palettes.load()
+    (assets / "palettes.css").write_text(palettes.stylesheet(themes), encoding="utf-8")
+    (assets / "highlight.css").write_text(palettes.code_stylesheet(), encoding="utf-8")
+    palette_menu, dark_palettes = palettes.menu(themes), palettes.dark_ids(themes)
     search = []
     total_characters = 0
     all_markdown = []
@@ -176,12 +178,11 @@ def build(destination: Path, base_url: str) -> dict:
             header = home_header()
             breadcrumb_tools = ""
         else:
-            reading_minutes = max(1, len(plain(content)) // 450)
             header = (
                 f'<header class="page-heading"><h1>{html.escape(page["title"])}</h1>'
                 f'<p class="page-description">{html.escape(page["description"])}</p></header>')
             breadcrumb_tools = (
-                f'<div class="page-tools"><span>约 {reading_minutes} 分钟阅读</span>'
+                f'<div class="page-tools">'
                 f'<button class="small-button" id="copy-page">复制本页</button>'
                 f'<a href="{root}markdown/{slug}.md" download>Markdown ↓</a></div>')
         header += '<script id="page-source" type="application/json">' + json.dumps(source, ensure_ascii=False).replace("<", "\\u003c") + '</script>'
@@ -200,6 +201,7 @@ def build(destination: Path, base_url: str) -> dict:
             root=root, slug=slug, version=html.escape(page.get("version", config["version"])), group=html.escape(page["group"]),
             navigation=navigation(config["groups"], slug, root), main_class="home" if slug == "index" else "document",
             breadcrumb_tools=breadcrumb_tools, page_header=header, content=content, source_details=source_details(page, config["source_commit"]),
+            palette_menu=palette_menu, dark_palettes=dark_palettes,
             pagination="".join(pagination), toc=toc, edit_url=f'{UPSTREAM}/edit/main/docs/site/content/{slug}.md')
         target = destination / page_url(slug)
         target.parent.mkdir(parents=True, exist_ok=True)

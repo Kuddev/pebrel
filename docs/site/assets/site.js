@@ -48,20 +48,48 @@
     }
   }));
 
-  const themeToggle = $('#theme-toggle');
-  function updateThemeLabel() {
-    const dark = document.documentElement.dataset.theme === 'dark';
-    themeToggle.setAttribute('aria-label', dark ? '切换到浅色主题' : '切换到深色主题');
-    themeToggle.title = themeToggle.getAttribute('aria-label');
-    themeToggle.setAttribute('aria-pressed', String(dark));
+  const html = document.documentElement;
+  const paletteButton = $('#theme-toggle');
+  const paletteMenu = $('#palette-menu');
+  const paletteOptions = $$('[data-palette-option]');
+  const darkPalettes = new Set(paletteOptions.filter(option => option.closest('[aria-label="深色"]')).map(option => option.dataset.paletteOption));
+  const systemDark = matchMedia('(prefers-color-scheme: dark)');
+  function applyPalette(choice, remember) {
+    const id = choice === 'system' ? (systemDark.matches ? 'Nord' : 'NordLight') : choice;
+    html.dataset.palette = id;
+    html.dataset.theme = darkPalettes.has(id) ? 'dark' : 'light';
+    if (choice === 'system') html.dataset.follow = 'system'; else delete html.dataset.follow;
+    paletteOptions.forEach(option => option.setAttribute('aria-checked', String(option.dataset.paletteOption === choice)));
+    $('meta[name=theme-color]')?.setAttribute('content', getComputedStyle(html).getPropertyValue('--bg').trim());
+    if (remember) { try { localStorage.setItem('pebrel-docs-palette', choice); } catch { /* Session only. */ } }
   }
-  updateThemeLabel();
-  themeToggle.addEventListener('click', () => {
-    const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem('pebrel-docs-theme', theme); } catch { /* Session only. */ }
-    updateThemeLabel();
+  function currentChoice() { return html.dataset.follow === 'system' ? 'system' : html.dataset.palette; }
+  function setPaletteMenu(open) {
+    paletteMenu.hidden = !open;
+    paletteButton.setAttribute('aria-expanded', String(open));
+    if (open) (paletteMenu.querySelector('[aria-checked=true]') || paletteOptions[0]).focus();
+  }
+  applyPalette(currentChoice(), false);
+  paletteButton.addEventListener('click', () => setPaletteMenu(paletteMenu.hidden));
+  paletteOptions.forEach(option => option.addEventListener('click', () => {
+    applyPalette(option.dataset.paletteOption, true);
+    setPaletteMenu(false);
+    paletteButton.focus();
+  }));
+  paletteMenu.addEventListener('keydown', event => {
+    const index = paletteOptions.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      paletteOptions[(index + (event.key === 'ArrowDown' ? 1 : -1) + paletteOptions.length) % paletteOptions.length].focus();
+    } else if (event.key === 'Escape') {
+      setPaletteMenu(false);
+      paletteButton.focus();
+    }
   });
+  document.addEventListener('click', event => {
+    if (!paletteMenu.hidden && !event.target.closest('.palette-picker')) setPaletteMenu(false);
+  });
+  systemDark.addEventListener('change', () => { if (currentChoice() === 'system') applyPalette('system', false); });
 
   const sidebar = $('#sidebar');
   const menu = $('#menu-toggle');
@@ -244,8 +272,6 @@
     if (scheduled) return;
     scheduled = true;
     requestAnimationFrame(() => {
-      const range = document.documentElement.scrollHeight - innerHeight;
-      $('.reading-progress').style.width = `${range > 0 ? scrollY / range * 100 : 0}%`;
       let active = headings[0]?.id;
       for (const heading of headings) { if (heading.getBoundingClientRect().top <= 145) active = heading.id; }
       tocLinks.forEach(link => link.classList.toggle('active', decodeURIComponent(link.hash.slice(1)) === active));
