@@ -1049,6 +1049,7 @@ impl NebulaWorkspace {
             } else {
                 super::session_persistence::SaveReason::Checkpoint
             },
+            window,
             cx,
         ) {
             log::warn!("Could not checkpoint before hiding window: {error}");
