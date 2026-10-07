@@ -328,6 +328,7 @@ impl TerminalView {
             last_ai_session_probe: None,
             error,
             exited: None,
+            shell_started: false,
             scrollbar_drag: None,
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,
