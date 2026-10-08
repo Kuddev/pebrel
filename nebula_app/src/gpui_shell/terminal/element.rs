@@ -857,6 +857,12 @@ impl Element for TerminalElement {
             }
         }
 
+        if snap.cursor.is_none() {
+            super::effects::paint(
+                &self.view, bounds, &theme, &overrides, None, focused, window, cx,
+            );
+        }
+
         if let Some(cursor) = &snap.cursor {
             let cursor_visual_col = visual_column(cursor.row, cursor.col);
             // 内联 ghost 余量与弹窗补全：结果由 view 在本帧 render 时算好
@@ -902,23 +908,6 @@ impl Element for TerminalElement {
                         );
                     }
                 }
-                if !popup_items.is_empty() {
-                    paint_completion_popup(
-                        window,
-                        cx,
-                        &popup_items,
-                        popup_selected,
-                        popup_offset,
-                        popup_hovered,
-                        cursor.row as usize,
-                        cursor_visual_col,
-                        layout,
-                        &bounds,
-                        &colors,
-                        &font,
-                        font_size,
-                    );
-                }
             }
 
             // Stroke shapes stay above completion ghost text; the IME anchor below is logical.
@@ -927,6 +916,37 @@ impl Element for TerminalElement {
             }
 
             // IME 组合文本锚点与预编辑串：跟随光标单元格。
+            // 后处理位于真实终端与光标之后，补齐菜单和预编辑串之前。
+
+            super::effects::paint(
+                &self.view,
+                bounds,
+                &theme,
+                &overrides,
+                cursor_paint.as_ref(),
+                focused,
+                window,
+                cx,
+            );
+            let colors = crate::gpui_shell::theme::completion_colors(cx, theme.background);
+            if !popup_items.is_empty() {
+                paint_completion_popup(
+                    window,
+                    cx,
+                    &popup_items,
+                    popup_selected,
+                    popup_offset,
+                    popup_hovered,
+                    cursor.row as usize,
+                    cursor_visual_col,
+                    layout,
+                    &bounds,
+                    &colors,
+                    &font,
+                    font_size,
+                );
+            }
+
             let anchor = cell_rect(cursor.row as usize, cursor_visual_col, 1);
             let marked = self.view.read(cx).marked_text.clone();
             self.view.update(cx, |view, _| view.ime_bounds = anchor);

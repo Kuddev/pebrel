@@ -507,6 +507,7 @@ pub struct ThemeEffects {
     pub blur: Option<BlurModeName>,
     pub cursor_shape: Option<CursorShapeName>,
     pub background_image: Option<String>,
+    pub background_media_kind: Option<crate::BackgroundMediaKind>,
     pub background_image_opacity: Option<f32>,
     pub background_image_fit: Option<String>,
     pub background_image_alignment: Option<String>,
@@ -520,6 +521,7 @@ impl Default for ThemeEffects {
             blur: None,
             cursor_shape: None,
             background_image: None,
+            background_media_kind: None,
             background_image_opacity: None,
             background_image_fit: None,
             background_image_alignment: None,
@@ -529,6 +531,13 @@ impl Default for ThemeEffects {
 }
 
 impl ThemeEffects {
+    /// Explicit legacy image paths select image mode. A colors-only theme
+    /// retains the user's source kind, while an explicit kind wins over either.
+    pub fn background_kind_override(&self) -> Option<crate::BackgroundMediaKind> {
+        self.background_media_kind
+            .or_else(|| self.background_image.as_ref().map(|_| crate::BackgroundMediaKind::Image))
+    }
+
     fn validate(&self) -> Result<(), ThemeValidationError> {
         if let Some(opacity) = self.opacity {
             if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {

@@ -17,12 +17,28 @@ path = "src/lib.rs"
 name = "nebula-gpui"
 path = "src/main.rs"
 
+[[bin]]
+name = "pebrel-media-probe"
+path = "src/media_probe/main.rs"
+required-features = ["media-probe"]
+
+[features]
+media-probe = ["gpui/test-support", "gpui_platform/test-support", "dep:gif", "dep:image", "dep:serde", "dep:serde_json", "dep:raw-window-handle", "dep:windows"]
+
 [dependencies]
 # 精确 Git 来源与 rev 由工作区根清单统一固定。
 gpui = "=0.2.2"
 gpui_platform.workspace = true
 gpui-component = "=0.5.2"
 gpui-component-assets = "=0.5.1"
+gif = { version = "=0.14.2", optional = true }
+image = { version = "0.25.8", optional = true, default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true, features = ["preserve_order"] }
+raw-window-handle = { version = "0.6.2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.61.3", optional = true, features = ["Win32_UI_WindowsAndMessaging"] }
 
 [lints.clippy]
 dbg_macro = "deny"

@@ -7,8 +7,10 @@ from pathlib import Path
 import struct
 import zipfile
 
+from relay_notices import bounded_read, read_bundle
 
-def verify(apk: Path, commit: str) -> None:
+
+def verify(apk: Path, commit: str, require_licenses: bool = False) -> None:
     with zipfile.ZipFile(apk) as archive:
         for arch, machine in (("x86_64", 62), ("aarch64", 183)):
             prefix = f"assets/native-relay/{arch}"
@@ -21,6 +23,11 @@ def verify(apk: Path, commit: str) -> None:
                     metadata.get("commit") != commit or metadata.get("arch") != arch or
                     metadata.get("protocol") != 2 or metadata.get("size") != len(data)):
                 raise ValueError(f"Invalid or stale native relay: {arch}")
+            if require_licenses:
+                def read(name: str) -> bytes:
+                    with archive.open(f"{prefix}/licenses/{name}") as stream:
+                        return bounded_read(stream)
+                read_bundle(read, commit, arch)
             print(f"Verified protocol-v2 {arch} service: {len(data)} bytes, source {commit}")
 
 

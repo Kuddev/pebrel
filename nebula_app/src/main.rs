@@ -554,37 +554,99 @@ fn try_hand_over_to_resident(options: &Options) -> bool {
         return false;
     }
     let terminal_options = &options.window_options.terminal_options;
+    // 这些入口从不交接；提前返回，避免为独立命令启动新增设置读取和目录检查。
+    if options.daemon || terminal_options.command().is_some() {
+        return false;
+    }
     let shell_id = terminal_options.shell_id();
-    let has_command = terminal_options.command().is_some();
-    let launch_dir = options
-        .window_options
-        .terminal_options
-        .resolved_working_directory()
-        .or_else(|| env::current_dir().ok())
-        .filter(|path| path.is_dir())
-        .and_then(|path| std::path::absolute(path).ok());
-    if !options.daemon
-        && !has_command
-        && nebula_settings::RuntimeSettings::load().windowing_behavior
-            == nebula_settings::WindowingBehaviorName::UseNew
-    {
+    let settings = nebula_settings::RuntimeSettings::load();
+    let launch_dir = resident_launch_directory(terminal_options, &settings);
+    if settings.windowing_behavior == nebula_settings::WindowingBehaviorName::UseNew {
         return runtime_api::try_open_window_existing(launch_dir.as_deref(), shell_id.as_deref());
     }
-    let plain_launch = !options.daemon && launch_dir.is_none() && !has_command;
-    if plain_launch && runtime_api::try_open_default_tab_existing(shell_id.as_deref()) {
+    if launch_dir.is_none() && runtime_api::try_open_default_tab_existing(shell_id.as_deref()) {
         return true;
     }
     // Explorer 右键「在 Nebula 中打开」带着 --working-directory 走到这里。
     // 带目录、无 -e 命令的启动优先并入驻留实例——ATTACH 恢复窗口，再在
     // 其中打开定目录标签；没有驻留实例时照旧独立启动。
-    let dir_launch = !options.daemon && !has_command;
-    if dir_launch
-        && let Some(dir) = launch_dir
+    if let Some(dir) = launch_dir
         && runtime_api::try_open_directory_existing(&dir, shell_id.as_deref())
     {
         return true;
     }
     false
+}
+
+fn resident_launch_directory(
+    options: &cli::TerminalOptions,
+    settings: &nebula_settings::RuntimeSettings,
+) -> Option<std::path::PathBuf> {
+    // 进程 cwd 只是缺省值，不能在交接前把它提升成覆盖用户设置的显式目录。
+    options
+        .resolved_working_directory()
+        .or_else(|| settings.startup_directory_path())
+        .or_else(|| env::current_dir().ok())
+        .filter(|path| path.is_dir())
+        .and_then(|path| std::path::absolute(path).ok())
+}
+
+#[cfg(test)]
+mod resident_launch_tests {
+    use super::*;
+    use clap::Parser as _;
+    use nebula_settings::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn ordinary_resident_launch_honors_the_configured_directory() {
+        let directory = tempfile::Builder::new().prefix("pebrel 启动目录 ").tempdir().unwrap();
+        let mut settings = RuntimeSettings::from_raw(&RawSettings::default());
+        settings.startup_directory = Some(format!(" {} ", directory.path().display()));
+        let options = Options::try_parse_from(["pebrel", "--gpui"]).unwrap();
+        assert_eq!(
+            resident_launch_directory(&options.window_options.terminal_options, &settings),
+            Some(std::path::absolute(directory.path()).unwrap()),
+        );
+    }
+
+    #[test]
+    fn explicit_resident_directory_keeps_precedence_and_relative_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut settings = RuntimeSettings::from_raw(&RawSettings::default());
+        settings.startup_directory = Some(directory.path().to_string_lossy().into_owned());
+        for args in [vec!["pebrel", "--working-directory", "."], vec!["pebrel", "."]] {
+            let options = Options::try_parse_from(args).unwrap();
+            assert_eq!(
+                resident_launch_directory(&options.window_options.terminal_options, &settings),
+                Some(std::env::current_dir().unwrap()),
+            );
+        }
+        let missing = directory.path().join("missing");
+        let mut options = cli::TerminalOptions::default();
+        options.working_directory = Some(missing);
+        assert_eq!(resident_launch_directory(&options, &settings), None);
+    }
+
+    #[test]
+    fn unusable_startup_directory_keeps_the_launch_directory_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("file");
+        std::fs::write(&file, "not a directory").unwrap();
+        let mut settings = RuntimeSettings::from_raw(&RawSettings::default());
+        for configured in [
+            None,
+            Some(String::new()),
+            Some("   ".to_owned()),
+            Some(directory.path().join("missing").to_string_lossy().into_owned()),
+            Some(file.to_string_lossy().into_owned()),
+        ] {
+            settings.startup_directory = configured;
+            assert_eq!(
+                resident_launch_directory(&cli::TerminalOptions::default(), &settings),
+                Some(std::env::current_dir().unwrap()),
+            );
+        }
+    }
 }
 
 fn log_config_path(config: &UiConfig) {

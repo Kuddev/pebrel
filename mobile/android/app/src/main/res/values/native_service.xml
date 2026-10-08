@@ -1,8 +1,11 @@
 <resources>
     <string name="service_intro">Choose the server you want to use. Pebrel installs a small encrypted relay over SSH; no Docker, Node.js or domain name is required.</string>
     <string name="service_title">Pebrel relay service</string>
+    <string name="service_add_ssh_host">Add SSH host or private key</string>
     <string name="service_manual_commands">Manual installation commands</string>
-    <string name="service_manual_hint">Upload and extract the companion offline relay kit, then enter its pebrel-relay-manual directory as root. Run the commands below; replace SERVER_IP or PORT if shown. The script prints four steps and stops on failure. No Docker or Node.js is required.</string>
+    <string name="service_manual_download">Open relay downloads</string>
+    <string name="service_manual_download_failed">The download page did not open. Visit the Pebrel Releases page in your browser.</string>
+    <string name="service_manual_hint">Choose the matching version’s archive ending in -relay-manual.tar.gz on the downloads page. Upload and extract it, then enter its pebrel-relay-manual directory as root. Run the commands below; replace SERVER_IP or PORT if shown. The script prints four steps and stops on failure. No Docker or Node.js is required.</string>
     <string name="service_advanced">Advanced connection settings</string>
     <string name="service_port">Relay port</string>
     <string name="service_address">Connection address override (optional)</string>

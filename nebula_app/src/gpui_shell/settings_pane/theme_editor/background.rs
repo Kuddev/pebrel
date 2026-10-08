@@ -215,6 +215,7 @@ impl SettingsPane {
         };
         let mut candidate = editor.draft.clone();
         candidate.effects.background_image = Some(path.clone());
+        candidate.effects.background_media_kind = Some(nebula_settings::BackgroundMediaKind::Image);
         if candidate.validate().is_err() {
             editor.error = Some(
                 crate::gpui_shell::config::ui_language(cx)
@@ -225,6 +226,7 @@ impl SettingsPane {
             return;
         }
         editor.draft.effects.background_image = Some(path.clone());
+        editor.draft.effects.background_media_kind = candidate.effects.background_media_kind;
         editor.input_values.insert(EditorInput::ImagePath, path.clone());
         editor.invalid_inputs.remove(&EditorInput::ImagePath);
         editor
