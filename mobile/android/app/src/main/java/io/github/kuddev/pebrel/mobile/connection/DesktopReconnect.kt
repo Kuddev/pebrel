@@ -16,7 +16,10 @@ internal class DesktopReconnect(private val scope: CoroutineScope, private val r
     }
 
     fun schedule(id: String, immediate: Boolean = false) {
-        if (!foreground || jobs[id]?.isActive == true) return
+        if (!foreground) return
+        // 网络恢复是新的事实，不能继续等待旧网络累积的退避期限。
+        if (immediate) { jobs.remove(id)?.cancel(); attempts.remove(id) }
+        else if (jobs[id]?.isActive == true) return
         val attempt = attempts[id] ?: 0
         attempts[id] = (attempt + 1).coerceAtMost(6)
         jobs[id] = scope.launch(Dispatchers.Main.immediate) {

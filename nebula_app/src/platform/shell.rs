@@ -136,9 +136,153 @@ pub(crate) fn default_wsl_distro() -> Option<String> {
     }
 }
 
+/// Completion includes every registered distro; picker-specific filtering belongs to its caller.
+pub(crate) fn registered_wsl_distros(cancelled: &dyn Fn() -> bool) -> Vec<String> {
+    let mut names = Vec::new();
+    #[cfg(windows)]
+    {
+        use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+        let Ok(lxss) = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Lxss")
+        else {
+            return names;
+        };
+        for guid in lxss.enum_keys().take(256).flatten() {
+            if cancelled() {
+                return Vec::new();
+            }
+            let Ok(sub) = lxss.open_subkey(guid) else { continue };
+            let Ok(name) = sub.get_value::<String, _>("DistributionName") else { continue };
+            if !name.is_empty() && !name.starts_with('-') && !name.chars().any(char::is_control) {
+                names.push(name);
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    if cancelled() { Vec::new() } else { names }
+}
+
+/// Produce UTF-8 evidence with the native QA shell on each host.
+#[cfg(test)]
+pub(crate) fn completion_qa_redirect(suffix: &str) -> String {
+    // PowerShell 5 的默认重定向为 UTF-16；验收产物使用显式 UTF-8。
+    if cfg!(windows) {
+        suffix.replace(" > ", " | Out-File -Encoding utf8 ")
+    } else {
+        suffix.to_owned()
+    }
+}
+
+/// Keep the isolated Include fixture acceptable to native OpenSSH permission checks.
+#[cfg(test)]
+pub(crate) fn completion_qa_ssh_config_permissions(path: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        // 临时目录可继承 OWNER RIGHTS；OpenSSH 拒绝它，夹具应只授权当前所有者。
+        let script = r#"$ErrorActionPreference='Stop'; $owner=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=[System.Security.AccessControl.FileSecurity]::new(); $acl.SetOwner($owner); $acl.SetAccessRuleProtection($true,$false); $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($owner,[System.Security.AccessControl.FileSystemRights]::FullControl,[System.Security.AccessControl.AccessControlType]::Allow)); $bytes=[System.IO.File]::ReadAllBytes($env:PEBREL_QA_SSH_CONFIG); [System.IO.File]::Delete($env:PEBREL_QA_SSH_CONFIG); $file=[System.IO.FileStream]::new($env:PEBREL_QA_SSH_CONFIG,[System.IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]::FullControl,[System.IO.FileShare]::Read,4096,[System.IO.FileOptions]::None,$acl); try { $file.Write($bytes,0,$bytes.Length) } finally { $file.Dispose() }"#;
+        let mut command = std::process::Command::new("powershell.exe");
+        command.args(["-NoProfile", "-Command", script]).env("PEBREL_QA_SSH_CONFIG", path);
+        assert!(super::process::hidden_command(&mut command).status().unwrap().success());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+/// Windows invokes the native npm launcher instead of depending on PowerShell script policy.
+#[cfg(test)]
+pub(crate) fn completion_qa_package_manager() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
+}
+
+/// Isolated native-shell fixture for completion acceptance on every desktop host.
+#[cfg(test)]
+pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal::tty::Shell {
+    #[cfg(windows)]
+    {
+        let integrated = nebula_terminal::tty::powershell_with_nebula_integration(
+            std::env::var("PEBREL_COMPLETION_QA_PWSH").unwrap_or_else(|_| "powershell.exe".into()),
+            vec!["-NoLogo".into(), "-NoProfile".into()],
+        );
+        let mut args = integrated.args().to_vec();
+        args.last_mut().unwrap().push_str("; Set-PSReadLineOption -HistorySaveStyle SaveNothing; if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource')) { Set-PSReadLineOption -PredictionSource None }");
+        let diagnostic = _output.join("editor-shell.json").to_string_lossy().replace('\'', "''");
+        args.last_mut().unwrap().push_str(&format!("; @{{ready=$global:PebrelCompletionInputReady; version=(Get-Module PSReadLine).Version.ToString(); chordParameter=(Get-Command Get-PSReadLineKeyHandler).Parameters.ContainsKey('Chord'); binding=@(Get-PSReadLineKeyHandler | Where-Object {{ $_.Key -like '*F12*' }} | Select-Object Key,Function)}} | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath '{diagnostic}'"));
+        if std::env::var("PEBREL_COMPLETION_QA_PREDICTION").as_deref() == Ok("1") {
+            args.last_mut().unwrap().push_str("; Set-PSReadLineOption -PredictionSource History -PredictionViewStyle InlineView; (Get-PSReadLineOption).PredictionSource.ToString() | Set-Content -LiteralPath (Join-Path $env:PEBREL_COMPLETION_QA_DIR 'prediction-source.txt')");
+        }
+        // 原生验收中编码命令的启动曾静默停住；文件入口保留同一初始化内容，
+        // 避免把启动器故障误判为补全失败。BOM 让 PowerShell 5.1 也按 UTF-8 读取。
+        let startup = args.pop().unwrap();
+        let startup_path = _output.join("editor-startup.ps1");
+        std::fs::write(&startup_path, format!("\u{feff}{startup}\n")).unwrap();
+        *args.last_mut().unwrap() = "-File".into();
+        // PTY 接收的参数已经是 Windows 命令行文本，路径中的空格需要保留引号。
+        args.push(format!("\"{}\"", startup_path.display()));
+        nebula_terminal::tty::Shell::new(integrated.program().to_owned(), args)
+    }
+    #[cfg(unix)]
+    {
+        let rcfile = _output.join("bashrc");
+        std::fs::write(
+            &rcfile,
+            "PS1='\\[\\e]133;A\\a\\]QA> \\[\\e]133;B\\a\\]'\nunset HISTFILE PROMPT_COMMAND\n",
+        )
+        .unwrap();
+        nebula_terminal::tty::Shell::new(
+            "bash".into(),
+            vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                rcfile.to_string_lossy().into_owned(),
+                "-i".into(),
+            ],
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a registered, runnable WSL distribution"]
+    fn common_completion_reads_and_executes_the_real_wsl_path() {
+        use crate::completion::{Cancellation, Session};
+        use crate::display::{CompletionStyle, SuggestEnv};
+        let distro = crate::platform::shell::registered_wsl_distros(&|| false)
+            .into_iter()
+            .find(|name| !name.starts_with("docker-desktop"))
+            .expect("registered WSL distro");
+        let env = SuggestEnv::Wsl { distro: distro.clone() };
+        let entries = crate::remote_dirs::fetch_wsl(&distro, "/etc").expect("guest directory");
+        assert!(entries.iter().any(|entry| entry.name == "os-release"));
+        crate::remote_dirs::finish_fetch(&env, "/etc", Some(entries));
+        for style in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+            let result = Session::default()
+                .request("/".into(), env.clone(), "cat /etc/os-re".into(), style, None)
+                .calculate(&Cancellation::default());
+            let edit = if style == CompletionStyle::Popup {
+                &result.completion_items[0]
+            } else {
+                result.suggestion_edit.as_ref().unwrap()
+            };
+            assert_eq!(edit.insert, "lease");
+        }
+        let mut command =
+            std::process::Command::new(crate::platform::shell::wsl_executable().unwrap());
+        crate::platform::process::hidden_command(&mut command);
+        let output = command
+            .args(["-d", &distro, "--exec", "/bin/cat", "/etc/os-release"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8(output.stdout).unwrap().contains("NAME="));
+    }
 
     #[cfg(all(not(windows), feature = "gpui-shell"))]
     #[test]

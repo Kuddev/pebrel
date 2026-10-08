@@ -7,6 +7,22 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DesktopReconnectTest {
+    @Test fun networkRecoveryReplacesTheOldBackoffImmediately() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val attempts = mutableListOf<String>()
+        val reconnect = DesktopReconnect(this) { attempts += it }
+        try {
+            reconnect.foreground(true)
+            reconnect.schedule("pc")
+            advanceTimeBy(100); runCurrent()
+            reconnect.schedule("pc", immediate = true)
+            advanceTimeBy(1); runCurrent()
+            assertEquals(listOf("pc"), attempts)
+            advanceTimeBy(500); runCurrent()
+            assertEquals("cancelled retry must not open a second connection", 1, attempts.size)
+        } finally { reconnect.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun backgroundPausesRetriesForegroundResumesAndClosePreventsResurrection() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val attempts = mutableListOf<String>()

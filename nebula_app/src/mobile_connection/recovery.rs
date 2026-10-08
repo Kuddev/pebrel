@@ -3,10 +3,21 @@
 use super::*;
 use std::time::Duration;
 
-pub(super) fn available_address(saved: Option<IpAddr>, available: &[LanAddress]) -> Option<IpAddr> {
-    saved
-        .filter(|address| available.iter().any(|entry| entry.address == *address))
-        .or_else(|| available.first().map(|entry| entry.address))
+pub(crate) fn available_address(saved: Option<IpAddr>, available: &[LanAddress]) -> Option<IpAddr> {
+    match saved {
+        // 已选接口短暂消失时等待原地址，不能把其他网卡当成同一条连接的恢复。
+        Some(address) => available.iter().any(|entry| entry.address == address).then_some(address),
+        None => available.first().map(|entry| entry.address),
+    }
+}
+
+pub(super) fn prepare_lan_address(preferences: &mut Preferences, available: &[LanAddress]) -> bool {
+    if let Some(address) = available_address(preferences.address, available) {
+        preferences.address = Some(address);
+        true
+    } else {
+        false
+    }
 }
 
 fn repair_lan() -> Result<(), Failure> {
@@ -28,12 +39,16 @@ fn repair_lan() -> Result<(), Failure> {
         return Ok(());
     }
     let available = addresses().map_err(|_| Failure::Address)?;
-    let address = available_address(preferences.address, &available).ok_or(Failure::Address)?;
+    let Some(address) = available_address(preferences.address, &available) else {
+        // 丢弃绑定到已消失接口的监听，避免网卡回来后复用状态尚未报错的旧 socket。
+        manager().lock().map_err(|_| Failure::Connection)?.lan.take();
+        return Err(Failure::Address);
+    };
     if healthy && preferences.address == Some(address) {
         return Ok(());
     }
     preferences.address = Some(address);
-    apply_locked(generation, preferences, None).map(|_| ())
+    apply_locked(generation, preferences, None, Some(Mode::Lan)).map(|_| ())
 }
 
 pub(super) fn start() {
@@ -52,7 +67,18 @@ pub(super) fn start() {
                     .preferences
                     .clone();
                 if preferences.enabled {
-                    apply(generation, preferences, None).map(|_| ())
+                    // 两条连接各自恢复，后启动的一条失败不回滚前一条已经提交的监听。
+                    let mut failure = None;
+                    for mode in [Mode::Lan, Mode::Relay] {
+                        if route_enabled(&preferences, mode) {
+                            if let Err(error) =
+                                apply(generation, preferences.clone(), None, Some(mode))
+                            {
+                                failure.get_or_insert(error);
+                            }
+                        }
+                    }
+                    failure.map_or(Ok(()), Err)
                 } else {
                     Ok(())
                 }
@@ -97,11 +123,50 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_interface_uses_the_current_order_without_inventing_an_address() {
+    fn an_absent_selected_interface_waits_without_switching_to_another_interface() {
         let saved = Some("192.168.0.7".parse().unwrap());
         let available = [address("192.168.1.7")];
-        assert_eq!(available_address(saved, &available), Some(available[0].address));
+        assert_eq!(available_address(saved, &available), None);
         assert_eq!(available_address(saved, &[]), None);
         assert_eq!(available_address(None, &available), Some(available[0].address));
+    }
+
+    #[test]
+    fn tailscale_disconnect_and_restart_keep_the_same_selected_address() {
+        for selected in ["100.64.0.8", "fd7a:115c:a1e0::8"] {
+            let selected = address(selected);
+            let other = address("192.168.1.7");
+            let mut configuration = preferences::Configuration::default();
+            configuration.preferences.address = Some(selected.address);
+            assert!(prepare_lan_address(
+                &mut configuration.preferences,
+                &[other.clone(), selected.clone()],
+            ));
+            assert!(!prepare_lan_address(&mut configuration.preferences, &[other.clone()]));
+            assert_eq!(configuration.preferences.address, Some(selected.address));
+            // 断网期间重启也必须记住原接口，不能因重新加载配置而切到 Wi-Fi。
+            let saved = serde_json::to_vec(&configuration).unwrap();
+            let mut restored: preferences::Configuration = serde_json::from_slice(&saved).unwrap();
+            assert!(!prepare_lan_address(&mut restored.preferences, &[other.clone()]));
+            assert_eq!(restored.preferences.address, Some(selected.address));
+            assert!(prepare_lan_address(&mut restored.preferences, &[other, selected.clone()],));
+            assert_eq!(restored.preferences.address, Some(selected.address));
+        }
+    }
+
+    #[test]
+    fn only_an_unconfigured_connection_automatically_selects_an_interface() {
+        let mut preferences = Preferences::default();
+        assert!(!prepare_lan_address(&mut preferences, &[]));
+        assert_eq!(preferences.address, None);
+        let available = [address("192.168.1.7")];
+        assert!(prepare_lan_address(&mut preferences, &available));
+        assert_eq!(preferences.address, Some(available[0].address));
+        assert!(!prepare_lan_address(&mut preferences, &[]));
+        assert_eq!(preferences.address, Some(available[0].address));
+        // 用户明确改选另一个接口仍生效。
+        preferences.address = Some("100.64.0.8".parse().unwrap());
+        assert!(prepare_lan_address(&mut preferences, &[address("100.64.0.8")]));
+        assert_eq!(preferences.address, Some("100.64.0.8".parse().unwrap()));
     }
 }

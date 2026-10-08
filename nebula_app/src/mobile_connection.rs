@@ -20,6 +20,7 @@ pub(crate) use endpoint::runtime::Status;
 pub(crate) use endpoint::{DeviceSummary, PairingRequest, Route as Mode};
 pub(crate) use preferences::Preferences;
 pub(crate) use preview::network::{LanAddress, addresses};
+pub(crate) use recovery::available_address;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Failure {
@@ -342,28 +343,29 @@ pub(crate) fn apply(
     generation: u64,
     preferences: Preferences,
     relay_json: Option<String>,
+    route: Option<Mode>,
 ) -> Result<Snapshot, Failure> {
     let _operation = OPERATIONS.lock().map_err(|_| Failure::Connection)?;
-    apply_locked(generation, preferences, relay_json)
+    apply_locked(generation, preferences, relay_json, route)
 }
 
 fn apply_locked(
     generation: u64,
     mut preferences: Preferences,
     relay_json: Option<String>,
+    route: Option<Mode>,
 ) -> Result<Snapshot, Failure> {
     initialize()?;
     current(generation)?;
     if preferences.enabled && !preferences.lan_enabled && !preferences.relay_enabled {
         preferences.enabled = false;
     }
-    if route_enabled(&preferences, Mode::Lan) {
+    let lan_available = if route_enabled(&preferences, Mode::Lan) {
         let available = addresses().map_err(|_| Failure::Address)?;
-        preferences.address = recovery::available_address(preferences.address, &available);
-        if preferences.address.is_none() {
-            return Err(Failure::Address);
-        }
-    }
+        recovery::prepare_lan_address(&mut preferences, &available)
+    } else {
+        false
+    };
     let previous = manager().lock().map_err(|_| Failure::Connection)?.configuration.clone();
     let mut configuration = previous.clone();
     configuration.preferences = preferences;
@@ -380,7 +382,14 @@ fn apply_locked(
     let result = (|| {
         let mut candidates = Vec::new();
         for mode in [Mode::Lan, Mode::Relay] {
-            if !route_enabled(&configuration.preferences, mode) {
+            // 网卡编辑和 LAN 恢复不重连中转，否则中转离线会撤销已建立的新监听。
+            if route.is_some_and(|selected| selected != mode) {
+                continue;
+            }
+            // 原 LAN 接口离线时保持等待；不能阻止独立的 relay 启动或复用。
+            if !route_enabled(&configuration.preferences, mode)
+                || (mode == Mode::Lan && !lan_available)
+            {
                 continue;
             }
             let identity = route_identity(&configuration, mode);
@@ -419,7 +428,7 @@ fn apply_locked(
                 Mode::Relay => &mut manager.relay,
             } = Some(active);
         }
-        if !route_enabled(&configuration.preferences, Mode::Lan) {
+        if !route_enabled(&configuration.preferences, Mode::Lan) || !lan_available {
             manager.lan.take();
         }
         if !route_enabled(&configuration.preferences, Mode::Relay) {

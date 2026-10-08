@@ -7,7 +7,7 @@ class NativeSshException @JvmOverloads constructor(val code: String, cause: Thro
 
 internal object NativeSsh {
     init { System.loadLibrary("pebrel_ssh") }
-    external fun create(host: String, port: Int, user: String, password: ByteArray, fingerprint: String): Long
+    external fun create(host: String, port: Int, user: String, password: ByteArray, fingerprint: String, privateKey: ByteArray): Long
     external fun nextEvent(id: Long): String
     external fun answerHostKey(id: Long, accepted: Boolean)
     external fun openShell(id: Long, columns: Int, rows: Int, width: Int, height: Int)
@@ -18,5 +18,6 @@ internal object NativeSsh {
     external fun resize(id: Long, columns: Int, rows: Int, width: Int, height: Int)
     external fun awaitExit(id: Long): Int
     external fun sftp(id: Long, request: String): String
+    external fun query(id: Long, command: String): String
     external fun close(id: Long)
 }

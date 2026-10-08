@@ -21,15 +21,25 @@ No rendering work or network work runs on Android's main thread.
 Connection stages originate from actual operations. Host fingerprints use russh's
 SHA256 OpenSSH encoding. A changed stored fingerprint is rejected, and a new
 identity waits for the application's explicit confirmation with a 60-second
-budget. Authentication first checks server-authorized none authentication, then
-tries the supplied password once. Key-file and jump-host transports are not
-implemented.
-Password bytes are not persisted or logged; temporary bridge-owned copies are
-zeroized, without claiming control over every internal library allocation.
+budget. Automatic authentication first checks server-authorized none authentication,
+then tries the supplied password once. Explicit key authentication instead decodes
+an OpenSSH/PEM private key (up to 64 KiB), accepts its optional passphrase, and uses
+public-key authentication with the negotiated RSA signature algorithm where needed.
+A rejected key never falls back to password authentication. Jump hosts remain outside
+this transport's implemented scope.
+
+Android's system document picker grants access to a selected key. Host metadata
+stores the persisted document URI and display name, not private-key bytes. Optional
+password/passphrase saving uses the existing Android Keystore-backed encrypted
+credential store; passphrases are scoped to the selected key document as well as
+the host/login identity. Revoked or missing documents report an error instead of
+changing authentication methods. Temporary bridge-owned copies are zeroized,
+without claiming control over every internal library allocation.
 
 `Cargo.lock` locks transitive dependencies. `mobile/tools/build_russh.py` compiles
 both Android ABIs with the pinned NDK and 16 KiB page alignment, and bundles the
 resolved dependency notices. Only the pinned open-source dependencies are linked;
 no private implementation is included. `SshIntegrationTest` exercises the
 optimized APK against a real OpenSSH fixture, including password rejection,
-changed identity and declined trust.
+encrypted Ed25519 and RSA/PEM keys, wrong passphrases, rejected keys without password
+fallback, changed identity and declined trust.

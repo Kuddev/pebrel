@@ -1,0 +1,42 @@
+name: OpenCode notification bridge
+
+on:
+  push:
+    paths:
+      - nebula_app/res/hooks/opencode.js
+      - scripts/tests/opencode-notification-bridge.test.mjs
+      - .github/workflows/opencode-bridge.yml
+  pull_request:
+    paths:
+      - nebula_app/res/hooks/opencode.js
+      - scripts/tests/opencode-notification-bridge.test.mjs
+      - .github/workflows/opencode-bridge.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    name: OpenCode bridge (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Match the runtime used by OpenCode v2.0.18.
+          bun-version: '1.4.2'
+      - name: Node bridge regression tests
+        run: node --test scripts/tests/opencode-notification-bridge.test.mjs
+      - name: Bun bridge regression tests
+        run: bun test scripts/tests/opencode-notification-bridge.test.mjs

@@ -135,7 +135,7 @@ fun CommandComposer(
         }
     }
     val showHistory = historyItems.isNotEmpty() && draft.isNotBlank() && editorFocused && !historyDismissed && historyRoom >= 52.dp
-    val shortcuts = (extraShortcuts + listOf("Ctrl+C", "Esc", "Tab", "←", "→", "↑", "↓")).distinct()
+    val shortcuts = (extraShortcuts + listOf("Ctrl+C", "Esc", "Tab", "Shift+Tab", "←", "→", "↑", "↓")).distinct()
     // One mutually exclusive slot. Animating two independently visible surfaces
     // left an empty toolbar under the editor and retained two input targets.
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)

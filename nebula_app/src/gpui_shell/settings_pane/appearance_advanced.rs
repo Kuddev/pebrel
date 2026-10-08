@@ -8,13 +8,29 @@ impl SettingsPane {
     ) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
         let font_picker = self.font_picker_dropdown(window, cx);
+        let cjk_font_picker = self.cjk_font_picker_dropdown(window, cx);
         let opacity: SharedString = format!("{:.0}%", self.runtime.opacity * 100.0).into();
         let wallpaper_opacity: SharedString =
             format!("{:.0}%", self.runtime.background_image_opacity * 100.0).into();
         let custom_background = self
             .group(language.pick("自定义背景", "Custom background"), cx)
             .child(self.background_color_row(cx))
+            .child(self.select_row(
+                "background_media_kind",
+                language.text(crate::i18n::Message::WallpaperKind),
+                language.text(crate::i18n::Message::WallpaperKindDescription),
+                cx,
+            ))
             .child(self.background_image_row(cx))
+            .child(self.select_row(
+                "background_shader_preset",
+                language.text(crate::i18n::Message::WallpaperShader),
+                language.text(crate::i18n::Message::WallpaperShaderDescription),
+                cx,
+            ))
+            .when(self.shader_custom_open || self.runtime.background_effects.wgsl, |group| {
+                group.child(self.shader_source_row(cx))
+            })
             .child(self.select_row(
                 "background_image_fit",
                 language.pick("背景图像拉伸模式", "Background image fit"),
@@ -43,9 +59,16 @@ impl SettingsPane {
                 help("background_image_cover_chrome", language),
                 self.runtime.background_image_cover_chrome,
                 cx,
-            ));
+            ))
+            .child(self.custom_effect_settings(window, cx));
         let cursor = self
             .group(language.pick("光标", "Cursor"), cx)
+            .child(self.select_row(
+                "cursor_motion",
+                language.text(crate::i18n::Message::SettingsCursorMotionTitle),
+                language.text(crate::i18n::Message::SettingsCursorMotionDescription),
+                cx,
+            ))
             .child(self.select_row(
                 "cursor_shape",
                 language.pick("光标形状", "Cursor shape"),
@@ -109,22 +132,12 @@ impl SettingsPane {
                 font_picker,
                 cx,
             ))
-            .child(
-                self.row(
-                    language.text(crate::i18n::Message::SettingsFontChinese),
-                    language.text(crate::i18n::Message::SettingsFontChineseDescription),
-                    div()
-                        .debug_selector(|| "font-family-cjk-input".to_owned())
-                        .w(px(SETTINGS_SELECT_WIDTH))
-                        .h(px(36.0))
-                        .child(
-                            Input::new(&self.font_family_cjk_input).w_full().h_full().aria_label(
-                                language.text(crate::i18n::Message::SettingsFontChinese),
-                            ),
-                        ),
-                    cx,
-                ),
-            )
+            .child(self.row(
+                language.text(crate::i18n::Message::SettingsFontChinese),
+                language.text(crate::i18n::Message::SettingsFontChineseDescription),
+                cjk_font_picker,
+                cx,
+            ))
             .child(self.font_size_row(false, cx))
             .child(self.switch_row(
                 "ctrl_wheel_font_zoom",
@@ -174,5 +187,42 @@ impl SettingsPane {
             .child(cursor)
             .child(interface)
             .child(custom_background)
+    }
+
+    pub(super) fn custom_effect_settings(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        use crate::i18n::Message;
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let expanded = self.effect_settings_open;
+        // 展开状态只属于设置页；收起高级入口不能停用或改写用户的效果配置。
+        v_flex()
+            .w_full()
+            .child(
+                Button::new("custom-effects-disclosure")
+                    .debug_selector(|| "custom-effects-disclosure".to_owned())
+                    .ghost()
+                    .icon(if expanded { IconName::ChevronDown } else { IconName::ChevronRight })
+                    .label(language.text(if self.runtime.terminal_effects.enabled {
+                        Message::TerminalEffectAdvancedActive
+                    } else {
+                        Message::TerminalEffectAdvanced
+                    }))
+                    .toggled(expanded)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.effect_settings_open = !this.effect_settings_open;
+                        cx.notify();
+                    })),
+            )
+            .when(expanded, |group| {
+                group.child(self.terminal_effect_row(window, cx)).child(self.select_row(
+                    "terminal_effect_animation",
+                    language.text(Message::TerminalEffectAnimation),
+                    language.text(Message::TerminalEffectAnimationDescription),
+                    cx,
+                ))
+            })
     }
 }

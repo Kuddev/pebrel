@@ -43,6 +43,7 @@ pub(crate) struct Options {
     pub port: u16,
     pub user: String,
     pub password: Zeroizing<Vec<u8>>,
+    pub private_key: Zeroizing<Vec<u8>>,
     pub fingerprint: String,
 }
 
@@ -64,6 +65,8 @@ pub(crate) enum Command {
     Open(Open, oneshot::Sender<Result<()>>),
     Resize(Geometry),
 }
+
+pub(crate) type Query = (String, oneshot::Sender<Result<String>>);
 
 pub(crate) struct Reader {
     rx: mpsc::Receiver<Vec<u8>>,
@@ -103,6 +106,7 @@ pub(crate) struct Session {
     pub commands: mpsc::Sender<Command>,
     pub input: mpsc::Sender<Vec<u8>>,
     sftp: mpsc::Sender<crate::sftp::Call>,
+    queries: mpsc::Sender<Query>,
     pub trust: Mutex<Option<oneshot::Sender<bool>>>,
     pub identity_failure: Mutex<Option<Failure>>,
     pub socket: Mutex<Option<std::net::TcpStream>>,
@@ -117,6 +121,7 @@ pub(crate) struct Worker {
     pub commands: mpsc::Receiver<Command>,
     pub input: mpsc::Receiver<Vec<u8>>,
     pub sftp: mpsc::Receiver<crate::sftp::Call>,
+    pub queries: mpsc::Receiver<Query>,
     pub stdout: mpsc::Sender<Vec<u8>>,
     pub stderr: mpsc::Sender<Vec<u8>>,
     pub outcome: watch::Sender<Option<Result<i32>>>,
@@ -128,6 +133,7 @@ impl Session {
         let (commands, command_rx) = mpsc::channel(16);
         let (input, input_rx) = mpsc::channel(16);
         let (sftp, sftp_rx) = mpsc::channel(4);
+        let (queries, query_rx) = mpsc::channel(1);
         let (stdout, stdout_rx) = mpsc::channel(8);
         let (stderr, stderr_rx) = mpsc::channel(8);
         let (outcome, outcome_rx) = watch::channel(None);
@@ -137,6 +143,7 @@ impl Session {
                 commands,
                 input,
                 sftp,
+                queries,
                 trust: Mutex::new(None),
                 identity_failure: Mutex::new(None),
                 socket: Mutex::new(None),
@@ -150,6 +157,7 @@ impl Session {
                 commands: command_rx,
                 input: input_rx,
                 sftp: sftp_rx,
+                queries: query_rx,
                 stdout,
                 stderr,
                 outcome,
@@ -202,6 +210,21 @@ impl Session {
     pub async fn read(&self, stderr: bool, limit: usize) -> Result<Vec<u8>> {
         let stream = if stderr { &self.stderr } else { &self.stdout };
         stream.lock().await.read(limit, self).await
+    }
+
+    pub async fn query(&self, command: String) -> Result<String> {
+        if command.len() > 8192 || command.contains('\0') {
+            return Err(Failure("INVALID_INPUT"));
+        }
+        let (reply, wait) = oneshot::channel();
+        tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => Err(Failure("CLOSED")),
+            result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                self.queries.send((command, reply)).await.map_err(|_| self.failure())?;
+                wait.await.map_err(|_| self.failure())?
+            }) => result.map_err(|_| Failure("TIMEOUT"))?,
+        }
     }
 
     pub async fn write(&self, bytes: Vec<u8>) -> Result<()> {

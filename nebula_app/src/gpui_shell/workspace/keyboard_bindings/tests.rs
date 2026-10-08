@@ -116,6 +116,33 @@ fn cleared_shortcut_reaches_terminal_and_can_be_restored_without_restart() {
     assert!(bindings[0].action().as_any().is::<ToggleShellPicker>());
 }
 
+#[test]
+fn stale_bare_key_removal_unbinds_the_action_instead_of_swallowing_the_key() {
+    use crate::config::Action;
+    use gpui::{KeyContext, Keymap, Keystroke};
+    // Binding a bare `enter` to a workspace action and then removing it must
+    // hand the key back to the terminal: the undo replays through
+    // `stale_removal_bindings`, whose `Unbind(action)` drops the interception
+    // instead of leaving a `NoAction` in the keymap that eats the key.
+    let original = custom_workspace_binding("enter", &Action::ToggleFullscreen).unwrap();
+    let terminal_scope = workspace_binding_in_context(
+        "enter",
+        &Action::ToggleFullscreen,
+        Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+    )
+    .unwrap();
+    let action_name = original.action().name().to_owned();
+    let mut keymap = Keymap::new(vec![original, terminal_scope]);
+    let contexts = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    let input = [Keystroke::parse("enter").unwrap()];
+    let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
+    assert!(!bindings.is_empty(), "while bound, the action owns enter");
+
+    keymap.add_bindings(stale_removal_bindings("enter", &action_name));
+    let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
+    assert!(bindings.is_empty(), "after removal enter is plain input again");
+}
+
 #[cfg(feature = "gpui-test-support")]
 mod dispatch {
     use super::*;
@@ -218,6 +245,44 @@ mod dispatch {
     }
 
     #[gpui::test]
+    fn removing_a_reassigned_bare_key_does_not_revive_its_previous_action(cx: &mut TestAppContext) {
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        for keep_previous_row in [false, true] {
+            let first = ("Enter".into(), "ToggleFullscreen".into());
+            let second = ("enter".into(), "ToggleShellPicker".into());
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![first.clone()], cx);
+            });
+            press("enter", &mut cx);
+            assert!(cx.update(|window, _| window.is_fullscreen()));
+            press("enter", &mut cx);
+            assert!(!cx.update(|window, _| window.is_fullscreen()));
+
+            workspace.update(&mut cx, |workspace, cx| {
+                let rows = if keep_previous_row {
+                    vec![first, second.clone()]
+                } else {
+                    vec![second.clone()]
+                };
+                workspace.update_keybinds(rows, cx);
+            });
+            press("enter", &mut cx);
+            assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            press("escape", &mut cx);
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![second], cx);
+                workspace.update_keybinds(Vec::new(), cx);
+            });
+            press("enter", &mut cx);
+            assert!(
+                !cx.update(|window, _| window.is_fullscreen()),
+                "old action revived after removal"
+            );
+            assert!(!workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        }
+    }
+
+    #[gpui::test]
     #[cfg(target_os = "macos")]
     fn recorded_command_key_can_restore_default(cx: &mut TestAppContext) {
         use crate::display::keymap;
@@ -262,6 +327,156 @@ mod dispatch {
             assert!(cx.update(|window, _| window.is_fullscreen()), "reset failed for {combo}");
             press("ctrl-cmd-f", &mut cx);
             assert!(!cx.update(|window, _| window.is_fullscreen()));
+        }
+    }
+
+    #[gpui::test]
+    fn hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui::EntityInputHandler as _;
+        use nebula_terminal::event_loop::Msg;
+        use nebula_terminal::term::test::TermSize;
+        use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let _settings_lock = crate::gpui_shell::settings_fixture::lock_theme_studio();
+        let _settings_bytes = crate::gpui_shell::settings_fixture::SettingsBytesGuard::capture();
+        nebula_settings::persist_keys(&[("ghost", "1".into()), ("theme", "Nord".into())]).unwrap();
+
+        fn draw(cx: &mut VisualTestContext) {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.run_until_parked();
+        }
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        cx.simulate_resize(size(px(1000.0), px(600.0)));
+        let (terminal, receiver) = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            let mut settings =
+                crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord);
+            settings.ghost = true;
+            settings.completion_style = crate::display::CompletionStyle::Inline;
+            cx.set_global(settings);
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_terminal_with(
+                    crate::session::LaunchSession::Shell {
+                        name: "completion fixture".into(),
+                        program: "pebrel-test-missing-shell-executable".into(),
+                        args: Vec::new(),
+                    },
+                    Some(directory.path().to_owned()),
+                    None,
+                    window,
+                    cx,
+                );
+                let terminal = workspace.tabs[workspace.active].focused_view().unwrap().clone();
+                let receiver =
+                    terminal.update(cx, |view, _| view.install_completion_test_session());
+                (terminal, receiver)
+            })
+        });
+        let pane_id = terminal.read_with(&cx, |view, _| view.pane_id);
+        for position in [
+            nebula_settings::TabsPositionName::Sidebar,
+            nebula_settings::TabsPositionName::Top,
+            nebula_settings::TabsPositionName::Sidebar,
+        ] {
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.tabs_position = position;
+                workspace.sync_settings_layout(true);
+                cx.notify();
+            });
+            draw(&mut cx);
+            cx.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.open_settings(window, cx));
+            });
+            draw(&mut cx);
+            let settings = workspace.read_with(&cx, |workspace, _| {
+                workspace.settings_surface.as_ref().unwrap().0.clone()
+            });
+            for (style, value) in [
+                (crate::display::CompletionStyle::Inline, "inline"),
+                (crate::display::CompletionStyle::Hybrid, "hybrid"),
+            ] {
+                nebula_settings::persist_keys(&[
+                    ("tabs_position", position.settings_value().into()),
+                    ("completion_style", value.into()),
+                ])
+                .unwrap();
+                // 沿设置实体的真实订阅通知热应用，而不是直接给终端改模式。
+                settings.update(&mut cx, |_, cx| {
+                    cx.emit(crate::gpui_shell::settings_pane::SettingsPaneEvent::Changed);
+                });
+                draw(&mut cx);
+                assert_eq!(
+                    terminal.read_with(&cx, |view, _| view.completion_test_state().4),
+                    style
+                );
+                assert_eq!(
+                    workspace.read_with(&cx, |workspace, _| workspace.tabs_position),
+                    position
+                );
+            }
+            let selector = if position == nebula_settings::TabsPositionName::Top {
+                "top-tab-0"
+            } else {
+                cx.update(|window, cx| {
+                    workspace.update(cx, |workspace, cx| workspace.leave_settings(window, cx));
+                });
+                draw(&mut cx);
+                "sidebar-tab-0"
+            };
+            let tab = cx.debug_bounds(selector).expect("actual tab control is visible");
+            cx.simulate_click(tab.center(), gpui::Modifiers::default());
+            draw(&mut cx);
+            cx.update(|window, cx| {
+                assert!(terminal.read(cx).focus_handle.is_focused(window), "{position:?}");
+                assert!(!workspace.read(cx).settings_open);
+            });
+            press("ctrl-u", &mut cx);
+            receiver.try_iter().for_each(drop);
+            terminal.update(&mut cx, |view, cx| {
+                // 无 PTY 的夹具显式确认真实布局发来的网格尺寸，再模拟 shell 回显。
+                let size = TermSize::new(view.grid_cols(), view.grid_rows());
+                let mut term = view.session.as_ref().unwrap().term.lock();
+                term.resize(size);
+                Processor::<StdSyncHandler>::default()
+                    .advance(&mut *term, "\x1b[2J\x1b[H❯ ".as_bytes());
+                cx.notify();
+            });
+            draw(&mut cx);
+            cx.update(|window, cx| {
+                terminal.update(cx, |view, cx| {
+                    view.replace_text_in_range(None, "systemc", window, cx);
+                    let mut term = view.session.as_ref().unwrap().term.lock();
+                    Processor::<StdSyncHandler>::default().advance(&mut *term, b"systemc");
+                    cx.notify();
+                });
+            });
+            receiver.try_iter().for_each(drop);
+            draw(&mut cx);
+            press("tab", &mut cx);
+            draw(&mut cx);
+            terminal.read_with(&cx, |view, _| {
+                let (line, requested, count, visible, _) = view.completion_test_state();
+                assert_eq!(view.pane_id, pane_id, "layout changes retain the same terminal");
+                assert_eq!(line, "systemc", "{position:?}");
+                assert!(
+                    requested && count > 0 && visible,
+                    "{position:?}: {requested}/{count}/{visible}"
+                );
+            });
+            assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+            cx.update(|window, cx| {
+                assert!(
+                    terminal.read(cx).focus_handle.is_focused(window),
+                    "Tab must retain terminal focus"
+                );
+            });
+            press("escape", &mut cx);
+            draw(&mut cx);
         }
     }
 

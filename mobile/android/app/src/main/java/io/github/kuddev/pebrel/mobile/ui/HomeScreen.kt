@@ -267,7 +267,7 @@ fun ComputerRows(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>, o
                     val relay = computer.relay
                     val profileId = desktops.find { it.id == computer.id }?.host?.id ?: computer.id
                     val saved = relays.find { it.id == profileId }
-                    ComputerRow(computer.title, computer.status, computer.transport, computer.address,
+                    ComputerRow(computer.title, computer.status, computer.transport, computer.address, computer.icon,
                         onForget = if (saved != null && onForget != null) ({ removing = saved }) else null) {
                         if (relay == null) onDesktop(computer.id) else onRelay(relay)
                     }
@@ -295,6 +295,7 @@ private data class ComputerSummary(
     val transport: String,
     val address: String,
     val relay: RelayProfile? = null,
+    val icon: String = "term",
 )
 
 private fun computerSummaries(desktops: List<DesktopWorkspace>, relays: List<RelayProfile>): List<ComputerSummary> = buildList {
@@ -303,21 +304,21 @@ private fun computerSummaries(desktops: List<DesktopWorkspace>, relays: List<Rel
     desktops.filter { it.hasConnected || relays.any { profile -> profile.id == it.host.id } }.forEach { desktop ->
         val retryProfile = if (desktop.status in setOf("ready", "connecting", "approval")) null
             else relays.find { it.id == desktop.host.id }
-        add(ComputerSummary(desktop.id, desktop.host.name, desktop.status, desktop.transport, desktop.host.address, retryProfile))
+        add(ComputerSummary(desktop.id, desktop.host.name, desktop.status, desktop.transport, desktop.host.address, retryProfile, desktop.host.icon))
     }
     relays.filter { profile -> desktops.none { it.host.id == profile.id } }.forEach { profile ->
-        add(ComputerSummary(profile.id, profile.name, "disconnected", if (profile.mode == "lan") "LAN" else "Relay", profile.url, profile))
+        add(ComputerSummary(profile.id, profile.name, "disconnected", if (profile.mode == "lan") "LAN" else "Relay", profile.url, profile, profile.hostOs))
     }
 }
 
 @Composable
-private fun ComputerRow(title: String, status: String? = null, transport: String = "", address: String = "",
+private fun ComputerRow(title: String, status: String? = null, transport: String = "", address: String = "", icon: String = "term",
                         onForget: (() -> Unit)? = null, onClick: () -> Unit) {
     // 电脑和添加入口属于同一级；共用图标列与行高，点击留白也有完整的按压反馈。
     Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
         .heightIn(min = 72.dp).padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Glyph(if (status == null) R.drawable.ic_plus else R.drawable.ic_monitor, Modifier.size(24.dp))
+        if (status == null) Glyph(R.drawable.ic_plus, Modifier.size(24.dp)) else HostSymbol(icon, Modifier.size(24.dp))
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (status != null) Box(Modifier.padding(top = 4.dp)) {

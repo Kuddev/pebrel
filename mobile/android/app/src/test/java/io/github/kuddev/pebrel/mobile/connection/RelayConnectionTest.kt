@@ -18,6 +18,31 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class RelayConnectionTest {
+    @Test fun remoteDiscoveryKeepsStableTargetsAndSelectsTheHostCommandSyntax() {
+        val inventory = RemoteSessions.parse("\u001eos\nDarwin\n\u001etmux\n${'$'}7\tWork\t1\t100:200\n" +
+            "\u001ewindows\n${'$'}7\t@9\t0\tEditor\n\u001eherdr\n\u001eend\n")
+        assertEquals("macos", inventory.os)
+        val session = inventory.sessions.single()
+        assertEquals("${'$'}7", session.id)
+        assertEquals("@9", session.windows.single().id)
+        val command = RemoteSessions.attachCommand(RemoteAttachment(session, session.windows.single()))
+        assertTrue(command.startsWith("sh -c "))
+        assertTrue(command.contains("100:200"))
+        assertFalse(command.contains("Work"))
+        assertThrows(IllegalArgumentException::class.java) {
+            RemoteSessions.attachCommand(RemoteAttachment(session.copy(id = "${'$'}7;bad")))
+        }
+        val windows = RemoteSessions.parse("\u001eos\nwindows\n\u001eherdr\n" +
+            "{\"sessions\":[{\"name\":\"work.dev\",\"running\":true}]}\n\u001eend\n")
+        assertTrue(windows.sessions.single().windowsHost)
+        val encoded = RemoteSessions.attachCommand(RemoteAttachment(windows.sessions.single(), RemoteWindow("tab_1", "Editor")))
+        val script = String(java.util.Base64.getDecoder().decode(encoded.substringAfterLast(' ')), Charsets.UTF_16LE)
+        assertTrue(script.contains("tab focus 'tab_1'"))
+        assertTrue(script.contains("session attach 'work.dev'"))
+        assertFalse(script.contains("exec "))
+        assertEquals("ubuntu", RemoteSessions.parse("\u001eos\nLinux\n\u001edistro\nID=ubuntu\n\u001eend\n").os)
+    }
+
     @Test fun discoveredAddressesNeverReplacePinnedIdentityOrInvitationCredentials() {
         val pin = "sha256/${"a".repeat(43)}="
         val secure = SecureRelayProfile("b".repeat(43), "device", "c".repeat(43), false)
@@ -217,6 +242,15 @@ class RelayConnectionTest {
         assertTrue(reducer.observe(snapshot(3, "finished").put("mobile_policy", JSONObject().put("notifications", false))).isEmpty())
         assertTrue(reducer.observe(snapshot(3, "finished").put("mobile_policy", JSONObject().put("notifications", true))).isEmpty())
         assertEquals(1, reducer.observe(snapshot(4, "finished")).size)
+        val recovered = DesktopTransitions(reducer.checkpoint())
+        assertTrue(recovered.observe(snapshot(4, "finished")).isEmpty())
+        assertEquals(1, recovered.observe(snapshot(5, "waiting_input")).size)
+        val muted = snapshot(6, "finished").put("mobile_policy", JSONObject().put("notifications", false))
+        assertTrue(recovered.observe(muted).isEmpty())
+        val restored = DesktopTransitions(recovered.checkpoint())
+        assertTrue(restored.observe(snapshot(6, "finished")).isEmpty())
+        assertTrue(restored.observe(snapshot(7, "finished").put("process_id", 99)).isEmpty())
+        assertTrue(DesktopTransitions(JSONObject("{\"panes\":false}")).observe(snapshot(8, "finished")).isEmpty())
     }
 
     @Test fun rejectedSendDisconnectsOnceAndSettlesOtherPendingRequests() = runBlocking {

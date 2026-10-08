@@ -9,6 +9,8 @@ class RelayProfile(val url: String, val device: String, val token: String, val n
                    val tlsPin: String? = null, val mode: String = "relay", secure: SecureRelayProfile? = null) {
     @Volatile var secure: SecureRelayProfile? = secure
         internal set
+    @Volatile var hostOs: String = "term"
+        internal set
     val version: Int = if (secure == null) 1 else 2
     internal val legacyId: String = digest("$url/$device" + (tlsPin?.let { "/$it" } ?: "") + (secure?.let { "/${it.host}" } ?: ""))
     // 地址、房间和授权可以轮换；电脑身份只跟随 Noise 公钥，认证成功前不写入保存记录。
@@ -41,9 +43,10 @@ class RelayProfile(val url: String, val device: String, val token: String, val n
         require(address.scheme == "https" && address.username.isEmpty() && address.password.isEmpty() &&
             address.encodedPath == "/" && address.query == null && address.fragment == null)
         val nextUrl = address.toString().replaceFirst("https://", "wss://").trimEnd('/')
-        return RelayProfile(nextUrl, device, token, name, tlsPin, mode, secure)
+        return RelayProfile(nextUrl, device, token, name, tlsPin, mode, secure).also { it.hostOs = hostOs }
     }
     fun toJson(): JSONObject = JSONObject().put("version", version).put("url", url).put("device", device).put("token", token).put("name", name).put("mode", mode).apply {
+        put("hostOs", hostOs)
         tlsPin?.let { put("tlsPin", it) }
         secure?.let { put("secure", it.toJson()) }
     }
@@ -79,7 +82,9 @@ class RelayProfile(val url: String, val device: String, val token: String, val n
             require(mode != "lan" || pin != null)
             val secure = if (version == 2) SecureRelayProfile.parse(data.getJSONObject("secure")) else null
             require(version != 2 || pin != null)
-            return RelayProfile(url.toString().replaceFirst("https://", "wss://").trimEnd('/'), device, token, name, pin, mode, secure)
+            return RelayProfile(url.toString().replaceFirst("https://", "wss://").trimEnd('/'), device, token, name, pin, mode, secure).also {
+                it.hostOs = desktopOsIcon(data.optString("hostOs"))
+            }
         }
     }
 }

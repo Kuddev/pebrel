@@ -1,4 +1,5 @@
 use super::*;
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
 
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
@@ -240,6 +241,7 @@ impl NebulaWorkspace {
                     color: tab_color,
                     renaming,
                     pane_count,
+                    local_administrator,
                 } = self.tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("sidebar-tab-hover-{ix}").into();
                 let has_program_glyph = program_glyph.is_some();
@@ -421,6 +423,13 @@ impl NebulaWorkspace {
                             .rounded_full()
                             .bg(color),
                     )
+                })
+                // 权限属于整个会话，先于程序身份呈现，且不被 AI 图标替换。
+                .when(local_administrator, |row| {
+                    row.child(tab_presentation::administrator_badge(
+                        format!("sidebar-admin-{ix}").into(),
+                        cx,
+                    ))
                 })
                 // 行首图标的优先级：**先身份、后形态**。AI 品牌图 / 程序字位
                 // 表达「这个 tab 里在跑什么」，它必须跟随聚焦 pane；2×2
@@ -833,7 +842,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let collapsed = self.sidebar_collapsed;
-        if !self.sidebar_fold_armed {
+        if tab_reveal_instant(cx) || !self.sidebar_fold_armed {
             return if collapsed {
                 div().into_any_element()
             } else {
@@ -870,21 +879,19 @@ impl NebulaWorkspace {
         let settings_active_fg = cx.theme().sidebar_accent_foreground;
         let sidebar_visible = !self.sidebar_collapsed && !self.reader_focus_active(cx);
         let language = crate::gpui_shell::config::ui_language(cx);
+        let port_forward_button = self.render_port_forward_button(cx);
         h_flex()
             .size_full()
             .items_center()
             .justify_between()
             .child(
                 h_flex()
-                    // 旧壳两枚 32px 命中块之间固定留 8px；默认 Button 正好是
-                    // 32px，`.small()` 会把热区缩成 24px。
-                    .gap_2()
+                    // Keep toolbar gaps independent of the UI font/rem size.
+                    .gap(px(8.0))
                     .items_center()
                     .occlude()
                     .child(
-                        Button::new("toggle-sidebar")
-                            .icon(IconName::PanelLeft)
-                            .ghost()
+                        toolbar_button("toggle-sidebar", IconName::PanelLeft)
                             .disabled(settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
@@ -899,14 +906,12 @@ impl NebulaWorkspace {
                                 } else {
                                     this.sidebar_collapsed = !this.sidebar_collapsed;
                                 }
-                                this.sidebar_fold_armed = true;
+                                this.sidebar_fold_armed = !tab_reveal_instant(cx);
                                 cx.notify();
                             })),
                     )
                     .child(
-                        Button::new("open-settings")
-                            .icon(IconName::Settings)
-                            .ghost()
+                        toolbar_button("open-settings", IconName::Settings)
                             .selected(settings_active)
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
@@ -920,20 +925,20 @@ impl NebulaWorkspace {
             .child(self.render_collapsed_tab_title(cx))
             .child(
                 title_bar_panel_controls()
-                    .gap_2()
+                    .gap(px(8.0))
                     .child(
-                        Button::new("toggle-command-manager")
-                            .icon(
-                                Icon::new(Icon::empty())
-                                    .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
-                            )
-                            .ghost()
-                            .selected(self.command_manager_open)
-                            .tooltip(language.text(Message::ChromeCommandList))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_command_manager(window, cx);
-                            })),
+                        toolbar_button(
+                            "toggle-command-manager",
+                            Icon::new(Icon::empty())
+                                .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                        )
+                        .selected(self.command_manager_open)
+                        .tooltip(language.text(Message::ChromeCommandList))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_command_manager(window, cx);
+                        })),
                     )
+                    .when_some(port_forward_button, |controls, button| controls.child(button))
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()
@@ -969,8 +974,15 @@ impl NebulaWorkspace {
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
-        let TabPresentation { title, logo_image, logo_pending, program_glyph, pane_count, .. } =
-            self.tab_presentation(self.active, cx, dark);
+        let TabPresentation {
+            title,
+            logo_image,
+            logo_pending,
+            program_glyph,
+            pane_count,
+            local_administrator,
+            ..
+        } = self.tab_presentation(self.active, cx, dark);
         slot.child(
             h_flex()
                 .absolute()
@@ -980,6 +992,12 @@ impl NebulaWorkspace {
                 .gap_2()
                 // 两侧工具靠 flex 天然让位，这点内缩只是别让长标题贴到按钮上。
                 .px_4()
+                .when(local_administrator, |row| {
+                    row.child(tab_presentation::administrator_badge(
+                        "collapsed-title-admin".into(),
+                        cx,
+                    ))
+                })
                 .when_some(logo_image, |row, image| {
                     row.child(
                         img(image)

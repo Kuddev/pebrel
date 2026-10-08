@@ -55,7 +55,7 @@ impl Display {
         self.nebula_ssh_editor_open = true;
         self.nebula_ssh_editor_hover = SshEditorHit::None;
         // 每次打开都从零开始，避免上一次退出动画的残余进度造成闪跳。
-        self.nebula_ui_anims.ssh_editor = UiAnim::new(0.0);
+        self.ui_animations.reset_ssh_editor();
         self.pending_update.dirty = true;
     }
 
@@ -100,7 +100,7 @@ impl Display {
         self.nebula_ssh_editor_rects = None;
         self.nebula_ssh_editor_open = true;
         self.nebula_ssh_editor_hover = SshEditorHit::None;
-        self.nebula_ui_anims.ssh_editor = UiAnim::new(0.0);
+        self.ui_animations.reset_ssh_editor();
         self.pending_update.dirty = true;
         self.window.request_redraw();
     }

@@ -2,6 +2,14 @@ package io.github.kuddev.pebrel.mobile.connection
 
 import org.json.JSONObject
 
+/** IDs from the shared OS icon catalog, based on the host response rather than its name. */
+fun desktopOsIcon(os: String): String = when (val normalized = os.lowercase(java.util.Locale.ROOT)) {
+    "windows", "win32" -> "windows"
+    "macos", "darwin" -> "macos"
+    "linux", "ubuntu", "debian", "centos", "rhel", "fedora", "rocky", "alpine", "arch", "suse", "nixos", "kali", "freebsd" -> normalized
+    else -> "term"
+}
+
 data class DesktopPane(
     val window: Long, val id: Long, val title: String, val cwd: String,
     val task: String, val state: String, val sequence: Long,
@@ -64,23 +72,40 @@ fun parseDesktopTabs(snapshot: JSONObject): List<DesktopTab> = buildList {
 
 fun parseDesktopPanes(snapshot: JSONObject): List<DesktopPane> = parseDesktopTabs(snapshot).flatMap { it.panes }
 
-/** Live de-dup only. This client does not advertise durable missed-event replay yet. */
-class DesktopTransitions {
+/** The cursor belongs to a computer; snapshots can recover only the latest observable state. */
+class DesktopTransitions(saved: JSONObject? = null) {
     private var process: Long? = null
+    var revision = 0L
+        private set
     private val sequences = LinkedHashMap<Pair<Long, Long>, Long>()
+    init {
+        if (saved != null) runCatching {
+            process = saved.getLong("process")
+            val rows = saved.getJSONArray("panes")
+            require(rows.length() <= 512)
+            for (i in 0 until rows.length()) rows.getJSONArray(i).let {
+                sequences[it.getLong(0) to it.getLong(1)] = it.getLong(2)
+            }
+        }.onFailure { process = null; sequences.clear() }
+    }
+    fun checkpoint(): JSONObject = JSONObject().put("process", process).put("panes", org.json.JSONArray().apply {
+        sequences.entries.toList().takeLast(512).forEach { (id, sequence) ->
+            put(org.json.JSONArray().put(id.first).put(id.second).put(sequence))
+        }
+    })
     fun observe(snapshot: JSONObject): List<DesktopPane> {
         val id = snapshot.getLong("process_id")
         val first = process != id
-        if (first) { sequences.clear(); process = id }
+        if (first) { sequences.clear(); process = id; revision++ }
         val panes = parseDesktopPanes(snapshot)
         val changed = panes.filter { pane ->
             val key = pane.window to pane.id
             val previous = sequences[key]
-            if (previous == null || pane.sequence > previous) sequences[key] = pane.sequence
+            if (previous == null || pane.sequence > previous) { sequences[key] = pane.sequence; revision++ }
             !first && previous != null && pane.sequence > previous &&
                 pane.state in setOf("finished", "failed", "waiting_input", "attention")
         }
-        sequences.keys.retainAll(panes.map { it.window to it.id }.toSet())
+        if (sequences.keys.retainAll(panes.map { it.window to it.id }.toSet())) revision++
         // 停用提醒时仍推进序号；重新开启不会补发停用期间的旧事件。
         return if (snapshot.optJSONObject("mobile_policy")?.optBoolean("notifications", true) != false) changed else emptyList()
     }

@@ -153,20 +153,24 @@ mod tests {
             assert_eq!(current(), expected);
             assert!(require_direct_update().is_err());
             assert!(crate::update_check::check_now().is_err());
-            let asset = crate::update_check::UpdateAsset {
-                version: "0.0.0".into(),
-                name: String::new(),
-                download_url: String::new(),
-                size: None,
-                sha256: None,
-            };
-            assert!(crate::update_download::begin(&asset).is_err());
-            assert!(crate::update_download::handoff::prepare(&asset).is_err());
-            assert!(crate::update_download::handoff::schedule(&asset).is_err());
-            assert!(!crate::update_download::handoff::apply_scheduled());
-            assert!(!crate::update_download::handoff::installation_in_progress().unwrap());
-            crate::update_download::hydrate();
-            assert!(crate::update_download::cached_asset().is_none());
+            // 旧壳仍校验安装归属；更新下载模块只在 GPUI 产品中存在。
+            #[cfg(feature = "gpui-shell")]
+            {
+                let asset = crate::update_check::UpdateAsset {
+                    version: "0.0.0".into(),
+                    name: String::new(),
+                    download_url: String::new(),
+                    size: None,
+                    sha256: None,
+                };
+                assert!(crate::update_download::begin(&asset).is_err());
+                assert!(crate::update_download::handoff::prepare(&asset).is_err());
+                assert!(crate::update_download::handoff::schedule(&asset).is_err());
+                assert!(!crate::update_download::handoff::apply_scheduled());
+                assert!(!crate::update_download::handoff::installation_in_progress().unwrap());
+                crate::update_download::hydrate();
+                assert!(crate::update_download::cached_asset().is_none());
+            }
             let executable = std::env::current_exe().unwrap();
             assert!(!executable.parent().unwrap().join(".pebrel-update.nebula-lock").exists());
             return;

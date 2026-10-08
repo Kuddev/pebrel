@@ -17,6 +17,7 @@ import io.github.kuddev.pebrel.mobile.connection.decodeDesktopScreen
 import io.github.kuddev.pebrel.terminal.GhosttyView
 import io.github.kuddev.pebrel.terminal.SessionTransport
 import io.github.kuddev.pebrel.terminal.TerminalCallbacks
+import io.github.kuddev.pebrel.terminal.TerminalHistory
 import io.github.kuddev.pebrel.terminal.TerminalFrame
 import io.github.kuddev.pebrel.terminal.TerminalRow
 import io.github.kuddev.pebrel.terminal.TerminalSession
@@ -38,6 +39,364 @@ import java.io.File
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class TerminalSnapshotViewTest {
+    @Test fun pagingKeepsTheSamePhysicalCellVisibleWithAndWithoutPhoneReflow() {
+        for (wrapped in listOf(false, true)) {
+            val view = view(*Array(200) { row("abcd") }, width = 39, height = 160)
+            view.wrapLines = wrapped
+            fun page(first: Long) = TerminalFrame(Array(200) { row("abcd") },
+                intArrayOf(4, 200, 0, 0, 0, background, red, 2),
+                history = TerminalHistory(first, 0, 500, 480, 20, false))
+            view.frame = page(100)
+            val y = TerminalSnapshotView::class.java.getDeclaredField("offsetY").apply { isAccessible = true }
+            val height = TerminalSnapshotView::class.java.getDeclaredField("cellHeight").apply { isAccessible = true }.getFloat(view)
+            TerminalSnapshotView::class.java.getDeclaredField("followOutput").apply { isAccessible = true }.setBoolean(view, false)
+            val rowsPerSource = projected(view).rows.size / 200
+            val before = 5.25f * height
+            y.setFloat(view, before)
+            view.frame = page(50)
+            assertEquals("page replacement preserves physical cell and sub-row pixels, wrap=$wrapped",
+                before + 50 * rowsPerSource * height, y.getFloat(view), .01f)
+            val requests = mutableListOf<Long?>()
+            view.onHistoryPage = { requests += it }
+            view.scrollTarget = object : TerminalInputTarget {
+                override val supportsScroll = true
+                override fun scroll(lines: Int, column: Int, row: Int): Boolean = error("history reading must not move the PC")
+                override fun text(text: String): Boolean = error("history reading must not type")
+                override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int): Boolean = error("history reading must not send keys")
+            }
+            val down = eventTime
+            touch(view, down, MotionEvent.ACTION_DOWN, 10f to 20f)
+            touch(view, down, MotionEvent.ACTION_MOVE, 10f to 20000f)
+            touch(view, down, MotionEvent.ACTION_CANCEL, 10f to 20000f)
+            assertTrue("read-only swipe requests the preceding page, wrap=$wrapped", requests.any { it != null && it < 50 })
+            assertNull(view.inputTarget)
+        }
+    }
+
+    @Test fun flingSurvivesAnInFlightHistoryPageAndKeyboardRequestsTheLiveTail() {
+        val view = view(*Array(200) { row("abcd") }, height = 160)
+        fun page(first: Long) = TerminalFrame(Array(200) { row("abcd") },
+            intArrayOf(4, 200, 0, 0, 0, background, red, 2),
+            history = TerminalHistory(first, 0, 500, 480, 20, false))
+        view.frame = page(100)
+        val requests = mutableListOf<Long?>()
+        view.onHistoryPage = { requests += it }
+        val y = TerminalSnapshotView::class.java.getDeclaredField("offsetY").apply { isAccessible = true }
+        y.setFloat(view, 0f)
+        eventTime = android.os.SystemClock.uptimeMillis()
+        val down = eventTime
+        touch(view, down, MotionEvent.ACTION_DOWN, 20f to 20f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 20f to 70f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 20f to 130f)
+        touch(view, down, MotionEvent.ACTION_UP, 20f to 150f)
+        repeat(3) {
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(16))
+            view.computeScroll()
+        }
+        view.frame = page(50)
+        val received = y.getFloat(view)
+        repeat(3) {
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(16))
+            view.computeScroll()
+        }
+        assertTrue("page arrival must not require a second swipe", y.getFloat(view) < received)
+        view.inputTarget = object : TerminalInputTarget {
+            override fun text(text: String) = true
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int) = true
+        }
+        view.showKeyboard()
+        assertNull("typing returns to the live tail", requests.last())
+    }
+
+    @Test fun localHistoryKeepsMovingAfterReleaseAndStopsAtTheNextTouch() {
+        val view = view(*Array(80) { row("abcd") }, height = 160)
+        val original = view.frame
+        fun offset() = TerminalSnapshotView::class.java.getDeclaredField("offsetY")
+            .apply { isAccessible = true }.getFloat(view)
+        eventTime = android.os.SystemClock.uptimeMillis()
+        val down = eventTime
+        touch(view, down, MotionEvent.ACTION_DOWN, 20f to 20f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 20f to 60f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 20f to 120f)
+        touch(view, down, MotionEvent.ACTION_UP, 20f to 140f)
+        val released = offset()
+        repeat(4) {
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(16))
+            view.computeScroll()
+        }
+        assertTrue("history should coast after the finger lifts", offset() < released)
+        val again = eventTime
+        touch(view, again, MotionEvent.ACTION_DOWN, 20f to 100f)
+        val stopped = offset()
+        repeat(4) {
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(16))
+            view.computeScroll()
+        }
+        assertEquals("a new touch owns scrolling immediately", stopped, offset(), .01f)
+        touch(view, again, MotionEvent.ACTION_CANCEL, 20f to 100f)
+        assertSame("inertia never rewrites the source grid", original, view.frame)
+    }
+
+    @Test fun remoteEdgeFlingStopsWhenItsInputOwnerIsRemoved() {
+        val view = view(row("abcd"), height = 200)
+        val scrolls = mutableListOf<Int>()
+        view.scrollTarget = object : TerminalInputTarget {
+            override val supportsScroll = true
+            override fun scroll(lines: Int, column: Int, row: Int): Boolean {
+                scrolls += lines
+                return true
+            }
+            override fun text(text: String): Boolean = error("fling must not type")
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int): Boolean =
+                error("fling must not synthesize command keys")
+        }
+        eventTime = android.os.SystemClock.uptimeMillis()
+        val down = eventTime
+        touch(view, down, MotionEvent.ACTION_DOWN, 20f to 20f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 20f to 80f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 20f to 140f)
+        touch(view, down, MotionEvent.ACTION_UP, 20f to 170f)
+        val released = scrolls.size
+        repeat(5) {
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(16))
+            view.computeScroll()
+        }
+        assertTrue("inertia should continue the existing wheel route", scrolls.size > released)
+        assertTrue(scrolls.all { it in 1..32 })
+        view.scrollTarget = null
+        val removed = scrolls.size
+        repeat(5) {
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(16))
+            view.computeScroll()
+        }
+        assertEquals("old ownership must not keep sending wheel requests", removed, scrolls.size)
+    }
+
+    @Test fun boundarySwipeForwardsWheelInComposerModeWithoutTypingOrResizing() {
+        val view = view(row("abcd"), height = 200)
+        val original = view.frame
+        val scrolls = mutableListOf<Triple<Int, Int, Int>>()
+        view.scrollTarget = object : TerminalInputTarget {
+            override val supportsScroll = true
+            override fun scroll(lines: Int, column: Int, row: Int): Boolean {
+                scrolls += Triple(lines, column, row)
+                return true
+            }
+            override fun text(text: String): Boolean = error("swipe must not type")
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int): Boolean =
+                error("swipe must not send Page Up or cursor keys from the phone")
+        }
+        assertNull(view.inputTarget)
+        fun swipe(from: Float, to: Float) {
+            val down = eventTime
+            touch(view, down, MotionEvent.ACTION_DOWN, 16f to from)
+            touch(view, down, MotionEvent.ACTION_MOVE, 16f to to)
+            touch(view, down, MotionEvent.ACTION_UP, 16f to to)
+        }
+        swipe(24f, 160f)
+        assertTrue(scrolls.any { it.first > 0 })
+        swipe(160f, 24f)
+        assertTrue(scrolls.any { it.first < 0 })
+        assertTrue(scrolls.all { it.second in 0..3 && it.third == 0 })
+        val count = scrolls.size
+        pinch(view)
+        assertEquals(count, scrolls.size)
+        view.scrollTarget = null
+        swipe(24f, 160f)
+        assertEquals(count, scrolls.size)
+        assertSame(original, view.frame)
+    }
+
+    @Test fun doubleTapCopiesWordAndTripleTapCopiesOnlyItsVisualRow() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val view = TerminalSnapshotView(activity).apply {
+            setFont(Typeface.MONOSPACE, 20)
+            frame = TerminalFrame(arrayOf(row("alpha beta"), row("next line ")),
+                intArrayOf(10, 2, 0, 0, 0, this@TerminalSnapshotViewTest.background, red, 2))
+        }
+        activity.setContentView(view)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        view.layout(0, 0, 400, 160)
+        val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+        val width = Paint().apply { typeface = Typeface.MONOSPACE; textSize = 20 * view.resources.displayMetrics.scaledDensity }.measureText("M")
+        fun tap() {
+            val down = eventTime
+            touch(view, down, MotionEvent.ACTION_DOWN, width * 2.5f to 8f)
+            touch(view, down, MotionEvent.ACTION_UP, width * 2.5f to 8f)
+        }
+        tap(); tap()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(350))
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        assertEquals("alpha", clipboard.primaryClip?.getItemAt(0)?.text.toString())
+        eventTime += 500
+        tap(); tap(); tap()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(350))
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        assertEquals("alpha beta", clipboard.primaryClip?.getItemAt(0)?.text.toString())
+        activity.finish()
+    }
+
+    @Test fun liveSelectionSupportsWordLineAndTapAwayWithoutChangingTheFrame() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val frame = TerminalFrame(arrayOf(row("alpha beta"), row("next line ")), intArrayOf(10, 2, 0, 0, 0, background, red, 2))
+        val transport = object : SessionTransport {
+            override fun open(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) = Unit
+            override fun input() = ByteArrayInputStream(byteArrayOf())
+            override fun output() = ByteArrayOutputStream()
+            override fun resize(columns: Int, rows: Int, cellWidth: Int, cellHeight: Int) = Unit
+            override fun awaitExit() = 0
+            override fun close() = Unit
+        }
+        val session = TerminalSession(transport, TerminalCallbacks())
+        TerminalSession::class.java.getDeclaredField("frame").apply { isAccessible = true }.set(session, frame)
+        val live = GhosttyView(activity).apply { this.session = session }
+        activity.setContentView(live)
+        live.layout(0, 0, 800, 400)
+        fun metric(name: String) = GhosttyView::class.java.getDeclaredField(name).apply { isAccessible = true }.getFloat(live)
+        fun selected(): Any? {
+            val selection = GhosttyView::class.java.getDeclaredField("selection").apply { isAccessible = true }.get(live)
+            return selection.javaClass.getDeclaredMethod("selectedText").apply { isAccessible = true }.invoke(selection)
+        }
+        val x = metric("cellWidth") * 2.5f
+        val y = metric("cellHeight") * .4f
+        fun tap(px: Float = x, py: Float = y) {
+            val down = eventTime
+            touch(live, down, MotionEvent.ACTION_DOWN, px to py)
+            touch(live, down, MotionEvent.ACTION_UP, px to py)
+        }
+        fun pixels() = Bitmap.createBitmap(live.width, live.height, Bitmap.Config.ARGB_8888).also { live.draw(Canvas(it)) }
+        val unselected = pixels()
+        try {
+            tap(); tap()
+            assertEquals("alpha", selected())
+            pixels().let { image ->
+                assertFalse("selection must visibly highlight text", image.sameAs(unselected))
+                image.recycle()
+            }
+            tap()
+            assertEquals("alpha beta", selected())
+            eventTime += 500
+            tap(700f, 250f)
+            assertEquals("", selected())
+            assertSame(frame, session.frame)
+            pixels().let { image ->
+                assertTrue("dismissal must remove the painted highlight, not only the copy menu", image.sameAs(unselected))
+                image.recycle()
+            }
+        } finally { unselected.recycle(); live.session = null; session.finishIfRunning(); activity.finish() }
+    }
+
+    private fun longPress(view: TerminalSnapshotView, x: Float, y: Float): Long {
+        eventTime = android.os.SystemClock.uptimeMillis()
+        val down = eventTime
+        touch(view, down, MotionEvent.ACTION_DOWN, x to y)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+            .idleFor(java.time.Duration.ofMillis(700))
+        eventTime = android.os.SystemClock.uptimeMillis()
+        return down
+    }
+
+    @Test fun longPressFreezesUnicodeCellsUntilCopyAndThenReleasesTheHighlight() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val theme = intArrayOf(Color.WHITE, background, Color.WHITE) + IntArray(16) { Color.RED }
+        val original = decodeDesktopScreen(JSONObject("""{"version":1,"columns":8,"rows":[
+            [["中",2,14251863,-258,0],["é",1,14251863,-258,0],["😀",2,14251863,-258,0],
+             ["█",1,65280,-258,0],["A",1,14251863,-258,0],[" ",1,-257,255,0]]
+            ],"cursor":[0,0,0],"palette":[]}"""), theme)
+        val view = TerminalSnapshotView(activity).apply { frame = original }
+        activity.setContentView(view)
+        view.layout(0, 0, 300, 120)
+        val down = longPress(view, 10f, 8f)
+        touch(view, down, MotionEvent.ACTION_UP, 10f to 8f)
+        assertTrue(view.onKeyDown(KeyEvent.KEYCODE_A,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A, 0, KeyEvent.META_CTRL_ON)))
+        view.onKeyUp(KeyEvent.KEYCODE_A, KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_A))
+        view.frame = TerminalFrame(arrayOf(row("NEW")), intArrayOf(3, 1, 0, 0, 0, background, red, 2))
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        val clip = activity.getSystemService(android.content.ClipboardManager::class.java).primaryClip
+        assertEquals("中é😀█A", clip?.getItemAt(0)?.text.toString())
+        assertFalse("copy must end selection", view.performAccessibilityAction(
+            android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        val fresh = TerminalSnapshotView(activity).apply { frame = view.frame; layout(0, 0, view.width, view.height) }
+        assertTrue("selection cannot leave stale pixels", render(fresh).sameAs(render(view)))
+        activity.finish()
+    }
+
+    @Test fun copyingWrappedSelectionKeepsHardBreaksAndSpacesAndUsesTheFrozenProjection() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val original = TerminalFrame(arrayOf(row("ab cd ef"), row("gh      "), row("next    ")),
+            intArrayOf(8, 3, 0, 0, 0, background, red, 2), booleanArrayOf(true, false, false))
+        val view = TerminalSnapshotView(activity).apply {
+            setFont(Typeface.MONOSPACE, 20); wrapLines = true; frame = original
+        }
+        activity.setContentView(view)
+        view.layout(0, 0, 39, 480)
+        assertTrue(projected(view).columns in 2..3)
+        val down = longPress(view, 5f, 8f)
+        touch(view, down, MotionEvent.ACTION_UP, 5f to 8f)
+        assertTrue(view.onKeyDown(KeyEvent.KEYCODE_A,
+            KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_A, 0, KeyEvent.META_CTRL_ON)))
+        view.onKeyUp(KeyEvent.KEYCODE_A, KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_A))
+        view.frame = TerminalFrame(arrayOf(row("NEW")), intArrayOf(3, 1, 0, 0, 0, background, red, 2))
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        assertEquals("ab cd efgh\nnext", activity.getSystemService(android.content.ClipboardManager::class.java)
+            .primaryClip?.getItemAt(0)?.text.toString())
+        val again = longPress(view, 5f, 8f)
+        touch(view, again, MotionEvent.ACTION_UP, 5f to 8f)
+        view.wrapLines = false
+        assertFalse("changing the projection must clear obsolete cell coordinates", view.performAccessibilityAction(
+            android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        activity.finish()
+    }
+
+    @Test fun draggingTheEndHandleAcrossTheStartPreservesItsIdentity() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val view = TerminalSnapshotView(activity).apply {
+            setFont(Typeface.MONOSPACE, 20)
+            frame = TerminalFrame(arrayOf(row("AAA BBB CCC")), intArrayOf(11, 1, 0, 0, 0, this@TerminalSnapshotViewTest.background, red, 2))
+        }
+        activity.setContentView(view)
+        view.layout(0, 0, 350, 120)
+        val metrics = android.graphics.Paint().apply { typeface = Typeface.MONOSPACE; textSize = 20 * view.resources.displayMetrics.scaledDensity }
+        val cell = metrics.measureText("M")
+        val down = longPress(view, 5.5f * cell, 8f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 0.5f * cell to 8f)
+        touch(view, down, MotionEvent.ACTION_UP, 0.5f * cell to 8f)
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        assertEquals("A ", activity.getSystemService(android.content.ClipboardManager::class.java)
+            .primaryClip?.getItemAt(0)?.text.toString())
+        activity.finish()
+    }
+
+    @Test fun readOnlySelectionCannotPasteAndRejectedPasteKeepsSelection() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val view = TerminalSnapshotView(activity).apply {
+            frame = TerminalFrame(arrayOf(row("copy")), intArrayOf(4, 1, 0, 0, 0, this@TerminalSnapshotViewTest.background, red, 2))
+        }
+        activity.setContentView(view)
+        view.layout(0, 0, 300, 120)
+        val down = longPress(view, 10f, 8f)
+        touch(view, down, MotionEvent.ACTION_UP, 10f to 8f)
+        val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("fixture", "paste"))
+        val info = android.view.accessibility.AccessibilityNodeInfo.obtain()
+        view.onInitializeAccessibilityNodeInfo(info)
+        assertFalse(info.actionList.contains(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_PASTE))
+        var pasted = 0
+        var accept = false
+        view.pasteTarget = object : TerminalInputTarget {
+            override fun text(text: String) = false
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int) = false
+            override fun paste(text: String): Boolean { assertEquals("paste", text); pasted++; return accept }
+        }
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE, null))
+        accept = true
+        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE, null))
+        assertEquals(2, pasted)
+        assertFalse(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+        activity.finish()
+    }
+
     @Test fun tappingPcSurfaceOpensDirectInputAndStaleImeCannotWriteAfterToggle() {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         val messages = mutableListOf<String>()
@@ -53,6 +412,7 @@ class TerminalSnapshotViewTest {
         val down = eventTime
         touch(view, down, MotionEvent.ACTION_DOWN, 12f to 12f)
         touch(view, down, MotionEvent.ACTION_UP, 12f to 12f)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(350))
         assertTrue(view.hasFocus())
         assertTrue(view.onCheckIsTextEditor())
         val ime = checkNotNull(view.onCreateInputConnection(EditorInfo()))
@@ -235,6 +595,39 @@ class TerminalSnapshotViewTest {
         val dim = bitmap.getPixel(cw + cw / 2, y)
         assertTrue(Color.red(dim) in 100..220)
         assertEquals(red, bitmap.getPixel(cw * 2 + cw / 2, y))
+        bitmap.recycle()
+    }
+
+    @Test fun tuiModeSymbolsKeepBothPauseBarsAndThePlayTipInsideTheirCells() {
+        // 文本形式检查线条几何；默认/Emoji 形式的彩色背景由真实 Android 字体测试覆盖。
+        val text = TerminalRow("\u23f8\ufe0e\u23f5", intArrayOf(
+            0, 2, 1, red, background, 0, 2, 1, 1, red, background, 0))
+        val bitmap = render(view(text, row("  ", fill = green)))
+        val fill = colorBounds(bitmap, green)
+        val cw = fill.width() / 2f
+        val ch = fill.height().toFloat()
+        fun sample(column: Int, x: Float, y: Float) =
+            bitmap.getPixel(((column + x) * cw).toInt(), (y * ch).toInt())
+        assertEquals("left pause bar", red, sample(0, .3f, .5f))
+        assertEquals("pause gap must stay open", background, sample(0, .5f, .5f))
+        assertEquals("right pause bar must not be clipped", red, sample(0, .7f, .5f))
+        assertEquals("play tip reaches the right half", red, sample(1, .65f, .5f))
+        assertEquals("space above play tip", background, sample(1, .7f, .2f))
+        bitmap.recycle()
+    }
+
+    @Test fun fallbackGlyphWidthMismatchKeepsItsRightStrokeAndTheNextCell() {
+        val frame = TerminalFrame(arrayOf(row("\u4e2d\u2588", fill = background)),
+            intArrayOf(2, 1, 0, 0, 0, background, red, 2))
+        frame.rows[0]!!.cells[9] = green
+        val view = view(frame.rows[0]!!).apply { this.frame = frame }
+        val bitmap = render(view)
+        val next = colorBounds(bitmap, green)
+        val glyph = colorBounds(bitmap, red)
+        assertFalse(glyph.isEmpty)
+        assertEquals("the adjacent cell keeps its full background and position", next.left, next.width())
+        assertTrue("the complete glyph must leave its right side bearing before the next cell",
+            glyph.right < next.left)
         bitmap.recycle()
     }
 

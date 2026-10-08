@@ -13,6 +13,41 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class DesktopTerminalInputTest {
+    @Test fun scrollUsesTheOrderedInputQueueAndRechecksPermission() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var allowed = true
+        val calls = mutableListOf<Pair<String, org.json.JSONObject>>()
+        val input = DesktopTerminalInput({ method, params -> calls += method to params },
+            { allowed }, {}, {}, remoteScrollSupported = true)
+        try {
+            assertTrue(input.text("first"))
+            assertTrue(input.scroll(2, 3, 4))
+            assertTrue(input.scroll(-1, 3, 4))
+            runCurrent()
+            assertEquals(listOf("pane.prompt", "pane.scroll", "pane.scroll"), calls.map { it.first })
+            assertEquals(2, calls[1].second.getInt("lines"))
+            assertEquals(3, calls[1].second.getInt("column"))
+            assertEquals(4, calls[1].second.getInt("row"))
+            assertFalse(input.scroll(33, 0, 0))
+            assertTrue(input.scroll(1, 0, 0))
+            allowed = false
+            runCurrent()
+            assertEquals(3, calls.size)
+            assertFalse(input.supportsScroll)
+            assertFalse(input.scroll(1, 0, 0))
+        } finally { input.close(); Dispatchers.resetMain() }
+    }
+
+    @Test fun oldDesktopDoesNotReceiveAnUnnegotiatedScroll() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val input = DesktopTerminalInput({ _, _ -> error("unexpected RPC") }, { true }, {}, {})
+        try {
+            assertFalse(input.supportsScroll)
+            assertFalse(input.scroll(1, 0, 0))
+            runCurrent()
+        } finally { input.close(); Dispatchers.resetMain() }
+    }
+
     @Test fun interruptedAcknowledgementStopsPipelineAndSettlesDraftWithoutReplay() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val receipts = mutableListOf<CompletableDeferred<Unit>>()
@@ -63,6 +98,13 @@ class DesktopTerminalInputTest {
         val control = DesktopTerminalInput.encodeKey(KeyEvent.KEYCODE_C, 2, "c")!!.single()
         assertEquals("c", control.params.getString("key"))
         assertTrue(control.params.getJSONObject("modifiers").getBoolean("control"))
+        for (shift in listOf(0, 1)) {
+            val tab = DesktopTerminalInput.encodeKey(KeyEvent.KEYCODE_TAB, shift, "")!!.single()
+            assertEquals("pane.send_key", tab.method)
+            assertEquals("tab", tab.params.getString("key"))
+            assertEquals(shift == 1, tab.params.getJSONObject("modifiers").getBoolean("shift"))
+            assertFalse(tab.params.getJSONObject("modifiers").getBoolean("control"))
+        }
         assertNull(DesktopTerminalInput.encodeText("\u001b]52;clipboard"))
         assertNull(DesktopTerminalInput.encodeText("\n".repeat(129)))
         assertNull(DesktopTerminalInput.encodeKey(KeyEvent.KEYCODE_A, 8, "a"))

@@ -16,6 +16,7 @@ use gpui_component::menu::PopupMenuItem;
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::SidebarActivity;
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::{Message, UiLanguage};
 
 use super::{
@@ -134,6 +135,7 @@ impl NebulaWorkspace {
     ) -> gpui::AnyElement {
         let row_height = super::tab_scroll::tab_row_height(self.density);
         let language = crate::gpui_shell::config::ui_language(cx);
+        let port_forward_button = self.render_port_forward_button(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
@@ -148,8 +150,10 @@ impl NebulaWorkspace {
         let chrome_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
+        let port_forward_w = if port_forward_button.is_some() { 32.0 } else { 0.0 };
         let tab_capacity_w =
-            (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W).max(TOP_TAB_MIN_W);
+            (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W - port_forward_w)
+                .max(TOP_TAB_MIN_W);
         let tab_w = tab_width(tab_capacity_w, self.top_tab_count());
         let strip_w = tab_strip_width(tab_w, self.top_tab_count());
         // 溢出时两端各让出一枚翻页按钮。这个反馈是单调的：`tab_w` 已被
@@ -189,6 +193,7 @@ impl NebulaWorkspace {
                     color,
                     renaming,
                     pane_count,
+                    local_administrator,
                 } = self.top_tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
@@ -359,6 +364,12 @@ impl NebulaWorkspace {
                                 .rounded_full()
                                 .bg(color),
                         )
+                    })
+                    .when(local_administrator, |row| {
+                        row.child(super::tab_presentation::administrator_badge(
+                            format!("top-tab-admin-{ix}").into(),
+                            cx,
+                        ))
                     })
                     // 图标优先级与侧栏同源：先身份（跟随聚焦 pane），分屏标记
                     // 只在没有身份图标时补位。理由见 sidebar.rs 同处注释。
@@ -690,20 +701,20 @@ impl NebulaWorkspace {
             .child(div().h_full().flex_1().min_w_0())
             .child(
                 title_bar_panel_controls()
+                    .gap(px(8.0))
                     .child(
-                        Button::new("top-toggle-command-manager")
-                            .icon(
-                                Icon::new(Icon::empty()).path(
-                                    crate::gpui_shell::assets::nav::COMMAND_MANAGER,
-                                ),
-                            )
-                            .ghost()
+                        toolbar_button(
+                            "top-toggle-command-manager",
+                            Icon::new(Icon::empty())
+                                .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                        )
                             .selected(self.command_manager_open)
                             .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),
                     )
+                    .when_some(port_forward_button, |controls, button| controls.child(button))
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()

@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
         var deployRelay by remember { mutableStateOf(false) }
         var login by remember { mutableStateOf<HostProfile?>(null) }
         var retrySession by remember { mutableStateOf<String?>(null) }
+        var pendingAttachment by remember { mutableStateOf<RemoteAttachment?>(null) }
         var switcher by remember { mutableStateOf(false) }
         val desktop = desktops.find { it.id == desktopId }
         val pane = desktop?.panes?.find { it.id == paneId && it.window == windowId }
@@ -138,10 +139,11 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(desktopId, relays) {
             if (page in setOf("pane", "desktop", "git", "file", "conversation")) repository.restoreDesktop(desktopId)?.let { desktopId = it }
         }
-        fun connectHost(host: HostProfile, previous: String? = null) {
+        fun connectHost(host: HostProfile, previous: String? = null, attachment: RemoteAttachment? = null) {
             if (credentialBusy) return
             if (!repository.hasSavedPassword(host)) {
                 retrySession = previous
+                pendingAttachment = attachment
                 login = host
                 return
             }
@@ -152,10 +154,11 @@ class MainActivity : ComponentActivity() {
                     secret = repository.loadSavedPassword(host)
                     if (secret == null) {
                         retrySession = previous
+                        pendingAttachment = attachment
                         login = host
                     } else {
                         previous?.let(repository::closeTerminal)
-                        openSession(repository.ssh(host, checkNotNull(secret)))
+                        openSession(repository.ssh(host, checkNotNull(secret), attachment))
                         secret = null
                     }
                 } finally {
@@ -198,6 +201,8 @@ class MainActivity : ComponentActivity() {
                 desktopId = target.getStringExtra("desktop").orEmpty()
                 windowId = target.getLongExtra("window", -1)
                 paneId = target.getLongExtra("pane", -1)
+                paneProcess = target.getLongExtra("process", -1).takeIf { it >= 0 }
+                repository.restoreDesktop(desktopId)?.let { desktopId = it }
                 showPage("pane")
             }
         }
@@ -244,14 +249,16 @@ class MainActivity : ComponentActivity() {
                         val session = sessions.find { it.id == selected }
                         if (session != null) LocalTerminalScreen(session, repository, ::back, { switcher = true },
                             onRetry = { session.host?.let { host ->
-                                connectHost(hosts.find { it.id == host.id } ?: host, session.id)
+                                connectHost(hosts.find { it.id == host.id } ?: host, session.id, session.attachment)
                             } },
                             onEdit = { session.host?.let { host ->
                                 editHost = hosts.find { it.id == host.id } ?: host; hostForm = true
                                 repository.closeTerminal(session.id); back()
                             } },
                             onClose = { repository.closeTerminal(session.id); back() },
-                            onFiles = session.files?.let { { showPage("sftp") } })
+                            onFiles = session.files?.let { { showPage("sftp") } },
+                            active = page == route,
+                            onAttachRemote = { entry -> session.host?.let { connectHost(it, attachment = entry) } })
                         else LaunchedEffect(selected) { showPage("home") }
                     }
                     "sftp" -> {
@@ -402,7 +409,8 @@ class MainActivity : ComponentActivity() {
         if (deployRelay) RelayDeploymentFlow(repository, onCancel = { deployRelay = false })
         login?.let { host -> LoginForm(
             host = host,
-            onCancel = { login = null; retrySession = null },
+            onCancel = { login = null; retrySession = null; pendingAttachment = null },
+            attachmentLabel = pendingAttachment?.title,
             passwordSaved = savedCredentials.isNotEmpty() && repository.hasSavedPassword(host),
             busy = credentialBusy,
             onClearPassword = {
@@ -423,7 +431,8 @@ class MainActivity : ComponentActivity() {
                             retrySession?.let(repository::closeTerminal)
                             retrySession = null
                             if (computer) openDesktop(repository.connectDesktop(host, secret, input))
-                            else openSession(repository.ssh(host, secret))
+                            else openSession(repository.ssh(host, secret, pendingAttachment))
+                            pendingAttachment = null
                             connectionPassword = null
                             login = null
                         }

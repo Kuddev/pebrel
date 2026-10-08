@@ -28,6 +28,8 @@ data class LocalSession(
     val status: String = "connecting", val host: HostProfile? = null,
     val stage: SshStage = SshStage.NETWORK, val failure: SshFailureKind? = null, val hasConnected: Boolean = false,
     val files: SftpClient? = null,
+    val attachment: RemoteAttachment? = null, val remote: RemoteInventory? = null,
+    val discovering: Boolean = false, val discoveryFailed: Boolean = false,
 )
 data class DesktopWorkspace(val id: String, val host: HostProfile, val panes: List<DesktopPane> = emptyList(), val status: String = "connecting", val allowInput: Boolean = false, val transport: String = "SSH", val failure: DesktopFailureKind? = null,
                             val hasConnected: Boolean = false, val relayProfile: RelayProfile? = null,
@@ -73,17 +75,23 @@ class SessionRepository(private val context: Context,
     private val hostWrites = Mutex()
     private val credentialWrites = Mutex()
     private val sshOperations = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val sshConnections = mutableMapOf<String, SshConnection>()
+    private val discoveryJobs = mutableMapOf<String, Job>()
     private val pendingTrust = java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Boolean>>()
     private var readJob: Job? = null
     private var readGeneration = 0L
     private var desktopReader: DesktopReadScheduler? = null
+    private var desktopHistoryStart: Long? = null
+    private var desktopHistoryRevision = 0L
     private val desktopClients = java.util.concurrent.ConcurrentHashMap<String, DesktopRuntimeClient>()
+    private val desktopTransitions = mutableMapOf<String, DesktopTransitions>()
     private val conversationCache = ConversationCache()
     private var activeGit: DesktopGit? = null
     private var foreground = false
     private var lanDiscovery: PairingDiscovery? = null
     private var lanDiscoveryJob: Job? = null
     private val resumeChecks = mutableMapOf<String, Job>()
+    private val network = DesktopNetworkMonitor(context, ::networkChanged)
     private val reconnect = DesktopReconnect(scope) { id ->
         val current = computers.value.find { it.id == id }
         if (foreground && current?.hasConnected == true && current.status != "ready" &&
@@ -98,22 +106,39 @@ class SessionRepository(private val context: Context,
         resumeChecks.values.forEach(Job::cancel)
         resumeChecks.clear()
         refreshLanDiscovery()
-        if (!value) return
+        if (!value) { network.stop(); return }
+        network.start()
         for (desktop in computers.value.filter { it.hasConnected && it.relayProfile != null }) {
             val client = desktopClients[desktop.id]
             if (client == null && DesktopReconnect.retryable(desktop.failure)) reconnect.schedule(desktop.id, immediate = true)
-            else if (client != null && desktop.status == "ready") resumeChecks[desktop.id] = scope.launch {
+            else if (client != null && desktop.status == "ready" && !client.recentlyActive) resumeChecks[desktop.id] = scope.launch {
                 try { withTimeout(5000) { client.request("runtime.describe") } }
                 catch (error: Exception) {
                     if (error is CancellationException && error !is TimeoutCancellationException) throw error
                     withContext(Dispatchers.Main) {
                         if (foreground) {
                             desktopFailed(desktop.id, client, DesktopFailureKind.NETWORK, immediate = true)
-                            client.close()
+                            scope.launch { client.close() }
                         }
                     }
                 }
             }
+        }
+    }
+
+    internal fun networkChanged() {
+        if (!foreground) return
+        resumeChecks.values.forEach(Job::cancel)
+        resumeChecks.clear()
+        for (desktop in computers.value.filter {
+            it.hasConnected && it.relayProfile != null && it.status != "approval" && DesktopReconnect.retryable(it.failure)
+        }) {
+            val client = desktopClients[desktop.id]
+            if (client != null) {
+                // 旧 TCP 不能迁移到新网络；结束旧连接代，避免等系统超时再恢复。
+                desktopFailed(desktop.id, client, DesktopFailureKind.NETWORK, immediate = true)
+                scope.launch { client.close() }
+            } else reconnect.schedule(desktop.id, immediate = true)
         }
     }
 
@@ -201,7 +226,8 @@ class SessionRepository(private val context: Context,
         (0 until rows.length()).map { i -> rows.getJSONObject(i).let {
             HostProfile(it.getString("id"), it.getString("name"), it.getString("address"), it.getInt("port"), it.getString("user"),
                 it.optString("fingerprint"), it.optString("icon", "term"), it.optString("group", "development"),
-                SshSessionMode.entries.firstOrNull { mode -> mode.id == it.optString("session_mode") } ?: SshSessionMode.SHELL, it.optString("session_name"))
+                SshSessionMode.entries.firstOrNull { mode -> mode.id == it.optString("session_mode") } ?: SshSessionMode.SHELL, it.optString("session_name"),
+                it.optString("key_uri"), it.optString("key_name"))
         } }
     }.getOrDefault(emptyList())
 
@@ -214,7 +240,9 @@ class SessionRepository(private val context: Context,
 
     /** Credentials are scoped to both the saved identity and the login endpoint. */
     private fun credentialKey(host: HostProfile): String {
-        val identity = "${host.id}\u0000${host.address}\u0000${host.port}\u0000${host.user}"
+        // 保留旧密码记录的 AAD；密钥口令另按密钥文档隔离，避免切换认证方式后误用密码。
+        val identity = "${host.id}\u0000${host.address}\u0000${host.port}\u0000${host.user}" +
+            if (host.keyUri.isEmpty()) "" else "\u0000key\u0000${host.keyUri}"
         return java.security.MessageDigest.getInstance("SHA-256").digest(identity.toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
     }
@@ -225,7 +253,7 @@ class SessionRepository(private val context: Context,
         }.getOrDefault(false)
 
     private fun sameSshLogin(first: HostProfile, second: HostProfile): Boolean =
-        first.id == second.id && first.port == second.port && runCatching {
+        first.id == second.id && first.port == second.port && first.keyUri == second.keyUri && runCatching {
             parseSshEndpoint(first.address, first.user) == parseSshEndpoint(second.address, second.user)
         }.getOrDefault(false)
 
@@ -242,6 +270,11 @@ class SessionRepository(private val context: Context,
                 credentialWrites.withLock {
                     try {
                         val previous = savedHosts.value.find { it.id == host.id }
+                        if (host.keyUri.isNotEmpty()) {
+                            val uri = android.net.Uri.parse(host.keyUri)
+                            require(uri.scheme == "content")
+                            context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
                         val key = credentialKey(host)
                         if (rememberPassword && password?.isNotEmpty() == true) credentialStore.save(key, password)
                         else if (!rememberPassword) credentialStore.clear(key)
@@ -255,6 +288,7 @@ class SessionRepository(private val context: Context,
                         val fingerprint = if (previous != null && sameSshServer(previous, host)) previous.fingerprint else ""
                         val next = savedHosts.value.filterNot { it.id == host.id } + host.copy(fingerprint = fingerprint)
                         check(writeHostMetadata(next))
+                        previous?.keyUri?.takeIf { it != host.keyUri }?.let { releaseKeyAccess(it, next) }
                         val ids = credentialStore.ids()
                         withContext(Dispatchers.Main) {
                             savedHosts.value = next
@@ -299,14 +333,25 @@ class SessionRepository(private val context: Context,
     fun deleteHost(host: HostProfile) {
         savedHosts.value = savedHosts.value.filterNot { it.id == host.id }
         persistHosts()
-        scope.launch { clearHostPassword(host) }
+        scope.launch {
+            clearHostPassword(host)
+            withContext(Dispatchers.IO) { releaseKeyAccess(host.keyUri, savedHosts.value) }
+        }
+    }
+
+    private fun releaseKeyAccess(uri: String, hosts: List<HostProfile>) {
+        if (uri.isEmpty() || hosts.any { it.keyUri == uri }) return
+        try {
+            context.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(uri), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) { /* 文件提供方可能已经撤销授权。 */ }
     }
 
     private fun writeHostMetadata(hosts: List<HostProfile>): Boolean {
         val rows = JSONArray()
         hosts.forEach { h -> rows.put(JSONObject().put("id", h.id).put("name", h.name).put("address", h.address)
             .put("port", h.port).put("user", h.user).put("fingerprint", h.fingerprint).put("icon", h.icon).put("group", h.group)
-            .put("session_mode", h.sessionMode.id).put("session_name", h.sessionName)) }
+            .put("session_mode", h.sessionMode.id).put("session_name", h.sessionName)
+            .put("key_uri", h.keyUri).put("key_name", h.keyName)) }
         return preferences.edit().putString("hosts", rows.toString()).commit()
     }
 
@@ -357,33 +402,71 @@ class SessionRepository(private val context: Context,
         terminalColors = value.copyOf()
         live.value.forEach { it.terminal.colors(value) }
     }
-    fun local(): String = addTerminal("Term", "Local", LocalPtyTransport(LocalTerminalStorage.homePath(context)))
-    fun ssh(host: HostProfile, password: CharArray): String {
+    fun local(): String = addTerminal("Term", "Local", LocalPtyTransport(
+        LocalTerminalStorage.homePath(context), context.filesDir.resolve("terminal").absolutePath))
+    fun ssh(host: HostProfile, password: CharArray, attachment: RemoteAttachment? = null): String {
         val id = UUID.randomUUID().toString()
-        val connection = SshConnection(host, password, { h, fingerprint -> verify(id, h, fingerprint) }) { stage ->
+        val command = attachment?.let(RemoteSessions::attachCommand)
+        val connection = SshConnection(host, password, { h, fingerprint -> verify(id, h, fingerprint) }, progress = { stage ->
             main.post { update(id) { if (it.status == "connecting") it.copy(stage = stage) else it } }
-        }
+        }, keySource = sshKeySource(context, host))
         val files = SftpClient(connection::sftp) { live.value.any { it.id == id && it.status == "ready" } }
-        return addTerminal(host.name, "SSH", SshTerminalTransport(connection), id, host, files)
+        sshConnections[id] = connection
+        return addTerminal(attachment?.title ?: host.name, "SSH", SshTerminalTransport(connection, command), id, host, files, attachment)
+    }
+
+    fun refreshRemoteSessions(id: String) {
+        val connection = sshConnections[id] ?: return
+        if (discoveryJobs[id]?.isActive == true || live.value.none { it.id == id && it.status == "ready" }) return
+        update(id) { it.copy(discovering = true, discoveryFailed = false) }
+        discoveryJobs[id] = scope.launch {
+            val result = try { Result.success(RemoteSessions.discover(connection)) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) { Result.failure(failure) }
+            withContext(Dispatchers.Main) {
+                if (sshConnections[id] !== connection) return@withContext
+                val inventory = result.getOrNull()
+                val host = live.value.find { it.id == id }?.host
+                update(id) { it.copy(remote = inventory ?: it.remote, discovering = false, discoveryFailed = result.isFailure,
+                    host = if (inventory == null || inventory.os == "term") it.host else it.host?.copy(icon = inventory.os)) }
+                if (host != null && inventory != null && inventory.os != "term") {
+                    val next = savedHosts.value.map { if (sameSshLogin(it, host) && it.icon == host.icon) it.copy(icon = inventory.os) else it }
+                    if (next != savedHosts.value) { savedHosts.value = next; persistHosts() }
+                }
+            }
+        }
+    }
+
+    suspend fun remoteWindows(id: String, session: RemoteSession): List<RemoteWindow> {
+        val connection = checkNotNull(sshConnections[id])
+        val result = withContext(Dispatchers.IO) { RemoteSessions.windows(connection, session) }
+        check(sshConnections[id] === connection)
+        return result
     }
 
     private fun addTerminal(title: String, source: String, transport: SessionTransport,
-                            id: String = UUID.randomUUID().toString(), host: HostProfile? = null, files: SftpClient? = null): String {
+                            id: String = UUID.randomUUID().toString(), host: HostProfile? = null, files: SftpClient? = null,
+                            attachment: RemoteAttachment? = null): String {
         val callbacks = object : TerminalCallbacks() {
             override fun onTextChanged(session: TerminalSession) { if (renderOwner == id) redraw?.invoke() }
             override fun onTitleChanged(session: TerminalSession) { update(id) { it.copy(title = session.title?.take(80) ?: it.title) } }
-            override fun onTransportReady(session: TerminalSession) { update(id) { it.copy(status = "ready", hasConnected = true) } }
+            override fun onTransportReady(session: TerminalSession) {
+                update(id) { it.copy(status = "ready", hasConnected = true) }
+                refreshRemoteSessions(id)
+            }
             override fun onSessionFinished(session: TerminalSession) {
+                sshConnections.remove(id)
+                discoveryJobs.remove(id)?.cancel()
                 cancelTrust(id)
                 update(id) { it.copy(status = if (session.failure == null) "ended" else "failed",
-                    failure = session.failureCause?.let(::classifySshFailure)) }
+                    failure = session.failureCause?.let(::classifySshFailure), discovering = false) }
                 stopIdleService()
             }
             override fun onInputRejected(session: TerminalSession) { error.value = "input_rejected" }
 
         }
-        val terminal = TerminalSession(transport, callbacks)
-        live.value = live.value + LocalSession(id, title, source, terminal, host = host, files = files)
+        val terminal = TerminalSession(transport, callbacks, display.state.value.scrollbackLines)
+        live.value = live.value + LocalSession(id, title, source, terminal, host = host, files = files, attachment = attachment)
         SessionService.ensureStarted(context)
         terminal.start()
         terminalColors?.let { terminal.colors(it) }
@@ -391,6 +474,8 @@ class SessionRepository(private val context: Context,
     }
     private fun update(id: String, change: (LocalSession) -> LocalSession) { live.value = live.value.map { if (it.id == id) change(it) else it } }
     fun closeTerminal(id: String) {
+        discoveryJobs.remove(id)?.cancel()
+        sshConnections.remove(id)
         remoteFiles.value = remoteFiles.value.filterNot { it.session == id }
         cancelTrust(id)
         live.value.find { it.id == id }?.terminal?.finishIfRunning()
@@ -424,20 +509,22 @@ class SessionRepository(private val context: Context,
     fun forgetRelay(profile: RelayProfile) {
         computers.value.filter { it.host.id == profile.id }.forEach { closeDesktop(it.id) }
         savedRelays.value = savedRelays.value.filterNot { it.id == profile.id }
+        desktopTransitions.remove("relay:${profile.id}")
+        preferences.edit().remove("desktop_transitions_relay:${profile.id}").apply()
         persistRelays()
     }
     fun connectRelay(profile: RelayProfile): String {
         val previous = computers.value.find { it.host.id == profile.id }
         if (previous != null && previous.status in setOf("ready", "connecting", "approval") &&
             previous.relayProfile?.sameConnection(profile) == true) return previous.id
-        val host = HostProfile(profile.id, profile.name, profile.url, 443, "")
+        val host = HostProfile(profile.id, profile.name, profile.url, 443, "", icon = profile.hostOs)
         return addDesktop(host, true, relayTransport(profile), if (profile.mode == "lan") "LAN" else "Relay",
             id = previous?.id ?: "relay:${profile.id}", relayProfile = profile)
     }
     fun connectDesktop(host: HostProfile, password: CharArray, allowInput: Boolean): String {
         val id = UUID.randomUUID().toString()
         return addDesktop(host, allowInput, SshDesktopTransport(SshConnection(host, password,
-            { h, fingerprint -> verify(id, h, fingerprint) })), "SSH", id)
+            { h, fingerprint -> verify(id, h, fingerprint) }, keySource = sshKeySource(context, host))), "SSH", id)
     }
 
     private fun addDesktop(host: HostProfile, allowInput: Boolean, transport: DesktopTransport, source: String,
@@ -452,17 +539,25 @@ class SessionRepository(private val context: Context,
         computers.value = if (previous == null) computers.value + entry else computers.value.map { if (it.id == id) entry else it }
         refreshLanDiscovery()
         SessionService.ensureStarted(context)
-        val transitions = DesktopTransitions()
+        val transitions = desktopTransitions.getOrPut(id) {
+            DesktopTransitions(if (relayProfile == null) null else
+                runCatching { preferences.getString("desktop_transitions_$id", null)?.let(::JSONObject) }.getOrNull())
+        }
         val negotiatedInput = AtomicBoolean(false)
         lateinit var client: DesktopRuntimeClient
         client = DesktopRuntimeClient(transport, { snapshot ->
             val tabs = parseDesktopTabs(snapshot)
             val panes = tabs.flatMap { it.panes }
             val windows = snapshot.getJSONArray("windows").let { rows -> (0 until rows.length()).map { rows.getJSONObject(it).getLong("id") } }
-            val events = transitions.observe(snapshot)
             main.post {
                 if (desktopClients[id] !== client) return@post
                 if (computers.value.none { it.id == id }) return@post
+                // 先核对连接代，再推进电脑的通知游标；旧连接不能吞掉新事件。
+                val revision = transitions.revision
+                val events = transitions.observe(snapshot)
+                if (relayProfile != null && revision != transitions.revision) {
+                    preferences.edit().putString("desktop_transitions_$id", transitions.checkpoint().toString()).apply()
+                }
                 if (relayProfile != null && savedRelays.value.find { it.id == relayProfile.id } != relayProfile) {
                     if (savedRelays.value.size < 64 || savedRelays.value.any { it.id == relayProfile.id }) {
                         savedRelays.value = savedRelays.value.filterNot { it.id == relayProfile.id } + relayProfile
@@ -475,7 +570,7 @@ class SessionRepository(private val context: Context,
                     allowInput = input, pairingApproval = null,
                     runtimeProcess = snapshot.getLong("process_id"), tabs = tabs, windows = windows) else it }
                 refreshLanDiscovery()
-                if (computers.value.any { it.id == id }) events.forEach { SessionNotices.task(context, id, host.name, it) }
+                events.forEach { SessionNotices.task(context, id, host.name, it, snapshot.getLong("process_id")) }
             }
         }, { failure -> main.post {
             desktopFailed(id, client, failure)
@@ -492,10 +587,16 @@ class SessionRepository(private val context: Context,
                 if (desktopClients[id] !== client) { client.close(); return@launch }
                 val hello = client.connect(allowInput)
                 negotiatedInput.set(allowInput && hello.optJSONObject("capabilities")?.optBoolean("input") == true)
-                // v2 权限以实时快照为准，旧版 SSH 通道才使用首次协商结果。
-                if (relayProfile?.version != 2) main.post {
+                val icon = desktopOsIcon(hello.optJSONObject("host")?.optString("os").orEmpty())
+                main.post {
                     if (desktopClients[id] === client) computers.value = computers.value.map {
-                        if (it.id == id) it.copy(allowInput = negotiatedInput.get()) else it
+                        // v2 权限以实时快照为准，图标更新不能覆盖后续权限撤销。
+                        if (it.id == id) it.copy(allowInput = if (relayProfile?.version != 2) negotiatedInput.get() else it.allowInput,
+                            host = if (icon == "term") it.host else it.host.copy(icon = icon)) else it
+                    }
+                    if (desktopClients[id] === client && relayProfile != null && icon != "term" && relayProfile.hostOs != icon) {
+                        relayProfile.hostOs = icon
+                        persistRelays()
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -522,6 +623,14 @@ class SessionRepository(private val context: Context,
     fun readDesktop(id: String, pane: DesktopPane) {
         if (output.value.target == "$id:${pane.window}:${pane.id}") desktopReader?.refresh()
     }
+    fun requestDesktopHistory(id: String, pane: DesktopPane, start: Long?) {
+        if (output.value.target != "$id:${pane.window}:${pane.id}" ||
+            desktopClients[id]?.terminalHistorySupported != true || start != null && start < 0) return
+        if (desktopHistoryStart == start) return
+        desktopHistoryStart = start
+        desktopHistoryRevision++
+        desktopReader?.refresh()
+    }
     suspend fun watchDesktop(id: String, pane: DesktopPane) {
         val client = desktopClients[id] ?: return
         val identity = "$id:${pane.window}:${pane.id}"
@@ -530,6 +639,7 @@ class SessionRepository(private val context: Context,
         val reader = DesktopReadScheduler()
         desktopReader = reader
         readJob = currentCoroutineContext().job
+        if (output.value.target != identity) { desktopHistoryStart = null; desktopHistoryRevision++ }
         output.value = if (output.value.target == identity) output.value else DesktopOutput(identity, loading = true)
         try {
             suspend fun publish(read: DesktopPaneRead) {
@@ -550,9 +660,13 @@ class SessionRepository(private val context: Context,
             if (client.streamPane(target(pane).put("lines", 100), ::publish)) return
             reader.run {
                 val previous = output.value
+                val pageRevision = desktopHistoryRevision
+                val params = target(pane).put("lines", 100)
+                if (client.terminalHistorySupported) params.put("screen_history", JSONObject().put("rows", 200)
+                    .apply { desktopHistoryStart?.let { put("start", it) } })
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
-                        val read = client.readPane(target(pane).put("lines", 100))
+                        val read = client.readPane(params)
                         val response = read.response
                         val frame = if (!read.screenChanged && previous.frame != null) previous.frame else response.optJSONObject("screen")?.let {
                             decodeDesktopScreen(it, checkNotNull(terminalColors))
@@ -562,6 +676,12 @@ class SessionRepository(private val context: Context,
                 }
                 currentCoroutineContext().ensureActive()
                 if (generation != readGeneration || desktopClients[id] !== client) throw CancellationException()
+                // 新的阅读页请求已经取代旧请求，旧回包不得把手机拉回之前的页。
+                if (pageRevision != desktopHistoryRevision) {
+                    // 丢弃的回包已经推进解码基线；下一页须重建，不能复用仍在显示的旧帧。
+                    client.resetScreen()
+                    return@run false
+                }
                 val next = result.getOrNull() ?: previous.copy(loading = false)
                 output.value = next
                 if (result.isFailure) {
@@ -584,11 +704,12 @@ class SessionRepository(private val context: Context,
             }
         }
     }
-    fun leaveDesktopPane() {
+    fun leaveDesktopPane(clearOutput: Boolean = false) {
         readGeneration++
         readJob?.cancel()
         desktopReader = null
-        output.value = DesktopOutput()
+        // 只保留最近一帧供页面重建，读取任务仍立即结束；主动关闭时释放它。
+        if (clearOutput) { output.value = DesktopOutput(); desktopHistoryStart = null; desktopHistoryRevision++ }
     }
     fun desktopInput(id: String, pane: DesktopPane): DesktopTerminalInput {
         val client = desktopClients[id]
@@ -603,6 +724,7 @@ class SessionRepository(private val context: Context,
             dispatch = { method, params ->
                 checkNotNull(client).dispatchInput(method, params.put("window_id", pane.window).put("pane_id", pane.id))
             },
+            remoteScrollSupported = client?.terminalScrollSupported == true,
         )
     }
 
@@ -671,15 +793,18 @@ class SessionRepository(private val context: Context,
     }
     private fun target(pane: DesktopPane) = JSONObject().put("window_id", pane.window).put("pane_id", pane.id)
     fun closeAll() {
+        discoveryJobs.values.forEach(Job::cancel); discoveryJobs.clear()
+        sshConnections.clear()
         activeGit = null
         reconnect.clear()
         resumeChecks.values.forEach(Job::cancel)
         resumeChecks.clear()
-        leaveDesktopPane()
+        leaveDesktopPane(clearOutput = true)
         pendingTrust.values.forEach { it.complete(false) }; pendingTrust.clear()
         trust.value?.answer?.complete(false); trust.value = null
         live.value.forEach { it.terminal.finishIfRunning() }; live.value = emptyList()
         val clients = desktopClients.values.toList(); desktopClients.clear(); computers.value = emptyList()
+        desktopTransitions.clear()
         refreshLanDiscovery()
         drafts.value = emptyMap()
         recentCommands.value = emptyMap()
@@ -687,11 +812,12 @@ class SessionRepository(private val context: Context,
         stopIdleService()
     }
     fun closeDesktop(id: String) {
+        desktopTransitions.remove(id)
         if (activeGit?.target?.desktop == id) activeGit = null
         reconnect.forget(id)
         resumeChecks.remove(id)?.cancel()
         cancelTrust(id)
-        leaveDesktopPane()
+        if (output.value.target.startsWith("$id:")) leaveDesktopPane(clearOutput = true)
         val client = desktopClients.remove(id)
         computers.value = computers.value.filterNot { it.id == id }
         refreshLanDiscovery()

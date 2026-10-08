@@ -27,6 +27,7 @@ const RESET_KEYS: &[&str] = &[
     "multiline_paste_confirm",
     "tab_close_visible",
     "terminal_proxy",
+    "refresh_environment",
     "powerline",
     "shell",
     "executor",
@@ -59,10 +60,27 @@ const RESET_KEYS: &[&str] = &[
     "theme_foreground",
     "custom_theme",
     "background_image",
+    "background_media_kind",
     "background_image_opacity",
     "background_image_fit",
     "background_image_alignment",
     "background_image_cover_chrome",
+    "background_effect_grain",
+    "background_effect_neon_vortex",
+    "background_effect_aurora_ribbons",
+    "background_effect_liquid_silk",
+    "background_wgsl_enabled",
+    "background_wgsl_path",
+    "terminal_effect_enabled",
+    "terminal_effect_path",
+    "terminal_effect_path_2",
+    "terminal_effect_path_3",
+    "terminal_effect_path_4",
+    "terminal_effect_path_5",
+    "terminal_effect_path_6",
+    "terminal_effect_path_7",
+    "terminal_effect_path_8",
+    "terminal_effect_animation",
     "panel_resize",
     "sidebar_w",
     "ssh_proxy_mode",
@@ -210,6 +228,17 @@ mod tests {
     }
 
     #[test]
+    fn reset_restores_inline_completion_and_preserves_unrelated_data() {
+        for mode in crate::CompletionStyleName::VALUES {
+            let restored =
+                default_settings_text(&format!("completion_style={mode}\ncustom=keep\n"));
+            assert_eq!(restored, "custom=keep\n");
+            let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+            assert_eq!(runtime.completion_style, crate::CompletionStyleName::Inline);
+        }
+    }
+
+    #[test]
     fn reset_removes_all_overrides_and_keeps_user_data() {
         let text = "# preferences\r\n THEME = Nord\r\ncopy_on_select=1\nkeybind=ctrl+x:Copy\nFONT_SIZE=30\nexecutor=custom\nblur=acrylic\nopacity=0.65\nbackground=#101216\ntheme_foreground=#d6dae6\ncustom_theme=my-night\nssh_hosts=saved-host\nai_provider=custom\nfuture_setting=keep\n";
         let result = default_settings_text(text);
@@ -226,6 +255,13 @@ mod tests {
         assert!(runtime.font_size_px.is_none());
         assert!(runtime.shell.is_none());
         assert!(crate::keybind_pairs_from_text(&result).is_empty());
+    }
+
+    #[test]
+    fn reset_restores_environment_refresh_without_changing_private_settings() {
+        let restored = default_settings_text("refresh_environment=0\nprivate_key=keep\n");
+        assert_eq!(restored, "private_key=keep\n");
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).refresh_environment);
     }
 
     #[test]
@@ -258,6 +294,46 @@ mod tests {
                 assert!(RESET_KEYS.contains(&key), "missing reset key: {key}");
             }
         }
+    }
+
+    #[test]
+    fn reset_removes_video_kind_and_path_but_keeps_unknown_keys() {
+        let reset = default_settings_text(
+            "background_media_kind=video\nbackground_image=clip.mp4\nfuture_key=keep\n",
+        );
+        assert_eq!(reset, "future_key=keep\n");
+        let settings = crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(&reset));
+        assert_eq!(settings.background_media_kind, crate::BackgroundMediaKind::Image);
+        assert!(settings.background_image.is_none());
+    }
+
+    #[test]
+    fn reset_revokes_effects_and_removes_the_source_without_removing_user_files() {
+        let text = "background_effect_grain=true\nbackground_effect_neon_vortex=true\nbackground_effect_aurora_ribbons=true\nbackground_effect_liquid_silk=true\nbackground_wgsl_enabled=true\nbackground_wgsl_path=custom.wgsl\nshader_notes=keep\n";
+        let restored = default_settings_text(text);
+        assert_eq!(restored, "shader_notes=keep\n");
+        let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+        assert_eq!(settings.background_effects, crate::BackgroundEffects::default());
+        for key in crate::BackgroundEffects::KEYS {
+            assert!(RESET_KEYS.contains(key));
+        }
+    }
+
+    #[test]
+    fn reset_clears_every_terminal_effect_source_slot() {
+        let mut text = String::from(
+            "terminal_effect_enabled=true\nterminal_effect_animation=always\ncustom=keep\n",
+        );
+        for key in crate::TerminalEffects::PATH_KEYS {
+            assert!(RESET_KEYS.contains(&key));
+            text.push_str(&format!("{key}=effect.wgsl\n"));
+        }
+        let restored = default_settings_text(&text);
+        assert_eq!(restored, "custom=keep\n");
+        assert_eq!(
+            crate::TerminalEffects::from_raw(&RawSettings::from_text(&restored)),
+            crate::TerminalEffects::default(),
+        );
     }
 
     #[test]

@@ -13,8 +13,40 @@ impl Render for Surface {
     }
 }
 
-pub(super) fn open(
+impl TerminalView {
+    // 工作区级按键回归复用同一个终端夹具，避免另造一套输入/会话状态。
+    pub(crate) fn install_completion_test_session(&mut self) -> Receiver<Msg> {
+        let (session, receiver) = session::test_session();
+        self.session = Some(session);
+        self.error = None;
+        self.exited = None;
+        self.exec_context = None;
+        self.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
+        receiver
+    }
+
+    pub(crate) fn completion_test_state(
+        &self,
+    ) -> (String, bool, usize, bool, crate::display::CompletionStyle) {
+        (
+            self.suggest.screen_line.clone(),
+            self.suggest.completion_popup_requested,
+            self.suggest.completion_items.len(),
+            self.completion_popup_geometry().is_some(),
+            self.completion_style,
+        )
+    }
+}
+
+pub(in crate::gpui_shell::terminal) fn open(
     cx: &mut TestAppContext,
+) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
+    open_at(cx, None)
+}
+
+fn open_at(
+    cx: &mut TestAppContext,
+    cwd: Option<std::path::PathBuf>,
 ) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -27,7 +59,7 @@ pub(super) fn open(
                 42,
                 (80, 24),
                 TerminalLaunch::Local {
-                    cwd: None,
+                    cwd,
                     shell: Some(nebula_terminal::tty::Shell::new(
                         "pebrel-test-missing-shell-executable".into(),
                         vec![],
@@ -38,15 +70,7 @@ pub(super) fn open(
                 cx,
             )
         });
-        let receiver = view.update(cx, |view, _| {
-            let (session, receiver) = session::test_session();
-            view.session = Some(session);
-            view.error = None;
-            view.exited = None;
-            view.exec_context = None;
-            view.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
-            receiver
-        });
+        let receiver = view.update(cx, |view, _| view.install_completion_test_session());
         result = Some((view, receiver));
         Root::new(cx.new(|_| Surface), window, cx)
     });
@@ -60,6 +84,508 @@ pub(super) fn feed(view: &mut TerminalView, bytes: &[u8]) {
         nebula_terminal::vte::ansi::StdSyncHandler,
     >::default();
     parser.advance(&mut *term, bytes);
+}
+
+fn refresh_completion_from_grid(view: &mut TerminalView, cx: &mut Context<TerminalView>) {
+    let (line, anchor) = {
+        let term = view.session.as_ref().unwrap().term.lock();
+        let cursor = term.grid().cursor.point;
+        let line = crate::display::nebula_prompt_line_from_raw_grid(
+            &term,
+            cursor,
+            &view.suggest.line_buf,
+            &view.suggest.suggest_env,
+        )
+        .map(|line| line.input);
+        (line, Some((cursor.line.0 as usize, cursor.column.0)))
+    };
+    view.refresh_suggestion_from_snapshot(line, anchor, cx);
+}
+
+#[gpui::test]
+fn git_completion_real_repository_reaches_all_modes_and_preserves_quoted_edits(
+    cx: &mut TestAppContext,
+) {
+    use crate::display::CompletionStyle;
+    let repository = crate::git_completion::tests::repository();
+    for mode in [CompletionStyle::Inline, CompletionStyle::Popup, CompletionStyle::Hybrid] {
+        for line in
+            ["git switch feature/中", "git switch \"feature/中\"", "git switch \"feature/中"]
+        {
+            let (view, window, receiver) = open_at(cx, Some(repository.path().to_owned()));
+            view.update(window, |view, cx| {
+                view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+                    &nebula_terminal::tty::Options {
+                        shell: Some(nebula_terminal::tty::Shell::new("pwsh".into(), vec![])),
+                        working_directory: Some(repository.path().to_owned()),
+                        ..Default::default()
+                    },
+                ));
+                view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+                view.ghost_enabled = true;
+                view.completion_style = mode;
+                feed(view, format!("❯ {line}").as_bytes());
+                refresh_completion_from_grid(view, cx);
+            });
+            window.run_until_parked();
+            view.update(window, |view, _| {
+                assert!(
+                    !view.suggest.suggestion.is_empty() || !view.suggest.completion_items.is_empty(),
+                    "missing Git candidate before acceptance: mode={mode:?} input={line:?} captured={:?} env={:?} cwd={:?} cache={:?}",
+                    view.suggest.screen_line, view.suggest.suggest_env, view.suggest.cwd,
+                    view.completion_session,
+                );
+            });
+            if mode == CompletionStyle::Hybrid {
+                window.update(|window, cx| {
+                    view.update(cx, |view, cx| {
+                        assert!(!view.suggest.suggestion.is_empty());
+                        view.on_terminal_tab(&TerminalTab, window, cx);
+                    })
+                });
+                window.run_until_parked();
+                assert!(
+                    receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))),
+                    "Tab opens without writing to the shell"
+                );
+            }
+            window.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    if mode == CompletionStyle::Hybrid {
+                        assert_eq!(view.suggest.completion_items[0].label, "feature/中文");
+                        assert!(view.handle_completion_key("enter", cx));
+                    } else {
+                        view.on_terminal_tab(&TerminalTab, window, cx);
+                    }
+                })
+            });
+            let input: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert!(!input.is_empty(), "a real Git candidate must reach PTY input");
+            assert!(
+                !input.contains(&b'\r') && !input.contains(&b'\n'),
+                "acceptance never executes"
+            );
+            let mut accepted = line.to_owned();
+            for ch in String::from_utf8(input).unwrap().chars() {
+                if matches!(ch, '\x08' | '\x7f') {
+                    accepted.pop();
+                } else {
+                    accepted.push(ch);
+                }
+            }
+            assert_eq!(
+                accepted,
+                if line.contains('"') {
+                    "git switch \"feature/中文\""
+                } else {
+                    "git switch feature/中文"
+                }
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn git_completion_rejects_previous_directory_and_remote_context(cx: &mut TestAppContext) {
+    let repository = crate::git_completion::tests::repository();
+    let other = tempfile::tempdir().unwrap();
+    let (view, window, _) = open_at(cx, Some(repository.path().to_owned()));
+    view.update(window, |view, cx| {
+        view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+            &nebula_terminal::tty::Options {
+                working_directory: Some(repository.path().to_owned()),
+                ..Default::default()
+            },
+        ));
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Inline;
+        feed(view, "❯ git switch fe".as_bytes());
+        refresh_completion_from_grid(view, cx);
+        let cancellation = view.suggestion_task.as_ref().unwrap().cancellation();
+        view.suggest.cwd = other.path().to_string_lossy().into_owned();
+        refresh_completion_from_grid(view, cx);
+        assert!(cancellation.is_cancelled());
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert!(view.suggest.suggestion.is_empty());
+        assert!(view.suggest.completion_items.is_empty());
+        view.suggest.cwd = repository.path().to_string_lossy().into_owned();
+        view.suggest.suggest_env =
+            crate::display::SuggestEnv::Ssh { destination: "completion-test.invalid".into() };
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    view.update(window, |view, _| {
+        assert!(view.suggest.suggestion.is_empty(), "host branches cannot leak into SSH");
+        assert!(view.suggest.suggestion_edit.is_none());
+    });
+}
+
+#[gpui::test]
+fn issue_353_initial_directory_reaches_completion_and_tab_writes_the_suffix(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("issue353-file.txt"), b"").unwrap();
+    let (view, window, receiver) = open_at(cx, Some(directory.path().to_path_buf()));
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert_eq!(view.suggest.cwd, directory.path().to_string_lossy());
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.ghost_enabled = true;
+            view.completion_style = crate::display::CompletionStyle::Inline;
+            feed(view, "❯ cat issue353-f".as_bytes());
+            refresh_completion_from_grid(view, cx);
+        });
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert_eq!(view.suggest.suggestion, "ile.txt");
+            view.on_terminal_tab(&TerminalTab, window, cx);
+            let input: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|msg| match msg {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(input, b"ile.txt", "Tab accepts without executing the command");
+        });
+    });
+}
+
+#[gpui::test]
+fn issue_353_history_uses_echoed_command_and_refreshes_on_all_platforms(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        let scope = crate::nebula_history::HistoryScope::Wsl("issue353-history".into());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell { scope: scope.clone() };
+        view.suggest.line_buf = "cd wrong-mirror".into();
+        feed(view, "❯ cd Downloads".as_bytes());
+        view.commit_line(cx);
+        assert_eq!(suggest::history_hint_for_test(&scope, "cd ").as_deref(), Some("Downloads"));
+        feed(view, "\r\n❯ cd ".as_bytes());
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Inline;
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    view.update(window, |view, _| assert_eq!(view.suggest.suggestion, "Downloads"));
+}
+
+#[gpui::test]
+fn completion_never_accepts_a_candidate_for_partial_pty_echo(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("echo-candidate.txt"), b"").unwrap();
+    let (view, window, receiver) = open_at(cx, Some(directory.path().to_owned()));
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.ghost_enabled = true;
+            view.completion_style = crate::display::CompletionStyle::Inline;
+            feed(view, "❯ ".as_bytes());
+            refresh_completion_from_grid(view, cx);
+            view.replace_text_in_range(None, "cat echo-ca", window, cx);
+            feed(view, b"cat echo-c");
+            refresh_completion_from_grid(view, cx);
+        })
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert!(view.suggest.suggestion.is_empty(), "the last sent character is still in flight");
+        assert!(view.suggest.completion_items.is_empty());
+        feed(view, b"a");
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert_eq!(view.suggest.suggestion, "ndidate.txt");
+            view.on_terminal_tab(&TerminalTab, window, cx);
+        })
+    });
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"cat echo-candidate.txt");
+}
+
+#[gpui::test]
+fn completion_mode_hybrid_lists_without_writing_and_cancels_pending_results(
+    cx: &mut TestAppContext,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("mode-candidate.txt"), b"").unwrap();
+    let (view, window, receiver) = open_at(cx, Some(directory.path().to_path_buf()));
+    view.update(window, |view, cx| {
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Hybrid;
+        feed(view, "❯ cat mode-c".as_bytes());
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert_eq!(view.suggest.suggestion, "andidate.txt");
+        assert!(view.suggest.completion_items.is_empty());
+        assert!(view.handle_completion_key("tab", cx));
+        assert!(view.suggest.completion_popup_requested);
+        assert!(view.handle_completion_key("escape", cx));
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert!(view.suggest.completion_items.is_empty(), "Esc cancels pending list results");
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert_eq!(view.suggest.suggestion, "andidate.txt");
+            view.on_terminal_tab(&TerminalTab, window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert!(
+        receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))),
+        "Tab only opens the list"
+    );
+    view.update(window, |view, cx| {
+        assert_eq!(view.suggest.completion_items[0].insert, "andidate.txt");
+        assert_eq!(view.suggest.completion_selected, Some(0));
+        crate::display::nebula_input_char(&mut view.suggest, 'a');
+        feed(view, b"a");
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert!(view.suggest.completion_popup_requested, "typing keeps the requested list open");
+        assert_eq!(view.suggest.completion_items[0].insert, "ndidate.txt");
+        assert!(view.handle_completion_key("enter", cx));
+        assert!(!view.suggest.completion_popup_requested);
+    });
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"ndidate.txt", "acceptance must not execute a command");
+}
+
+#[gpui::test]
+fn completion_mode_switch_invalidates_a_pending_list_and_right_accepts_inline(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Hybrid;
+        view.refresh_suggestion_from_snapshot(Some("systemc".into()), Some((0, 7)), cx);
+        let inline_request = view.suggestion_task.as_ref().unwrap().cancellation();
+        view.handle_completion_key("tab", cx);
+        assert!(inline_request.is_cancelled());
+        let list_request = view.suggestion_task.as_ref().unwrap().cancellation();
+        cx.global_mut::<Settings>().completion_style = crate::display::CompletionStyle::Inline;
+        cx.global_mut::<Settings>().ghost = true;
+        view.apply_settings(cx);
+        assert!(list_request.is_cancelled());
+        assert!(view.suggestion_task.is_none());
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert!(!view.suggest.completion_popup_requested);
+        assert!(view.suggest.completion_items.is_empty());
+        cx.global_mut::<Settings>().completion_style = crate::display::CompletionStyle::Hybrid;
+        view.apply_settings(cx);
+        view.refresh_suggestion_from_snapshot(Some("systemc".into()), Some((0, 7)), cx);
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| assert!(view.handle_completion_key("right", cx)));
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"tl");
+}
+
+#[gpui::test]
+fn completion_mode_list_tab_accepts_first_candidate_and_ime_keeps_the_key(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Popup;
+        feed(view, "❯ systemc".as_bytes());
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert_eq!(view.suggest.completion_selected, None);
+            assert_eq!(view.suggest.completion_items[0].insert, "tl");
+            view.marked_text = Some("输入法".into());
+            view.on_terminal_tab(&TerminalTab, window, cx);
+            assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+            assert_eq!(view.suggest.completion_selected, None);
+            view.marked_text = None;
+            view.on_terminal_tab(&TerminalTab, window, cx);
+            assert!(view.suggest.completion_items.is_empty());
+        });
+    });
+    let input: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(input, b"tl", "the first Tab inserts without navigation or command execution");
+}
+
+#[gpui::test]
+fn issue_358_history_popup_matches_a_command_prefix_without_a_trailing_space(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        let scope = crate::nebula_history::HistoryScope::Wsl("issue358-popup".into());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell { scope };
+        for command in ["cls;calc", "cls;notepad"] {
+            feed(view, format!("\x1b[2J\x1b[H❯ {command}").as_bytes());
+            view.commit_line(cx);
+            view.process_event(Event::CommandStart, cx);
+            view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        }
+        feed(view, "\x1b[2J\x1b[H❯ cls".as_bytes());
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Popup;
+        refresh_completion_from_grid(view, cx);
+    });
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert_eq!(view.suggest.screen_line, "cls");
+            assert!(view.suggest.suggestion.is_empty());
+            let candidates: Vec<_> =
+                view.suggest.completion_items.iter().map(|item| item.insert.as_str()).collect();
+            assert_eq!(candidates, [";notepad", ";calc"]);
+            view.on_key_down(
+                &KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("down").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                window,
+                cx,
+            );
+            assert_eq!(view.suggest.completion_selected, Some(0));
+            view.on_key_down(
+                &KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("tab").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                window,
+                cx,
+            );
+            let input: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(input, b";notepad", "accept the candidate without submitting the command");
+        });
+    });
+}
+
+#[gpui::test]
+fn native_shell_suggestion_and_zellij_alternate_screen_keep_their_input(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.ghost_enabled = true;
+            view.completion_style = crate::display::CompletionStyle::Hybrid;
+            // Shell 自己绘制的灰字在光标后，不能被当成已经接受的输入。
+            feed(view, "❯ echo native_hint\x1b[11D".as_bytes());
+            refresh_completion_from_grid(view, cx);
+            assert!(view.suggest.suggestion.is_empty());
+            assert!(view.suggest.completion_items.is_empty());
+            // Zellij 已进入备用屏时，即使上一帧有建议也不能截获它的按键。
+            feed(view, b"\x1b[?1049h");
+            for (combo, expected) in [("tab", b"\t".as_slice()), ("ctrl-p", b"\x10".as_slice())] {
+                view.suggest.suggestion = "stale suggestion".into();
+                let event = KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse(combo).unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                };
+                view.on_key_down(&event, window, cx);
+                let input: Vec<u8> = receiver
+                    .try_iter()
+                    .filter_map(|msg| match msg {
+                        Msg::Input(bytes) => Some(bytes.into_owned()),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                assert_eq!(input, expected, "{combo}");
+            }
+        });
+    });
+}
+
+#[gpui::test]
+fn pending_completion_cannot_restore_hints_after_input_or_cancellation(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, cx| {
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Inline;
+        view.refresh_suggestion_from_snapshot(Some("systemc".into()), Some((0, 7)), cx);
+        crate::display::nebula_input_char(&mut view.suggest, 'x');
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert!(view.suggest.suggestion.is_empty());
+        view.refresh_suggestion_from_snapshot(Some("gre".into()), Some((0, 3)), cx);
+        view.refresh_suggestion_from_snapshot(Some("systemc".into()), Some((0, 7)), cx);
+    });
+    window.run_until_parked();
+    view.update(window, |view, cx| {
+        assert_eq!(view.suggest.suggestion, "tl", "only the latest request may be applied");
+        view.refresh_suggestion_from_snapshot(Some("gre".into()), Some((0, 3)), cx);
+        view.refresh_suggestion_from_snapshot(None, None, cx);
+    });
+    window.run_until_parked();
+    view.update(window, |view, _| {
+        assert!(view.suggest.suggestion.is_empty());
+        assert!(view.suggestion_task.is_none());
+    });
 }
 
 #[gpui::test]
@@ -720,5 +1246,89 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
         assert_eq!(view.session_agent(), Some(saved));
         assert!(view.can_retry_recovery());
         assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+    });
+}
+
+#[gpui::test]
+fn host_administrator_scope_excludes_remote_and_wsl_shells(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, _| {
+        let context = |program: &str| {
+            crate::runtime_exec::PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                ..Default::default()
+            })
+        };
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("pwsh.exe"));
+        assert!(view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Ssh("user@remote".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Wsl("Ubuntu".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("wsl.exe"));
+        assert!(!view.inherits_windows_host_token());
+        view.exec_context = Some(context("pwsh.exe"));
+        view.ssh_destination = Some("user@remote".into());
+        assert!(!view.inherits_windows_host_token());
+        view.ssh_destination = None;
+        view.exec_context = None;
+        assert!(!view.inherits_windows_host_token());
+    });
+}
+
+#[gpui::test]
+fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut TestAppContext) {
+    use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.line_height = px(20.0);
+            view.cell_width = px(10.0);
+            let mut parser = Processor::<StdSyncHandler>::default();
+            parser.advance(
+                &mut *view.session.as_ref().unwrap().term.lock(),
+                b"\x1b[?1000h\x1b[?1006h",
+            );
+            receiver.try_iter().for_each(drop);
+            view.runtime_scroll(2, 3, 4, window, cx).unwrap();
+            let bytes: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|m| match m {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(bytes, b"\x1b[<64;4;5M\x1b[<64;4;5M");
+            parser.advance(
+                &mut *view.session.as_ref().unwrap().term.lock(),
+                b"\x1b[?1000l\x1b[?1006l\x1b[?1049h\x1b[?1007h",
+            );
+            view.runtime_scroll(-2, 3, 4, window, cx).unwrap();
+            let bytes: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|m| match m {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(bytes, b"\x1b[B\x1b[B");
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?1049l");
+            for _ in 0..40 {
+                parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"history\r\n");
+            }
+            view.runtime_scroll(3, 3, 4, window, cx).unwrap();
+            assert_eq!(view.session.as_ref().unwrap().term.lock().grid().display_offset(), 3);
+            assert!(receiver.try_iter().all(|m| !matches!(m, Msg::Input(_))));
+            assert!(view.runtime_scroll(1, 400, 0, window, cx).is_err());
+        });
     });
 }

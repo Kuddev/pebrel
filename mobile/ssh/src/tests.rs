@@ -13,6 +13,8 @@ fn cancellation_wakes_trust_events_reads_and_queued_open() {
         let event_owner = owner.clone();
         let event = tokio::spawn(async move { event_owner.event().await });
         let files_owner = owner.clone();
+        let query_owner = owner.clone();
+        let query = tokio::spawn(async move { query_owner.query("uname -s".into()).await });
         let files = tokio::spawn(async move {
             files_owner.sftp(crate::sftp::Request::List { path: ".".into(), cursor: None }).await
         });
@@ -22,6 +24,7 @@ fn cancellation_wakes_trust_events_reads_and_queued_open() {
             assert_eq!(open.await.unwrap().unwrap_err(), Failure("CLOSED"));
             assert_eq!(event.await.unwrap().unwrap_err(), Failure("CLOSED"));
             assert_eq!(files.await.unwrap().unwrap_err(), Failure("CLOSED"));
+            assert_eq!(query.await.unwrap().unwrap_err(), Failure("CLOSED"));
         })
         .await
         .unwrap();
@@ -67,6 +70,11 @@ fn partial_reads_preserve_bytes_and_drain_before_exit() {
 fn closed_handle_is_rejected_without_accessing_memory() {
     session::close(-1);
     assert!(matches!(session::get(-1), Err(Failure("CLOSED"))));
+    runtime().block_on(async {
+        let (owner, _worker) = Session::new();
+        assert_eq!(owner.query("x".repeat(8193)).await.unwrap_err(), Failure("INVALID_INPUT"));
+        assert_eq!(owner.query("x\0y".into()).await.unwrap_err(), Failure("INVALID_INPUT"));
+    });
 }
 
 #[test]
@@ -94,6 +102,7 @@ fn cancelling_key_exchange_closes_the_actual_socket() {
                 port: listener.local_addr().unwrap().port(),
                 user: "fixture".into(),
                 password: Zeroizing::new(Vec::new()),
+                private_key: Zeroizing::new(Vec::new()),
                 fingerprint: String::new(),
             })
             .unwrap();

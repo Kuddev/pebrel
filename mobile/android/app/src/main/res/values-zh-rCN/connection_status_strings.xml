@@ -1,4 +1,8 @@
 <resources>
+    <string name="task_finished">任务已完成</string>
+    <string name="task_failed">任务失败，打开会话查看详情</string>
+    <string name="task_waiting_input">正在等待你的输入</string>
+    <string name="task_attention">此会话需要你处理</string>
     <string name="desktop_reconnecting">正在重新连接电脑…草稿已保留。</string>
     <string name="desktop_session_changed">原电脑会话已不可用，请重新选择会话后继续。</string>
     <string name="desktop_dns">无法解析电脑或中转服务器地址。请检查地址和网络连接。</string>

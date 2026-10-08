@@ -17,6 +17,24 @@ pub(super) fn localized_select_labels(
             .collect();
     }
     let labels: Vec<&'static str> = match key {
+        "terminal_effect_animation" => vec![
+            language.text(crate::i18n::Message::TerminalEffectAnimationOff),
+            language.text(crate::i18n::Message::TerminalEffectAnimationFocused),
+            language.text(crate::i18n::Message::TerminalEffectAnimationAlways),
+        ],
+        "background_shader_preset" => vec![
+            language.text(crate::i18n::Message::WallpaperShaderOff),
+            language.text(crate::i18n::Message::WallpaperShaderGrain),
+            language.text(crate::i18n::Message::WallpaperShaderNeonVortex),
+            language.text(crate::i18n::Message::WallpaperShaderAuroraRibbons),
+            language.text(crate::i18n::Message::WallpaperShaderLiquidSilk),
+            language.text(crate::i18n::Message::WallpaperShaderWgsl),
+        ],
+        "background_media_kind" => vec![
+            language.text(crate::i18n::Message::WallpaperImage),
+            language.text(crate::i18n::Message::WallpaperVideo),
+            language.text(crate::i18n::Message::WallpaperGif),
+        ],
         "language" => nebula_settings::LanguagePref::ALL
             .iter()
             .map(|preference| {
@@ -44,6 +62,10 @@ pub(super) fn localized_select_labels(
             language.pick("下划线（_）", "Underscore (_)"),
             language.pick("实心框（█）", "Filled box (█)"),
             language.pick("空心框（□）", "Empty box (□)"),
+        ],
+        "cursor_motion" => vec![
+            language.text(crate::i18n::Message::SettingsCursorMotionOff),
+            language.text(crate::i18n::Message::SettingsCursorMotionSmooth),
         ],
         "tabs_position" => {
             vec![language.pick("左侧边栏", "Left sidebar"), language.pick("顶部", "Top")]
@@ -93,9 +115,10 @@ pub(super) fn localized_select_labels(
             "Tab",
             language.pick("Tab 或右方向键", "Tab or Right arrow"),
         ],
-        "completion_style" => {
-            vec![language.pick("行内灰字", "Inline ghost"), language.pick("弹窗列表", "Popup list")]
-        },
+        "completion_style" => nebula_settings::CompletionStyleName::ALL
+            .into_iter()
+            .map(|style| language.completion_style_label(style))
+            .collect(),
         "background_image_fit" => vec![
             language.pick("拉伸", "Fill"),
             language.pick("适应", "Uniform"),

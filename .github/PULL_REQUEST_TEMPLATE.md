@@ -1,3 +1,9 @@
+Advertising, commercial promotion, and traffic solicitation are prohibited in PRs
+and Issues. Business requests must go through the email in the
+[contribution policy](https://github.com/Kuddev/pebrel/blob/main/CONTRIBUTING.md#commercial-promotion-policy).
+PRs or Issues containing unauthorized promotion will be closed directly.
+严禁利用 PR 或 Issue 推广、引流，未经授权的推广将直接关闭；商业需求请通过贡献指南中的邮箱沟通，已获批准的赞助按批准范围处理。
+
 ## Result / 用户结果
 
 What changes for users? Link the relevant issue; do not claim unfinished work.

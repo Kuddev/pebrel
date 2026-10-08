@@ -1,4 +1,8 @@
 <resources>
+    <string name="task_finished">Task finished</string>
+    <string name="task_failed">Task failed — open the session for details</string>
+    <string name="task_waiting_input">Waiting for your input</string>
+    <string name="task_attention">This session needs your attention</string>
     <string name="desktop_reconnecting">Reconnecting to the computer… Your draft is kept.</string>
     <string name="desktop_session_changed">The computer session is no longer available. Choose a session to continue.</string>
     <string name="desktop_dns">The computer or relay address could not be resolved. Check the address and network.</string>

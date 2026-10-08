@@ -256,16 +256,24 @@ class SessionService : Service() {
 }
 
 object SessionNotices {
-    fun task(context: Context, desktop: String, host: String, pane: DesktopPane) {
+    fun task(context: Context, desktop: String, host: String, pane: DesktopPane, process: Long) {
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("tasks", context.getString(R.string.task_notifications), NotificationManager.IMPORTANCE_DEFAULT))
         val key = "$desktop:${pane.window}:${pane.id}"
         val intent = Intent(context, MainActivity::class.java).setAction("OPEN_TASK").setData(android.net.Uri.parse("pebrel://task/$key"))
             .putExtra("desktop", desktop).putExtra("window", pane.window).putExtra("pane", pane.id)
+            .putExtra("process", process)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val message = when (pane.state) {
+            "finished" -> R.string.task_finished
+            "failed" -> R.string.task_failed
+            "waiting_input" -> R.string.task_waiting_input
+            else -> R.string.task_attention
+        }
         manager.notify(key, 2, Notification.Builder(context, "tasks").setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(host).setContentText(context.getString(R.string.task_updated)).setContentIntent(pending)
+            .setContentTitle("$host · ${pane.displayTitle}").setContentText(context.getString(message)).setContentIntent(pending)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setAutoCancel(true).build())
     }
 }

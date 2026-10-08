@@ -41,6 +41,22 @@ class DesktopScreenSyncTest {
         assertThrows(IllegalArgumentException::class.java) { sync.apply("1:2", delta()) }
     }
 
+    @Test fun historyMetadataChangesAdvanceTheFrameAndCanBeRemoved() {
+        val sync = DesktopScreenSync()
+        val history = JSONObject("""{"first":0,"oldest":0,"end":3,"live_start":1,"live_rows":2,"application_scroll":false}""")
+        sync.apply("1:2", full().apply { getJSONObject("screen").put("history", history) })
+        val changed = delta().apply { getJSONObject("screen_delta").put("rows", JSONArray())
+            .put("history", JSONObject(history.toString()).put("first", 1)) }
+        val result = sync.apply("1:2", changed)
+        assertTrue(result.screenChanged)
+        assertEquals(1L, result.response.getJSONObject("screen").getJSONObject("history").getLong("first"))
+        val stale = delta(2).apply { getJSONObject("screen_delta").put("rows", JSONArray()).put("history", history) }
+        assertThrows(IllegalArgumentException::class.java) { sync.apply("1:2", stale) }
+        val live = delta(2).put("screen_seq", 3).apply {
+            getJSONObject("screen_delta").put("rows", JSONArray()).put("history", JSONObject.NULL) }
+        assertFalse(sync.apply("1:2", live).response.getJSONObject("screen").has("history"))
+    }
+
     @Test fun wrapMetadataSurvivesDeltasAndCannotChangeWithoutARevision() {
         val sync = DesktopScreenSync()
         val start = full().apply { getJSONObject("screen").put("wrapped", JSONArray("[true,false]")) }

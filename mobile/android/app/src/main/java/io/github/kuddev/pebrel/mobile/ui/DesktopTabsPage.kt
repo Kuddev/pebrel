@@ -107,7 +107,7 @@ internal fun DesktopTabRows(desktop: DesktopWorkspace, onTab: (DesktopTab) -> Un
                 Row(Modifier.weight(1f).heightIn(min = 64.dp)
                     .clickable(enabled = desktop.status == "ready" && (tab.readable || tab.panes.isNotEmpty())) { onTab(tab) }
                     .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.width(36.dp), contentAlignment = Alignment.CenterStart) { Glyph(tabIcon(tab)) }
+                    Box(Modifier.width(36.dp), contentAlignment = Alignment.CenterStart) { DesktopTabSymbol(tab) }
                     Column(Modifier.weight(1f)) {
                         Text(tab.displayTitle, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(tabKindLabel(tab), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -157,6 +157,13 @@ internal fun tabIcon(tab: DesktopTab): Int = when (tab.kind) {
     "image" -> R.drawable.ic_image
     "document", "code" -> R.drawable.ic_git_file
     else -> R.drawable.ic_terminal
+}
+
+@Composable
+internal fun DesktopTabSymbol(tab: DesktopTab, modifier: Modifier = Modifier) {
+    if (tab.kind in setOf("document", "code", "image")) {
+        FileSymbol(tab.file?.path ?: tab.displayTitle, modifier = modifier.size(20.dp))
+    } else Glyph(tabIcon(tab), modifier)
 }
 
 @Composable

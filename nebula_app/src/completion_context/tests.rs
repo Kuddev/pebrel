@@ -1,5 +1,24 @@
 use super::*;
 
+#[test]
+fn native_accepted_input_requires_a_known_owner_and_records_the_complete_line() {
+    let scope = HistoryScope::Ssh("native-editor-history-qa".into());
+    let mut state = NebulaPaneState::default();
+    state.suggest_env = SuggestEnv::Shell { scope: scope.clone() };
+    state.cwd = "/guest".into();
+    state.completion_shell_report(SHELL_VAR, "fixture-owner");
+    state.completion_shell_report(INPUT_VAR, "unrelated-owner\necho native-accepted-invalid");
+    assert!(crate::completion::history_hint_for_test(&scope, "echo native-accepted-i").is_none());
+    state.completion_shell_report(INPUT_VAR, "fixture-owner\necho native-accepted-中文😀 tail");
+    assert_eq!(
+        crate::completion::history_hint_for_test(&scope, "echo native-accepted-中").as_deref(),
+        Some("文😀 tail")
+    );
+    assert_eq!(state.last_committed, "echo native-accepted-中文😀 tail");
+    state.completion_shell_report(INPUT_VAR, "fixture-owner\necho bad\nnext command");
+    assert_eq!(state.last_committed, "echo native-accepted-中文😀 tail");
+}
+
 fn pane(env: SuggestEnv, token: &str) -> NebulaPaneState {
     let mut state = NebulaPaneState::default();
     state.suggest_env = env;
@@ -69,6 +88,7 @@ fn transitions_drop_ghost_popup_suppression_mirrors_and_pending_directory() {
         label: "outer-path".into(),
         insert: "outer-path".into(),
         replace_chars: 0,
+        replace_after_chars: 0,
         kind: crate::display::NebulaCompletionKind::History,
     });
     state.completion_selected = Some(0);

@@ -1,4 +1,8 @@
 {
+  "tray": {
+    "show": "显示 Pebrel",
+    "quit": "退出"
+  },
   "notification": {
     "bell": "终端响铃",
     "turn_failed_reason": "请求失败：{error}",
@@ -13,6 +17,26 @@
     "en_us": "English"
   },
   "settings": {
+    "completion": {
+      "mode": "补齐模式",
+      "cycle": "切换补齐模式",
+      "inline": "行内补齐",
+      "popup": "列表补齐",
+      "hybrid": "混合补齐",
+      "description": "选择补齐模式，决定建议的显示方式和接受键。",
+      "details": "行内模式：Tab 接受光标后的建议。列表模式：随输入显示候选，方向键选择、Tab 填入。混合模式：右方向键接受行内建议；Tab 展开列表，方向键选择、Enter 填入。Esc 关闭列表。接受建议不会执行命令。切换后对已打开终端立即生效。"
+    },
+    "environment": {
+      "refresh": "新建终端时刷新系统环境变量",
+      "refresh_description": "打开终端时读取 Windows 当前环境设置。关闭后继承启动 Pebrel 时的环境，包括临时添加的 PATH。已打开的终端不受影响。"
+    },
+    "cursor_motion": {
+      "title": "平滑光标",
+      "description": "让终端光标平滑移动，大范围跳转仍立即定位。",
+      "off": "关闭",
+      "smooth": "平滑（90 ms）",
+      "save_failed": "无法保存光标动画设置：{error}"
+    },
     "scrolling": {
       "history": "回滚行数",
       "history_description": "每个窗格保留的历史行数。仅适用于新窗格。",
@@ -57,6 +81,10 @@
       },
       "address": {
         "label": "代理地址"
+      },
+      "terminal": {
+        "label": "系统代理",
+        "description": "打开后，新建终端使用当前 Windows 系统代理。填写自定义代理地址后，新开的终端会直接使用这个地址，不必再打开这项。"
       },
       "status": {
         "idle": "测试当前设置是否可以访问网络",
@@ -234,6 +262,7 @@
     "saved": "已保存",
     "cancel": "取消",
     "confirm": "确认",
+    "confirmation_dialog_shortcuts": "确认对话框：确定 / 取消",
     "close": "关闭",
     "open": "打开",
     "add": "添加",
@@ -721,7 +750,7 @@
   },
   "theme_editor": {
     "title": "自定义主题",
-    "description": "从现有主题开始，调整成自己的配色。",
+    "description": "调整颜色与字体，在右侧查看效果。",
     "template": "模板",
     "name": "主题名称",
     "background": "终端背景",
@@ -731,7 +760,7 @@
     "font_family": "字体",
     "font_size": "字号",
     "line_height": "行高",
-    "opacity": "不透明度",
+    "opacity": "窗口背景不透明度",
     "advanced": "高级设置",
     "reset": "重置修改",
     "back": "返回",
@@ -739,7 +768,9 @@
     "apply": "保存并应用",
     "import": "导入",
     "export": "导出",
-    "common": "常用设置",
+    "common": "常用颜色",
+    "typography": "字体与显示",
+    "contrast": "文字与背景对比度（不含透明度）",
     "preview_terminal": "终端",
     "preview_interface": "界面",
     "preview_ansi": "ANSI 色彩",
@@ -780,7 +811,19 @@
     "editing_status": "主题草稿",
     "editing_unchanged": "当前设置尚未改变",
     "editing_changed": "预览包含尚未保存的修改",
-    "reset_short": "重置"
+    "reset_short": "重置",
+    "keep_personal_settings": "保留个人设置",
+    "background_effects": "背景与窗口效果",
+    "background_effects_description": "图片效果会实时显示在右侧。窗口模糊在“保存并应用”后生效，效果因平台而异；图片路径指向本地文件。",
+    "image_loading": "正在加载背景图片…",
+    "image_path": "背景图片路径",
+    "choose_image": "选择图片",
+    "remove_image": "移除图片",
+    "image_opacity": "图片不透明度",
+    "image_fit": "图片适配",
+    "image_alignment": "图片对齐",
+    "image_cover": "将图片扩展到标题栏和侧边栏",
+    "window_blur": "窗口模糊／材质"
   },
   "theme_picker": {
     "title": "选择主题",
@@ -823,7 +866,46 @@
   },
   "wallpaper": {
     "load_failed": "无法加载背景图。请选择可正常读取的 PNG、JPEG、WebP、GIF 或 BMP 图片。",
-    "too_large": "背景图超出内存限制，请选择尺寸更小的图片。"
+    "too_large": "背景图超出内存限制，请选择尺寸更小的图片。",
+    "kind": "背景来源",
+    "image": "图片",
+    "video": "视频",
+    "kind_description": "选择静态图片、静音循环视频或 GIF 动图。失去前台时暂停动画；图片模式保持静止。",
+    "video_description": "支持 MP4/H.264；减少动态效果时显示首帧。",
+    "choose_video": "选择视频",
+    "video_prompt": "选择终端背景视频",
+    "video_failed": "视频背景无法播放，请检查文件格式或重新选择视频。",
+    "video_unavailable": "此版本或平台暂不支持视频背景。",
+    "video_preview": "视频背景应用后在主窗口播放，此处仅预览主题配色。",
+    "shader": "背景动效",
+    "shader_description": "为背景添加视觉效果，选择后即时预览。切到后台时暂停播放。",
+    "shader_off": "关闭",
+    "shader_grain": "静态颗粒",
+    "shader_neon_vortex": "霓虹漩涡",
+    "shader_aurora_ribbons": "极光丝带",
+    "shader_liquid_silk": "液态流光",
+    "shader_wgsl": "自定义…",
+    "shader_source": "自定义背景效果",
+    "shader_source_description": "选择 WGSL 效果文件后点击启用。已启用时更换文件会替换当前效果；编辑文件后可重新加载。",
+    "shader_choose": "选择文件",
+    "shader_reload": "重新加载",
+    "shader_selecting": "选择中…",
+    "shader_prompt": "选择终端背景 WGSL 文件",
+    "shader_failed": "着色器背景加载失败，已保留底层背景。请检查 WGSL 语法和帧参数格式，或选择其他效果。",
+    "shader_unavailable": "此构建或平台尚未启用实时着色器背景。",
+    "shader_missing_source": "请先选择 WGSL 文件，再启用自定义效果。",
+    "shader_confirm": "启用自定义背景效果？",
+    "shader_confirm_description": "所选本地程序将在 GPU 上运行。请启用可信文件；运行开销取决于文件内容。",
+    "shader_enable": "启用",
+    "shader_cancel": "取消",
+    "gif": "GIF 动图",
+    "gif_description": "逐帧播放 GIF，保留透明度、帧延时和循环次数。失去前台时暂停；减少动态效果时保持首帧。",
+    "choose_gif": "选择 GIF",
+    "gif_prompt": "选择 GIF 动态背景",
+    "gif_failed": "GIF 动图加载失败，请检查文件及尺寸，或选择其他 GIF。",
+    "gif_unavailable": "此构建或平台尚未启用 GIF 动态背景。",
+    "media_selecting": "选择中…",
+    "media_reload": "重新播放"
   },
   "update": {
     "managed_label": "由安装渠道管理更新",
@@ -946,7 +1028,7 @@
     "assistant": "助手设置",
     "sessions": "工作区会话",
     "directories": "目录历史",
-    "commands": "命令历史",
+    "commands": "命令与历史",
     "fonts": "自定义字体"
   },
   "ai_hooks": {
@@ -970,6 +1052,7 @@
     "tab_color": "标签颜色"
   },
   "chrome": {
+    "local_administrator": "本机 Pebrel 进程正以 Windows 管理员身份运行",
     "new_terminal_ctrl_shift_t": "新建终端 (Ctrl+Shift+T)",
     "more": "更多",
     "scroll_tabs_left": "向左翻标签",
@@ -1083,7 +1166,7 @@
     "hosts_hint": "已保存的主机地址与连接配置",
     "session_hint": "窗口、标签页与分屏布局",
     "dirs_hint": "最近进入过的目录，会带上项目路径",
-    "commands_hint": "可能包含粘贴进命令行的令牌",
+    "commands_hint": "已保存命令及其分组，以及 Shell 历史记录。可能包含粘贴的令牌。",
     "settings": "设置",
     "data": "数据与历史",
     "measuring": "正在计算内容体积…",
@@ -1219,5 +1302,74 @@
     "relay_imported": "已导入连接信息。检查并保存后生效。",
     "relay_invalid": "配置格式有误。请导入 pebrel-relay 导出的连接信息，或补全地址、房间号、令牌和指纹。",
     "relay_read_failed": "读取未完成。请检查 SSH 主机连接，以及服务器是否已安装 pebrel-relay。"
+  },
+  "theme": {
+    "package": {
+      "entry": "主题包",
+      "short": "ZIP",
+      "title": "主题包",
+      "description": "将主题和图片一起分享，或安装别人分享的 ZIP 主题包。",
+      "author": "作者",
+      "github": "GitHub 用户名（可选）",
+      "version": "版本",
+      "license": "许可",
+      "metadata_hint": "请填写作者、版本，以及允许分享此主题和图片的许可。",
+      "preview": "预览图（可选）",
+      "choose_preview": "选择预览图",
+      "no_preview": "未选择预览图",
+      "choose_file": "选择 ZIP 主题包",
+      "import_hint": "先检查主题包，再确认安装。导入只添加到主题库，不会自动应用。",
+      "identity": "{author} · 版本 {version} · {license}",
+      "resources": "包含 {count} 个资源文件",
+      "export_mode": "导出 ZIP",
+      "import_mode": "导入 ZIP",
+      "install": "安装主题",
+      "checking": "正在检查主题包…",
+      "working": "正在处理主题和图片…",
+      "exported": "主题包已导出。",
+      "imported": "{name} 已添加到主题库。你可以在主题选择器中应用，或编辑一个副本。",
+      "edit_copy": "编辑副本",
+      "failed": "操作未完成：{detail}",
+      "changed": "主题包在检查后发生了变化。请重新选择文件，再确认安装。"
+    }
+  },
+  "ssh.ports.button": "端口",
+  "ssh.ports.title": "SSH 端口转发",
+  "ssh.ports.empty": "暂无端口转发",
+  "ssh.ports.stop": "停止转发",
+  "ssh.ports.remote": "服务器端口",
+  "ssh.ports.local": "本地端口",
+  "ssh.ports.forward": "转发",
+  "ssh.ports.invalid": "请输入 1–65535 的端口",
+  "ssh.ports.pending": "正在启动端口转发…",
+  "ssh.ports.unavailable": "SSH 网络运行时不可用",
+  "ssh.ports.started": "正在将 127.0.0.1:{local} 转发至 {host} 的 {remote} 端口",
+  "terminal_effect": {
+    "title": "自定义终端效果",
+    "description": "为文字和光标所在的终端画面添加效果，不改变背景设置。导入后点击启用。",
+    "choose": "添加文件",
+    "choosing": "选择中…",
+    "enable": "启用",
+    "disable": "停用",
+    "reload": "重新加载",
+    "confirm": "启用自定义终端效果？",
+    "confirm_description": "按列表顺序在终端画面上运行 WGSL。现有背景设置保持不变。",
+    "missing": "请先选择 WGSL 文件。",
+    "failed": "终端效果加载失败，已保留原始终端画面。请检查文件后重新加载。",
+    "unsupported": "当前窗口的图形后端或构建尚未支持终端效果。仍可移除已保存的文件或停用效果。",
+    "prompt": "添加终端效果 WGSL 文件",
+    "animation": "播放方式",
+    "animation_description": "默认只在当前终端中播放，以减少后台资源占用。",
+    "animation_off": "静态",
+    "animation_focused": "仅当前终端（节能）",
+    "animation_always": "所有可见终端",
+    "pick_failed": "选择效果文件失败，请重试。",
+    "move_up": "上移",
+    "move_down": "下移",
+    "remove": "移除",
+    "sources_invalid": "最多添加八个 WGSL 文件，路径需符合设置文件格式。",
+    "save_failed": "效果列表保存失败，请检查设置目录的写入权限后重试。",
+    "advanced": "高级效果",
+    "advanced_active": "高级效果 · 终端效果已启用"
   }
 }

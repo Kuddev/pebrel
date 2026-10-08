@@ -6,5 +6,22 @@
 theme-studio = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'test(gpui_shell::settings_pane::theme_studio_tests::) or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll) or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)'
+filter = 'test(gpui_shell::settings_pane::theme_studio_tests::) or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll) or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch) or test(environment_refresh_switch_is_searchable_and_persists) or test(pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url) or test(capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection) or test(completion_capsules_keep_all_chinese_choices_at_large_font_size) or test(font_size_click_input_commits_cancels_and_bounds_values) or test(cjk_dropdown_selection_preserves_the_english_font_chain) or test(review_regression_font_fields_align_and_dropdown_toggles_with_search) or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)'
 test-group = 'theme-studio'
+
+# 三模式夹具包含九个真实 Git/窗口场景；原生进程的墙钟期限不能用并发 UI 负载测试。
+# 只为此重型夹具保留资源，产品查询期限和用例断言保持不变。
+[[profile.default.overrides]]
+filter = 'test(=gpui_shell::terminal::view::startup_tests::git_completion_real_repository_reaches_all_modes_and_preserves_quoted_edits)'
+threads-required = 'num-test-threads'
+
+# 这些语义夹具同样要求真实 Git 在产品的 3 秒预算内成功；并发绘制负载
+# 可以合法耗尽该预算，不能把这种回退结果当成候选语义的反例。
+# 只预留这七个完整名称；取消、失败/超时和普通纯规则测试继续并发执行。
+[[profile.default.overrides]]
+filter = 'test(=git_completion::tests::real_explicit_tracking_creates_and_inherits_the_expected_upstream) or test(=git_completion::tests::real_remote_guesses_follow_configuration_and_refspecs) or test(=git_completion::tests::real_branches_cache_invalidation_and_directory_context)'
+threads-required = 'num-test-threads'
+
+[[profile.default.overrides]]
+filter = 'test(=completion::tests::completion_requests_work_without_a_view_and_keep_repository_invalidation) or test(=completion::tests::editor_cursor_requests_replace_only_the_active_token_and_keep_following_options) or test(=completion::tests::checkout_completion_combines_branches_and_paths_and_scopes_remote_demand) or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)'
+threads-required = 'num-test-threads'

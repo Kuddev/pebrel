@@ -125,7 +125,7 @@ impl NebulaWorkspace {
         if query.is_empty() {
             return commands;
         }
-        let mut query = nebula_completions::command_search::CommandQuery::new(query);
+        let mut query = pebrel_completions::command_search::CommandQuery::new(query);
         let mut matches = commands
             .into_iter()
             .enumerate()
@@ -151,6 +151,20 @@ impl NebulaWorkspace {
             return;
         }
         self.dismiss_palette_state();
+        self.refresh_command_manager(window, cx);
+        self.command_manager_open = true;
+        self.command_manager_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn refresh_command_manager(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         if let Err(error) = self.saved_commands.reload() {
             crate::gpui_shell::toast::toast(
                 window,
@@ -159,14 +173,10 @@ impl NebulaWorkspace {
                 format!("无法读取已保存命令：{error}"),
             );
         }
-        self.command_manager_open = true;
         self.command_manager_group = None;
+        self.command_group_menu = None;
         self.command_manager_selected = 0;
         self.command_manager_scroll.scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-        self.command_manager_input.update(cx, |input, cx| {
-            input.set_value("", window, cx);
-            input.focus(window, cx);
-        });
         cx.notify();
     }
 

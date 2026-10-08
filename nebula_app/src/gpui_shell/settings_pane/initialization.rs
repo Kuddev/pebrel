@@ -32,6 +32,18 @@ impl SettingsPane {
                     if let SelectEvent::Confirm(Some(_)) = event {
                         let row = entity.read(cx).selected_index(cx).map(|path| path.row);
                         if let Some(value) = row.and_then(|row| values.get(row)) {
+                            if key == "background_media_kind" {
+                                this.set_background_kind(value, window, cx);
+                                return;
+                            }
+                            if key == "background_shader_preset" {
+                                this.set_shader_preset(value, window, cx);
+                                return;
+                            }
+                            if key == "cursor_motion" {
+                                this.set_cursor_motion(value, window, cx);
+                                return;
+                            }
                             if key == "notification_duration" {
                                 this.set_notification_duration(value, window, cx);
                                 return;
@@ -52,8 +64,22 @@ impl SettingsPane {
             selects.push((key, select, values));
         };
 
+        add_select(
+            "terminal_effect_animation",
+            nebula_settings::EffectAnimation::VALUES,
+            runtime.terminal_effects.animation.settings_value(),
+            window,
+            cx,
+        );
         let cursor_current =
             runtime.cursor_shape.map(|shape| shape.settings_value()).unwrap_or("beam");
+        add_select(
+            "cursor_motion",
+            nebula_settings::CursorMotion::VALUES,
+            runtime.cursor_motion.settings_value(),
+            window,
+            cx,
+        );
         let shell_current = crate::platform::shell::effective_shell_id(runtime.shell.as_deref());
 
         add_select(
@@ -168,20 +194,27 @@ impl SettingsPane {
             cx,
         );
         add_select(
-            "accept",
-            &["right", "tab", "both"],
-            runtime.accept.settings_value(),
-            window,
-            cx,
-        );
-        add_select(
             "completion_style",
-            &["inline", "popup"],
+            &nebula_settings::CompletionStyleName::VALUES,
             runtime.completion_style.settings_value(),
             window,
             cx,
         );
+        add_select(
+            "background_media_kind",
+            nebula_settings::BackgroundMediaKind::VALUES,
+            runtime.background_media_kind.settings_value(),
+            window,
+            cx,
+        );
         // 壁纸 fit/对齐：存原文，经旧壳 renderer::image 的 parse 归一化
+        add_select(
+            "background_shader_preset",
+            nebula_settings::BackgroundEffects::PRESETS,
+            runtime.background_effects.preset(),
+            window,
+            cx,
+        );
         // （兼容 cover/contain 等别名），展示用规范记号。
         let bgimg_fit = crate::renderer::image::BackgroundImageFit::parse(
             runtime.background_image_fit.as_deref().unwrap_or(""),
@@ -342,10 +375,10 @@ impl SettingsPane {
             |this: &mut Self,
              _,
              event: &SelectEvent<Vec<SharedString>>,
-             _,
+             window,
              cx: &mut Context<Self>| {
                 if matches!(event, SelectEvent::Confirm(Some(_))) {
-                    this.commit_proxy_address(cx);
+                    this.commit_proxy_address(window, cx);
                 }
             },
         ));
@@ -358,8 +391,8 @@ impl SettingsPane {
         subscriptions.push(cx.subscribe_in(
             &proxy_url_input,
             window,
-            |this: &mut Self, _, event: &InputEvent, _, cx: &mut Context<Self>| {
-                this.on_proxy_address_event(event, cx);
+            |this: &mut Self, _, event: &InputEvent, window, cx: &mut Context<Self>| {
+                this.on_proxy_address_event(event, window, cx);
             },
         ));
         let provider_store = crate::ai_providers::load();
@@ -502,26 +535,8 @@ impl SettingsPane {
         subscriptions.push(cx.subscribe_in(
             &font_family_cjk_input,
             window,
-            |this: &mut Self, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                    let raw = input.read(cx).value();
-                    let normalized = crate::font_install::normalize_font_family_chain(&raw);
-                    let value = if normalized.is_empty() {
-                        crate::font_install::REQUIRED_FONT_FAMILY.to_owned()
-                    } else {
-                        normalized
-                    };
-                    let current = this
-                        .runtime
-                        .font_family_cjk
-                        .as_deref()
-                        .unwrap_or(crate::font_install::REQUIRED_FONT_FAMILY);
-                    let changed = current != value;
-                    input.update(cx, |input, cx| input.set_value(value.clone(), window, cx));
-                    if changed {
-                        this.persist(&[("font_family_cjk", value)], cx);
-                    }
-                }
+            |this: &mut Self, _, event: &InputEvent, window, cx| {
+                this.on_cjk_font_family_input_event(event, window, cx);
             },
         ));
 
@@ -556,6 +571,11 @@ impl SettingsPane {
              event: &InputEvent,
              _: &mut Window,
              cx: &mut Context<Self>| {
+                match event {
+                    InputEvent::Focus => this.settings_search_focus.set_focused(true),
+                    InputEvent::Blur => this.settings_search_focus.set_focused(false),
+                    _ => {},
+                }
                 if matches!(event, InputEvent::Change | InputEvent::Focus | InputEvent::Blur) {
                     if matches!(event, InputEvent::Change) {
                         this.update_settings_search(cx);
@@ -564,6 +584,41 @@ impl SettingsPane {
                 }
             },
         ));
+
+        let font_size_input = cx.new(|cx| InputState::new(window, cx));
+        subscriptions.push(cx.subscribe_in(
+            &font_size_input,
+            window,
+            |this: &mut Self, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    this.finish_font_size_edit(true, window, cx);
+                }
+            },
+        ));
+        let font_size_interceptor =
+            cx.listener(|this, event: &gpui::KeystrokeEvent, window, cx| {
+                if this.font_size_editing.is_some()
+                    && this.font_size_input.read(cx).focus_handle(cx).is_focused(window)
+                {
+                    match event.keystroke.key.as_str() {
+                        "escape" => {
+                            cx.stop_propagation();
+                            this.finish_font_size_edit(false, window, cx);
+                        },
+                        "tab" => {
+                            cx.stop_propagation();
+                            if event.keystroke.modifiers.shift {
+                                window.focus_prev(cx);
+                            } else {
+                                window.focus_next(cx);
+                            }
+                            this.finish_font_size_edit(true, window, cx);
+                        },
+                        _ => {},
+                    }
+                }
+            });
+        subscriptions.push(cx.intercept_keystrokes(font_size_interceptor));
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -574,9 +629,17 @@ impl SettingsPane {
             mobile: mobile::MobileState::new(window, cx),
             appearance_picker: None,
             appearance_picker_seq: 0,
+            shader_picker: None,
+            terminal_effect_picker: None,
+            shader_custom_open: false,
+            effect_settings_open: false,
+            media_picker: None,
+            media_picker_generation: 0,
             theme_editor: None,
             theme_editor_seq: 0,
             theme_transfer: theme_transfer::ThemeTransferState::default(),
+            theme_package: None,
+            theme_package_seq: 0,
             theme_picker_trigger: cx.focus_handle(),
             icon_picker_trigger: cx.focus_handle(),
             expanded_setting_help: std::collections::HashSet::new(),
@@ -585,6 +648,7 @@ impl SettingsPane {
             about_last_checked: None,
             about_sponsor_open: false,
             settings_search_input,
+            settings_search_focus: search_header::SearchFocus::default(),
             search_origin_section: None,
             selects,
             shell_select,
@@ -613,6 +677,7 @@ impl SettingsPane {
             provider_status: None,
             provider_test_seq: 0,
             provider_test_running: false,
+            provider_key_task: None,
             provider_codex_confirm: None,
             ssh_library,
             ssh_hosts: crate::gpui_shell::ssh_hosts::SshHostLists::load(),
@@ -642,12 +707,16 @@ impl SettingsPane {
             ssh_delete_undo: None,
             ssh_undo_seq: 0,
             font_picker_open: false,
+            font_picker_cjk: false,
             font_loading: false,
             font_system: None,
             font_imported: Vec::new(),
             font_family_input,
             font_family_cjk_input,
+            font_size_input,
+            font_size_editing: None,
             font_picker_trigger_bounds: None,
+            font_picker_cjk_bounds: None,
             backup_selection: backup_remote.selection,
             backup_ui: backup::BackupUiState::default(),
             backup_pass_input: cx.new(|cx| {

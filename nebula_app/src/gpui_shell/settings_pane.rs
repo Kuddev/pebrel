@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use crate::gpui_shell::config::{DEFAULT_CURSOR_BLINK, effective_cursor_blink};
 use crate::gpui_shell::prelude::*;
-use crate::gpui_shell::widgets::NebulaButton;
+use crate::gpui_shell::widgets::{NebulaButton, settings_control_height};
 
 mod about;
 mod agents;
@@ -43,7 +43,9 @@ mod appearance_advanced;
 mod appearance_picker;
 #[path = "background_color.rs"]
 mod background_color;
+mod background_shader;
 mod backup;
+mod cursor_motion;
 mod design;
 mod font_picker;
 mod providers;
@@ -52,6 +54,7 @@ mod scrolling;
 mod search_header;
 mod segmented;
 mod setting_help;
+mod terminal_effect;
 mod theme_picker;
 
 mod initialization;
@@ -69,6 +72,8 @@ mod status;
 mod theme_advanced;
 mod theme_editor;
 mod theme_foreground;
+mod theme_package;
+mod theme_package_view;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod theme_studio_tests;
 mod theme_transfer;
@@ -87,6 +92,7 @@ pub enum SettingsPaneEvent {
     /// Explicitly close Settings and return to the workspace.
     Close,
     Changed,
+    BackupRestored,
     /// 导入 Profile 已落盘；Tab 的 Shell 面板若正打开，需要重建候选快照。
     TerminalProfilesChanged,
     /// 设置页"连接"按钮：宿主开 SSH tab（连接语义在业务层）。
@@ -109,9 +115,17 @@ pub struct SettingsPane {
     mobile: mobile::MobileState,
     appearance_picker: Option<appearance_picker::AppearancePicker>,
     appearance_picker_seq: u64,
+    shader_picker: Option<Task<()>>,
+    terminal_effect_picker: Option<Task<()>>,
+    shader_custom_open: bool,
+    effect_settings_open: bool,
+    media_picker: Option<Task<()>>,
+    media_picker_generation: u64,
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
     theme_editor_seq: u64,
     pub(super) theme_transfer: theme_transfer::ThemeTransferState,
+    pub(super) theme_package: Option<theme_package::PackageTransfer>,
+    theme_package_seq: u64,
     theme_picker_trigger: FocusHandle,
     icon_picker_trigger: FocusHandle,
     expanded_setting_help: std::collections::HashSet<&'static str>,
@@ -121,6 +135,7 @@ pub struct SettingsPane {
     /// 首页「项目与支持」→ 赞助商：独立页面，不是外链行。切换分区时清掉。
     about_sponsor_open: bool,
     settings_search_input: Entity<InputState>,
+    settings_search_focus: search_header::SearchFocus,
     search_origin_section: Option<usize>,
     /// 每项还带着自己的 `values` 表：`SelectState` 只认索引，而从代码侧
     /// 改设置（还原默认值、命令面板切换）时手里只有配置文件记号，没有
@@ -159,6 +174,7 @@ pub struct SettingsPane {
     provider_status: Option<ProviderStatus>,
     provider_test_seq: u64,
     provider_test_running: bool,
+    provider_key_task: Option<Task<()>>,
     provider_codex_confirm: Option<String>,
     /// SSH 主机列表（共享三键 + merge 权威）；操作后整体重载防漂移。
     /// SSH 区的行为实现拆在 `ssh_settings.rs`（同类型第二个 impl 块）。
@@ -200,6 +216,7 @@ pub struct SettingsPane {
     pub(super) ssh_undo_seq: u64,
     /// 可直接编辑的字体链及其建议弹层；逗号分隔主字体与 fallback 字体。
     pub(super) font_picker_open: bool,
+    font_picker_cjk: bool,
     font_loading: bool,
     /// None = 尚未枚举；首次展开时在后台线程装配（几百字体的机器上
     /// `IsMonospacedFont` 逐族探询是实打实的开销，不挡 UI 帧）。
@@ -208,9 +225,12 @@ pub struct SettingsPane {
     font_imported: Vec<String>,
     font_family_input: Entity<InputState>,
     font_family_cjk_input: Entity<InputState>,
+    font_size_input: Entity<InputState>,
+    font_size_editing: Option<bool>,
     /// 字体输入框上一帧的窗口坐标。字体目录是宽弹层，不能把整条设置行当
     /// 锚点；否则输入框在右侧、菜单却会从正文左缘展开。
     font_picker_trigger_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    font_picker_cjk_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     /// 备份类别选择（本地 UI 态；出厂默认 = 共享 `BackupSelection::default`）。
     backup_selection: crate::encrypted_backup::BackupSelection,
     backup_ui: backup::BackupUiState,
@@ -321,6 +341,7 @@ impl SettingsPane {
             (&self.ssh_jump_host_input, "ssh_jump_host"),
             (&self.ssh_icon_filter_input, "ssh_icon_filter"),
             (&self.font_family_input, "font_family"),
+            (&self.font_family_cjk_input, "font_family"),
             (&self.backup_pass_input, "backup_password"),
             (&self.backup_secret_input, "backup_secret"),
         ] {
@@ -379,7 +400,10 @@ impl SettingsPane {
             cx.notify();
             return;
         }
-        if matches!(key, "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes") {
+        if matches!(
+            key,
+            "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes" | "refresh_environment"
+        ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
                 let language = crate::gpui_shell::config::ui_language(cx);
                 super::toast::toast(
@@ -674,16 +698,18 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let select = self.select_of(key);
-        // 闭态选中值 = accent（旧壳 combobox_value 15 处调用 14 处传
-        // sk.accent）。闭框/背景都不带文字色，包一层就能继承下去；右侧
-        // chevron 在组件内自带 muted，不会被染色。
         let control = self.segmented_setting(key, cx).unwrap_or_else(|| {
-            div()
-                .debug_selector(move || format!("settings-select-{key}"))
-                .w(px(SETTINGS_SELECT_WIDTH))
-                .text_color(cx.theme().link)
-                .children(select.map(|state| Select::new(&state)))
-                .into_any_element()
+            let Some(state) = select else {
+                return div().into_any_element();
+            };
+            crate::gpui_shell::widgets::settings_select_frame(
+                SharedString::from(format!("settings-select-{key}")),
+                Select::new(&state).appearance(false).h_full().rounded(px(6.0)),
+                cx,
+            )
+            .debug_selector(move || format!("settings-select-{key}"))
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .into_any_element()
         });
         self.maybe_marked(key, label, desc, control, cx)
     }
@@ -693,11 +719,13 @@ impl SettingsPane {
         self.row(
             language.pick("默认 Shell", "Default shell"),
             help("shell", language),
-            div()
-                .w(px(SETTINGS_SELECT_WIDTH))
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_color(cx.theme().link)
-                .child(Select::new(&self.shell_select)),
+            crate::gpui_shell::widgets::settings_select_frame(
+                "settings-shell-select",
+                Select::new(&self.shell_select).appearance(false).h_full().rounded(px(6.0)),
+                cx,
+            )
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .font_family(cx.theme().mono_font_family.clone()),
             cx,
         )
     }
@@ -741,11 +769,13 @@ impl SettingsPane {
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
             "terminal_proxy" => flag!(terminal_proxy),
+            "refresh_environment" => flag!(refresh_environment),
             "powerline" => flag!(powerline),
             "ghost" => flag!(ghost),
             "ai_toasts" => flag!(ai_toasts),
             "ctrl_wheel_font_zoom" => flag!(ctrl_wheel_font_zoom),
             "notification_duration" => pick!(notification_duration),
+            "cursor_motion" => pick!(cursor_motion),
             "cjk_bold_regular" => flag!(cjk_bold_regular),
             "fetch" => flag!(fetch),
             "keep_session" => flag!(keep_session),
@@ -754,6 +784,14 @@ impl SettingsPane {
             "tray" => flag!(tray),
             "panel_resize" => flag!(panel_resize),
             "background_image_cover_chrome" => flag!(background_image_cover_chrome),
+            "background_media_kind" => pick!(background_media_kind),
+            "terminal_effect_animation" => Some((
+                cur.terminal_effects.animation != def.terminal_effects.animation,
+                def.terminal_effects.animation.settings_value().to_owned(),
+            )),
+            "background_shader_preset" => {
+                Some((cur.background_effects.preset() != "off", "off".to_owned()))
+            },
             "language" => pick!(language),
             "accept" => pick!(accept),
             "completion_style" => pick!(completion_style),
@@ -814,9 +852,14 @@ impl SettingsPane {
         control: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let layout = if segmented::supports(key) {
+            design::RowLayout::IntrinsicControl
+        } else {
+            design::RowLayout::Standard
+        };
         match self.setting_override(key) {
             Some((dirty, factory)) => self
-                .row_with_reset(
+                .row_with_reset_layout(
                     label,
                     desc,
                     dirty,
@@ -825,16 +868,28 @@ impl SettingsPane {
                             this.commit_scrollback_lines(&factory, window, cx);
                             return;
                         }
+                        if key == "background_media_kind" {
+                            this.set_background_kind(&factory, window, cx);
+                            this.sync_select(key, &factory, window, cx);
+                            return;
+                        }
+                        if key == "background_shader_preset" {
+                            this.set_shader_preset(&factory, window, cx);
+                            return;
+                        }
                         this.persist(&[(key, factory.clone())], cx);
                         // 开关行读 `runtime`，notify 就够；下拉框自己存索引，
                         // 必须显式拉回，否则撤销只改了值不改显示。
                         this.sync_select(key, &factory, window, cx);
                     },
+                    layout,
                     control,
                     cx,
                 )
                 .into_any_element(),
-            None => self.row(label, desc, control, cx).into_any_element(),
+            None => self
+                .row_shell(label, desc.into(), None, false, layout, control, cx)
+                .into_any_element(),
         }
     }
 
@@ -984,29 +1039,117 @@ impl SettingsPane {
         )
     }
 
+    fn set_background_kind(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(kind) = nebula_settings::BackgroundMediaKind::parse(value) else { return };
+        if kind == self.runtime.background_media_kind {
+            return;
+        }
+        if !super::wallpaper::media_available(kind) {
+            super::wallpaper::show_media_error(kind, cx);
+            self.sync_select(
+                "background_media_kind",
+                self.runtime.background_media_kind.settings_value(),
+                window,
+                cx,
+            );
+            return;
+        }
+        self.media_picker_generation = self.media_picker_generation.wrapping_add(1);
+        self.media_picker.take();
+        self.persist(
+            &[
+                ("background_media_kind", kind.settings_value().to_owned()),
+                ("background_image", String::new()),
+            ],
+            cx,
+        );
+        self.sync_select(
+            "background_media_kind",
+            self.runtime.background_media_kind.settings_value(),
+            window,
+            cx,
+        );
+    }
+
     fn choose_background_image(&mut self, cx: &mut Context<Self>) {
+        if self.media_picker.is_some() {
+            return;
+        }
         let language = crate::gpui_shell::config::ui_language(cx);
+        let kind = self.runtime.background_media_kind;
+        if !super::wallpaper::media_available(kind) {
+            super::wallpaper::show_media_error(kind, cx);
+            return;
+        }
+        let old_path = self.runtime.background_image.clone();
+        self.media_picker_generation = self.media_picker_generation.wrapping_add(1);
+        let generation = self.media_picker_generation;
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
             prompt: Some(
-                language.pick("选择终端背景图片", "Select a terminal background image").into(),
+                if kind == nebula_settings::BackgroundMediaKind::Gif {
+                    language.text(crate::i18n::Message::WallpaperGifPrompt)
+                } else if kind == nebula_settings::BackgroundMediaKind::Video {
+                    language.text(crate::i18n::Message::WallpaperVideoPrompt)
+                } else {
+                    language.text(crate::i18n::Message::ThemeEditorChooseImage)
+                }
+                .into(),
             ),
         });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
-            let Some(path) = paths.into_iter().next() else { return };
-            let value = path.to_string_lossy().into_owned();
+        self.media_picker = Some(cx.spawn(async move |this, cx| {
+            let result = picked.await;
             let _ = this.update(cx, |pane, cx| {
-                pane.persist(&[("background_image", value)], cx);
+                if generation != pane.media_picker_generation {
+                    return;
+                }
+                if let Some(task) = pane.media_picker.take() {
+                    task.detach();
+                }
+                if pane.runtime.background_media_kind != kind
+                    || pane.runtime.background_image != old_path
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.first() {
+                            if let Some(value) = path.to_str() {
+                                pane.persist(
+                                    &[
+                                        ("background_image", value.to_owned()),
+                                        ("background_media_kind", kind.settings_value().to_owned()),
+                                    ],
+                                    cx,
+                                );
+                                if kind.is_animated()
+                                    && old_path.as_deref() == Some(value)
+                                    && pane.runtime.background_image.as_deref() == Some(value)
+                                {
+                                    super::wallpaper::reload_media(cx);
+                                }
+                            } else {
+                                super::wallpaper::show_media_error(kind, cx);
+                            }
+                        }
+                    },
+                    Ok(Ok(None)) => {},
+                    _ => super::wallpaper::show_media_error(kind, cx),
+                }
+                cx.notify();
             });
-        })
-        .detach();
+        }));
+        cx.notify();
     }
 
     fn background_image_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let language = crate::gpui_shell::config::ui_language(cx);
+        let video =
+            self.runtime.background_media_kind == nebula_settings::BackgroundMediaKind::Video;
+        let gif = self.runtime.background_media_kind == nebula_settings::BackgroundMediaKind::Gif;
         let current = self.runtime.background_image.clone();
         let has_image = current.as_ref().is_some_and(|path| !path.trim().is_empty());
         let path_label: Option<SharedString> =
@@ -1019,10 +1162,24 @@ impl SettingsPane {
                     .into()
             });
         self.row_with_reset(
-            language.pick("背景图片", "Background image"),
-            help("background_image", language),
+            if gif {
+                language.text(crate::i18n::Message::WallpaperGif)
+            } else if video {
+                language.text(crate::i18n::Message::WallpaperVideo)
+            } else {
+                language.pick("背景图片", "Background image")
+            },
+            if gif {
+                language.text(crate::i18n::Message::WallpaperGifDescription).into()
+            } else if video {
+                language.text(crate::i18n::Message::WallpaperVideoDescription).into()
+            } else {
+                help("background_image", language)
+            },
             has_image,
             |this, _, cx| {
+                this.media_picker_generation = this.media_picker_generation.wrapping_add(1);
+                this.media_picker.take();
                 this.persist(&[("background_image", String::new())], cx);
             },
             h_flex()
@@ -1030,11 +1187,40 @@ impl SettingsPane {
                 .gap_2()
                 .child(
                     NebulaButton::new("background-image-choose")
-                        .label(language.pick("选择图片", "Choose image"))
+                        .label(if self.media_picker.is_some() {
+                            language.text(crate::i18n::Message::WallpaperMediaSelecting)
+                        } else if gif {
+                            language.text(crate::i18n::Message::WallpaperChooseGif)
+                        } else if video {
+                            language.text(crate::i18n::Message::WallpaperChooseVideo)
+                        } else {
+                            language.text(crate::i18n::Message::ThemeEditorChooseImage)
+                        })
+                        .disabled(
+                            self.media_picker.is_some()
+                                || !super::wallpaper::media_available(
+                                    self.runtime.background_media_kind,
+                                ),
+                        )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.choose_background_image(cx);
                         })),
                 )
+                .when((video || gif) && has_image, |row| {
+                    row.child(
+                        NebulaButton::new("background-media-reload")
+                            .label(language.text(crate::i18n::Message::WallpaperMediaReload))
+                            .disabled(
+                                self.media_picker.is_some()
+                                    || !super::wallpaper::media_available(
+                                        self.runtime.background_media_kind,
+                                    ),
+                            )
+                            .on_click(
+                                cx.listener(|_, _, _, cx| super::wallpaper::reload_media(cx)),
+                            ),
+                    )
+                })
                 .when_some(path_label, |row, name| {
                     row.child(
                         div()
@@ -1091,7 +1277,19 @@ impl SettingsPane {
         let terminal = self
             .group(language.pick("启动", "Startup"), cx)
             .child(self.shell_select_row(cx))
-            .child(self.startup_directory_row(cx));
+            .child(self.startup_directory_row(cx))
+            .when(
+                crate::platform::Platform::current() == crate::platform::Platform::Windows,
+                |group| {
+                    group.child(self.switch_row(
+                        "refresh_environment",
+                        language.text(crate::i18n::Message::SettingsEnvironmentRefresh),
+                        language.text(crate::i18n::Message::SettingsEnvironmentRefreshDescription),
+                        self.runtime.refresh_environment,
+                        cx,
+                    ))
+                },
+            );
         let alerts = self
             .group(language.pick("提醒", "Alerts"), cx)
             .child(self.switch_row(
@@ -1123,14 +1321,8 @@ impl SettingsPane {
                 cx,
             ))
             .child(self.select_row(
-                "accept",
-                language.pick("补全接受键", "Completion accept key"),
-                help("accept", language),
-                cx,
-            ))
-            .child(self.select_row(
                 "completion_style",
-                language.pick("补全样式", "Completion style"),
+                language.text(crate::i18n::Message::SettingsCompletionMode),
                 help("completion_style", language),
                 cx,
             ));
@@ -1448,6 +1640,7 @@ impl Render for SettingsPane {
         let appearance_picker_modal = self.appearance_picker_modal(window, cx);
         let theme_editor_modal = self.theme_editor_modal(window, cx);
         let theme_transfer_modal = self.theme_transfer_modal(window, cx);
+        let theme_package_modal = self.theme_package_modal(window, cx);
         let backup_drawer = self.backup_drawer(window, cx);
         let mobile_relay_modal = self.mobile_relay_modal(cx);
         let application_page = self.active_section == 0;
@@ -1570,6 +1763,7 @@ impl Render for SettingsPane {
             .when_some(appearance_picker_modal, |root, modal| root.child(modal))
             .when_some(theme_editor_modal, |root, modal| root.child(modal))
             .when_some(theme_transfer_modal, |root, modal| root.child(modal))
+            .when_some(theme_package_modal, |root, modal| root.child(modal))
             .when_some(mobile_relay_modal, |root, modal| root.child(modal))
             .when(font_picker_open, |root| {
                 root

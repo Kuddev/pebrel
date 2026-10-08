@@ -35,6 +35,103 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [28])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CommandComposerTest {
+    @Test fun scrollbackDefaultsToOneThousandAndPersistsWithinTheDeviceLimit() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val preferences = DisplayPreferences(context)
+        assertEquals(1000, preferences.state.value.scrollbackLines)
+        preferences.update { it.copy(scrollbackLines = 50_000) }
+        assertEquals(preferences.maxScrollbackLines, preferences.state.value.scrollbackLines)
+        assertEquals(preferences.state.value.scrollbackLines, DisplayPreferences(context).state.value.scrollbackLines)
+        preferences.update { it.copy(scrollbackLines = 1000) }
+    }
+
+    @Test fun fileSymbolsUseDedicatedOutlineResources() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        assertNotEquals(fileSymbol("README.md", false), fileSymbol("README.unknown", false))
+        assertEquals(fileSymbol("readme.md", false), fileSymbol("/项目/README.MD", false))
+        assertNotEquals(fileSymbol("src", true), fileSymbol("src", false))
+        assertEquals(R.drawable.ic_file_md, fileSymbol("README", false))
+        assertEquals(R.drawable.ic_file_docker, fileSymbol("Dockerfile.dev", false))
+        assertEquals(R.drawable.ic_file_kt, fileSymbol("MainActivity.kt", false))
+        assertEquals(R.drawable.ic_file_go, fileSymbol("server.go", false))
+        assertEquals(R.drawable.ic_file_powershell, fileSymbol("build.ps1", false))
+        val types = listOf("README.md", "main.rs", "script.py", "config.json", "config.toml", "config.yaml", "notes.txt", "image.png", "archive.zip", "manual.pdf")
+        assertEquals(types.size, types.map { fileSymbol(it, false) }.distinct().size)
+        for (path in types) {
+            assertTrue(path, context.resources.getDrawable(fileSymbol(path, false), context.theme).intrinsicWidth > 0)
+        }
+    }
+
+    @Test fun keyAuthenticationCanBeSelectedAndRequiresAKeyDocument() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        compose.setContent {
+            MaterialTheme { HostForm(HostProfile("key-form", "Key host", "127.0.0.1", 22, "test"), {}, false, false, {}, onSave = { _, _, _, _ -> }) }
+        }
+        assertTrue(compose.onNodeWithTag("ssh-session-mode").fetchSemanticsNode().boundsInRoot.width <= 240 * context.resources.displayMetrics.density)
+        assertTrue(compose.onNodeWithTag("ssh-auth-mode").fetchSemanticsNode().boundsInRoot.width <= 220 * context.resources.displayMetrics.density)
+        compose.onNodeWithText(context.getString(R.string.auth_key)).performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText(context.getString(R.string.ssh_choose_key)).performScrollTo().assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText(context.getString(R.string.auth_auto)).performScrollTo().performClick()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).performScrollTo().assertIsEnabled()
+    }
+
+    @Test fun savedKeyFormUsesPassphraseLabelsInsteadOfPasswordLabels() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        compose.setContent {
+            MaterialTheme { HostForm(HostProfile("saved-key", "Key host", "127.0.0.1", 22, "test",
+                keyUri = "content://fixture/key", keyName = "encrypted-key"), {}, true, false, {}, onSave = { _, _, _, _ -> }) }
+        }
+        compose.onNodeWithText(context.getString(R.string.ssh_clear_saved_passphrase)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.ssh_passphrase_saved_hint)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.clear_saved_password)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.password_saved_hint)).assertDoesNotExist()
+    }
+
+    @Test fun compactSegmentsKeepLargeEnglishLabelsAndFortyEightDpTargets() {
+        var chosen by mutableStateOf("production")
+        var scale by mutableFloatStateOf(1f)
+        compose.setContent {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, scale)) {
+                MaterialTheme {
+                    Box(Modifier.width(320.dp)) {
+                        ConnectionSegments(listOf("production" to "Production", "development" to "Development"),
+                            chosen, { chosen = it }, Modifier.testTag("compact-segments"), compact = true)
+                    }
+                }
+            }
+        }
+        for (fontScale in listOf(1f, 1.5f)) {
+            compose.runOnIdle { scale = fontScale }
+            val density = ApplicationProvider.getApplicationContext<PebrelApplication>().resources.displayMetrics.density
+            assertTrue(compose.onNodeWithTag("compact-segments").fetchSemanticsNode().boundsInRoot.width <= 280 * density)
+            for (label in listOf("Production", "Development")) {
+                compose.onNode(hasText(label) and hasClickAction()).assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
+            }
+            compose.runOnIdle { assertEquals("development", chosen) }
+        }
+    }
+
+    @Test fun defaultComposerExposesShiftTabInTheNarrowShortcutMenu() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        val sent = mutableListOf<String>()
+        var allowed by mutableStateOf(true)
+        compose.setContent { MaterialTheme {
+            Box(Modifier.width(240.dp)) {
+                CommandComposer("backtab", repository, allowed, true, null, { sent += it }) { true }
+            }
+        } }
+        compose.onNodeWithContentDescription(context.getString(R.string.terminal_shortcuts_more)).performClick()
+        compose.onAllNodesWithText("Shift+Tab").onLast().assertIsDisplayed().performClick()
+        assertEquals(listOf("Shift+Tab"), sent)
+        compose.runOnIdle { allowed = false }
+        compose.onNodeWithContentDescription(context.getString(R.string.terminal_shortcuts_more)).performClick()
+        compose.onAllNodesWithText("Shift+Tab").onLast().assertIsNotEnabled()
+        assertEquals(listOf("Shift+Tab"), sent)
+    }
+
     @Test fun compactShortcutOverflowProvidesATappableMenuAndRespectsInputPermission() {
         val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
         val sent = mutableListOf<String>()
@@ -194,11 +291,72 @@ class CommandComposerTest {
         compose.onNodeWithText(context.getString(R.string.deploy_domain)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.deploy_http_port)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.service_port)).assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.service_advanced)).performClick()
+        compose.onNodeWithText(context.getString(R.string.service_advanced)).performScrollTo().performClick()
         compose.onNodeWithContentDescription(context.getString(R.string.service_port)).assertExists()
         compose.onNodeWithContentDescription(context.getString(R.string.service_address)).assertExists()
         compose.onNodeWithText(context.getString(R.string.service_manual_commands)).performScrollTo().performClick()
         compose.onNodeWithText("sh install.sh 'SERVER_IP' 443\n/opt/pebrel-relay/pebrel-relay service-status").assertExists()
+        compose.onNodeWithText(context.getString(R.string.service_manual_download)).performScrollTo().performClick()
+        val opened = org.robolectric.Shadows.shadowOf(context).nextStartedActivity
+        assertEquals(android.content.Intent.ACTION_VIEW, opened.action)
+        assertEquals("https://github.com/Kuddev/pebrel/releases", opened.dataString)
+    }
+
+    @Test fun servicePageAllowsAnUnencryptedKeyAndSeparatesItsPassphraseFromAPassword() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        val keyHost = HostProfile("relay-key", "Key host", "192.0.2.1", user = "root",
+            keyUri = "content://fixture/private-key", keyName = "private-key")
+        repository.saveHost(keyHost)
+        compose.setContent { MaterialTheme { RelayDeploymentFlow(repository) {} } }
+        compose.onNodeWithContentDescription(context.getString(R.string.ssh_key_passphrase)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.ssh_key_passphrase_hint)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertIsEnabled()
+        compose.onNodeWithText(context.getString(R.string.service_check)).assertIsEnabled()
+        compose.onNodeWithContentDescription(context.getString(R.string.ssh_key_passphrase))
+            .performTextInput("private-key-passphrase")
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertIsEnabled()
+        compose.runOnIdle { repository.saveHost(keyHost.copy(keyUri = "", keyName = "")) }
+        compose.onNodeWithContentDescription(context.getString(R.string.credential_password))
+            .performTextClearance()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertIsNotEnabled()
+    }
+
+    @Test fun serviceSetupCanOpenTheSharedKeyPickerAndCancelWithoutLosingItsHost() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        repository.saveHost(HostProfile("existing-relay", "Existing relay", "192.0.2.1", user = "root"))
+        compose.setContent { MaterialTheme { RelayDeploymentFlow(repository) {} } }
+        compose.onNodeWithText(context.getString(R.string.service_add_ssh_host)).performClick()
+        compose.onNodeWithText(context.getString(R.string.auth_key)).performScrollTo().performClick()
+        compose.onNodeWithText(context.getString(R.string.ssh_choose_key)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).assertDoesNotExist()
+        compose.onAllNodesWithContentDescription(context.getString(R.string.close)).onLast().performScrollTo().performClick()
+        compose.onNodeWithText("Existing relay").assertExists()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertExists()
+        assertEquals(1, repository.hosts.value.size)
+        assertTrue(repository.sessions.value.isEmpty())
+    }
+
+    @Test fun serviceSetupSavesAndSelectsTheNewHostWithoutOpeningATerminal() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        repository.saveHost(HostProfile("existing-relay", "Existing relay", "192.0.2.1", user = "root"))
+        compose.setContent { MaterialTheme { RelayDeploymentFlow(repository) {} } }
+        compose.onNodeWithText(context.getString(R.string.service_add_ssh_host)).performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.host_name)).performTextInput("New relay")
+        compose.onNodeWithContentDescription(context.getString(R.string.host_address)).performTextInput("192.0.2.2")
+        compose.onNodeWithText(context.getString(R.string.save)).performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(10_000) {
+            // 凭据事务在 IO 完成后投递 Android 主队列，需推进它而不只推进 Compose 时钟。
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            repository.hosts.value.size == 2 || repository.error.value != null
+        }
+        assertNull("Host persistence must complete before returning to relay setup", repository.error.value)
+        compose.onNodeWithText("New relay").assertExists()
+        compose.onNodeWithText("Existing relay").assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertExists()
+        assertTrue(repository.sessions.value.isEmpty())
     }
 
     private fun saveSurface(tag: String) {
