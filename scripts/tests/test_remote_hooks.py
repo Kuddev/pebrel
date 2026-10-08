@@ -26,6 +26,34 @@ def module(name):
 
 @unittest.skipUnless(os.name == "posix", "remote adapter targets POSIX SSH hosts")
 class RemoteHooksTests(unittest.TestCase):
+    def test_claude_without_controlling_tty_returns_terminal_sequence(self):
+        import errno
+        import io
+        bridge = module("remote_bridge")
+        osc = b"\x1b]777;nebula-hook;fixture;payload\x07"
+        output = io.StringIO()
+        with patch.object(bridge.os, "open", side_effect=OSError(errno.ENXIO, "no tty")), patch.object(bridge.sys, "stdout", output):
+            bridge.write_terminal(osc, "claude")
+        self.assertEqual(json.loads(output.getvalue()), {"terminalSequence": osc.decode("ascii")})
+
+    def test_stdout_fallback_is_only_for_claude_without_a_tty(self):
+        import errno
+        import io
+        bridge = module("remote_bridge")
+        for source, error in [("codex", errno.ENXIO), ("pi", errno.ENXIO), ("opencode", errno.ENXIO), ("claude", errno.EACCES)]:
+            with self.subTest(source=source, error=error), patch.object(bridge.os, "open", side_effect=OSError(error, "unavailable")), patch.object(bridge.sys, "stdout", io.StringIO()) as output:
+                with self.assertRaises(OSError):
+                    bridge.write_terminal(b"\x07", source)
+                self.assertEqual(output.getvalue(), "")
+
+    def test_claude_with_controlling_tty_does_not_duplicate_stdout(self):
+        import io
+        bridge = module("remote_bridge")
+        with patch.object(bridge.os, "open", return_value=42), patch.object(bridge.os, "close"), patch.object(bridge.select, "select", return_value=([], [42], [])), patch.object(bridge.os, "write", return_value=1) as write, patch.object(bridge.sys, "stdout", io.StringIO()) as output:
+            bridge.write_terminal(b"\x07", "claude")
+            write.assert_called_once_with(42, b"\x07")
+            self.assertEqual(output.getvalue(), "")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="pebrel-remote-hooks-")
         self.addCleanup(self.tmp.cleanup)
@@ -172,6 +200,21 @@ class RemoteHooksTests(unittest.TestCase):
         self.assertEqual(payloads[-1]["hook_event_name"], "Stop")
         self.assertEqual(payloads[-1]["transcript_path"], payloads[0]["transcript_path"])
         self.assertNotIn("last_assistant_message", payloads[-1])
+
+    def test_large_claude_failure_keeps_prompt_identity_and_error(self):
+        bridge = module("remote_bridge")
+        payload = {"hook_event_name": "StopFailure", "session_id": "main",
+                   "prompt_id": "current-prompt", "error": "unknown",
+                   "last_assistant_message": "x" * 70000}
+        with patch.object(bridge, "write_terminal") as write:
+            bridge.send("claude", False, "", payload, TOKEN)
+        frame, source = write.call_args.args
+        self.assertEqual(source, "claude")
+        encoded = frame.split(b";", 3)[3].removesuffix(b"\x07")
+        body = json.loads(base64.b64decode(encoded).split(b"\n", 1)[1])
+        self.assertEqual(body["prompt_id"], "current-prompt")
+        self.assertEqual(body["error"], "unknown")
+        self.assertNotIn("last_assistant_message", body)
 
     def test_large_pi_events_keep_the_native_file_and_bridge_lifetime(self):
         bridge = module("remote_bridge")

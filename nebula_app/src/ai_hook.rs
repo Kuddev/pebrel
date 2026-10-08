@@ -8,6 +8,7 @@
 //! `PEBREL_HOOK_LOG` (legacy `NEBULA_HOOK_LOG`) diagnoses bridge delivery without
 //! payloads; `GateVerdict` explains rejected events in application debug logs.
 
+pub(crate) mod auto_continue;
 mod bridges;
 mod event;
 pub(crate) mod installation;

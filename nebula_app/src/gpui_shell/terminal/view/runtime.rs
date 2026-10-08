@@ -129,6 +129,8 @@ impl TerminalView {
     /// the primary edge; the cached-prompt path calls the same reset so the two
     /// lifecycle routes cannot drift apart.
     pub(super) fn clear_foreground_agent_state(&mut self, cx: &mut Context<Self>) -> bool {
+        self.cancel_auto_continue();
+        self.auto_continue.reset();
         if let Some(session) = &self.session {
             session.term.lock().set_redraw_anchor_enabled(false);
         }
@@ -354,7 +356,7 @@ impl TerminalView {
         }
     }
 
-    fn runtime_key_sequence(
+    pub(super) fn runtime_key_sequence(
         &self,
         key: crate::runtime_api::RuntimeKey,
         modifiers: crate::runtime_api::RuntimeKeyModifiers,

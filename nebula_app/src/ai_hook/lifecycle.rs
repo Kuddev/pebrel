@@ -155,7 +155,12 @@ impl AgentActivity {
         if self.native_codex && event.source == "codex" && event.codex_hooks.is_none() {
             return false;
         }
-        if event.codex_hooks.is_some()
+        if (event.codex_hooks.is_some()
+            || event.source == "claude"
+                && matches!(
+                    event.kind,
+                    AiHookKind::TurnDone | AiHookKind::NeedsAttention | AiHookKind::ToolComplete
+                ))
             && self.turn_id.is_some()
             && event.turn_id.is_some()
             && self.turn_id != event.turn_id
@@ -164,7 +169,8 @@ impl AgentActivity {
             return false;
         }
         if event.kind == AiHookKind::TurnDone
-            && self.status == AgentStatus::Done
+            && (self.status == AgentStatus::Done
+                || event.source == "claude" && self.status == AgentStatus::Idle)
             && event.turn_id.is_some()
             && event.turn_id == self.turn_id
         {
