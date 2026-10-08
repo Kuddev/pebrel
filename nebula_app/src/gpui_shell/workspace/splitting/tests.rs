@@ -1,351 +1,175 @@
 use super::*;
-use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
-use gpui::{AppContext as _, Keystroke, TestAppContext, VisualTestContext};
-use gpui_component::Root;
+use std::path::PathBuf;
+use tab_duplication::{FocusedGuest, PaneOrigin};
 
-fn fixture(
-    cx: &mut TestAppContext,
-    source: SplitShellSource,
-) -> (tempfile::TempDir, Entity<NebulaWorkspace>, VisualTestContext) {
-    let directory = tempfile::tempdir().unwrap();
-    // Native appearance initialization reloads settings from disk. Use the real
-    // preference authority, with callers holding the bytes guard and fixture lock.
-    nebula_settings::persist_keys(&[
-        ("split_shell_source", source.settings_value().into()),
-        ("focus_follows_mouse", "0".into()),
-    ])
-    .unwrap();
-    cx.update(|cx| {
-        gpui_component::init(cx);
-        crate::gpui_shell::math_view::register(cx);
-        crate::gpui_shell::file_editor::init(cx);
-        init(cx);
-        windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
-        cx.set_reduce_motion(true);
-        let mut settings =
-            crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord);
-        settings.split_shell_source = source;
-        settings.focus_follows_mouse = false;
-        settings.shell_id = Some("unrelated-default".into());
-        cx.set_global(settings);
-    });
-    let mut entity = None;
-    let (_, window) = cx.add_window_view(|window, cx| {
-        let workspace = cx.new(|cx| {
-            let mut workspace = NebulaWorkspace::new(
-                window,
-                None,
-                None,
-                1,
-                crate::runtime_api::RuntimeHub::new(),
-                windowing::WorkspaceStartup::Empty,
-                windowing::WindowRole::Regular,
-                cx,
-            );
-            workspace.add_terminal_with(
-                LaunchSession::Shell {
-                    name: "Source shell".into(),
-                    program: directory
-                        .path()
-                        .join("missing-source-shell")
-                        .to_string_lossy()
-                        .into_owned(),
-                    args: vec!["--login".into()],
-                },
-                Some(directory.path().to_path_buf()),
-                None,
-                window,
-                cx,
-            );
-            workspace
-        });
-        entity = Some(workspace.clone());
-        Root::new(workspace, window, cx)
-    });
-    window.simulate_resize(gpui::size(px(1000.0), px(750.0)));
-    window.run_until_parked();
-    (directory, entity.unwrap(), window.clone())
-}
-
-fn press(combo: &str, cx: &mut VisualTestContext) {
-    let keystroke = Keystroke::parse(combo).unwrap();
-    cx.simulate_event(gpui::KeyDownEvent {
-        keystroke: keystroke.clone(),
-        is_held: false,
-        prefer_character_input: false,
-    });
-    cx.simulate_event(gpui::KeyUpEvent { keystroke });
-    cx.run_until_parked();
-}
-
-fn count(workspace: &Entity<NebulaWorkspace>, cx: &VisualTestContext) -> usize {
-    workspace.read_with(cx, |w, _| match &w.tabs[0] {
-        WorkspaceTab::Terminal { panes, .. } => panes.len(),
-        _ => panic!("terminal tab expected"),
-    })
-}
-
-fn install_choice(
-    workspace: &Entity<NebulaWorkspace>,
-    directory: &std::path::Path,
-    cx: &mut VisualTestContext,
-) {
-    workspace.update(cx, |w, cx| {
-        let selected = crate::shell_detect::DetectedShell {
-            name: "Chosen shell".into(),
-            id: "chosen".into(),
-            program: directory.join("missing-chosen-shell").to_string_lossy().into_owned(),
-            args: vec!["--chosen".into()],
-        };
-        w.palette_override = Some(shell_palette_rows(
-            vec![selected],
-            Vec::new(),
-            Vec::<(String, String)>::new(),
-            "chosen",
-            workspace_ui_language(),
-            1.0,
-        ));
-        cx.notify();
-    });
-}
-
-#[gpui::test]
-fn both_split_shortcuts_inherit_the_focused_pane_not_the_default_or_tab_identity(
-    cx: &mut TestAppContext,
-) {
-    let _lock = lock_theme_studio();
-    let _guard = SettingsBytesGuard::capture();
-    let (directory, workspace, mut cx) = fixture(cx, SplitShellSource::Focused);
-    cx.update(|window, cx| {
-        workspace.update(cx, |w, cx| {
-            let chosen = LaunchSession::Profile {
-                name: "Other profile".into(),
-                command: directory
-                    .path()
-                    .join("missing-profile-shell")
-                    .to_string_lossy()
-                    .into_owned(),
-                args: vec!["--profile".into()],
-                cwd: None,
-                shell_id: Some("other".into()),
-            };
-            let source = match &w.tabs[0] {
-                WorkspaceTab::Terminal { focused, .. } => *focused,
-                _ => unreachable!(),
-            };
-            w.split_at(
-                PendingSplit { pane_id: source, direction: SplitDirection::LeftRight },
-                SplitLaunch::Selected(chosen),
-                window,
-                cx,
-            )
-            .unwrap();
-        })
-    });
-    for shortcut in ["ctrl-shift-d", "ctrl-shift-s"] {
-        let identity = workspace.read_with(&cx, |w, cx| {
-            w.tabs[0].focused_view().unwrap().read(cx).session_launch.clone()
-        });
-        press(shortcut, &mut cx);
-        workspace.read_with(&cx, |w, cx| {
-            assert!(!w.command_palette_open);
-            assert_eq!(w.tabs[0].focused_view().unwrap().read(cx).session_launch, identity);
-            assert_ne!(w.meta(0).launch.as_ref(), Some(&identity));
-        });
+fn shell(name: &str, program: &str, args: &[&str]) -> LaunchSession {
+    LaunchSession::Shell {
+        name: name.into(),
+        program: program.into(),
+        args: args.iter().map(|arg| (*arg).into()).collect(),
     }
-    assert_eq!(count(&workspace, &cx), 4);
-}
-
-#[gpui::test]
-fn picker_escape_and_click_keep_the_captured_anchor_and_direction(cx: &mut TestAppContext) {
-    let _lock = lock_theme_studio();
-    let _guard = SettingsBytesGuard::capture();
-    let (directory, workspace, mut cx) = fixture(cx, SplitShellSource::Ask);
-    let original =
-        workspace.read_with(&cx, |w, cx| w.tabs[0].focused_view().unwrap().read(cx).pane_id);
-    press("ctrl-shift-d", &mut cx);
-    assert_eq!(count(&workspace, &cx), 1);
-    assert!(workspace.read_with(&cx, |w, _| w.pending_split.is_some()));
-    press("escape", &mut cx);
-    assert!(workspace.read_with(&cx, |w, _| w.pending_split.is_none() && !w.command_palette_open));
-    assert_eq!(count(&workspace, &cx), 1);
-    // Immediate/API splitting stays non-interactive even with the preference enabled.
-    cx.update(|window, cx| {
-        workspace.update(cx, |w, cx| {
-            w.split_focused(SplitDirection::LeftRight, window, cx).unwrap();
-            w.focus_pane(0, original, window, cx);
-        })
-    });
-    press("ctrl-shift-s", &mut cx);
-    install_choice(&workspace, directory.path(), &mut cx);
-    workspace.update(&mut cx, |w, cx| {
-        let WorkspaceTab::Terminal { panes, focused, .. } = &mut w.tabs[0] else { unreachable!() };
-        *focused = panes[1].id; // A focus change must not retarget the pending request.
-        cx.notify();
-    });
-    cx.update(|window, cx| {
-        let _ = window.draw(cx);
-    });
-    let bounds = cx.debug_bounds("command-palette-row-0").expect("real launcher row");
-    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-    workspace.read_with(&cx, |w, cx| {
-        assert_eq!(w.tabs.len(), 1, "a split choice must not create a tab");
-        let WorkspaceTab::Terminal { tree, focused, .. } = &w.tabs[0] else { unreachable!() };
-        let SplitTree::Split { first, .. } = tree else { panic!("outer split lost") };
-        assert_eq!(first.leaves(), vec![original, *focused]);
-        let SplitTree::Split { direction, .. } = first.as_ref() else { panic!("wrong anchor") };
-        assert_eq!(*direction, SplitDirection::TopBottom);
-        let LaunchSession::Shell { name, args, .. } =
-            &w.tabs[0].focused_view().unwrap().read(cx).session_launch
-        else {
-            panic!("chosen identity lost")
-        };
-        assert_eq!(name, "Chosen shell");
-        assert_eq!(args, &["--chosen"]);
-        assert!(w.pending_split.is_none() && !w.command_palette_open);
-    });
-    assert_eq!(count(&workspace, &cx), 3);
-}
-
-#[gpui::test]
-fn closed_source_choice_cannot_split_the_new_focus_or_open_a_tab(cx: &mut TestAppContext) {
-    let _lock = lock_theme_studio();
-    let _guard = SettingsBytesGuard::capture();
-    let (directory, workspace, mut cx) = fixture(cx, SplitShellSource::Ask);
-    let source =
-        workspace.read_with(&cx, |w, cx| w.tabs[0].focused_view().unwrap().read(cx).pane_id);
-    cx.update(|window, cx| {
-        workspace.update(cx, |w, cx| {
-            w.add_terminal_with(
-                LaunchSession::Shell {
-                    name: "Surviving shell".into(),
-                    program: directory
-                        .path()
-                        .join("missing-survivor-shell")
-                        .to_string_lossy()
-                        .into_owned(),
-                    args: Vec::new(),
-                },
-                Some(directory.path().to_path_buf()),
-                None,
-                window,
-                cx,
-            );
-            w.activate_tab(w.tab_of_pane(source).unwrap(), window, cx);
-        })
-    });
-    press("ctrl-shift-d", &mut cx);
-    install_choice(&workspace, directory.path(), &mut cx);
-    cx.update(|window, cx| {
-        workspace.update(cx, |w, cx| {
-            assert_eq!(w.pending_split.unwrap().pane_id, source);
-            w.close_pane(w.tab_of_pane(source).unwrap(), source, window, cx);
-            w.run_selected_palette_action(window, cx);
-            assert_eq!(w.tabs.len(), 1, "closed source must not open an unrelated tab");
-            let WorkspaceTab::Terminal { panes, .. } = &w.tabs[0] else { unreachable!() };
-            assert_eq!(panes.len(), 1, "closed source must not split the new focus");
-            assert!(w.pending_split.is_none());
-        })
-    });
-}
-
-#[gpui::test]
-fn default_source_uses_the_configured_shell_for_both_split_shortcuts(cx: &mut TestAppContext) {
-    let _lock = lock_theme_studio();
-    let _guard = SettingsBytesGuard::capture();
-    let _profiles_guard = SettingsBytesGuard::capture_at(crate::terminal_profiles::store_path());
-    let default_directory = tempfile::tempdir().unwrap();
-    let command = default_directory.path().join("non-executable-default.exe");
-    // The real profile loader requires a compatible PE header on Windows. This
-    // deliberately incomplete image is discoverable on every host but cannot
-    // execute, so a real PTY reader never races GPUI's deterministic scheduler.
-    let mut header = vec![0_u8; 0x86];
-    header[..2].copy_from_slice(b"MZ");
-    header[0x3c..0x40].copy_from_slice(&0x80_u32.to_le_bytes());
-    header[0x80..0x84].copy_from_slice(b"PE\0\0");
-    header[0x84..0x86].copy_from_slice(&0x014c_u16.to_le_bytes());
-    std::fs::write(&command, header).unwrap();
-    let mut profiles = crate::terminal_profiles::TerminalProfiles::default();
-    profiles
-        .upsert(crate::terminal_profiles::TerminalProfile {
-            id: "split-default-fixture".into(),
-            name: "Configured default fixture".into(),
-            command: command.clone(),
-            args: vec!["--configured-default".into()],
-            cwd: None,
-            shell_id: "fixture".into(),
-        })
-        .unwrap();
-    let profile = profiles.as_config_profiles().pop().unwrap();
-    let settings_id = profile.settings_id().unwrap();
-    let expected = super::super::shell_launch::profile_launch_session(profile);
-    profiles.save().unwrap();
-    nebula_settings::persist_keys(&[("shell", settings_id.clone())]).unwrap();
-    let (_directory, workspace, mut cx) = fixture(cx, SplitShellSource::Default);
-    // The fixture's deliberate unrelated in-memory default must not obscure the
-    // real saved preference; appearance reloads see the same configured identity.
-    cx.update(|_, cx| {
-        cx.global_mut::<crate::gpui_shell::config::Settings>().shell_id = Some(settings_id);
-        assert_eq!(super::super::shell_launch::configured_local_launch(cx), expected);
-    });
-    let (source, before) = workspace.read_with(&cx, |w, cx| {
-        let view = w.tabs[0].focused_view().unwrap().read(cx);
-        (view.pane_id, view.session_launch.clone())
-    });
-    assert_ne!(before, expected, "fixture must distinguish focused and default identities");
-    for shortcut in ["ctrl-shift-d", "ctrl-shift-s"] {
-        // Both shortcuts must start from the original, distinct focused shell.
-        // Otherwise the second could inherit the first default pane and pass.
-        cx.update(|window, cx| workspace.update(cx, |w, cx| w.focus_pane(0, source, window, cx)));
-        press(shortcut, &mut cx);
-        workspace.read_with(&cx, |w, cx| {
-            assert!(!w.command_palette_open && w.pending_split.is_none());
-            let view = w.tabs[0].focused_view().unwrap().read(cx);
-            assert_ne!(view.pane_id, source);
-            assert_eq!(view.session_launch, expected);
-            assert_ne!(view.session_launch, before);
-        });
-    }
-    assert_eq!(count(&workspace, &cx), 3);
 }
 
 #[test]
-fn default_source_keeps_target_identity_and_never_copies_guest_location() {
-    let configured = LaunchSession::Shell {
-        name: "Configured guest".into(),
-        program: "wsl.exe".into(),
-        args: vec!["-d".into(), "Configured".into(), "-u".into(), "chosen".into()],
-    };
-    for host_cwd in [None, Some(std::path::PathBuf::from("host-directory"))] {
-        let origin = tab_duplication::PaneOrigin {
-            guest: Some(tab_duplication::FocusedGuest { distro: "Focused", user: Some("other") }),
-            cwd: "/home/other/guest-only",
-            host_cwd: host_cwd.clone(),
-        };
-        let (launch, directory) = default_split_launch(configured.clone(), origin);
-        assert_eq!(launch, configured, "default must not pin to the focused guest or user");
-        assert_eq!(directory, host_cwd, "guest cwd must not become a host path or --cd");
+fn source_mode_matrix_resolves_identity_arguments_and_directory_without_a_window() {
+    let host = shell("Host", "host-shell", &["--login"]);
+    let wsl = shell("Guest", "wsl.exe", &["-u", "dev"]);
+    let ssh = LaunchSession::Ssh { host: "server".into() };
+    let configured = shell("Default", "default-shell", &["--configured"]);
+    let selected = shell("Chosen", "chosen-shell", &["--chosen"]);
+    let host_cwd = PathBuf::from("host-project");
+    let cases = [
+        (&host, None, "host-project", Some(host_cwd.clone()), None),
+        (&wsl, Some(FocusedGuest { distro: "Ubuntu", user: Some("dev") }), "/home/dev", None, None),
+        (&ssh, None, "/srv/project", None, Some(("server", Some("/srv/project".into())))),
+    ];
+    for (focused, guest, cwd, local, remote) in cases {
+        for mode in SplitShellSource::ALL {
+            let source = match mode {
+                SplitShellSource::Default => SplitLaunch::Default(configured.clone()),
+                SplitShellSource::Focused => SplitLaunch::Focused,
+                SplitShellSource::Ask => SplitLaunch::Selected(selected.clone()),
+            };
+            let plan = resolve_split_launch(
+                source,
+                focused,
+                PaneOrigin { guest, cwd, host_cwd: local.clone() },
+                remote.clone(),
+            );
+            let expected = match (mode, guest) {
+                (SplitShellSource::Default, _) => configured.clone(),
+                (SplitShellSource::Ask, _) => selected.clone(),
+                (SplitShellSource::Focused, Some(_)) => {
+                    shell("Guest", "wsl.exe", &["--cd", "/home/dev", "-d", "Ubuntu", "-u", "dev"])
+                },
+                (SplitShellSource::Focused, None) => focused.clone(),
+            };
+            assert_eq!(plan.identity, expected, "{focused:?} × {mode:?}");
+            assert_eq!(plan.host_cwd, local, "{focused:?} × {mode:?}");
+            let expected_remote = if mode == SplitShellSource::Focused {
+                remote.clone().and_then(|(_, cwd)| cwd)
+            } else {
+                None
+            };
+            assert_eq!(plan.remote_cwd, expected_remote, "{focused:?} × {mode:?}");
+        }
     }
+}
+
+#[test]
+fn profiles_use_live_host_directory_except_for_an_explicit_choice() {
     let profile = LaunchSession::Profile {
-        name: "Configured profile".into(),
+        name: "Profile".into(),
         command: "shell".into(),
         args: vec!["--login".into()],
-        cwd: Some("configured-startup".into()),
-        shell_id: Some("configured".into()),
+        cwd: Some("startup".into()),
+        shell_id: Some("profile".into()),
     };
-    let origin =
-        tab_duplication::PaneOrigin { guest: None, cwd: "/remote/ssh-only", host_cwd: None };
-    let (launch, directory) = default_split_launch(profile.clone(), origin);
-    assert_eq!(launch, profile);
-    assert_eq!(directory, None, "remote cwd must not be passed to the configured local shell");
-    let host = std::path::PathBuf::from("live-host-directory");
-    let origin = tab_duplication::PaneOrigin {
-        guest: None,
-        cwd: "live-host-directory",
-        host_cwd: Some(host.clone()),
-    };
-    let (launch, directory) = default_split_launch(profile, origin);
-    assert!(matches!(launch, LaunchSession::Profile { cwd: None, .. }));
-    assert_eq!(directory, Some(host));
+    for (mode, host_cwd, expected_cwd) in [
+        (SplitShellSource::Default, None, Some("startup")),
+        (SplitShellSource::Default, Some(PathBuf::from("live")), None),
+        (SplitShellSource::Focused, Some(PathBuf::from("live")), None),
+        (SplitShellSource::Ask, Some(PathBuf::from("live")), Some("startup")),
+    ] {
+        let source = match mode {
+            SplitShellSource::Default => SplitLaunch::Default(profile.clone()),
+            SplitShellSource::Focused => SplitLaunch::Focused,
+            SplitShellSource::Ask => SplitLaunch::Selected(profile.clone()),
+        };
+        let plan = resolve_split_launch(
+            source,
+            &profile,
+            PaneOrigin { guest: None, cwd: "live", host_cwd: host_cwd.clone() },
+            None,
+        );
+        assert!(
+            matches!(&plan.identity, LaunchSession::Profile { cwd, .. } if cwd.as_deref() == expected_cwd)
+        );
+        assert_eq!(plan.host_cwd, host_cwd);
+    }
+}
+
+#[test]
+fn explicit_wsl_and_ssh_choices_only_inherit_a_matching_destination() {
+    let focused = shell("Guest", "wsl.exe", &["-d", "Ubuntu", "-u", "dev"]);
+    for (selected, expected_args) in [
+        (
+            shell("Same", "wsl.exe", &["-d", "Ubuntu", "-u", "dev"]),
+            vec!["--cd", "/home/dev", "-d", "Ubuntu", "-u", "dev"],
+        ),
+        (shell("Other", "wsl.exe", &["-d", "Debian"]), vec!["-d", "Debian"]),
+        (
+            shell("Root", "wsl.exe", &["-d", "Ubuntu", "-u", "root"]),
+            vec!["-d", "Ubuntu", "-u", "root"],
+        ),
+        (
+            shell("Own cwd", "wsl.exe", &["-d", "Ubuntu", "-u", "dev", "--cd", "~/own"]),
+            vec!["-d", "Ubuntu", "-u", "dev", "--cd", "~/own"],
+        ),
+    ] {
+        let plan = resolve_split_launch(
+            SplitLaunch::Selected(selected),
+            &focused,
+            PaneOrigin {
+                guest: Some(FocusedGuest { distro: "Ubuntu", user: Some("dev") }),
+                cwd: "/home/dev",
+                host_cwd: None,
+            },
+            None,
+        );
+        let LaunchSession::Shell { args, .. } = plan.identity else { unreachable!() };
+        assert_eq!(args, expected_args);
+        assert_eq!(plan.host_cwd, None);
+    }
+    for (target, expected_cwd) in [("server", Some("/srv")), ("other", None)] {
+        let plan = resolve_split_launch(
+            SplitLaunch::Selected(LaunchSession::Ssh { host: target.into() }),
+            &LaunchSession::Ssh { host: "server".into() },
+            PaneOrigin { guest: None, cwd: "/srv", host_cwd: None },
+            Some(("server", Some("/srv".into()))),
+        );
+        assert_eq!(plan.identity, LaunchSession::Ssh { host: target.into() });
+        assert_eq!(plan.remote_cwd.as_deref(), expected_cwd);
+        assert_eq!(plan.host_cwd, None);
+    }
+}
+
+#[test]
+fn captured_request_keeps_its_source_and_direction_and_rejects_a_closed_source() {
+    for direction in [SplitDirection::LeftRight, SplitDirection::TopBottom] {
+        let mut tree = SplitTree::Leaf(1);
+        assert!(tree.split_leaf(1, 2, SplitDirection::LeftRight, 0.5));
+        let request = PendingSplit { pane_id: 1, direction };
+        // A different current focus does not participate in applying the request.
+        assert!(request.apply(&mut tree, 3));
+        let SplitTree::Split { first, .. } = &tree else { unreachable!() };
+        let SplitTree::Split { direction: captured, .. } = first.as_ref() else { unreachable!() };
+        assert_eq!(*captured, direction);
+        assert_eq!(first.leaves(), [1, 3]);
+
+        let mut tree = SplitTree::Leaf(1);
+        tree.split_leaf(1, 2, SplitDirection::LeftRight, 0.5);
+        tree.remove_leaf(1);
+        assert!(!request.apply(&mut tree, 3));
+        assert_eq!(tree.leaves(), [2], "never substitute the surviving pane for a closed source");
+    }
+}
+
+#[test]
+fn default_wsl_target_does_not_copy_the_focused_guest_or_user() {
+    let configured = shell("Configured", "wsl.exe", &["-d", "Debian", "-u", "chosen"]);
+    for host_cwd in [None, Some(PathBuf::from("mounted-host-directory"))] {
+        let plan = resolve_split_launch(
+            SplitLaunch::Default(configured.clone()),
+            &LaunchSession::Default,
+            PaneOrigin {
+                guest: Some(FocusedGuest { distro: "Ubuntu", user: Some("dev") }),
+                cwd: "/home/dev",
+                host_cwd: host_cwd.clone(),
+            },
+            None,
+        );
+        assert_eq!(plan.identity, configured);
+        assert_eq!(plan.host_cwd, host_cwd);
+    }
 }

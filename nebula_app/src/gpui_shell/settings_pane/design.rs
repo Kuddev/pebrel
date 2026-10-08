@@ -132,7 +132,6 @@ impl SettingsPane {
         let reset = dirty.then(|| {
             div()
                 .id(SharedString::from(format!("setting-reset-{label}")))
-                .debug_selector(move || format!("setting-reset-{label}"))
                 .size(px(32.0))
                 .rounded_md()
                 .flex()
@@ -239,7 +238,6 @@ impl SettingsPane {
                         };
                         heading.child(
                             Button::new(SharedString::from(format!("settings-help-{label}")))
-                                .debug_selector(move || format!("settings-help-{label}"))
                                 .icon(IconName::Info)
                                 .ghost()
                                 .size(px(32.0))
@@ -271,18 +269,11 @@ impl SettingsPane {
             })
             .when_some(desc.details.filter(|_| expanded), |text, details| {
                 text.child(
-                    v_flex()
-                        .id(SharedString::from(format!("settings-details-{label}")))
-                        .debug_selector(move || format!("settings-details-{label}"))
+                    div()
                         .mt(px(8.0))
                         .text_size(px(base_px * DESC_SCALE))
                         .text_color(theme.muted_foreground)
-                        .children(details.lines().enumerate().map(|(index, line)| {
-                            div()
-                                .id(SharedString::from(format!("settings-detail-{label}-{index}")))
-                                .debug_selector(move || format!("settings-detail-{label}-{index}"))
-                                .child(Self::desc_text(line, cx))
-                        })),
+                        .child(Self::desc_text(details, cx)),
                 )
             });
         let control = control.into_any_element();

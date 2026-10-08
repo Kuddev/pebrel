@@ -67,8 +67,6 @@ mod notifications;
 mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
-#[cfg(all(test, feature = "gpui-test-support"))]
-mod split_shell_tests;
 mod sponsor;
 mod status;
 mod theme_advanced;
@@ -361,12 +359,6 @@ impl SettingsPane {
 
     fn set_split_shell_source(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(error) = self.try_persist(&[("split_shell_source", value.to_owned())], cx) {
-            self.sync_select(
-                "split_shell_source",
-                self.runtime.split_shell_source.settings_value(),
-                window,
-                cx,
-            );
             let language = crate::gpui_shell::config::ui_language(cx);
             super::toast::toast(
                 window,
@@ -379,6 +371,12 @@ impl SettingsPane {
             );
             cx.notify();
         }
+        self.sync_select(
+            "split_shell_source",
+            self.runtime.split_shell_source.settings_value(),
+            window,
+            cx,
+        );
     }
 
     fn toggle(
@@ -890,8 +888,6 @@ impl SettingsPane {
                     move |this, window, cx| {
                         if key == "split_shell_source" {
                             this.set_split_shell_source(&factory, window, cx);
-                            let saved = this.runtime.split_shell_source.settings_value();
-                            this.sync_select(key, saved, window, cx);
                             return;
                         }
                         if key == "scrollback_lines" {

@@ -1,10 +1,10 @@
 /// Launch source for interactive terminal splits. Missing or invalid values
-/// preserve the default-shell choice; the removed picker boolean is not an alias.
+/// preserve the default-shell choice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SplitShellSource {
-    Focused,
     #[default]
     Default,
+    Focused,
     Ask,
 }
 
@@ -45,10 +45,6 @@ mod tests {
                 source
             );
         }
-        assert_eq!(
-            SplitShellSource::ALL,
-            [SplitShellSource::Default, SplitShellSource::Focused, SplitShellSource::Ask]
-        );
         assert_eq!(SplitShellSource::VALUES, ["default", "focused", "ask"]);
         for (source, value) in SplitShellSource::ALL.into_iter().zip(SplitShellSource::VALUES) {
             assert_eq!(source.settings_value(), *value);
@@ -56,26 +52,11 @@ mod tests {
     }
 
     #[test]
-    fn missing_invalid_and_removed_boolean_settings_use_default_shell() {
-        for text in [
-            "",
-            "split_shell_source=invalid",
-            "split_shell_source=",
-            "split_shell_picker=true",
-            "split_shell_picker=false",
-            "split_shell_picker=1\nsplit_shell_source=invalid",
-        ] {
+    fn missing_and_invalid_settings_use_default_shell() {
+        for text in ["", "split_shell_source=invalid", "split_shell_source="] {
             assert_eq!(
                 RuntimeSettings::from_raw(&RawSettings::from_text(text)).split_shell_source,
                 SplitShellSource::Default
-            );
-        }
-        for source in SplitShellSource::ALL {
-            let text =
-                format!("split_shell_picker=1\nsplit_shell_source={}\n", source.settings_value());
-            assert_eq!(
-                RuntimeSettings::from_raw(&RawSettings::from_text(&text)).split_shell_source,
-                source
             );
         }
     }

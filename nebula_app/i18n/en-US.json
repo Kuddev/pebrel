@@ -19,7 +19,7 @@
   "settings": {
     "split_shell_source": "Split shell source",
     "split_shell_source_description": "Chooses the shell for interactive splits. Defaults to the configured \"Default shell\".",
-    "split_shell_source_details": "Default: Uses the configured \"Default shell\" and inherits only a host directory.\nFocused: Follows the current pane’s Shell, Profile or SSH identity.\nAsk: Opens the launcher before each split; Escape cancels without creating a pane.\nChanges apply immediately to split shortcuts.",
+    "split_shell_source_details": "Default uses the configured \"Default shell\" and inherits only a host directory. Focused follows the current pane’s Shell, Profile or SSH identity. Ask opens the launcher before each split; Escape cancels without creating a pane. Changes apply immediately to split shortcuts.",
     "split_shell_source_focused": "Focused pane",
     "split_shell_source_default": "Default shell",
     "split_shell_source_ask": "Ask each time",

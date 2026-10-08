@@ -12,24 +12,59 @@ pub(super) struct PendingSplit {
     direction: SplitDirection,
 }
 
+impl PendingSplit {
+    fn apply(self, tree: &mut SplitTree<u64>, new_id: u64) -> bool {
+        tree.split_leaf(self.pane_id, new_id, self.direction, 0.5)
+    }
+}
+
 enum SplitLaunch {
     Focused,
-    Default,
+    Default(LaunchSession),
     Selected(LaunchSession),
 }
 
-/// Default splits never copy a source guest/user/remote directory. The existing
-/// pane-origin adapter alone decides whether a source directory is host-visible.
-fn default_split_launch(
-    mut launch: LaunchSession,
+/// Prepared launch parameters; resolving them does not read settings, probe paths
+/// or create a terminal. The window adapter supplies the captured pane snapshot.
+struct SplitLaunchPlan {
+    identity: LaunchSession,
+    host_cwd: Option<std::path::PathBuf>,
+    remote_cwd: Option<String>,
+}
+
+fn resolve_split_launch(
+    source: SplitLaunch,
+    focused: &LaunchSession,
     origin: tab_duplication::PaneOrigin<'_>,
-) -> (LaunchSession, Option<std::path::PathBuf>) {
-    if origin.host_cwd.is_some()
-        && let LaunchSession::Profile { cwd, .. } = &mut launch
-    {
-        *cwd = None;
+    remote: Option<(&str, Option<String>)>,
+) -> SplitLaunchPlan {
+    let (identity, host_cwd) = match source {
+        SplitLaunch::Focused => {
+            let mut identity = focused.clone();
+            // The live pane directory takes precedence over profile startup cwd.
+            if let LaunchSession::Profile { cwd, .. } = &mut identity {
+                *cwd = None;
+            }
+            tab_duplication::copy_launch(identity, tab_duplication::CopyKind::Split, origin)
+        },
+        SplitLaunch::Default(mut identity) => {
+            if origin.host_cwd.is_some()
+                && let LaunchSession::Profile { cwd, .. } = &mut identity
+            {
+                *cwd = None;
+            }
+            (identity, origin.host_cwd)
+        },
+        SplitLaunch::Selected(identity) => {
+            tab_duplication::copy_launch(identity, tab_duplication::CopyKind::Selected, origin)
+        },
+    };
+    if let LaunchSession::Ssh { host } = &identity {
+        let remote_cwd =
+            remote.filter(|(destination, _)| *destination == host).and_then(|(_, cwd)| cwd);
+        return SplitLaunchPlan { identity, host_cwd: None, remote_cwd };
     }
-    (launch, origin.host_cwd)
+    SplitLaunchPlan { identity, host_cwd, remote_cwd: None }
 }
 
 impl NebulaWorkspace {
@@ -55,7 +90,9 @@ impl NebulaWorkspace {
                 return;
             },
             SplitShellSource::Focused => SplitLaunch::Focused,
-            SplitShellSource::Default => SplitLaunch::Default,
+            SplitShellSource::Default => {
+                SplitLaunch::Default(super::shell_launch::configured_local_launch(cx))
+            },
         };
         if let Err(error) = self.split_at(request, launch, window, cx) {
             self.report_split_error(error, window, cx);
@@ -138,50 +175,25 @@ impl NebulaWorkspace {
         })?;
         let (cols, rows, identity, launch) = {
             let view = anchor.view.read(cx);
-            let explicit = matches!(source, SplitLaunch::Selected(_));
-            let use_default = matches!(source, SplitLaunch::Default);
-            let mut identity = match source {
-                SplitLaunch::Focused => view.session_launch.clone(),
-                SplitLaunch::Default => super::shell_launch::configured_local_launch(cx),
-                SplitLaunch::Selected(launch) => launch,
-            };
-            // Focused inheritance uses the live pane directory, not profile startup cwd.
-            if !explicit
-                && !use_default
-                && let LaunchSession::Profile { cwd, .. } = &mut identity
-            {
-                *cwd = None;
-            }
-            let (identity, launch) = match &identity {
+            let remote = view.ssh_destination.as_deref().map(|host| {
+                let cwd = view
+                    .remote_cwd()
+                    .or_else(|| self.remote_browser.path_for(pane_id, host).map(ToOwned::to_owned));
+                (host, cwd)
+            });
+            let plan = resolve_split_launch(
+                source,
+                &view.session_launch,
+                tab_duplication::PaneOrigin::of(view),
+                remote,
+            );
+            let launch = match &plan.identity {
                 LaunchSession::Ssh { host } => {
-                    let cwd = (view.ssh_destination.as_deref() == Some(host.as_str()))
-                        .then(|| {
-                            view.remote_cwd().or_else(|| {
-                                self.remote_browser.path_for(pane_id, host).map(ToOwned::to_owned)
-                            })
-                        })
-                        .flatten();
-                    let launch = TerminalLaunch::Ssh { destination: host.clone(), cwd };
-                    (identity, launch)
+                    TerminalLaunch::Ssh { destination: host.clone(), cwd: plan.remote_cwd }
                 },
-                _ => {
-                    // An explicitly selected target follows its own distro/user/directory.
-                    let kind = if explicit {
-                        tab_duplication::CopyKind::Selected
-                    } else {
-                        tab_duplication::CopyKind::Split
-                    };
-                    let origin = tab_duplication::PaneOrigin::of(view);
-                    let (identity, cwd) = if use_default {
-                        default_split_launch(identity, origin)
-                    } else {
-                        tab_duplication::copy_launch(identity, kind, origin)
-                    };
-                    let launch = Self::terminal_launch_from_session(&identity, cwd);
-                    (identity, launch)
-                },
+                _ => Self::terminal_launch_from_session(&plan.identity, plan.host_cwd),
             };
-            (view.grid_cols() as u16, view.grid_rows() as u16, identity, launch)
+            (view.grid_cols() as u16, view.grid_rows() as u16, plan.identity, launch)
         };
         let grid = match direction {
             SplitDirection::LeftRight => ((cols / 2).max(2), rows.max(2)),
@@ -198,7 +210,7 @@ impl NebulaWorkspace {
             pane.view.read(cx).shutdown();
             return Err(ApiError::new("action_failed", "the source terminal tab changed"));
         };
-        if !tree.split_leaf(pane_id, new_id, direction, 0.5) {
+        if !request.apply(tree, new_id) {
             pane.view.read(cx).shutdown();
             return Err(ApiError::new("action_failed", "the source pane could not be split"));
         }
@@ -215,5 +227,8 @@ impl NebulaWorkspace {
     }
 }
 
-#[cfg(all(test, feature = "gpui-test-support"))]
+#[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod smoke_tests;

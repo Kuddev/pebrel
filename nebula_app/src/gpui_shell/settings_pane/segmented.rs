@@ -209,8 +209,6 @@ impl SettingsPane {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if key == "split_shell_source" {
                                     this.set_split_shell_source(value, window, cx);
-                                    let saved = this.runtime.split_shell_source.settings_value();
-                                    this.sync_select(key, saved, window, cx);
                                     return;
                                 }
                                 match this.try_persist(&[(key, value.to_owned())], cx) {
