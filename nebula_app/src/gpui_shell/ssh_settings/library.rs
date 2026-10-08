@@ -701,22 +701,61 @@ impl SettingsPane {
         let group = name.to_owned();
         let keyboard_group = group.clone();
         let selector = format!("ssh-group-{name}");
+        let tooltip_label = format!("{label} ({count})");
+        let theme = cx.theme();
+        let hover = theme.list_hover;
+        let pressed = theme.list_active;
+        let focus = theme.primary;
         div()
             .h(px(HOST_ROW_HEIGHT))
             .w_full()
             .p_2()
             .child(
-                Button::new(SharedString::from(format!("ssh-group-{name}")))
+                h_flex()
+                    .id(SharedString::from(format!("ssh-group-{name}")))
                     .debug_selector(move || selector.clone())
-                    .ghost()
                     .w_full()
                     .h_full()
-                    .justify_start()
-                    .icon(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown })
-                    .label(format!("{label} ({count})"))
-                    .tooltip(action)
-                    .toggled(!collapsed)
-                    .disabled(searching)
+                    .px_2()
+                    .gap_2()
+                    .items_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border.opacity(0.0))
+                    .role(if searching { gpui::Role::Heading } else { gpui::Role::Button })
+                    .aria_label(tooltip_label.clone())
+                    .aria_description(action)
+                    .aria_expanded(!collapsed)
+                    .when(searching, |header| header.opacity(0.6))
+                    .when(!searching, |header| {
+                        header
+                            .focusable()
+                            .tab_stop(true)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(hover))
+                            .active(move |style| style.bg(pressed))
+                            .focus_visible(move |style| style.border_color(focus))
+                    })
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tooltip_label.clone())
+                            .build(window, cx)
+                    })
+                    .child(
+                        Icon::new(if collapsed {
+                            IconName::ChevronRight
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .small(),
+                    )
+                    .child(div().min_w_0().truncate().text_sm().child(label.to_owned()))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("({count})")),
+                    )
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                         if !searching
                             && event.keystroke.modifiers == gpui::Modifiers::default()
@@ -727,7 +766,9 @@ impl SettingsPane {
                         }
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.toggle_library_group(&group, cx);
+                        if !searching {
+                            this.toggle_library_group(&group, cx);
+                        }
                     })),
             )
             .into_any_element()
