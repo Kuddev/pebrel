@@ -2,6 +2,7 @@ package io.github.kuddev.pebrel.mobile.connection
 
 import io.github.kuddev.pebrel.terminal.TerminalFrame
 import io.github.kuddev.pebrel.terminal.TerminalRow
+import io.github.kuddev.pebrel.terminal.TerminalHistory
 import org.json.JSONObject
 
 /** Strict decoder: packet text cannot inject ANSI, clipboard operations or terminal input. */
@@ -84,8 +85,20 @@ internal fun decodeDesktopScreen(screen: JSONObject, theme: IntArray): TerminalF
     val cx = cursor.getInt(0)
     val cy = cursor.getInt(1)
     if (cursor.getInt(2) == 1) require(cx in 0 until columns && cy in decoded.indices)
+    val history = screen.optJSONObject("history")?.let { value ->
+        val first = value.getLong("first")
+        val oldest = value.getLong("oldest")
+        val end = value.getLong("end")
+        val liveStart = value.getLong("live_start")
+        val liveRows = value.getInt("live_rows")
+        require(oldest in 0..9_007_199_254_740_991 && end in oldest..9_007_199_254_740_991)
+        require(first in oldest..end && rows.length().toLong() <= end - first)
+        require(liveRows in 1..200 && liveStart in oldest..end && end - liveStart == liveRows.toLong())
+        require(value.get("application_scroll") is Boolean)
+        TerminalHistory(first, oldest, end, liveStart, liveRows, value.getBoolean("application_scroll"))
+    }
     // The optional tail belongs to the phone's surrounding chrome. Native PTY
     // frames keep their original eight entries; the cell painter is unchanged.
     return TerminalFrame(decoded, intArrayOf(columns, decoded.size, cx, cy, cursor.getInt(2),
-        palette[257], palette[258], 2, palette[256], palette[1]), wraps)
+        palette[257], palette[258], 2, palette[256], palette[1]), wraps, history)
 }

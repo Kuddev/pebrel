@@ -60,7 +60,7 @@ impl SettingsPane {
                 self.runtime.background_image_cover_chrome,
                 cx,
             ))
-            .child(self.custom_effect_settings(cx));
+            .child(self.custom_effect_settings(window, cx));
         let cursor = self
             .group(language.pick("光标", "Cursor"), cx)
             .child(self.select_row(
@@ -189,7 +189,11 @@ impl SettingsPane {
             .child(custom_background)
     }
 
-    pub(super) fn custom_effect_settings(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn custom_effect_settings(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         use crate::i18n::Message;
         let language = crate::gpui_shell::config::ui_language(cx);
         let expanded = self.effect_settings_open;
@@ -213,7 +217,7 @@ impl SettingsPane {
                     })),
             )
             .when(expanded, |group| {
-                group.child(self.terminal_effect_row(cx)).child(self.select_row(
+                group.child(self.terminal_effect_row(window, cx)).child(self.select_row(
                     "terminal_effect_animation",
                     language.text(Message::TerminalEffectAnimation),
                     language.text(Message::TerminalEffectAnimationDescription),

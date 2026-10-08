@@ -103,6 +103,16 @@ struct ReadParams {
     screen: bool,
     #[serde(default)]
     screen_viewport: bool,
+    #[serde(default)]
+    screen_history: Option<HistoryParams>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryParams {
+    #[serde(default)]
+    start: Option<u64>,
+    rows: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -361,11 +371,24 @@ impl RuntimeCommand {
                 if params.screen_viewport && !params.screen {
                     return Err(ApiError::invalid_params("screen_viewport requires screen=true"));
                 }
+                if let Some(history) = &params.screen_history {
+                    if !params.screen
+                        || params.screen_viewport
+                        || !(1..=200).contains(&history.rows)
+                        || history.start.is_some_and(|start| start > 9_007_199_254_740_991)
+                    {
+                        return Err(ApiError::invalid_params(
+                            "screen_history requires screen=true, 1..200 rows, a safe unsigned start and no screen_viewport",
+                        ));
+                    }
+                }
                 Ok(Self::ReadPane {
                     window_id: params.window_id,
                     pane_id: params.pane_id,
                     lines: params.lines,
-                    screen: params.screen.then_some(if params.screen_viewport {
+                    screen: params.screen.then_some(if let Some(history) = params.screen_history {
+                        ScreenMode::History { start: history.start, rows: history.rows }
+                    } else if params.screen_viewport {
                         ScreenMode::Viewport
                     } else {
                         ScreenMode::Live
