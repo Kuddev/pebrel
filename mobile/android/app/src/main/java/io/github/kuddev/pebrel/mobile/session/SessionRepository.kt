@@ -81,6 +81,8 @@ class SessionRepository(private val context: Context,
     private var readJob: Job? = null
     private var readGeneration = 0L
     private var desktopReader: DesktopReadScheduler? = null
+    private var desktopHistoryStart: Long? = null
+    private var desktopHistoryRevision = 0L
     private val desktopClients = java.util.concurrent.ConcurrentHashMap<String, DesktopRuntimeClient>()
     private val desktopTransitions = mutableMapOf<String, DesktopTransitions>()
     private val conversationCache = ConversationCache()
@@ -621,6 +623,14 @@ class SessionRepository(private val context: Context,
     fun readDesktop(id: String, pane: DesktopPane) {
         if (output.value.target == "$id:${pane.window}:${pane.id}") desktopReader?.refresh()
     }
+    fun requestDesktopHistory(id: String, pane: DesktopPane, start: Long?) {
+        if (output.value.target != "$id:${pane.window}:${pane.id}" ||
+            desktopClients[id]?.terminalHistorySupported != true || start != null && start < 0) return
+        if (desktopHistoryStart == start) return
+        desktopHistoryStart = start
+        desktopHistoryRevision++
+        desktopReader?.refresh()
+    }
     suspend fun watchDesktop(id: String, pane: DesktopPane) {
         val client = desktopClients[id] ?: return
         val identity = "$id:${pane.window}:${pane.id}"
@@ -629,6 +639,7 @@ class SessionRepository(private val context: Context,
         val reader = DesktopReadScheduler()
         desktopReader = reader
         readJob = currentCoroutineContext().job
+        if (output.value.target != identity) { desktopHistoryStart = null; desktopHistoryRevision++ }
         output.value = if (output.value.target == identity) output.value else DesktopOutput(identity, loading = true)
         try {
             suspend fun publish(read: DesktopPaneRead) {
@@ -649,9 +660,13 @@ class SessionRepository(private val context: Context,
             if (client.streamPane(target(pane).put("lines", 100), ::publish)) return
             reader.run {
                 val previous = output.value
+                val pageRevision = desktopHistoryRevision
+                val params = target(pane).put("lines", 100)
+                if (client.terminalHistorySupported) params.put("screen_history", JSONObject().put("rows", 200)
+                    .apply { desktopHistoryStart?.let { put("start", it) } })
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
-                        val read = client.readPane(target(pane).put("lines", 100))
+                        val read = client.readPane(params)
                         val response = read.response
                         val frame = if (!read.screenChanged && previous.frame != null) previous.frame else response.optJSONObject("screen")?.let {
                             decodeDesktopScreen(it, checkNotNull(terminalColors))
@@ -661,6 +676,12 @@ class SessionRepository(private val context: Context,
                 }
                 currentCoroutineContext().ensureActive()
                 if (generation != readGeneration || desktopClients[id] !== client) throw CancellationException()
+                // 新的阅读页请求已经取代旧请求，旧回包不得把手机拉回之前的页。
+                if (pageRevision != desktopHistoryRevision) {
+                    // 丢弃的回包已经推进解码基线；下一页须重建，不能复用仍在显示的旧帧。
+                    client.resetScreen()
+                    return@run false
+                }
                 val next = result.getOrNull() ?: previous.copy(loading = false)
                 output.value = next
                 if (result.isFailure) {
@@ -688,7 +709,7 @@ class SessionRepository(private val context: Context,
         readJob?.cancel()
         desktopReader = null
         // 只保留最近一帧供页面重建，读取任务仍立即结束；主动关闭时释放它。
-        if (clearOutput) output.value = DesktopOutput()
+        if (clearOutput) { output.value = DesktopOutput(); desktopHistoryStart = null; desktopHistoryRevision++ }
     }
     fun desktopInput(id: String, pane: DesktopPane): DesktopTerminalInput {
         val client = desktopClients[id]

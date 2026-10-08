@@ -1,6 +1,16 @@
 name: Android Preview release package
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version already present in the selected source
+        required: true
+        type: string
+      source_commit:
+        description: Exact 40-character source commit to rebuild without moving its release tag
+        required: true
+        type: string
   workflow_call:
     inputs:
       version:
@@ -14,6 +24,7 @@ env:
   PYTHONUTF8: "1"
   RUST_TOOLCHAIN: "1.97.1"
   CARGO_TERM_COLOR: always
+  SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
 
 jobs:
   relay:
@@ -36,6 +47,12 @@ jobs:
       RUSTFLAGS: -C linker=musl-gcc
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+      - name: Verify the selected source commit
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -60,7 +77,7 @@ jobs:
           cargo build --locked --release -p pebrel-mobile-link --features relay --bin pebrel-relay
           python3 mobile/tools/package_native_relay.py \
             --binary "target/$RELAY_TARGET/release/pebrel-relay" \
-            --output relay-assets --arch "$RELAY_ARCH" --commit "$GITHUB_SHA"
+            --output relay-assets --arch "$RELAY_ARCH" --commit "$SOURCE_COMMIT"
       - name: Save compiled relay
         if: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
@@ -83,6 +100,12 @@ jobs:
       PACKAGE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+      - name: Verify the selected source commit
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -116,6 +139,9 @@ jobs:
           path: 'mobile/android/ghostty/build/upstream'
           key: android-vt-linux-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json', 'mobile/tools/build_ghostty.py') }}
       - name: Build both Android native ABIs
+        env:
+          # 恢复旧标签时也隔离父仓库；旧版构建脚本会继承此环境。
+          GIT_CEILING_DIRECTORIES: ${{ github.workspace }}/mobile/android
         run: |
           python3 mobile/tools/build_ghostty.py
           python3 mobile/tools/build_russh.py
@@ -183,7 +209,7 @@ jobs:
             gradle --no-daemon -p mobile/android :app:connectedPreviewAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.kuddev.pebrel.mobile.GhosttyEngineTest,io.github.kuddev.pebrel.mobile.SshIntegrationTest#privateKeysAuthenticateWithPassphrasesAndNeverFallBackToPassword,io.github.kuddev.pebrel.mobile.SshIntegrationTest#sftpRoundTripPagingAndCancellationKeepTheRealShellUsable,io.github.kuddev.pebrel.mobile.SshIntegrationTest#realPasswordShellStreamsOutputThroughGhostty,io.github.kuddev.pebrel.mobile.SshIntegrationTest#wrongPasswordReportsAuthenticationAndWipesSecret,io.github.kuddev.pebrel.mobile.SshIntegrationTest#changedHostKeyNeverReachesAuthentication,io.github.kuddev.pebrel.mobile.SshIntegrationTest#declinedTrustNeverAuthenticates,io.github.kuddev.pebrel.mobile.SshIntegrationTest#execKeepsStderrOutOfRpcStdoutAndPreservesExitCode -Pandroid.testInstrumentationRunnerArguments.sshFingerprint="$SSH_FINGERPRINT" -Pandroid.testInstrumentationRunnerArguments.sftpFixtureDirectory=paging
       - name: Verify signing, identity, native payload and test results
         run: |
-          python3 scripts/android_release.py --version "$PACKAGE_VERSION" --commit "$GITHUB_SHA" \
+          python3 scripts/android_release.py --version "$PACKAGE_VERSION" --commit "$SOURCE_COMMIT" \
             --sdk "$ANDROID_HOME" --output dist --report android-evidence/android-report.json
       - name: Upload Android Preview asset
         uses: actions/upload-artifact@v4
