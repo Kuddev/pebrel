@@ -87,6 +87,122 @@ fn count(workspace: &Entity<NebulaWorkspace>, cx: &VisualTestContext) -> usize {
 }
 
 #[gpui::test]
+fn cycling_split_mode_shortcut_persists_syncs_the_selector_and_shows_in_app_toasts(
+    cx: &mut TestAppContext,
+) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+    use gpui_component::WindowExt as _;
+
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("split_shell_source", "default".into())]).unwrap();
+    let raw = vec![("ctrl+alt+m".into(), "CycleSplitShellSource".into())];
+    nebula_settings::persist_keybinds(&raw).unwrap();
+    let (_directory, workspace, mut cx) = fixture(cx);
+    workspace.update(&mut cx, |w, cx| w.apply_custom_keybinds(cx));
+
+    for (index, source) in
+        [SplitShellSource::Focused, SplitShellSource::Ask, SplitShellSource::Default]
+            .into_iter()
+            .enumerate()
+    {
+        let previous_toasts = cx.update(|window, cx| {
+            window.notifications(cx).iter().map(|note| note.entity_id()).collect::<Vec<_>>()
+        });
+        press("ctrl-alt-m", &mut cx);
+        assert_eq!(nebula_settings::RuntimeSettings::load().split_shell_source, source);
+        cx.update(|window, cx| {
+            assert_eq!(
+                cx.global::<crate::gpui_shell::config::Settings>().split_shell_source,
+                source
+            );
+            assert_eq!(
+                window
+                    .notifications(cx)
+                    .iter()
+                    .filter(|note| !previous_toasts.contains(&note.entity_id()))
+                    .count(),
+                1,
+                "switching shows a new in-app toast",
+            );
+            workspace.update(cx, |w, cx| {
+                assert_eq!(w.tabs.len(), 1);
+                assert!(w.pending_split.is_none());
+                if index == 0 {
+                    w.open_settings(window, cx);
+                }
+                let pane = w.settings_surface.as_ref().unwrap().0.read(cx);
+                assert_eq!(pane.runtime.split_shell_source, source);
+                assert_eq!(
+                    pane.select_of("split_shell_source")
+                        .unwrap()
+                        .read(cx)
+                        .selected_index(cx)
+                        .unwrap()
+                        .row,
+                    (index + 1) % 3,
+                );
+            });
+        });
+        cx.run_until_parked();
+    }
+    assert_eq!(count(&workspace, &cx), 1);
+    nebula_settings::persist_keybinds(&[("ctrl+alt+n".into(), "CycleSplitShellSource".into())])
+        .unwrap();
+    workspace.update(&mut cx, |w, cx| w.apply_custom_keybinds(cx));
+    press("ctrl-alt-m", &mut cx);
+    assert_eq!(
+        nebula_settings::RuntimeSettings::load().split_shell_source,
+        SplitShellSource::Default
+    );
+    press("ctrl-alt-n", &mut cx);
+    assert_eq!(
+        nebula_settings::RuntimeSettings::load().split_shell_source,
+        SplitShellSource::Focused
+    );
+    nebula_settings::persist_keybinds(&[]).unwrap();
+    workspace.update(&mut cx, |w, cx| w.apply_custom_keybinds(cx));
+    press("ctrl-alt-n", &mut cx);
+    assert_eq!(
+        nebula_settings::RuntimeSettings::load().split_shell_source,
+        SplitShellSource::Focused
+    );
+}
+
+#[gpui::test]
+fn cycling_split_mode_save_failure_keeps_the_current_mode_and_settings_bytes(
+    cx: &mut TestAppContext,
+) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+    use gpui_component::WindowExt as _;
+
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    let (_directory, workspace, mut cx) = fixture(cx);
+    set_source(SplitShellSource::Ask, &mut cx);
+    nebula_settings::persist_keybinds(&[("ctrl+alt+m".into(), "CycleSplitShellSource".into())])
+        .unwrap();
+    workspace.update(&mut cx, |w, cx| w.apply_custom_keybinds(cx));
+    // Invalid UTF-8 makes the existing read-before-write boundary fail without overwriting bytes.
+    std::fs::write(nebula_settings::settings_path(), [0xff]).unwrap();
+    cx.update(|window, cx| {
+        for note in window.notifications(cx).iter() {
+            note.update(cx, |note, cx| note.dismiss(window, cx));
+        }
+    });
+    press("ctrl-alt-m", &mut cx);
+    cx.update(|window, cx| {
+        assert_eq!(
+            cx.global::<crate::gpui_shell::config::Settings>().split_shell_source,
+            SplitShellSource::Ask
+        );
+        assert_eq!(window.notifications(cx).len(), 1, "save failure shows an in-app warning");
+    });
+    assert_eq!(std::fs::read(nebula_settings::settings_path()).unwrap(), [0xff]);
+    assert_eq!(count(&workspace, &cx), 1);
+}
+
+#[gpui::test]
 fn changing_the_live_setting_changes_both_split_shortcuts(cx: &mut TestAppContext) {
     let (_directory, workspace, mut cx) = fixture(cx);
     let identity = workspace

@@ -189,6 +189,9 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
                 this.request_split(SplitDirection::TopBottom, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &splitting::CycleSplitShellSource, window, cx| {
+                this.cycle_split_shell_source(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &RenameActiveTab, window, cx| {
                 let ix = this.active;
                 this.begin_rename(ix, window, cx);

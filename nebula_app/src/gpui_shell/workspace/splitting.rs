@@ -6,6 +6,8 @@ use crate::runtime_api::ApiError;
 use crate::session::LaunchSession;
 use nebula_settings::SplitShellSource;
 
+gpui::actions!(nebula_workspace, [CycleSplitShellSource]);
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PendingSplit {
     pane_id: u64,
@@ -68,6 +70,45 @@ fn resolve_split_launch(
 }
 
 impl NebulaWorkspace {
+    pub(super) fn cycle_split_shell_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let next = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .map(|settings| settings.split_shell_source)
+            .unwrap_or_default()
+            .next();
+        if let Err(error) =
+            nebula_settings::persist_keys(&[("split_shell_source", next.settings_value().into())])
+        {
+            crate::gpui_shell::toast::toast(
+                window,
+                cx,
+                crate::gpui_shell::toast::ToastKind::Warning,
+                language.format(
+                    crate::i18n::Message::SettingsSaveFailed,
+                    &[("error", &error.to_string())],
+                ),
+            );
+            return;
+        }
+        self.apply_runtime_settings(cx);
+        if let Some((pane, _)) = &self.settings_surface {
+            pane.update(cx, |pane, cx| pane.sync_split_shell_source(next, window, cx));
+        }
+        let mode = language.text(match next {
+            SplitShellSource::Default => crate::i18n::Message::SettingsSplitShellSourceDefault,
+            SplitShellSource::Focused => crate::i18n::Message::SettingsSplitShellSourceFocused,
+            SplitShellSource::Ask => crate::i18n::Message::SettingsSplitShellSourceAsk,
+        });
+        crate::gpui_shell::toast::toast(
+            window,
+            cx,
+            crate::gpui_shell::toast::ToastKind::Info,
+            language
+                .format(crate::i18n::Message::SettingsSplitShellSourceChanged, &[("mode", mode)]),
+        );
+    }
+
     /// UI entry point. Runtime API callers use `split_focused` without a picker.
     pub(super) fn request_split(
         &mut self,

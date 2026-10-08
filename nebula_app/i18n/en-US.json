@@ -23,6 +23,7 @@
     "split_shell_source_focused": "Focused pane",
     "split_shell_source_default": "Default shell",
     "split_shell_source_ask": "Ask each time",
+    "split_shell_source_changed": "Split mode: {mode}",
     "completion": {
       "mode": "Completion mode",
       "cycle": "Cycle completion mode",
@@ -156,6 +157,7 @@
       "ctrl_wheel_zoom_description": "Hold Ctrl and scroll over the terminal to change its font size. Turned off, the Ctrl+wheel gesture is ignored completely: it neither resizes text nor scrolls the terminal. Ctrl+=, Ctrl+- and Ctrl+0 still work."
     },
     "keymap": {
+      "cycle_split_shell_source": "Cycle split mode",
       "conflict": "{combo} is assigned to both \"{first}\" and \"{second}\"; only the earlier \"{first}\" action will run.",
       "help": "Click a shortcut and press a new combination. Backspace clears it; Esc cancels. Use the row buttons to clear or restore defaults.",
       "clear": "Clear shortcut (pass through to terminal)",

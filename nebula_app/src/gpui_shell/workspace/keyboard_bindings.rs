@@ -228,6 +228,9 @@ fn workspace_binding_in_context(
         Action::ToggleGitPanel => Some(KeyBinding::new(&combo, ToggleGitPanel, scope)),
         Action::SplitRight => Some(KeyBinding::new(&combo, SplitRight, scope)),
         Action::SplitDown => Some(KeyBinding::new(&combo, SplitDown, scope)),
+        Action::CycleSplitShellSource => {
+            Some(KeyBinding::new(&combo, splitting::CycleSplitShellSource, scope))
+        },
         Action::ToggleZoom => Some(KeyBinding::new(&combo, ToggleZoom, scope)),
         Action::FocusPaneLeft => Some(KeyBinding::new(&combo, FocusPaneLeft, scope)),
         Action::FocusPaneRight => Some(KeyBinding::new(&combo, FocusPaneRight, scope)),

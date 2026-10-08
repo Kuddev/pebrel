@@ -23,6 +23,7 @@
     "split_shell_source_focused": "跟随焦点",
     "split_shell_source_default": "使用默认",
     "split_shell_source_ask": "每次选择",
+    "split_shell_source_changed": "分屏模式：{mode}",
     "completion": {
       "mode": "补齐模式",
       "cycle": "切换补齐模式",
@@ -156,6 +157,7 @@
       "ctrl_wheel_zoom_description": "按住 Ctrl 在终端上滚动即可调整字号。关闭后该手势被完全忽略：既不改变字号，也不滚动终端；Ctrl+=、Ctrl+-、Ctrl+0 快捷键不受影响。"
     },
     "keymap": {
+      "cycle_split_shell_source": "循环切换分屏模式",
       "conflict": "{combo} 同时绑定了「{first}」与「{second}」——只有排前面的「{first}」会触发",
       "help": "点击快捷键后按新组合键；Backspace 清空，Esc 取消。右侧可清空或恢复默认。",
       "clear": "清空快捷键（传给终端）",

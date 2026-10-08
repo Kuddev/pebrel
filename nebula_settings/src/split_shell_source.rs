@@ -12,6 +12,14 @@ impl SplitShellSource {
     pub const ALL: [Self; 3] = [Self::Default, Self::Focused, Self::Ask];
     pub const VALUES: &'static [&'static str] = &["default", "focused", "ask"];
 
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Default => Self::Focused,
+            Self::Focused => Self::Ask,
+            Self::Ask => Self::Default,
+        }
+    }
+
     pub fn from_settings(value: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -48,6 +56,17 @@ mod tests {
         assert_eq!(SplitShellSource::VALUES, ["default", "focused", "ask"]);
         for (source, value) in SplitShellSource::ALL.into_iter().zip(SplitShellSource::VALUES) {
             assert_eq!(source.settings_value(), *value);
+        }
+    }
+
+    #[test]
+    fn cycling_visits_every_source_and_wraps_to_default() {
+        let mut source = SplitShellSource::Default;
+        for expected in
+            [SplitShellSource::Focused, SplitShellSource::Ask, SplitShellSource::Default]
+        {
+            source = source.next();
+            assert_eq!(source, expected);
         }
     }
 

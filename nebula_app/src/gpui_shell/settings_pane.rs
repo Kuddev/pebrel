@@ -372,12 +372,18 @@ impl SettingsPane {
             );
             cx.notify();
         }
-        self.sync_select(
-            "split_shell_source",
-            self.runtime.split_shell_source.settings_value(),
-            window,
-            cx,
-        );
+        self.sync_split_shell_source(self.runtime.split_shell_source, window, cx);
+    }
+
+    pub(super) fn sync_split_shell_source(
+        &mut self,
+        source: nebula_settings::SplitShellSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.runtime.split_shell_source = source;
+        self.sync_select("split_shell_source", source.settings_value(), window, cx);
+        cx.notify();
     }
 
     fn toggle(

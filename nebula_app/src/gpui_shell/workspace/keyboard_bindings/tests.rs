@@ -10,6 +10,32 @@ fn command_aliases_and_modifier_order_share_one_runtime_identity() {
     assert_ne!(gpui_binding_combo("ctrl+shift+k"), expected);
 }
 
+#[test]
+fn split_mode_cycle_is_editable_but_has_no_default_shortcut() {
+    use crate::config::Action;
+    use crate::display::keymap;
+
+    let action = Action::CycleSplitShellSource;
+    assert_eq!(keymap::parse_action("CycleSplitShellSource"), Some(action.clone()));
+    assert!(keymap::EDITABLE_ACTIONS.iter().any(|(candidate, ..)| *candidate == action));
+    assert!(keymap::default_shortcuts().iter().all(|(_, candidate)| *candidate != action));
+    assert!(
+        default_workspace_bindings()
+            .iter()
+            .all(|binding| { !binding.action().as_any().is::<splitting::CycleSplitShellSource>() })
+    );
+    let binding = custom_workspace_binding("ctrl+alt+m", &action).unwrap();
+    assert!(binding.action().as_any().is::<splitting::CycleSplitShellSource>());
+
+    let mut raw = Vec::new();
+    keymap::rebind_action(&mut raw, &action, "ctrl+alt+m".into());
+    assert!(keymap::effective_combo(&action, &keymap::build_bindings(&raw)).is_some());
+    keymap::clear_action(&mut raw, &action);
+    assert!(keymap::effective_combo(&action, &keymap::build_bindings(&raw)).is_none());
+    keymap::reset_action(&mut raw, &action);
+    assert!(keymap::effective_combo(&action, &keymap::build_bindings(&raw)).is_none());
+}
+
 mod macos_command_keys {
     use super::*;
 
