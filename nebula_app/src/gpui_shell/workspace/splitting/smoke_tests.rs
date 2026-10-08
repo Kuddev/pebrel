@@ -110,6 +110,103 @@ fn changing_the_live_setting_changes_both_split_shortcuts(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn profile_save_and_restore_uses_the_saved_pane_directory(cx: &mut TestAppContext) {
+    let (directory, workspace, mut cx) = fixture(cx);
+    let startup = directory.path().join("startup");
+    let live = directory.path().join("live");
+    std::fs::create_dir(&startup).unwrap();
+    std::fs::create_dir(&live).unwrap();
+    let profile = LaunchSession::Profile {
+        name: "Project".into(),
+        command: directory.path().join("missing-profile-shell").to_string_lossy().into_owned(),
+        args: vec!["--login".into()],
+        cwd: Some(startup.to_string_lossy().into_owned()),
+        shell_id: None,
+    };
+    cx.update(|window, cx| {
+        workspace.update(cx, |w, cx| {
+            w.add_terminal_with(profile.clone(), Some(live.clone()), None, window, cx);
+            let pane = w.tabs[w.active].focused_view().unwrap().clone();
+            assert_eq!(
+                pane.read(cx).cwd,
+                startup.to_string_lossy(),
+                "fresh profile keeps startup cwd"
+            );
+            pane.update(cx, |view, _| view.cwd = live.to_string_lossy().into_owned());
+            let json = serde_json::to_string(&w.snapshot_session(cx)).unwrap();
+            let saved: crate::session::Session = serde_json::from_str(&json).unwrap();
+            let tab = saved.tabs.last().unwrap();
+            let Some(crate::session::LayoutSession::Pane { cwd, launch, .. }) = &tab.layout else {
+                panic!("expected a saved profile pane");
+            };
+            assert_eq!(cwd, &live.to_string_lossy());
+            assert_eq!(launch.as_ref(), Some(&profile));
+            assert!(w.restore_tab(tab, false, window, cx));
+            let restored = w.tabs.last().unwrap().focused_view().unwrap().read(cx);
+            assert_eq!(restored.cwd, live.to_string_lossy());
+            assert_eq!(restored.session_launch, profile);
+
+            let mut invalid = tab.clone();
+            let Some(crate::session::LayoutSession::Pane { cwd, .. }) = &mut invalid.layout else {
+                unreachable!();
+            };
+            *cwd = directory.path().join("missing-directory").to_string_lossy().into_owned();
+            assert!(w.restore_tab(&invalid, false, window, cx));
+            assert_eq!(
+                w.tabs.last().unwrap().focused_view().unwrap().read(cx).cwd,
+                startup.to_string_lossy()
+            );
+        });
+    });
+}
+
+#[cfg(unix)]
+#[gpui::test]
+fn focused_split_keeps_the_original_unix_default_after_preference_changes(cx: &mut TestAppContext) {
+    let (directory, workspace, mut cx) = fixture(cx);
+    let program = nebula_terminal::tty::default_shell_program().unwrap();
+    let id = std::path::Path::new(&program).file_name().unwrap().to_str().unwrap();
+    let args = crate::platform::shell::interactive_args(id);
+    cx.update(|window, cx| {
+        workspace.update(cx, |w, cx| {
+            w.add_terminal_with(
+                LaunchSession::Default,
+                Some(directory.path().to_path_buf()),
+                None,
+                window,
+                cx,
+            );
+            let original = w.tabs[w.active].focused_view().unwrap().read(cx).session_launch.clone();
+            let LaunchSession::Shell { program: saved_program, args: saved_args, .. } = &original
+            else {
+                panic!("default shell must be frozen at pane creation");
+            };
+            assert_eq!(saved_program, &program);
+            assert_eq!(saved_args, &args);
+            let settings = cx.global_mut::<crate::gpui_shell::config::Settings>();
+            settings.shell_id = Some(if id == "zsh" { "bash" } else { "zsh" }.into());
+            settings.split_shell_source = SplitShellSource::Focused;
+            w.request_split(SplitDirection::LeftRight, window, cx);
+            assert_eq!(w.tabs[w.active].focused_view().unwrap().read(cx).session_launch, original);
+            w.split_focused(SplitDirection::TopBottom, window, cx).unwrap();
+            assert_eq!(w.tabs[w.active].focused_view().unwrap().read(cx).session_launch, original);
+            let WorkspaceTab::Terminal { panes, .. } = &w.tabs[w.active] else { unreachable!() };
+            assert_eq!(panes.len(), 3);
+            for (index, pane) in panes.iter().enumerate() {
+                let view = pane.view.read(cx);
+                if index > 0 {
+                    assert_eq!(
+                        view.exec_context.as_ref().unwrap().shell_program(),
+                        Some(program.as_str())
+                    );
+                }
+                view.shutdown();
+            }
+        });
+    });
+}
+
+#[gpui::test]
 fn cancelling_ask_leaves_no_pane_or_pending_request(cx: &mut TestAppContext) {
     let (_directory, workspace, mut cx) = fixture(cx);
     set_source(SplitShellSource::Ask, &mut cx);

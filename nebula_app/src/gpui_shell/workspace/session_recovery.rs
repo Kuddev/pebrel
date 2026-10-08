@@ -96,6 +96,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        use crate::gpui_shell::terminal::view::TerminalLaunch;
         use crate::session::{LaunchSession, LayoutSession};
 
         let layout = tab.layout.clone().unwrap_or(LayoutSession::Pane {
@@ -139,15 +140,17 @@ impl NebulaWorkspace {
             } else {
                 crate::session::valid_dir(cwd)
             };
-            let launch = match &launch_session {
-                LaunchSession::Ssh { host } => {
-                    crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
-                        destination: host.clone(),
-                        cwd: (!cwd.is_empty()).then(|| cwd.clone()),
-                    }
+            let mut launch = match &launch_session {
+                LaunchSession::Ssh { host } => TerminalLaunch::Ssh {
+                    destination: host.clone(),
+                    cwd: (!cwd.is_empty()).then(|| cwd.clone()),
                 },
-                _ => Self::terminal_launch_from_session(&launch_session, local_cwd),
+                _ => Self::terminal_launch_from_session(&launch_session, None),
             };
+            // Resume the saved location without changing the profile's launch identity.
+            if let TerminalLaunch::Local { cwd, .. } = &mut launch {
+                *cwd = local_cwd.or(cwd.take());
+            }
             let mut pane = self.new_pane(grid, launch, None, window, cx);
             pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);
             if !matches!(launch_session, LaunchSession::Default) {

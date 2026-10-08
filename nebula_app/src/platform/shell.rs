@@ -63,8 +63,8 @@ pub fn interactive_args(id: &str) -> Vec<String> {
     }
 }
 
-/// Preserve the actual Windows PTY default in a pane's durable launch snapshot.
-/// Unix keeps an unspecified shell unspecified so the login-shell policy applies.
+/// Freeze the PTY default so later preference changes cannot alter pane copies.
+/// The initial Unix spawn still uses the backend's login-shell policy.
 pub(crate) fn snapshot_shell(
     configured: Option<nebula_terminal::tty::Shell>,
 ) -> Option<nebula_terminal::tty::Shell> {
@@ -72,8 +72,15 @@ pub(crate) fn snapshot_shell(
     {
         configured.or_else(|| Some(nebula_terminal::tty::resolved_default_shell()))
     }
-    #[cfg(not(windows))]
-    configured
+    #[cfg(unix)]
+    {
+        configured.or_else(|| {
+            let program = nebula_terminal::tty::default_shell_program().ok()?;
+            let id = Path::new(&program).file_name()?.to_str()?;
+            let args = interactive_args(id);
+            Some(nebula_terminal::tty::Shell::new(program, args))
+        })
+    }
 }
 
 #[cfg(target_os = "macos")]
