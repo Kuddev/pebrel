@@ -325,8 +325,11 @@ impl NebulaPaneState {
         self.completion_result_ready = true;
     }
 
-    pub(crate) fn begin_completion_query(&mut self, key: String) {
-        self.clear_completion_hints();
+    pub(crate) fn begin_completion_query(&mut self, key: String, preserve_results: bool) {
+        if !preserve_results {
+            self.clear_completion_hints();
+        }
+        self.completion_result_ready = false;
         self.suggestion_key = key;
     }
 

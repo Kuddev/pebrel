@@ -82,6 +82,52 @@ fn remote_editor_completion_native_shell_end_to_end() {
             let run = async {
                 ready(cx, window.into(), &terminal).await?;
                 let mut reports = Vec::new();
+                for style in [CompletionStyle::Popup, CompletionStyle::Hybrid] {
+                    ready(cx, window.into(), &terminal).await?;
+                    cx.update_window(window.into(), |_, window, cx| terminal.update(cx, |view, cx| {
+                        cx.global_mut::<Settings>().completion_style = style;
+                        view.apply_settings(cx);
+                        view.replace_text_in_range(None, "c", window, cx);
+                        if style == CompletionStyle::Hybrid {
+                            view.on_terminal_tab(&TerminalTab, window, cx);
+                        }
+                    })).map_err(|e| e.to_string())?;
+                    wait_for(cx, window.into(), &terminal, |view| {
+                        !view.completion_editor.is_querying() && !view.suggest.completion_items.is_empty()
+                    }).await?;
+                    // 超过旧的一秒查询超时，实际绘制期间菜单也必须保留，而非只检查回调结果。
+                    for _ in 0..15 {
+                        cx.background_executor().timer(Duration::from_millis(100)).await;
+                        cx.update_window(window.into(), |_, window, cx| {
+                            window.refresh();
+                            window.draw(cx).clear(cx);
+                            let view = terminal.read(cx);
+                            if view.completion_popup_geometry().is_none() || view.completion_editor.is_querying() {
+                                return Err(format!(
+                                    "c-prefix menu state: expected={style:?} actual={:?} line={:?} items={} selected={:?} anchor={:?} size={}x{} calculation={} editor={:?} mode={:?}",
+                                    view.completion_style,
+                                    view.suggest.screen_line, view.suggest.completion_items.len(),
+                                    view.suggest.completion_selected, view.suggest_anchor, view.cols, view.rows,
+                                    view.suggestion_task.is_some(),
+                                    view.completion_editor, view.term_mode(),
+                                ));
+                            }
+                            Ok::<_, String>(())
+                        }).map_err(|e| e.to_string())??;
+                    }
+                    let expected = cx.update_window(window.into(), |_, window, cx| terminal.update(cx, |view, cx| {
+                        if view.suggest.completion_selected.is_none() { key(view, "down", window, cx); }
+                        let item = &view.suggest.completion_items[view.suggest.completion_selected.unwrap()];
+                        let mut expected = "c".to_owned();
+                        for _ in 0..item.replace_chars { expected.pop(); }
+                        expected.push_str(&item.insert);
+                        key(view, "enter", window, cx);
+                        expected
+                    })).map_err(|e| e.to_string())?;
+                    probe(cx, window.into(), &terminal, &expected).await?;
+                    reports.push(serde_json::json!({"route":fixture.route,"mode":format!("{style:?}"),"scenario":"c-prefix-stable-menu-enter","accepted":expected,"observation_ms":1500,"native_buffer_verified":true}));
+                    cx.update_window(window.into(), |_, window, cx| terminal.update(cx, |view, cx| key(view, "ctrl-u", window, cx))).map_err(|e| e.to_string())?;
+                }
                 for (style, name) in [(CompletionStyle::Inline, "inline"), (CompletionStyle::Popup, "popup"), (CompletionStyle::Hybrid, "hybrid")] {
                     ready(cx, window.into(), &terminal).await?;
                     let branch = format!("qa/remote-{name}");

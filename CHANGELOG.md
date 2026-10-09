@@ -4,6 +4,271 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.2.0 - 2026-10-08
+
+### English
+
+#### Added
+
+- Added: Pane-scoped SSH local port forwarding with a Ports control and editable local/remote port dialog. Listeners bind to local loopback, bound concurrent connections, retry accept errors and stop their work when the owning session exits.
+- Added: A static administrator shield for confirmed elevated local Windows sessions, before the program or Agent icon and tab name, with matching icon size and hover text. SSH and WSL sessions retain their own identity. Addresses [#436](https://github.com/Kuddev/pebrel/issues/436).
+- Added: Custom-theme background controls for image selection, opacity, fit, alignment and window blur, with a live preview owned by the current editor draft.
+- Added: Portable theme ZIP archives containing native theme JSON, static background images, an optional preview, author, license and version metadata. Import adds a theme to the local library; applying it remains a separate action.
+- Added: `pebrel theme pack`, `check`, `import` and `limits`, with JSON results, meaningful exit codes and Bash/Zsh/Fish command completion. Relative image paths resolve from the theme JSON directory.
+- Added: Theme-editor ZIP import/export dialogs with archive inspection, package metadata, explicit confirmation and an entry to edit the installed theme.
+- Added: Windows video and streaming GIF backgrounds with an explicit image/video/GIF source selector. Playback uses bounded decoding, frame and GPU resources, and follows window visibility and activity.
+- Added: Grain, Neon Vortex, Aurora Ribbons and Liquid Silk background presets, plus local WGSL background files. Effects require explicit activation; retaining a file path alone does not start execution.
+- Added: Ordered WGSL terminal postprocessing on supported native Windows, Linux Vulkan and macOS Metal windows. The chain supports up to eight files/eight fragment passes, explicit reload, independent activation and off/focused/always animation policies.
+- Added: Terminal-effect inputs for the visible terminal texture, viewport, monotonic time, focus, current/previous cursor and resolved 256-color palette, with cursor-trail and scanline/vignette examples. Text remains at native pixel resolution; completion and IME overlays render afterwards.
+- Added: A short circular reveal for day/night theme changes on Windows and center-expanding settings-search focus feedback. Reduced-motion preferences keep immediate changes; unavailable capture leaves theme switching functional.
+- Added: Completion from the native editor buffer and actual caret through PSReadLine, Bash Readline and Zsh ZLE, including advertised WSL/SSH startup support. Queries preserve user key bindings and distinguish typed text from shell prediction text.
+- Added: Caret-aware Git argument completion for explicit tracking options, configured remotes, branches, references and push/pull/fetch argument roles, using metadata from the selected local, WSL or authenticated SSH environment.
+- Added: npm, pnpm and Yarn workspace/script completion from the selected packages, with workspace names/paths, supported filters, dependency selection and package-manager-specific script sets. Local and remote projects share the same selection rules.
+- Added: A matching offline relay installer archive and installation guide alongside the Android APK, with Linux x64/ARM64 binaries, download entry points, product and dependency licenses, source identity and checksum verification.
+- Added: Bounded `pane.scroll` input and paged `screen_history` reads in the runtime/mobile bridge, with screen-cell validation, history identity and matching schema updates for the phone terminal viewport.
+
+#### Improved
+
+- Improved: Theme previews reuse prepared images, discard outdated loads and release owned resources when the editor closes. File-picker and package results remain bound to the originating draft; import/export work stays off the UI thread.
+- Improved: Theme-package validation checks real byte limits, declared entries, resource hashes and portable paths before installation. Static image import/export shares one implementation; animated media, video and shaders are not activated or installed by this package format.
+- Improved: Background decoding, material application and terminal-effect controllers have explicit owners and shared resource budgets. The intermediate duplicate native-visual abstraction was reverted; the retained native adapters follow the existing UI lifecycle.
+- Improved: Effect availability follows the current window backend. Unsupported windows retain editable saved sources and allow disabling; animation scheduling follows focus/visibility and explicit playback policy.
+- Improved: Terminal-effect file ordering, reload and playback settings are grouped under Advanced effects. Custom-background controls appear when needed, preserving saved activation and playback choices.
+- Improved: Mobile network address, port and refresh action share one row. Dropdown hover remains local, the port uses a thin center-expanding focus line, automatic ports display their real value without becoming fixed settings, and relay/pause buttons match backup-page spacing.
+- Improved: Phone wheel acknowledgements avoid serializing a full workspace snapshot, while continuous scrolling retains momentum and stops when input ownership, attachment or the active target changes.
+- Improved: Streaming emoji continuation state stays inline and is initialized only when needed; ordinary BMP text retains its original input path. Focused correctness and cost checks accompany the implementation.
+- Improved: Git and project metadata queries run in owned background processes or SSH channels with time/output limits, cancellation and connection-scoped caches. They do not inject discovery commands into the interactive terminal or reuse results from another connection.
+- Improved: WSL launch parsing, guest identity and directory inheritance now use shared rules. The proposed Zsh startup takeover and guest-shell probes were withdrawn from this release, preserving the guest default shell and existing startup ownership.
+- Improved: SSH forwarding review and regression coverage now includes native shortcut selection, dialog input hit targets and edited port values. Screenshot/probe adjustments were used for review and are not additional shipped UI features.
+- Improved: Native regression fixtures reveal controls before pointer input, retain their windows and rendering assets, use shared prompt/viewport helpers, preserve acquisition diagnostics, and isolate shared settings/Git resources. Coverage includes split duplication, startup directories, keyboard-layout switching, settings event routing and mobile scrolling.
+- Improved: PowerShell prompt regressions exercise Conda and real Python virtual environments, repeated wrapping and ordinary-function status behavior. The contributor-only diagnostic workflow was removed from the final release tree.
+- Improved: Theme-package, terminal-effect, completion, WSL and media documentation records the retained interfaces and verification boundaries. Theme-format diagnostics and test names are clearer; associated import/format corrections preserve behavior.
+- Improved: Release metadata follows the full history from v2.1.1 through the unpublished 2.1.2 installation candidate to v2.2.0, including the prior release checksum backfill, product/Android versions and bilingual notes. [Full commit comparison](https://github.com/Kuddev/pebrel/compare/v2.1.1...v2.2.0) covers 133 non-merge commits and 124 integration merges; related iterations are consolidated here.
+- Improved: Tagged publication requires the complete five-platform native suite, package/runtime evidence and the complete verified asset set before exposing a public stable release.
+
+#### Fixed
+
+- Fixed: SSH port inputs render inside the dialog content area, accept pointer/keyboard editing and use the edited values; listener accept failures no longer permanently terminate forwarding.
+- Fixed: WSL-related splits, duplicated tabs, file/Git helpers and runtime execution retain the pane's actual distribution, explicit user and guest directory, including bare `wsl` launches after the system default changes. Parsing stops at guest-command boundaries and preserves the command's own arguments.
+- Fixed: WSL helpers use direct `--exec` argument boundaries, preserving quoted arguments and trailing backslashes. Unsupported quoted startup directories return a specific error instead of being rewritten or interpreted as shell commands.
+- Fixed: Theme-package fields have clear labels and a compact mode selector; editor actions remain reachable in narrow windows.
+- Fixed: Theme previews remain visible when scrolling theme choices and restore the selected appearance when transient preview ends.
+- Fixed: Backup-provider rows and wizard steps allow long titles and wrapped descriptions to remain visible in narrow layouts.
+- Fixed: Encrypted command backups include saved commands, and an open command manager refreshes after restoration or undo. The scope description is updated across the existing language catalogs.
+- Fixed: Closing the final tab preserves an enabled background-resident workspace and its consistent empty-window/session state.
+- Fixed: Streamed emoji components such as variation selectors, skin tones, regional indicators and joined sequences update the same terminal cluster with the correct cell width, wrapping and continuation behavior.
+- Fixed: Each PowerShell prompt wrapper keeps its original prompt owner, including virtual-environment activation/deactivation and repeated initialization. Only the outer wrapper publishes completion/status protocol markers, preserving original prompt effects and exit status.
+- Fixed: Duplicating a terminal tab reconstructs the complete nested split tree, split ratios and focused pane, preserving each pane's launch identity and directory while allocating independent pane/session identities.
+- Fixed: Configured startup directories apply both on cold start and when opening another window in a resident application, while explicit launch directory choices retain precedence.
+- Fixed: Owned Windows helper processes are attached to their cleanup job before they can run or spawn descendants, closing the fast-child race in cancellation and resource cleanup.
+- Fixed: The terminal paste menu displays its intended icon.
+- Fixed: Relay deployment reuses the shared SSH private-key reader and passphrase rules, and can add a saved key-authenticated host directly from the setup flow.
+- Fixed: Offline relay kits contain the installer and required packaging inputs; notices are collected only from resolved dependencies, and kit/APK evidence verifies matching native binaries, source identity and license content.
+- Fixed: Unchanged managed hook reconciliation preserves configuration bytes and hook positions, avoiding unnecessary rewrites while retaining edited-entry ownership checks and duplicate repair.
+- Fixed: Active-session probing resolves symbolic-link rollout directories before matching session paths.
+- Fixed: Phone terminal swipes reach the native wheel/input routing path. Momentum, gesture cancellation and target ownership behave consistently when detaching or switching terminals.
+- Fixed: Ordinary phone terminal history scrolls independently of the desktop viewport, with bounded paging, preserved anchors through reflow and stale-frame cancellation. Alternate-screen applications retain their native input behavior.
+- Fixed: Offline relay state no longer interferes with LAN pairing; refreshing or changing LAN addresses does not restart a healthy relay route.
+- Fixed: WSL native editor queries survive Win32 input mode, and valid visible completion candidates remain available during asynchronous directory refresh.
+- Fixed: Translated short-choice settings retain readable segmented capsules instead of falling back to dropdowns because of fixed widths; groups wrap together when needed.
+- Fixed: Restored PowerShell sessions refresh obsolete managed bootstrap references before launch. Managed scripts are identified by release and content while user-supplied launch commands retain their own settings.
+- Fixed: Windows day/night transitions capture composited client pixels; rapid reversal, resize, scale changes, focus loss and capture failure clear or replace temporary images within the existing resource limits.
+- Fixed: The background shader compiler resolves from its own source directory, avoiding the incorrect module path in the integrated build.
+- Fixed: Native CI applies the intended optimization profile to the media acceptance package, preserving media verification without the incorrect package override.
+- Fixed: Conformance launches isolate their runtime identity from the parent application and normalize temporary Windows paths so tests reach the intended instance.
+- Fixed: The source-name checker decodes added UTF-8 source independently of potentially truncated Git diff hunk headers, while still rejecting invalid added text and retaining its positive/negative fixtures.
+- Fixed: Release-pipeline follow-up: the Android archive builder is isolated from the enclosing application Git tag. The v2.2.0 APK and matching relay kit were rebuilt from the unchanged release source and passed 184 unit tests and 24 instrumented tests, with no skipped tests; the tag and desktop packages remain unchanged.
+
+### 中文
+
+#### 新增
+
+- 新增：与窗格会话绑定的 SSH 本地端口转发，提供 Ports 入口和本地/远端端口编辑对话框；仅监听本地回环地址，限制并发连接，接收连接出错后重试，并在所属会话退出时清理。
+- 新增：已确认的本地 Windows 管理员会话显示静态盾牌，位于程序或 Agent 图标及标签名之前，尺寸与任务图标一致并带悬停说明；SSH 和 WSL 保持各自会话身份。对应 [#436](https://github.com/Kuddev/pebrel/issues/436)。
+- 新增：自定义主题的背景图片选择、不透明度、适配方式、对齐和窗口模糊控件，并提供跟随当前编辑草稿的实时预览。
+- 新增：可携带原生主题 JSON、静态背景图、可选预览图、作者、许可证和版本信息的主题 ZIP；导入后添加到本地主题库，应用主题仍由用户单独操作。
+- 新增：`pebrel theme pack`、`check`、`import`、`limits` 命令，提供 JSON 结果、对应退出码及 Bash/Zsh/Fish 补全；相对图片路径以主题 JSON 所在目录解析。
+- 新增：主题编辑器内的 ZIP 导入、导出对话框，支持预先检查压缩包、填写包信息、确认操作，以及继续编辑已安装主题。
+- 新增：Windows 视频及流式 GIF 背景，明确区分图片、视频和 GIF 来源；播放限制解码、帧和 GPU 资源，并随窗口可见性及活动状态调度。
+- 新增：颗粒、霓虹漩涡、极光飘带、流动丝绸背景预设及本地 WGSL 背景文件；效果需要显式开启，仅保存文件路径不会启动执行。
+- 新增：在具备对应原生能力的 Windows、Linux Vulkan 和 macOS Metal 窗口中运行有序 WGSL 终端后处理；支持最多八个文件、八个片段处理阶段，显式重新加载、独立启用及关闭/仅聚焦/始终动画策略。
+- 新增：终端效果可读取可见终端纹理、视口、单调时间、焦点、当前/前一光标及解析后的 256 色调色板，并提供光标拖尾和扫描线/暗角示例；文字保持原生像素分辨率，补全和输入法预编辑层随后绘制。
+- 新增：Windows 日夜主题切换的短时圆形揭示过渡，以及设置搜索框从中心展开的焦点反馈；减少动效时即时切换，客户区捕获未就绪时仍保持正常主题切换。
+- 新增：依据 PSReadLine、Bash Readline、Zsh ZLE 的原生编辑缓冲和真实光标生成补全，并接入已声明能力的 WSL/SSH 启动环境；查询保留用户按键绑定，区分实际输入与 Shell 预测文字。
+- 新增：按光标位置提供 Git 显式跟踪选项、已配置远端、分支、引用及 push/pull/fetch 参数角色补全，元数据来自当前选定的本地、WSL 或已认证 SSH 环境。
+- 新增：按所选包提供 npm、pnpm、Yarn 工作区及脚本补全，支持工作区名称/路径、已支持的筛选器、依赖选择和对应包管理器的脚本集合；本地与远端工程共用选择规则。
+- 新增：随 Android APK 提供同版本离线中转安装包与安装指引，包含 Linux x64/ARM64 程序、下载入口、产品及依赖许可证、源码身份和校验值验证。
+- 新增：运行时与手机桥接的有界 `pane.scroll` 输入和分页 `screen_history` 读取，校验屏幕格坐标、携带历史身份，并同步更新协议 schema，支撑手机终端视口。
+
+#### 改进
+
+- 改进：主题预览复用已准备图片，丢弃过期加载，并在编辑器关闭时释放所属资源；文件选择和主题包结果绑定原草稿，导入导出在界面线程之外执行。
+- 改进：主题包安装前校验实际字节限制、声明文件、资源哈希和可携带路径；静态图片导入导出共用规则，该包格式不激活或安装动画、视频及着色器。
+- 改进：背景解码、窗口材质与终端效果控制器明确资源归属并共享资源预算；中途引入的重复原生视觉抽象已回退，最终保留的原生适配器沿用现有界面生命周期。
+- 改进：效果可用性跟随当前窗口后端；不支持的窗口保留已保存来源的编辑与关闭操作，动画调度遵循焦点、可见性及显式播放策略。
+- 改进：终端效果的文件顺序、重新加载和播放设置集中到“高级效果”；自定义背景控件按需显示，保留已保存的启用状态及播放选择。
+- 改进：手机远程设置将网卡地址、端口和刷新操作放在同一行；下拉框单独响应悬停，端口聚焦时细线从中心展开，自动端口显示实际值但不保存成固定端口，配置中转和暂停按钮与备份页保持一致留白。
+- 改进：手机滚轮回执避免序列化完整工作区快照；连续滚动保留惯性，并在输入归属、附着状态或活动目标改变时停止。
+- 改进：流式 emoji 续写状态保持内联并按需初始化，普通 BMP 文本沿用原输入路径；实现配有针对性的正确性及成本核验。
+- 改进：Git 和工程元数据查询通过所属后台进程或 SSH 通道执行，限制时间及输出，支持取消并按连接区分缓存；发现命令不注入交互终端，也不复用其他连接的结果。
+- 改进：WSL 启动参数解析、来宾身份及目录继承统一使用共享规则；本轮曾加入的 Zsh 启动接管与来宾 Shell 探测已移出发行内容，保留来宾默认 Shell 和既有启动归属。
+- 改进：SSH 转发的审阅与回归覆盖原生快捷键、对话框输入命中区域和修改后的端口值；截图及探针调整用于审阅，不另列为已交付界面功能。
+- 改进：原生回归在指针操作前显示真实控件，保留测试窗口与绘制资源，复用提示符及视口工具，保留元数据获取诊断，并隔离共享设置/Git 资源；覆盖分屏复制、启动目录、键盘布局切换、设置事件路由及手机滚动。
+- 改进：PowerShell 提示符回归覆盖 Conda、真实 Python 虚拟环境、重复包装及普通函数的状态语义；仅用于贡献者排查的诊断工作流已从最终发行树移除。
+- 改进：主题包、终端效果、补全、WSL 和媒体文档记录最终保留的接口及验证边界；主题格式诊断和测试命名更明确，配套导入顺序及格式修正保留原行为。
+- 改进：发布元数据覆盖 v2.1.1 经未公开的 2.1.2 安装候选到 v2.2.0 的完整历史，包括上一版校验值回填、产品/Android 版本及双语说明；[完整提交对比](https://github.com/Kuddev/pebrel/compare/v2.1.1...v2.2.0) 包含 133 个非合并提交与 124 个整合提交，相关迭代在本说明中合并表述。
+- 改进：标签发布在公开稳定版之前要求五平台完整原生测试、打包与运行证据，以及完整资产集合校验全部通过。
+
+#### 修复
+
+- 修复：SSH 端口输入框正确绘制在对话框内容区，支持鼠标和键盘编辑并使用修改后的值；监听器接收连接失败后不再永久停止转发。
+- 修复：WSL 分屏、标签复制、文件/Git 辅助命令及运行时执行保留窗格实际使用的发行版、显式用户和来宾目录，包括系统默认发行版改变后的裸 `wsl` 启动；参数解析在来宾命令边界停止，保留命令自己的参数。
+- 修复：WSL 辅助命令使用直接 `--exec` 参数边界，保留参数内部引号和末尾反斜杠；不支持的含引号启动目录返回明确错误，避免改写目录或将其解释为 Shell 命令。
+- 修复：主题包字段补齐清晰标签并保持紧凑模式选择器，主题编辑操作在窄窗口中仍可访问。
+- 修复：滚动主题选项时预览保持可见，临时预览结束后恢复选定外观。
+- 修复：备份服务行和向导步骤在窄布局下保留长标题及换行说明，避免内容被压缩或遮挡。
+- 修复：加密命令备份包含已保存命令，恢复或撤销后已打开的命令管理器同步刷新，并更新现有语言目录中的备份范围说明。
+- 修复：关闭最后一个标签后保留已启用的后台驻留工作区，并保持空窗口及会话状态一致。
+- 修复：流式输入中的变体选择符、肤色、区域指示符及连接序列更新同一 emoji 字素簇，正确处理终端格宽、换行和续写。
+- 修复：每层 PowerShell 提示符包装保留自己的原始提示符归属，覆盖虚拟环境激活/退出和重复初始化；仅最外层发送补全及状态协议标记，保留原提示符副作用和退出状态。
+- 修复：复制终端标签时重建完整嵌套分屏树、分屏比例和焦点窗格，保留各窗格启动身份及目录，并为副本分配独立窗格和会话身份。
+- 修复：配置的启动目录同时用于冷启动和驻留应用再次开窗，显式指定的启动目录仍保持优先级。
+- 修复：Windows 辅助子进程在运行或创建后代前先加入所属清理作业，修复快速子进程导致取消和资源清理失去归属的竞态。
+- 修复：终端粘贴菜单缺少图标的问题。
+- 修复：中转部署复用共享 SSH 私钥读取器及口令规则，并支持在配置流程中直接添加使用密钥认证的已保存主机。
+- 修复：离线中转包补齐安装器及必需打包输入，仅收集实际解析依赖的许可证，并通过安装包/APK 证据核对原生程序、源码身份和许可证内容。
+- 修复：托管 hook 内容未变化时保留配置原始字节及 hook 位置，避免无谓改写，同时保留被编辑条目的归属检查和重复条目修复。
+- 修复：活动会话探测在匹配会话路径前解析符号链接形式的 rollout 目录。
+- 修复：手机终端滑动接入原生滚轮及输入路由，脱离或切换终端时一致处理惯性、手势取消和目标归属。
+- 修复：手机普通终端历史独立于桌面视口滚动，采用有界分页，在重排后保留阅读锚点并取消过期帧；备用屏幕应用保留原生输入行为。
+- 修复：中转离线状态不再干扰局域网配对，刷新或更改局域网地址不会重启健康的中转连接。
+- 修复：WSL 原生编辑器查询在 Win32 输入模式下不再丢失，异步目录刷新期间保留有效的可见补全候选。
+- 修复：翻译后的短选项不再因固定宽度退回下拉框，分段胶囊保持可读，并在空间不足时整组换行。
+- 修复：恢复的 PowerShell 会话在启动前刷新过期托管脚本引用；托管脚本按发行版本及内容标识，用户自定义启动命令保留自身设置。
+- 修复：Windows 日夜切换捕获已合成的客户区像素；快速反向切换、缩放、比例变化、失焦或捕获失败时，在现有资源限制内清理或替换临时画面。
+- 修复：背景着色器编译模块从自身源码目录解析，修复整合构建中的模块路径错误。
+- 修复：原生 CI 为媒体验收包应用正确的优化配置，修复错误包级覆盖并保留媒体验证。
+- 修复：运行验收启动隔离父应用的运行时身份，并规范化 Windows 临时路径，使测试指向预期实例。
+- 修复：源码名称检查独立解码新增 UTF-8 内容，避免 Git diff hunk 标题在多字节边界截断导致误报，同时保留非法新增文本检查及正反用例。
+- 修复：发布流程后续修正：Android 解压源码构建与外层应用 Git 标签隔离；v2.2.0 APK 和配套中转包仍从原发布源码构建，184 项单测、24 项模拟器测试通过且无跳过，版本标签及桌面包保持不变。
+### Contributors
+
+| Contributor | Contributions |
+| --- | --- |
+| [<img src="https://github.com/WilliamWang1721.png?size=64" width="48" height="48" alt="WilliamWang1721" /><br />WilliamWang1721](https://github.com/WilliamWang1721) | SSH forwarding, administrator indicators, terminal and workspace fixes ([#280](https://github.com/Kuddev/pebrel/pull/280), [#449](https://github.com/Kuddev/pebrel/pull/449), [#451](https://github.com/Kuddev/pebrel/pull/451), [#455](https://github.com/Kuddev/pebrel/pull/455)) |
+| [<img src="https://github.com/MomentDerek.png?size=64" width="48" height="48" alt="MomentDerek" /><br />MomentDerek](https://github.com/MomentDerek) | WSL pane identity and guest-directory preservation ([#351](https://github.com/Kuddev/pebrel/pull/351)) |
+| [<img src="https://github.com/azzliang6.png?size=64" width="48" height="48" alt="azzliang6" /><br />azzliang6](https://github.com/azzliang6) | Configured cold-start directory ([#485](https://github.com/Kuddev/pebrel/pull/485)) |
+| [<img src="https://github.com/Kuddev.png?size=64" width="48" height="48" alt="Kuddev" /><br />Kuddev](https://github.com/Kuddev) | Theme packages and transitions, native terminal effects, mobile history, LAN pairing, settings controls and release integration ([#506](https://github.com/Kuddev/pebrel/pull/506), [#513](https://github.com/Kuddev/pebrel/pull/513), [#519](https://github.com/Kuddev/pebrel/pull/519), [#521](https://github.com/Kuddev/pebrel/pull/521), [#522](https://github.com/Kuddev/pebrel/pull/522)) |
+
+---
+
+**SHA256**
+
+- `Pebrel-v2.2.0-linux-x64-preview.AppImage`: `2b32cf9d4409bc70d843b6408348aaded2c2ec9deff6f69f6987575331771523`
+- `Pebrel-v2.2.0-linux-x64-preview.deb`: `f311062bc18c95f9386f92a8781f8724fbb062ed8f0f26793be47d640bfc11f3`
+- `Pebrel-v2.2.0-linux-x64-preview.tar.gz`: `fdcfec88cc917bfa74cba453815112eb82a1bbd150a596570ed0953d8b7d1c9d`
+- `Pebrel-v2.2.0-macos-arm64-preview.dmg`: `29dcdafb761d742e25221dd9589377e8646bc2511923da1ffde9ef47aceef224`
+- `Pebrel-v2.2.0-macos-x64-preview.dmg`: `01e1af358ed38f840fd72a253e12be82f0f25fbeb20e52b2a6c64488b36e83c2`
+- `Pebrel-v2.2.0-windows-x64.zip`: `20023c035d7aa28680345c0049781b03a0c6a430cfdf5ebf8b3bd3d04ebf4c62`
+- `Pebrel-v2.2.0-windows-x64-setup.exe`: `6d9becba6a171bcf405f93c05dd73336a2a88079e5baaf643071646966a726bf`
+- `Pebrel-v2.2.0-windows-arm64.zip`: `780fa61cd4260b6e8a1be9ac4e6e030bcc5df90ebcb4dc9f429551c0255c5a8b`
+- `Pebrel-v2.2.0-windows-arm64-setup.exe`: `2468bbad526938d9e0060a37dd81756107e4ed0c3d96056164fe455e0711f92f`
+- `Pebrel-v2.2.0-android-universal-preview.apk`: `9468f97673f9cb9c853e10841740ec04fa228e90bba3ce19ba72b65fe7c94f5e`
+- `Pebrel-v2.2.0-relay-manual.tar.gz`: `cb4b5cb08fd35054c1be2ade7afe236d612924f2bcb4f24bb94ca3abd899b06a`
+
+## 2.1.2 - 2026-10-07
+
+Installation candidate. Packages are built from one recorded source commit; publication as a GitHub Release is a separate step.
+
+安装候选版本。配套安装包固定从同一源码提交构建；发布 GitHub Release 是独立步骤。
+
+### English
+
+#### Added
+
+- Added pane-scoped local SSH port forwarding, with bounded connections and cleanup when the owning session exits.
+- Added a static Windows administrator shield before the program/AI icon and tab name. The shield matches the task icon size and includes a hover description; SSH and WSL panes are not marked as local Windows administrator sessions. Addresses [#436](https://github.com/Kuddev/pebrel/issues/436).
+- Added wallpaper controls and live preview for custom themes, plus portable ZIP import/export for image themes from the theme editor and command line.
+- Added Windows video/GIF backgrounds and explicitly enabled WGSL background and terminal effects, with user-controlled effect ordering and activation.
+- Added a matching offline relay installer archive and installation instructions alongside the Android package.
+
+#### Fixed
+
+- Fixed short-choice settings, including completion mode, reverting to dropdowns when translated labels exceeded a fixed width. Capsules keep readable choices and wrap as a group when needed.
+- Fixed WSL editor queries being lost in Win32 input mode and completion menus disappearing during background directory refresh; valid candidates remain selectable while the same input is refreshed.
+- Fixed Android remote-terminal swipes stopping at the current picture instead of reaching the desktop terminal. Authorized scrolling now follows the desktop's mouse, alternate-screen and scrollback behavior, and the phone reads the resulting viewport. Both phone and desktop require this version; phone-only reflow remains a local reading mode.
+- Fixed relay deployment omitting the private-key reader used by ordinary SSH connections. Key passphrases and unencrypted keys use the appropriate input rules, and a key-authenticated host can be added directly from relay installation.
+- Fixed configured startup directories being ignored on cold starts and when opening another window in a resident application.
+- Fixed tab duplication losing nested split layouts. Preserved each WSL pane's distribution, user, arguments and guest directory when creating related panes or tabs.
+- Fixed saved commands being omitted from encrypted backups and stale command lists remaining after restoration.
+- Fixed leaving a Python virtual environment failing to restore the original PowerShell prompt.
+- Fixed streamed emoji sequences allocating inconsistent terminal cells while keeping composition state bounded.
+- Fixed closing the last tab terminating a workspace that should remain resident in the background.
+- Fixed the theme preview disappearing when scrolling theme choices, backup-provider content clipping in narrow layouts, and the terminal paste menu's missing icon.
+- Fixed unchanged managed hook configuration being rewritten, and improved native session identification when the active conversation directory is reached through symbolic links.
+
+#### Improved
+
+- Grouped custom terminal effect files, reloading and playback policy under Advanced effects. Custom background files appear on demand, without changing saved activation or playback settings.
+- Improved completion at the actual editor caret for Git arguments, remotes, branches and workspace scripts, using the selected local, WSL or SSH execution environment rather than unrelated host metadata.
+- Kept mobile scroll acknowledgements compact instead of rebuilding a full window/tab snapshot for every wheel event. Existing frame-size, input-queue and no-replay limits remain in effect.
+
+### 中文
+
+#### 新增
+
+- 新增：与窗格会话绑定的 SSH 本地端口转发，限制并发连接，并在所属会话退出时清理。
+- 新增：Windows 管理员盾牌置于程序／AI 图标与标签名之前，与任务图标同尺寸，并提供悬停说明；SSH 与 WSL 窗格不标记为本机 Windows 管理员会话。对应 [#436](https://github.com/Kuddev/pebrel/issues/436)。
+- 新增：自定义主题的壁纸设置与即时预览，以及主题编辑器和命令行中的图片主题 ZIP 导入、导出。
+- 新增：Windows 视频／GIF 背景，以及需要显式开启的 WGSL 背景与终端效果；效果顺序及是否启用均由用户控制。
+- 新增：随 Android 安装包提供同版本离线中转安装压缩包与安装指引。
+
+#### 修复
+
+- 修复：补齐模式等短选项因翻译文案超出固定宽度而退回下拉框的问题；胶囊保留完整选项，空间不足时整组换行。
+- 修复：WSL 在 Win32 输入模式下丢失编辑器查询，以及后台目录刷新导致补齐菜单消失的问题；同一输入刷新期间，已有效的候选仍可选择。
+- 修复：Android 远程终端滑动停留在当前画面，没有传到桌面终端的问题。授权后的滚动沿用桌面的鼠标接管、备用屏与历史回滚行为，手机显示滚动后的视口。手机和桌面均需更新至本版本；手机重排阅读模式仍使用本地滚动。
+- 修复：中转部署遗漏普通 SSH 连接使用的私钥读取器。密钥口令和未加密私钥采用对应的输入规则，并可直接在中转安装页面添加密钥认证主机。
+- 修复：冷启动以及应用驻留后再次开窗时忽略指定启动目录的问题。
+- 修复：复制标签丢失嵌套分屏布局的问题；创建相关窗格或标签时保留各 WSL 窗格的发行版、用户、参数与来宾目录。
+- 修复：加密备份遗漏保存命令，以及恢复后命令列表未及时更新的问题。
+- 修复：退出 Python 虚拟环境后未恢复原 PowerShell 提示符的问题。
+- 修复：流式组合 emoji 的终端格分配不一致问题，同时保持组合状态的内存边界。
+- 修复：关闭最后一个标签时，原本应后台驻留的工作区被结束的问题。
+- 修复：滚动主题列表时预览消失、窄布局中的备份服务内容裁切，以及终端粘贴菜单缺少图标的问题。
+- 修复：未变化的托管 hook 配置被重复改写；改进通过符号链接访问活动会话目录时的原生会话识别。
+
+#### 改进
+
+- 改进：自定义终端效果文件、重新加载和播放策略收进“高级效果”；自定义背景文件按需展示，保留已保存的启用状态和播放设置。
+- 改进：依据实际编辑缓冲与光标位置补全 Git 参数、远端、分支及工作区脚本，使用选定的本地、WSL 或 SSH 执行环境，而非无关的宿主元数据。
+- 改进：手机滚轮回执保持精简，不再为每次滑动重建整窗和标签状态快照；保留既有画面大小、输入队列及不重放限制。
+
+### Contributors
+
+| Contributor | Contributions |
+| --- | --- |
+| [<img src="https://avatars.githubusercontent.com/u/140129782?u=febdc34cca0b41f2d017adfbe7e59b92505bcfe6&v=4" width="48" height="48" alt="WilliamWang1721" /><br />WilliamWang1721](https://github.com/WilliamWang1721) | SSH forwarding, administrator indicators, terminal and workspace fixes ([#280](https://github.com/Kuddev/pebrel/pull/280), [#449](https://github.com/Kuddev/pebrel/pull/449), [#451](https://github.com/Kuddev/pebrel/pull/451), [#453](https://github.com/Kuddev/pebrel/pull/453), [#455](https://github.com/Kuddev/pebrel/pull/455), [#448](https://github.com/Kuddev/pebrel/pull/448), [#446](https://github.com/Kuddev/pebrel/pull/446), [#443](https://github.com/Kuddev/pebrel/pull/443)) |
+| [<img src="https://avatars.githubusercontent.com/u/40252940?v=4" width="48" height="48" alt="MomentDerek" /><br />MomentDerek](https://github.com/MomentDerek) | WSL pane launch identity and guest-directory preservation ([#351](https://github.com/Kuddev/pebrel/pull/351)) |
+| [<img src="https://avatars.githubusercontent.com/u/112920194?v=4" width="48" height="48" alt="azzliang6" /><br />azzliang6](https://github.com/azzliang6) | Configured cold-start directory ([#485](https://github.com/Kuddev/pebrel/pull/485)) |
+| [<img src="https://avatars.githubusercontent.com/u/292709043?v=4" width="48" height="48" alt="Kuddev" /><br />Kuddev](https://github.com/Kuddev) | Mobile scrolling, relay deployment, completion, theme packages and release integration ([#504](https://github.com/Kuddev/pebrel/pull/504), [#498](https://github.com/Kuddev/pebrel/pull/498), [#488](https://github.com/Kuddev/pebrel/pull/488), [#490](https://github.com/Kuddev/pebrel/pull/490), [#489](https://github.com/Kuddev/pebrel/pull/489), [#497](https://github.com/Kuddev/pebrel/pull/497), [#492](https://github.com/Kuddev/pebrel/pull/492), [#491](https://github.com/Kuddev/pebrel/pull/491), [#465](https://github.com/Kuddev/pebrel/pull/465), [#466](https://github.com/Kuddev/pebrel/pull/466), [#467](https://github.com/Kuddev/pebrel/pull/467), [#468](https://github.com/Kuddev/pebrel/pull/468), [#469](https://github.com/Kuddev/pebrel/pull/469), [#473](https://github.com/Kuddev/pebrel/pull/473), [#437](https://github.com/Kuddev/pebrel/pull/437), [#438](https://github.com/Kuddev/pebrel/pull/438), [#440](https://github.com/Kuddev/pebrel/pull/440), [#441](https://github.com/Kuddev/pebrel/pull/441)) |
+
+---
+
+**SHA256**
+
+- `Pebrel-v2.1.2-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-windows-x64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-android-universal-preview.apk`: `PENDING FINAL BUILD`
+- `Pebrel-v2.1.2-relay-manual.tar.gz`: `PENDING FINAL BUILD`
+
 ## 2.1.1 - 2026-10-01
 
 ### English
