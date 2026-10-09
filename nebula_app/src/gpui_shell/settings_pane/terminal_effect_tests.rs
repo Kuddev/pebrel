@@ -12,6 +12,7 @@ fn open_effect_settings(
     )
     .unwrap();
     let (pane, mut window) = open_settings(cx);
+    window.update(|window, _| window.simulate_postprocess_wgsl_support(true).unwrap());
     pane.update(&mut window, |pane, cx| {
         pane.runtime = RuntimeSettings::load();
         pane.active_section = 1;
@@ -168,4 +169,45 @@ fn stale_confirmation_does_not_authorize_replaced_sources(cx: &mut TestAppContex
     let runtime = RuntimeSettings::load();
     assert_eq!(runtime.terminal_effects.paths, ["replacement.wgsl"]);
     assert!(!runtime.terminal_effects.enabled);
+}
+
+#[gpui::test]
+fn unsupported_renderer_preserves_editing_and_allows_disabling(cx: &mut TestAppContext) {
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    let (_, mut window) = open_effect_settings(
+        cx,
+        "terminal_effect_enabled=true\nterminal_effect_path=existing.wgsl\n",
+    );
+    window.update(|window, _| window.simulate_postprocess_wgsl_support(false).unwrap());
+    draw(&mut window);
+    let revision =
+        window.read(|cx| crate::gpui_shell::wallpaper::terminal_effect_configuration(cx).1);
+    let before = settings_file_snapshot();
+    click("nebula-btn-terminal-effect-choose", &mut window);
+    assert!(!window.did_prompt_for_paths());
+    click("nebula-btn-terminal-effect-reload", &mut window);
+    assert_eq!(
+        window.read(|cx| crate::gpui_shell::wallpaper::terminal_effect_configuration(cx).1),
+        revision
+    );
+    assert_eq!(settings_file_snapshot(), before);
+    click("nebula-btn-terminal-effect-toggle", &mut window);
+    assert!(!RuntimeSettings::load().terminal_effects.enabled);
+    click("nebula-btn-terminal-effect-toggle", &mut window);
+    assert!(window.debug_bounds("confirm-dialog-ok").is_none());
+    click("nebula-btn-terminal-effect-remove-0", &mut window);
+    assert!(RuntimeSettings::load().terminal_effects.paths.is_empty());
+}
+
+#[gpui::test]
+fn capability_loss_before_confirmation_does_not_enable_effects(cx: &mut TestAppContext) {
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    let (_, mut window) = open_effect_settings(cx, "terminal_effect_path=existing.wgsl\n");
+    click("nebula-btn-terminal-effect-toggle", &mut window);
+    assert!(window.debug_bounds("confirm-dialog-ok").is_some());
+    window.update(|window, _| window.simulate_postprocess_wgsl_support(false).unwrap());
+    press("enter", &mut window);
+    assert!(!RuntimeSettings::load().terminal_effects.enabled);
 }

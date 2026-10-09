@@ -1680,6 +1680,32 @@
           "type": "boolean",
           "default": false,
           "description": "Opt in to the controlled desktop viewport, including scrollback. Requires screen=true and the pane.read.screen.viewport.v1 feature. Text tail semantics are unchanged."
+        },
+        "screen_history": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "rows"
+          ],
+          "properties": {
+            "start": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "rows": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          "additionalProperties": false,
+          "description": "Independent bounded history page; requires screen=true, no screen_viewport, and pane.read.screen.history.v1. Null/omitted start follows the tail. Coordinates survive ordinary append/eviction; column reflow changes physical rows."
         }
       },
       "additionalProperties": false,
@@ -1702,6 +1728,31 @@
             "properties": {
               "screen": {
                 "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "screen_history"
+            ],
+            "properties": {
+              "screen_history": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "screen"
+            ],
+            "properties": {
+              "screen": {
+                "const": true
+              },
+              "screen_viewport": {
+                "const": false
               }
             }
           }
@@ -3229,6 +3280,49 @@
             "type": "boolean"
           },
           "description": "Optional soft-wrap flag per physical row, preserving logical lines during phone-only reflow."
+        },
+        "history": {
+          "type": "object",
+          "required": [
+            "first",
+            "oldest",
+            "end",
+            "live_start",
+            "live_rows",
+            "application_scroll"
+          ],
+          "properties": {
+            "first": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "oldest": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "live_start": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "live_rows": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "application_scroll": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Absolute physical row range [oldest,end); first is the returned page start. Alternate screen or mouse tracking sets application_scroll and returns the live grid, not normal history."
         }
       },
       "additionalProperties": false,
