@@ -2,7 +2,58 @@
 
 use super::*;
 use crate::gpui_shell::widgets::NebulaSwitch;
+use gpui::{Animation, AnimationExt as _, relative};
 use gpui_component::menu::PopupMenuItem;
+use std::{cell::Cell, rc::Rc};
+
+#[derive(Default)]
+pub(super) struct PortFocus {
+    focused: bool,
+    generation: usize,
+    from: f32,
+    position: Rc<Cell<f32>>,
+}
+
+impl PortFocus {
+    pub(super) fn set_focused(&mut self, focused: bool) {
+        if self.focused != focused {
+            self.from = self.position.get();
+            self.focused = focused;
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    fn underline(&self, cx: &App) -> gpui::AnyElement {
+        let target = if self.focused { 1.0 } else { 0.0 };
+        let line = div()
+            .id("mobile-port-focus-line")
+            .debug_selector(|| "mobile-port-focus-line".into())
+            .absolute()
+            .bottom_0()
+            .h(px(1.0))
+            .bg(cx.theme().link);
+        if self.from == target || cx.reduce_motion() {
+            self.position.set(target);
+            return line
+                .left(relative((1.0 - target) * 0.5))
+                .w(relative(target))
+                .into_any_element();
+        }
+        let from = self.from;
+        let position = self.position.clone();
+        line.with_animation(
+            ("mobile-port-focus", self.generation),
+            Animation::new(Duration::from_millis(180))
+                .with_easing(|progress| crate::motion::Easing::EaseInOutCubic.sample(progress)),
+            move |line, progress| {
+                let value = from + (target - from) * progress;
+                position.set(value);
+                line.left(relative((1.0 - value) * 0.5)).w(relative(value))
+            },
+        )
+        .into_any_element()
+    }
+}
 
 pub(super) fn description(text: impl Into<SharedString>, cx: &App) -> gpui::Div {
     div()
@@ -73,6 +124,11 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         self.mobile_initialize(window, cx);
+        self.mobile_sync_port_placeholder(window, cx);
+        // GPUI 焦点通知在 draw 末尾派发；首帧直接读取焦点事实，避免底线晚一帧展开。
+        self.mobile
+            .port_focus
+            .set_focused(self.mobile.port_input.read(cx).focus_handle(cx).is_focused(window));
         let language = crate::gpui_shell::config::ui_language(cx);
         let phase = self.mobile.phase();
         // 原型的 812 包含两侧 56px 留白；窄窗收紧页边，不缩小二维码或按钮。
@@ -529,7 +585,7 @@ impl SettingsPane {
                                 } else {
                                     let mut preferences = this.mobile.preferences();
                                     preferences.default_input = value;
-                                    this.mobile_apply(preferences, None, false, window, cx);
+                                    this.mobile_apply(preferences, None, None, false, window, cx);
                                 }
                             });
                         },
@@ -636,30 +692,76 @@ impl SettingsPane {
     }
 
     fn mobile_lan_options(&self, compact: bool, cx: &Context<Self>) -> gpui::Div {
+        use crate::gpui_shell::widgets::{settings_icon_button, settings_select_frame};
         let language = crate::gpui_shell::config::ui_language(cx);
         let busy = self.mobile.operation;
-        v_flex()
-            .w_full()
-            .when(compact, |fields| fields.gap(px(12.0)))
-            .child(
-                row(
-                    "mobile-interface-row",
-                    language.text(Message::MobileInterface),
-                    language.text(Message::MobileInterfaceHint),
+        v_flex().w_full().when(!compact, |fields| fields.px(px(13.0)).py(px(12.0))).child(
+            v_flex()
+                .id("mobile-interface-row")
+                .debug_selector(|| "mobile-interface-row".into())
+                .w_full()
+                .gap(px(6.0))
+                .child(div().text_size(px(14.0)).child(language.text(Message::MobileInterface)))
+                .child(description(language.text(Message::MobileInterfaceHint), cx))
+                .child(
                     h_flex()
-                        .gap_2()
+                        .w_full()
+                        .min_w_0()
+                        .gap(px(8.0))
+                        .mt(px(4.0))
                         .child(
-                            gpui::Styled::h(
-                                Select::new(&self.mobile.address_select).small(),
-                                px(32.0),
+                            settings_select_frame(
+                                "mobile-network-select",
+                                Select::new(&self.mobile.address_select)
+                                    .appearance(false)
+                                    .w_full()
+                                    .disabled(busy),
+                                cx,
                             )
-                            .w(px(204.0))
-                            .disabled(busy),
+                            .debug_selector(|| "mobile-network-select".into())
+                            .cursor(gpui::CursorStyle::Arrow)
+                            .w(px(260.0))
+                            .min_w(px(100.0)),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("-"),
+                        )
+                        .child(
+                            div()
+                                .id("mobile-port-row")
+                                .debug_selector(|| "mobile-port-row".into())
+                                .relative()
+                                .w(px((f32::from(cx.theme().font_size) * 4.0).max(64.0)))
+                                .h(settings_control_height(cx))
+                                .flex_shrink_0()
+                                .child(gpui::Styled::h(
+                                    Input::new(&self.mobile.port_input)
+                                        .appearance(false)
+                                        .focus_bordered(false)
+                                        .aria_label(language.text(Message::MobilePort))
+                                        .w_full()
+                                        .px(px(4.0))
+                                        .disabled(busy),
+                                    settings_control_height(cx),
+                                ))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .bottom_0()
+                                        .left_0()
+                                        .w_full()
+                                        .h(px(1.0))
+                                        .bg(crate::gpui_shell::theme::settings_hairline(cx)),
+                                )
+                                .child(self.mobile.port_focus.underline(cx)),
                         )
                         .child(
                             Button::new("mobile-refresh-addresses")
-                                .ghost()
-                                .small()
+                                .debug_selector(|| "mobile-refresh-addresses".into())
+                                .map(|button| settings_icon_button(button, cx))
                                 .icon(IconName::Redo)
                                 .tooltip(language.text(Message::MobileRefreshAddresses))
                                 .disabled(busy || self.mobile.loading)
@@ -667,26 +769,9 @@ impl SettingsPane {
                                     this.mobile_refresh_addresses(window, cx)
                                 })),
                         ),
-                    cx,
                 )
-                .when(compact, |field| {
-                    field.flex_col().items_stretch().gap(px(6.0)).px(px(0.0)).py(px(0.0))
-                }),
-            )
-            .child(
-                row(
-                    "mobile-port-row",
-                    language.text(Message::MobilePort),
-                    language.text(Message::MobilePortHint),
-                    gpui::Styled::h(Input::new(&self.mobile.port_input).small(), px(32.0))
-                        .w(px(120.0))
-                        .disabled(busy),
-                    cx,
-                )
-                .when(compact, |field| {
-                    field.flex_col().items_stretch().gap(px(6.0)).px(px(0.0)).py(px(0.0))
-                }),
-            )
+                .child(description(language.text(Message::MobilePortHint), cx)),
+        )
     }
 
     fn mobile_connections(&self, cx: &Context<Self>) -> gpui::Div {
@@ -715,7 +800,7 @@ impl SettingsPane {
                     .on_click(cx.listener(|this, enabled: &bool, window, cx| {
                         let mut preferences = this.mobile.preferences();
                         preferences.lan_enabled = *enabled;
-                        this.mobile_apply(preferences, None, false, window, cx);
+                        this.mobile_apply(preferences, None, Some(Mode::Lan), false, window, cx);
                     })),
                 cx,
             ));
@@ -733,8 +818,8 @@ impl SettingsPane {
             language.text(Message::MobileRelay),
             hint,
             Button::new("mobile-configure-relay")
-                .outline()
-                .small()
+                .debug_selector(|| "mobile-configure-relay".into())
+                .map(|button| crate::gpui_shell::widgets::settings_button(button, true, cx))
                 .label(language.text(if preferences.relay_enabled {
                     Message::MobileManageRelay
                 } else {
@@ -769,7 +854,7 @@ impl SettingsPane {
                     .on_click(cx.listener(|this, enabled: &bool, window, cx| {
                         let mut preferences = this.mobile.preferences();
                         preferences.notifications = *enabled;
-                        this.mobile_apply(preferences, None, false, window, cx);
+                        this.mobile_apply(preferences, None, None, false, window, cx);
                     })),
                 cx,
             ))
@@ -779,8 +864,7 @@ impl SettingsPane {
                 language.text(Message::MobilePauseHint),
                 Button::new("mobile-pause")
                     .debug_selector(|| "mobile-pause".into())
-                    .outline()
-                    .small()
+                    .map(|button| crate::gpui_shell::widgets::settings_button(button, true, cx))
                     .label(language.text(Message::MobilePause))
                     .disabled(self.mobile.operation)
                     .on_click(cx.listener(|this, _, window, cx| this.mobile_pause(window, cx))),
