@@ -25,7 +25,7 @@ mod runtime;
 mod startup;
 mod startup_command;
 #[cfg(all(test, feature = "gpui-test-support"))]
-mod startup_tests;
+pub(super) mod startup_tests;
 mod tab_identity;
 mod typography;
 

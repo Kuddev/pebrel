@@ -11,6 +11,8 @@ impl SettingsPane {
     ) {
         let Some(updates) = BackgroundEffects::selection_updates(preset) else { return };
         let previous = self.runtime.background_effects.clone();
+        self.shader_custom_open = preset == "wgsl";
+        cx.notify();
         // 确认前恢复真实选中值，取消或写盘失败时不留下虚假的启用状态。
         self.sync_select("background_shader_preset", previous.preset(), window, cx);
         if preset == previous.preset() {
@@ -22,14 +24,8 @@ impl SettingsPane {
         }
         if preset == "wgsl" {
             if previous.wgsl_path.is_none() {
-                let text = crate::gpui_shell::config::ui_language(cx)
-                    .text(Message::WallpaperShaderMissingSource);
-                crate::gpui_shell::toast::toast(
-                    window,
-                    cx,
-                    crate::gpui_shell::toast::ToastKind::Warning,
-                    text,
-                );
+                // 先让用户选择文件，再由显式启用操作确认；不能要求先启用才能看到文件入口。
+                self.choose_shader_source(cx);
                 return;
             }
             let language = crate::gpui_shell::config::ui_language(cx);
@@ -141,6 +137,8 @@ impl SettingsPane {
             },
             h_flex()
                 .items_center()
+                .flex_wrap()
+                .max_w_full()
                 .gap_2()
                 .child(
                     NebulaButton::new("background-shader-choose")
@@ -152,6 +150,16 @@ impl SettingsPane {
                         .disabled(pending || !available)
                         .on_click(cx.listener(|this, _, _, cx| this.choose_shader_source(cx))),
                 )
+                .when(current.is_some() && !self.runtime.background_effects.wgsl, |row| {
+                    row.child(
+                        NebulaButton::new("background-shader-enable")
+                            .label(language.text(Message::WallpaperShaderEnable))
+                            .disabled(pending || !available)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_shader_preset("wgsl", window, cx);
+                            })),
+                    )
+                })
                 .child(
                     NebulaButton::new("background-shader-reload")
                         .label(language.text(Message::WallpaperShaderReload))
