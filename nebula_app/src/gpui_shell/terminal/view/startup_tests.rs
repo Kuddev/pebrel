@@ -44,6 +44,42 @@ pub(in crate::gpui_shell::terminal) fn open(
     open_at(cx, None)
 }
 
+/// 启动身份点名 agent 的 pane（提示符 ssh 标签拉起的 `claude` 包装会话就是
+/// 这种）直接以该 agent 开局。这类 pane 里没有交互式 shell 可以嗅探命令行，
+/// 少了这条声明，侧栏只会剩下权限盾牌、没有程序身份与品牌图。
+#[gpui::test]
+fn a_launch_named_after_an_agent_starts_with_that_program(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
+    });
+    let mut programs = Vec::new();
+    let (_, _window) = cx.add_window_view(|window, cx| {
+        for name in [Some("claude"), Some("pwsh"), None] {
+            let view = cx.new(|cx| {
+                TerminalView::new(
+                    7,
+                    (80, 24),
+                    TerminalLaunch::Local {
+                        cwd: None,
+                        shell: Some(nebula_terminal::tty::Shell::new(
+                            "pebrel-test-missing-shell-executable".into(),
+                            vec![],
+                        )),
+                        shell_name: name.map(str::to_owned),
+                    },
+                    window,
+                    cx,
+                )
+            });
+            programs.push(view.read(cx).running_program.clone());
+        }
+        Root::new(cx.new(|_| Surface), window, cx)
+    });
+    // 普通 shell 与没有启动身份的面板都不声明程序身份。
+    assert_eq!(programs, vec![Some("claude".to_owned()), None, None]);
+}
+
 fn open_at(
     cx: &mut TestAppContext,
     cwd: Option<std::path::PathBuf>,

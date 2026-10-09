@@ -9,8 +9,9 @@ use std::sync::Arc;
 use gpui::{App, ClipboardItem, Window};
 use nebula_terminal::event::EventListener;
 use nebula_terminal::index::Point;
-use nebula_terminal::term::cell::Flags;
+use nebula_terminal::term::cell::{Cell, Flags};
 use nebula_terminal::term::{Term, point_to_viewport_from};
+use nebula_terminal::tty::REMOTE_CLAUDE_CHIP_GLYPH;
 use nebula_terminal::vte::ansi::Color;
 use unicode_width::UnicodeWidthChar;
 use winit::keyboard::ModifiersState;
@@ -26,6 +27,42 @@ pub(super) fn link_modifier(mods: &gpui::Modifiers) -> bool {
         Platform::MacOS => mods.platform,
         Platform::Windows | Platform::Linux => mods.control,
     }
+}
+
+/// 注入提示符里 "ssh" 标签用的内部链接 scheme：
+/// `pebrel-ssh://<base64url(本机目录 UTF-8)>`。
+///
+/// 载荷由 `nebula_terminal` 的 PowerShell 提示符生成（目录可能含空格与
+/// 非 ASCII，所以走 base64url 而不是百分号转义）；只有 Pebrel 自己消费它，
+/// 别的终端里它只是普通文字，不会触发任何外部打开动作。
+pub(super) const REMOTE_CLAUDE_SCHEME: &str = "pebrel-ssh://";
+
+/// 解析 `pebrel-ssh://` 链接里的本机目录；不是该 scheme 或载荷坏了返回 `None`。
+pub(super) fn remote_claude_target(uri: &str) -> Option<String> {
+    use base64::Engine as _;
+
+    let payload = uri.strip_prefix(REMOTE_CLAUDE_SCHEME)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let target = String::from_utf8(bytes).ok()?;
+    (!target.trim().is_empty()).then_some(target)
+}
+
+/// 鼠标下的 `pebrel-ssh://` 链接指向的本机目录（不需要任何修饰键）。
+pub(super) fn remote_claude_at<T: EventListener>(term: &Term<T>, point: Point) -> Option<String> {
+    let (hyperlink, _) = hint::hyperlink_at(term, point)?;
+    remote_claude_target(hyperlink.uri())
+}
+
+/// 悬停状态：内部链接不走"修饰键 + 正则命中"那套判定，普通悬停即可预览。
+pub(super) fn remote_claude_hint_at<T: EventListener>(
+    term: &Term<T>,
+    config: &UiConfig,
+    point: Point,
+) -> Option<HintMatch> {
+    let (hyperlink, bounds) = hint::hyperlink_at(term, point)?;
+    remote_claude_target(hyperlink.uri())?;
+    let trigger = config.hints.enabled.first()?.clone();
+    Some(HintMatch::for_hyperlink(bounds, hyperlink, trigger))
 }
 
 /// 悬停目标：旧壳 `highlighted_hint` + 已经解码好的预览文案。
@@ -67,37 +104,63 @@ pub(super) struct LinkCell {
 
 pub(super) type LinkCells = HashMap<(u16, u16), LinkCell>;
 
-pub(super) fn dashed_cells<T: EventListener>(
+/// 提示符的两类按格装饰：外部链接的虚线下划线格子，以及 ssh 标签里那格要换成
+/// Claude 品牌图的图标。一次网格遍历同时取回，绘制帧不做第二遍。
+#[derive(Default)]
+pub(super) struct LinkDecorations {
+    pub dashed: LinkCells,
+    /// (视口行, 视口列)：宿主在这格上画品牌图（见 `claude_chip`）。
+    pub chip_icons: Vec<(u16, u16)>,
+}
+
+/// 目标格的颜色（含 INVERSE 交换），虚线装饰与图标格共用同一份判定。
+fn link_cell(cell: &Cell) -> LinkCell {
+    let (mut fg, mut bg) = (cell.fg, cell.bg);
+    if cell.flags.contains(Flags::INVERSE) {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+    LinkCell { fg, bg, bold: cell.flags.contains(Flags::BOLD) }
+}
+
+pub(super) fn link_decorations<T: EventListener>(
     term: &Term<T>,
     config: &UiConfig,
     rows: usize,
     cols: usize,
-) -> LinkCells {
+) -> LinkDecorations {
     let matches = hint::visible_clickable_matches(term, config);
     if matches.is_empty() {
-        return HashMap::new();
+        return LinkDecorations::default();
     }
     let origin = term.viewport_origin_for(rows);
-    let mut cells = HashMap::new();
+    let mut decorations = LinkDecorations::default();
     for indexed in term.grid().display_iter() {
         if indexed.flags.intersects(Flags::HIDDEN | Flags::LEADING_WIDE_CHAR_SPACER)
             || !matches.iter().any(|bounds| bounds.contains(&indexed.point))
         {
             continue;
         }
+        // 提示符里的 ssh 标签自带图标与 "ssh" 文字：它不是外部链接，不该再叠
+        // 一条虚线下划线（那条装饰是"Ctrl+点击打开外部目标"的信号）；图标那一格
+        // 交给宿主画品牌图，其余格子保持文字。
+        if indexed.hyperlink().is_some_and(|link| remote_claude_target(link.uri()).is_some()) {
+            if indexed.cell.c == REMOTE_CLAUDE_CHIP_GLYPH
+                && let Some(vp) = point_to_viewport_from(origin, indexed.point)
+                && vp.line < rows
+                && vp.column.0 < cols
+            {
+                decorations.chip_icons.push((vp.line as u16, vp.column.0 as u16));
+            }
+            continue;
+        }
         let Some(vp) = point_to_viewport_from(origin, indexed.point) else { continue };
         if vp.line < rows && vp.column.0 < cols {
-            let (mut fg, mut bg) = (indexed.fg, indexed.bg);
-            if indexed.flags.contains(Flags::INVERSE) {
-                std::mem::swap(&mut fg, &mut bg);
-            }
-            cells.insert(
-                (vp.line as u16, vp.column.0 as u16),
-                LinkCell { fg, bg, bold: indexed.flags.contains(Flags::BOLD) },
-            );
+            decorations
+                .dashed
+                .insert((vp.line as u16, vp.column.0 as u16), link_cell(indexed.cell));
         }
     }
-    cells
+    decorations
 }
 
 pub(super) fn highlighted_at<T: EventListener>(
@@ -126,13 +189,23 @@ pub(super) fn hover_from_hint<T: EventListener>(
         .hyperlink()
         .map(|link| link.uri().to_owned())
         .or_else(|| hint.text(term).map(|text| text.into_owned()))?;
-    let uri = crate::file_uri::extract_link_target(&raw);
     let origin = term.viewport_origin_for(rows);
     let start = *hint.bounds().start();
     let vp =
         point_to_viewport_from(origin, start).filter(|vp| vp.line < rows && vp.column.0 < cols);
     let (anchor_row, anchor_col) =
         vp.map(|vp| (vp.line as u16, vp.column.0 as u16)).unwrap_or((0, 0));
+    // 内部链接没有可跳转的地址：预览只说明点下去会发生什么（单击，不需要
+    // Ctrl/Command——它不是"外部打开"类手势）。
+    if remote_claude_target(&raw).is_some() {
+        return Some(LinkHover {
+            hint,
+            preview: language.text(Message::RemoteClaudePromptHint).to_owned(),
+            anchor_row,
+            anchor_col,
+        });
+    }
+    let uri = crate::file_uri::extract_link_target(&raw);
     let gesture = language.text(match Platform::current() {
         Platform::MacOS => Message::CommonLinkCommandClick,
         Platform::Windows | Platform::Linux => Message::CommonLinkCtrlClick,
@@ -188,6 +261,20 @@ pub(super) fn link_base_directory(
 #[cfg(test)]
 mod path_tests {
     use super::*;
+
+    #[test]
+    fn remote_claude_links_decode_the_local_directory() {
+        use base64::Engine as _;
+
+        let cwd = r"E:\work\proj 带空格";
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cwd);
+        let uri = format!("{REMOTE_CLAUDE_SCHEME}{payload}");
+        assert_eq!(remote_claude_target(&uri).as_deref(), Some(cwd));
+        // 其它 scheme、坏载荷与空目录都不是内部链接。
+        assert!(remote_claude_target("https://example.com").is_none());
+        assert!(remote_claude_target("pebrel-ssh://%%%").is_none());
+        assert!(remote_claude_target(REMOTE_CLAUDE_SCHEME).is_none());
+    }
 
     #[test]
     fn absolute_prompt_paths_use_the_owning_wsl_distribution() {

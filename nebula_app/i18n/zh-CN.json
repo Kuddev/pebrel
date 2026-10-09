@@ -1344,6 +1344,42 @@
   "ssh.ports.pending": "正在启动端口转发…",
   "ssh.ports.unavailable": "SSH 网络运行时不可用",
   "ssh.ports.started": "正在将 127.0.0.1:{local} 转发至 {host} 的 {remote} 端口",
+  "remote_claude": {
+    "prompt_hint": "选择 SSH 主机并运行 Claude Code",
+    "hosts": {
+      "prompt": "选择运行 Claude Code 的服务器：",
+      "choice": "编号（q 取消）："
+    },
+    "stage": {
+      "local_channel": "本机回环 SSH 服务已就绪：127.0.0.1:{port}。",
+      "tunnel": "回连通道已建立：服务器的 127.0.0.1:{port} 可直达本机。",
+      "probe": "回连自检通过（{detail}）。",
+      "session": "正在启动远程 Claude Code 会话。"
+    },
+    "error": {
+      "openssh_missing": "找不到随包 OpenSSH 服务端：{detail}",
+      "local_channel": "本机回环 SSH 服务启动失败：{detail}",
+      "project_unmapped": "无法把该目录映射到服务器：{detail}",
+      "ssh_failed": "ssh 无法连接 {host}：{detail}",
+      "claude_missing": "服务器上未安装 Claude Code。请先在服务器安装（https://claude.ai/install.sh），再重新运行本命令。",
+      "claude_logged_out": "服务器上的 Claude Code 尚未登录。请先在服务器执行 `claude auth login`，再重新运行本命令。",
+      "claude_broken": "服务器上的 Claude Code 未能运行：{detail}",
+      "remote_ssh_missing": "服务器上没有 ssh 客户端，无法建立回连通道。",
+      "mirror_unwritable": "服务器上无法创建会话目录：{detail}",
+      "state_unwritable": "服务器上的家目录不可写：{detail}",
+      "home_missing": "服务器未报告可用的家目录。",
+      "no_free_port": "服务器上没有空闲的回环端口可用于回连通道。",
+      "not_provisioned": "服务器上本次连接使用的临时目录已不存在。请重新运行命令。",
+      "probe_failed": "服务器无法通过回连通道连回本机：{detail}",
+      "mirror_missing": "该项目在服务器上的会话目录已消失。请重新运行命令。",
+      "report": "服务器报告 {code}：{detail}",
+      "host_required": "未指定服务器，且当前没有可选择服务器的终端。请传入 --ssh <主机>。",
+      "no_hosts": "没有可用的 SSH 主机。请先写入 ~/.ssh/config 或在 Pebrel 中保存主机。",
+      "cancelled": "已取消。",
+      "launch_failed": "无法启动 Claude Code：{detail}",
+      "hold_failed": "远程 Claude Code 会话已中断。按回车关闭此标签页。"
+    }
+  },
   "terminal_effect": {
     "title": "自定义终端效果",
     "description": "为文字和光标所在的终端画面添加效果，不改变背景设置。导入后点击启用。",

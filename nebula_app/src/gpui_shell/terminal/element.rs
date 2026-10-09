@@ -10,10 +10,10 @@
 //! 绘制，组合字符跟随基字；编辑、光标和选区不能改变无关格的原点。
 
 use gpui::{
-    App, Bounds, ContentMask, Corners, CursorStyle, DispatchPhase, Element, ElementId,
-    GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseButton,
-    MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Rgba, SharedString, Style, TextRun,
-    UnderlineStyle, Window, fill, outline, point, px, relative, size,
+    App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId,
+    Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseButton, MouseMoveEvent,
+    MouseUpEvent, PathBuilder, Pixels, Rgba, SharedString, Style, TextRun, UnderlineStyle, Window,
+    fill, outline, point, px, relative, size,
 };
 use gpui_component::ActiveTheme as _;
 use nebula_terminal::grid::Dimensions as _;
@@ -91,7 +91,7 @@ impl TerminalElement {
         RenderSnapshot,
         Option<String>,
         usize,
-        super::osc_links::LinkCells,
+        super::osc_links::LinkDecorations,
         usize,
         i64,
         bool,
@@ -119,7 +119,7 @@ impl TerminalElement {
             &SnapshotConfig { rows: rows as u16, cols: cols as u16 },
         );
         let history = term.history_size();
-        let dashed = super::osc_links::dashed_cells(&term, &hint_config, rows, cols);
+        let links = super::osc_links::link_decorations(&term, &hint_config, rows, cols);
         let scrollback_floor = term.grid().scrolled_out();
         let image_anchor = scrollback_floor.saturating_add(history) as i64;
         let viewport_top_abs = image_anchor + i64::from(term.viewport_origin_for(rows).0);
@@ -127,7 +127,7 @@ impl TerminalElement {
             snapshot,
             prompt_line,
             history,
-            dashed,
+            links,
             scrollback_floor,
             viewport_top_abs,
             term.mode().contains(TermMode::ALT_SCREEN),
@@ -313,7 +313,7 @@ impl Element for TerminalElement {
             mut snap,
             prompt_line,
             history,
-            mut dashed,
+            mut links,
             scrollback_floor,
             viewport_top_abs,
             alternate_screen,
@@ -330,7 +330,7 @@ impl Element for TerminalElement {
             view.drive_pending_remote_dir(cx);
         });
         let overrides = snap.color_overrides;
-        self.resolve_app_colors(&mut snap, &mut dashed, &theme, &overrides, cx);
+        self.resolve_app_colors(&mut snap, &mut links.dashed, &theme, &overrides, cx);
         let (theme_anchor, theme_is_light) = themed_anchor(&theme, cx);
         let host_cursor_follows_theme = is_default_host_cursor(&theme);
         let app_cursor = snap.cursor.as_ref().filter(|cursor| {
@@ -661,12 +661,17 @@ impl Element for TerminalElement {
                 else {
                     continue;
                 };
+                // 提示符 ssh 标签的图标格不画字形：那一格由 `claude_chip` 换成
+                // 品牌图，字形只留给别的终端与旧壳。
+                if links.chip_icons.contains(&(seg.row, cell.col)) {
+                    continue;
+                }
                 let fg: Hsla = if let Some(foreground) = selected_foreground(seg.row, cell.col) {
                     foreground.into()
                 } else {
                     theme.resolve(cell.fg, &overrides, cell.bold).into()
                 };
-                let dashed_link = dashed.contains_key(&(seg.row, cell.col));
+                let dashed_link = links.dashed.contains_key(&(seg.row, cell.col));
                 let underline = (cell.underline && !dashed_link).then(|| UnderlineStyle {
                     thickness: px(1.0),
                     color: Some(fg),
@@ -697,7 +702,7 @@ impl Element for TerminalElement {
                             ) == Some(visual_col + offset)
                             && selected_foreground(seg.row, next.col)
                                 == selected_foreground(seg.row, cell.col)
-                            && !dashed.contains_key(&(seg.row, next.col))
+                            && !links.dashed.contains_key(&(seg.row, next.col))
                     })
                 } else {
                     1
@@ -763,7 +768,7 @@ impl Element for TerminalElement {
         // Link decoration follows grid columns, including wide-character spacer
         // cells and spaces omitted by text shaping. Every cell shares one dash
         // phase, so font fallback and ASCII/CJK boundaries cannot restart it.
-        for (&(row, col), cell) in &dashed {
+        for (&(row, col), cell) in &links.dashed {
             if math_frame.covers(row as usize, col as usize) {
                 continue;
             }
@@ -792,6 +797,20 @@ impl Element for TerminalElement {
             }
         }
 
+        // 提示符里的 ssh 标签：那一格的回落字形在上面已跳过，这里补上项目自带的
+        // Claude 品牌图（与侧栏标签页标题前那枚同一张、同一套预处理）。
+        super::claude_chip::paint(
+            window,
+            bounds,
+            super::claude_chip::ChipGrid {
+                origin: bounds.origin,
+                cell_width: layout.cell_width,
+                line_height: layout.line_height,
+            },
+            &links.chip_icons,
+            |row, col| visual_column(row, col),
+        );
+
         // 公式位图画在格子文本之后、装饰（ghost/光标/滚动条）之前，
         // 与旧壳 draw_rects → draw_overlays 的次序一致。
         if !math_frame.is_empty() {
@@ -817,45 +836,15 @@ impl Element for TerminalElement {
             cx,
         );
 
-        // Terminal images are ordinary scrollback content: the PTY reader
-        // reserved rows when it saw the protocol sequence, while this pass
-        // paints only images intersecting the current viewport. GPUI caches
-        // each RenderImage texture by ID, so steady-state scrolling is one
-        // clipped textured quad rather than a repeated decode/upload.
         let inline_images =
             self.view.update(cx, |view, _| view.inline_images.frame_images(scrollback_floor));
-        if !inline_images.is_empty() {
-            let device_scale = window.scale_factor().max(0.1);
-            let viewport_top = bounds.origin.y.as_f32();
-            let viewport_bottom = viewport_top + bounds.size.height.as_f32();
-            for inline in inline_images {
-                let y = bounds.origin.y
-                    + layout.line_height * (inline.abs_line as i64 - viewport_top_abs) as f32;
-                let mut width = inline.display_width / device_scale;
-                let mut height = inline.display_height / device_scale;
-                let fit = (bounds.size.width.as_f32() / width.max(1.0)).min(1.0);
-                width *= fit;
-                height *= fit;
-                let image_top = y.as_f32();
-                if image_top + height <= viewport_top || image_top >= viewport_bottom {
-                    continue;
-                }
-                let target = Bounds::new(
-                    point(bounds.origin.x, y),
-                    size(px(width.max(1.0)), px(height.max(1.0))),
-                );
-                window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                    let _ = window.paint_image(
-                        target,
-                        target,
-                        Corners::all(px(0.0)),
-                        inline.image,
-                        0,
-                        false,
-                    );
-                });
-            }
-        }
+        super::inline_image::paint_frame(
+            window,
+            bounds,
+            layout.line_height,
+            viewport_top_abs,
+            &inline_images,
+        );
 
         if snap.cursor.is_none() {
             super::effects::paint(

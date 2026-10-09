@@ -173,6 +173,8 @@ pub enum TerminalViewEvent {
     RequestClose,
     /// 失败后在当前分屏叶原位重建同一 SSH 目标。
     RetrySsh(String),
+    /// 失败后原位重建"该目录的远程 Claude Code"会话（启动身份存在 tab meta 里）。
+    RetryRemoteClaude,
     /// Ctrl+滚轮改了终端字号：宿主应对所有 pane 热应用并写盘。
     FontSizeChanged,
     /// BEL（`^G`）。后台 tab 记铃点；本 tab 的闪烁/声音由视图自己处理。
@@ -180,6 +182,11 @@ pub enum TerminalViewEvent {
     /// 用户语义输入。宿主可按 tab 的广播状态扇出；接收 pane 必须重新编码，
     /// 不能复用发送方已经受终端 mode 影响的字节。
     UserInput(TerminalInput),
+    /// 提示符里的 ssh 标签被左键点击：宿主弹出 SSH 主机选择，并在载荷里的
+    /// 本机目录启动远程 Claude Code（见 `osc_links::REMOTE_CLAUDE_SCHEME`）。
+    RemoteClaudeRequest {
+        cwd: String,
+    },
     /// Provider 明确上报的 permission/awaiting-input 上下文。宿主拥有 Window，
     /// 由它负责驻留提示、后台 Tab 标记和系统通知；raw context 不进入文案。
     AiAttention(crate::ai_hook::AttentionContext),
@@ -356,6 +363,9 @@ pub struct TerminalView {
     pub(super) ssh_connect: Option<crate::display::ssh_connect::SshConnectState>,
     /// 上一次动画帧时刻（卡片 step 的 delta 来源）。
     ssh_connect_last_step: std::time::Instant,
+    /// ssh 标签拉起的远程 Claude 会话：`ready` 帧已到、远端首屏还没画出来。
+    /// 这段时间卡片要留在屏幕上，否则中间那段空白看起来像会话已经断了。
+    remote_claude_awaiting_paint: bool,
     /// Hook-reported identity for exact resume/fork. Process/title inference is
     /// never accepted here because a wrong id would continue the wrong chat.
     pub ai_session: Option<crate::display::AiSessionIdentity>,
@@ -415,6 +425,10 @@ pub struct TerminalView {
     /// OSC 8 / 正则 URL：虚线下划线、悬停预览、平台修饰键+点击打开。
     pub(super) hint_config: Arc<UiConfig>,
     pub(super) link_hover: Option<super::osc_links::LinkHover>,
+
+    /// 按下但还没松手的 ssh 标签（载荷 = 本机目录）：松手仍在同一枚标签上
+    /// 才发 [`TerminalViewEvent::RemoteClaudeRequest`]，拖动即取消。
+    pub(super) pending_remote_claude: Option<String>,
     pending_link_open: bool,
     /// 选中即复制（旧壳 `copy_on_select`）；关闭时复制交给右键路径。
     copy_on_select: bool,
@@ -565,6 +579,7 @@ impl TerminalView {
         }
         match event {
             TermEvent::Wakeup => {
+                self.clear_remote_claude_card_when_painted(cx);
                 self.flush_pending_runtime_submit(cx);
                 self.flush_pending_shell_command(cx);
                 if self.output_visible {
@@ -700,6 +715,9 @@ impl TerminalView {
                     self.handle_ai_hook(&hook, cx);
                 }
             },
+            TermEvent::RemoteClaude { stage, host, detail } => {
+                self.apply_remote_claude_stage(&stage, &host, &detail, cx);
+            },
             TermEvent::Bell => self.on_bell(cx),
             TermEvent::UserVar { name, value } => {
                 if name == "pebrel_cmd_prompt"
@@ -730,6 +748,87 @@ impl TerminalView {
             });
         })
         .detach();
+    }
+
+    /// 提示符 ssh 标签发起的那条会话：把 CLI 上报的阶段翻到**同一张连接卡片**
+    /// 上（见 `display::ssh_connect` 的 `ConnectFlow::RemoteClaude`）。`ready`
+    /// 之后卡片还要停留到远端首屏，见 `wait_for_remote_claude_paint`。
+    fn apply_remote_claude_stage(
+        &mut self,
+        stage: &str,
+        host: &str,
+        detail: &str,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::display::ssh_connect::SshConnectState;
+        use crate::ssh_session::SshStage;
+
+        let Some(stage) = super::ssh_connect_overlay::remote_claude_stage(stage, detail) else {
+            return;
+        };
+        if stage == SshStage::Ready {
+            self.wait_for_remote_claude_paint(cx);
+            return;
+        }
+        self.remote_claude_awaiting_paint = false;
+        if self.ssh_connect.is_none() || stage == SshStage::Resolve {
+            self.ssh_connect = Some(SshConnectState::new_remote_claude(host.to_owned()));
+        }
+        if let Some(state) = self.ssh_connect.as_mut() {
+            state.set_stage(stage);
+        }
+        cx.notify();
+    }
+
+    /// `ready` 帧只说明回连通道把会话交了出去，远端 Claude 还要几秒才画出首屏
+    /// （实拍：claude 2.1.x 先发 OSC 0 `✳ Claude Code`，之后过一会儿才铺 TUI）。
+    /// 这期间卡片留在屏幕上、停在最后一步；首屏真的画出来或宽限期用完，卡片才
+    /// 让位——否则中间那段空白看起来像场"闪一下就关"。
+    fn wait_for_remote_claude_paint(&mut self, cx: &mut Context<Self>) {
+        use crate::ssh_session::SshStage;
+
+        const GRACE: std::time::Duration = std::time::Duration::from_secs(4);
+
+        let Some(state) = self.ssh_connect.as_mut() else { return };
+        state.set_stage(SshStage::Ready);
+        self.remote_claude_awaiting_paint = true;
+        cx.notify();
+        // 远端 Claude 崩在首屏之前时卡片不能永久盖住终端：宽限期一过就放开。
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(GRACE).await;
+            let _ = this.update(cx, |view, cx| {
+                if std::mem::take(&mut view.remote_claude_awaiting_paint) {
+                    view.ssh_connect = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// 远端 Claude 画出首屏：连接卡片让位给真实终端。
+    fn remote_claude_paint_arrived(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.remote_claude_awaiting_paint) {
+            self.ssh_connect = None;
+            cx.notify();
+        }
+    }
+
+    /// 首屏判据是**网格里真的出现了内容**，不是标题：Claude 的 OSC 0 早于铺面板
+    /// 很久（实拍那段窗口里只有 ssh 远端脚本留下的阶段文本），按标题撤卡片就等于
+    /// 把这段启动窗口露给用户。包装器把失败原因写出来时同样会命中这一条。
+    fn clear_remote_claude_card_when_painted(&mut self, cx: &mut Context<Self>) {
+        if !self.remote_claude_awaiting_paint || !self.screen_has_content() {
+            return;
+        }
+        self.remote_claude_paint_arrived(cx);
+    }
+
+    /// 可见网格里有没有内容（含备用屏）。扫描只发生在等首屏的那几秒。
+    fn screen_has_content(&self) -> bool {
+        let Some(session) = self.session.as_ref() else { return false };
+        let term = session.term.lock();
+        term.grid().display_iter().any(|cell| cell.cell.c != ' ')
     }
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。

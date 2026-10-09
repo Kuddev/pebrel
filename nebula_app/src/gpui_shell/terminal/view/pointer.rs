@@ -143,6 +143,10 @@ impl TerminalView {
                 let (point, _) = self.grid_point(position);
                 let term = session.term.lock();
                 super::super::osc_links::highlighted_at(&term, &self.hint_config, point, mods)
+                    // 提示符里的 ssh 标签是单击开的，不需要 Ctrl/Command。
+                    .or_else(|| {
+                        super::super::osc_links::remote_claude_hint_at(&term, &self.hint_config, point)
+                    })
                     .and_then(|hint| {
                         super::super::osc_links::hover_from_hint(
                             &term,
@@ -196,6 +200,14 @@ impl TerminalView {
             window,
             cx,
         );
+    }
+
+    /// 鼠标下的 `pebrel-ssh://` 标签指向的本机目录；没有就是 `None`。
+    fn remote_claude_cwd_at(&self, position: Point<Pixels>) -> Option<String> {
+        let session = self.session.as_ref()?;
+        let (point, _) = self.grid_point(position);
+        let term = session.term.lock();
+        super::super::osc_links::remote_claude_at(&term, point)
     }
 
     /// 应用是否接管了鼠标（vim/htop 等）。Shift 按住时强制旁路——这是
@@ -409,6 +421,7 @@ impl TerminalView {
     ) {
         window.focus(&self.focus_handle, cx);
         self.pending_link_open = false;
+        self.pending_remote_claude = None;
         cx.emit(TerminalViewEvent::FocusRequested);
         if self.session.is_none() {
             return;
@@ -465,6 +478,18 @@ impl TerminalView {
                 return;
             }
         }
+        // 提示符里的 ssh 标签：左键单击即可（它不是"外部打开"类手势，所以
+        // 不需要 Ctrl/Command）。开了鼠标追踪的全屏程序里，点击照旧归程序。
+        if event.click_count == 1 && !self.mouse_mode_active(&event.modifiers) {
+            if let Some(cwd) = self.remote_claude_cwd_at(event.position) {
+                if let Some(session) = &self.session {
+                    session.term.lock().selection = None;
+                }
+                self.selecting = false;
+                self.pending_remote_claude = Some(cwd);
+                return;
+            }
+        }
         if self.mouse_mode_active(&event.modifiers) {
             self.send_mouse_report(
                 event.position,
@@ -511,6 +536,10 @@ impl TerminalView {
         // Retain the pressed link until release; dragging must not retarget it
         // or leak part of the consumed gesture to the application.
         if self.pending_link_open {
+            return;
+        }
+        // 按下的 ssh 标签在松手前不重定向：与链接手势同一套"按下即锁定"。
+        if self.pending_remote_claude.is_some() {
             return;
         }
         if self.move_completion_popup_scrollbar(event, cx) {
@@ -629,6 +658,15 @@ impl TerminalView {
             return;
         }
         let pending_link_open = std::mem::take(&mut self.pending_link_open);
+        if let Some(cwd) = self.pending_remote_claude.take() {
+            // 松手仍在同一枚标签上才算点击；拖出去等于取消。
+            if self.remote_claude_cwd_at(event.position).as_deref() == Some(cwd.as_str()) {
+                self.selecting = false;
+                cx.emit(TerminalViewEvent::RemoteClaudeRequest { cwd });
+                cx.notify();
+                return;
+            }
+        }
         if !pending_link_open && !self.selecting && self.mouse_mode_active(&event.modifiers) {
             self.send_mouse_report(
                 event.position,
@@ -668,6 +706,7 @@ impl TerminalView {
         self.stop_selection_scroll();
         let dragging_scrollbar = self.scrollbar_drag.take().is_some();
         self.pending_link_open = false;
+        self.pending_remote_claude = None;
         if !self.selecting {
             if dragging_scrollbar {
                 cx.notify();

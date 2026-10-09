@@ -1,6 +1,90 @@
 //! `workspace.rs` 单元测试。
 
+use super::remote_claude::{
+    create_process_argument_list, remote_claude_palette_rows, remote_claude_wrapper,
+};
 use super::*;
+
+/// 会话包装器：一条 `-EncodedCommand` 的 PowerShell（控制台原生），脚本里
+/// 每个参数都按 PowerShell 规则转义，失败时留住 pane 等用户确认。
+#[test]
+fn remote_claude_wrapper_runs_the_cli_in_a_console_native_powershell() {
+    use base64::Engine as _;
+
+    let exe = Path::new(r"C:\Program Files\Pebrel\pebrel.exe");
+    let (program, args) = remote_claude_wrapper(
+        exe,
+        "box host",
+        r"C:\work dir\proj",
+        crate::display::UiLanguage::ZhCn,
+    )
+    .unwrap();
+    let leaf = program.rsplit(['\\', '/']).next().unwrap_or_default().to_ascii_lowercase();
+    assert!(leaf.starts_with("pwsh") || leaf.starts_with("powershell"), "{program}");
+    assert_eq!(&args[..3], ["-NoLogo", "-NoProfile", "-EncodedCommand"]);
+
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&args[3]).unwrap();
+    let units: Vec<u16> =
+        bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    let script = String::from_utf16(&units).unwrap();
+    // PowerShell 对 GUI 子系统进程的 `&` 调用不等待：必须用 Start-Process -Wait，
+    // 否则脚本会在 CLI 还没跑完时就判失败（表现为"刚连上就中断"）。
+    assert!(script.contains(r"-FilePath 'C:\Program Files\Pebrel\pebrel.exe'"), "{script}");
+    assert!(
+        script
+            .contains(r#"-ArgumentList '"claude" "--ssh" "box host" "--cwd" "C:\work dir\proj"'"#),
+        "{script}"
+    );
+    assert!(script.contains("-NoNewWindow -Wait -PassThru"), "{script}");
+    assert!(script.contains("$p.ExitCode"), "{script}");
+    assert!(script.contains("按回车关闭此标签页"), "{script}");
+    assert!(!script.contains("cmd.exe"), "{script}");
+}
+
+/// 参数行按 CreateProcess 规则转义：末尾反斜杠成对，内部引号不会被吞。
+#[test]
+fn create_process_argument_list_quotes_windows_paths() {
+    let args = [r"C:\", r"C:\work dir\proj", r#"say "hi""#].map(str::to_owned);
+    assert_eq!(
+        create_process_argument_list(&args).unwrap(),
+        r#""C:\\" "C:\work dir\proj" "say \"hi\"""#
+    );
+}
+
+/// 提示符 ssh 标签的选择器：SSH 主机行改绑到"在该目录起 Claude Code"，
+/// Shell 行保持原样（用户仍可切到 Shell 过滤正常开终端）。
+#[test]
+fn remote_claude_palette_rows_rebind_only_ssh_hosts() {
+    let shells = vec![crate::shell_detect::DetectedShell {
+        name: crate::shell_detect::display_name_for_id("pwsh"),
+        id: "pwsh".to_owned(),
+        program: "pwsh.exe".to_owned(),
+        args: Vec::new(),
+    }];
+    let rows = shell_palette_rows(
+        shells,
+        Vec::new(),
+        [("box.example".to_owned(), String::new())],
+        "pwsh",
+        crate::display::UiLanguage::ZhCn,
+        1.0,
+    );
+    let (rows, hosts) = remote_claude_palette_rows(rows, r"E:\work\proj", (3, 7));
+    assert_eq!(hosts, 1);
+    assert!(rows.iter().any(|row| matches!(row.action, WorkspacePaletteAction::LaunchShell(_))));
+    let remote = rows
+        .iter()
+        .find(|row| matches!(row.action, WorkspacePaletteAction::LaunchRemoteClaude { .. }))
+        .expect("the SSH host row must be rebound");
+    assert!(matches!(
+        &remote.action,
+        WorkspacePaletteAction::LaunchRemoteClaude { host, cwd, tab, pane }
+            if host == "box.example" && cwd == r"E:\work\proj" && *tab == 3 && *pane == 7
+    ));
+    // 主机行的展示身份不变，只换动作。
+    assert_eq!(remote.label, "box.example");
+    assert!(rows.iter().all(|row| !matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_))));
+}
 
 #[test]
 fn ssh_host_icons_are_confined_to_the_selected_configuration_directory() {

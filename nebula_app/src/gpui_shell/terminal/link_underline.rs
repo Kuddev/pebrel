@@ -50,7 +50,7 @@ mod tests {
 
     use super::*;
     use crate::config::UiConfig;
-    use crate::gpui_shell::terminal::osc_links::dashed_cells;
+    use crate::gpui_shell::terminal::osc_links::link_decorations;
     use nebula_terminal::event::VoidListener;
     use nebula_terminal::term::test::TermSize;
     use nebula_terminal::term::{Config, Term};
@@ -75,7 +75,7 @@ mod tests {
             let started = std::time::Instant::now();
             let mut last_cells = 0;
             for _ in 0..200 {
-                let cells = dashed_cells(&term, &config, 40, 120);
+                let cells = link_decorations(&term, &config, 40, 120).dashed;
                 last_cells = cells.len();
                 let segments: usize = cells
                     .keys()
@@ -106,7 +106,7 @@ mod tests {
             &mut term,
             "\x1b]8;;file:///tmp/example\x1b\\A开始 菜单Z\x1b]8;;\x1b\\".as_bytes(),
         );
-        let cells = dashed_cells(&term, &UiConfig::default(), 2, 40);
+        let cells = link_decorations(&term, &UiConfig::default(), 2, 40).dashed;
         assert_eq!(cells.len(), 11);
         assert!((0..11).all(|col| cells.contains_key(&(0, col))));
         for scale in [1.0, 1.25, 1.5, 2.0] {
@@ -126,5 +126,44 @@ mod tests {
                 assert_eq!(actual, expected, "scale={scale}, width={width}");
             }
         }
+    }
+
+    /// 提示符里的 ssh 标签自带图标与文字，不该再叠"Ctrl+点击打开外部目标"
+    /// 那条虚线下划线；同一行里的外部链接照旧有。
+    #[test]
+    fn prompt_ssh_chip_is_not_painted_as_an_external_link() {
+        let mut term = Term::new(Config::default(), &TermSize::new(60, 2), VoidListener);
+        let mut parser: ansi::Processor = ansi::Processor::new();
+        parser.advance(
+            &mut term,
+            "\x1b]8;;pebrel-ssh://RQ\x1b\\ ssh \x1b]8;;\x1b\\ \x1b]8;;https://example.com\x1b\\site\x1b]8;;\x1b\\"
+                .as_bytes(),
+        );
+        let cells = link_decorations(&term, &UiConfig::default(), 2, 60).dashed;
+        let keys: Vec<_> = cells.keys().copied().collect();
+        // 只有 https 链接那 4 列有装饰；ssh 标签（列 0..5）没有。
+        assert!((0..5).all(|col| !cells.contains_key(&(0, col))), "{keys:?}");
+        assert!((6..10).all(|col| cells.contains_key(&(0, col))), "{keys:?}");
+    }
+
+    /// ssh 标签里那格图标是宿主与提示符之间的第二份契约：宿主按码位认出它，
+    /// 画上 Claude 品牌图。同一行里孤立的同码位字形不属于任何标签，不能误画。
+    #[test]
+    fn prompt_ssh_chip_exposes_the_icon_cell_for_the_brand_mark() {
+        use nebula_terminal::tty::REMOTE_CLAUDE_CHIP_GLYPH;
+
+        let mut term = Term::new(Config::default(), &TermSize::new(60, 2), VoidListener);
+        let mut parser: ansi::Processor = ansi::Processor::new();
+        parser.advance(
+            &mut term,
+            format!(
+                "\x1b]8;;pebrel-ssh://RQ\x1b\\ {REMOTE_CLAUDE_CHIP_GLYPH} ssh \x1b]8;;\x1b\\\
+                 {REMOTE_CLAUDE_CHIP_GLYPH}\r\n"
+            )
+            .as_bytes(),
+        );
+        let icons = link_decorations(&term, &UiConfig::default(), 2, 60).chip_icons;
+        // " <icon> ssh" 从第 0 列起：图标在第 1 列，第 8 列那枚孤立的同码位字形不算。
+        assert_eq!(icons, vec![(0, 1)]);
     }
 }

@@ -247,7 +247,7 @@ fn format_destination(dest: &str, login_user: Option<&str>, port: Option<&str>) 
 /// Locate the system `ssh`. Windows 10+ ships OpenSSH; prefer the known path,
 /// fall back to whatever `ssh` is on `PATH`.
 #[cfg(windows)]
-fn find_ssh() -> String {
+pub(crate) fn find_ssh() -> String {
     if let Ok(sysroot) = std::env::var("SystemRoot") {
         let p = std::path::Path::new(&sysroot).join("System32").join("OpenSSH").join("ssh.exe");
         if p.exists() {
@@ -622,26 +622,79 @@ pub fn build_pane_launch(
             "SSH destination contains unsafe shell characters",
         ));
     }
+    let command = build_cli_launch(
+        shell_id,
+        exe,
+        &["ssh".to_owned(), "--".to_owned(), destination.to_owned()],
+    )?;
+    Ok(SshPaneLaunch { command: format!("{command}\r").into_bytes() })
+}
+
+/// 把一条 Pebrel 命令行写成"用户手输的一行"，按默认 shell 的引号规则转义；
+/// 返回值**不含回车**（提交由 `TerminalView::run_command` 的 Enter 负责）。
+///
+/// 为什么要在 pane 的 shell 里执行而不是把 GUI 进程本身当 PTY 子进程：
+/// `pebrel.exe` 是 GUI 子系统进程，它派生 `ssh.exe` 时拿不到 ConPTY 控制台，
+/// Windows 会给 ssh 分配一个**独立的可见控制台窗口**，终端尺寸也不再跟随
+/// pane。经过 pane 的 shell 执行，子进程继承的就是 pane 自己的控制台。
+pub fn build_cli_launch(
+    shell_id: &str,
+    exe: &std::path::Path,
+    args: &[String],
+) -> std::io::Result<String> {
+    for arg in args {
+        if arg.chars().any(char::is_control) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "argument contains a control character",
+            ));
+        }
+    }
     let exe_text = exe.to_string_lossy();
     let shell = shell_id.trim().to_ascii_lowercase();
+    let powershell_quote = |text: &str| format!("'{}'", text.replace('\'', "''"));
+    let posix_quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
     let command = if matches!(shell.as_str(), "pwsh" | "powershell" | "ps") {
-        format!(
-            "& '{}' ssh -- '{}'\r",
-            exe_text.replace('\'', "''"),
-            destination.replace('\'', "''")
-        )
+        let mut command = format!("& {}", powershell_quote(&exe_text));
+        for arg in args {
+            command.push(' ');
+            command.push_str(&powershell_quote(arg));
+        }
+        command
     } else if shell == "cmd" {
-        format!("\"{exe_text}\" ssh -- {destination}\r")
+        let mut command = format!("\"{exe_text}\"");
+        for arg in args {
+            // cmd 在双引号内仍会展开 %VAR%；路径里真带 % 或 " 时不猜，直接拒绝。
+            if arg.contains(['"', '%']) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "argument cannot be quoted for cmd.exe",
+                ));
+            }
+            command.push_str(&format!(" \"{arg}\""));
+        }
+        command
     } else if matches!(shell.as_str(), "bash" | "git-bash" | "gitbash") {
-        format!("'{}' ssh -- '{}'\r", git_bash_path(exe), destination.replace('\'', "'\\''"))
+        let mut command = posix_quote(&git_bash_path(exe));
+        for arg in args {
+            command.push(' ');
+            command.push_str(&posix_quote(arg));
+        }
+        command
     } else if shell == "nu" {
-        format!(
-            "^'{}' ssh -- '{}'\r",
-            exe_text.replace('\'', "''"),
-            destination.replace('\'', "''")
-        )
+        let mut command = format!("^{}", powershell_quote(&exe_text));
+        for arg in args {
+            command.push(' ');
+            command.push_str(&powershell_quote(arg));
+        }
+        command
     } else if shell.starts_with("wsl:") || shell == "wsl" {
-        format!("'{}' ssh -- '{}'\r", wsl_path(exe), destination.replace('\'', "'\\''"))
+        let mut command = posix_quote(&wsl_path(exe));
+        for arg in args {
+            command.push(' ');
+            command.push_str(&posix_quote(arg));
+        }
+        command
     } else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -649,7 +702,7 @@ pub fn build_pane_launch(
         ));
     };
 
-    Ok(SshPaneLaunch { command: command.into_bytes() })
+    Ok(command)
 }
 
 pub struct SshAskpassEnv {
@@ -935,32 +988,58 @@ mod tests {
         let ps = build_pane_launch("pwsh", exe, "root@example.com").unwrap();
         assert_eq!(
             String::from_utf8(ps.command).unwrap(),
-            "& 'C:\\Program Files\\Nebula\\nebula.exe' ssh -- 'root@example.com'\r"
+            "& 'C:\\Program Files\\Nebula\\nebula.exe' 'ssh' '--' 'root@example.com'\r"
         );
 
         let cmd = build_pane_launch("cmd", exe, "root@example.com").unwrap();
         assert_eq!(
             String::from_utf8(cmd.command).unwrap(),
-            "\"C:\\Program Files\\Nebula\\nebula.exe\" ssh -- root@example.com\r"
+            "\"C:\\Program Files\\Nebula\\nebula.exe\" \"ssh\" \"--\" \"root@example.com\"\r"
         );
 
         let bash = build_pane_launch("git-bash", exe, "root@example.com").unwrap();
         assert_eq!(
             String::from_utf8(bash.command).unwrap(),
-            "'/c/Program Files/Nebula/nebula.exe' ssh -- 'root@example.com'\r"
+            "'/c/Program Files/Nebula/nebula.exe' 'ssh' '--' 'root@example.com'\r"
         );
 
         let nu = build_pane_launch("nu", exe, "root@example.com").unwrap();
         assert_eq!(
             String::from_utf8(nu.command).unwrap(),
-            "^'C:\\Program Files\\Nebula\\nebula.exe' ssh -- 'root@example.com'\r"
+            "^'C:\\Program Files\\Nebula\\nebula.exe' 'ssh' '--' 'root@example.com'\r"
         );
 
         let wsl = build_pane_launch("wsl:Ubuntu", exe, "root@example.com").unwrap();
         assert_eq!(
             String::from_utf8(wsl.command).unwrap(),
-            "'/mnt/c/Program Files/Nebula/nebula.exe' ssh -- 'root@example.com'\r"
+            "'/mnt/c/Program Files/Nebula/nebula.exe' 'ssh' '--' 'root@example.com'\r"
         );
+    }
+
+    /// 远程 Claude Code 入口走同一份引号权威：每个参数逐字转义，带空格的
+    /// 目录不会被拆成两个参数；无法安全转义的家族/参数直接拒绝。
+    #[test]
+    fn cli_launch_quotes_every_argument_for_the_configured_shell() {
+        let exe = std::path::Path::new(r"C:\Program Files\Pebrel\pebrel.exe");
+        let args =
+            ["claude", "--ssh", "box.example", "--cwd", r"C:\work dir\proj"].map(String::from);
+        assert_eq!(
+            build_cli_launch("pwsh", exe, &args).unwrap(),
+            r"& 'C:\Program Files\Pebrel\pebrel.exe' 'claude' '--ssh' 'box.example' '--cwd' 'C:\work dir\proj'"
+        );
+        assert_eq!(
+            build_cli_launch("cmd", exe, &args).unwrap(),
+            "\"C:\\Program Files\\Pebrel\\pebrel.exe\" \"claude\" \"--ssh\" \"box.example\" \"--cwd\" \"C:\\work dir\\proj\""
+        );
+        assert_eq!(
+            build_cli_launch("git-bash", exe, &args).unwrap(),
+            r"'/c/Program Files/Pebrel/pebrel.exe' 'claude' '--ssh' 'box.example' '--cwd' 'C:\work dir\proj'"
+        );
+        // cmd 在双引号内仍会展开 %VAR%：宁可拒绝，也不打错一条命令。
+        let percent = ["claude", "--cwd", r"C:\100%\proj"].map(String::from);
+        assert!(build_cli_launch("cmd", exe, &percent).is_err());
+        // 未知 shell 家族不猜引号规则。
+        assert!(build_cli_launch("fish", exe, &args).is_err());
     }
 
     #[test]
