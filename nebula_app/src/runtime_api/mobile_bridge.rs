@@ -217,7 +217,7 @@ fn start_subscription(
     Ok(Subscription { id, cancelled, shutdown, thread })
 }
 
-fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool, bool) {
+fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool, bool, bool) {
     let request = ApiRequest::new(endpoint.token.clone(), "runtime.describe", json!({}));
     let result = (|| -> io::Result<ApiResponse> {
         let mut reader = BufReader::new(connect(endpoint, &request)?);
@@ -226,7 +226,7 @@ fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool, bool) {
         serde_json::from_slice(&bytes).map_err(io::Error::other)
     })();
     let Some(value) = result.ok().filter(|reply| reply.ok).and_then(|reply| reply.result) else {
-        return (false, false, false);
+        return (false, false, false, false);
     };
     let stream = value["capabilities"]
         .as_array()
@@ -240,7 +240,10 @@ fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool, bool) {
         && value["features"].as_array().is_some_and(|features| {
             features.iter().any(|feature| feature == "pane.read.screen.viewport.v1")
         });
-    (stream, grid, scroll)
+    let history = value["features"].as_array().is_some_and(|features| {
+        features.iter().any(|feature| feature == "pane.read.screen.history.v1")
+    });
+    (stream, grid, scroll, history)
 }
 
 pub(crate) fn run(allow_input: bool) -> Result<(), Box<dyn Error>> {
@@ -281,7 +284,8 @@ impl BridgeSession {
         let endpoint =
             read_endpoint().ok_or_else(|| io::Error::other("no resident Pebrel runtime"))?;
         let stopped = Arc::new(AtomicBool::new(false));
-        let (screen_stream, screen_grid, terminal_scroll) = screen_capabilities(&endpoint);
+        let (screen_stream, screen_grid, terminal_scroll, terminal_history) =
+            screen_capabilities(&endpoint);
         write_frame(
             &output,
             &json!({
@@ -290,7 +294,8 @@ impl BridgeSession {
                     "snapshot": true, "read_tail": true, "state_subscription": true,
                     "input": allow_input, "exclusive_input": false, "replay_notifications": false,
                     "terminal_grid_stream": screen_stream, "screen_delta": screen_grid,
-                    "terminal_grid": screen_grid, "terminal_scroll": terminal_scroll
+                    "terminal_grid": screen_grid, "terminal_scroll": terminal_scroll,
+                    "terminal_history": terminal_history
                 },
                 "max_request_bytes": MAX_BRIDGE_REQUEST,
                 "max_frame_bytes": MAX_BRIDGE_FRAME

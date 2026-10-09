@@ -66,7 +66,7 @@ class DesktopRecoveryTest {
         assertEquals(listOf("Ctrl+C"), sent)
     }
 
-    private class Link(private val autoSnapshot: Boolean = true, private val scrollSupported: Boolean = false) : DesktopTransport {
+    private class Link(private val autoSnapshot: Boolean = true, private val scrollSupported: Boolean = false, private val historySupported: Boolean = false) : DesktopTransport {
         lateinit var receive: (JSONObject) -> Unit
         lateinit var lost: (Throwable?) -> Unit
         var closed = false
@@ -76,7 +76,7 @@ class DesktopRecoveryTest {
             this.receive = receive
             lost = disconnected
             receive(JSONObject().put("type", "mobile.ready").put("protocol", "pebrel.mobile.relay").put("version", 1)
-                .put("capabilities", JSONObject().put("input", true).put("terminal_scroll", scrollSupported)))
+                .put("capabilities", JSONObject().put("input", true).put("terminal_scroll", scrollSupported).put("terminal_history", historySupported)))
         }
         override fun send(frame: JSONObject) {
             val method = frame.getString("method")
@@ -106,6 +106,22 @@ class DesktopRecoveryTest {
             val read = link.requests.single { it.getString("method") == "pane.read" }.getJSONObject("params")
             assertTrue(read.getBoolean("screen"))
             assertTrue(read.getBoolean("screen_viewport"))
+        } finally { client.close() }
+    }
+
+    @Test fun historyReaderNegotiatesReadOnlyPagesInsteadOfTheDesktopViewport() = runTest {
+        val link = Link(scrollSupported = true, historySupported = true)
+        val client = DesktopRuntimeClient(link, {}, {})
+        try {
+            client.connect(false)
+            assertFalse(client.streamPane(JSONObject().put("window_id", 1).put("pane_id", 2)) { error("history is paged") })
+            client.readPane(JSONObject().put("window_id", 1).put("pane_id", 2)
+                .put("screen_history", JSONObject().put("start", 40).put("rows", 200)))
+            val read = link.requests.single { it.getString("method") == "pane.read" }.getJSONObject("params")
+            assertTrue(read.getBoolean("screen"))
+            assertFalse(read.has("screen_viewport"))
+            assertEquals(40L, read.getJSONObject("screen_history").getLong("start"))
+            assertTrue(link.requests.none { it.getString("method") in setOf("pane.scroll", "pane.send_key", "pane.prompt") })
         } finally { client.close() }
     }
 
