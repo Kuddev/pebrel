@@ -1792,6 +1792,9 @@ impl NebulaWorkspace {
         reset_browse_root: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.details_panel.monitor_selected {
+            return false;
+        }
         if !self.side_panel.open {
             return false;
         }
@@ -1808,7 +1811,8 @@ impl NebulaWorkspace {
     }
 
     fn toggle_file_tree(&mut self, cx: &mut Context<Self>) {
-        if self.active_document_section(cx).is_some() {
+        let monitoring = std::mem::take(&mut self.details_panel.monitor_selected);
+        if monitoring || self.active_document_section(cx).is_some() {
             self.details_panel.section = None;
             self.select_side_panel_view(crate::display::side_panel::PanelView::Files, cx);
             return;
@@ -1818,7 +1822,8 @@ impl NebulaWorkspace {
     }
 
     fn toggle_git_tree(&mut self, cx: &mut Context<Self>) {
-        if self.active_document_section(cx).is_some() {
+        let monitoring = std::mem::take(&mut self.details_panel.monitor_selected);
+        if monitoring || self.active_document_section(cx).is_some() {
             self.details_panel.section = None;
             self.select_side_panel_view(crate::display::side_panel::PanelView::Git, cx);
             return;
@@ -2216,26 +2221,6 @@ impl NebulaWorkspace {
             },
             _ => self.focus_active(window, cx),
         }
-        cx.notify();
-    }
-
-    fn select_side_panel_view(
-        &mut self,
-        view: crate::display::side_panel::PanelView,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.side_panel.open {
-            self.toggle_side_panel(view, cx);
-            return;
-        }
-        if self.side_panel.view == view {
-            cx.notify();
-            return;
-        }
-        self.file_tree_menu = None;
-        self.side_panel.toggle(view);
-        let (cwd, wsl) = self.side_panel_follow(cx);
-        self.side_panel.sync_at(cwd, wsl);
         cx.notify();
     }
 

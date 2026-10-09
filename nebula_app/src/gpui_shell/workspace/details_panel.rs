@@ -1,11 +1,13 @@
-//! One workspace-owned sidebar for files, VCS and the active document.
+//! One workspace-owned sidebar for files, VCS, resources and the active document.
 //! Content views own their data; this module owns selection, geometry and gestures.
 
 use super::*;
 use crate::display::side_panel::PanelView;
 use crate::gpui_shell::file_editor::{DocumentDetails, DocumentSection, TextFileView};
+use crate::gpui_shell::resource_monitor::{ResourceMonitor, Scope};
 use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::Message;
+use crate::resource_monitor::Target;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 #[path = "details_panel_tests.rs"]
@@ -18,6 +20,10 @@ const RESIZE_HIT_WIDTH: f32 = 8.0;
 const HEADER_CONTROL_SIZE: f32 = 32.0;
 
 pub(super) struct DetailsPanelState {
+    /// Resource selection overrides document/files/VCS without changing their remembered state.
+    pub(super) monitor_selected: bool,
+    /// Workspace-owned telemetry view; hidden panels keep snapshots but cancel their worker.
+    monitor: Option<Entity<ResourceMonitor>>,
     pub(super) section: Option<DocumentSection>,
     width: f32,
     closing_width: Option<f32>,
@@ -31,6 +37,8 @@ pub(super) struct DetailsPanelState {
 impl Default for DetailsPanelState {
     fn default() -> Self {
         Self {
+            monitor_selected: false,
+            monitor: None,
             section: Some(DocumentSection::Outline),
             width: DEFAULT_WIDTH,
             closing_width: None,
@@ -51,6 +59,66 @@ fn panel_width(preferred: f32, available: f32) -> f32 {
 }
 
 impl NebulaWorkspace {
+    /// Bind resource collection to a captured terminal identity, never to its cwd spelling.
+    fn sync_resource_monitor(&mut self, cx: &mut Context<Self>) {
+        let selected = self.details_panel.monitor_selected;
+        if selected && self.details_panel.monitor.is_none() {
+            self.details_panel.monitor = Some(cx.new(ResourceMonitor::new));
+        }
+        let Some(monitor) = self.details_panel.monitor.clone() else { return };
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let mut scope = Scope {
+            key: "local".into(),
+            label: language.text(Message::MonitorLocal).into(),
+            target: Some(Target::Native),
+        };
+        if let Some(view) = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view) {
+            let view = view.read(cx);
+            if let Some(destination) = &view.ssh_destination {
+                scope = Scope {
+                    key: format!("ssh:{destination}"),
+                    label: format!("SSH · {destination}"),
+                    target: view.ready_ssh_destination().map(|_| Target::Ssh(destination.clone())),
+                };
+            } else if let Some(context) = &view.exec_context {
+                if let Some(distribution) = context.wsl_distribution() {
+                    scope = Scope {
+                        key: format!(
+                            "wsl:{}:{}",
+                            distribution.unwrap_or_default(),
+                            context.wsl_user().unwrap_or_default()
+                        ),
+                        label: format!("WSL · {}", distribution.unwrap_or_default()),
+                        target: Some(Target::Wsl(context.clone())),
+                    };
+                }
+            }
+        }
+        let visible = selected
+            && self.side_panel.open
+            && !self.settings_open
+            && !self.reader_focus_active(cx);
+        monitor.update(cx, |view, cx| view.bind(scope, visible, cx));
+    }
+
+    /// Select files or VCS within the shared sidebar, ending any resource-only selection.
+    pub(super) fn select_side_panel_view(&mut self, view: PanelView, cx: &mut Context<Self>) {
+        self.details_panel.monitor_selected = false;
+        if !self.side_panel.open {
+            self.toggle_side_panel(view, cx);
+            return;
+        }
+        if self.side_panel.view == view {
+            cx.notify();
+            return;
+        }
+        self.file_tree_menu = None;
+        self.side_panel.toggle(view);
+        let (cwd, wsl) = self.side_panel_follow(cx);
+        self.side_panel.sync_at(cwd, wsl);
+        cx.notify();
+    }
+
     pub(super) fn toggle_side_panel(
         &mut self,
         view: crate::display::side_panel::PanelView,
@@ -108,6 +176,9 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn active_document_section(&self, cx: &App) -> Option<DocumentSection> {
+        if self.details_panel.monitor_selected {
+            return None;
+        }
         let document = self.active_details_document(cx)?;
         self.details_panel.section.filter(|section| {
             *section != DocumentSection::Outline || document.read(cx).has_outline()
@@ -115,6 +186,7 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn sync_document_details(&mut self, cx: &mut Context<Self>) {
+        self.sync_resource_monitor(cx);
         let document = self.active_details_document(cx);
         if document.as_ref() != self.details_panel.document.as_ref().map(|(file, _)| file) {
             self.details_panel.resize = None;
@@ -168,6 +240,7 @@ impl NebulaWorkspace {
     }
 
     fn select_document_section(&mut self, section: DocumentSection, cx: &mut Context<Self>) {
+        self.details_panel.monitor_selected = false;
         let Some(file) = self.active_details_document(cx) else { return };
         let section = if section == DocumentSection::Outline && !file.read(cx).has_outline() {
             DocumentSection::Info
@@ -183,6 +256,9 @@ impl NebulaWorkspace {
     }
 
     fn details_tab(&self, cx: &App) -> u8 {
+        if self.details_panel.monitor_selected {
+            return 4;
+        }
         match self.active_document_section(cx) {
             Some(DocumentSection::Info) => 0,
             Some(DocumentSection::Outline) => 1,
@@ -223,6 +299,12 @@ impl NebulaWorkspace {
             IconName::FolderClosed,
         ));
         tabs.push((3, "side-panel-git", vcs_name, IconName::Github));
+        tabs.push((
+            4,
+            "side-panel-resources",
+            language.text(Message::MonitorTitle),
+            IconName::Info,
+        ));
         let label_limit = (width
             - 16.0
             - (tabs.len() + 1) as f32 * HEADER_CONTROL_SIZE
@@ -298,6 +380,14 @@ impl NebulaWorkspace {
                     match index {
                         0 => view.select_document_section(DocumentSection::Info, cx),
                         1 => view.select_document_section(DocumentSection::Outline, cx),
+                        4 => {
+                            view.details_panel.monitor_selected = true;
+                            view.details_panel.section = None;
+                            if !view.side_panel.open {
+                                view.toggle_side_panel(view.side_panel.view, cx);
+                            }
+                            cx.notify();
+                        },
                         _ => {
                             view.details_panel.section = None;
                             view.select_side_panel_view(
@@ -367,8 +457,16 @@ impl NebulaWorkspace {
             panel_width(self.details_panel.width, f32::from(window.viewport_size().width))
         };
         let section = self.active_document_section(cx);
-        let remote = open && section.is_none() && self.route_remote_browser(window, cx);
-        let panel = if section.is_some() {
+        let monitoring = self.details_panel.monitor_selected;
+        let remote =
+            open && !monitoring && section.is_none() && self.route_remote_browser(window, cx);
+        let panel = if monitoring {
+            self.details_panel
+                .monitor
+                .as_ref()
+                .map(|monitor| monitor.clone().into_any_element())
+                .unwrap_or_else(|| div().into_any_element())
+        } else if section.is_some() {
             self.details_panel.document.as_ref().unwrap().1.clone().into_any_element()
         } else {
             match self.side_panel.view {
