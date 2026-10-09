@@ -188,7 +188,7 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(environment_refresh_switch_is_searchable_and_persists)"
                           " or test(pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url)"
                           " or test(capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection)"
-                          " or test(long_segments_use_a_real_dropdown_without_losing_preference_updates)"
+                          " or test(completion_capsules_keep_all_chinese_choices_at_large_font_size)"
                           " or test(font_size_click_input_commits_cancels_and_bounds_values)"
                           " or test(cjk_dropdown_selection_preserves_the_english_font_chain)"
                           " or test(review_regression_font_fields_align_and_dropdown_toggles_with_search)"
@@ -211,6 +211,14 @@ class NativeSuiteTests(unittest.TestCase):
                 "threads-required": "num-test-threads",
             }],
         })
+
+        # 核对真实函数名，避免配置和期望同时保留旧名字却漏掉写设置的测试。
+        segmented = (root / "nebula_app/src/gpui_shell/settings_pane/segmented/tests.rs").read_text(encoding="utf-8")
+        for name in (
+            "capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection",
+            "completion_capsules_keep_all_chinese_choices_at_large_font_size",
+        ):
+            self.assertIn(f"fn {name}(", segmented)
 
     def test_native_caches_are_default_branch_snapshots_not_per_pr_uploads(self):
         root = Path(__file__).resolve().parents[2]
