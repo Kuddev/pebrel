@@ -43,7 +43,8 @@ pub use server::{
 };
 pub use terminal_read::{RuntimePaneRead, ScreenMode};
 pub(crate) use terminal_read::{
-    capture_terminal_screen, capture_terminal_tail, capture_terminal_viewport,
+    capture_terminal_history, capture_terminal_screen, capture_terminal_tail,
+    capture_terminal_viewport,
 };
 
 use std::error::Error;

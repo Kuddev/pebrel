@@ -1356,7 +1356,7 @@
     "confirm_description": "Run the listed WGSL files in order on terminal surfaces. Existing background settings are kept.",
     "missing": "Choose a WGSL source first.",
     "failed": "Terminal effect failed. Original terminal rendering is kept; check the source and reload.",
-    "unsupported": "Terminal effects are not available in this build.",
+    "unsupported": "Terminal effects are not available for this window's graphics backend or build. Saved sources can still be removed and effects disabled.",
     "prompt": "Add terminal effect WGSL files",
     "animation": "Playback",
     "animation_description": "By default, play only in the current terminal to reduce background resource use.",

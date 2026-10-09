@@ -1356,7 +1356,7 @@
     "confirm_description": "按列表顺序在终端画面上运行 WGSL。现有背景设置保持不变。",
     "missing": "请先选择 WGSL 文件。",
     "failed": "终端效果加载失败，已保留原始终端画面。请检查文件后重新加载。",
-    "unsupported": "此构建尚未提供终端效果。",
+    "unsupported": "当前窗口的图形后端或构建尚未支持终端效果。仍可移除已保存的文件或停用效果。",
     "prompt": "添加终端效果 WGSL 文件",
     "animation": "播放方式",
     "animation_description": "默认只在当前终端中播放，以减少后台资源占用。",

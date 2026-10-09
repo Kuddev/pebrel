@@ -17,6 +17,18 @@ class DesktopScreenFrameTest {
         [["中",2,14251863,-258,0],["▛",1,-2,25,1],[" ",1,-257,-26,0]]
         ],"cursor":[3,0,1],"palette":[[1,16711680]]}""")
 
+    @Test fun historyCoordinatesAreValidatedBeforeRendering() {
+        val history = JSONObject("""{"first":4,"oldest":2,"end":5,"live_start":3,"live_rows":2,"application_scroll":false}""")
+        assertEquals(4L, decodeDesktopScreen(screen().put("history", history), theme).history!!.first)
+        for (invalid in listOf(
+            JSONObject(history.toString()).put("first", 5),
+            JSONObject(history.toString()).put("oldest", 6),
+            JSONObject(history.toString()).put("live_rows", 1),
+            JSONObject(history.toString()).put("application_scroll", "false"))) {
+            assertThrows(IllegalArgumentException::class.java) { decodeDesktopScreen(screen().put("history", invalid), theme) }
+        }
+    }
+
     @Test fun desktopPaletteWinsOverOppositePhoneTheme() {
         val snapshot = screen().put("palette", JSONArray("[[256,15787730],[257,660510],[258,16777215],[1,16711680]]"))
         val dark = decodeDesktopScreen(snapshot, theme)
