@@ -17,6 +17,7 @@ mod child;
 mod cmd_prompt;
 mod conpty;
 mod environment;
+mod powershell_launch;
 
 #[cfg(test)]
 mod proxy_tests;
@@ -847,7 +848,9 @@ fn integration_script_path(name: &str) -> std::path::PathBuf {
 
 /// Write the Nebula prompt script to a temp file, returning its path.
 fn nebula_prompt_script_path() -> Option<std::path::PathBuf> {
-    let path = integration_script_path("pebrel_prompt.ps1");
+    let legacy = integration_script_path("pebrel_prompt.ps1");
+    let path = powershell_launch::versioned_path(legacy.parent()?);
+    std::fs::create_dir_all(path.parent()?).ok()?;
     // NOTE: do NOT touch the theme bridge file here. The UI process owns it
     // (written with the restored/selected theme); stamping a default from the
     // spawn path used to reset the powerline palette on every new tab.
@@ -1159,9 +1162,10 @@ fn nebula_default_shell(settings: NebulaRuntimeSettings) -> Shell {
 }
 
 fn cmdline(config: &Options) -> String {
-    let default_shell = resolved_default_shell();
     let using_default_shell = config.shell.is_none();
-    let shell = config.shell.as_ref().unwrap_or(&default_shell);
+    let default_shell = using_default_shell.then(resolved_default_shell);
+    let refreshed = config.shell.as_ref().and_then(powershell_launch::refresh);
+    let shell = refreshed.as_ref().or(config.shell.as_ref()).or(default_shell.as_ref()).unwrap();
 
     let mut cmd = String::new();
     push_escaped_arg(&mut cmd, &shell.program);
