@@ -15,6 +15,26 @@ fn letterbox_edges_stay_square_and_native_alignment_inherits_card_corners() {
     assert_eq!(corners.bottom_right, px(0.0));
 }
 
+#[test]
+fn native_underlay_composites_exactly_like_a_wallpaper_painted_above_the_surface() {
+    for surface in [0.0, 0.3, 0.62, 0.78, 1.0] {
+        for wallpaper in [0.0, 0.2, 0.38, 0.75, 1.0] {
+            let (alpha, layer) = underlay_composition(surface, wallpaper);
+            // Weights of video, surface color and whatever lies behind the window.
+            let above =
+                [wallpaper, surface * (1.0 - wallpaper), (1.0 - surface) * (1.0 - wallpaper)];
+            let below = [(1.0 - alpha) * layer, alpha, (1.0 - alpha) * (1.0 - layer)];
+            for (expected, actual) in above.iter().zip(below) {
+                assert!(
+                    (expected - actual).abs() < 1e-6,
+                    "surface {surface}, wallpaper {wallpaper}: {above:?} != {below:?}"
+                );
+            }
+            assert!((0.0..=1.0).contains(&layer));
+        }
+    }
+}
+
 fn settings(path: Option<PathBuf>) -> nebula_settings::RuntimeSettings {
     let mut settings = nebula_settings::RuntimeSettings::load();
     settings.background_image = path.map(|path| path.to_string_lossy().into_owned());
