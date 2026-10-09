@@ -75,15 +75,23 @@ def notes(checksum_placeholder: bool = True) -> str:
 
 
 class StableReleaseTests(unittest.TestCase):
-    def test_stable_workflow_packages_without_repeating_native_tests(self) -> None:
-        # The Full native tests workflow covers every main push and merge group;
-        # PRs select hosts by changed paths; the release run only packages and verifies the runtime
-        # conformance evidence of each package, so its wall time is bounded by
-        # the slowest build rather than by test scheduling.
+    def assert_release_native_gate(self, workflow: str) -> None:
+        self.assertIn("\n  native-tests:\n", workflow)
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  prepare:\n", 1)[0]
+        self.assertIn("if: ${{ !inputs.windows_only }}", native)
+        self.assertIn("uses: ./.github/workflows/linux-lua.yml", native)
+        self.assertIn("actions: read", native)
+        self.assertNotIn("continue-on-error", native)
+        publish = workflow.split("\n  publish:\n", 1)[1]
+        self.assertIn("needs: [prepare, native-tests, aggregate]", publish)
+        self.assertNotIn("always()", publish)
+
+    def test_stable_workflow_requires_same_commit_native_tests_before_publication(self) -> None:
+        # tag 可以直接指向尚未进入 main 的发布提交；main 的历史绿灯不覆盖它。
+        # 复用同一套原生测试，并与打包并行；发布必须等待两者成功。
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        self.assertNotIn("  native-tests:\n", workflow)
-        self.assertNotIn("uses: ./.github/workflows/linux-lua.yml", workflow)
+        self.assert_release_native_gate(workflow)
         shared = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
         # Platform coverage comes from the event plan, not literal runner names
         # in YAML. Verify both the consumer wiring and the full caller matrices.
@@ -118,6 +126,21 @@ class StableReleaseTests(unittest.TestCase):
             self.assertIn(required, arm)
         self.assertNotIn("continue-on-error", arm)
         self.assertNotIn("always()", aggregate)
+
+    def test_release_native_gate_rejects_unvalidated_tag_publication(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        mutations = (
+            ("needs: [prepare, native-tests, aggregate]", "needs: [prepare, aggregate]"),
+            ("uses: ./.github/workflows/linux-lua.yml", "uses: ./unrelated.yml"),
+            ("  native-tests:\n    if: ${{ !inputs.windows_only }}", "  native-tests:\n    if: false"),
+            ("  native-tests:\n", "  native-tests:\n    continue-on-error: true\n"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(mutation=replacement):
+                self.assertIn(original, workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_release_native_gate(workflow.replace(original, replacement, 1))
 
     def test_native_packagers_expose_stable_channel_without_preview_id(self) -> None:
         root = Path(__file__).resolve().parents[2]
