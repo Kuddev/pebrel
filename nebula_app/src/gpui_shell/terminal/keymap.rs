@@ -733,8 +733,8 @@ mod tests {
     fn plain_backspace_stays_a_single_delete_byte() {
         let mode = TermMode::default();
         assert_eq!(encode(&keystroke("backspace"), &mode), Some(b"\x7f".to_vec()));
-        let kitty = TermMode::DISAMBIGUATE_ESC_CODES;
-        assert_eq!(encode(&keystroke("backspace"), &kitty), Some(b"\x7f".to_vec()));
+        let extended_mode = TermMode::DISAMBIGUATE_ESC_CODES;
+        assert_eq!(encode(&keystroke("backspace"), &extended_mode), Some(b"\x7f".to_vec()));
     }
 
     #[test]
@@ -786,13 +786,13 @@ mod tests {
 
     #[test]
     fn kitty_enter_preserves_each_modifier_and_bare_enter_compatibility() {
-        for kitty in [
+        for extended_mode in [
             TermMode::DISAMBIGUATE_ESC_CODES,
             TermMode::REPORT_EVENT_TYPES,
             TermMode::REPORT_ALL_KEYS_AS_ESC,
             pi_keyboard_mode(),
         ] {
-            for mode in [kitty, kitty | TermMode::WIN32_INPUT_MODE] {
+            for mode in [extended_mode, extended_mode | TermMode::WIN32_INPUT_MODE] {
                 for (shift, control, alt, platform, parameter) in [
                     (false, false, false, false, 1),
                     (true, false, false, false, 2),

@@ -157,6 +157,7 @@ impl NebulaWorkspace {
             | RuntimeCommand::ZoomPane { .. }
             | RuntimeCommand::ResizePane { .. }
             | RuntimeCommand::ReadPane { .. }
+            | RuntimeCommand::ScrollPane { .. }
             | RuntimeCommand::Procs { .. }
             | RuntimeCommand::AgentRead { .. }
             | RuntimeCommand::AgentFork { .. } => {
@@ -554,6 +555,25 @@ impl NebulaWorkspace {
                 serde_json::to_value(read)
                     .map_err(|error| ApiError::new("serialization_failed", error.to_string()))
             },
+            RuntimeCommand::ScrollPane { window_id, pane_id, lines, column, row } => {
+                self.runtime_window_requested(*window_id)?;
+                let tab_ix = self.tab_of_pane(*pane_id).ok_or_else(|| {
+                    ApiError::new("target_not_found", "scroll pane does not exist")
+                })?;
+                let view = match &self.tabs[tab_ix] {
+                    WorkspaceTab::Terminal { panes, .. } => panes
+                        .iter()
+                        .find(|pane| pane.id == *pane_id)
+                        .expect("resolved pane")
+                        .view
+                        .clone(),
+                    _ => unreachable!("tab_of_pane only resolves terminal tabs"),
+                };
+                view.update(cx, |view, cx| view.runtime_scroll(*lines, *column, *row, window, cx))?;
+                // 连续手势不改变窗口清单；不为每个滚轮回执重建整窗状态快照。
+                Ok(json!({"action": {"window_id": self.runtime_window_id,
+                    "pane_id": pane_id, "lines": lines}}))
+            },
             RuntimeCommand::Procs { window_id, pane_id } => {
                 self.runtime_window_requested(*window_id)?;
                 let Some(tab_ix) = self.tab_of_pane(*pane_id) else {
@@ -784,7 +804,7 @@ impl NebulaWorkspace {
                         .expect("tab_of_pane resolved a terminal pane")
                         .view
                         .read(cx)
-                        .runtime_read(self.runtime_window_id, *lines, false),
+                        .runtime_read(self.runtime_window_id, *lines, None),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 }?;
                 Ok(json!({ "agent": managed, "read": read }))
@@ -1104,6 +1124,71 @@ fn runtime_layout(tree: &SplitTree<u64>) -> RuntimeLayout {
 #[cfg(test)]
 mod tests {
     use super::{ResidencyCloseAction, residency_close_action};
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn remote_scroll_returns_compact_reply_without_switching_tabs(cx: &mut gpui::TestAppContext) {
+        use super::*;
+        use crate::gpui_shell::workspace::windowing;
+        use gpui::AppContext as _;
+        use gpui_component::Root;
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            crate::gpui_shell::workspace::init(cx);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| {
+                NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                )
+            });
+            workspace.update(cx, |workspace, cx| {
+                for _ in 0..2 {
+                    workspace.add_terminal_with(
+                        crate::session::LaunchSession::Shell {
+                            name: "scroll fixture".into(),
+                            program: "pebrel-test-missing-shell-executable".into(),
+                            args: vec![],
+                        },
+                        None,
+                        None,
+                        window,
+                        cx,
+                    );
+                    workspace.tabs[workspace.active].focused_view().unwrap().update(
+                        cx,
+                        |view, _| {
+                            view.install_completion_test_session();
+                        },
+                    );
+                }
+                let active = workspace.active;
+                let target = workspace.tabs[0].focused_view().unwrap().read(cx).pane_id;
+                let command = RuntimeCommand::ScrollPane {
+                    window_id: Some(1),
+                    pane_id: target,
+                    lines: 1,
+                    column: 0,
+                    row: 0,
+                };
+                let reply = workspace.execute_runtime_command(&command, window, cx).unwrap();
+                assert!(reply.get("snapshot").is_none());
+                assert_eq!(reply["action"]["pane_id"], target);
+                assert_eq!(workspace.active, active);
+            });
+            Root::new(workspace, window, cx)
+        });
+        window.run_until_parked();
+    }
 
     #[test]
     fn closing_last_tab_can_reside_without_preserving_a_terminal_process() {

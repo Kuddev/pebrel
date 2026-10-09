@@ -128,7 +128,8 @@ fn background_messages_keep_chinese_text_through_catalog_generation() {
         assert!(text.chars().any(|ch| ('\u{3400}'..='\u{9fff}').contains(&ch)), "{key}");
         assert!(!text.contains("??") && !text.contains('\u{fffd}'), "{key}");
     }
-    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperShaderSource), "WGSL 文件");
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperShaderSource), "自定义背景效果");
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::TerminalEffectAdvanced), "高级效果");
     assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperGif), "GIF 动图");
     assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperMediaSelecting), "选择中…");
 }

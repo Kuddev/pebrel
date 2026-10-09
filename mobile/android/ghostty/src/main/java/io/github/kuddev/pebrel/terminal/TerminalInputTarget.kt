@@ -4,6 +4,8 @@ package io.github.kuddev.pebrel.terminal
  * Acceptance means queued, not remotely executed. Owners must reject stale input.
  */
 interface TerminalInputTarget {
+    val supportsScroll: Boolean get() = false
+    fun scroll(lines: Int, column: Int, row: Int): Boolean = false
     fun text(text: String): Boolean
     fun key(code: Int, modifiers: Int = 0, action: Int = 1, text: String = "", unshifted: Int = 0): Boolean
     fun paste(text: String): Boolean = text(text)

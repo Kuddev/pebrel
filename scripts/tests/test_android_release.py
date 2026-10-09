@@ -2,15 +2,55 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from mobile.tools.build_ghostty import build_environment
 from scripts import android_release as android
 from scripts.preview_release import sha256
 
 
 class AndroidReleaseTests(unittest.TestCase):
+    def test_extracted_terminal_source_cannot_discover_the_application_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            sources = root / "unpacked" / "terminal-core"
+            sources.mkdir(parents=True)
+            environment = os.environ.copy()
+            for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES"):
+                environment.pop(name, None)
+
+            def git(*args, cwd=root, env=environment):
+                return subprocess.run(
+                    ["git", "-C", str(cwd), *args], env=env,
+                    text=True, encoding="utf-8", capture_output=True,
+                )
+
+            self.assertEqual(git("init").returncode, 0)
+            committed = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                            "-c", "commit.gpgsign=false", "-c", "core.hooksPath=",
+                            "commit", "--allow-empty", "-m", "Application fixture")
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+            self.assertEqual(git("tag", "v2.2.0").returncode, 0)
+            # 失败对照重现上游的真实 Git 查询，证明标签来自父仓库。
+            leaked = git("describe", "--exact-match", "--tags", cwd=sources)
+            self.assertEqual(leaked.stdout.strip(), "v2.2.0")
+            with patch.dict(os.environ, environment, clear=True):
+                for inherited in ({}, {"GIT_DIR": str(root / ".git"),
+                                       "GIT_WORK_TREE": str(root),
+                                       "GIT_COMMON_DIR": str(root / ".git")}):
+                    with self.subTest(inherited=inherited), patch.dict(os.environ, inherited):
+                        isolated = build_environment(sources, root / "ndk", root / "output")
+                        detected = git("rev-parse", "--abbrev-ref", "HEAD", cwd=sources, env=isolated)
+                        self.assertNotEqual(detected.returncode, 0)
+                        self.assertIn("not a git repository", detected.stderr.lower())
+                        self.assertEqual(isolated["ANDROID_NDK_HOME"], str(root / "ndk"))
+            self.assertEqual(git("describe", "--exact-match", "--tags").stdout.strip(), "v2.2.0")
+
     def identity(self):
         metadata = {"applicationId": android.APPLICATION_ID, "variantName": "preview", "elements": [
             {"filters": [], "outputFile": "app-preview.apk", "versionCode": 18, "versionName": "2.0.0-preview"},
@@ -109,6 +149,12 @@ class AndroidReleaseTests(unittest.TestCase):
         self.assertNotIn("assembleDebug", android_workflow)
         self.assertNotIn("keytool -genkey", android_workflow)
         self.assertIn("dist/*-relay-manual.tar.gz", android_workflow)
+        self.assertIn("workflow_dispatch:", android_workflow)
+        self.assertEqual(android_workflow.count("ref: ${{ env.SOURCE_COMMIT }}"), 2)
+        self.assertEqual(android_workflow.count('test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"'), 2)
+        self.assertEqual(android_workflow.count('--commit "$SOURCE_COMMIT"'), 2)
+        self.assertNotIn('--commit "$GITHUB_SHA"', android_workflow)
+        self.assertIn("GIT_CEILING_DIRECTORIES: ${{ github.workspace }}/mobile/android", android_workflow)
 
     def test_manual_kit_evidence_is_required_only_after_the_published_211_manifest(self):
         self.assertIsNone(android.manual_asset_name("2.1.1"))
