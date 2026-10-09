@@ -53,6 +53,7 @@ internal fun DesktopOutputSurface(
     wrapLines: Boolean = true,
     pasteTarget: TerminalInputTarget? = inputTarget,
     scrollTarget: TerminalInputTarget? = inputTarget,
+    onHistoryPage: ((Long?) -> Unit)? = null,
 ) {
     val legacyText = frame == null && text.isNotEmpty()
     var lastKeyboardRequest by remember(identity) { mutableIntStateOf(keyboardRequest) }
@@ -67,6 +68,7 @@ internal fun DesktopOutputSurface(
                     view.pasteTarget = null
                     view.scrollTarget = null
                     view.onZoomChanged = null
+                    view.onHistoryPage = null
                     if (inputView === view) inputView = null
                 }, update = { view ->
                 inputView = view
@@ -82,6 +84,7 @@ internal fun DesktopOutputSurface(
                 view.inputTarget = inputTarget
                 view.pasteTarget = pasteTarget
                 view.scrollTarget = scrollTarget
+                view.onHistoryPage = onHistoryPage
                 if (lastKeyboardRequest != keyboardRequest) {
                     lastKeyboardRequest = keyboardRequest
                     view.post { if (view.isAttachedToWindow) view.showKeyboard() }

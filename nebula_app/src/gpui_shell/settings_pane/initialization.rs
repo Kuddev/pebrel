@@ -571,6 +571,11 @@ impl SettingsPane {
              event: &InputEvent,
              _: &mut Window,
              cx: &mut Context<Self>| {
+                match event {
+                    InputEvent::Focus => this.settings_search_focus.set_focused(true),
+                    InputEvent::Blur => this.settings_search_focus.set_focused(false),
+                    _ => {},
+                }
                 if matches!(event, InputEvent::Change | InputEvent::Focus | InputEvent::Blur) {
                     if matches!(event, InputEvent::Change) {
                         this.update_settings_search(cx);
@@ -643,6 +648,7 @@ impl SettingsPane {
             about_last_checked: None,
             about_sponsor_open: false,
             settings_search_input,
+            settings_search_focus: search_header::SearchFocus::default(),
             search_origin_section: None,
             selects,
             shell_select,

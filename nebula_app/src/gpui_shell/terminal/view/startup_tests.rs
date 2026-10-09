@@ -38,7 +38,7 @@ impl TerminalView {
     }
 }
 
-pub(super) fn open(
+pub(in crate::gpui_shell::terminal) fn open(
     cx: &mut TestAppContext,
 ) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
     open_at(cx, None)
