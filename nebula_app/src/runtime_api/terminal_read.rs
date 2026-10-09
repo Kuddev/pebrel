@@ -29,6 +29,18 @@ pub struct RuntimePaneRead {
 pub enum ScreenMode {
     Live,
     Viewport,
+    History { start: Option<u64>, rows: usize },
+}
+
+/// Stable buffer coordinates for an independent, bounded reader; not a PTY resize.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeScreenHistory {
+    pub first: u64,
+    pub oldest: u64,
+    pub end: u64,
+    pub live_start: u64,
+    pub live_rows: usize,
+    pub application_scroll: bool,
 }
 
 /// Screen v1 uses logical cells, not ANSI replay; wide spacers never become extra glyphs.
@@ -41,13 +53,15 @@ pub struct RuntimeTerminalScreen {
     pub cursor: (usize, usize, u8),
     #[serde(default)]
     pub wrapped: Vec<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<RuntimeScreenHistory>,
 }
 
 pub(crate) fn capture_terminal_screen<T: EventListener>(
     term: &Term<T>,
     palette_color: impl Fn(usize) -> Rgb,
 ) -> Result<RuntimeTerminalScreen, ApiError> {
-    capture_terminal_grid(term, palette_color, 0)
+    capture_terminal_grid(term, palette_color, 0, term.screen_lines())
 }
 
 /// 手机显式跟随被控制的桌面视口；普通 Agent 读取仍固定在实时网格。
@@ -55,16 +69,62 @@ pub(crate) fn capture_terminal_viewport<T: EventListener>(
     term: &Term<T>,
     palette_color: impl Fn(usize) -> Rgb,
 ) -> Result<RuntimeTerminalScreen, ApiError> {
-    capture_terminal_grid(term, palette_color, term.grid().display_offset())
+    capture_terminal_grid(
+        term,
+        palette_color,
+        -(term.grid().display_offset() as i32),
+        term.screen_lines(),
+    )
+}
+
+pub(crate) fn capture_terminal_history<T: EventListener>(
+    term: &Term<T>,
+    palette_color: impl Fn(usize) -> Rgb,
+    start: Option<u64>,
+    requested_rows: usize,
+) -> Result<RuntimeTerminalScreen, ApiError> {
+    use nebula_terminal::term::TermMode;
+    let columns = term.columns();
+    if !(1..=400).contains(&columns) || !(1..=200).contains(&requested_rows) {
+        return Err(ApiError::invalid_params("history requires 1..200 rows and 1..400 columns"));
+    }
+    let oldest = term.grid().scrolled_out() as u64;
+    let live_start = oldest + term.history_size() as u64;
+    let end = live_start + term.screen_lines() as u64;
+    let application_scroll = term.mode().intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE);
+    // 程序接管滚轮时仍返回实时网格；普通历史则由手机自己的绝对行锚点读取。
+    let rows = if application_scroll {
+        term.screen_lines()
+    } else {
+        requested_rows.min(40_000 / columns).min(term.total_lines())
+    };
+    let first = if application_scroll {
+        live_start
+    } else {
+        start
+            .unwrap_or(end.saturating_sub(rows as u64))
+            .clamp(oldest, end.saturating_sub(rows as u64).max(oldest))
+    };
+    let first_line = (first as i64 - live_start as i64) as i32;
+    let mut screen = capture_terminal_grid(term, palette_color, first_line, rows)?;
+    screen.history = Some(RuntimeScreenHistory {
+        first,
+        oldest,
+        end,
+        live_start,
+        live_rows: term.screen_lines(),
+        application_scroll,
+    });
+    Ok(screen)
 }
 
 fn capture_terminal_grid<T: EventListener>(
     term: &Term<T>,
     palette_color: impl Fn(usize) -> Rgb,
-    display_offset: usize,
+    first_line: i32,
+    lines: usize,
 ) -> Result<RuntimeTerminalScreen, ApiError> {
     let columns = term.columns();
-    let lines = term.screen_lines();
     if !(1..=400).contains(&columns) || !(1..=200).contains(&lines) || columns * lines > 40_000 {
         return Err(ApiError::new(
             "screen_too_large",
@@ -77,7 +137,7 @@ fn capture_terminal_grid<T: EventListener>(
         let mut row = Vec::with_capacity(columns);
         let mut x = 0;
         while x < columns {
-            let cell = &term.grid()[Point::new(Line(y as i32 - display_offset as i32), Column(x))];
+            let cell = &term.grid()[Point::new(Line(first_line + y as i32), Column(x))];
             let spacer =
                 cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
             let width = if !spacer && cell.flags.contains(Flags::WIDE_CHAR) && x + 1 < columns {
@@ -114,7 +174,7 @@ fn capture_terminal_grid<T: EventListener>(
         rows.push(row);
     }
     let cursor = term.renderable_content().cursor;
-    let cursor_y = i64::from(cursor.point.line.0) + display_offset as i64;
+    let cursor_y = i64::from(cursor.point.line.0) - i64::from(first_line);
     let visible = cursor.shape != CursorShape::Hidden && cursor_y >= 0 && cursor_y < lines as i64;
     Ok(RuntimeTerminalScreen {
         version: 1,
@@ -122,7 +182,7 @@ fn capture_terminal_grid<T: EventListener>(
         rows,
         wrapped: (0..lines)
             .map(|y| {
-                term.grid()[Point::new(Line(y as i32 - display_offset as i32), Column(columns - 1))]
+                term.grid()[Point::new(Line(first_line + y as i32), Column(columns - 1))]
                     .flags
                     .contains(Flags::WRAPLINE)
             })
@@ -135,6 +195,7 @@ fn capture_terminal_grid<T: EventListener>(
             cursor_y.clamp(0, lines as i64 - 1) as usize,
             u8::from(visible),
         ),
+        history: None,
     })
 }
 
@@ -246,6 +307,85 @@ mod tests {
             term.colors()[index].unwrap_or(Rgb { r: 1, g: 2, b: 3 })
         })
         .unwrap()
+    }
+
+    #[test]
+    fn independent_history_pages_preserve_desktop_viewport_and_survive_eviction() {
+        let mut term = terminal(12, 2, "first\r\nsecond\r\nthird\r\nfourth");
+        term.scroll_display(Scroll::Top);
+        let offset = term.grid().display_offset();
+        let page =
+            capture_terminal_history(&term, |_| Rgb { r: 0, g: 0, b: 0 }, Some(1), 2).unwrap();
+        assert_eq!(page.rows[0][0].0, "s");
+        assert_eq!(page.history.as_ref().unwrap().first, 1);
+        assert_eq!(term.grid().display_offset(), offset);
+        assert_eq!(page.cursor.2, 0);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\r\nfifth");
+        let appended =
+            capture_terminal_history(&term, |_| Rgb { r: 0, g: 0, b: 0 }, Some(1), 2).unwrap();
+        assert_eq!(page.rows, appended.rows);
+        term.grid_mut().update_history(1);
+        let evicted =
+            capture_terminal_history(&term, |_| Rgb { r: 0, g: 0, b: 0 }, Some(0), 200).unwrap();
+        let history = evicted.history.unwrap();
+        assert_eq!(history.first, history.oldest);
+        assert_eq!(history.end - history.first, evicted.rows.len() as u64);
+        assert!(history.oldest > 0);
+    }
+
+    #[test]
+    fn history_tail_uses_cell_budget_and_application_scroll_uses_live_grid() {
+        let text = (0..205).map(|_| "row\r\n").collect::<String>();
+        let term = terminal(400, 2, &text);
+        let page =
+            capture_terminal_history(&term, |_| Rgb { r: 0, g: 0, b: 0 }, None, 200).unwrap();
+        assert_eq!(page.rows.len(), 100);
+        let history = page.history.unwrap();
+        assert_eq!(history.first + 100, history.end);
+        for mode in ["\x1b[?1049h", "\x1b[?1000h"] {
+            let term = terminal(12, 2, &format!("old\r\nnew\r\n{mode}live"));
+            let page = capture_terminal_history(&term, |_| Rgb { r: 0, g: 0, b: 0 }, Some(0), 200)
+                .unwrap();
+            let history = page.history.unwrap();
+            assert!(history.application_scroll);
+            assert_eq!(history.first, history.live_start);
+            assert_eq!(page.rows, capture(&term).rows);
+        }
+    }
+
+    #[test]
+    fn history_request_rejects_conflicting_modes_and_unbounded_coordinates() {
+        use crate::runtime_api::{ApiRequest, RuntimeCommand};
+        for params in [
+            serde_json::json!({"pane_id":2,"screen_history":{"rows":1}}),
+            serde_json::json!({"pane_id":2,"screen":true,"screen_viewport":true,"screen_history":{"rows":1}}),
+            serde_json::json!({"pane_id":2,"screen":true,"screen_history":{"rows":0}}),
+            serde_json::json!({"pane_id":2,"screen":true,"screen_history":{"rows":201}}),
+            serde_json::json!({"pane_id":2,"screen":true,"screen_history":{"rows":1,"start":-1}}),
+            serde_json::json!({"pane_id":2,"screen":true,"screen_history":{"rows":1,"start":9_007_199_254_740_992_u64}}),
+        ] {
+            assert!(
+                RuntimeCommand::from_request(&ApiRequest::new(
+                    "fixture".into(),
+                    "pane.read",
+                    params
+                ))
+                .is_err()
+            );
+        }
+        let valid = ApiRequest::new(
+            "fixture".into(),
+            "pane.read",
+            serde_json::json!({"pane_id":2,"screen":true,"screen_history":{"rows":200,"start":12}}),
+        );
+        assert!(matches!(
+            RuntimeCommand::from_request(&valid).unwrap(),
+            RuntimeCommand::ReadPane {
+                screen: Some(ScreenMode::History { start: Some(12), rows: 200 }),
+                ..
+            }
+        ));
     }
 
     #[test]

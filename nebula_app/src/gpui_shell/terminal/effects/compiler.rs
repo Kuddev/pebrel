@@ -1,14 +1,11 @@
 use anyhow::{Context, Result, ensure};
 use std::{io::Read, path::Path, sync::Arc};
 
-#[path = "../../wallpaper/shader/native_compile.rs"]
-mod native;
-
 pub const UNIFORM_BYTES: usize = (13 + 256) * 16;
 pub const ABI: &str = include_str!("abi.wgsl");
 
 pub struct Program {
-    pub passes: Arc<[Arc<[u8]>]>,
+    pub passes: Arc<[gpui::WgslPostprocessPass]>,
 }
 
 pub fn load_chain(paths: &[std::path::PathBuf]) -> Result<Program> {
@@ -40,107 +37,27 @@ pub fn load(path: &Path) -> Result<Program> {
 
 pub fn compile(source: &str) -> Result<Program> {
     ensure!(source.len() <= 64 * 1024, "effect source exceeds 64 KiB");
-    let input = format!("{ABI}\n{source}");
-    let module = naga::front::wgsl::parse_str(&input)
-        .map_err(|e| anyhow::anyhow!(e.emit_to_string(&input)))?;
-    ensure!(
-        (1..=8).contains(&module.entry_points.len()),
-        "effects require one through eight fragment entry points"
-    );
+    let input: Arc<str> = format!("{ABI}\n{source}").into();
+    let (module, _) = gpui::validate_postprocess_wgsl_module(&input, UNIFORM_BYTES)?;
+    // 通用 ABI 由渲染器统一校验；这里只保留产品自己的变量名称合同。
     for (_, global) in module.global_variables.iter() {
-        if global.space == naga::AddressSpace::Private && global.binding.is_none() {
-            continue;
-        }
-        let binding = global
-            .binding
-            .as_ref()
-            .context("effect globals must use the declared frame/surface ABI")?;
-        ensure!(
-            binding.group == 0 && binding.binding <= 1,
-            "effect globals must use the declared frame/surface ABI"
-        );
-        if binding.binding == 0 {
+        if let Some(binding) = &global.binding {
+            let expected = if binding.binding == 0 { "frame" } else { "surface" };
             ensure!(
-                global.name.as_deref() == Some("frame")
-                    && global.space == naga::AddressSpace::Uniform
-                    && matches!(&module.types[global.ty].inner, naga::TypeInner::Struct { span, .. } if *span as usize == UNIFORM_BYTES),
-                "effect frame layout changed"
-            );
-        } else {
-            ensure!(
-                global.name.as_deref() == Some("surface")
-                    && global.space == naga::AddressSpace::Handle
-                    && matches!(
-                        module.types[global.ty].inner,
-                        naga::TypeInner::Image {
-                            dim: naga::ImageDimension::D2,
-                            arrayed: false,
-                            class: naga::ImageClass::Sampled {
-                                kind: naga::ScalarKind::Float,
-                                multi: false
-                            }
-                        }
-                    ),
-                "effect surface binding changed"
+                global.name.as_deref() == Some(expected),
+                "effect product binding name changed"
             );
         }
     }
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)?;
-    let mut options = naga::back::hlsl::Options {
-        shader_model: naga::back::hlsl::ShaderModel::V5_0,
-        fake_missing_bindings: false,
-        ..Default::default()
-    };
-    for binding in [0, 1] {
-        options.binding_map.insert(
-            naga::ResourceBinding { group: 0, binding },
-            naga::back::hlsl::BindTarget { register: 0, ..Default::default() },
-        );
-    }
-    let mut passes = Vec::new();
-    for entry in &module.entry_points {
-        ensure!(entry.stage == naga::ShaderStage::Fragment, "only fragment effects are supported");
-        ensure!(entry.function.arguments.len() <= 1, "effect input is the local fragment position");
-        for argument in &entry.function.arguments {
-            ensure!(
-                matches!(
-                    argument.binding,
-                    Some(naga::Binding::BuiltIn(naga::BuiltIn::Position { .. }))
-                ),
-                "effect input is the local fragment position"
-            );
-        }
-        let result = entry.function.result.as_ref().context("missing effect color")?;
-        ensure!(
-            matches!(result.binding, Some(naga::Binding::Location { location: 0, .. }))
-                && matches!(
-                    module.types[result.ty].inner,
-                    naga::TypeInner::Vector {
-                        size: naga::VectorSize::Quad,
-                        scalar: naga::Scalar { kind: naga::ScalarKind::Float, width: 4 }
-                    }
-                ),
-            "effect output must be location 0 vec4<f32>"
-        );
-        let mut hlsl = String::new();
-        let pipeline = naga::back::hlsl::PipelineOptions {
-            entry_point: Some((naga::ShaderStage::Fragment, entry.name.clone())),
-        };
-        let reflected = naga::back::hlsl::Writer::new(&mut hlsl, &options, &pipeline)
-            .write(&module, &info, None)?;
-        ensure!(hlsl.len() <= 256 * 1024, "translated effect exceeds its byte budget");
-        let name = reflected
-            .entry_point_names
-            .into_iter()
-            .next()
-            .context("missing native effect entry")?
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        passes.push(native::compile(&hlsl, &name)?);
-    }
+    let passes = module
+        .entry_points
+        .into_iter()
+        .map(|entry| gpui::WgslPostprocessPass {
+            // 同一文件的入口共享源程序，后端可跨窗口尺寸复用其编译结果。
+            source: input.clone(),
+            entry: entry.name.into(),
+        })
+        .collect::<Vec<_>>();
     Ok(Program { passes: passes.into() })
 }
 
@@ -159,8 +76,10 @@ mod tests {
 }"#;
         let program = compile(source).unwrap();
         assert_eq!(program.passes.len(), 2);
-        assert!(program.passes.iter().all(|code| code.starts_with(b"DXBC")));
-        assert_ne!(program.passes[0], program.passes[1]);
+        assert_eq!(&*program.passes[0].entry, "first");
+        assert_eq!(&*program.passes[1].entry, "second");
+        assert!(Arc::ptr_eq(&program.passes[0].source, &program.passes[1].source));
+        assert!(program.passes[0].source.starts_with(ABI));
     }
 
     #[test]
@@ -194,12 +113,13 @@ mod tests {
         .unwrap();
         let first_pass = load(&first).unwrap().passes[0].clone();
         let second_pass = load(&second).unwrap().passes[0].clone();
-        assert_ne!(first_pass, second_pass);
-        assert_eq!(
-            &*load_chain(&[first.clone(), second.clone()]).unwrap().passes,
-            &[first_pass.clone(), second_pass.clone()],
-        );
-        assert_eq!(&*load_chain(&[second, first]).unwrap().passes, &[second_pass, first_pass],);
+        assert_ne!(first_pass.source, second_pass.source);
+        let forward = load_chain(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(forward.passes[0].source, first_pass.source);
+        assert_eq!(forward.passes[1].source, second_pass.source);
+        let reverse = load_chain(&[second, first]).unwrap();
+        assert_eq!(reverse.passes[0].source, second_pass.source);
+        assert_eq!(reverse.passes[1].source, first_pass.source);
     }
 
     #[test]

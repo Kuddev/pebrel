@@ -135,6 +135,7 @@ pub struct SettingsPane {
     /// 首页「项目与支持」→ 赞助商：独立页面，不是外链行。切换分区时清掉。
     about_sponsor_open: bool,
     settings_search_input: Entity<InputState>,
+    settings_search_focus: search_header::SearchFocus,
     search_origin_section: Option<usize>,
     /// 每项还带着自己的 `values` 表：`SelectState` 只认索引，而从代码侧
     /// 改设置（还原默认值、命令面板切换）时手里只有配置文件记号，没有
