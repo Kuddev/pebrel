@@ -107,6 +107,8 @@ mod renderer;
 #[cfg(all(feature = "gpui-shell", not(feature = "legacy-shell")))]
 #[path = "product_renderer.rs"]
 mod renderer;
+#[cfg(feature = "gpui-shell")]
+mod resource_monitor;
 mod runtime_api;
 mod runtime_exec;
 mod saved_commands;
