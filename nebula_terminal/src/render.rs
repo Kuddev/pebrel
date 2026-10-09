@@ -176,6 +176,9 @@ pub struct SnapCell {
     /// 是什么颜色，不是取决于主题底色。
     pub bg: Color,
     pub bold: bool,
+    /// SGR 2 (dim/faint). Kept apart from `fg` so the frontend dims with its
+    /// palette's dim slots instead of a fixed RGB.
+    pub dim: bool,
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
@@ -237,6 +240,7 @@ pub struct BoxGlyph {
     pub ch: char,
     pub fg: Color,
     pub bold: bool,
+    pub dim: bool,
 }
 
 /// Everything a frontend needs to paint one frame, as plain data. Built in a
@@ -321,6 +325,7 @@ impl RenderSnapshot {
             let (row, col) = (row as u16, col as u16);
             let flags = indexed.cell.flags;
             let bold = flags.intersects(Flags::BOLD);
+            let dim = flags.contains(Flags::DIM);
             let mut fg = indexed.cell.fg;
             let mut bg = indexed.cell.bg;
             if flags.contains(Flags::INVERSE) {
@@ -363,6 +368,7 @@ impl RenderSnapshot {
                     ch: c,
                     fg,
                     bold,
+                    dim,
                 });
                 continue;
             }
@@ -386,6 +392,7 @@ impl RenderSnapshot {
                 fg,
                 bg,
                 bold,
+                dim,
                 italic: flags.intersects(Flags::ITALIC),
                 underline: flags.intersects(Flags::ALL_UNDERLINES),
                 strikethrough: flags.contains(Flags::STRIKEOUT),
@@ -628,6 +635,23 @@ mod tests {
         term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(0));
         let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
         assert!(snap.cursor.expect("cursor").wide);
+    }
+
+    #[test]
+    fn capture_carries_sgr_dim_on_text_and_box_glyphs() {
+        let size = TestSize { cols: 8, rows: 4 };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser: crate::vte::ansi::Processor = crate::vte::ansi::Processor::new();
+        parser.advance(&mut term, "a\x1b[2mb─\x1b[22mc".as_bytes());
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let text: Vec<_> = snap
+            .segments
+            .iter()
+            .flat_map(|segment| segment.cells.iter().map(|cell| (cell.text.as_str(), cell.dim)))
+            .collect();
+        assert_eq!(text, vec![("a", false), ("b", true), ("c", false)]);
+        let glyphs: Vec<_> = snap.box_glyphs.iter().map(|glyph| (glyph.ch, glyph.dim)).collect();
+        assert_eq!(glyphs, vec![('─', true)]);
     }
 
     #[test]
