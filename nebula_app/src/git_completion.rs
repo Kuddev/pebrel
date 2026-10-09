@@ -58,7 +58,7 @@ pub(crate) fn complete_available(
     execution: &Execution,
     cwd: &str,
     context: &Context,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<Vec<Suggestion>> {
     let (branches_only, include_busy) = match context.source {
         Source::Branches { include_busy } => (true, include_busy),
@@ -218,7 +218,7 @@ fn complete(
     execution: &Execution,
     cwd: &str,
     context: &Context,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Vec<Suggestion> {
     complete_available(cache, execution, cwd, context, cancelled).unwrap_or_default()
 }
@@ -227,31 +227,23 @@ fn query(
     execution: &Execution,
     cwd: &str,
     context: &Context,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Option<Repository> {
     // 两次元数据读取共用总预算；缓存命中及逐字筛选不再启动子进程。
     let deadline = Instant::now() + Duration::from_secs(3);
     let stopped = || cancelled() || Instant::now() >= deadline;
-    let mut remaining = 1024 * 1024;
-    let mut read = |args: &[&str]| {
-        if stopped() {
-            return None;
-        }
-        let result = execution.git(cwd, &context.directories, args, deadline, remaining, &stopped);
+    let limit = 1024 * 1024;
+    if matches!(context.source, Source::Remotes) {
+        let result =
+            execution.git(cwd, &context.directories, &["remote"], deadline, limit, &stopped);
         #[cfg(test)]
         if result.is_none() {
             eprintln!(
-                "Git metadata stage unavailable: {:?}, expired={}",
-                args.first(),
+                "Git metadata stage unavailable: Some(\"remote\"), expired={}",
                 Instant::now() >= deadline
             );
         }
-        let bytes = result?;
-        remaining -= bytes.len();
-        String::from_utf8(bytes).ok()
-    };
-    if matches!(context.source, Source::Remotes) {
-        let remotes = read(&["remote"])?;
+        let remotes = String::from_utf8(result?).ok()?;
         return (!stopped()).then_some(Repository {
             remotes: remotes
                 .lines()
@@ -265,17 +257,40 @@ fn query(
             ..Default::default()
         });
     }
-    // 哨兵保证无相关配置也是成功的空结果；只读取所需键，不收集 URL、凭据等配置。
-    let config = tracking::Config::parse(&read(&[
-        "config",
-        "--null",
-        "--get-regexp",
-        "^(checkout\\.(guess|defaultremote)|remote\\..*\\.fetch|completion\\.snapshot)$",
-    ])?);
-    let text = read(&[
-        "for-each-ref",
-        "--format=%(refname)%00%(refname:short)%00%(symref)%00%(worktreepath)%00%(objecttype)%00%(*objecttype)%00%(HEAD)",
-    ])?;
+    // 两条只读查询共用 3 秒期限并行启动；总输出仍限制为 1 MiB。
+    let (config_bytes, reference_bytes) = execution.git_pair(
+        cwd,
+        &context.directories,
+        &[
+            "config",
+            "--null",
+            "--get-regexp",
+            "^(checkout\\.(guess|defaultremote)|remote\\..*\\.fetch|completion\\.snapshot)$",
+        ],
+        &[
+            "for-each-ref",
+            "--format=%(refname)%00%(refname:short)%00%(symref)%00%(worktreepath)%00%(objecttype)%00%(*objecttype)%00%(HEAD)",
+        ],
+        deadline,
+        limit,
+        &stopped,
+    );
+    #[cfg(test)]
+    for (stage, result) in [("config", &config_bytes), ("for-each-ref", &reference_bytes)] {
+        if result.is_none() {
+            eprintln!(
+                "Git metadata stage unavailable: Some({stage:?}), expired={}",
+                Instant::now() >= deadline
+            );
+        }
+    }
+    let config_bytes = config_bytes?;
+    let reference_bytes = reference_bytes?;
+    if config_bytes.len().checked_add(reference_bytes.len())? > limit || stopped() {
+        return None;
+    }
+    let config = tracking::Config::parse(&String::from_utf8(config_bytes).ok()?);
+    let text = String::from_utf8(reference_bytes).ok()?;
     let references: Vec<_> = text
         .lines()
         .filter_map(|line| {
