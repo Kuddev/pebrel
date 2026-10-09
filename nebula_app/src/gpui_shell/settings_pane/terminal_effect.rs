@@ -3,7 +3,9 @@ use crate::i18n::Message;
 
 impl SettingsPane {
     fn choose_terminal_effect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.terminal_effect_picker.is_some() {
+        if self.terminal_effect_picker.is_some()
+            || !crate::platform::effect_activity::supported(window)
+        {
             return;
         }
         let previous = self.runtime.terminal_effects.clone();
@@ -68,6 +70,9 @@ impl SettingsPane {
             self.persist(&[("terminal_effect_enabled", "false".into())], cx);
             return;
         }
+        if !crate::platform::effect_activity::supported(window) {
+            return;
+        }
         if self.runtime.terminal_effects.paths.is_empty() {
             crate::gpui_shell::toast::toast(
                 window,
@@ -91,7 +96,10 @@ impl SettingsPane {
                 language.text(Message::WallpaperShaderCancel),
                 ButtonVariant::Primary,
             )
-            .on_ok(move |_, _, cx| {
+            .on_ok(move |_, window, cx| {
+                if !crate::platform::effect_activity::supported(window) {
+                    return true;
+                }
                 let _ = entity.update(cx, |this, cx| {
                     this.runtime = RuntimeSettings::load();
                     if this.runtime.terminal_effects == expected {
@@ -146,11 +154,15 @@ impl SettingsPane {
         }
     }
 
-    pub(super) fn terminal_effect_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn terminal_effect_row(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let language = crate::gpui_shell::config::ui_language(cx);
         let config = &self.runtime.terminal_effects;
         let busy = self.terminal_effect_picker.is_some();
-        let available = super::super::wallpaper::shader_available();
+        let available = crate::platform::effect_activity::supported(window);
         let sources = config
             .paths
             .iter()
@@ -241,7 +253,7 @@ impl SettingsPane {
                             } else {
                                 Message::TerminalEffectEnable
                             }))
-                            .disabled(busy || !available)
+                            .disabled(busy || (!available && !config.enabled))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_terminal_effect(window, cx)
                             })),
@@ -250,8 +262,10 @@ impl SettingsPane {
                         NebulaButton::new("terminal-effect-reload")
                             .label(language.text(Message::TerminalEffectReload))
                             .disabled(busy || !available || !config.enabled)
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                super::super::wallpaper::reload_terminal_effects(cx)
+                            .on_click(cx.listener(|_, _, window, cx| {
+                                if crate::platform::effect_activity::supported(window) {
+                                    super::super::wallpaper::reload_terminal_effects(cx)
+                                }
                             })),
                     ),
             ),

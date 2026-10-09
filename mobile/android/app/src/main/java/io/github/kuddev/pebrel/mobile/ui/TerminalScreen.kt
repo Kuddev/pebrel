@@ -146,7 +146,8 @@ fun DesktopTerminalScreen(desktop: DesktopWorkspace, pane: DesktopPane, reposito
             Modifier.weight(1f).fillMaxWidth(), frame = if (output.target == identity) output.frame else null,
             inputTarget = input.takeIf { enabled && direct }, keyboardRequest = keyboardRequest,
             loading = output.loading, connected = desktop.status == "ready", wrapLines = wrapLines,
-            pasteTarget = input.takeIf { enabled })
+            pasteTarget = input.takeIf { enabled }, scrollTarget = input.takeIf { enabled },
+            onHistoryPage = { start -> repository.requestDesktopHistory(desktop.id, pane, start) })
         if (output.loading && output.text.isBlank()) LinearProgressIndicator(Modifier.fillMaxWidth())
         CommandComposer(identity, repository, enabled, direct, {
             direct = it
