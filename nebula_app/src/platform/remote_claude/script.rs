@@ -16,15 +16,6 @@ use base64::Engine as _;
 
 use super::prompt::sh_quote;
 
-/// PowerShell `-EncodedCommand` 的参数：脚本按 UTF-16LE 编码后再 Base64。
-pub(crate) fn utf16le_base64(script: &str) -> Result<String, String> {
-    let mut bytes = Vec::with_capacity(script.len() * 2);
-    for unit in script.encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
-    }
-    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
-}
-
 /// 预检/下发的远端命令：脚本从 stdin 读入。
 pub(super) const PROVISION_COMMAND: &str = "exec /bin/sh -s";
 
@@ -510,11 +501,5 @@ mod tests {
                 .unwrap();
         assert!(decoded.contains("card=0"), "{decoded}");
         assert!(decoded.contains(r#"note "$msg_tunnel""#), "{decoded}");
-    }
-
-    #[test]
-    fn utf16le_base64_matches_powershell_encoding() {
-        // "PS" 的 UTF-16LE 字节是 50 00 53 00。
-        assert_eq!(utf16le_base64("PS").unwrap(), "UABTAA==");
     }
 }

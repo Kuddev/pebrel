@@ -296,7 +296,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Subcommands::Ssh(options)) => std::process::exit(crate::ssh::run(options.args)),
         #[cfg(windows)]
         Some(Subcommands::Claude(options)) => {
-            std::process::exit(crate::remote_claude::run(options))
+            std::process::exit(crate::platform::remote_claude::run(options))
         },
         None => {
             #[cfg(feature = "legacy-shell")]

@@ -135,7 +135,7 @@ pub(super) fn probe_command(powershell: &str, shell: CommandShell) -> Result<Str
     let script = "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); \
                   [Console]::Out.Write('PEBREL_SSH_READY ' + $PSVersionTable.PSVersion.ToString() \
                   + ' ' + $env:USERNAME)";
-    let encoded = super::script::utf16le_base64(script)?;
+    let encoded = crate::remote_claude::utf16le_base64(script)?;
     Ok(match shell {
         CommandShell::Cmd => {
             format!("\"{powershell}\" -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")

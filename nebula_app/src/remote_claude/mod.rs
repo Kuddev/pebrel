@@ -1,32 +1,34 @@
-//! 远程 Claude Code over SSH（设计与理由见
-//! `architecture/notes/nebula_app/remote_claude/2026-10-08-remote-claude-over-ssh.md`）。
+//! 远程 Claude Code over SSH：跨平台的那一小块。
 //!
-//! 让 Claude Code 跑在远程 Linux 服务器上，而文件读写与命令执行回到本机项目目录。
+//! 功能本体（回环 sshd、一次性密钥、两阶段编排、远端脚本）是 Windows 本机
+//! 实现，归 `crate::platform::remote_claude`；这里只留两平台都会用到的编码
+//! 工具——`pebrel claude` 由 CLI 的能力门控隐藏，但会话包装器（
+//! `gpui_shell::workspace::remote_claude_wrapper`）在任何平台都要能编译。
 //!
-//! - [`mirror`]：R1 本机路径 → 远端镜像目录的固定映射与项目状态键。
-//! - [`prompt`]：R4 每次启动重算的追加系统提示词。
-//! - [`script`]：服务器端的预检/下发与会话引导脚本（文本生成）。
-//! - [`hosts`]：R7 服务器候选列表，与侧栏共用排序/隐藏规则。
-//! - 本机侧（仅 Windows）：[`local`] 环境事实、[`keys`] 一次性密钥、
-//!   [`sshd`] 回环 SSH 服务端实例、[`session`] 两阶段编排。
-//!
-//! 入口是 `pebrel claude --ssh <别名>`（[`run`]）。
+//! 设计与理由见
+//! `architecture/notes/nebula_app/remote_claude/2026-10-08-remote-claude-over-ssh.md`。
 
-mod hosts;
-mod mirror;
-mod prompt;
-mod script;
+/// 一段脚本 → PowerShell `-EncodedCommand` 接受的 UTF-16LE Base64。
+///
+/// 只有这一种形式同时绕开 cmd.exe 与 PowerShell 两套引号规则；两代
+/// Windows PowerShell 都认。
+pub(crate) fn utf16le_base64(script: &str) -> Result<String, String> {
+    use base64::Engine as _;
 
-#[cfg(windows)]
-mod keys;
-#[cfg(windows)]
-mod local;
-#[cfg(windows)]
-mod session;
-#[cfg(windows)]
-mod sshd;
+    let mut bytes = Vec::with_capacity(script.len() * 2);
+    for unit in script.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
 
-#[cfg(windows)]
-pub(crate) use session::run;
-// 会话包装用的同一份编码实现（见 `gpui_shell::workspace::remote_claude_wrapper`）。
-pub(crate) use script::utf16le_base64;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf16le_base64_matches_powershell_encoding() {
+        // "PS" 的 UTF-16LE 字节是 50 00 53 00。
+        assert_eq!(utf16le_base64("PS").unwrap(), "UABTAA==");
+    }
+}
