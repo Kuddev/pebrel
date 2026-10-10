@@ -99,7 +99,7 @@ mod window_titlebar;
 pub(crate) mod windowing;
 
 // 调用点分散在设置页与窗口层，原样再导出以免拆分波及它们。
-pub(crate) use update_dialog::{open_update_dialog, show_update_notification};
+pub(crate) use update_dialog::open_update_dialog;
 
 use tab_drag::{DockTarget, TabDrag, TabDragAxis};
 

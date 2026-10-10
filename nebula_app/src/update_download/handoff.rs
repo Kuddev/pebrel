@@ -160,6 +160,7 @@ pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
         guard_path: base.with_extension("nebula-lock"),
         participants: vec![Participant { pid: std::process::id(), created: created.to_string() }],
     };
+    crate::update_check::release_notes::snapshot(&asset.version, &directory)?;
     let plan_path = directory.join("plan.json");
     crate::atomic_file::write(
         &plan_path,
@@ -267,6 +268,28 @@ pub(crate) fn acknowledge_restore(restored_windows: usize) {
     } else {
         *active = None;
     }
+}
+
+/// A successful helper result must belong to this installation and running version.
+pub(crate) fn completed_update_directory() -> Option<PathBuf> {
+    let path: PathBuf =
+        read_json(&nebula_settings::settings_dir().join("updates/last-handoff.json"))?;
+    let path = canonical(&path).ok()?;
+    let root = canonical(&nebula_settings::settings_dir().join("updates/handoffs")).ok()?;
+    if !path.starts_with(root) || path.file_name()? != "plan.json" {
+        return None;
+    }
+    let plan: Plan = read_json(&path)?;
+    if plan.schema != 1
+        || plan.version != env!("CARGO_PKG_VERSION")
+        || canonical(&plan.executable).ok()? != canonical(&std::env::current_exe().ok()?).ok()?
+    {
+        return None;
+    }
+    let directory = path.parent()?;
+    let result: serde_json::Value = read_json(&directory.join("result.json"))?;
+    (result["success"] == true && result["transaction"] == plan.transaction)
+        .then(|| directory.to_owned())
 }
 
 pub(super) fn failed_update() -> Option<(UpdateAsset, String)> {

@@ -251,6 +251,8 @@ mod tests {
         let en = crate::display::UiLanguage::EnUs;
         let zh = crate::display::UiLanguage::ZhCn;
         assert_eq!(matching_sections(" FONT ", en), vec![1]);
+        assert_eq!(matching_sections("release notes", en), vec![RELEASE_NOTES_SECTION]);
+        assert_eq!(matching_sections("更新内容", zh), vec![RELEASE_NOTES_SECTION]);
         assert_eq!(matching_sections("字体", zh), vec![1]);
         assert_eq!(matching_sections("quick terminal", en), vec![7]);
         assert_eq!(matching_sections("clod backup", en), vec![9]);

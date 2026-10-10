@@ -110,3 +110,61 @@ fn moving_one_of_two_tabs_preserves_source_and_identity(cx: &mut TestAppContext)
         assert_eq!(combined_session(None, cx).unwrap().tabs.len(), 2);
     });
 }
+
+#[gpui::test]
+fn installed_notes_wait_for_visible_window(cx: &mut TestAppContext) {
+    // Isolate persisted once-only state from every other test and real settings.
+    if std::env::var_os("PEBREL_INSTALLED_NOTES_TEST_CHILD").is_none() {
+        let root = tempfile::tempdir().unwrap();
+        let test_name = format!(
+            "{}::installed_notes_wait_for_visible_window",
+            module_path!().split_once("::").unwrap().1
+        );
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test_name, "--nocapture"])
+            .env("PEBREL_INSTALLED_NOTES_TEST_CHILD", "1")
+            .env("PEBREL_CONFIG_DIR", root.path())
+            .env("NEBULA_CONFIG_DIR", root.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"));
+        return;
+    }
+    initialize_test(cx);
+    let (id, workspace) = cx.update(|cx| open_test_window(cx, 0));
+    let state = nebula_settings::settings_dir().join("update_state.json");
+    cx.update(|cx| {
+        workspace.update(cx, |workspace, _| workspace.window_hidden = true);
+        dispatch_shell_events(
+            vec![GpuiShellEvent::UpdateInstalled(
+                crate::update_check::release_notes::ReleaseNotes {
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    body: "# Installed changes".into(),
+                },
+            )],
+            cx,
+        );
+        assert!(super::super::update_dialog::has_pending_installed_notes(cx));
+        assert!(!state.exists(), "hidden window must not consume persistent notice");
+        workspace.update(cx, |workspace, _| workspace.window_hidden = false);
+        dispatch_shell_events(Vec::new(), cx);
+        assert!(!super::super::update_dialog::has_pending_installed_notes(cx));
+        assert!(entry_by_id(id, cx).is_some());
+    });
+    cx.run_until_parked();
+    let state_after = std::fs::read(&state).unwrap();
+    let stored: serde_json::Value = serde_json::from_slice(&state_after).unwrap();
+    assert_eq!(stored["release_notes_shown"], env!("CARGO_PKG_VERSION"));
+    cx.update(|cx| dispatch_shell_events(Vec::new(), cx));
+    assert_eq!(
+        std::fs::read(state).unwrap(),
+        state_after,
+        "later pump ticks must not acknowledge again"
+    );
+}

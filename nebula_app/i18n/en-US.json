@@ -939,7 +939,13 @@
     "later": "Later",
     "prepare_failed": "Could not prepare the update: {error}. Pebrel will stay open.",
     "draft_changed": "A document changed while preparing to exit. Save or discard the latest changes, then retry.",
-    "in_progress": "This installation is being updated. Wait for the update to finish; Pebrel will reopen automatically."
+    "in_progress": "This installation is being updated. Wait for the update to finish; Pebrel will reopen automatically.",
+    "release_notes_title": "Release notes",
+    "release_notes_loading": "Loading release notes…",
+    "release_notes_failed": "Could not load release notes: {error}",
+    "release_notes_retry": "Retry",
+    "release_notes_empty": "This release has no description.",
+    "open_release": "Open release"
   },
   "files.search_failed": "Unable to complete search",
   "files.search_running": "Searching…",

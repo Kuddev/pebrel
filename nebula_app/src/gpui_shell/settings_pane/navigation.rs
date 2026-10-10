@@ -8,7 +8,8 @@ pub(super) const BUG_REPORT_TEMPLATE: &str = "bug_report.yml";
 
 /// 稳定路由只追加；视觉顺序独立放在 NAV_GROUPS，避免旧入口指向另一页。
 pub(super) const MOBILE_SECTION: usize = 11;
-pub(super) const SECTION_IDS: [&str; 12] = [
+pub(super) const RELEASE_NOTES_SECTION: usize = 12;
+pub(super) const SECTION_IDS: [&str; 13] = [
     "application",
     "appearance",
     "profiles",
@@ -21,12 +22,13 @@ pub(super) const SECTION_IDS: [&str; 12] = [
     "backup",
     "agents",
     "mobile",
+    "release-notes",
 ];
 
 /// Bilingual search aliases for the stable section routes. Search is a route
 /// finder, so a query such as "font", "opacity", or "更新" lands on the
 /// section that owns the control instead of merely filtering the current page.
-pub(super) const SECTION_SEARCH_TERMS: [&str; 12] = [
+pub(super) const SECTION_SEARCH_TERMS: [&str; 13] = [
     "application app 应用 update 更新 version 版本 github support 支持",
     "appearance ligatures 连字 外观 theme 主题 custom 自定义 template 模板 import 导入 export 导出 font 字体 opacity 透明度 background 背景 shader wgsl terminal effects effect 终端效果 着色器 video 视频 gif 动图 cursor 光标 smooth motion 平滑 动画 icon 图标 dim inactive panes 调暗非活动窗格 分屏变暗 scrollback scrolling speed history 回滚 滚动 速度 历史 滚轮 ctrl wheel zoom 缩放",
     "profiles 配置文件 shell terminal 终端 completion 补全 startup 启动 environment refresh path 环境变量 刷新 ai message notifications toast alerts bell 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 duration timeout persistent auto-dismiss 时长 秒 常驻 自动关闭",
@@ -39,6 +41,7 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 12] = [
     "backup cloud sync 云备份 云同步 云存储 备份 export 导出 restore 恢复 webdav s3 sftp 坚果云 123 123云盘 nextcloud synology 群晖 nas r2 minio snapshots 快照",
     "agents agent hook hooks 智能体 钩子 接入 claude codex opencode cursor kimi pi omp copilot grok",
     "mobile phone android ios remote pairing qr lan relay 手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
+    "release notes changelog what is new 更新内容 更新日志 版本说明",
 ];
 
 // 暂时隐藏供应商入口，保留路由编号，避免其他设置入口发生偏移。
@@ -49,7 +52,7 @@ pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
 pub(super) const NAV_GROUPS: [(&str, &[usize]); 3] = [
     ("workspace", &[0, 1, 2, 10, 6, 7]),
     ("connections", &[3, 4, 5, MOBILE_SECTION]),
-    ("system", &[8, 9]),
+    ("system", &[8, 9, RELEASE_NOTES_SECTION]),
 ];
 
 pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) -> &'static str {
@@ -66,6 +69,7 @@ pub(super) fn section_label(index: usize, language: crate::display::UiLanguage) 
         Some("backup") => language.tr("settings.sidebar.backup"),
         Some("agents") => language.text(crate::i18n::Message::SettingsSidebarAgents),
         Some("mobile") => language.text(crate::i18n::Message::MobileTitle),
+        Some("release-notes") => language.text(crate::i18n::Message::UpdateReleaseNotesTitle),
         _ => "",
     }
 }
@@ -127,6 +131,7 @@ pub(super) fn section_icon(index: usize) -> SharedString {
         9 => crate::gpui_shell::assets::backup::DRIVE.into(),
         10 => IconName::Bot.path(),
         MOBILE_SECTION => crate::gpui_shell::assets::nav::PHONE.into(),
+        RELEASE_NOTES_SECTION => IconName::BookOpen.path(),
         _ => IconName::Inbox.path(),
     }
 }

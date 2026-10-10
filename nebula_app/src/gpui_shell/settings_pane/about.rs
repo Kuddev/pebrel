@@ -287,11 +287,15 @@ impl SettingsPane {
                 REPOSITORY_URL.to_owned(),
                 cx,
             ))
-            .child(Self::about_action_row(
+            .child(Self::about_page_row(
                 "about-releases",
                 IconName::BookOpen,
-                language.pick("更新内容", "Release notes"),
-                crate::update_check::RELEASES_PAGE.to_owned(),
+                language.text(crate::i18n::Message::UpdateReleaseNotesTitle),
+                cx.listener(|this, _, _, cx| {
+                    this.active_section = RELEASE_NOTES_SECTION;
+                    this.about_sponsor_open = false;
+                    cx.notify();
+                }),
                 cx,
             ))
             .child(Self::about_page_row(

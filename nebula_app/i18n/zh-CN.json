@@ -939,7 +939,13 @@
     "later": "稍后",
     "prepare_failed": "更新准备失败：{error}。Pebrel 将保持打开。",
     "draft_changed": "准备退出期间文档发生了变化。请保存或放弃最新修改后重试。",
-    "in_progress": "当前安装正在更新，请等待更新完成，Pebrel 随后会自动重新打开。"
+    "in_progress": "当前安装正在更新，请等待更新完成，Pebrel 随后会自动重新打开。",
+    "release_notes_title": "更新内容",
+    "release_notes_loading": "正在加载更新内容…",
+    "release_notes_failed": "无法加载更新内容：{error}",
+    "release_notes_retry": "重试",
+    "release_notes_empty": "此版本未提供更新说明。",
+    "open_release": "打开发布页"
   },
   "files.search_failed": "无法完成搜索",
   "files.search_running": "正在搜索…",
