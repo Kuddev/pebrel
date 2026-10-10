@@ -109,6 +109,19 @@ chinesesimplified.MigrationFailed=Pebrel 已安装，但旧安装未能完全迁
 chinesesimplified.MigrationPreflightFailed=无法检查旧安装：%1。尚未开始安装。
 chinesesimplified.RemovePathFailed=无法从 PATH 中移除 Pebrel 安装目录。
 
+english.ExplorerMenuTitle=Explorer context menu
+english.ExplorerMenuDescription=Choose which Pebrel entries appear in Explorer.
+english.ExplorerMenuHelp=Run this installer again to change these choices. Upgrades keep your selection. New WSL distributions start unchecked after you save a selection.
+english.ExplorerMenuEnabled=Enable Explorer context menu integration
+english.ExplorerMenuConflict=An existing Pebrel context menu belongs to another installation or was edited, so it was preserved: %1.
+english.ExplorerMenuFailed=Unable to update Explorer context menu entries or save your selection.
+chinesesimplified.ExplorerMenuTitle=资源管理器右键菜单
+chinesesimplified.ExplorerMenuDescription=选择在资源管理器中显示哪些 Pebrel 入口。
+chinesesimplified.ExplorerMenuHelp=重新运行此安装器即可修改选项。升级会保留选择；保存选择后，新安装的 WSL 发行版默认不勾选。
+chinesesimplified.ExplorerMenuEnabled=启用资源管理器右键菜单集成
+chinesesimplified.ExplorerMenuConflict=现有 Pebrel 右键菜单属于其他安装或已被修改，因此已保留：%1。
+chinesesimplified.ExplorerMenuFailed=无法更新资源管理器右键菜单或保存选择。
+
 [Tasks]
 #ifndef AcceptanceFixture
 Name: "installfont"; Description: "{cm:InstallFont}"
@@ -154,14 +167,6 @@ Root: HKCU; Subkey: "Software\Pebrel"; ValueType: dword; ValueName: "InstallerAd
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddToPath; Flags: preservestringtype
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\pebrel.exe"; ValueType: string; ValueName: ""; ValueData: "{app}\pebrel.exe"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\pebrel.exe"; ValueType: string; ValueName: "Path"; ValueData: "{app}"
-; 目录背景使用 %V，选中的目录对象使用 %1；两者必须由 Explorer 展开后再交给 CLI。
-; 每个动词使用独立的应用子键，卸载时只删除 Pebrel 自己注册的菜单。
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Pebrel"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:OpenInPebrel}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Pebrel"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\pebrel.exe,0"
-Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Pebrel\command"; ValueType: string; ValueName: ""; ValueData: """{app}\pebrel.exe"" --gpui --working-directory ""%V"""
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel"; ValueType: string; ValueName: "MUIVerb"; ValueData: "{cm:OpenInPebrel}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\pebrel.exe,0"
-Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel\command"; ValueType: string; ValueName: ""; ValueData: """{app}\pebrel.exe"" --gpui --working-directory ""%1"""
 #endif
 
 [Run]
@@ -196,7 +201,7 @@ begin
 
   { WSL 右键项是 [Code] 动态写的、没有 uninsdeletekey，必须自己认领删除；
     这一步排在 PATH 那段的早退之前——两条互不依赖。 }
-  RemoveOwnedWslContextMenus;
+  RemoveOwnedExplorerContextMenus;
 
   if not RegValueExists(HKCU, 'Software\Pebrel', 'InstallerAddedToPath') then
     Exit;
