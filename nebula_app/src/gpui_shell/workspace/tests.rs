@@ -800,8 +800,11 @@ fn ai_session_palette_exposes_verified_resume_and_fork_commands() {
             "Unsupported",
         ),
     ];
-    let rows = ai_session_palette_rows(sessions);
+    let rows = ai_session_palette_rows(sessions, crate::i18n::UiLanguage::EnUs);
     assert_eq!(rows.len(), 2, "Claude supports resume and fork; Aider supports neither");
+    assert_eq!(rows[0].label, "Fix resize");
+    assert!(rows[0].hint.starts_with("Resume · "));
+    assert_eq!(rows[1].label, "Fork · Fix resize");
     assert!(matches!(
         &rows[0].action,
         WorkspacePaletteAction::RunAiSession { command, .. }

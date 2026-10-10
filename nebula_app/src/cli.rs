@@ -314,6 +314,7 @@ pub enum Subcommands {
     /// Check or invoke a local plugin package without starting a GUI or plugin daemon.
     Plugin(crate::plugins::cli::Options),
     /// Export, verify, or import a portable ZIP theme package.
+    #[cfg(feature = "gpui-shell")]
     Theme(crate::theme_library::package::cli::Options),
     /// Test system notification (toast) delivery.
     #[cfg(windows)]

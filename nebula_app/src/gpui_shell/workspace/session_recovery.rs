@@ -1,6 +1,7 @@
 //! Workspace snapshot capture and cold restoration.
 
 use super::*;
+use crate::i18n::Message;
 
 impl NebulaWorkspace {
     /// 冷启动回退（没有恢复出任何标签）时首个终端的 cwd：与 `add_terminal`
@@ -36,6 +37,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> bool {
         use crate::display::ToastKind;
+        let language = crate::gpui_shell::config::ui_language(cx);
 
         let Some(mut session) = crate::session::load() else { return false };
         if !crate::session::should_restore(&session) {
@@ -47,7 +49,10 @@ impl NebulaWorkspace {
                         window,
                         cx,
                         ToastKind::Warning,
-                        format!("连续多次启动未完成恢复，已跳过；现场保存在 {}", path.display()),
+                        language.format(
+                            Message::WorkspaceRecoverySkipped,
+                            &[("path", &path.display().to_string())],
+                        ),
                     );
                 }
             }
@@ -66,11 +71,12 @@ impl NebulaWorkspace {
         }
         self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
         self.focus_active(window, cx);
-        let text = if crashed {
-            format!("上次未正常退出，已恢复 {restored} 个标签")
+        let message = if crashed {
+            Message::WorkspaceRecoveryUnclean
         } else {
-            format!("已恢复 {restored} 个标签")
+            Message::WorkspaceRecoveryRestored
         };
+        let text = language.format(message, &[("count", &restored.to_string())]);
         crate::gpui_shell::toast::toast(window, cx, ToastKind::Success, text);
         cx.notify();
         true

@@ -145,6 +145,9 @@ discover candidates from the current environment without matching prior commands
 - GPU-accelerated GPUI interface, light and dark themes, backgrounds, and opacity controls.
 - Application icon palettes and eleven UI language choices with English fallback
   for untranslated text.
+- Workspace dialogs, command feedback, Git/SVN controls and default notifications
+  follow the selected language. Switching languages preserves command search text
+  and selection. See [internationalization](docs/internationalization.md).
 - Searchable settings, a command palette, and Lua configuration with validation and
   live reload. Existing TOML configuration remains supported.
 - Markdown document tabs and native mathematical typesetting without a WebView.

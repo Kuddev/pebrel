@@ -8,7 +8,9 @@
     "turn_failed_reason": "Request failed: {error}",
     "turn_failed": "Request failed. Check the terminal for details.",
     "turn_incomplete": "Response incomplete. Check the terminal before continuing.",
-    "turn_ended": "Turn ended. Check the terminal for the result."
+    "turn_ended": "Turn ended. Check the terminal for the result.",
+    "input_needed": "Confirmation or input is needed",
+    "turn_finished": "Turn finished. Ready for the next instruction."
   },
   "language": {
     "self_name": "English",
@@ -520,7 +522,13 @@
       "ssh_key": "SSH · Create Ed25519 key"
     },
     "builtin_label": "Built-in",
-    "save_copy": "Save a copy"
+    "save_copy": "Save a copy",
+    "search": "Search saved commands…",
+    "read_failed": "Could not read saved commands: {error}",
+    "no_terminal": "The current tab is not an available terminal",
+    "send_failed": "Could not send the command: {error}",
+    "copied": "Command copied",
+    "missing": "This command no longer exists"
   },
   "files": {
     "path_unavailable": "The path no longer exists",
@@ -561,7 +569,9 @@
       "title": "Delete {name}?",
       "folder_body": "The folder and all of its contents will be moved to the Recycle Bin.",
       "file_body": "The file will be moved to the Recycle Bin."
-    }
+    },
+    "remote_session_unavailable": "The remote browsing session is unavailable. Reopen the file panel.",
+    "remote_connection_unavailable": "The remote connection is unavailable. Try again later."
   },
   "recipe": {
     "title": "Layout recipes",
@@ -709,7 +719,44 @@
     "directory_unavailable": "The selected directory is unavailable",
     "following_directory": "The selected directory is unavailable; following the current directory",
     "command_failed": "{program} failed",
-    "task_start_failed": "Could not start the version control task: {error}"
+    "task_start_failed": "Could not start the version control task: {error}",
+    "svn": {
+      "repository_empty": "Empty repository · no contents yet",
+      "repository_standard_layout": "Standard layout · {entries}",
+      "repository_top_level": "Top level · {entries}",
+      "repository_hint": "Check out a working copy to view file status for this server repository.",
+      "add": "Add",
+      "update": "Update",
+      "log": "Log",
+      "check_changes": "Check changes",
+      "checkout": "Check out",
+      "create_layout": "Create standard layout",
+      "tortoise_missing": "TortoiseSVN was not found. Log, lock and property dialogs are unavailable; commits and updates can still use the svn command line.",
+      "more": "More SVN actions",
+      "file_actions": "SVN actions for this file",
+      "browse_repository": "Repository browser",
+      "update_revision": "Update to revision…",
+      "branch_tag": "Branch / tag…",
+      "switch": "Switch…",
+      "merge": "Merge…",
+      "export": "Export…",
+      "revision_graph": "Revision graph",
+      "relocate": "Relocate…",
+      "properties": "Properties",
+      "cleanup": "Clean up",
+      "show_log": "Show log",
+      "blame": "Blame",
+      "lock": "Get lock…",
+      "unlock": "Release lock",
+      "ignore": "Add to ignore list…",
+      "rename": "Rename…",
+      "edit_conflict": "Edit conflict",
+      "confirm_revert": "Confirm revert",
+      "revert": "Revert SVN changes",
+      "add_file": "Add to SVN",
+      "resolve": "Resolve",
+      "mark_resolved": "Keep the current contents and mark the conflict resolved"
+    }
   },
   "launcher": {
     "open_admin": "Open as administrator",
@@ -1060,7 +1107,8 @@
     "select_terminal": "Select terminal",
     "command_list": "Command list",
     "toggle_sidebar": "Show/hide sidebar (Ctrl+Shift+B)",
-    "settings_shortcut": "Settings (Ctrl+,)"
+    "settings_shortcut": "Settings (Ctrl+,)",
+    "new_terminal_ctrl_k": "New terminal (Ctrl+K)"
   },
   "workspace": {
     "pane": {
@@ -1086,7 +1134,16 @@
     },
     "close_tab": {
       "title": "Close this tab?"
-    }
+    },
+    "search_commands": "Search commands…",
+    "exported": "Exported to {path}",
+    "export_failed": "Could not export the workspace: {error}",
+    "recovery_skipped": "Recovery was skipped after repeated incomplete starts. Recovery files: {path}",
+    "recovery_unclean": "The previous exit was interrupted. Restored tabs: {count}",
+    "recovery_restored": "Restored tabs: {count}",
+    "resume_hint": "Resume · {source} · {location}",
+    "fork_label": "Fork · {title}",
+    "fork_title": "{title} (fork)"
   },
   "remote": {
     "locating": "Locating the remote directory…",
@@ -1371,5 +1428,77 @@
     "save_failed": "Could not save the effect list. Check that the settings location is writable, then try again.",
     "advanced": "Advanced effects",
     "advanced_active": "Advanced effects · Terminal effects enabled"
+  },
+  "merge": {
+    "title": "Merge · {name}",
+    "unresolved_notice": "Resolve the remaining conflict markers before applying the merge.",
+    "loading": "Loading Git merge versions…",
+    "unresolved": "Conflict markers remain",
+    "ready": "Ready to apply",
+    "saving": "Writing and staging…",
+    "resolved": "Written and staged",
+    "ours": "Current version",
+    "ours_missing": "Current version (file absent)",
+    "theirs": "Incoming version",
+    "theirs_missing": "Incoming version (file absent)",
+    "result": "Merge result",
+    "result_editable": "Merge result (editable)",
+    "reload": "Reload conflict versions",
+    "apply": "Apply and stage",
+    "clear_markers": "Clear the conflict markers from the merge result first",
+    "stage_tooltip": "Write the working tree file and run git add",
+    "use_ours": "Replace the merge result with the current version",
+    "use_theirs": "Replace the merge result with the incoming version",
+    "error": {
+      "invalid_path": "The conflict file path is invalid",
+      "outside_repository": "The conflict file is outside the current repository",
+      "missing_stages": "The Git index has no :2/:3 versions to merge",
+      "document_too_large": "{part} exceeds {limit} MB and cannot be opened safely in the three-way editor",
+      "binary": "{part} contains binary data and cannot be handled by the text merge editor",
+      "invalid_utf8": "{part} is not UTF-8. Writing is blocked to avoid corrupting its encoding",
+      "read_failed": "Could not read the merge result: {error}",
+      "read_wsl_failed": "Could not read the conflict file from WSL: {error}",
+      "result_too_large": "The merge result exceeds {limit} MB; writing was canceled",
+      "write_failed": "Could not write the merge result: {error}",
+      "start_wsl_write_failed": "Could not start writing the conflict file to WSL: {error}",
+      "wsl_pipe_missing": "Could not open the WSL write pipe",
+      "write_wsl_failed": "Could not write the WSL conflict file: {error}",
+      "wait_wsl_failed": "Could not wait for the WSL write: {error}",
+      "wsl_failed": "Writing to WSL failed",
+      "stage_failed": "git add failed. The file was written but has not been staged",
+      "git_start_failed": "Could not run git: {error}"
+    }
+  },
+  "image": {
+    "loading": "Loading image…",
+    "read_failed": "Could not read {path}: {error}",
+    "decode_failed": "Could not decode {path}: {error}"
+  },
+  "terminal": {
+    "process_exited": "Process exited ({code})",
+    "pty_failure": "PTY failure: {error}",
+    "session_ended": "Session ended",
+    "ssh_start_failed": "Could not start the SSH session: {error}",
+    "pty_start_failed": "Could not start the PTY: {error}"
+  },
+  "confirmation": {
+    "cover_title": "Extend the background image behind window controls?",
+    "cover_body": "The image will extend behind the title bar, window buttons, tabs and SSH sidebar. Low-contrast images can make controls harder to see; a minimum opacity is retained for readability.",
+    "resize_title": "Enable dragging to resize sidebars?",
+    "resize_body": "Terminal contents reflow as you resize the sidebar or drawer. Large scrollback buffers or slower devices may reduce frame rates. Resize updates are throttled by frame rate and column width. Drag the left sidebar fully left to collapse it. Widths are saved, and you can turn this off at any time.",
+    "font_title": "A terminal font is recommended",
+    "font_body": "Maple Mono Nerd Font was not found. If icons are missing, install the font and restart Pebrel.",
+    "paste_body": "The shell may execute a multiline paste one line at a time. Only continue if you trust the source.",
+    "ssh_hide_title": "Hide SSH host {host}?",
+    "ssh_hide_body": "This only hides the host from Pebrel. ~/.ssh/config is unchanged. Saved passwords are cleared after the undo period.",
+    "ssh_delete_title": "Delete SSH host {host}?",
+    "ssh_delete_body": "The host is removed from the list. Saved Windows passwords are cleared after the undo period.",
+    "remote_delete_title": "Delete remote item {name}?",
+    "remote_delete_directory_body": "The folder and all its remote contents will be permanently deleted. This cannot be undone.",
+    "remote_delete_file_body": "The remote file will be permanently deleted. This cannot be undone.",
+    "restore_passphrase_title": "Enter the restore passphrase",
+    "restore_passphrase_body": "Enter the passphrase used when exporting the backup. No files are written until authentication succeeds.",
+    "backup_passphrase_title": "Set a backup passphrase",
+    "backup_passphrase_body": "Use at least 8 characters. Pebrel does not save the passphrase; the backup cannot be restored if you lose it."
   }
 }

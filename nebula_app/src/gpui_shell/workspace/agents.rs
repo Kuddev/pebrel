@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::i18n::{Message, UiLanguage};
 use gpui::{Context, Window};
 use nebula_split::SplitTree;
 
@@ -38,6 +39,7 @@ pub(super) fn restored_agent_command(
 
 pub(super) fn ai_session_palette_rows(
     sessions: impl IntoIterator<Item = crate::ai_sessions::AiSession>,
+    language: UiLanguage,
 ) -> Vec<WorkspacePaletteRow> {
     let mut source_order = std::collections::HashMap::new();
     let mut rows = Vec::new();
@@ -53,7 +55,7 @@ pub(super) fn ai_session_palette_rows(
         };
         let group = crate::display::command_palette::source_group_label(session.source);
         let place = session.place_label();
-        let time = crate::ai_sessions::relative_label(session.modified);
+        let time = crate::ai_sessions::relative_label(session.modified, language);
         let location = if place.is_empty() { time } else { format!("{place} · {time}") };
         let source = session.source.display_name();
         let search = format!("{} {} {}", session.title, session.project, session.source.label());
@@ -65,7 +67,10 @@ pub(super) fn ai_session_palette_rows(
                 group_order,
                 group: group.clone(),
                 label: session.title.clone(),
-                hint: format!("恢复 · {source} · {location}"),
+                hint: language.format(
+                    Message::WorkspaceResumeHint,
+                    &[("source", source), ("location", &location)],
+                ),
                 hint_style: super::WorkspacePaletteHintStyle::Metadata,
                 search: format!("恢复 resume {search}"),
                 action: WorkspacePaletteAction::RunAiSession { command, cwd: cwd.clone() },
@@ -78,7 +83,7 @@ pub(super) fn ai_session_palette_rows(
             rows.push(WorkspacePaletteRow {
                 group_order,
                 group: group.clone(),
-                label: format!("分叉 · {}", session.title),
+                label: language.format(Message::WorkspaceForkLabel, &[("title", &session.title)]),
                 hint: format!("{source} · {location}"),
                 hint_style: super::WorkspacePaletteHintStyle::Metadata,
                 search: format!("分叉 fork {search}"),
@@ -377,7 +382,10 @@ impl NebulaWorkspace {
             tab,
             TabMeta {
                 runtime_id: Default::default(),
-                custom_name: agent.map(|agent| format!("{} 分叉", agent.display_name())),
+                custom_name: agent.map(|agent| {
+                    crate::gpui_shell::config::ui_language(cx)
+                        .format(Message::WorkspaceForkTitle, &[("title", agent.display_name())])
+                }),
                 color,
                 shell_tag,
                 launch: Some(launch_session),

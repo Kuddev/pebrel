@@ -217,24 +217,30 @@ impl Notification {
     }
 
     pub(crate) fn raw_toast_text(&self) -> (String, String) {
+        self.raw_toast_text_in(notification_language())
+    }
+
+    pub(crate) fn raw_toast_text_in(&self, language: crate::i18n::UiLanguage) -> (String, String) {
         match self {
             Self::Bell { program } => match program {
-                Some(p) => (
-                    p.clone(),
-                    notification_language().text(crate::i18n::Message::NotificationBell).to_owned(),
+                Some(p) => {
+                    (p.clone(), language.text(crate::i18n::Message::NotificationBell).to_owned())
+                },
+                None => (
+                    crate::brand::NAME.to_owned(),
+                    language.text(crate::i18n::Message::NotificationBell).to_owned(),
                 ),
-                None => (crate::brand::NAME.to_owned(), "终端响铃".to_owned()),
             },
             Self::CommandDone { duration, program } => (
                 program.clone().unwrap_or_else(|| crate::brand::NAME.to_owned()),
-                notification_language().format(
+                language.format(
                     crate::i18n::Message::NotificationCommandFinished,
                     &[("seconds", &duration.as_secs().to_string())],
                 ),
             ),
             Self::CommandFailed { duration, program, exit_code } => (
                 program.clone().unwrap_or_else(|| crate::brand::NAME.to_owned()),
-                notification_language().format(
+                language.format(
                     crate::i18n::Message::NotificationCommandFailed,
                     &[
                         ("seconds", &duration.as_secs().to_string()),
@@ -249,17 +255,16 @@ impl Notification {
             Self::AiTurn { program, message, attention } => {
                 let body = message.clone().unwrap_or_else(|| {
                     if *attention {
-                        "需要你的确认或输入".to_owned()
+                        language.text(crate::i18n::Message::NotificationInputNeeded).to_owned()
                     } else {
-                        "回合完成，等待下一条指令".to_owned()
+                        language.text(crate::i18n::Message::NotificationTurnFinished).to_owned()
                     }
                 });
                 (program.clone(), body)
             },
-            Self::AiTurnIssue { program, message, outcome } => (
-                program.clone(),
-                turn_issue_text(*outcome, message.as_deref(), notification_language()),
-            ),
+            Self::AiTurnIssue { program, message, outcome } => {
+                (program.clone(), turn_issue_text(*outcome, message.as_deref(), language))
+            },
         }
     }
 
@@ -523,6 +528,43 @@ fn spawn_actionable_toast(
 #[cfg(test)]
 mod delivery_tests {
     use super::*;
+
+    #[test]
+    fn notification_fallbacks_follow_the_requested_language() {
+        use crate::i18n::UiLanguage;
+        for (notification, expected) in [
+            (Notification::Bell { program: None }, "Terminal bell"),
+            (
+                Notification::AiTurn { program: "worker".into(), message: None, attention: true },
+                "Confirmation or input is needed",
+            ),
+            (
+                Notification::AiTurn { program: "worker".into(), message: None, attention: false },
+                "Turn finished. Ready for the next instruction.",
+            ),
+        ] {
+            let english = notification.raw_toast_text_in(UiLanguage::EnUs);
+            let chinese = notification.raw_toast_text_in(UiLanguage::ZhCn);
+            assert_eq!(english.1, expected);
+            assert_eq!(chinese.0, english.0);
+            assert_ne!(chinese.1, english.1);
+        }
+    }
+
+    #[test]
+    fn notification_language_does_not_translate_source_names_or_message_content() {
+        let notification = Notification::AiTurn {
+            program: "程序 {source}".into(),
+            message: Some("原文 {error}".into()),
+            attention: true,
+        };
+        for language in [crate::i18n::UiLanguage::EnUs, crate::i18n::UiLanguage::ZhCn] {
+            assert_eq!(
+                notification.raw_toast_text_in(language),
+                ("程序 {source}".into(), "原文 {error}".into())
+            );
+        }
+    }
 
     fn pi_result(reason: Option<&str>, message: Option<&str>) -> crate::ai_hook::AiHookEvent {
         let payload = serde_json::json!({

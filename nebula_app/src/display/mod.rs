@@ -64,6 +64,7 @@ mod background_color_model;
 pub mod color;
 mod command_completion;
 mod completion;
+mod confirmation_text;
 pub mod content;
 pub mod cursor;
 pub mod hint;
@@ -5939,11 +5940,12 @@ impl Display {
     /// 「恢复 AI 会话」面板：原生 Claude/Codex 档案与 Nebula hook 索引
     /// 合并去重；只展示已验证有 resume 语法的来源。
     pub fn open_ai_session_palette(&mut self) {
+        let language = self.ui_language();
         let mut rows = Vec::new();
         for session in crate::ai_sessions::scan(30) {
             // 右列 = 「位置 · 相对时间」。来源不再挤进这段文字——行首
             // 品牌 logo + 右缘 chip 已经把 claude/codex 标满了。
-            let time = crate::ai_sessions::relative_label(session.modified);
+            let time = crate::ai_sessions::relative_label(session.modified, language);
             let place = session.place_label();
             let hint = if place.is_empty() { time } else { format!("{place} · {time}") };
             let search =
@@ -5960,7 +5962,10 @@ impl Display {
             });
             if let Some(command) = session.fork_command() {
                 rows.push(command_palette::AiSessionRow {
-                    label: format!("分叉 · {}", session.title),
+                    label: language.format(
+                        crate::i18n::Message::WorkspaceForkLabel,
+                        &[("title", &session.title)],
+                    ),
                     hint,
                     search: format!("分叉 fork {search}"),
                     command,
@@ -8672,97 +8677,7 @@ impl Display {
         let txt = sk.ink;
         let dim = sk.ink_dim;
 
-        let (title, body, danger) = match &confirm {
-            NebulaConfirm::EnableBackgroundImageCoverChrome => (
-                "让背景图覆盖窗口控件区域？".to_owned(),
-                "背景图会延伸到标题栏、窗口按钮、Tab 与 SSH 侧栏下方，低对比度图片可能影响操作可见性；界面仍会保留最低不透明度保护。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::EnablePanelResize => (
-                "开启侧栏拖拽调节？".to_owned(),
-                "拖动左侧栏或右侧抽屉的宽度时，终端内容会跟随实时重排；在低性能设备或超大回滚缓冲下可能出现掉帧。拖动已按帧率与列宽双重节流，把左侧栏一路拖到最左即可收起。宽度会保存，此功能可随时关闭。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::InstallRequiredFont { .. } => (
-                "建议安装终端字体".to_owned(),
-                "未检测到 Maple Mono Nerd Font；缺少图标时可安装后重启 Nebula。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::ClosePane { process, .. } => (
-                "关闭此分栏？".to_owned(),
-                format!("{process} 仍在运行，关闭会中止它。"),
-                true,
-            ),
-            NebulaConfirm::CloseTab { process, .. } => (
-                "关闭此标签页？".to_owned(),
-                format!("{process} 仍在运行，关闭会中止它。"),
-                true,
-            ),
-            NebulaConfirm::CloseWindow { process } => (
-                "关闭整个窗口？".to_owned(),
-                format!("{process} 仍在运行，关闭会中止它。"),
-                true,
-            ),
-            NebulaConfirm::Paste { lines, .. } => (
-                format!("粘贴 {lines} 行文本？"),
-                "多行粘贴会被 shell 逐行执行，请确认来源可信。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::DeleteSsh { host, from_config } => {
-                let host = truncate_tab_label(host, 28);
-                if *from_config {
-                    (
-                        format!("隐藏 SSH 主机 {host}？"),
-                        "只从 Nebula 隐藏；~/.ssh/config 不会修改，保存的密码将在撤销期后清除。"
-                            .to_owned(),
-                        true,
-                    )
-                } else {
-                    (
-                        format!("删除 SSH 主机 {host}？"),
-                        "会从主机列表移除，保存的 Windows 密码将在撤销期后清除。".to_owned(),
-                        true,
-                    )
-                }
-            },
-            NebulaConfirm::DeleteSftp { entry } => (
-                format!("删除远端项目 {}？", truncate_tab_label(&entry.name, 28)),
-                if entry.kind == crate::ssh_sftp::SftpEntryKind::Directory {
-                    "文件夹及其全部远端内容会被递归删除，此操作无法撤销。".to_owned()
-                } else {
-                    "远端文件会被永久删除，此操作无法撤销。".to_owned()
-                },
-                true,
-            ),
-            NebulaConfirm::DeleteFileTreePath { path, is_dir } => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.display().to_string());
-                (
-                    format!("删除 {}？", truncate_tab_label(&name, 28)),
-                    if *is_dir {
-                        "文件夹及其全部内容会移入回收站。".to_owned()
-                    } else {
-                        "文件会移入回收站。".to_owned()
-                    },
-                    true,
-                )
-            },
-            NebulaConfirm::BackupPassphrase { restoring } => (
-                if *restoring {
-                    "输入恢复口令".to_owned()
-                } else {
-                    "设置备份口令".to_owned()
-                },
-                if *restoring {
-                    "输入导出时使用的口令；认证通过后才会写入任何文件。".to_owned()
-                } else {
-                    "口令至少 8 个字符。Nebula 不会保存口令，丢失后无法恢复此备份。".to_owned()
-                },
-                false,
-            ),
-        };
+        let (title, body, danger) = confirmation_text::text_for(&confirm, self.ui_language());
 
         let is_backup_passphrase = matches!(confirm, NebulaConfirm::BackupPassphrase { .. });
         let body = if is_backup_passphrase {
@@ -8793,8 +8708,8 @@ impl Display {
         // 手画：外圈描边 quad + 内层填充 quad，只露 1px 圆环。描边取按钮
         // 自己的墨色，深色主题下自然读作白框，浅色主题下是深框。
         let language = self.ui_language();
-        let primary_label = language.pick("是", "Yes");
-        let cancel_label = language.pick("否", "No");
+        let primary_label = language.text(crate::i18n::Message::CommonYes);
+        let cancel_label = language.text(crate::i18n::Message::CommonNo);
         let primary_key = "Enter";
         let cancel_key = "Esc";
         let btn_h = s(34.0);

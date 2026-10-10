@@ -9,6 +9,50 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
+#[gpui::test]
+fn command_search_tracks_language_without_replacing_the_query(cx: &mut TestAppContext) {
+    use crate::i18n::UiLanguage;
+    use gpui::{Element as _, IntoElement as _, RenderOnce as _};
+
+    let directory = tempfile::tempdir().unwrap();
+    let saved =
+        crate::saved_commands::SavedCommands::load_from(&directory.path().join("commands.json"))
+            .unwrap();
+    let (workspace, mut cx) = open_manager(saved, cx);
+    let input = workspace.read_with(&cx, |workspace, _| workspace.command_manager_input.clone());
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.set_value("build 测试", window, cx);
+            input.set_selected_range(0..5, cx);
+        });
+    });
+    let original_id = input.entity_id();
+    let original_cursor = input.read_with(&cx, |input, _| input.cursor_position());
+    for (language, expected) in [
+        (UiLanguage::EnUs, "Search saved commands…"),
+        (UiLanguage::ZhCn, "搜索已保存命令…"),
+        (UiLanguage::EnUs, "Search saved commands…"),
+    ] {
+        cx.update(|window, cx| {
+            let mut settings =
+                crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord);
+            settings.ui_language = language;
+            cx.set_global(settings);
+            workspace.update(cx, |_, cx| cx.notify());
+            window.refresh();
+            window.draw(cx).clear(cx);
+            let element = Input::new(&input).render(window, cx).into_element();
+            let mut node = gpui::accesskit::Node::new(gpui::accesskit::Role::TextInput);
+            element.write_a11y_info(&mut node);
+            assert_eq!(node.placeholder(), Some(expected));
+            assert_eq!(workspace.read(cx).command_manager_input.entity_id(), original_id);
+            assert_eq!(input.read(cx).value(), "build 测试");
+            assert_eq!(input.read(cx).selected_value(), "build");
+            assert_eq!(input.read(cx).cursor_position(), original_cursor);
+        });
+    }
+}
+
 fn open_manager(
     saved: crate::saved_commands::SavedCommands,
     cx: &mut TestAppContext,

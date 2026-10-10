@@ -16,6 +16,7 @@ use image::Frame;
 
 use crate::display::image_viewer::ImageView;
 use crate::gpui_shell::prelude::*;
+use crate::i18n::Message;
 
 /// 双击路由：应用内能读的开 tab（图片/文档/源码），其余交系统处理器。
 /// 源码查看是 GPUI 壳新增能力，旧壳合同（`input/chrome.rs`）之上的超集。
@@ -32,7 +33,7 @@ pub struct ImageTabView {
     geometry: ImageView,
     /// 后台解码的像素（BGRA 帧）；None = 解码中或失败。
     image: Option<Arc<RenderImage>>,
-    error: Option<String>,
+    error: Option<(Message, String)>,
     /// 上一帧查看区矩形（窗口坐标）；事件换算用。绘制不依赖它——canvas
     /// paint 拿的是当帧 bounds。
     area: Rc<RefCell<Bounds<Pixels>>>,
@@ -125,11 +126,11 @@ impl ImageTabView {
 }
 
 /// 与壁纸解码同款：RGBA8 → BGRA（gpui 帧通道序）。跑在后台线程。
-fn decode_bgra(path: &Path) -> Result<Arc<RenderImage>, String> {
+fn decode_bgra(path: &Path) -> Result<Arc<RenderImage>, (Message, String)> {
     let bytes =
-        std::fs::read(path).map_err(|error| format!("无法读取 {}: {error}", path.display()))?;
+        std::fs::read(path).map_err(|error| (Message::ImageReadFailed, error.to_string()))?;
     let mut rgba = image::load_from_memory(&bytes)
-        .map_err(|error| format!("无法解码 {}: {error}", path.display()))?
+        .map_err(|error| (Message::ImageDecodeFailed, error.to_string()))?
         .into_rgba8();
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
@@ -139,6 +140,7 @@ fn decode_bgra(path: &Path) -> Result<Arc<RenderImage>, String> {
 
 impl Render for ImageTabView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = super::config::ui_language(cx);
         let muted = cx.theme().muted_foreground;
         let store = self.area.clone();
         // paint 闭包吃当帧几何：矩形按当帧 bounds 现算，没有首帧空窗。
@@ -177,13 +179,17 @@ impl Render for ImageTabView {
         .absolute()
         .inset_0();
 
-        let status: Option<String> = if let Some(error) = &self.error {
-            Some(error.clone())
-        } else if self.image.is_none() {
-            Some(String::from("正在加载图片…"))
-        } else {
-            None
-        };
+        let status: Option<String> =
+            if let Some((message, error)) = &self.error {
+                Some(language.format(
+                    *message,
+                    &[("path", &self.path.display().to_string()), ("error", error)],
+                ))
+            } else if self.image.is_none() {
+                Some(language.text(Message::ImageLoading).to_owned())
+            } else {
+                None
+            };
 
         div()
             .id("nebula-image-tab")

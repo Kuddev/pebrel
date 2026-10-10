@@ -56,6 +56,7 @@ use keyboard_bindings::{
 };
 mod details_panel;
 mod documents;
+mod export;
 mod file_tree;
 mod key_actions;
 mod launcher_menu;
@@ -686,6 +687,7 @@ pub struct NebulaWorkspace {
     command_manager_group: Option<String>,
     command_group_menu: Option<command_manager::GroupMenu>,
     command_manager_input: Entity<InputState>,
+    command_manager_language: crate::i18n::UiLanguage,
     command_manager_selected: usize,
     command_manager_scroll: gpui::UniformListScrollHandle,
     saved_commands: crate::saved_commands::SavedCommands,
@@ -864,10 +866,15 @@ impl NebulaWorkspace {
                     cx.notify();
                 }
             });
-        let command_palette_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索命令…"));
-        let command_manager_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索已保存命令…"));
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let command_palette_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(language.text(crate::i18n::Message::WorkspaceSearchCommands))
+        });
+        let command_manager_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(language.text(crate::i18n::Message::CommandsSearch))
+        });
         let file_tree_search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(
                 workspace_ui_language().pick("搜索文件和文件夹…", "Search files and folders..."),
@@ -952,6 +959,7 @@ impl NebulaWorkspace {
             command_manager_group: None,
             command_group_menu: None,
             command_manager_input,
+            command_manager_language: language,
             command_manager_selected: 0,
             command_manager_scroll: gpui::UniformListScrollHandle::new(),
             saved_commands: crate::saved_commands::SavedCommands::load().unwrap_or_default(),
@@ -2278,48 +2286,6 @@ impl NebulaWorkspace {
             .unwrap_or_else(|| "tab".to_owned());
         let export = crate::session::Session::new(0, vec![tab]);
         self.prompt_save_workspace(export, &stem, window, cx);
-    }
-
-    fn prompt_save_workspace(
-        &self,
-        export: crate::session::Session,
-        stem: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let stem: String = stem
-            .chars()
-            .map(|c| {
-                if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
-                    '-'
-                } else {
-                    c
-                }
-            })
-            .collect();
-        let directory =
-            crate::platform::dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let prompt =
-            cx.prompt_for_new_path(&directory, Some(&format!("{stem}.nebula-workspace.json")));
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(path))) = prompt.await else { return };
-            let result = crate::session::save_to(&path, &export);
-            let _ = this.update_in(cx, |_, window, cx| match result {
-                Ok(()) => crate::gpui_shell::toast::toast(
-                    window,
-                    cx,
-                    crate::display::ToastKind::Success,
-                    format!("已导出到 {}", path.display()),
-                ),
-                Err(error) => crate::gpui_shell::toast::toast(
-                    window,
-                    cx,
-                    crate::display::ToastKind::Warning,
-                    format!("工作区导出失败：{error}"),
-                ),
-            });
-        })
-        .detach();
     }
 
     /// Terminal tab 的内容区：单叶直渲、缩放态聚焦 pane 满卡，否则按
