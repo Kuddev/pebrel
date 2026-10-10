@@ -123,6 +123,7 @@ WSL 发行版，以及 `cat` 读取带空格的文件名。使用内置 Powerlin
 - Claude Code、Codex 等可识别的 CLI 显示各自图标与活动状态；受支持的 hook 事件提供更准确的进度和待处理信号。
 - 通知跟随来源窗格，点击即可返回对应终端。
 - 已捕获的 Claude Code 与 Codex 回答可在阅读器中打开，支持 Markdown、公式、原文和本地图片预览。
+  阅读器控件与提示随所选语言显示；复制原文保留完整回答。详见[阅读器语言说明](docs/answer-reader-language.md)。
 - 剪贴板图片会保存为 PNG，并把路径插入本地、WSL 或 SSH 会话。终端内直接显示图片需要 CLI
   输出受支持的 OSC 1337 协议；附件缩略图取决于 CLI 自身。
 
