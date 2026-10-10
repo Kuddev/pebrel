@@ -657,6 +657,8 @@
     "summary": "{total} 台主机，其中 {config} 台来自 ~/.ssh/config",
     "hidden_count": "已隐藏 {count} 台",
     "collapse_hidden": "收起已隐藏",
+    "expand_group": "展开 {group}",
+    "collapse_group": "收起 {group}",
     "more": "主机操作",
     "pin": "置顶",
     "unpin": "取消置顶",

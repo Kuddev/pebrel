@@ -657,6 +657,8 @@
     "summary": "{total} hosts, including {config} from ~/.ssh/config",
     "hidden_count": "{count} hidden",
     "collapse_hidden": "Collapse hidden",
+    "expand_group": "Expand {group}",
+    "collapse_group": "Collapse {group}",
     "more": "Host actions",
     "pin": "Pin",
     "unpin": "Unpin",
