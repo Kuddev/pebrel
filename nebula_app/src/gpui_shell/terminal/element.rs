@@ -161,6 +161,9 @@ impl TerminalElement {
         overrides: &Colors,
         cx: &mut App,
     ) {
+        if crate::gpui_shell::wallpaper::cell_backgrounds_over_underlay(cx) {
+            crate::gpui_shell::wallpaper::keep_text_colors_under_veil(snap);
+        }
         self.view.update(cx, |view, _| {
             resolve_app_colors_into(snap, theme, overrides, &mut view.color_resolver);
             for cell in links.values_mut() {
