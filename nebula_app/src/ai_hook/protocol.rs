@@ -98,7 +98,11 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     let mut event_id =
         context_string(&payload, &["event_id", "eventId"]).map(|id| truncate(&id, ID_MAX_CHARS));
     let turn_id =
-        context_string(&payload, &["turn_id", "turn-id"]).map(|id| truncate(&id, ID_MAX_CHARS));
+        context_string(&payload, &["turn_id", "turn-id"])
+            .or_else(|| {
+                if source == "claude" { context_string(&payload, &["prompt_id"]) } else { None }
+            })
+            .map(|id| truncate(&id, ID_MAX_CHARS));
     // 旧字段名保留：用户机器上可能还装着上一版 bridge，它写的是
     // `provider_sequence`。字段来源始终是 bridge，不是 provider 原生顺序。
     let bridge_sequence = context_u64(

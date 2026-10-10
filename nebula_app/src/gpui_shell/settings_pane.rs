@@ -402,7 +402,11 @@ impl SettingsPane {
         }
         if matches!(
             key,
-            "ai_toasts" | "focus_follows_mouse" | "dim_inactive_panes" | "refresh_environment"
+            "ai_toasts"
+                | "ai_auto_continue"
+                | "focus_follows_mouse"
+                | "dim_inactive_panes"
+                | "refresh_environment"
         ) {
             if let Err(error) = self.try_persist(&[(key, (value as u8).to_string())], cx) {
                 let language = crate::gpui_shell::config::ui_language(cx);
@@ -773,6 +777,7 @@ impl SettingsPane {
             "powerline" => flag!(powerline),
             "ghost" => flag!(ghost),
             "ai_toasts" => flag!(ai_toasts),
+            "ai_auto_continue" => flag!(ai_auto_continue),
             "ctrl_wheel_font_zoom" => flag!(ctrl_wheel_font_zoom),
             "notification_duration" => pick!(notification_duration),
             "cursor_motion" => pick!(cursor_motion),
@@ -1297,6 +1302,13 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::SettingsNotificationsAiMessages),
                 help("ai_toasts", language),
                 self.runtime.ai_toasts,
+                cx,
+            ))
+            .child(self.switch_row(
+                "ai_auto_continue",
+                language.text(crate::i18n::Message::SettingsNotificationsAutoContinue),
+                help("ai_auto_continue", language),
+                self.runtime.ai_auto_continue,
                 cx,
             ))
             .child(self.select_row(

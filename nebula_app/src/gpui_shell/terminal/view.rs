@@ -3,6 +3,7 @@
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod activity_tests;
 mod agent_activity;
+mod auto_continue;
 mod broadcast;
 mod completion;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -329,6 +330,9 @@ pub struct TerminalView {
     last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// Shared lifecycle owns hook authority, session scope and fallback evidence.
     agent_activity: crate::ai_hook::lifecycle::AgentActivity,
+    auto_continue: crate::ai_hook::auto_continue::AutoContinue,
+    auto_continue_task: Option<gpui::Task<()>>,
+    _auto_continue_subscription: gpui::Subscription,
     /// 程序上报的任务进度（OSC 9;4）。存在 pane 上、由宿主投到任务栏：一个
     /// 窗口只有一个任务栏按钮，谁被看着只有宿主知道。
     pub progress: crate::taskbar::TaskProgress,
@@ -762,6 +766,7 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        self.cancel_auto_continue();
         self.completion_editor.invalidate();
         self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
@@ -1337,6 +1342,9 @@ impl gpui::EntityInputHandler for TerminalView {
     ) {
         if self.answer_reader.is_some() {
             return;
+        }
+        if !new_text.is_empty() {
+            self.cancel_auto_continue();
         }
         let marked_text = if new_text.is_empty() { None } else { Some(new_text.to_string()) };
         if self.marked_text != marked_text {

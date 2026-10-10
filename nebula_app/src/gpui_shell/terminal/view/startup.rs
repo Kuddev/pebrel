@@ -305,6 +305,13 @@ impl TerminalView {
             active_run: None,
             last_run: None,
             agent_activity: Default::default(),
+            auto_continue: Default::default(),
+            auto_continue_task: None,
+            _auto_continue_subscription: cx.observe_global::<Settings>(|view, cx| {
+                if !cx.global::<Settings>().ai_auto_continue {
+                    view.cancel_auto_continue();
+                }
+            }),
             progress: crate::taskbar::TaskProgress::None,
             pending_runtime_submit: None,
             pending_shell_command: None,

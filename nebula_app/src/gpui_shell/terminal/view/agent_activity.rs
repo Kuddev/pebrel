@@ -135,6 +135,7 @@ impl TerminalView {
         {
             cx.emit(TerminalViewEvent::Notification(notification));
         }
+        self.schedule_auto_continue(event, cx);
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
         true
