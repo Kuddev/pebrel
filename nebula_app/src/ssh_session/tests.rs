@@ -363,3 +363,53 @@ fn all_keys_failing_locally_is_not_reported_as_server_rejection() {
     assert!(partial.contains("服务器拒绝"), "实际文案: {partial}");
     assert!(partial.contains("本地密钥问题"), "实际文案: {partial}");
 }
+
+#[test]
+fn trusted_host_is_not_blocked_by_unrelated_invalid_keys_or_unknown_algorithms() {
+    use russh::client::Handler as _;
+    use russh::keys::ssh_key::{Algorithm, PrivateKey};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let source = format!(
+        "fixture.example {}\nother.example ssh-ed25519 NOT_BASE64\nunknown.example ssh-future-format opaque\n|1|BAD|BAD ssh-ed25519 NOT_BASE64\n@revoked\n",
+        key.public_key().to_openssh().unwrap()
+    );
+    std::fs::write(&path, &source).unwrap();
+    let mut handler = super::ClientHandler {
+        host: "fixture.example".into(),
+        port: 22,
+        allow_prompt: true,
+        handshake: super::lifecycle::Handshake::default(),
+        known_hosts_path: Some(path.clone()),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    assert!(runtime.block_on(handler.check_server_key(key.public_key())).unwrap());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+}
+
+#[test]
+fn a_recorded_server_key_is_trusted_without_prompt_despite_another_old_key() {
+    use russh::client::Handler as _;
+    use russh::keys::ssh_key::{Algorithm, PrivateKey};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    let current = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let old = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let source = format!(
+        "fixture.example {}\nfixture.example {}\nfixture.example ssh-future-format opaque\n",
+        current.public_key().to_openssh().unwrap(),
+        old.public_key().to_openssh().unwrap()
+    );
+    std::fs::write(&path, &source).unwrap();
+    let mut handler = super::ClientHandler {
+        host: "fixture.example".into(),
+        port: 22,
+        allow_prompt: false,
+        handshake: super::lifecycle::Handshake::default(),
+        known_hosts_path: Some(path.clone()),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    assert!(runtime.block_on(handler.check_server_key(current.public_key())).unwrap());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+}

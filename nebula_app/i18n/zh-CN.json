@@ -1333,6 +1333,9 @@
       "changed": "主题包在检查后发生了变化。请重新选择文件，再确认安装。"
     }
   },
+  "ssh.changedHost.title": "SSH 主机身份已变更",
+  "ssh.changedHost.description": "{endpoint}\n\n之前保存的 SHA256 指纹：\n{previous}\n\n新的 SHA256 指纹：\n{fingerprint}\n\n这可能表示服务器已更换，也可能有攻击者冒充主机。请通过可信渠道核对新指纹。更新将替换此主机保存的密钥；取消将保留原信任记录并拒绝连接。",
+  "ssh.changedHost.confirm": "更新密钥并连接",
   "ssh.ports.button": "端口",
   "ssh.ports.title": "SSH 端口转发",
   "ssh.ports.empty": "暂无端口转发",
