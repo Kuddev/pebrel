@@ -199,6 +199,10 @@
       "save_failed": "无法更改启动设置：{error}"
     },
     "agents": {
+      "resume_title": "自动接续附加参数",
+      "resume_description": "按 Agent 输入由字面参数组成的 JSON 数组，例如 [\"--flag\", \"value\"]。留空保持默认命令。保存后用于下次自动接续或重试，不重放命令历史。CMD 不支持包含双引号、% 或 ! 的参数。",
+      "resume_invalid": "请输入最多 32 个字符串组成的 JSON 数组，不包含控制字符（引用后最多 64 KiB）。",
+      "resume_failed": "无法保存接续参数：{error}",
       "title": "编程智能体",
       "description": "在 Pebrel 中显示运行状态、完成通知和授权请求。Claude Code 与 Codex 默认开启。",
       "refresh": "刷新",

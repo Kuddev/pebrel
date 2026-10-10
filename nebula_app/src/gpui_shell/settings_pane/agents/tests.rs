@@ -225,3 +225,6 @@ fn closing_settings_does_not_cancel_a_submitted_hook_write_or_reopen_the_view(
     window.run_until_parked();
     assert!(weak.upgrade().is_none());
 }
+
+#[path = "../agent_resume_tests.rs"]
+mod resume_tests;

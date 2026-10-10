@@ -192,6 +192,7 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(font_size_click_input_commits_cancels_and_bounds_values)"
                           " or test(cjk_dropdown_selection_preserves_the_english_font_chain)"
                           " or test(review_regression_font_fields_align_and_dropdown_toggles_with_search)"
+                          " or test(resume_arguments_save_reopen_reject_invalid_and_clear_through_real_controls)"
                           " or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)",
                 "test-group": "theme-studio",
             }, {

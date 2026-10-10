@@ -1250,6 +1250,107 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn configured_cold_resume_preserves_saved_identity_cwd_and_retries(cx: &mut TestAppContext) {
+    let cwd = tempfile::tempdir().unwrap();
+    let (view, window, receiver) = open_at(cx, Some(cwd.path().to_owned()));
+    let text = nebula_settings::apply_updates(
+        "resume_ai=1\n",
+        &[(
+            "agent_resume_args_codex",
+            r#"["--yolo", "--config", "model=a b;$(echo nope)", ""]"#.into(),
+        )],
+    );
+    window.update(|_, cx| {
+        let runtime = nebula_settings::RuntimeSettings::from_raw(
+            &nebula_settings::RawSettings::from_text(&text),
+        );
+        cx.set_global(Settings::load_with_runtime(nebula_settings::ThemeName::Nord, runtime));
+    });
+    view.update(window, |view, cx| {
+        let thread = "0199a213-c2a4-7cf5-8f6b-d746fbb6e86c";
+        let saved = crate::session::AgentSession {
+            source: "codex".into(),
+            session_id: Some("obsolete-hook-group".into()),
+            session_file: Some(format!("/sessions/rollout-date-{thread}.jsonl")),
+        };
+        view.exec_context = Some(crate::runtime_exec::PaneExecContext::from_pty_options(
+            &nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new("wsl.exe".into(), vec![])),
+                ..Default::default()
+            },
+        ));
+        let before_cwd = view.cwd.clone();
+        assert_eq!(before_cwd, cwd.path().to_string_lossy().into_owned());
+        view.restore_agent(saved, cx);
+        assert!(view.pending_shell_command.is_some());
+        assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+        let target = view.session_agent().unwrap();
+        assert_eq!(target.session_id.as_deref(), Some(thread));
+        let expected = format!("codex resume {thread} --yolo --config 'model=a b;$(echo nope)' ''");
+        assert_eq!(view.cwd, before_cwd);
+        feed(view, b"\x1b]133;A\x07user@host:~$ ");
+        view.flush_pending_shell_command(cx);
+        assert!(receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == expected.as_bytes())
+        }));
+        assert!(view.recovery_pending());
+        feed(view, expected.as_bytes());
+        view.flush_pending_runtime_submit(cx);
+        view.process_event(Event::CommandStart, cx);
+        feed(view, b"\r\nresume failed\r\n");
+        view.process_event(Event::CommandDone { exit_code: Some(1) }, cx);
+        feed(view, b"\x1b]133;A\x07user@host:~$ ");
+        assert!(view.can_retry_recovery());
+        view.retry_recovery(cx);
+        assert!(receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == expected.as_bytes())
+        }));
+        assert_eq!(view.session_agent(), Some(target));
+        assert_eq!(view.cwd, before_cwd);
+        feed(view, expected.as_bytes());
+        view.flush_pending_runtime_submit(cx);
+        view.process_event(Event::CommandStart, cx);
+        feed(view, b"\r\nresume failed\r\n");
+        view.process_event(Event::CommandDone { exit_code: Some(1) }, cx);
+        feed(view, b"\x1b]133;A\x07user@host:~$ ");
+        assert!(view.can_choose_recovery_session());
+        view.choose_recovery_session(cx);
+        let chooser = "codex resume --yolo --config 'model=a b;$(echo nope)' ''";
+        assert!(receiver.try_iter().any(|message| {
+            matches!(message, Msg::Input(bytes) if bytes.as_ref() == chooser.as_bytes())
+        }));
+    });
+}
+
+#[gpui::test]
+fn invalid_resume_arguments_fail_without_submitting_a_default_or_shell_expression(
+    cx: &mut TestAppContext,
+) {
+    let (view, window, receiver) = open(cx);
+    window.update(|_, cx| {
+        let raw =
+            nebula_settings::RawSettings::from_text("agent_resume_args_codex=--yolo; echo bad\n");
+        cx.set_global(Settings::load_with_runtime(
+            nebula_settings::ThemeName::Nord,
+            nebula_settings::RuntimeSettings::from_raw(&raw),
+        ));
+    });
+    view.update(window, |view, cx| {
+        let saved = crate::session::AgentSession {
+            source: "codex".into(),
+            session_id: Some("saved-conversation".into()),
+            session_file: None,
+        };
+        feed(view, b"\x1b]133;A\x07user@host:~$ ");
+        view.restore_agent(saved.clone(), cx);
+        assert!(view.can_retry_recovery());
+        assert!(view.pending_shell_command.is_none());
+        assert!(!receiver.try_iter().any(|message| matches!(message, Msg::Input(_))));
+        assert_eq!(view.session_agent(), Some(saved));
+    });
+}
+
+#[gpui::test]
 fn host_administrator_scope_excludes_remote_and_wsl_shells(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, _| {
