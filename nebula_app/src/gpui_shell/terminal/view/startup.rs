@@ -95,7 +95,7 @@ impl TerminalView {
             cell_width: (cell_w.as_f32() * scale).round().max(1.0) as u16,
             cell_height: (line_h.as_f32() * scale).round().max(1.0) as u16,
         };
-        let initial_cwd = match &launch {
+        let mut initial_cwd = match &launch {
             TerminalLaunch::Local { cwd, .. } => {
                 cwd.as_ref().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
             },
@@ -150,6 +150,9 @@ impl TerminalView {
                     },
                 );
                 let options = session::local_options(spawn_shell, pane_id, cwd);
+                if let Some(cwd) = &options.working_directory {
+                    initial_cwd = cwd.to_string_lossy().into_owned();
+                }
                 let history_cwd = startup_history_directory(&options, &suggest_env);
                 completion_cwd = history_cwd
                     .as_ref()
