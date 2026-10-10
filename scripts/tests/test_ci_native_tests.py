@@ -192,7 +192,9 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(font_size_click_input_commits_cancels_and_bounds_values)"
                           " or test(cjk_dropdown_selection_preserves_the_english_font_chain)"
                           " or test(review_regression_font_fields_align_and_dropdown_toggles_with_search)"
-                          " or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)",
+                          " or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)"
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_reuses_window_and_preserves_each_program_and_directory)"
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)",
                 "test-group": "theme-studio",
             }, {
                 "filter": "test(=gpui_shell::terminal::view::startup_tests::"
@@ -219,6 +221,14 @@ class NativeSuiteTests(unittest.TestCase):
             "completion_capsules_keep_all_chinese_choices_at_large_font_size",
         ):
             self.assertIn(f"fn {name}(", segmented)
+
+        # 新夹具同样会写共享设置；只加入这两个真实函数，不放宽其它测试的调度。
+        elevated = (root / "nebula_app/src/gpui_shell/workspace/windowing/elevated_launch.rs").read_text(encoding="utf-8")
+        for name in (
+            "elevated_launch_reuses_window_and_preserves_each_program_and_directory",
+            "elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs",
+        ):
+            self.assertIn(f"fn {name}(", elevated)
 
     def test_native_caches_are_default_branch_snapshots_not_per_pr_uploads(self):
         root = Path(__file__).resolve().parents[2]
