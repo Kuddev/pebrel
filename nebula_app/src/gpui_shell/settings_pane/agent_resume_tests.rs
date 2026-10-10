@@ -16,7 +16,12 @@ fn click(selector: &'static str, cx: &mut VisualTestContext) {
 
 fn edit_input(selector: &'static str, value: &str, cx: &mut VisualTestContext) {
     click(selector, cx);
-    cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-a" } else { "ctrl-a" });
+    let select_all = if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    };
+    cx.simulate_keystrokes(select_all);
     cx.simulate_input(value);
     draw(cx);
 }
