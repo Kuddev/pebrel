@@ -77,7 +77,7 @@ mod tests {
     }
 
     fn deliver(request: Request, cx: &mut App) -> Result<(), String> {
-        let (request, mut reply) = Dispatch::new(request);
+        let (request, reply) = Dispatch::new(request);
         dispatch_shell_events(vec![GpuiShellEvent::ElevatedLaunch(request)], cx);
         reply.try_recv().unwrap()
     }

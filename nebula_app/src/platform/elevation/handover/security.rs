@@ -1,4 +1,4 @@
-//! 原生管道身份验证：PID 来自内核，角色、用户及登录会话来自进程令牌。
+//! 管理员接收窗口的身份与命名互斥量；窗口 PID 来自内核，身份来自进程令牌。
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -6,8 +6,7 @@ use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 
-use tokio::net::windows::named_pipe::{NamedPipeClient, NamedPipeServer, ServerOptions};
-use windows_sys::Win32::Foundation::{HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -15,10 +14,11 @@ use windows_sys::Win32::Security::{
     GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS,
     TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenSessionId, TokenUser,
 };
-use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateMutexW, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 #[derive(Clone, Debug)]
 pub(super) struct Identity {
@@ -83,14 +83,14 @@ impl Identity {
         self.elevated && peer.elevated && self.user == peer.user && self.session == peer.session
     }
 
-    pub(super) fn pipe_name(&self, config_file: Option<&Path>) -> io::Result<String> {
+    pub(super) fn endpoint_name(&self, config_file: Option<&Path>) -> io::Result<String> {
         let mut scope = DefaultHasher::new();
         // 同一程序/数据目录才共享窗口，隔离开发构建、便携目录和显式配置文件。
         std::env::current_exe()?.canonicalize()?.hash(&mut scope);
         std::path::absolute(nebula_settings::settings_dir())?.hash(&mut scope);
         config_file.map(std::path::absolute).transpose()?.hash(&mut scope);
         Ok(format!(
-            r"\\.\pipe\Pebrel.elevated-launch.v1.{}.{}.{:016x}",
+            "Pebrel.elevated-launch.v2.{}.{}.{:016x}",
             self.user,
             self.session,
             scope.finish()
@@ -120,10 +120,11 @@ fn token_value<T: Copy>(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Re
     }
 }
 
-pub(super) fn create_server(name: &str) -> io::Result<NamedPipeServer> {
-    // 默认命名管道允许 Everyone 读取；显式管理员 DACL 和高完整性读写限制排除该默认值。
+pub(super) fn acquire_owner(name: &str) -> io::Result<Option<OwnedHandle>> {
+    // 命名对象只供管理员/SYSTEM 使用；句柄随接收线程存活，不依赖托盘或真实终端窗口。
     let sddl: Vec<u16> = "D:P(A;;GA;;;SY)(A;;GA;;;BA)S:(ML;;NWNR;;;HI)\0".encode_utf16().collect();
-    // SAFETY: 描述符由 LocalFree 释放；CreateNamedPipe 在返回前复制安全属性。
+    let name: Vec<u16> = format!("Local\\{name}\0").encode_utf16().collect();
+    // SAFETY: 描述符由 LocalFree 释放；CreateMutexW 在返回前复制安全属性。
     unsafe {
         let mut descriptor = std::ptr::null_mut();
         if ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -135,54 +136,48 @@ pub(super) fn create_server(name: &str) -> io::Result<NamedPipeServer> {
         {
             return Err(io::Error::last_os_error());
         }
-        let mut attributes = SECURITY_ATTRIBUTES {
+        let attributes = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor,
             bInheritHandle: 0,
         };
-        let result = ServerOptions::new()
-            .first_pipe_instance(true)
-            .max_instances(1)
-            .reject_remote_clients(true)
-            .in_buffer_size(4096)
-            .out_buffer_size(4096)
-            .create_with_security_attributes_raw(
-                name,
-                (&mut attributes as *mut SECURITY_ATTRIBUTES).cast(),
-            );
+        // 只以命名对象是否已存在选出拥有者，不等待互斥锁，也不跨线程转移锁的持有权。
+        windows_sys::Win32::Foundation::SetLastError(0);
+        let handle = CreateMutexW(&attributes, 0, name.as_ptr());
+        let error = GetLastError();
         LocalFree(descriptor);
-        result
+        if handle.is_null() {
+            return Err(io::Error::from_raw_os_error(error as i32));
+        }
+        let handle = OwnedHandle::from_raw_handle(handle);
+        Ok((error != ERROR_ALREADY_EXISTS).then_some(handle))
     }
 }
 
-pub(super) fn verify_server(pipe: &NamedPipeClient, identity: &Identity) -> io::Result<u32> {
-    verify_peer(pipe.as_raw_handle(), identity, false)
-}
-
-pub(super) fn verify_client(pipe: &NamedPipeServer, identity: &Identity) -> io::Result<()> {
-    verify_peer(pipe.as_raw_handle(), identity, true).map(|_| ())
-}
-
-fn verify_peer(pipe: HANDLE, identity: &Identity, server_side: bool) -> io::Result<u32> {
+pub(super) fn verify_window(window: HWND, identity: &Identity) -> io::Result<u32> {
     let mut pid = 0;
-    // SAFETY: pipe 是仍存活的 Tokio 管道句柄，PID 写入有效的局部变量。
-    let ok = unsafe {
-        if server_side {
-            GetNamedPipeClientProcessId(pipe, &mut pid)
-        } else {
-            GetNamedPipeServerProcessId(pipe, &mut pid)
-        }
-    };
-    if ok == 0 {
+    // SAFETY: Windows 验证 HWND；不把请求中的 PID 或可伪造的 wParam 当成接收端身份。
+    if unsafe { GetWindowThreadProcessId(window, &mut pid) } == 0 {
         return Err(io::Error::last_os_error());
     }
     if !identity.permits(&Identity::for_process(pid)?) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "elevated launch peer identity mismatch",
+            "elevated launch window identity mismatch",
         ));
     }
     Ok(pid)
+}
+
+pub(super) fn sender_lifetime(pid: u32) -> io::Result<OwnedHandle> {
+    // 请求 PID 仅用于检测启动器退出，不作为发送者认证；管理员窗口保留系统默认 UIPI。
+    // SAFETY: 句柄仅用于等待进程退出，立即交给 OwnedHandle 释放。
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+    }
 }
 
 #[cfg(test)]

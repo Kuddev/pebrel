@@ -3,18 +3,19 @@
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub(crate) use windows::start_or_forward;
+pub(crate) use windows::{Server, start_or_forward};
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use crate::config::ui_config::Program;
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
 
 type Reply = Result<(), String>;
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -46,16 +47,22 @@ impl Request {
 pub(crate) struct Dispatch {
     request: Request,
     pending: AtomicBool,
-    reply: Mutex<Option<oneshot::Sender<Reply>>>,
+    deadline: Instant,
+    reply: Mutex<Option<mpsc::Sender<Reply>>>,
 }
 
 impl Dispatch {
-    pub(crate) fn new(request: Request) -> (Arc<Self>, oneshot::Receiver<Reply>) {
-        let (sender, receiver) = oneshot::channel();
+    pub(crate) fn new(request: Request) -> (Arc<Self>, mpsc::Receiver<Reply>) {
+        Self::with_timeout(request, STARTUP_TIMEOUT)
+    }
+
+    fn with_timeout(request: Request, timeout: Duration) -> (Arc<Self>, mpsc::Receiver<Reply>) {
+        let (sender, receiver) = mpsc::channel();
         (
             Arc::new(Self {
                 request,
                 pending: AtomicBool::new(true),
+                deadline: Instant::now() + timeout,
                 reply: Mutex::new(Some(sender)),
             }),
             receiver,
@@ -63,6 +70,11 @@ impl Dispatch {
     }
 
     pub(crate) fn run(&self, operation: impl FnOnce(&Request) -> Reply) {
+        // 原生接收器与 UI 分属线程；在真正领取事件前核对期限，避免超时后的迟到标签。
+        if Instant::now() >= self.deadline {
+            self.cancel();
+            return;
+        }
         if self.pending.swap(false, Ordering::AcqRel) {
             let result = operation(&self.request);
             if let Some(reply) = self.reply.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -72,7 +84,10 @@ impl Dispatch {
     }
 
     fn cancel(&self) {
-        self.pending.store(false, Ordering::Release);
+        if self.pending.swap(false, Ordering::AcqRel) {
+            // 关闭待执行事件的回执端，同时唤醒正等待 UI 的原生接收线程。
+            self.reply.lock().unwrap_or_else(|e| e.into_inner()).take();
+        }
     }
 }
 
@@ -81,16 +96,8 @@ pub(crate) enum Startup {
     Forwarded,
 }
 
-/// 一个管理员进程只拥有一个休眠中的管道任务；App 退出时唤醒并释放原生句柄。
-pub(crate) struct Server(Option<oneshot::Sender<()>>);
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        if let Some(stop) = self.0.take() {
-            let _ = stop.send(());
-        }
-    }
-}
+#[cfg(not(windows))]
+pub(crate) struct Server;
 
 #[cfg(not(windows))]
 pub(crate) fn start_or_forward(
