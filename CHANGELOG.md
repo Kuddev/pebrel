@@ -4,22 +4,6 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
-## 2.2.3 - 2026-10-10
-
-### English
-
-#### Fixed
-
-- Fixed tab tear-out being unreachable when the window filled the screen, most visibly with left-sidebar tabs. Holding Alt while dragging a tab and releasing now tears it into a standalone new window from anywhere inside the window. The sidebar tear-out previously only triggered when the cursor left the window bounds, which a maximized single-screen window never allows. Addresses [#572](https://github.com/Kuddev/pebrel/issues/572).
-- Fixed drag releases that land outside the source window being silently dropped: releasing a dragged tab over another Pebrel window now merges it there, with a live dock preview in the target window while hovering, and releasing past the window edge again tears the tab into a new window. Addresses [#572](https://github.com/Kuddev/pebrel/issues/572).
-
-### 中文
-
-#### 修复
-
-- 修复窗口铺满屏幕时（尤其是左侧栏标签模式）标签无法撕出的问题。拖动标签时按住 Alt 再松手，现在可从窗口内任意位置把标签撕成独立新窗口。此前侧栏撕出只在光标移出窗口边界时触发，而最大化的单屏窗口无法让光标移出。对应 [#572](https://github.com/Kuddev/pebrel/issues/572)。
-- 修复落在源窗口之外的拖拽释放被静默丢弃的问题：把标签拖到另一个 Pebrel 窗口上松手现在会合并进该窗口，悬停期间目标窗口实时显示 dock 高亮预览；向窗口边缘外拖出松手也恢复为撕出新窗口。对应 [#572](https://github.com/Kuddev/pebrel/issues/572)。
-
 ## 2.2.0 - 2026-10-08
 
 ### English
