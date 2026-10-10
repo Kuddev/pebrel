@@ -6,6 +6,18 @@ pub(crate) fn report_error(error: &dyn std::fmt::Display, gui_launch: bool) {
     let _ = (error, gui_launch);
 }
 
+/// 两种权限的重复启动共用目录优先级，进程 cwd 不覆盖显式目录或用户设置。
+pub(crate) fn resident_launch_directory(
+    explicit: Option<std::path::PathBuf>,
+    settings: &nebula_settings::RuntimeSettings,
+) -> Option<std::path::PathBuf> {
+    explicit
+        .or_else(|| settings.startup_directory_path())
+        .or_else(|| std::env::current_dir().ok())
+        .filter(|path| path.is_dir())
+        .and_then(|path| std::path::absolute(path).ok())
+}
+
 #[cfg(windows)]
 mod console;
 #[cfg(feature = "gpui-shell")]

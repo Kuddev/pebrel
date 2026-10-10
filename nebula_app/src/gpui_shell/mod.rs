@@ -74,6 +74,7 @@ pub(crate) enum GpuiShellEvent {
     UpdateAvailable(crate::update_check::UpdateCheckResult),
     SshPrompt(std::sync::Arc<crate::ssh_prompt::Prompt>),
     OpenDirectories(Vec<String>),
+    ElevatedLaunch(std::sync::Arc<crate::platform::elevation::handover::Dispatch>),
 }
 
 /// 在当前线程启动 GPUI 运行时并打开主窗口，阻塞直至 UI 退出。
@@ -104,6 +105,33 @@ pub fn run_shell(
         return;
     }
     let (shell_tx, shell_rx) = std::sync::mpsc::channel();
+    let _elevated_handover = if crate::platform::elevation::is_elevated().is_ok_and(|value| value) {
+        use crate::platform::elevation::handover::{Request, Startup, start_or_forward};
+        let settings = nebula_settings::RuntimeSettings::load();
+        let request = Request {
+            cwd: crate::platform::startup::resident_launch_directory(
+                initial_cwd.clone(),
+                &settings,
+            ),
+            command: initial_command.clone(),
+            shell_id: shell_id.clone(),
+        };
+        let sender = shell_tx.clone();
+        // 在托盘、Hook 和 Runtime 创建前决定唯一管理员拥有者，不复用普通实例的端口。
+        match start_or_forward(request, config_file.as_deref(), move |request| {
+            sender.send(GpuiShellEvent::ElevatedLaunch(request)).is_ok()
+        }) {
+            Ok(Startup::Resident(server)) => Some(server),
+            Ok(Startup::Forwarded) => return,
+            Err(error) => {
+                log::error!("Elevated launch handover failed: {error}");
+                crate::platform::startup::report_error(&error, true);
+                return;
+            },
+        }
+    } else {
+        None
+    };
     let open_urls_tx = shell_tx.clone();
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::ssh_prompt::install({

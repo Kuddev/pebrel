@@ -15,6 +15,7 @@
 ))]
 compile_error!(r#"at least one of the "x11"/"wayland" features must be enabled"#);
 
+#[cfg(feature = "legacy-shell")]
 use std::env;
 use std::error::Error;
 use std::fmt::Write as _;
@@ -581,13 +582,7 @@ fn resident_launch_directory(
     options: &cli::TerminalOptions,
     settings: &nebula_settings::RuntimeSettings,
 ) -> Option<std::path::PathBuf> {
-    // 进程 cwd 只是缺省值，不能在交接前把它提升成覆盖用户设置的显式目录。
-    options
-        .resolved_working_directory()
-        .or_else(|| settings.startup_directory_path())
-        .or_else(|| env::current_dir().ok())
-        .filter(|path| path.is_dir())
-        .and_then(|path| std::path::absolute(path).ok())
+    platform::startup::resident_launch_directory(options.resolved_working_directory(), settings)
 }
 
 #[cfg(test)]
