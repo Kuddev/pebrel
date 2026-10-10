@@ -38,6 +38,11 @@
       "save_failed": "Could not save cursor motion: {error}"
     },
     "scrolling": {
+      "scrollbar": "Scrollbar visibility",
+      "scrollbar_auto": "Auto-hide",
+      "scrollbar_hover": "On hover",
+      "scrollbar_always": "Always",
+      "scrollbar_description": "Auto-hide shows while scrolled into history. Hover shows at the right edge; always shows whenever history exists.",
       "history": "Scrollback lines",
       "history_description": "History lines retained per terminal. Applies to new terminals only.",
       "speed": "Scrolling speed",

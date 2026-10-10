@@ -175,6 +175,13 @@ impl SettingsPane {
             window,
             cx,
         );
+        add_select(
+            "scrollbar_visibility",
+            nebula_settings::ScrollbarVisibility::VALUES,
+            runtime.scrollbar_visibility.settings_value(),
+            window,
+            cx,
+        );
         // 文案照抄旧壳 `accept_label` / `completion_style_label`。
         add_select(
             "bell",
