@@ -117,13 +117,11 @@ fn cleared_shortcut_reaches_terminal_and_can_be_restored_without_restart() {
 }
 
 #[test]
-fn stale_bare_key_removal_unbinds_the_action_instead_of_swallowing_the_key() {
+fn stale_bare_key_removal_releases_the_key_instead_of_swallowing_it() {
     use crate::config::Action;
     use gpui::{KeyContext, Keymap, Keystroke};
-    // Binding a bare `enter` to a workspace action and then removing it must
-    // hand the key back to the terminal: the undo replays through
-    // `stale_removal_bindings`, whose `Unbind(action)` drops the interception
-    // instead of leaving a `NoAction` in the keymap that eats the key.
+    // Removing a user binding hands Enter back to the terminal without leaving
+    // a null or an old action behind.
     let original = custom_workspace_binding("enter", &Action::ToggleFullscreen).unwrap();
     let terminal_scope = workspace_binding_in_context(
         "enter",
@@ -131,16 +129,72 @@ fn stale_bare_key_removal_unbinds_the_action_instead_of_swallowing_the_key() {
         Some(crate::gpui_shell::terminal::KEY_CONTEXT),
     )
     .unwrap();
-    let action_name = original.action().name().to_owned();
-    let mut keymap = Keymap::new(vec![original, terminal_scope]);
+    let mut keymap =
+        Keymap::new(with_user_keybindings(&Keymap::default(), vec![original, terminal_scope]));
     let contexts = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
     let input = [Keystroke::parse("enter").unwrap()];
     let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
     assert!(!bindings.is_empty(), "while bound, the action owns enter");
 
-    keymap.add_bindings(stale_removal_bindings("enter", &action_name));
+    keymap = Keymap::new(with_user_keybindings(&keymap, Vec::new()));
     let (bindings, _) = keymap.bindings_for_input(&input, &contexts);
     assert!(bindings.is_empty(), "after removal enter is plain input again");
+}
+
+#[test]
+fn replacing_overrides_preserves_component_keys_and_foreign_registrations() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let input_context = [KeyContext::parse("Root").unwrap(), KeyContext::parse("Input").unwrap()];
+    let terminal_context = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    let key = [Keystroke::parse("ctrl-v").unwrap()];
+    let mut base = default_workspace_bindings();
+    base.push(KeyBinding::new("ctrl-v", gpui_component::input::Paste, Some("Input")));
+    let mut keymap = Keymap::new(base);
+    let nulls = || {
+        vec![
+            workspace_binding_in_context("ctrl+v", &crate::config::Action::ReceiveChar, None)
+                .unwrap(),
+        ]
+    };
+    keymap = Keymap::new(with_user_keybindings(&keymap, nulls()));
+    // A control registering after the user source must survive future replacements.
+    keymap.add_bindings([
+        KeyBinding::new("f12", ToggleZoom, Some("OtherControl")),
+        KeyBinding::new("f11", gpui::NoAction, Some("OtherControl")),
+    ]);
+    let expected = keymap.bindings().len();
+    for _ in 0..50 {
+        keymap = Keymap::new(with_user_keybindings(&keymap, nulls()));
+        assert_eq!(keymap.bindings().len(), expected, "updates replace rather than accumulate");
+        let (bindings, _) = keymap.bindings_for_input(&key, &input_context);
+        assert!(bindings[0].action().as_any().is::<gpui_component::input::Paste>());
+        let (bindings, _) = keymap.bindings_for_input(&key, &terminal_context);
+        assert!(bindings.is_empty(), "cleared terminal paste is still disabled");
+    }
+    keymap = Keymap::new(with_user_keybindings(&keymap, Vec::new()));
+    assert_eq!(keymap.bindings().len(), expected - 1);
+    let (bindings, _) = keymap.bindings_for_input(&key, &terminal_context);
+    assert!(bindings[0].action().as_any().is::<PasteClipboard>());
+    let (bindings, _) = keymap.bindings_for_input(
+        &[Keystroke::parse("f12").unwrap()],
+        &[KeyContext::parse("OtherControl").unwrap()],
+    );
+    assert!(bindings[0].action().as_any().is::<ToggleZoom>());
+    assert!(
+        keymap.bindings().any(|binding| binding.action().as_any().is::<gpui::NoAction>()),
+        "another control's null must not be removed"
+    );
+
+    // Explicitly binding a workspace action retains its established precedence;
+    // protecting native input from nulls does not silently rewrite that request.
+    keymap = Keymap::new(with_user_keybindings(
+        &keymap,
+        vec![
+            custom_workspace_binding("ctrl+v", &crate::config::Action::ToggleShellPicker).unwrap(),
+        ],
+    ));
+    let (bindings, _) = keymap.bindings_for_input(&key, &input_context);
+    assert!(bindings[0].action().as_any().is::<ToggleShellPicker>());
 }
 
 #[cfg(feature = "gpui-test-support")]
@@ -242,6 +296,126 @@ mod dispatch {
             crate::platform::Platform::current() == crate::platform::Platform::MacOS,
             "共享别名表只应在 macOS 注册原生命令键"
         );
+    }
+
+    fn paste_in_command_dialog(raw: Vec<(String, String)>, restore: bool, cx: &mut TestAppContext) {
+        // Mouse events can render another frame. Keep the entry animation from
+        // moving Save away from its sampled bounds on slower native CI runners.
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        workspace.update(&mut cx, |workspace, cx| {
+            workspace.saved_commands = crate::saved_commands::SavedCommands::load_from(
+                &directory.path().join("commands.json"),
+            )
+            .unwrap();
+            workspace.update_keybinds(raw.clone(), cx);
+            if restore {
+                workspace.update_keybinds(Vec::new(), cx);
+            }
+        });
+        workspace.update_in(&mut cx, |workspace, window, cx| {
+            workspace.toggle_command_manager(window, cx);
+        });
+        let native = if cfg!(target_os = "macos") { "cmd-v" } else { "ctrl-v" };
+        for (index, shortcut) in [native, "ctrl-shift-v"].into_iter().enumerate() {
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            let add = cx.debug_bounds("saved-command-add").unwrap();
+            cx.simulate_click(add.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            let name = format!("Paste fixture {index}");
+            let command = format!("echo fixture_{index}\necho second_line");
+            cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(name.clone())));
+            press(shortcut, &mut cx);
+            press("tab", &mut cx);
+            cx.update(|_, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.clone()))
+            });
+            press(shortcut, &mut cx);
+            cx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            let save = cx.debug_bounds("saved-command-save").unwrap();
+            cx.simulate_click(save.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            workspace.read_with(&cx, |workspace, _| {
+                assert_eq!(
+                    workspace.saved_commands.commands().len(),
+                    index + 1,
+                    "{shortcut} must populate both real dialog inputs before Save"
+                );
+                assert_eq!(workspace.saved_commands.commands()[index].name, name);
+                assert_eq!(workspace.saved_commands.commands()[index].command, command);
+                assert!(workspace.tabs.is_empty(), "paste must not create or target a terminal");
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn default_command_dialog_paste_reaches_both_inputs(cx: &mut TestAppContext) {
+        paste_in_command_dialog(Vec::new(), false, cx);
+    }
+
+    #[gpui::test]
+    fn remapped_terminal_paste_keeps_command_dialog_paste(cx: &mut TestAppContext) {
+        paste_in_command_dialog(reported_paste_overrides(), false, cx);
+    }
+
+    #[gpui::test]
+    fn restored_terminal_paste_keeps_command_dialog_paste_without_restart(cx: &mut TestAppContext) {
+        paste_in_command_dialog(reported_paste_overrides(), true, cx);
+    }
+
+    #[gpui::test]
+    fn disabled_terminal_paste_keeps_command_dialog_paste(cx: &mut TestAppContext) {
+        let mut raw = reported_paste_overrides();
+        raw.retain(|(_, action)| action == "ReceiveChar");
+        for (_, action) in &mut raw {
+            *action = "None".into();
+        }
+        paste_in_command_dialog(raw, false, cx);
+    }
+
+    #[gpui::test]
+    fn override_updates_from_either_window_do_not_accumulate_old_rules(cx: &mut TestAppContext) {
+        let (_first_dir, first, mut first_cx) = open_workspace(1, cx);
+        let (_second_dir, second, mut second_cx) = open_workspace(1, cx);
+        let baseline = first_cx.update(|_, cx| cx.key_bindings().borrow().bindings().len());
+        for _ in 0..5 {
+            first.update(&mut first_cx, |workspace, cx| {
+                workspace.update_keybinds(vec![("ctrl+k".into(), "ReceiveChar".into())], cx);
+            });
+            press("ctrl-k", &mut second_cx);
+            assert!(!second.read_with(&second_cx, |workspace, _| workspace.shell_picker_open));
+            second
+                .update(&mut second_cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
+            press("ctrl-k", &mut first_cx);
+            assert!(first.read_with(&first_cx, |workspace, _| workspace.shell_picker_open));
+            press("escape", &mut first_cx);
+            assert_eq!(
+                first_cx.update(|_, cx| cx.key_bindings().borrow().bindings().len()),
+                baseline
+            );
+        }
+    }
+
+    fn reported_paste_overrides() -> Vec<(String, String)> {
+        // config::platform_key_bindings is empty under cfg(test), so rebind_action
+        // cannot reproduce Windows' saved removal rows here. Use the persisted
+        // form reported by the user, plus the equivalent native macOS shortcut.
+        let mut raw = vec![
+            ("ctrl+v".into(), "ReceiveChar".into()),
+            ("ctrl+shift+v".into(), "ReceiveChar".into()),
+            ("ctrl+alt+v".into(), "Paste".into()),
+        ];
+        if cfg!(target_os = "macos") {
+            raw.push(("cmd+v".into(), "ReceiveChar".into()));
+        }
+        raw
     }
 
     #[gpui::test]
