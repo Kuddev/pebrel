@@ -3,7 +3,7 @@
 //! 左侧栏和顶部栏共享同一套存储顺序与 dock 语义；差别只有列表轴和每格
 //! 步距，因此拖拽状态捕获这两个量，而不是复制两套状态机。
 
-use gpui::{Context, MouseButton, Pixels, Point, Window, px};
+use gpui::{Context, MouseButton, Pixels, Point, Styled as _, Window, px};
 use nebula_split::{SplitNav, SplitTree};
 
 use super::{
@@ -31,6 +31,9 @@ pub(super) struct TabDrag {
     pub(super) pitch: f32,
     pub(super) offset: f32,
     pub(super) active: bool,
+    /// Alt 撕出意图锁存：拖拽期间只要观察到一次 Alt 即置位，直到手势结束。
+    /// 松手瞬间用户可能已经松开 Alt，锁存保证撕出意图不依赖那一刻的修饰键采样。
+    pub(super) force_tear_out: bool,
     pub(super) dock: Option<DockTarget>,
 }
 
@@ -69,14 +72,28 @@ impl NebulaWorkspace {
     pub(super) fn release_tab_drag_at(
         &mut self,
         position: Point<Pixels>,
+        force_tear_out: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if self.tab_drag.is_none() {
             return false;
         }
-        self.update_tab_drag_position(f32::from(position.x), f32::from(position.y), cx);
+        // 松手那一刻的 Alt 可能已被用户松开；拖拽期间锁存的撕出意图同样生效。
+        let force_tear_out =
+            force_tear_out || self.tab_drag.as_ref().is_some_and(|drag| drag.force_tear_out);
+        self.update_tab_drag_position(
+            f32::from(position.x),
+            f32::from(position.y),
+            force_tear_out,
+            cx,
+        );
         let active = self.tab_drag.as_ref().is_some_and(|drag| drag.active);
+        // Alt 强制撕出（含拖拽期间锁存）：优先于 dock 并入与跨窗合并，因此在
+        // 最大化/铺满单屏、光标无法移出 viewport 时也能把标签撕成独立新窗口。
+        if active && force_tear_out && self.tear_out_active_tab_drag(cx) {
+            return true;
+        }
         let destination = active.then(|| self.update_cross_window_drag_target(cx)).flatten();
         if let Some(destination) = destination {
             let drag = self.tab_drag.take().expect("active drag checked above");
@@ -95,20 +112,87 @@ impl NebulaWorkspace {
             || position.y < px(0.0)
             || position.x > viewport.width
             || position.y > viewport.height;
-        if active && outside {
-            if let Some(drag) = self.tab_drag.take() {
-                windowing::clear_cross_window_drag_target(drag.cross_window_target, cx);
-                if let Some(payload) = drag.cross_window {
-                    cx.defer(move |cx| windowing::move_tab_to_new_window(payload, cx));
-                } else {
-                    self.schedule_move_tab_to_new_window(drag.source, cx);
-                }
-                cx.notify();
-                return true;
-            }
+        if active && outside && self.tear_out_active_tab_drag(cx) {
+            return true;
         }
         self.release_tab_drag(window, cx);
         active
+    }
+
+    /// 窗口级裸释放/移动监听（canvas 作为 paint 钩子注册 `Window::on_mouse_event`）：
+    /// Windows 拖拽期间源窗口持有 OS capture，指针移到其它窗口后事件坐标落在
+    /// viewport 之外，而根 capture 与罩层 on_mouse_up 都带 `hitbox.is_hovered`
+    /// 门控，此时全部不触发——跨窗合并与「拖出窗口外撕出」恰好都在这个位置
+    /// 松手（#572 真机 trace 的「activated 后无任何 release 行」即此形状）。
+    /// 裸监听不进门控：窗外 move 继续喂状态机（跨窗 dock 预览、Alt 锁存），
+    /// Left mouse-up 一律交给 release_tab_drag_at——状态已被门控路径结算时
+    /// 为空操作，谁先到谁结算。
+    pub(super) fn render_tab_drag_global_capture(
+        &self,
+        cx: &Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let entity = cx.entity().downgrade();
+        gpui::canvas(
+            |_, _, _| (),
+            move |_, _, window, cx| {
+                let Some(workspace) = entity.upgrade() else { return };
+                if workspace.read(cx).tab_drag.is_none() {
+                    return;
+                }
+                let moves = entity.clone();
+                window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+                    if phase != gpui::DispatchPhase::Capture {
+                        return;
+                    }
+                    let viewport = window.viewport_size();
+                    let outside = event.position.x < gpui::px(0.0)
+                        || event.position.y < gpui::px(0.0)
+                        || event.position.x > viewport.width
+                        || event.position.y > viewport.height;
+                    if !outside {
+                        return;
+                    }
+                    let Some(workspace) = moves.upgrade() else { return };
+                    workspace.update(cx, |this, cx| this.update_tab_drag(event, window, cx));
+                });
+                let ups = entity.clone();
+                window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
+                    if phase != gpui::DispatchPhase::Capture
+                        || event.button != gpui::MouseButton::Left
+                    {
+                        return;
+                    }
+                    let Some(workspace) = ups.upgrade() else { return };
+                    workspace.update(cx, |this, cx| {
+                        if this.tab_drag.is_none() {
+                            return;
+                        }
+                        if this.release_tab_drag_at(event.position, event.modifiers.alt, window, cx)
+                        {
+                            cx.stop_propagation();
+                        }
+                    });
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// 把当前已激活的 tab 拖拽撕出成独立新窗口：终端 tab 走手势开始时冻结的
+    /// 跨窗 payload，其它 tab 按源下标延迟移出。调用前须确认拖拽已激活。
+    fn tear_out_active_tab_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(drag) = self.tab_drag.take() else {
+            return false;
+        };
+        windowing::clear_cross_window_drag_target(drag.cross_window_target, cx);
+        if let Some(payload) = drag.cross_window {
+            cx.defer(move |cx| windowing::move_tab_to_new_window(payload, cx));
+        } else {
+            self.schedule_move_tab_to_new_window(drag.source, cx);
+        }
+        cx.notify();
+        true
     }
 
     /// 源下标加单轴位移换算出的整槽数；越过半格即换位。
@@ -127,10 +211,37 @@ impl NebulaWorkspace {
             return;
         }
         if event.pressed_button != Some(MouseButton::Left) {
-            self.finish_tab_drag(window, cx);
+            // Windows 的非客户区移动（WM_NCMOUSEMOVE：窗口边框、标题栏条带）由
+            // gpui_windows 合成为 pressed_button=None 的 MouseMoveEvent
+            // （handle_nc_mouse_move_msg）。已激活的拖拽不能把它当松手，否则
+            // 拖向窗口边缘时手势被静默清掉、锁存意图丢失，松手无事发生
+            // （Issue #572 真机现场）。真正的结束由根节点 capture 的 mouse-up
+            // 负责——非客户区松手同样以标准 MouseUpEvent 到达。待命状态仍在此
+            // 清理，避免 up 丢失后残留。
+            if !self.tab_drag.as_ref().is_some_and(|drag| drag.active) {
+                self.finish_tab_drag(window, cx);
+            }
             return;
         }
-        self.update_tab_drag_position(f32::from(event.position.x), f32::from(event.position.y), cx);
+        // 拖拽期间观察到 Alt 即锁存撕出意图；松手时不再依赖当次事件的修饰键。
+        if event.modifiers.alt {
+            if let Some(drag) = self.tab_drag.as_mut() {
+                drag.force_tear_out = true;
+            }
+        }
+        let force_tear_out = self.tab_drag.as_ref().is_some_and(|drag| drag.force_tear_out);
+        self.update_tab_drag_position(
+            f32::from(event.position.x),
+            f32::from(event.position.y),
+            force_tear_out,
+            cx,
+        );
+        // Alt 期间直接撕出，不再求 dock/跨窗目标：清掉可能残留的跨窗预览并
+        // 跳过自动滚动，让罩层只按位移呈现，与松手撕出的结果保持一致。
+        if force_tear_out {
+            self.clear_tab_drag_cross_window_target(cx);
+            return;
+        }
         let cross_window_target = self.update_cross_window_drag_target(cx).is_some();
         // 拖到 tab 视口边缘就自动滚（仅顶栏模式且真的溢出时生效）。放在位移
         // 换算之后：让位槽位仍按存储顺序算，滚动只改可视窗口。
@@ -141,6 +252,17 @@ impl NebulaWorkspace {
                 .is_some_and(|drag| drag.active && drag.axis == TabDragAxis::Horizontal)
         {
             self.autoscroll_top_tabs_for_drag(f32::from(event.position.x), window, cx);
+        }
+    }
+
+    /// 清掉 Alt 撕出手势期间残留的跨窗 drop 预览，避免目标窗口闪高亮。
+    fn clear_tab_drag_cross_window_target(&mut self, cx: &mut Context<Self>) {
+        let previous = self.tab_drag.as_ref().and_then(|drag| drag.cross_window_target);
+        if previous.is_some() {
+            windowing::clear_cross_window_drag_target(previous, cx);
+            if let Some(drag) = self.tab_drag.as_mut() {
+                drag.cross_window_target = None;
+            }
         }
     }
 
@@ -159,12 +281,24 @@ impl NebulaWorkspace {
         destination
     }
 
-    fn update_tab_drag_position(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
+    fn update_tab_drag_position(
+        &mut self,
+        x: f32,
+        y: f32,
+        force_tear_out: bool,
+        cx: &mut Context<Self>,
+    ) {
         let len = self.tabs.len();
         // dock 必须在可变借用 drag 前计算；只有两个 Terminal tab 之间允许。
+        // Alt 强制撕出时跳过 dock 求解，避免显示会被撕出覆盖的并入预览。
         let source = self.tab_drag.as_ref().map(|drag| drag.source);
-        let dock =
-            source.filter(|&source| self.dock_allowed(source)).and_then(|_| self.dock_nav_at(x, y));
+        let dock = (!force_tear_out)
+            .then(|| {
+                source
+                    .filter(|&source| self.dock_allowed(source))
+                    .and_then(|_| self.dock_nav_at(x, y))
+            })
+            .flatten();
         let drag = self.tab_drag.as_mut().expect("checked above");
         let dx = x - drag.press_x;
         let dy = y - drag.press_y;
