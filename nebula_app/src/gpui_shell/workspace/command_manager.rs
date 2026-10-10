@@ -5,6 +5,8 @@
 
 use super::*;
 mod groups;
+#[cfg(all(test, feature = "gpui-test-support", target_os = "windows"))]
+mod native_paste_tests;
 mod rows;
 pub(super) use groups::GroupMenu;
 use groups::{CommandDrag, ManagerRow};
@@ -344,7 +346,7 @@ impl NebulaWorkspace {
                         .w_full()
                         .gap_1()
                         .child(div().text_sm().font_semibold().child(language.pick("名称", "Name")))
-                        .child(Input::new(&name).w_full()),
+                        .child(Input::new(&name).w_full().accessibility_id("saved-command-name")),
                 )
                 .child(
                     v_flex()
@@ -353,7 +355,10 @@ impl NebulaWorkspace {
                         .child(
                             div().text_sm().font_semibold().child(language.pick("命令", "Command")),
                         )
-                        .child(command_editor_input(&command, cx)),
+                        .child(
+                            command_editor_input(&command, cx)
+                                .accessibility_id("saved-command-text"),
+                        ),
                 )
                 .child(
                     gpui_component::checkbox::Checkbox::new("saved-command-append-enter")
@@ -378,12 +383,19 @@ impl NebulaWorkspace {
             let footer = DialogFooter::new()
                 .child(div().flex_1())
                 .child(
-                    DialogClose::new()
-                        .child(Button::new("saved-command-cancel").label(cancel_label)),
+                    DialogClose::new().child(
+                        Button::new("saved-command-cancel")
+                            .debug_selector(|| "saved-command-cancel".into())
+                            .label(cancel_label),
+                    ),
                 )
                 .child(
-                    DialogAction::new()
-                        .child(Button::new("saved-command-save").label(save_label).primary()),
+                    DialogAction::new().child(
+                        Button::new("saved-command-save")
+                            .debug_selector(|| "saved-command-save".into())
+                            .label(save_label)
+                            .primary(),
+                    ),
                 );
 
             center_modal_dialog(dialog, window, EDITOR_DIALOG_HEIGHT)
