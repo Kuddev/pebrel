@@ -63,6 +63,7 @@ pub(super) struct LinkCell {
     pub fg: Color,
     pub bg: Color,
     pub bold: bool,
+    pub dim: bool,
 }
 
 pub(super) type LinkCells = HashMap<(u16, u16), LinkCell>;
@@ -93,7 +94,12 @@ pub(super) fn dashed_cells<T: EventListener>(
             }
             cells.insert(
                 (vp.line as u16, vp.column.0 as u16),
-                LinkCell { fg, bg, bold: indexed.flags.contains(Flags::BOLD) },
+                LinkCell {
+                    fg,
+                    bg,
+                    bold: indexed.flags.contains(Flags::BOLD),
+                    dim: indexed.flags.contains(Flags::DIM),
+                },
             );
         }
     }
