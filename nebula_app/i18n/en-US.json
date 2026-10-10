@@ -1303,6 +1303,19 @@
     "relay_invalid": "Invalid configuration. Import connection details exported by pebrel-relay, or complete the address, room, tokens and fingerprint.",
     "relay_read_failed": "Reading did not complete. Check the SSH connection and that pebrel-relay is installed."
   },
+  "startup": {
+    "portable": {
+      "title": "Portable mode",
+      "description": "Pebrel is outside Applications. Store its data beside the app in {path}?",
+      "enable": "Use portable mode",
+      "normal": "Use normal mode",
+      "quit": "Quit",
+      "translocated": "Pebrel is running from a temporary macOS location. Move the app to a trusted folder and reopen it.",
+      "write_failed": "Could not use the portable data folder {path}: {error}",
+      "linked_directory": "The portable data folder or its temporary folder is a symbolic link.",
+      "error_title": "Pebrel could not start"
+    }
+  },
   "theme": {
     "package": {
       "entry": "Theme package",
