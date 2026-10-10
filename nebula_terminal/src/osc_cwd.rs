@@ -71,7 +71,12 @@ pub enum OscEvent {
     /// Only static PNG/JPEG/GIF input is accepted; animated GIFs are rendered
     /// as their first frame by the frontend.
     /// `width`/`height` come from the encoded image header, in pixels.
-    InlineImage { data: Vec<u8>, width: u32, height: u32 },
+    InlineImage {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        options: crate::inline_image::ImageOptions,
+    },
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -317,6 +322,7 @@ fn parse_osc1337_image(rest: &[u8]) -> Option<OscEvent> {
     if !inline {
         return None;
     }
+    let options = crate::inline_image::ImageOptions::parse(args)?;
 
     let data = base64::engine::general_purpose::STANDARD
         .decode(data)
@@ -333,7 +339,7 @@ fn parse_osc1337_image(rest: &[u8]) -> Option<OscEvent> {
     if pixels > MAX_IMAGE_PIXELS {
         return None;
     }
-    Some(OscEvent::InlineImage { data, width, height })
+    Some(OscEvent::InlineImage { data, width, height, options })
 }
 
 /// Read dimensions from the supported formats without allocating their pixel
@@ -706,7 +712,7 @@ mod tests {
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0].0, seq.len());
         match &ev[0].1 {
-            OscEvent::InlineImage { data, width, height } => {
+            OscEvent::InlineImage { data, width, height, .. } => {
                 assert_eq!((data.as_slice(), *width, *height), (TINY_PNG, 1, 1));
             },
             other => panic!("expected InlineImage, got {other:?}"),

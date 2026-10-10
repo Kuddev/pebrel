@@ -262,7 +262,17 @@ impl ImageRenderer {
         rgba: &Arc<Vec<u8>>,
         px: (u32, u32),
         rect: (f32, f32, f32, f32),
+        clip: Option<(f32, f32, f32, f32)>,
     ) {
+        let (x, y, w, h) = rect;
+        let (cx, cy, cw, ch) = clip.unwrap_or(rect);
+        let left = x.max(cx);
+        let top = y.max(cy);
+        let right = (x + w).min(cx + cw);
+        let bottom = (y + h).min(cy + ch);
+        if right <= left || bottom <= top {
+            return;
+        }
         // Cheap displacement cap: inline textures rarely exceed a handful,
         // but a runaway imgcat loop must not exhaust VRAM.
         if self.inline.len() > 32 {
@@ -274,8 +284,18 @@ impl ImageRenderer {
             .or_insert_with(|| InlineTexture { texture: upload_rgba_texture(px.0, px.1, rgba) })
             .texture;
 
-        let (x, y, w, h) = rect;
-        let vertices = rect_vertices(size_info.width(), size_info.height(), x, y, w, h);
+        let mut vertices = rect_vertices(
+            size_info.width(),
+            size_info.height(),
+            left,
+            top,
+            right - left,
+            bottom - top,
+        );
+        for vertex in &mut vertices {
+            vertex.u = (left - x + vertex.u * (right - left)) / w;
+            vertex.v = (top - y + vertex.v * (bottom - top)) / h;
+        }
 
         unsafe {
             gl::BindVertexArray(self.vao);
