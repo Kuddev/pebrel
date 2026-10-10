@@ -891,8 +891,7 @@ impl NebulaWorkspace {
                     .items_center()
                     .occlude()
                     .child(
-                        toolbar_button("toggle-sidebar", IconName::PanelLeft)
-                            .disabled(settings_active)
+                        toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
                             .selected(sidebar_visible)
@@ -911,7 +910,7 @@ impl NebulaWorkspace {
                             })),
                     )
                     .child(
-                        toolbar_button("open-settings", IconName::Settings)
+                        toolbar_button("open-settings", IconName::Settings, false)
                             .selected(settings_active)
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
@@ -924,13 +923,13 @@ impl NebulaWorkspace {
             )
             .child(self.render_collapsed_tab_title(cx))
             .child(
-                title_bar_panel_controls()
-                    .gap(px(8.0))
+                window_titlebar::title_bar_right_controls()
                     .child(
                         toolbar_button(
                             "toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                            false,
                         )
                         .selected(self.command_manager_open)
                         .tooltip(language.text(Message::ChromeCommandList))

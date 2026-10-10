@@ -150,8 +150,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> Button {
         let visible = self.side_panel.open && !self.reader_focus_active(cx);
-        toolbar_button("toggle-right-sidebar", IconName::PanelRight)
-            .disabled(disabled)
+        toolbar_button("toggle-right-sidebar", IconName::PanelRight, disabled)
             .selected(visible)
             .when(visible, |button| button.bg(cx.theme().secondary))
             .tooltip(crate::gpui_shell::config::ui_language(cx).text(Message::EditorRightSidebar))

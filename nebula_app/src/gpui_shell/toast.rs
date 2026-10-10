@@ -127,7 +127,8 @@ fn note(kind: ToastKind, text: String) -> Notification {
     };
     // `refine_style` 在组件自身的 `w_112` 之后应用，所以这里能可靠覆盖
     // 固定宽度；auto 让短消息收紧，max_w 给长路径/错误信息提供换行约束。
-    note.w_auto().min_w(px(TOAST_MIN_WIDTH)).max_w(px(TOAST_MAX_WIDTH))
+    // 整张卡片点击即关闭（见 `toast` / `banner`），指针要和可点击保持一致。
+    note.w_auto().min_w(px(TOAST_MIN_WIDTH)).max_w(px(TOAST_MAX_WIDTH)).cursor_pointer()
 }
 
 /// 窗口构造闭包里 `NebulaWorkspace::new` 早于外层 `Root::new` 返回；此时
@@ -187,7 +188,9 @@ pub fn toast(window: &mut Window, cx: &mut App, kind: ToastKind, text: impl Into
         return;
     }
     log::info!("toast [{kind:?}]: {text}");
-    push_notification(window, cx, note(kind, text), Some(TOAST_TTL));
+    // 组件库的关闭按钮只有 20px 且不可配置；挂上空的 `on_click` 后整张卡片
+    // 都能点掉它，命中区随卡片自身的位移动画移动。
+    push_notification(window, cx, note(kind, text).on_click(|_, _, _| {}), Some(TOAST_TTL));
 }
 
 /// 驻留一条消息（消息栏层）：默认停留远长于 toast，但**有上限**，见
@@ -523,20 +526,21 @@ mod tests {
             cx.run_until_parked();
         }
 
+        struct NotificationSurface;
+        impl Render for NotificationSurface {
+            fn render(
+                &mut self,
+                window: &mut Window,
+                cx: &mut Context<Self>,
+            ) -> impl gpui::IntoElement {
+                div().relative().size_full().children(render_layer(window, cx))
+            }
+        }
+
         #[gpui::test]
         fn numbered_choice_buttons_have_real_hit_targets_and_report_a_closed_pane(
             cx: &mut TestAppContext,
         ) {
-            struct NotificationSurface;
-            impl Render for NotificationSurface {
-                fn render(
-                    &mut self,
-                    window: &mut Window,
-                    cx: &mut Context<Self>,
-                ) -> impl gpui::IntoElement {
-                    div().relative().size_full().children(render_layer(window, cx))
-                }
-            }
             initialize(cx, true);
             cx.update(|cx| {
                 cx.set_reduce_motion(true);
@@ -596,6 +600,38 @@ mod tests {
                 1,
                 "the closed source produces visible expired-request feedback"
             );
+        }
+
+        #[gpui::test]
+        fn clicking_a_toast_card_dismisses_only_that_card(cx: &mut TestAppContext) {
+            initialize(cx, true);
+            cx.update(|cx| cx.set_reduce_motion(true));
+            let mut surface = None;
+            let (_, cx) = cx.add_window_view(|window, cx| {
+                let view = cx.new(|_| NotificationSurface);
+                surface = Some(view.clone());
+                Root::new(view, window, cx)
+            });
+            let surface = surface.unwrap();
+            cx.update(|window, cx| {
+                toast(window, cx, ToastKind::Info, "first card");
+                toast(window, cx, ToastKind::Info, "second card");
+            });
+            cx.run_until_parked();
+            cx.background_executor.advance_clock(Duration::from_millis(200));
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                surface.update(cx, |_, cx| cx.notify());
+                let _ = window.draw(cx);
+            });
+            let original = ids(cx);
+            assert_eq!(original.len(), 2);
+            // The newest card is anchored 20px from the bottom-right corner.
+            let size = cx.update(|window, _| window.viewport_size());
+            let body = gpui::point(size.width - px(40.0), size.height - px(30.0));
+            cx.simulate_click(body, gpui::Modifiers::default());
+            settle_dismissal(cx);
+            assert_eq!(ids(cx), vec![original[0]]);
         }
 
         #[gpui::test]
