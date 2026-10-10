@@ -118,6 +118,106 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_commands_encrypted_round_trip_selection_and_undo() {
+        let source = tempfile::tempdir().unwrap();
+        let name = crate::saved_commands::STORE_FILE;
+        let mut commands =
+            crate::saved_commands::SavedCommands::load_from(&source.path().join(name)).unwrap();
+        commands.create_group("Build tools").unwrap();
+        let group = commands.groups()[0].id.clone();
+        let saved = commands
+            .insert_in_group("Build", "echo backup-secret-marker", false, Some(&group))
+            .unwrap();
+        commands.insert("Test", "cargo test", true).unwrap();
+        let source_bytes = fs::read(source.path().join(name)).unwrap();
+        let history = crate::nebula_history::history_file_names()[0];
+        fs::write(source.path().join(history), b"history fixture").unwrap();
+        assert!(
+            collect_from(source.path(), BackupSelection::default())
+                .unwrap()
+                .entries
+                .iter()
+                .all(|entry| entry.name != name)
+        );
+        let selection = BackupSelection::from_categories([BackupCategory::CommandHistory]);
+        let archive = collect_from(source.path(), selection).unwrap();
+        let packet = seal(&archive, "correct horse").unwrap();
+        assert!(!packet.windows(20).any(|bytes| bytes == b"backup-secret-marker"));
+        let opened = open(&packet, "correct horse").unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let original = br#"{"version":1,"commands":[]}"#;
+        fs::write(destination.path().join(name), original).unwrap();
+        restore_selected_at(
+            destination.path(),
+            &opened,
+            BackupSelection::default(),
+            "correct horse",
+        )
+        .unwrap();
+        assert_eq!(fs::read(destination.path().join(name)).unwrap(), original);
+        let point =
+            restore_selected_at(destination.path(), &opened, selection, "correct horse").unwrap();
+        assert_eq!(fs::read(destination.path().join(name)).unwrap(), source_bytes);
+        assert_eq!(fs::read(destination.path().join(history)).unwrap(), b"history fixture");
+        let restored =
+            crate::saved_commands::SavedCommands::load_from(&destination.path().join(name))
+                .unwrap();
+        assert_eq!(restored.commands(), commands.commands());
+        assert_eq!(restored.groups(), commands.groups());
+        assert_eq!(restored.group_for(&saved.id), Some(group.as_str()));
+        undo_at(destination.path(), &point, "correct horse").unwrap();
+        assert_eq!(fs::read(destination.path().join(name)).unwrap(), original);
+        assert!(!destination.path().join(history).exists());
+
+        // Previous v1 archives have only history entries, so restoring them
+        // must leave a newer local command store untouched.
+        let mut old_archive = opened;
+        old_archive.entries.retain(|entry| entry.name != name);
+        let old_packet = seal(&old_archive, "correct horse").unwrap();
+        let old_archive = open(&old_packet, "correct horse").unwrap();
+        restore_selected_at(destination.path(), &old_archive, selection, "correct horse").unwrap();
+        assert_eq!(fs::read(destination.path().join(name)).unwrap(), original);
+    }
+
+    #[test]
+    fn invalid_saved_command_store_is_rejected_before_any_restore_write() {
+        let root = tempfile::tempdir().unwrap();
+        let name = crate::saved_commands::STORE_FILE;
+        let original = br#"{"version":1,"commands":[]}"#;
+        fs::write(root.path().join(name), original).unwrap();
+        let selection = BackupSelection::from_categories([BackupCategory::CommandHistory]);
+        for bytes in [b"not json".as_slice(), br#"{"version":2,"commands":[]}"#] {
+            let archive = BackupArchive {
+                manifest: BackupManifest {
+                    version: 1,
+                    device: String::new(),
+                    categories: vec![BackupCategory::CommandHistory],
+                },
+                entries: vec![
+                    BackupEntry {
+                        category: BackupCategory::CommandHistory,
+                        name: crate::nebula_history::history_file_names()[0].into(),
+                        bytes: b"must not write".to_vec(),
+                    },
+                    BackupEntry {
+                        category: BackupCategory::CommandHistory,
+                        name: name.into(),
+                        bytes: bytes.to_vec(),
+                    },
+                ],
+            };
+            let packet =
+                encrypt_bytes(&serde_json::to_vec(&archive).unwrap(), "correct horse").unwrap();
+            assert!(open(&packet, "correct horse").is_err());
+            assert!(
+                restore_selected_at(root.path(), &archive, selection, "correct horse").is_err()
+            );
+            assert_eq!(fs::read(root.path().join(name)).unwrap(), original);
+            assert!(!root.path().join(crate::nebula_history::history_file_names()[0]).exists());
+        }
+    }
+
+    #[test]
     fn selective_restore_preserves_other_categories_and_undo_restores_exact_bytes() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("pebrel_settings.txt"), b"theme=old\npinned_hosts=local")

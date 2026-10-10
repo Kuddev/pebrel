@@ -214,13 +214,14 @@ pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal:
         if std::env::var("PEBREL_COMPLETION_QA_PREDICTION").as_deref() == Ok("1") {
             args.last_mut().unwrap().push_str("; Set-PSReadLineOption -PredictionSource History -PredictionViewStyle InlineView; (Get-PSReadLineOption).PredictionSource.ToString() | Set-Content -LiteralPath (Join-Path $env:PEBREL_COMPLETION_QA_DIR 'prediction-source.txt')");
         }
-        // Explicit PTY arguments are not Windows-escaped. Encode the complete
-        // fixture startup so nested prediction strings survive both PowerShell hosts.
-        use base64::Engine as _;
+        // 原生验收中编码命令的启动曾静默停住；文件入口保留同一初始化内容，
+        // 避免把启动器故障误判为补全失败。BOM 让 PowerShell 5.1 也按 UTF-8 读取。
         let startup = args.pop().unwrap();
-        *args.last_mut().unwrap() = "-EncodedCommand".into();
-        let bytes: Vec<_> = startup.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        args.push(base64::engine::general_purpose::STANDARD.encode(bytes));
+        let startup_path = _output.join("editor-startup.ps1");
+        std::fs::write(&startup_path, format!("\u{feff}{startup}\n")).unwrap();
+        *args.last_mut().unwrap() = "-File".into();
+        // PTY 接收的参数已经是 Windows 命令行文本，路径中的空格需要保留引号。
+        args.push(format!("\"{}\"", startup_path.display()));
         nebula_terminal::tty::Shell::new(integrated.program().to_owned(), args)
     }
     #[cfg(unix)]

@@ -25,7 +25,7 @@ mod runtime;
 mod startup;
 mod startup_command;
 #[cfg(all(test, feature = "gpui-test-support"))]
-mod startup_tests;
+pub(super) mod startup_tests;
 mod tab_identity;
 mod typography;
 
@@ -274,6 +274,8 @@ pub struct TerminalView {
     pub focus_handle: FocusHandle,
     /// 公式覆盖层（探测/持久化状态复用旧壳 `terminal_math`，每 pane 一份）。
     pub math: super::math_overlay::MathOverlay,
+
+    pub(super) effect: Option<gpui::Entity<super::effects::TerminalEffect>>,
     pub font: Font,
     pub font_bold: Font,
     pub font_italic: Font,
@@ -514,6 +516,14 @@ impl TerminalView {
         typography::startup_cell_metrics_at_scale(scale, cx)
     }
 
+    pub(super) fn effect_output_visible(&self) -> bool {
+        self.output_visible && self.answer_reader.is_none()
+    }
+
+    pub(super) fn effect_pane_focused(&self) -> bool {
+        self.cursor_pane_focused
+    }
+
     pub(in crate::gpui_shell) fn set_output_visible(
         &mut self,
         visible: bool,
@@ -521,6 +531,8 @@ impl TerminalView {
     ) {
         if self.output_visible != visible {
             self.cursor_animation.reset();
+
+            super::effects::visibility_changed(self, cx);
         }
         if std::mem::replace(&mut self.output_visible, visible) != visible && visible {
             // Hidden output deliberately did not invalidate the cached view.
@@ -977,6 +989,12 @@ impl TerminalView {
     pub fn local_cwd(&self) -> Option<std::path::PathBuf> {
         let path = std::path::PathBuf::from(self.cwd.trim());
         path.is_dir().then_some(path)
+    }
+
+    /// WSL 发行版：spawn 时 pin 进启动参数的 [`crate::shell_detect::wsl_spawn_distro`]
+    /// 快照，裸 `wsl` / 默认 shell 也有确定的来宾身份，事后改默认发行版不会串台。
+    pub(crate) fn wsl_distro(&self) -> Option<&str> {
+        self.exec_context.as_ref()?.wsl_distribution().flatten()
     }
 
     /// Absolute remote cwd reported by OSC 7/title integration. Unlike

@@ -6,6 +6,70 @@ use gpui_component::Root;
 use std::sync::Arc;
 
 #[gpui::test]
+fn duplicate_bare_wsl_keeps_the_panes_frozen_distribution(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::gpui_shell::math_view::register(cx);
+        crate::gpui_shell::file_editor::init(cx);
+        crate::gpui_shell::workspace::init(cx);
+        windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        cx.set_reduce_motion(true);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("missing/wsl.exe").to_string_lossy().into_owned();
+    let launch = LaunchSession::Shell {
+        name: "WSL".into(),
+        program: program.clone(),
+        args: vec!["-u".into(), "worker".into()],
+    };
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let workspace = cx.new(|cx| {
+            let mut workspace = NebulaWorkspace::new(
+                window,
+                None,
+                None,
+                1,
+                crate::runtime_api::RuntimeHub::new(),
+                windowing::WorkspaceStartup::Empty,
+                windowing::WindowRole::Regular,
+                cx,
+            );
+            workspace.add_terminal_with(
+                launch.clone(),
+                Some(directory.path().to_path_buf()),
+                None,
+                window,
+                cx,
+            );
+            let source = workspace.tabs[0].focused_view().unwrap().clone();
+            source.update(cx, |view, _| {
+                view.cwd = "/srv/project with spaces".into();
+                let mut options = nebula_terminal::tty::Options::default();
+                options.shell = Some(nebula_terminal::tty::Shell::new(
+                    program.clone(),
+                    ["-d", "FrozenDistro", "-u", "worker"].map(String::from).to_vec(),
+                ));
+                view.exec_context =
+                    Some(crate::runtime_exec::PaneExecContext::from_pty_options(&options));
+            });
+            workspace.duplicate_tab(0, window, cx);
+            let duplicate = workspace.tabs[workspace.active].focused_view().unwrap().read(cx);
+            let LaunchSession::Shell { program, args, .. } = &duplicate.session_launch else {
+                panic!("WSL launch identity was lost");
+            };
+            assert_eq!(crate::shell_detect::wsl_launch_distro(program, args), Some("FrozenDistro"));
+            assert_eq!(crate::shell_detect::wsl_launch_user(program, args), Some("worker"));
+            assert_eq!(duplicate.cwd, "/srv/project with spaces");
+            assert_eq!(source.read(cx).session_launch, launch);
+            assert_ne!(source.read(cx).pane_id, duplicate.pane_id);
+            workspace
+        });
+        Root::new(workspace, window, cx)
+    });
+    window.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+#[gpui::test]
 fn duplicate_rebuilds_nested_mixed_layout_with_fresh_sessions(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);

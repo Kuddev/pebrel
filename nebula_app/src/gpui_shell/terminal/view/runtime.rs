@@ -1,6 +1,6 @@
 //! GPUI 终端对 Runtime API 暴露的读取、输入与任务状态边界。
 
-use gpui::{Context, EventEmitter as _};
+use gpui::{Context, EventEmitter as _, Window, px};
 use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::{Column, Line, Point as TermPoint};
 use nebula_terminal::term::TermMode;
@@ -380,7 +380,7 @@ impl TerminalView {
         &self,
         window_id: u64,
         lines: usize,
-        screen: bool,
+        screen: Option<crate::runtime_api::ScreenMode>,
     ) -> Result<crate::runtime_api::RuntimePaneRead, crate::runtime_api::ApiError> {
         self.ensure_runtime_readable()?;
         let Some(session) = &self.session else {
@@ -399,12 +399,67 @@ impl TerminalView {
             self.exited.is_some(),
             self.exited.clone(),
         );
-        if screen {
-            read.screen = Some(crate::runtime_api::capture_terminal_screen(&term, |index| {
-                self.palette.query_reply(index, term.colors())
-            })?);
+        if let Some(screen) = screen {
+            let palette = |index| self.palette.query_reply(index, term.colors());
+            let capture = match screen {
+                crate::runtime_api::ScreenMode::History { start, rows } => {
+                    crate::runtime_api::capture_terminal_history(&term, palette, start, rows)
+                },
+                crate::runtime_api::ScreenMode::Viewport => {
+                    crate::runtime_api::capture_terminal_viewport(&term, palette)
+                },
+                crate::runtime_api::ScreenMode::Live => {
+                    crate::runtime_api::capture_terminal_screen(&term, palette)
+                },
+            };
+            read.screen = Some(capture?);
         }
         Ok(read)
+    }
+
+    pub(crate) fn runtime_scroll(
+        &mut self,
+        lines: i16,
+        column: u16,
+        row: u16,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::runtime_api::ApiError> {
+        self.ensure_runtime_readable()?;
+        if self.exited.is_some() || self.session.is_none() {
+            return Err(crate::runtime_api::ApiError::new(
+                "invalid_state",
+                "scroll pane is not running",
+            ));
+        }
+        if lines == 0
+            || lines.unsigned_abs() > 32
+            || usize::from(column) >= self.cols
+            || usize::from(row) >= self.rows
+        {
+            return Err(crate::runtime_api::ApiError::invalid_params(
+                "scroll is outside the current pane",
+            ));
+        }
+        // 精确触摸位移不再叠加桌面滚轮倍率，鼠标接管和备用屏仍由同一入口裁定。
+        let position = gpui::point(
+            self.origin.x + self.cell_width * (f32::from(column) + 0.5),
+            self.origin.y + self.line_height * (f32::from(row) + 0.5),
+        );
+        self.on_scroll(
+            &gpui::ScrollWheelEvent {
+                position,
+                delta: gpui::ScrollDelta::Pixels(gpui::point(
+                    px(0.0),
+                    self.line_height * f32::from(lines),
+                )),
+                modifiers: Default::default(),
+                touch_phase: gpui::TouchPhase::Moved,
+            },
+            window,
+            cx,
+        );
+        Ok(())
     }
 
     pub fn runtime_procs(

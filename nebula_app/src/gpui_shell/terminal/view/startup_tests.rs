@@ -13,7 +13,32 @@ impl Render for Surface {
     }
 }
 
-pub(super) fn open(
+impl TerminalView {
+    // 工作区级按键回归复用同一个终端夹具，避免另造一套输入/会话状态。
+    pub(crate) fn install_completion_test_session(&mut self) -> Receiver<Msg> {
+        let (session, receiver) = session::test_session();
+        self.session = Some(session);
+        self.error = None;
+        self.exited = None;
+        self.exec_context = None;
+        self.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
+        receiver
+    }
+
+    pub(crate) fn completion_test_state(
+        &self,
+    ) -> (String, bool, usize, bool, crate::display::CompletionStyle) {
+        (
+            self.suggest.screen_line.clone(),
+            self.suggest.completion_popup_requested,
+            self.suggest.completion_items.len(),
+            self.completion_popup_geometry().is_some(),
+            self.completion_style,
+        )
+    }
+}
+
+pub(in crate::gpui_shell::terminal) fn open(
     cx: &mut TestAppContext,
 ) -> (Entity<TerminalView>, &mut VisualTestContext, Receiver<Msg>) {
     open_at(cx, None)
@@ -45,15 +70,7 @@ fn open_at(
                 cx,
             )
         });
-        let receiver = view.update(cx, |view, _| {
-            let (session, receiver) = session::test_session();
-            view.session = Some(session);
-            view.error = None;
-            view.exited = None;
-            view.exec_context = None;
-            view.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
-            receiver
-        });
+        let receiver = view.update(cx, |view, _| view.install_completion_test_session());
         result = Some((view, receiver));
         Root::new(cx.new(|_| Surface), window, cx)
     });
@@ -1229,5 +1246,89 @@ fn a_failed_codex_chooser_does_not_start_an_automatic_retry_loop(cx: &mut TestAp
         assert_eq!(view.session_agent(), Some(saved));
         assert!(view.can_retry_recovery());
         assert!(receiver.try_iter().all(|message| !matches!(message, Msg::Input(_))));
+    });
+}
+
+#[gpui::test]
+fn host_administrator_scope_excludes_remote_and_wsl_shells(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    view.update(window, |view, _| {
+        let context = |program: &str| {
+            crate::runtime_exec::PaneExecContext::from_pty_options(&nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new(program.into(), vec![])),
+                ..Default::default()
+            })
+        };
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("pwsh.exe"));
+        assert!(view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Ssh("user@remote".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Shell {
+            scope: crate::nebula_history::HistoryScope::Wsl("Ubuntu".into()),
+        };
+        assert!(!view.inherits_windows_host_token());
+        view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+        view.exec_context = Some(context("wsl.exe"));
+        assert!(!view.inherits_windows_host_token());
+        view.exec_context = Some(context("pwsh.exe"));
+        view.ssh_destination = Some("user@remote".into());
+        assert!(!view.inherits_windows_host_token());
+        view.ssh_destination = None;
+        view.exec_context = None;
+        assert!(!view.inherits_windows_host_token());
+    });
+}
+
+#[gpui::test]
+fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut TestAppContext) {
+    use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+    let (view, window, receiver) = open(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.suggest.suggest_env = crate::display::SuggestEnv::Local;
+            view.line_height = px(20.0);
+            view.cell_width = px(10.0);
+            let mut parser = Processor::<StdSyncHandler>::default();
+            parser.advance(
+                &mut *view.session.as_ref().unwrap().term.lock(),
+                b"\x1b[?1000h\x1b[?1006h",
+            );
+            receiver.try_iter().for_each(drop);
+            view.runtime_scroll(2, 3, 4, window, cx).unwrap();
+            let bytes: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|m| match m {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(bytes, b"\x1b[<64;4;5M\x1b[<64;4;5M");
+            parser.advance(
+                &mut *view.session.as_ref().unwrap().term.lock(),
+                b"\x1b[?1000l\x1b[?1006l\x1b[?1049h\x1b[?1007h",
+            );
+            view.runtime_scroll(-2, 3, 4, window, cx).unwrap();
+            let bytes: Vec<u8> = receiver
+                .try_iter()
+                .filter_map(|m| match m {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            assert_eq!(bytes, b"\x1b[B\x1b[B");
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?1049l");
+            for _ in 0..40 {
+                parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"history\r\n");
+            }
+            view.runtime_scroll(3, 3, 4, window, cx).unwrap();
+            assert_eq!(view.session.as_ref().unwrap().term.lock().grid().display_offset(), 3);
+            assert!(receiver.try_iter().all(|m| !matches!(m, Msg::Input(_))));
+            assert!(view.runtime_scroll(1, 400, 0, window, cx).is_err());
+        });
     });
 }

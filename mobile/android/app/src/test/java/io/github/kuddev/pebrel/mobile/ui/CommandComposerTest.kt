@@ -65,7 +65,7 @@ class CommandComposerTest {
     @Test fun keyAuthenticationCanBeSelectedAndRequiresAKeyDocument() {
         val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
         compose.setContent {
-            MaterialTheme { HostForm(HostProfile("key-form", "Key host", "127.0.0.1", 22, "test"), {}, false, false, {}, { _, _, _, _ -> }) }
+            MaterialTheme { HostForm(HostProfile("key-form", "Key host", "127.0.0.1", 22, "test"), {}, false, false, {}, onSave = { _, _, _, _ -> }) }
         }
         assertTrue(compose.onNodeWithTag("ssh-session-mode").fetchSemanticsNode().boundsInRoot.width <= 240 * context.resources.displayMetrics.density)
         assertTrue(compose.onNodeWithTag("ssh-auth-mode").fetchSemanticsNode().boundsInRoot.width <= 220 * context.resources.displayMetrics.density)
@@ -80,7 +80,7 @@ class CommandComposerTest {
         val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
         compose.setContent {
             MaterialTheme { HostForm(HostProfile("saved-key", "Key host", "127.0.0.1", 22, "test",
-                keyUri = "content://fixture/key", keyName = "encrypted-key"), {}, true, false, {}, { _, _, _, _ -> }) }
+                keyUri = "content://fixture/key", keyName = "encrypted-key"), {}, true, false, {}, onSave = { _, _, _, _ -> }) }
         }
         compose.onNodeWithText(context.getString(R.string.ssh_clear_saved_passphrase)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.ssh_passphrase_saved_hint)).performScrollTo().assertIsDisplayed()
@@ -291,11 +291,72 @@ class CommandComposerTest {
         compose.onNodeWithText(context.getString(R.string.deploy_domain)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.deploy_http_port)).assertDoesNotExist()
         compose.onNodeWithText(context.getString(R.string.service_port)).assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.service_advanced)).performClick()
+        compose.onNodeWithText(context.getString(R.string.service_advanced)).performScrollTo().performClick()
         compose.onNodeWithContentDescription(context.getString(R.string.service_port)).assertExists()
         compose.onNodeWithContentDescription(context.getString(R.string.service_address)).assertExists()
         compose.onNodeWithText(context.getString(R.string.service_manual_commands)).performScrollTo().performClick()
         compose.onNodeWithText("sh install.sh 'SERVER_IP' 443\n/opt/pebrel-relay/pebrel-relay service-status").assertExists()
+        compose.onNodeWithText(context.getString(R.string.service_manual_download)).performScrollTo().performClick()
+        val opened = org.robolectric.Shadows.shadowOf(context).nextStartedActivity
+        assertEquals(android.content.Intent.ACTION_VIEW, opened.action)
+        assertEquals("https://github.com/Kuddev/pebrel/releases", opened.dataString)
+    }
+
+    @Test fun servicePageAllowsAnUnencryptedKeyAndSeparatesItsPassphraseFromAPassword() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        val keyHost = HostProfile("relay-key", "Key host", "192.0.2.1", user = "root",
+            keyUri = "content://fixture/private-key", keyName = "private-key")
+        repository.saveHost(keyHost)
+        compose.setContent { MaterialTheme { RelayDeploymentFlow(repository) {} } }
+        compose.onNodeWithContentDescription(context.getString(R.string.ssh_key_passphrase)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.ssh_key_passphrase_hint)).assertExists()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertIsEnabled()
+        compose.onNodeWithText(context.getString(R.string.service_check)).assertIsEnabled()
+        compose.onNodeWithContentDescription(context.getString(R.string.ssh_key_passphrase))
+            .performTextInput("private-key-passphrase")
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertIsEnabled()
+        compose.runOnIdle { repository.saveHost(keyHost.copy(keyUri = "", keyName = "")) }
+        compose.onNodeWithContentDescription(context.getString(R.string.credential_password))
+            .performTextClearance()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertIsNotEnabled()
+    }
+
+    @Test fun serviceSetupCanOpenTheSharedKeyPickerAndCancelWithoutLosingItsHost() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        repository.saveHost(HostProfile("existing-relay", "Existing relay", "192.0.2.1", user = "root"))
+        compose.setContent { MaterialTheme { RelayDeploymentFlow(repository) {} } }
+        compose.onNodeWithText(context.getString(R.string.service_add_ssh_host)).performClick()
+        compose.onNodeWithText(context.getString(R.string.auth_key)).performScrollTo().performClick()
+        compose.onNodeWithText(context.getString(R.string.ssh_choose_key)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.save_connect)).assertDoesNotExist()
+        compose.onAllNodesWithContentDescription(context.getString(R.string.close)).onLast().performScrollTo().performClick()
+        compose.onNodeWithText("Existing relay").assertExists()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertExists()
+        assertEquals(1, repository.hosts.value.size)
+        assertTrue(repository.sessions.value.isEmpty())
+    }
+
+    @Test fun serviceSetupSavesAndSelectsTheNewHostWithoutOpeningATerminal() {
+        val context = ApplicationProvider.getApplicationContext<PebrelApplication>()
+        val repository = SessionRepository(context)
+        repository.saveHost(HostProfile("existing-relay", "Existing relay", "192.0.2.1", user = "root"))
+        compose.setContent { MaterialTheme { RelayDeploymentFlow(repository) {} } }
+        compose.onNodeWithText(context.getString(R.string.service_add_ssh_host)).performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.host_name)).performTextInput("New relay")
+        compose.onNodeWithContentDescription(context.getString(R.string.host_address)).performTextInput("192.0.2.2")
+        compose.onNodeWithText(context.getString(R.string.save)).performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(10_000) {
+            // 凭据事务在 IO 完成后投递 Android 主队列，需推进它而不只推进 Compose 时钟。
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            repository.hosts.value.size == 2 || repository.error.value != null
+        }
+        assertNull("Host persistence must complete before returning to relay setup", repository.error.value)
+        compose.onNodeWithText("New relay").assertExists()
+        compose.onNodeWithText("Existing relay").assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.service_install)).assertExists()
+        assertTrue(repository.sessions.value.isEmpty())
     }
 
     private fun saveSurface(tag: String) {

@@ -48,7 +48,7 @@ fn repair_lan() -> Result<(), Failure> {
         return Ok(());
     }
     preferences.address = Some(address);
-    apply_locked(generation, preferences, None).map(|_| ())
+    apply_locked(generation, preferences, None, Some(Mode::Lan)).map(|_| ())
 }
 
 pub(super) fn start() {
@@ -67,7 +67,18 @@ pub(super) fn start() {
                     .preferences
                     .clone();
                 if preferences.enabled {
-                    apply(generation, preferences, None).map(|_| ())
+                    // 两条连接各自恢复，后启动的一条失败不回滚前一条已经提交的监听。
+                    let mut failure = None;
+                    for mode in [Mode::Lan, Mode::Relay] {
+                        if route_enabled(&preferences, mode) {
+                            if let Err(error) =
+                                apply(generation, preferences.clone(), None, Some(mode))
+                            {
+                                failure.get_or_insert(error);
+                            }
+                        }
+                    }
+                    failure.map_or(Ok(()), Err)
                 } else {
                     Ok(())
                 }

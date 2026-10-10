@@ -3,6 +3,12 @@
 use super::*;
 
 impl NebulaWorkspace {
+    /// 冷启动回退（没有恢复出任何标签）时首个终端的 cwd：与 `add_terminal`
+    /// 同一合同，设置页「启动目录」优先，未设置或失效时才继承进程启动目录。
+    pub(super) fn cold_start_cwd() -> Option<std::path::PathBuf> {
+        cold_start_cwd(Self::startup_directory(), std::env::current_dir().ok())
+    }
+
     pub(super) fn restore_update_session(
         &mut self,
         session: &crate::session::Session,
@@ -242,5 +248,34 @@ impl NebulaWorkspace {
             });
         }
         Session::new(active_out, tabs)
+    }
+}
+
+/// 开机自启动快捷方式把进程启动目录固定为 `%USERPROFILE%`；只看进程 cwd
+/// 会让首个终端无视「启动目录」，与 Ctrl+T 新标签不一致（#479）。
+fn cold_start_cwd(
+    startup_directory: Option<std::path::PathBuf>,
+    launch_cwd: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    startup_directory.or(launch_cwd)
+}
+
+#[cfg(test)]
+mod cold_start_tests {
+    use super::cold_start_cwd;
+    use std::path::PathBuf;
+
+    #[test]
+    fn configured_startup_directory_wins_over_the_launch_directory() {
+        let home = PathBuf::from("C:/Users/fixture");
+        let configured = PathBuf::from("C:/Users/fixture/workspace");
+        assert_eq!(cold_start_cwd(Some(configured.clone()), Some(home)), Some(configured));
+    }
+
+    #[test]
+    fn unset_startup_directory_keeps_inheriting_the_launch_directory() {
+        let home = PathBuf::from("C:/Users/fixture");
+        assert_eq!(cold_start_cwd(None, Some(home.clone())), Some(home));
+        assert_eq!(cold_start_cwd(None, None), None);
     }
 }

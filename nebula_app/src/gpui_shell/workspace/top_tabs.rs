@@ -193,6 +193,7 @@ impl NebulaWorkspace {
                     color,
                     renaming,
                     pane_count,
+                    local_administrator,
                 } = self.top_tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
@@ -363,6 +364,12 @@ impl NebulaWorkspace {
                                 .rounded_full()
                                 .bg(color),
                         )
+                    })
+                    .when(local_administrator, |row| {
+                        row.child(super::tab_presentation::administrator_badge(
+                            format!("top-tab-admin-{ix}").into(),
+                            cx,
+                        ))
                     })
                     // 图标优先级与侧栏同源：先身份（跟随聚焦 pane），分屏标记
                     // 只在没有身份图标时补位。理由见 sidebar.rs 同处注释。

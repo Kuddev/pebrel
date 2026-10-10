@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const STORE_VERSION: u32 = 1;
-const STORE_FILE: &str = "saved_commands.json";
+pub(crate) const STORE_FILE: &str = "saved_commands.json";
 const MAX_COMMANDS: usize = 40;
 const MAX_ID_CHARS: usize = 80;
 const MAX_NAME_CHARS: usize = 80;
@@ -75,7 +75,11 @@ impl SavedCommands {
             },
             Err(error) => return Err(error),
         };
-        let store: CommandStore = serde_json::from_slice(&bytes)
+        Self::from_bytes(path, &bytes)
+    }
+
+    pub(crate) fn from_bytes(path: &Path, bytes: &[u8]) -> io::Result<Self> {
+        let store: CommandStore = serde_json::from_slice(bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if store.version != STORE_VERSION {
             return Err(io::Error::new(
