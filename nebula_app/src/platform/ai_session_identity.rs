@@ -357,7 +357,7 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
             proc_dir.join("cwd").join(codex_home).join("sessions").canonicalize()
         else {
             #[cfg(test)]
-            trace_probe_rejection(pid, format_args!("sessions root failed: {codex_home:?}"));
+            trace_probe_rejection(pid, format_args!("sessions root failed"));
             continue;
         };
         let Ok(fds) = std::fs::read_dir(proc_dir.join("fd")) else { continue };
