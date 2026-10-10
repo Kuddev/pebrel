@@ -19,6 +19,8 @@ pub mod capabilities;
 pub mod credentials;
 pub mod dirs;
 pub(crate) mod distribution;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod effect_activity;
 pub(crate) mod elevation;
 pub(crate) mod environment;
 pub(crate) mod file_drag;
@@ -49,6 +51,8 @@ pub mod startup;
 #[cfg(unix)]
 pub(crate) mod tray_native;
 pub(crate) mod update_installation;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod window_capture;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod window_chrome;
 #[cfg(feature = "gpui-shell")]

@@ -1,9 +1,9 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "2.1.1"
+  #define AppVersion "2.1.2"
 #endif
 
 #ifndef NumericVersion
-  #define NumericVersion "2.1.1.0"
+  #define NumericVersion "2.1.2.0"
 #endif
 
 #ifndef Configuration
@@ -89,6 +89,7 @@ english.OpenInPebrelWsl=Open in Pebrel (WSL)
 english.WslMenuConflict=An existing WSL submenu belongs to another installation or was edited, so it was preserved: %1.
 english.WslMenuRegistrationFailed=Unable to register the WSL context submenu.
 english.LaunchProgram=Launch Pebrel
+english.LaunchEnvironmentFailed=Unable to update the environment for launching Pebrel: %1.
 english.UninstallProgram=Uninstall Pebrel
 english.CloseLegacyProgram=Close the application at %1, then retry the installation.
 english.MigrationFailed=Pebrel was installed, but the old installation could not be completely migrated: %1. Close the old application and run this installer again. Your other files and configuration were preserved.
@@ -103,6 +104,7 @@ chinesesimplified.OpenInPebrelWsl=在 Pebrel 中打开（WSL）
 chinesesimplified.WslMenuConflict=现有 WSL 子菜单属于其他安装或已被修改，因此已保留：%1。
 chinesesimplified.WslMenuRegistrationFailed=无法注册 WSL 右键子菜单。
 chinesesimplified.LaunchProgram=启动 Pebrel
+chinesesimplified.LaunchEnvironmentFailed=无法更新启动 Pebrel 所需的环境：%1。
 chinesesimplified.UninstallProgram=卸载 Pebrel
 chinesesimplified.CloseLegacyProgram=请关闭 %1 中运行的程序，然后重试安装。
 chinesesimplified.MigrationFailed=Pebrel 已安装，但旧安装未能完全迁移：%1。请关闭旧程序后重新运行此安装器。其他文件和配置已保留。
@@ -165,7 +167,7 @@ Root: HKCU; Subkey: "Software\Classes\Directory\shell\Pebrel\command"; ValueType
 #endif
 
 [Run]
-Filename: "{app}\pebrel.exe"; Parameters: "--gpui"; Description: "{cm:LaunchProgram}"; WorkingDir: "{%USERPROFILE}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\pebrel.exe"; Parameters: "{code:PebrelLaunchParameters}"; Description: "{cm:LaunchProgram}"; WorkingDir: "{%USERPROFILE}"; Flags: nowait postinstall skipifsilent; AfterInstall: RestorePebrelLaunchEnvironment
 
 [UninstallRun]
 #ifndef AcceptanceFixture
@@ -175,6 +177,7 @@ Filename: "{app}\pebrel.exe"; Parameters: "setup-ai --remove"; WorkingDir: "{app
 
 [Code]
 #include "installer-migration.iss"
+#include "installer-launch.iss"
 
 function NeedsAddToPath: Boolean;
 var

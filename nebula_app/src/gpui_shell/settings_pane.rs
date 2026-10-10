@@ -118,6 +118,8 @@ pub struct SettingsPane {
     appearance_picker_seq: u64,
     shader_picker: Option<Task<()>>,
     terminal_effect_picker: Option<Task<()>>,
+    shader_custom_open: bool,
+    effect_settings_open: bool,
     media_picker: Option<Task<()>>,
     media_picker_generation: u64,
     pub(super) theme_editor: Option<theme_editor::ThemeEditor>,
@@ -134,6 +136,7 @@ pub struct SettingsPane {
     /// 首页「项目与支持」→ 赞助商：独立页面，不是外链行。切换分区时清掉。
     about_sponsor_open: bool,
     settings_search_input: Entity<InputState>,
+    settings_search_focus: search_header::SearchFocus,
     search_origin_section: Option<usize>,
     /// 每项还带着自己的 `values` 表：`SelectState` 只认索引，而从代码侧
     /// 改设置（还原默认值、命令面板切换）时手里只有配置文件记号，没有
@@ -850,9 +853,14 @@ impl SettingsPane {
         control: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let layout = if segmented::supports(key) {
+            design::RowLayout::IntrinsicControl
+        } else {
+            design::RowLayout::Standard
+        };
         match self.setting_override(key) {
             Some((dirty, factory)) => self
-                .row_with_reset(
+                .row_with_reset_layout(
                     label,
                     desc,
                     dirty,
@@ -875,11 +883,14 @@ impl SettingsPane {
                         // 必须显式拉回，否则撤销只改了值不改显示。
                         this.sync_select(key, &factory, window, cx);
                     },
+                    layout,
                     control,
                     cx,
                 )
                 .into_any_element(),
-            None => self.row(label, desc, control, cx).into_any_element(),
+            None => self
+                .row_shell(label, desc.into(), None, false, layout, control, cx)
+                .into_any_element(),
         }
     }
 

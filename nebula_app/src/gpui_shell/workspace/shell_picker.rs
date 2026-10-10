@@ -32,7 +32,7 @@ pub(super) fn ssh_host_display(label: Option<&str>, host: &str) -> (String, Stri
 pub(super) fn shell_palette_rows(
     shells: Vec<crate::shell_detect::DetectedShell>,
     profiles: Vec<crate::config::ui_config::Profile>,
-    ssh_hosts: impl IntoIterator<Item = (String, String)>,
+    ssh_hosts: &crate::gpui_shell::ssh_hosts::SshHostLists,
     default_shell_id: &str,
     language: crate::display::UiLanguage,
     scale_factor: f32,
@@ -95,26 +95,97 @@ pub(super) fn shell_palette_rows(
         let default_row = rows.remove(position);
         rows.insert(0, default_row);
     }
-    let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
-    rows.extend(ssh_hosts.into_iter().map(|(host, label)| {
-        let glyph =
-            crate::display::ui::os_icons::resolve(ssh_icons.get(&host).map(String::as_str)).glyph;
-        // 空串 = 没起名：`ssh_host_display` 回落地址本身，hint 保持 "SSH"。
-        let named = (!label.is_empty()).then_some(label.as_str());
-        let (label, hint) = ssh_host_display(named, &host);
-        let search = format!("{label} {host} ssh host remote lianjie 连接").to_lowercase();
-        WorkspacePaletteRow {
-            group_order: 2,
-            group: ssh_group.to_owned(),
-            label,
-            hint,
-            hint_style: WorkspacePaletteHintStyle::Metadata,
-            search,
-            action: WorkspacePaletteAction::LaunchSshHost(host),
-            icon: None,
-            icon_glyph: Some(glyph),
-            icon_path: None,
-        }
-    }));
+    rows.extend(ssh_palette_rows(ssh_hosts, 2, ssh_group));
     rows
+}
+
+/// All GPUI search entry points use the host library's searchable metadata.
+pub(super) fn ssh_palette_rows(
+    hosts: &crate::gpui_shell::ssh_hosts::SshHostLists,
+    group_order: usize,
+    group: &str,
+) -> Vec<WorkspacePaletteRow> {
+    let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
+    let search_texts = hosts.profiles.search_texts();
+    hosts
+        .merged_with_labels()
+        .into_iter()
+        .map(|(host, label)| {
+            let glyph =
+                crate::display::ui::os_icons::resolve(ssh_icons.get(&host).map(String::as_str))
+                    .glyph;
+            // 空串 = 没起名：`ssh_host_display` 回落地址本身，hint 保持 "SSH"。
+            let named = (!label.is_empty()).then_some(label.as_str());
+            let (label, hint) = ssh_host_display(named, &host);
+            let metadata = search_texts.get(host.as_str()).map(String::as_str).unwrap_or_default();
+            let search = format!("{metadata} {label} {host} ssh host remote lianjie 远程 连接")
+                .to_lowercase();
+            WorkspacePaletteRow {
+                group_order,
+                group: group.to_owned(),
+                label,
+                hint,
+                hint_style: WorkspacePaletteHintStyle::Metadata,
+                search,
+                action: WorkspacePaletteAction::LaunchSshHost(host),
+                icon: None,
+                icon_glyph: Some(glyph),
+                icon_path: None,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_search_rows_preserve_identity_order_and_metadata_after_reload() {
+        let mut hosts = crate::gpui_shell::ssh_hosts::SshHostLists {
+            saved: vec!["recent-only".into(), "hidden-host".into()],
+            configured: vec!["config-only".into()],
+            pinned: vec!["copy-id".into()],
+            hidden: vec!["hidden-host".into()],
+            ..Default::default()
+        };
+        let mut profile = hosts.profiles.for_destination("copy-id");
+        profile.label = Some("Production database".into());
+        profile.private_keys.push("private-key-path-marker".into());
+        hosts.profiles.upsert(profile);
+        hosts.profiles.set_connection_destination("copy-id", "root@db.example").unwrap();
+        hosts
+            .profiles
+            .set_organization(
+                "copy-id",
+                crate::ssh_profiles::HostOrganization::from_inputs(
+                    "生产",
+                    "Linux, Équipe",
+                    "Owner: Alice",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        hosts.profiles =
+            serde_json::from_str(&serde_json::to_string(&hosts.profiles).unwrap()).unwrap();
+
+        // Launcher, Quick Jump and command palette use these different group positions.
+        for group_order in [2, 3, usize::MAX] {
+            let rows = ssh_palette_rows(&hosts, group_order, "SSH hosts");
+            assert_eq!(rows.len(), 3, "hidden hosts remain excluded");
+            assert_eq!(rows[0].label, "Production database", "pinned host stays first");
+            assert_eq!(rows[0].group_order, group_order);
+            assert!(matches!(&rows[0].action,
+                WorkspacePaletteAction::LaunchSshHost(host) if host == "copy-id"));
+            for keyword in ["production", "root@db.example", "生产", "linux", "équipe", "alice"]
+            {
+                assert!(rows[0].search.contains(keyword), "missing keyword: {keyword}");
+            }
+            assert!(!rows[0].search.contains("private-key-path-marker"));
+            assert_eq!(rows[1].label, "recent-only");
+            assert!(rows[1].search.contains("recent-only"));
+            assert_eq!(rows[2].label, "config-only");
+            assert!(rows[2].search.contains("config-only"));
+        }
+    }
 }
