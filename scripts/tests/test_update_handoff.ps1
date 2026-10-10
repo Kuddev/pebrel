@@ -36,7 +36,8 @@ function Write-Json([string]$Path, $Value) {
 }
 
 $results = @()
-foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'installer-failure', 'other-process', 'late-process', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held')) {
+foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'installer-failure', 'other-process', 'late-process', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held', 'portable-success', 'portable-rollback', 'portable-held', 'portable-tampered', 'portable-traversal', 'portable-cancel', 'portable-managed', 'portable-external', 'portable-junction', 'portable-no-modules')) {
+    $portable = $scenario.StartsWith('portable-')
     $directory = Join-Path $OutputRoot $scenario
     $installation = Join-Path $directory 'installed app'
     $transaction = Join-Path $directory 'transaction'
@@ -46,17 +47,18 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
     Copy-Item -LiteralPath $old -Destination $executable
     $payload = if ($scenario -eq 'reinstall') { $reinstall } elseif ($scenario -eq 'repair-identical') { $old } else { $candidate }
     Copy-Item -LiteralPath $payload -Destination (Join-Path $directory 'candidate.exe')
-    [System.IO.File]::WriteAllText((Join-Path $installation 'unins000.exe'), 'fixture marker')
+    if (-not $portable) { [System.IO.File]::WriteAllText((Join-Path $installation 'unins000.exe'), 'fixture marker') }
+    [System.IO.File]::WriteAllText((Join-Path $installation 'my notes.txt'), 'keep my file')
     $env:PEBREL_HANDOFF_FIXTURE = $directory
     $env:PEBREL_HANDOFF_FAIL_INSTALL = if ($scenario -eq 'installer-failure') { '1' } else { '0' }
     $env:PEBREL_HANDOFF_NOOP_INSTALL = if ($scenario -eq 'upgrade-noop') { '1' } else { '0' }
-    $parent = Start-Process -FilePath $executable -ArgumentList 'wait' -PassThru
+    $parent = Start-Process -FilePath $executable -ArgumentList 'wait' -PassThru -WindowStyle Hidden
     $null = $parent.Handle
     $runner = $null
     $other = $null
     $helperLock = $null
     try {
-        if ($scenario -in @('helper-unlocked', 'helper-held')) {
+        if ($scenario -in @('helper-unlocked', 'helper-held', 'portable-held')) {
             $null = New-Item -ItemType Directory -Path (Join-Path $installation 'runtime') -Force
             $helperPath = Join-Path $installation 'runtime\pebrel-hook.exe'
             [System.IO.File]::WriteAllText($helperPath, 'old helper fixture')
@@ -71,19 +73,50 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
             version = '9.9.9'; original_version = '1.8.0'; guard_path = (Join-Path $directory 'install.nebula-lock')
             participants = @(@{ pid = $parent.Id; created = $parent.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() })
         }
+        if ($portable) {
+            $staging = Join-Path $transaction 'portable'
+            $null = New-Item -ItemType Directory -Path (Join-Path $staging 'runtime'), (Join-Path $staging 'docs') -Force
+            Copy-Item -LiteralPath $candidate -Destination (Join-Path $staging 'pebrel.exe')
+            [IO.File]::WriteAllText((Join-Path $staging 'runtime\pebrel-hook.exe'), 'repaired helper fixture')
+            [IO.File]::WriteAllText((Join-Path $staging 'docs\new.txt'), 'new package file')
+            $null = New-Item -ItemType Directory -Path (Join-Path $installation 'runtime') -Force
+            if ($scenario -ne 'portable-held') {
+                [IO.File]::WriteAllText((Join-Path $installation 'runtime\pebrel-hook.exe'), 'old helper fixture')
+            }
+            $files = @('pebrel.exe', 'runtime/pebrel-hook.exe', 'docs/new.txt') | ForEach-Object {
+                $source = Join-Path $staging $_
+                @{ path = $_; bytes = (Get-Item -LiteralPath $source).Length; sha256 = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash }
+            }
+            $plan.portable = @{ directory = $staging; files = @($files) }
+            if ($scenario -eq 'portable-rollback') { $plan.version = '8.8.8' }
+            if ($scenario -eq 'portable-tampered') { [IO.File]::WriteAllText((Join-Path $staging 'docs\new.txt'), 'changed') }
+            if ($scenario -eq 'portable-traversal') { $plan.portable.files[2].path = '../escape.txt' }
+            if ($scenario -eq 'portable-managed') { [IO.File]::WriteAllText((Join-Path $installation 'unins000.exe'), 'managed copy') }
+            if ($scenario -eq 'portable-external') { [IO.File]::WriteAllText((Join-Path $installation 'pebrel-distribution'), 'scoop') }
+            if ($scenario -eq 'portable-junction') {
+                $outside = Join-Path $directory 'outside'
+                $null = New-Item -ItemType Directory -Path $outside -Force
+                [IO.File]::WriteAllText((Join-Path $outside 'sentinel.txt'), 'keep outside file')
+                $null = New-Item -ItemType Junction -Path (Join-Path $installation 'docs') -Target $outside
+            }
+        }
         if ($scenario -eq 'checksum') { $plan.sha256 = '0' * 64 }
         if ($scenario -in @('reinstall', 'repair-identical')) { $plan.version = '1.8.0' }
         if ($scenario -eq 'creation-time') { $plan.participants[0].created = '1' }
         if ($scenario -eq 'other-process') {
-            $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -PassThru
+            $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -PassThru -WindowStyle Hidden
         }
         $planPath = Join-Path $transaction 'plan.json'
         Write-Json $planPath $plan
-        $runner = Start-Process -FilePath $powershell -ArgumentList @(
-            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-            ('"' + $helper + '"'), '-PlanPath', ('"' + $planPath + '"')) -PassThru
+        $modulePathBefore = $env:PSModulePath
+        try {
+            if ($scenario -eq 'portable-no-modules') { $env:PSModulePath = Join-Path $directory 'missing-modules' }
+            $runner = Start-Process -FilePath $powershell -ArgumentList @(
+                '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                ('"' + $helper + '"'), '-PlanPath', ('"' + $planPath + '"')) -PassThru -WindowStyle Hidden
+        } finally { $env:PSModulePath = $modulePathBefore }
         $resultPath = Join-Path $transaction 'result.json'
-        if ($scenario -in @('checksum', 'creation-time', 'other-process')) {
+        if ($scenario -in @('checksum', 'creation-time', 'other-process', 'portable-tampered', 'portable-traversal', 'portable-managed', 'portable-external', 'portable-junction')) {
             Wait-File $resultPath
             Assert (-not $parent.HasExited) 'Rejected plan must leave the original process open'
             Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Rejected plan started setup'
@@ -99,9 +132,9 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
             } catch [System.IO.IOException] { $locked = $true }
             Assert $locked 'Ready helper did not own the installation lock'
             if ($scenario -eq 'late-process') {
-                $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -PassThru
+                $other = Start-Process -FilePath $executable -ArgumentList 'wait-other' -PassThru -WindowStyle Hidden
             }
-            if ($scenario -eq 'cancel') {
+            if ($scenario -in @('cancel', 'portable-cancel')) {
                 Write-Json (Join-Path $transaction 'cancel.json') @{}
                 Wait-File $resultPath
                 Assert (-not $parent.HasExited) 'Cancel stopped the original process'
@@ -119,7 +152,7 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
                     $helperLock = $null
                 }
                 Wait-File $resultPath
-                if ($scenario -in @('success', 'installer-failure', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held')) {
+                if ($scenario -in @('success', 'installer-failure', 'reinstall', 'repair-identical', 'upgrade-noop', 'helper-unlocked', 'helper-held', 'portable-success', 'portable-rollback', 'portable-held', 'portable-no-modules')) {
                     Wait-File (Join-Path $directory 'new-launch')
                     $launch = [System.IO.File]::ReadAllLines((Join-Path $directory 'new-launch'))
                     Assert ($launch[0] -eq $executable) 'Relaunch selected another installation'
@@ -131,7 +164,7 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
         }
         Assert ($runner.WaitForExit(5000)) 'Helper did not finish'
         $result = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        Assert ($result.success -eq ($scenario -in @('success', 'reinstall', 'repair-identical', 'helper-unlocked'))) 'Unexpected helper outcome'
+        Assert ($result.success -eq ($scenario -in @('success', 'reinstall', 'repair-identical', 'helper-unlocked', 'portable-success', 'portable-no-modules'))) 'Unexpected helper outcome'
         if ($result.success) {
             $expected = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash
             Assert ($result.executable_sha256 -eq $expected) 'Installed binary differs from candidate'
@@ -142,8 +175,26 @@ foreach ($scenario in @('cancel', 'success', 'checksum', 'creation-time', 'insta
             Assert (-not $other.HasExited) 'Update stopped an unprepared process'
             Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Setup ran with an unprepared process'
         }
-        if ($scenario -in @('installer-failure', 'upgrade-noop', 'helper-held')) {
+        if ($scenario -in @('installer-failure', 'upgrade-noop', 'helper-held', 'portable-held', 'portable-rollback')) {
             Assert $result.recovered_original 'Untouched old executable was not recovered'
+        }
+        Assert ([IO.File]::ReadAllText((Join-Path $installation 'my notes.txt')) -eq 'keep my file') 'Update modified a user file'
+        if ($portable) {
+            Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'Portable update launched setup'
+            if ($scenario -in @('portable-success', 'portable-no-modules')) {
+                Assert ([IO.File]::ReadAllText((Join-Path $installation 'docs\new.txt')) -eq 'new package file') 'New package file missing'
+                Assert (Test-Path (Join-Path $installation ('.pebrel-update-' + $scenario + '\pebrel.exe'))) 'Old portable binary was not backed up'
+            } else {
+                Assert ((Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash) 'Portable failure left a changed executable'
+                Assert (-not (Test-Path (Join-Path $installation 'docs\new.txt'))) 'Rollback left a newly added file'
+            }
+            if ($scenario -eq 'portable-rollback') {
+                Assert ([IO.File]::ReadAllText((Join-Path $installation 'runtime\pebrel-hook.exe')) -eq 'old helper fixture') 'Rollback did not restore the helper'
+            }
+            if ($scenario -eq 'portable-junction') {
+                Assert ([IO.File]::ReadAllText((Join-Path $outside 'sentinel.txt')) -eq 'keep outside file') 'Update touched a path outside the installation'
+                Assert (-not (Test-Path (Join-Path $outside 'new.txt'))) 'Junction allowed a package write outside the installation'
+            }
         }
         if ($scenario -eq 'helper-held') {
             Assert (-not (Test-Path (Join-Path $directory 'installer-started'))) 'A blocked helper allowed a partial installation'

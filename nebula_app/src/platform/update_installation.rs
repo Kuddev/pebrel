@@ -83,12 +83,40 @@ pub(crate) fn installation_directory(executable: &Path) -> Result<PathBuf, Strin
     #[cfg(not(target_os = "macos"))]
     {
         let directory = executable.parent().ok_or("Missing application directory")?;
-        if !directory.join("unins000.exe").is_file() {
-            return Err(
-                "This copy is portable. Use the download page to replace its package.".into()
-            );
-        }
         Ok(directory.to_owned())
+    }
+}
+
+/// Share the existing uninstall-marker rule with discovery, before downloading.
+/// Channel ownership is checked separately and always takes precedence.
+pub(crate) fn windows_portable_at(directory: &Path) -> io::Result<bool> {
+    match std::fs::metadata(directory.join("unins000.exe")) {
+        Ok(marker) if marker.is_file() => Ok(false),
+        Ok(_) => Err(io::Error::other("Invalid installer ownership marker")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn windows_portable() -> io::Result<bool> {
+    let executable = canonical(&std::env::current_exe()?)?;
+    windows_portable_at(
+        executable.parent().ok_or_else(|| io::Error::other("Missing application directory"))?,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn package_ownership_uses_the_uninstall_marker_before_download() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(super::windows_portable_at(root.path()).unwrap());
+        let marker = root.path().join("unins000.exe");
+        std::fs::write(&marker, b"installer").unwrap();
+        assert!(!super::windows_portable_at(root.path()).unwrap());
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::create_dir(&marker).unwrap();
+        assert!(super::windows_portable_at(root.path()).is_err());
     }
 }
 

@@ -22,10 +22,26 @@ pub(crate) fn windows_names(version: &str, architecture: &str) -> Vec<String> {
     }
 }
 
+pub(crate) fn windows_portable_names(version: &str, architecture: &str) -> Vec<String> {
+    let architecture = match architecture {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => return Vec::new(),
+    };
+    vec![format!("Pebrel-v{version}-windows-{architecture}.zip")]
+}
+
 pub(crate) fn native_names(version: &str) -> Vec<String> {
     match Platform::current() {
         Platform::MacOS => macos_names(version, std::env::consts::ARCH),
-        Platform::Windows => windows_names(version, std::env::consts::ARCH),
+        Platform::Windows => match crate::platform::update_installation::windows_portable() {
+            Ok(true) => windows_portable_names(version, std::env::consts::ARCH),
+            Ok(false) => windows_names(version, std::env::consts::ARCH),
+            Err(error) => {
+                log::warn!("Could not establish update package ownership: {error}");
+                Vec::new()
+            },
+        },
         _ => Vec::new(),
     }
 }
@@ -120,6 +136,24 @@ mod tests {
         assert_eq!(select(version, "", &assets, &x64).unwrap().name, x64[0]);
         assert!(select(version, "", &assets[..1], &arm).is_none());
         assert!(select(version, "", &assets[2..], &arm).is_none());
+    }
+    #[test]
+    fn portable_names_never_fall_back_to_an_installer_or_another_architecture() {
+        for (arch, expected) in [("x86_64", "x64"), ("aarch64", "arm64")] {
+            let names = windows_portable_names("2.3.0", arch);
+            assert_eq!(names, [format!("Pebrel-v2.3.0-windows-{expected}.zip")]);
+            let assets = windows_names("2.3.0", arch)
+                .into_iter()
+                .map(|name| GitHubReleaseAsset {
+                    name,
+                    browser_download_url: String::new(),
+                    size: 1,
+                    digest: None,
+                })
+                .collect::<Vec<_>>();
+            assert!(select("2.3.0", "", &assets, &names).is_none());
+        }
+        assert!(windows_portable_names("2.3.0", "unknown").is_empty());
     }
     #[test]
     fn checksum_manifest_requires_one_exact_valid_entry() {

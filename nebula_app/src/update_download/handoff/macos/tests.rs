@@ -128,6 +128,7 @@ impl Fixture {
             version: version.into(),
             original_version: env!("CARGO_PKG_VERSION").into(),
             participants: vec![Participant { pid: old.id(), created: created.to_string() }],
+            portable: None,
         };
         fs::copy(binary, directory.join("handoff")).unwrap();
         Self { _root: root, plan, directory, old, helper: None }

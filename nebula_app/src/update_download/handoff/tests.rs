@@ -46,6 +46,7 @@ fn update_restore_tickets_cover_success_rollback_and_acknowledgement() {
         original_version: version,
         guard_path: config.join("guard"),
         participants: Vec::new(),
+        portable: None,
     };
     let save = |name: &str, value: serde_json::Value| {
         std::fs::write(directory.join(name), serde_json::to_vec(&value).unwrap()).unwrap();

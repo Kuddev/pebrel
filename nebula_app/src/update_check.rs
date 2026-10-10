@@ -514,6 +514,13 @@ mod tests {
             ]
         }"#;
         let release = parse_latest_release(json).expect("valid release");
+        if crate::platform::update_installation::windows_portable().unwrap() {
+            assert!(
+                release.asset.is_none(),
+                "a portable copy must not fall back to setup or an unsupported legacy ZIP"
+            );
+            return;
+        }
         let asset = release.asset.expect("x64 installer");
 
         assert_eq!(release.version, "1.4.0");
@@ -590,7 +597,9 @@ mod tests {
 
     #[test]
     fn unsupported_platforms_do_not_offer_a_windows_installer() {
-        if cfg!(all(windows, target_arch = "x86_64")) {
+        if cfg!(all(windows, target_arch = "x86_64"))
+            && !crate::platform::update_installation::windows_portable().unwrap_or(true)
+        {
             return;
         }
         let json = serde_json::json!({
