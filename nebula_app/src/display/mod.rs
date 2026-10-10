@@ -2201,21 +2201,19 @@ impl Display {
         ink: Rgb,
         target_size: u32,
     ) -> Option<(u64, std::sync::Arc<Vec<u8>>, (u32, u32))> {
-        // Color assets keep their source colors. Grok ships official dark
-        // and light marks, selected to match the chrome ink without tinting.
-        let grok_uses_light_mark =
+        // Color assets keep their source colors. Grok and Qoder ship dark and
+        // light marks, selected to match the chrome ink without tinting.
+        let light_ink =
             u32::from(ink.r) * 299 + u32::from(ink.g) * 587 + u32::from(ink.b) * 114 >= 128_000;
         let key = match logo {
-            AiLogo::Grok if grok_uses_light_mark => (logo, [255, 255, 255], target_size),
-            AiLogo::OpenAi | AiLogo::OpenCode | AiLogo::Pi => {
-                (logo, [ink.r, ink.g, ink.b], target_size)
-            },
+            AiLogo::Grok | AiLogo::Qoder if light_ink => (logo, [255, 255, 255], target_size),
+            _ if logo.tints_with_ink() => (logo, [ink.r, ink.g, ink.b], target_size),
             _ => (logo, [0, 0, 0], target_size),
         };
         if let Some(cached) = self.nebula_ai_logo_cache.get(&key) {
             return Some(cached.clone());
         }
-        let bytes = logo.png(grok_uses_light_mark);
+        let bytes = logo.png(light_ink);
         let (width, height, mut rgba) = match crate::renderer::image::decode_png_bytes(bytes) {
             Ok(decoded) => decoded,
             // Unreachable for a valid embedded asset; degrade to no icon.
