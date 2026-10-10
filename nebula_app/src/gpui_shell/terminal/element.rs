@@ -465,12 +465,17 @@ impl Element for TerminalElement {
             }
         });
 
+        // Explicit cell backgrounds sit above a native video layer like the card surface.
+        let over_underlay = crate::gpui_shell::wallpaper::cell_backgrounds_over_underlay(cx);
         for run in &snap.bg_runs {
             let mut paint = |start: u16, end: u16, color: Color| {
                 if start >= end {
                     return;
                 }
-                let color = theme.resolve(color, &overrides, false);
+                let color = crate::gpui_shell::wallpaper::cell_background(
+                    theme.resolve(color, &overrides, false),
+                    over_underlay,
+                );
                 for visual in math_frame.projected_runs(
                     run.row as usize,
                     start as usize..end as usize,

@@ -218,6 +218,29 @@ fn refresh_surface_opacity(cx: &mut App) {
     sync_root_background(cx);
 }
 
+/// Whether explicit terminal cell backgrounds sit above a native video layer.
+pub fn cell_backgrounds_over_underlay(cx: &App) -> bool {
+    native_underlay_active(cx)
+}
+
+/// Fill for an explicit cell background above a native video layer. Dark,
+/// near-neutral fills are decorative panels (prompt bars, dialogs) and are not
+/// painted: on the translucent card they read as opaque slabs. Other fills mark
+/// meaning (selection, inverse video, diff, search) and become a translucent
+/// dark overlay, which keeps them visible without hiding the video.
+fn underlay_cell_background(color: gpui::Rgba) -> gpui::Rgba {
+    let max = color.r.max(color.g).max(color.b);
+    let min = color.r.min(color.g).min(color.b);
+    let luma = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+    let alpha = if max - min < 0.08 && luma < 0.35 { 0.0 } else { 0.15 };
+    gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: alpha }
+}
+
+/// Final fill for an explicit cell background.
+pub fn cell_background(color: gpui::Rgba, over_underlay: bool) -> gpui::Rgba {
+    if over_underlay { underlay_cell_background(color) } else { color }
+}
+
 /// Whether a native wallpaper layer is composited below the GPUI scene.
 pub fn native_underlay_active(cx: &App) -> bool {
     animated::underlay_ready(cx)

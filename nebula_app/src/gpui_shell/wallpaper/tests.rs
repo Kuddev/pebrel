@@ -35,6 +35,28 @@ fn native_underlay_composites_exactly_like_a_wallpaper_painted_above_the_surface
     }
 }
 
+#[test]
+fn over_native_video_panels_vanish_and_highlights_become_a_dark_overlay() {
+    let rgb = |r: u8, g: u8, b: u8| gpui::Rgba {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        a: 1.0,
+    };
+    // Prompt bar and dialog fills drawn by full-screen programs.
+    for panel in [rgb(20, 20, 24), rgb(55, 55, 55), rgb(70, 70, 70), rgb(48, 48, 48)] {
+        assert_eq!(cell_background(panel, true).a, 0.0);
+    }
+    // Selection, inverse video and diff fills stay visible as a translucent dark overlay.
+    for highlight in [rgb(38, 79, 120), rgb(230, 230, 230), rgb(90, 30, 30), rgb(30, 80, 40)] {
+        let fill = cell_background(highlight, true);
+        assert_eq!((fill.r, fill.g, fill.b), (0.0, 0.0, 0.0));
+        assert!(fill.a > 0.0 && fill.a < 1.0, "{highlight:?} -> {fill:?}");
+    }
+    // Without a native layer every explicit background keeps its color.
+    assert_eq!(cell_background(rgb(38, 79, 120), false), rgb(38, 79, 120));
+}
+
 fn settings(path: Option<PathBuf>) -> nebula_settings::RuntimeSettings {
     let mut settings = nebula_settings::RuntimeSettings::load();
     settings.background_image = path.map(|path| path.to_string_lossy().into_owned());
