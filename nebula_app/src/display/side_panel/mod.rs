@@ -7,7 +7,8 @@
 //! instead of reflowing the PTY, so toggling it never resizes the shell.
 //!
 //! Tree/Git snapshots refresh in the background on toggle, root changes, or
-//! explicit refresh. The filename index survives those snapshots and follows
+//! explicit refresh. Local tree rows also follow bounded filesystem notifications.
+//! The filename index survives those snapshots and follows
 //! filesystem notifications. `git --no-optional-locks` avoids touching
 //! the index lock, so it can't corrupt or stall a concurrent git operation.
 //!
@@ -25,6 +26,7 @@ use unicode_width::UnicodeWidthChar;
 mod enumerate;
 mod gitignore;
 mod icons;
+mod live_tree;
 mod notice;
 #[cfg(feature = "legacy-shell")]
 mod render;
@@ -460,6 +462,9 @@ pub struct SidePanel {
     /// 切换视图/根不再同步跑 git——旧内容原样留在屏上，新快照落地后整体
     /// 替换。
     snapshot_slot: std::sync::Arc<std::sync::Mutex<Option<PanelSnapshot>>>,
+    snapshot_revision: u64,
+    tree_revision: u64,
+    tree_watch: live_tree::TreeWatch,
     /// 上一份落地快照的枚举是否失败（WSL 超时 / find 非零退出）。UI 靠它区分
     /// "读不到"和"目录真的是空的"。
     enumeration_failed: bool,
@@ -469,6 +474,8 @@ pub struct SidePanel {
 /// What the background snapshot worker produces: everything `refresh` used to
 /// compute synchronously on the render thread.
 struct PanelSnapshot {
+    revision: u64,
+    tree_revision: u64,
     /// Root the snapshot was built from — stale snapshots (root changed while
     /// the worker ran) are dropped on harvest.
     root: PathBuf,
@@ -535,6 +542,9 @@ impl SidePanel {
             op_error: Default::default(),
             snapshot_running: Default::default(),
             snapshot_slot: Default::default(),
+            snapshot_revision: 0,
+            tree_revision: 0,
+            tree_watch: Default::default(),
             enumeration_failed: false,
             needs_refresh: false,
         }
@@ -545,6 +555,7 @@ impl SidePanel {
     pub fn toggle(&mut self, view: PanelView) {
         if self.open && self.view == view {
             self.open = false;
+            self.suspend_file_watching();
             self.file_index.clear_query();
             self.rows = Vec::new();
             self.search_memory = None;
@@ -556,6 +567,7 @@ impl SidePanel {
         self.open = true;
         self.view = view;
         if view == PanelView::Git {
+            self.suspend_file_watching();
             self.file_index.clear_query();
             self.rows = Vec::new();
             self.search_memory = None;
@@ -593,6 +605,7 @@ impl SidePanel {
         wsl: Option<crate::shell_detect::WslCwd>,
     ) -> bool {
         if !self.open {
+            self.suspend_file_watching();
             return false;
         }
         // 先收割落地的后台快照——旧内容在工人跑动期间一直显示，这里一次
@@ -652,20 +665,22 @@ impl SidePanel {
         if self.op_done.swap(false, std::sync::atomic::Ordering::Relaxed) {
             self.request_refresh();
         }
-        // 目录内容**不做定时重扫**。这里原先有一条 `stale`（每 4 秒无条件重跑
-        // 工人），代价是每 4 秒重新拉一遍 WSL 子进程 + 三个 git 子进程；配上 WSL
-        // 冷路径要 7.5s，面板就在"正在读取目录…"和结果之间反复闪——2026-08-21
-        // 用户裁定：目录识别不要轮询。
-        //
-        // 剩下的触发点全是明确事件：cwd/根变化、手动刷新按钮（`needs_refresh`）、
-        // git 操作完成（`op_done`）、浏览覆盖失效。终端里新建/删除文件不再自动
-        // 反映，由刷新按钮兜底——这是这条裁定的显式代价。
+        // No periodic rescans: native events invalidate only local tree rows.
+        // In particular, cloning must not repeatedly launch VCS/WSL subprocesses.
         if !(root_changed
             || custom_invalidated
             || follow_override_cleared
             || wsl_changed
             || self.needs_refresh)
         {
+            if changed || !self.tree_watch.active() {
+                self.sync_tree_watch();
+            }
+            if !self.snapshot_running.load(std::sync::atomic::Ordering::Acquire)
+                && self.tree_watch.take_changed(Instant::now())
+            {
+                self.refresh_snapshot(false);
+            }
             return changed;
         }
         if root_changed {
@@ -698,6 +713,9 @@ impl SidePanel {
             Err(_) => None,
         };
         let Some(snapshot) = snapshot else { return false };
+        if snapshot.revision != self.snapshot_revision {
+            return false;
+        }
         // 工人跑动期间根又变了：这份快照已经过期，丢弃。新刷新在路上。
         if self.root.as_ref() != Some(&snapshot.root)
             || self.file_wsl_root().cloned() != snapshot.files_wsl
@@ -707,15 +725,21 @@ impl SidePanel {
             self.needs_refresh = true;
             return false;
         }
-        self.tree_rows = snapshot.rows;
-        if self.search.trim().is_empty() {
-            self.rows.clone_from(&self.tree_rows);
+        let mut changed = false;
+        if snapshot.tree_revision == self.tree_revision {
+            self.tree_rows = snapshot.rows;
+            if self.search.trim().is_empty() {
+                self.rows.clone_from(&self.tree_rows);
+            }
+            self.enumeration_failed = !snapshot.enumeration_ok;
+            changed = true;
         }
-        self.enumeration_failed = !snapshot.enumeration_ok;
+        // Expanding a row invalidates its old shape, not the same root's VCS read.
         if let Some(git) = snapshot.git {
             self.git = git.map(std::sync::Arc::new);
+            changed = true;
         }
-        true
+        changed
     }
 
     fn harvest_file_search(&mut self) -> bool {
@@ -882,6 +906,7 @@ impl SidePanel {
     pub fn request_refresh(&mut self) {
         self.needs_refresh = true;
         self.search_index_refresh_requested = true;
+        self.tree_watch.restart();
     }
 
     /// 面板顶部的一句话提示（复用根目录不可用的同一条 UI）。
@@ -924,6 +949,12 @@ impl SidePanel {
 
     /// Rebuild the tree and git snapshot from `root`.
     fn refresh(&mut self) {
+        self.refresh_snapshot(true);
+    }
+
+    fn refresh_snapshot(&mut self, with_vcs: bool) {
+        self.snapshot_revision = self.snapshot_revision.wrapping_add(1);
+        self.sync_tree_watch();
         self.needs_refresh = false;
         let Some(root) = self.root.clone() else {
             // 没有根：清空是即时且无成本的，不需要工人。
@@ -956,6 +987,8 @@ impl SidePanel {
         let wsl = self.followed_wsl.clone();
         let running = std::sync::Arc::clone(&self.snapshot_running);
         let slot = std::sync::Arc::clone(&self.snapshot_slot);
+        let revision = self.snapshot_revision;
+        let tree_revision = self.tree_revision;
         std::thread::spawn(move || {
             let _running_guard = SnapshotRunningGuard(running);
             let (rows, enumeration_ok) = match &files_wsl {
@@ -964,15 +997,19 @@ impl SidePanel {
             };
             // 文件列表是 Files 的主结果，不能被随后可能耗满超时预算的 WSL
             // git 探测扣住。先发布目录行；VCS 完成后再用同一行集补全快照。
+            let vcs_rows = with_vcs.then(|| rows.clone());
             if let Ok(mut slot) = slot.lock() {
                 *slot = Some(PanelSnapshot {
+                    revision,
+                    tree_revision,
                     root: root.clone(),
                     files_wsl: files_wsl.clone(),
-                    rows: rows.clone(),
+                    rows,
                     enumeration_ok,
                     git: None,
                 });
             }
+            let Some(rows) = vcs_rows else { return };
             // 设置可强制只认 Git / SVN（混合仓库场景）；Auto 保持既有探测：
             // a checkout nested inside a Git tree must remain visible as SVN.
             // Prefer SVN only when its metadata is in the current path's
@@ -1005,8 +1042,15 @@ impl SidePanel {
                 },
             };
             if let Ok(mut slot) = slot.lock() {
-                *slot =
-                    Some(PanelSnapshot { root, files_wsl, rows, enumeration_ok, git: Some(git) });
+                *slot = Some(PanelSnapshot {
+                    revision,
+                    tree_revision,
+                    root,
+                    files_wsl,
+                    rows,
+                    enumeration_ok,
+                    git: Some(git),
+                });
             }
         });
     }
@@ -1014,6 +1058,8 @@ impl SidePanel {
     /// Rebuild only the flattened rows (tree shape / filter changes; the git
     /// snapshot stays).
     fn rebuild_rows(&mut self) {
+        // A delayed snapshot must not undo a later expand/collapse interaction.
+        self.tree_revision = self.tree_revision.wrapping_add(1);
         let Some(root) = self.root.clone() else { return };
         if !self.search.trim().is_empty() {
             self.queue_file_search();
@@ -1031,6 +1077,22 @@ impl SidePanel {
             },
         }
         self.rows.clone_from(&self.tree_rows);
+        self.sync_tree_watch();
+    }
+
+    pub(crate) fn suspend_file_watching(&mut self) {
+        self.tree_watch.configure(None);
+    }
+
+    fn sync_tree_watch(&mut self) {
+        let scope = self
+            .root
+            .as_ref()
+            .filter(|_| {
+                self.open && self.view == PanelView::Files && self.file_wsl_root().is_none()
+            })
+            .map(|root| live_tree::WatchScope::new(root, &self.tree_rows));
+        self.tree_watch.configure(scope);
     }
 
     fn queue_file_search(&mut self) {

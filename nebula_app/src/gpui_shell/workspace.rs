@@ -1795,11 +1795,10 @@ impl NebulaWorkspace {
         if !self.side_panel.open {
             return false;
         }
-        // 远端 pane 的位置不在本机文件系统里。不早退的话，`side_panel_follow`
-        // 会拿远端路径去问宿主 `is_dir`（必然为假），于是本地树保留上一个有效
-        // 根——用户在 SSH tab 上看到的是**上一个本地目录**的内容，而且没有任何
-        // 提示。这正是"远端浏览器识别不到"的观感来源。
+        // Remote paths belong to the remote browser, not the host file tree.
+        // Suspend host watches while that browser owns the drawer.
         if self.remote_browser.active() {
+            self.side_panel.suspend_file_watching();
             return false;
         }
         let (cwd, wsl) = self.side_panel_follow(cx);
