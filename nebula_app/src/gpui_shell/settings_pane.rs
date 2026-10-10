@@ -1495,7 +1495,7 @@ impl SettingsPane {
             1 => self.section_appearance(window, cx),
             2 => self.section_profiles(window, cx),
             3 => self.section_providers(cx),
-            4 => self.section_ssh(window, cx),
+            4 => self.section_ssh(cx),
             5 => self.section_network(cx),
             6 => self.section_interaction(cx),
             7 => self.section_keymap(cx),
@@ -1644,7 +1644,6 @@ impl Render for SettingsPane {
         let backup_drawer = self.backup_drawer(window, cx);
         let mobile_relay_modal = self.mobile_relay_modal(cx);
         let application_page = self.active_section == 0;
-        let mobile_page = self.active_section == MOBILE_SECTION;
 
         div()
             .size_full()
@@ -1711,7 +1710,6 @@ impl Render for SettingsPane {
                             .pt(px(20.0))
                             .pb(px(22.0))
                             .when(!application_page, |content| content.pt(px(28.0)).pb(px(30.0)))
-                            .when(mobile_page, |content| content.p_0())
                             // 注意这层包装 `v_flex` 的 `w_full` 不能删（2026-08-23
                             // 又栽了一次）：`overflow_y_scrollbar` 把内容层清成
                             // `Display::Block`，而 flex 容器在 block 父里
@@ -1749,9 +1747,6 @@ impl Render for SettingsPane {
                                     .child(
                                         v_flex()
                                             .w_full()
-                                            .when(matches!(self.active_section, 4 | 9 | 10 | MOBILE_SECTION), |content| {
-                                                content.items_center()
-                                            })
                                             .when(application_page, |content| content.max_w(px(960.0)))
                                             .child(content),
                                     ),

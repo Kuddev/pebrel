@@ -663,11 +663,7 @@ impl SettingsPane {
             .into_any_element()
     }
 
-    pub(in crate::gpui_shell) fn section_ssh(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    pub(in crate::gpui_shell) fn section_ssh(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let language = crate::gpui_shell::config::ui_language(cx);
         let controls = self.library_controls(cx);
         let header = self.library_header(cx);
@@ -751,10 +747,6 @@ impl SettingsPane {
             .flex_col()
             .gap(px(14.0))
             .w_full()
-            .max_w(px(1000.0))
-            .px(px(if f32::from(window.viewport_size().width) < 1000.0 { 12.0 } else { 36.0 }))
-            .pt(px(16.0))
-            .pb(px(110.0))
             .child(header)
             .child(div().mt(px(10.0)).child(controls))
             .children(
