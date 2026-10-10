@@ -114,10 +114,14 @@ impl NebulaWorkspace {
         );
         let is_default = target.default_id().is_some_and(|id| id.eq_ignore_ascii_case(&current));
         let pending = self.launcher_admin_task.is_some();
+        let splitting = self.pending_split.is_some();
         let weak = cx.entity().downgrade();
         let language = workspace_ui_language();
         let menu = PopupMenu::build(window, cx, move |menu, _, _| {
             commands(&target).into_iter().fold(menu.external_link_icon(false), |menu, command| {
+                if splitting && command == LauncherCommand::OpenAdmin {
+                    return menu;
+                }
                 let target = target.clone();
                 let weak = weak.clone();
                 let label = if command == LauncherCommand::SetDefault && is_default {
@@ -193,8 +197,7 @@ impl NebulaWorkspace {
             LauncherCommand::OpenAdmin => self.launch_administrator(&target, window, cx),
             LauncherCommand::Connect => {
                 if let LauncherTarget::Ssh(host) = target {
-                    self.dismiss_palette_state();
-                    self.add_ssh_terminal(host, window, cx);
+                    self.launch_palette_ssh(host, window, cx);
                 }
             },
             LauncherCommand::Edit | LauncherCommand::Delete => {

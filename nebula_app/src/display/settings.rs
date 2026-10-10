@@ -108,7 +108,7 @@ fn nav_icon(section: NebulaSettingsSection) -> icons::SettingsNavIcon {
 }
 
 /// Shortcut sheet shown in 设置→按键映射. Editable rows live in
-/// [`keymap::EDITABLE_ACTIONS`]; the read-only extras in
+/// [`keymap::LEGACY_ACTIONS`]; the read-only extras in
 /// [`keymap::READONLY_ROWS`] (spec 002).
 
 /// Which independently draggable opacity control is being adjusted.
@@ -247,7 +247,7 @@ pub struct ProxyPaneState {
 }
 
 /// 按键映射页几何的动态输入：搜索过滤后的每组可见行数 + 冲突提示占位。
-/// 数组与 [`keymap::GROUPS`] 对齐（长度由 keymap 侧测试锁定为 5）。
+/// 数组与 [`keymap::LEGACY_GROUPS`] 对齐（长度由 keymap 侧测试锁定为 5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct KeymapPaneState {
     pub visible: [u8; 5],
@@ -1642,7 +1642,7 @@ fn settings_geometry(
     let mut keymap_slot = 0usize;
     let mut keymap_first_group = true;
     let keymap_rows_top = keymap_cursor + 42.0;
-    for group in 0..keymap::GROUPS.len() {
+    for group in 0..keymap::LEGACY_GROUPS.len() {
         let rows = keymap_pane.visible[group] as usize;
         if rows == 0 {
             continue;
@@ -3341,7 +3341,7 @@ fn keymap_pane_state_view(view: &SettingsView) -> KeymapPaneState {
         ..Default::default()
     };
     let mut start = 0usize;
-    for (group, (.., count)) in keymap::GROUPS.iter().enumerate() {
+    for (group, (.., count)) in keymap::LEGACY_GROUPS.iter().enumerate() {
         let end = start + count;
         pane.visible[group] =
             view.keymap_visible.iter().filter(|flat| (start..end).contains(*flat)).count() as u8;
@@ -7259,7 +7259,7 @@ pub(super) fn draw_text(
                 if !title_y.is_finite() || !visible(*title_y, title_h) {
                     continue;
                 }
-                let (zh, en) = match keymap::GROUPS.get(group) {
+                let (zh, en) = match keymap::LEGACY_GROUPS.get(group) {
                     Some((zh, en, _)) => (*zh, *en),
                     None => ("固定快捷键", "Fixed shortcuts"),
                 };
@@ -7310,7 +7310,7 @@ pub(super) fn draw_text(
                         language.pick("快速终端", "Quick terminal")
                     }
                 } else {
-                    keymap::action_label(&keymap::EDITABLE_ACTIONS[i - 1], language)
+                    keymap::action_label(&keymap::LEGACY_ACTIONS[i - 1], language)
                 };
                 r.draw_chrome_text(
                     size,

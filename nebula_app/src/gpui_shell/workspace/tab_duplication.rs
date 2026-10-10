@@ -50,9 +50,8 @@ fn wsl_program_args(launch: &LaunchSession) -> Option<(&str, &[String])> {
 /// How a copy relates to the pane it starts from.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum CopyKind {
-    /// A WSL pane is duplicated into its own guest, even without a reported guest
-    /// cwd (fish, or before the first prompt); other panes open the current
-    /// default shell in the host cwd.
+    /// Preserve every focused pane's launch identity; WSL also pins its guest
+    /// before the first prompt or when the guest has no directory integration.
     Split,
     /// A duplicate (or fork) of a tab's identity, which may differ from the
     /// pane's. A bare WSL identity is pinned to the pane's spawn-time distribution.
@@ -60,6 +59,8 @@ pub(super) enum CopyKind {
     /// A new default-shell tab; a target that chooses its own directory keeps it,
     /// as a profile `cwd` does for host shells.
     NewTab,
+    /// An explicit picker choice follows its own guest/user and startup directory.
+    Selected,
 }
 
 /// The guest a WSL pane runs in: its spawn-time distribution and explicit user.
@@ -91,7 +92,8 @@ impl<'a> PaneOrigin<'a> {
                     guest: guest.to_owned(),
                 })
             },
-            None => view.local_cwd(),
+            None if view.ssh_destination.is_none() => view.local_cwd(),
+            None => None,
         };
         let guest = context.and_then(|context| {
             Some(FocusedGuest { distro: context.wsl_distribution()??, user: context.wsl_user() })
@@ -109,15 +111,12 @@ pub(super) fn copy_launch(
 ) -> (LaunchSession, Option<PathBuf>) {
     let mut focused = origin.guest;
     match kind {
-        CopyKind::Split if wsl_program_args(&launch).is_none() => {
-            return (LaunchSession::Default, origin.host_cwd);
-        },
         CopyKind::Split | CopyKind::Duplicate => {
             if let Some(focused) = focused {
                 pin_distribution(&mut launch, focused.distro);
             }
         },
-        CopyKind::NewTab => {
+        CopyKind::NewTab | CopyKind::Selected => {
             let own_directory = matches!(&launch, LaunchSession::Profile { cwd: Some(_), .. })
                 || wsl_program_args(&launch)
                     .and_then(|(program, args)| crate::shell_detect::wsl_launch(program, args))
@@ -280,7 +279,7 @@ mod tests {
     }
 
     /// A copy never carries a guest path into another distribution, user or shell;
-    /// a duplicate pins a bare identity, a new tab follows the default and keeps a
+    /// Splits and duplicates pin a bare identity; new tabs and explicit choices keep a
     /// directory the target chooses itself (a guest command's `--cd` is not one).
     #[test]
     fn copies_follow_the_guest_only_into_the_same_guest() {
@@ -310,7 +309,12 @@ mod tests {
                 true,
             ),
         ];
-        for (kind, cases) in [(CopyKind::Duplicate, duplicates), (CopyKind::NewTab, new_tabs)] {
+        for (kind, cases) in [
+            (CopyKind::Duplicate, duplicates.clone()),
+            (CopyKind::Split, duplicates),
+            (CopyKind::NewTab, new_tabs.clone()),
+            (CopyKind::Selected, new_tabs),
+        ] {
             for (target, guest, expected, inherits) in cases {
                 let origin = PaneOrigin { guest, cwd: "/srv", host_cwd: Some(host.clone()) };
                 let (launch, cwd) = copy_launch(target, kind, origin);
@@ -321,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn split_stays_in_the_guest_and_host_panes_keep_the_default_shell() {
+    fn split_preserves_the_focused_guest_and_host_shell() {
         use crate::gpui_shell::terminal::view::TerminalLaunch;
 
         let host = std::path::PathBuf::from(r"C:\Users\dev\project");
@@ -344,7 +348,10 @@ mod tests {
         assert_eq!((cwd, args.unwrap()), (Some(host.clone()), vec!["-d".into(), "Ubuntu".into()]));
         let own = shell("work", "wsl.exe", &["-d", "Ubuntu", "--cd", "~/work"]);
         assert_eq!(split(own, guest("Ubuntu"), "").1.unwrap(), ["-d", "Ubuntu", "--cd", "~/work"]);
-        assert_eq!(split(shell("pwsh", "pwsh.exe", &[]), None, "/x"), (Some(host.clone()), None));
+        assert_eq!(
+            split(shell("pwsh", "pwsh.exe", &["-NoLogo"]), None, "/x"),
+            (Some(host.clone()), Some(vec!["-NoLogo".into()]))
+        );
     }
 }
 

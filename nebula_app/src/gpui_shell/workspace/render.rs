@@ -184,10 +184,13 @@ impl Render for NebulaWorkspace {
                 this.toggle_file_tree(cx);
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
-                let _ = this.split_focused(SplitDirection::LeftRight, window, cx);
+                this.request_split(SplitDirection::LeftRight, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
-                let _ = this.split_focused(SplitDirection::TopBottom, window, cx);
+                this.request_split(SplitDirection::TopBottom, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &splitting::CycleSplitShellSource, window, cx| {
+                this.cycle_split_shell_source(window, cx);
             }))
             .on_action(cx.listener(|this, _: &RenameActiveTab, window, cx| {
                 let ix = this.active;

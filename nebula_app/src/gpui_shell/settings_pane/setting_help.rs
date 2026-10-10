@@ -79,6 +79,10 @@ pub(super) fn help(key: &str, language: UiLanguage) -> SettingHelp {
             language.pick("用于新标签，不影响已打开的终端。", "Used for new tabs. Existing terminals are unaffected."),
             None,
         ),
+        "split_shell_source" => (
+            language.text(crate::i18n::Message::SettingsSplitShellSourceDescription),
+            Some(language.text(crate::i18n::Message::SettingsSplitShellSourceDetails)),
+        ),
         "startup_directory" => (
             language.pick("未设置时，继承应用的启动目录。", "When unset, inherits the directory used to launch the application."),
             Some(language.pick("从资源管理器的文件夹中启动时，默认进入该文件夹。", "Launching from a File Explorer folder uses that folder by default.")),
@@ -189,6 +193,7 @@ mod tests {
             "fetch",
             "powerline",
             "shell",
+            "split_shell_source",
             "startup_directory",
             "bell",
             "ai_toasts",

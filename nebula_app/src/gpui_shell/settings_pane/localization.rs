@@ -49,6 +49,11 @@ pub(super) fn localized_select_labels(
             language.text(crate::i18n::Message::SettingsQuickTerminalDedicated),
             language.text(crate::i18n::Message::SettingsQuickTerminalExisting),
         ],
+        "split_shell_source" => vec![
+            language.text(crate::i18n::Message::SettingsSplitShellSourceDefault),
+            language.text(crate::i18n::Message::SettingsSplitShellSourceFocused),
+            language.text(crate::i18n::Message::SettingsSplitShellSourceAsk),
+        ],
         "notification_duration" => vec![
             language.text(crate::i18n::Message::SettingsNotificationsDurationDefault),
             language.text(crate::i18n::Message::SettingsNotificationsDurationFive),

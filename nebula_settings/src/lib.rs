@@ -39,6 +39,8 @@ pub use ligatures::Ligatures;
 mod notifications;
 pub use notifications::NotificationDuration;
 mod quick_terminal;
+mod split_shell_source;
+pub use split_shell_source::SplitShellSource;
 mod scrolling;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
@@ -1028,6 +1030,8 @@ pub struct RuntimeSettings {
     /// 默认 shell 的原始 id（`shell=` 原文：powershell/bash/cmd/pwsh/WSL
     /// 发行版等）。解析归 shell 检测层，这里只做持久化往返。
     pub shell: Option<String>,
+    /// Interactive split launch source. Missing/invalid values use the default shell.
+    pub split_shell_source: SplitShellSource,
     pub startup_directory: Option<String>,
     /// AI 内联补全（ghost text）。
     pub ghost: bool,
@@ -1213,6 +1217,10 @@ impl RuntimeSettings {
             refresh_environment: raw.bool_on("refresh_environment").unwrap_or(true),
             powerline: raw.bool_on("powerline").unwrap_or(true),
             shell: raw.value("shell").or_else(|| raw.value("executor")).map(str::to_owned),
+            split_shell_source: raw
+                .value("split_shell_source")
+                .and_then(SplitShellSource::from_settings)
+                .unwrap_or_default(),
             startup_directory: raw.value("startup_directory").map(str::to_owned),
             ghost: raw.value("ghost").map(|v| v != "0").unwrap_or(true),
             accept: raw.value("accept").and_then(AcceptKeyName::from_settings).unwrap_or_default(),

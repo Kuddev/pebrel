@@ -358,6 +358,34 @@ impl SettingsPane {
         cx.notify();
     }
 
+    fn set_split_shell_source(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = self.try_persist(&[("split_shell_source", value.to_owned())], cx) {
+            let language = crate::gpui_shell::config::ui_language(cx);
+            super::toast::toast(
+                window,
+                cx,
+                super::toast::ToastKind::Warning,
+                language.format(
+                    crate::i18n::Message::SettingsSaveFailed,
+                    &[("error", &error.to_string())],
+                ),
+            );
+            cx.notify();
+        }
+        self.sync_split_shell_source(self.runtime.split_shell_source, window, cx);
+    }
+
+    pub(super) fn sync_split_shell_source(
+        &mut self,
+        source: nebula_settings::SplitShellSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.runtime.split_shell_source = source;
+        self.sync_select("split_shell_source", source.settings_value(), window, cx);
+        cx.notify();
+    }
+
     fn toggle(
         &mut self,
         key: &'static str,
@@ -766,6 +794,7 @@ impl SettingsPane {
             "copy_on_select" => flag!(copy_on_select),
             "focus_follows_mouse" => Some((cur.focus_follows_mouse.is_some(), String::new())),
             "dim_inactive_panes" => flag!(dim_inactive_panes),
+            "split_shell_source" => pick!(split_shell_source),
             "multiline_paste_confirm" => flag!(multiline_paste_confirm),
             "tab_close_visible" => flag!(tab_close_visible),
             "terminal_proxy" => flag!(terminal_proxy),
@@ -864,6 +893,10 @@ impl SettingsPane {
                     desc,
                     dirty,
                     move |this, window, cx| {
+                        if key == "split_shell_source" {
+                            this.set_split_shell_source(&factory, window, cx);
+                            return;
+                        }
                         if key == "scrollback_lines" {
                             this.commit_scrollback_lines(&factory, window, cx);
                             return;
@@ -1277,6 +1310,12 @@ impl SettingsPane {
         let terminal = self
             .group(language.pick("启动", "Startup"), cx)
             .child(self.shell_select_row(cx))
+            .child(self.select_row(
+                "split_shell_source",
+                language.text(crate::i18n::Message::SettingsSplitShellSource),
+                help("split_shell_source", language),
+                cx,
+            ))
             .child(self.startup_directory_row(cx))
             .when(
                 crate::platform::Platform::current() == crate::platform::Platform::Windows,

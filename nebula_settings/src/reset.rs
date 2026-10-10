@@ -30,6 +30,7 @@ const RESET_KEYS: &[&str] = &[
     "refresh_environment",
     "powerline",
     "shell",
+    "split_shell_source",
     "executor",
     "startup_directory",
     "ghost",
@@ -148,6 +149,26 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn split_sources_round_trip_and_reset_to_default_shell() {
+        for source in crate::SplitShellSource::ALL {
+            let text = crate::apply_updates(
+                "custom=keep\n",
+                &[("split_shell_source", source.settings_value().into())],
+            );
+            assert_eq!(
+                RuntimeSettings::from_raw(&RawSettings::from_text(&text)).split_shell_source,
+                source
+            );
+            let reset = default_settings_text(&text);
+            assert_eq!(reset, "custom=keep\n");
+            assert_eq!(
+                RuntimeSettings::from_raw(&RawSettings::from_text(&reset)).split_shell_source,
+                crate::SplitShellSource::Default
+            );
+        }
+    }
 
     #[test]
     fn reset_preserves_explicit_hook_authorization_and_opt_out() {

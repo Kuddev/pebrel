@@ -1073,7 +1073,7 @@ pub struct Display {
     /// `process_key_bindings` BEFORE the config table (spec 002).
     pub nebula_keymap: Vec<crate::config::KeyBinding>,
     /// When `Some(row)`, the Keymap settings page is capturing a new combo
-    /// for `keymap::EDITABLE_ACTIONS[row]` and the keyboard is owned by it.
+    /// for `keymap::LEGACY_ACTIONS[row]` and the keyboard is owned by it.
     pub nebula_keymap_capture: Option<usize>,
     /// 捕获态实时回显：当前按住的修饰键前缀（"Ctrl+Shift+"）。松开清空。
     pub nebula_keymap_capture_preview: String,
@@ -2946,7 +2946,7 @@ impl Display {
             background_image_alignment: self.nebula_background_image_alignment,
             background_image_cover_chrome: self.nebula_background_image_cover_chrome,
             scroll: self.nebula_settings_scroll,
-            keymap: keymap::EDITABLE_ACTIONS
+            keymap: keymap::LEGACY_ACTIONS
                 .iter()
                 .map(|(action, ..)| keymap::effective_combo(action, &self.nebula_keymap))
                 .collect(),
@@ -5398,7 +5398,7 @@ impl Display {
         let combo = if flat == keymap::QUICK_TERMINAL_ROW {
             keymap::display_stored_combo(&self.nebula_quick_terminal_hotkey)
         } else {
-            keymap::EDITABLE_ACTIONS
+            keymap::LEGACY_ACTIONS
                 .get(flat - 1)
                 .and_then(|(action, ..)| keymap::effective_combo(action, &self.nebula_keymap))
                 .map(|(combo, _)| combo)
@@ -5407,7 +5407,7 @@ impl Display {
         let (zh, en) = if flat == keymap::QUICK_TERMINAL_ROW {
             ("快速终端", "Quick terminal")
         } else {
-            keymap::EDITABLE_ACTIONS.get(flat - 1).map(|(_, zh, en)| (*zh, *en)).unwrap_or(("", ""))
+            keymap::LEGACY_ACTIONS.get(flat - 1).map(|(_, zh, en)| (*zh, *en)).unwrap_or(("", ""))
         };
         format!("{zh} {en} {combo}").to_lowercase()
     }
@@ -5415,7 +5415,7 @@ impl Display {
     /// 过滤后的可见行（flat 下标，升序）。空查询 = 全部。
     pub fn keymap_visible_editable(&self) -> Vec<usize> {
         let query = self.nebula_keymap_query.trim().to_lowercase();
-        (0..keymap::editable_row_count())
+        (0..keymap::legacy_editable_row_count())
             .filter(|flat| query.is_empty() || self.keymap_row_haystack(*flat).contains(&query))
             .collect()
     }
@@ -5435,13 +5435,13 @@ impl Display {
     /// 冲突检测：同一 combo 绑了多个动作 → 每行标记 + 一句提示。只报第一组
     /// ——修完一组再报下一组，提示条不该自己变成列表。
     fn keymap_clash_info(&self) -> (Vec<bool>, Option<String>) {
-        let total = keymap::editable_row_count();
+        let total = keymap::legacy_editable_row_count();
         let mut combos: Vec<Option<String>> = Vec::with_capacity(total);
         for flat in 0..total {
             let combo = if flat == keymap::QUICK_TERMINAL_ROW {
                 Some(keymap::display_stored_combo(&self.nebula_quick_terminal_hotkey))
             } else {
-                keymap::EDITABLE_ACTIONS
+                keymap::LEGACY_ACTIONS
                     .get(flat - 1)
                     .and_then(|(action, ..)| keymap::effective_combo(action, &self.nebula_keymap))
                     .map(|(combo, _)| combo)
@@ -5454,7 +5454,7 @@ impl Display {
             if flat == keymap::QUICK_TERMINAL_ROW {
                 self.nebula_language.pick("快速终端", "Quick terminal").to_owned()
             } else {
-                keymap::EDITABLE_ACTIONS
+                keymap::LEGACY_ACTIONS
                     .get(flat - 1)
                     .map(|row| keymap::action_label(row, self.nebula_language).to_owned())
                     .unwrap_or_default()
@@ -5493,7 +5493,7 @@ impl Display {
             ..Default::default()
         };
         let mut start = 0usize;
-        for (group, (.., count)) in keymap::GROUPS.iter().enumerate() {
+        for (group, (.., count)) in keymap::LEGACY_GROUPS.iter().enumerate() {
             let end = start + count;
             pane.visible[group] =
                 visible.iter().filter(|flat| (start..end).contains(*flat)).count() as u8;
@@ -6959,7 +6959,7 @@ impl Display {
 
     /// 设置页点击某行的 keycap：进入捕获态（下一次按键成为新绑定）。
     pub fn keymap_begin_capture(&mut self, row: usize) {
-        if row < keymap::editable_row_count() {
+        if row < keymap::legacy_editable_row_count() {
             self.nebula_keymap_capture = Some(row);
             self.nebula_keymap_capture_preview.clear();
             self.nebula_quick_hotkey_error = None;
@@ -7000,7 +7000,7 @@ impl Display {
             self.pending_update.dirty = true;
             return;
         }
-        let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(row - 1) else { return };
+        let Some((action, ..)) = keymap::LEGACY_ACTIONS.get(row - 1) else { return };
         keymap::rebind_action(&mut self.nebula_keybinds, action, combo);
         self.keymap_commit();
     }
@@ -7022,7 +7022,7 @@ impl Display {
             return;
         }
         let action_row = row.saturating_sub(1);
-        let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(action_row) else { return };
+        let Some((action, ..)) = keymap::LEGACY_ACTIONS.get(action_row) else { return };
         keymap::clear_action(&mut self.nebula_keybinds, action);
         self.keymap_commit();
     }

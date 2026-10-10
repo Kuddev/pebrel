@@ -17,6 +17,13 @@
     "en_us": "English"
   },
   "settings": {
+    "split_shell_source": "分屏 Shell 来源",
+    "split_shell_source_description": "决定分屏使用的 Shell，默认用设置中的“默认 Shell”。",
+    "split_shell_source_details": "使用默认会启动设置中的“默认 Shell”，仅继承宿主机目录；跟随焦点会沿用当前窗格的 Shell、Profile 或 SSH 身份；每次选择会在分屏前打开启动选择器，按 Esc 取消且不创建新窗格。更改对分屏快捷键即时生效。",
+    "split_shell_source_focused": "跟随焦点",
+    "split_shell_source_default": "使用默认",
+    "split_shell_source_ask": "每次选择",
+    "split_shell_source_changed": "分屏模式：{mode}",
     "completion": {
       "mode": "补齐模式",
       "cycle": "切换补齐模式",
@@ -150,6 +157,7 @@
       "ctrl_wheel_zoom_description": "按住 Ctrl 在终端上滚动即可调整字号。关闭后该手势被完全忽略：既不改变字号，也不滚动终端；Ctrl+=、Ctrl+-、Ctrl+0 快捷键不受影响。"
     },
     "keymap": {
+      "cycle_split_shell_source": "循环切换分屏模式",
       "conflict": "{combo} 同时绑定了「{first}」与「{second}」——只有排前面的「{first}」会触发",
       "help": "点击快捷键后按新组合键；Backspace 清空，Esc 取消。右侧可清空或恢复默认。",
       "clear": "清空快捷键（传给终端）",
@@ -1063,6 +1071,7 @@
     "settings_shortcut": "设置 (Ctrl+,)"
   },
   "workspace": {
+    "split_failed": "无法创建分屏：{error}",
     "pane": {
       "rename_hint": "双击重命名；Enter 或点击外部保存，Esc 取消。清空恢复自动标题，重新编辑可撤销已保存的名称。",
       "stop_broadcast_input": "关闭广播输入",

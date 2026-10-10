@@ -145,6 +145,7 @@ pub(super) fn supports(key: &str) -> bool {
             | "vcs_display"
             | "cell_width_mode"
             | "completion_style"
+            | "split_shell_source"
     )
 }
 
@@ -206,6 +207,10 @@ impl SettingsPane {
                             .toggled(active)
                             .label(label)
                             .on_click(cx.listener(move |this, _, window, cx| {
+                                if key == "split_shell_source" {
+                                    this.set_split_shell_source(value, window, cx);
+                                    return;
+                                }
                                 match this.try_persist(&[(key, value.to_owned())], cx) {
                                     Ok(()) => this.sync_select(key, value, window, cx),
                                     Err(error) => crate::gpui_shell::toast::toast(

@@ -5,7 +5,7 @@
 //! 默认/TOML 表，命中即短路——改键遮蔽默认、`none` 禁用键都由这一条
 //! 优先级规则实现。设置页「按键映射」的行数据与捕获逻辑也在这里。
 
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
@@ -25,6 +25,10 @@ pub(crate) const DEFAULT_QUICK_TERMINAL_HOTKEY: &str = "ctrl+`";
 
 pub(crate) fn editable_row_count() -> usize {
     EDITABLE_ACTIONS.len() + 1
+}
+
+pub(crate) fn legacy_editable_row_count() -> usize {
+    LEGACY_ACTIONS.len() + 1
 }
 
 pub(crate) fn display_stored_combo(combo: &str) -> String {
@@ -51,6 +55,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
     // -- 窗格 --
     (Action::SplitRight, "左右分屏", "Split right"),
     (Action::SplitDown, "上下分屏", "Split down"),
+    (Action::CycleSplitShellSource, "循环切换分屏模式", "Cycle split mode"),
     (Action::ToggleZoom, "放大当前分屏", "Zoom current pane"),
     (Action::FocusPaneLeft, "焦点：左侧分屏", "Focus pane left"),
     (Action::FocusPaneRight, "焦点：右侧分屏", "Focus pane right"),
@@ -76,10 +81,22 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
 pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
     ("全局", "Global", 6),
     ("标签页", "Tabs", 5),
-    ("窗格", "Panes", 7),
+    ("窗格", "Panes", 8),
     ("侧栏面板", "Side panels", 2),
     ("终端", "Terminal", 9),
 ];
+
+// 旧壳没有分屏模式轮换处理器，编辑器不能提供这个动作。
+pub(crate) static LEGACY_ACTIONS: LazyLock<Vec<(Action, &str, &str)>> = LazyLock::new(|| {
+    EDITABLE_ACTIONS
+        .iter()
+        .filter(|(action, ..)| *action != Action::CycleSplitShellSource)
+        .cloned()
+        .collect()
+});
+
+pub(crate) const LEGACY_GROUPS: &[(&str, &str, usize)] =
+    &[GROUPS[0], GROUPS[1], (GROUPS[2].0, GROUPS[2].1, GROUPS[2].2 - 1), GROUPS[3], GROUPS[4]];
 
 /// 只读展示行（无法在图形页编辑，TOML/settings 行仍可覆盖其中的表驱动键）。
 pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
@@ -146,10 +163,12 @@ pub(crate) fn action_label(
     row: &(Action, &'static str, &'static str),
     language: super::UiLanguage,
 ) -> &'static str {
-    if row.0 == Action::RenameTab {
-        language.text(crate::i18n::Message::CommonRenameTab)
-    } else {
-        language.pick(row.1, row.2)
+    match row.0 {
+        Action::RenameTab => language.text(crate::i18n::Message::CommonRenameTab),
+        Action::CycleSplitShellSource => {
+            language.text(crate::i18n::Message::SettingsKeymapCycleSplitShellSource)
+        },
+        _ => language.pick(row.1, row.2),
     }
 }
 
@@ -162,6 +181,18 @@ mod group_tests {
         let total: usize = GROUPS.iter().map(|(.., count)| count).sum();
         assert_eq!(total, editable_row_count(), "分组区间必须连续铺满全部可编辑行");
         assert_eq!(GROUPS.len(), 5, "settings::KeymapPaneState 的数组长度写死为 5");
+    }
+
+    #[test]
+    fn legacy_editor_excludes_gpui_only_split_mode_cycle() {
+        assert!(
+            EDITABLE_ACTIONS.iter().any(|(action, ..)| *action == Action::CycleSplitShellSource)
+        );
+        assert!(LEGACY_ACTIONS.iter().all(|(action, ..)| *action != Action::CycleSplitShellSource));
+        assert_eq!(LEGACY_ACTIONS.len() + 1, EDITABLE_ACTIONS.len());
+        let total: usize = LEGACY_GROUPS.iter().map(|(.., count)| count).sum();
+        assert_eq!(total, legacy_editable_row_count());
+        assert_eq!(LEGACY_GROUPS.len(), GROUPS.len());
     }
 }
 

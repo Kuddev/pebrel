@@ -172,7 +172,7 @@ impl NebulaWorkspace {
                         };
                         workspace.activate_tab(tab, window, cx);
                         workspace.focus_pane(tab, pane, window, cx);
-                        let _ = workspace.split_focused(direction, window, cx);
+                        workspace.request_split(direction, window, cx);
                     });
                 },
             ));
