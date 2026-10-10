@@ -282,6 +282,18 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+thread_local! {
+    static PROBE_TRACE_PID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn trace_probe_rejection(pid: u32, reason: std::fmt::Arguments<'_>) {
+    if PROBE_TRACE_PID.with(|target| target.get() == pid) {
+        eprintln!("owned fixture {pid}: {reason}");
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
@@ -298,12 +310,26 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
         let proc_dir = entry.path();
         let Ok(comm) = std::fs::read_to_string(proc_dir.join("comm")) else { continue };
         if !is_codex_process_name(comm.trim()) {
+            #[cfg(test)]
+            trace_probe_rejection(pid, format_args!("comm rejected: {comm:?}"));
             continue;
         }
-        let Ok(environment) = std::fs::read(proc_dir.join("environ")) else { continue };
+        let environment = match std::fs::read(proc_dir.join("environ")) {
+            Ok(environment) => environment,
+            Err(_error) => {
+                #[cfg(test)]
+                trace_probe_rejection(pid, format_args!("environment read failed: {_error}"));
+                continue;
+            },
+        };
         if !environment_has_value(&environment, b"PEBREL_PANE_ID", pane_id.as_bytes())
             && !environment_has_value(&environment, b"NEBULA_PANE_ID", pane_id.as_bytes())
         {
+            #[cfg(test)]
+            trace_probe_rejection(
+                pid,
+                format_args!("pane not found; environ bytes={}", environment.len()),
+            );
             continue;
         }
         if !environment_has_value(
@@ -311,15 +337,27 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
             crate::agent_env::PROCESS_ENV.as_bytes(),
             instance.as_bytes(),
         ) {
+            #[cfg(test)]
+            trace_probe_rejection(
+                pid,
+                format_args!("instance not found; environ bytes={}", environment.len()),
+            );
             continue;
         }
         let Some(codex_home) = codex_home_from_environment(&environment) else {
+            #[cfg(test)]
+            trace_probe_rejection(
+                pid,
+                format_args!("home not found; environ bytes={}", environment.len()),
+            );
             continue;
         };
         // /proc/fd 返回真实路径；先统一目录身份，再做词法边界检查，且不逐句柄访问磁盘。
         let Ok(sessions_root) =
             proc_dir.join("cwd").join(codex_home).join("sessions").canonicalize()
         else {
+            #[cfg(test)]
+            trace_probe_rejection(pid, format_args!("sessions root failed: {codex_home:?}"));
             continue;
         };
         let Ok(fds) = std::fs::read_dir(proc_dir.join("fd")) else { continue };
@@ -327,6 +365,13 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
             let fd_path = fd.path();
             let Ok(link) = std::fs::read_link(&fd_path) else { continue };
             if !is_rollout_link(&link, &sessions_root) {
+                #[cfg(test)]
+                if fd.file_name() == "0" {
+                    trace_probe_rejection(
+                        pid,
+                        format_args!("stdin outside root: {link:?} / {sessions_root:?}"),
+                    );
+                }
                 continue;
             }
             let Ok(first_line) = read_first_line(&fd_path) else { continue };
@@ -586,6 +631,7 @@ mod tests {
             ] {
                 let mut guest = Command::new("sh");
                 guest.args(["-c", PROBE_SCRIPT, "probe", query_pane, query_instance]);
+                PROBE_TRACE_PID.with(|target| target.set(if matches { _child.0.id() } else { 0 }));
                 for (probe, found) in [
                     ("local_proc", probe_local_proc(query_pane, query_instance)),
                     ("guest_shell", run_probe_command(guest)),
