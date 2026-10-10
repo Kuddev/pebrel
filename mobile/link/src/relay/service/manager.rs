@@ -110,17 +110,21 @@ fn systemd_version() -> io::Result<u32> {
     Ok(version)
 }
 
+/// The modern unit's `ExecStart` reads `%d/relay.json`. LoadCredential exists
+/// since systemd 247, but the `%d` credentials-directory specifier was only
+/// added in systemd 251; older managers reject the unit with "Invalid slot".
 fn systemd_definition(version: u32) -> io::Result<&'static str> {
     match version {
-        247.. => Ok(super::unit()),
-        239..=246 => Ok(legacy_systemd_unit()),
+        251.. => Ok(super::unit()),
+        239..=250 => Ok(legacy_systemd_unit()),
         _ => Err(io::Error::other("systemd_239_required")),
     }
 }
 
 /// Read protected credentials and bind before permanently dropping to nobody.
 /// This is the same single-threaded privilege boundary already used by OpenRC;
-/// systemd 239 has no LoadCredential/%d support. No accounts are created.
+/// systemd 239-250 lacks LoadCredential and/or the `%d` specifier. No accounts
+/// are created.
 pub(super) fn legacy_systemd_unit() -> &'static str {
     "[Unit]\nDescription=Pebrel encrypted mobile relay\nAfter=network-online.target\nWants=network-online.target\n\n\
 [Service]\nType=simple\nUMask=0077\n\
@@ -140,14 +144,17 @@ mod tests {
     #[test]
     fn unit_matches_available_systemd_features() {
         assert!(systemd_definition(238).is_err());
-        for version in [239, 245, 246] {
+        // 247-250 have LoadCredential but not the `%d` specifier (#536).
+        for version in [239, 245, 246, 247, 249, 250] {
             let unit = systemd_definition(version).unwrap();
             assert!(unit.contains("serve-unprivileged"));
             assert!(unit.contains("CAP_SETUID CAP_SETGID"));
             assert!(!unit.contains("LoadCredential"));
             assert!(!unit.contains("%d/"));
         }
-        assert!(systemd_definition(247).unwrap().contains("LoadCredential"));
+        let modern = systemd_definition(251).unwrap();
+        assert!(modern.contains("LoadCredential"));
+        assert!(modern.contains("%d/relay.json"));
     }
 }
 
