@@ -1,0 +1,2 @@
+mistune==3.2.1
+Pygments==2.20.0
