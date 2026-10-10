@@ -586,10 +586,17 @@ mod tests {
             ] {
                 let mut guest = Command::new("sh");
                 guest.args(["-c", PROBE_SCRIPT, "probe", query_pane, query_instance]);
-                for found in
-                    [probe_local_proc(query_pane, query_instance), run_probe_command(guest)]
-                {
-                    assert_eq!(found.is_some(), matches, "home={codex_home:?}");
+                for (probe, found) in [
+                    ("local_proc", probe_local_proc(query_pane, query_instance)),
+                    ("guest_shell", run_probe_command(guest)),
+                ] {
+                    assert_eq!(
+                        found.is_some(),
+                        matches,
+                        "probe={probe} home={codex_home:?} child_comm={:?} child_fd0={:?}",
+                        std::fs::read_to_string(format!("/proc/{}/comm", _child.0.id())),
+                        std::fs::read_link(format!("/proc/{}/fd/0", _child.0.id())),
+                    );
                     if let Some(found) = found {
                         assert_eq!(found.session_id, ROOT_ID);
                         assert_eq!(Path::new(&found.session_file), rollout);
