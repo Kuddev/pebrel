@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 
 use super::{CLAUDE_EVENTS, HELPER_ARGS, is_helper_executable, is_helper_shell_command};
 
+mod antigravity;
+mod claude_style;
 mod codex_hooks;
 mod codex_notify;
 mod config_guard;

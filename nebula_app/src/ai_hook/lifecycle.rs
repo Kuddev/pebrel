@@ -7,6 +7,10 @@ use crate::ai_agents::{AgentStatus, AgentStatusSource, Detection};
 
 use super::{AiHookEvent, AiHookKind};
 
+/// A stop from these sources proves nothing about the answer unless it carries a result, so
+/// an unclassified one returns the pane to idle instead of announcing completion.
+const UNPROVEN_STOP: [&str; 5] = ["pi", "omp", "cursor", "copilot", "antigravity"];
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum HookCoverage {
     #[default]
@@ -295,7 +299,7 @@ impl AgentActivity {
                     super::AiTurnOutcome::Failed
                         | super::AiTurnOutcome::Incomplete
                         | super::AiTurnOutcome::Cancelled
-                ) || (matches!(event.source.as_str(), "pi" | "omp" | "cursor" | "copilot")
+                ) || (UNPROVEN_STOP.contains(&event.source.as_str())
                     && event.turn_outcome == super::AiTurnOutcome::Unknown)
                 {
                     AgentStatus::Idle
