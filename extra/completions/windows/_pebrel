@@ -1298,6 +1298,15 @@ _arguments "${_arguments_options[@]}" : \
 '*::args -- All arguments forwarded verbatim to `ssh` (destination and flags):_default' \
 && ret=0
 ;;
+(claude)
+_arguments "${_arguments_options[@]}" : \
+'--ssh=[SSH host alias (or \`user@host\`) that runs Claude Code]:HOST:_default' \
+'--cwd=[Local project directory to open; defaults to the current directory]:DIRECTORY:_files -/' \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::args -- Everything after `--` is forwarded to the remote Claude Code (`--resume <id>`, `--continue`, `--model`, …):_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_pebrel__help_commands" \
@@ -1690,6 +1699,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(claude)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1719,6 +1732,7 @@ _pebrel_commands() {
 'notify-test:Test system notification (toast) delivery' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
 'ssh:SSH with Pebrel shell integration bootstrapped on the remote host, so tab icons / spinner / cwd track the program running over the connection (claude, vim, cargo…). All arguments are forwarded to the system \`ssh\`' \
+'claude:Run Claude Code on a remote Linux host while the project stays on this computer\: a loopback SSH channel sends every file access and command back here, and \`/resume\` history lives in the server'\''s \`~/.claude\`' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel commands' commands "$@"
@@ -1813,6 +1827,11 @@ _pebrel__agent__send_commands() {
 _pebrel__agent__wait_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel agent wait commands' commands "$@"
+}
+(( $+functions[_pebrel__claude_commands] )) ||
+_pebrel__claude_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel claude commands' commands "$@"
 }
 (( $+functions[_pebrel__config_commands] )) ||
 _pebrel__config_commands() {
@@ -2269,6 +2288,7 @@ _pebrel__help_commands() {
 'notify-test:Test system notification (toast) delivery' \
 'setup-ai:Install (or --remove) AI hooks plus the Pebrel Runtime Skill for Codex and Claude Code' \
 'ssh:SSH with Pebrel shell integration bootstrapped on the remote host, so tab icons / spinner / cwd track the program running over the connection (claude, vim, cargo…). All arguments are forwarded to the system \`ssh\`' \
+'claude:Run Claude Code on a remote Linux host while the project stays on this computer\: a loopback SSH channel sends every file access and command back here, and \`/resume\` history lives in the server'\''s \`~/.claude\`' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel help commands' commands "$@"
@@ -2314,6 +2334,11 @@ _pebrel__help__agent__send_commands() {
 _pebrel__help__agent__wait_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help agent wait commands' commands "$@"
+}
+(( $+functions[_pebrel__help__claude_commands] )) ||
+_pebrel__help__claude_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help claude commands' commands "$@"
 }
 (( $+functions[_pebrel__help__config_commands] )) ||
 _pebrel__help__config_commands() {

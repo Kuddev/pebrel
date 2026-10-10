@@ -63,9 +63,11 @@ mod logos;
 mod notifications;
 mod palette;
 mod pane_header;
+mod pane_relaunch;
 mod quick_jump;
 mod quick_terminal;
 mod recipes;
+mod remote_claude;
 mod remote_files;
 mod rename;
 #[cfg(test)]
@@ -434,10 +436,28 @@ enum WorkspacePaletteAction {
     },
     /// 启动器混排的 SSH 主机行（数据源 = 共享主机列表权威）。
     LaunchSshHost(String),
+    /// 提示符 ssh 标签选中的主机：在 `cwd` 上起远程 Claude Code，而不是
+    /// 普通 SSH tab。载荷来自提示符链接，和主机行同一份数据源。
+    LaunchRemoteClaude {
+        host: String,
+        cwd: String,
+        /// 发起这次连接的 pane（tab 下标 + pane id）：会话在原 pane 原地接上，
+        /// 不新开 tab。弹层打开期间窗口结构若变了，这两个 id 会让替换静默放弃。
+        tab: usize,
+        pane: u64,
+    },
     /// 新建终端弹窗里的一台已检测 shell（旧壳 `ProfileRow::Shell`）。
     LaunchShell(crate::shell_detect::DetectedShell),
     /// 设置页“导入终端目录”落盘的可执行文件快照。
     LaunchProfile(crate::config::ui_config::Profile),
+}
+
+impl WorkspacePaletteAction {
+    /// 启动器的 "SSH" 过滤与计数共用这一条判据：两种主机行只在选中后的动作
+    /// 上不同，不能各自再写一遍 `matches!`。
+    fn is_ssh_host(&self) -> bool {
+        matches!(self, Self::LaunchSshHost(_) | Self::LaunchRemoteClaude { .. })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -496,7 +516,7 @@ impl QuickJumpFilter {
                 WorkspacePaletteAction::FocusTab(_) | WorkspacePaletteAction::FocusPane { .. }
             ),
             Self::Folders => matches!(action, WorkspacePaletteAction::OpenDirectory(_)),
-            Self::Ssh => matches!(action, WorkspacePaletteAction::LaunchSshHost(_)),
+            Self::Ssh => action.is_ssh_host(),
             Self::Agents => matches!(action, WorkspacePaletteAction::RunAiSession { .. }),
         }
     }
@@ -1312,72 +1332,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    /// 在同一 tab、同一分屏位置替换失败的 SSH pane。先把新实体及订阅完整
-    /// 建好，再原子替换树叶和 pane 所有权；旧实体的异步泵只会更新旧 Entity，
-    /// 因而无法把迟到的 Failed/Ready 写进新连接。
-    fn retry_ssh_pane(
-        &mut self,
-        tab_ix: usize,
-        pane_id: u64,
-        destination: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(WorkspaceTab::Terminal { panes, .. }) = self.tabs.get(tab_ix) else { return };
-        let Some(old) = panes.iter().find(|pane| pane.id == pane_id) else { return };
-        let custom_name = old.custom_name.clone();
-        let name_history = old.name_history.clone();
-        let (grid, remote_cwd) = {
-            let view = old.view.read(cx);
-            if view.ssh_destination.as_deref() != Some(destination.as_str()) {
-                return;
-            }
-            (
-                (view.grid_cols() as u16, view.grid_rows() as u16),
-                (!view.cwd.is_empty()).then(|| view.cwd.clone()),
-            )
-        };
-
-        let launch = crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
-            destination: destination.clone(),
-            cwd: remote_cwd,
-        };
-        let mut replacement = self.new_pane(grid, launch, None, window, cx);
-        replacement.custom_name = custom_name;
-        replacement.name_history = name_history;
-        self.forget_pane_rename(pane_id);
-        let replacement_id = replacement.id;
-        let old = {
-            let Some(WorkspaceTab::Terminal { panes, tree, focused, .. }) =
-                self.tabs.get_mut(tab_ix)
-            else {
-                replacement.view.read(cx).shutdown();
-                return;
-            };
-            let Some(index) = panes.iter().position(|pane| pane.id == pane_id) else {
-                replacement.view.read(cx).shutdown();
-                return;
-            };
-            if !tree.replace_leaf(pane_id, replacement_id) {
-                replacement.view.read(cx).shutdown();
-                return;
-            }
-            if *focused == pane_id {
-                *focused = replacement_id;
-            }
-            std::mem::replace(&mut panes[index], replacement)
-        };
-
-        self.runtime_hub.record_pane_closed(self.runtime_window_id, pane_id);
-        self.pane_bounds.borrow_mut().remove(&pane_id);
-        old.view.read(cx).shutdown();
-        if tab_ix == self.active {
-            self.focus_active(window, cx);
-            self.sync_side_panel_to_active(true, cx);
-        }
-        cx.notify();
-    }
-
     /// 在聚焦 pane 上开分屏（ctrl+shift+d / ctrl+shift+s，对齐旧壳
     /// SplitRight/SplitDown）：新 pane 继承聚焦 pane 的 cwd，spawn 网格按
     /// 切割方向对半预估——首帧 prepaint 回写真实矩形后自动收敛。
@@ -1953,6 +1907,10 @@ impl NebulaWorkspace {
                 self.dismiss_palette_state();
                 self.add_ssh_terminal(host, window, cx);
             },
+            WorkspacePaletteAction::LaunchRemoteClaude { host, cwd, tab, pane } => {
+                self.dismiss_palette_state();
+                self.replace_pane_with_remote_claude(tab, pane, host, cwd, window, cx);
+            },
             WorkspacePaletteAction::LaunchShell(detected) => {
                 self.launch_palette_shell(detected, window, cx);
             },
@@ -2062,10 +2020,7 @@ impl NebulaWorkspace {
                 )
             })
             .count();
-        let ssh = rows
-            .iter()
-            .filter(|row| matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_)))
-            .count();
+        let ssh = rows.iter().filter(|row| row.action.is_ssh_host()).count();
         [
             (LauncherFilter::All, shell + ssh),
             (LauncherFilter::Ssh, ssh),

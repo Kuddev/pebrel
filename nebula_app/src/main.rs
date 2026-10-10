@@ -100,6 +100,7 @@ mod polling;
 mod process_tree;
 mod provider_test;
 mod proxy_test;
+mod remote_claude;
 mod remote_dirs;
 mod render_cache;
 #[cfg(feature = "legacy-shell")]
@@ -293,6 +294,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         #[cfg(windows)]
         Some(Subcommands::Ssh(options)) => std::process::exit(crate::ssh::run(options.args)),
+        #[cfg(windows)]
+        Some(Subcommands::Claude(options)) => {
+            std::process::exit(crate::platform::remote_claude::run(options))
+        },
         None => {
             #[cfg(feature = "legacy-shell")]
             nebula(options)?;

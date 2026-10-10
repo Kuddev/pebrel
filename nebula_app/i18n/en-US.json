@@ -1344,6 +1344,42 @@
   "ssh.ports.pending": "Starting port forwarding…",
   "ssh.ports.unavailable": "SSH network runtime unavailable",
   "ssh.ports.started": "Forwarding 127.0.0.1:{local} to {host} port {remote}",
+  "remote_claude": {
+    "prompt_hint": "Pick an SSH host and run Claude Code",
+    "hosts": {
+      "prompt": "Select the server that should run Claude Code:",
+      "choice": "Number (q cancels): "
+    },
+    "stage": {
+      "local_channel": "Local loopback SSH server ready on 127.0.0.1:{port}.",
+      "tunnel": "Reverse channel established: 127.0.0.1:{port} on the server reaches this computer.",
+      "probe": "Loopback self-check passed ({detail}).",
+      "session": "Starting the remote Claude Code session."
+    },
+    "error": {
+      "openssh_missing": "The bundled OpenSSH server is missing: {detail}",
+      "local_channel": "Could not start the local loopback SSH server: {detail}",
+      "project_unmapped": "This directory cannot be mapped onto the server: {detail}",
+      "ssh_failed": "ssh could not reach {host}: {detail}",
+      "claude_missing": "Claude Code is not installed on the server. Install it there (https://claude.ai/install.sh), then run this command again.",
+      "claude_logged_out": "Claude Code is not signed in on the server. Run `claude auth login` there, then run this command again.",
+      "claude_broken": "Claude Code on the server did not report a version: {detail}",
+      "remote_ssh_missing": "The server has no ssh client, so the loopback channel cannot be established.",
+      "mirror_unwritable": "Could not create the session directory on the server: {detail}",
+      "state_unwritable": "The home directory on the server is not writable: {detail}",
+      "home_missing": "The server did not report a usable home directory.",
+      "no_free_port": "No loopback port is free on the server for the reverse channel.",
+      "not_provisioned": "The server no longer has this connection's temporary directory. Run the command again.",
+      "probe_failed": "The server could not reach this computer over the loopback channel: {detail}",
+      "mirror_missing": "The session directory for this project disappeared on the server. Run the command again.",
+      "report": "The server reported {code}: {detail}",
+      "host_required": "No server was given and there is no terminal to choose one in. Pass --ssh <host>.",
+      "no_hosts": "No SSH host is configured. Add one to ~/.ssh/config or save it in Pebrel first.",
+      "cancelled": "Cancelled.",
+      "launch_failed": "Could not start Claude Code: {detail}",
+      "hold_failed": "The remote Claude Code session ended with an error. Press Enter to close this tab."
+    }
+  },
   "terminal_effect": {
     "title": "Custom terminal effects",
     "description": "Apply effects to the terminal text and cursor without changing the background. Enable after importing.",

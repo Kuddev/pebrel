@@ -67,6 +67,10 @@ pub enum OscEvent {
     Progress { state: u8, value: Option<u8> },
     /// Nebula 远端 Hook 私有 OSC：随机通道令牌 + 原始 Hook 信封。
     RemoteHook { token: String, envelope: Vec<u8> },
+    /// OSC 777 `pebrel-remote-claude;<stage>[;<host>[;<detail>]]` —— 本机 CLI
+    /// 在建立"远程 Claude Code"会话时上报的阶段，宿主据此画同一张连接卡片。
+    /// 缺省字段是空串（例如本地阶段只有 stage）。
+    RemoteClaude { stage: String, host: String, detail: String },
     /// OSC 1337 `File=...inline=1:<base64>` — an inline image.
     /// Only static PNG/JPEG/GIF input is accepted; animated GIFs are rendered
     /// as their first frame by the frontend.
@@ -207,6 +211,9 @@ impl CwdSniffer {
         if let Some(rest) = self.payload.strip_prefix(b"777;nebula-hook;") {
             return parse_remote_hook(rest);
         }
+        if let Some(rest) = self.payload.strip_prefix(b"777;pebrel-remote-claude;") {
+            return parse_remote_claude(rest);
+        }
         if let Some(rest) = self.payload.strip_prefix(b"133;") {
             // Semantic prompt zones. `A` may carry optional
             // `;key=value` params — accept those too.
@@ -299,6 +306,21 @@ fn parse_remote_hook(rest: &[u8]) -> Option<OscEvent> {
         return None;
     }
     Some(OscEvent::RemoteHook { token: token.to_owned(), envelope })
+}
+
+/// `pebrel-remote-claude;<stage>[;<host>[;<detail>]]`：字段按出现顺序取；阶段名
+/// 必须是稳定的 ASCII 单词（约定见 `gpui_shell::terminal::ssh_connect_overlay`），
+/// 不是我们认识的形状就整条丢掉——它可能来自别的终端程序。
+fn parse_remote_claude(rest: &[u8]) -> Option<OscEvent> {
+    let text = std::str::from_utf8(rest).ok()?;
+    let mut fields = text.splitn(3, ';');
+    let stage = fields.next()?.trim();
+    if stage.is_empty() || !stage.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
+        return None;
+    }
+    let host = fields.next().unwrap_or("").trim().to_owned();
+    let detail = fields.next().unwrap_or("").trim().to_owned();
+    Some(OscEvent::RemoteClaude { stage: stage.to_owned(), host, detail })
 }
 
 /// Parse an OSC 1337 body (`File=key=value;...:<base64>`) into an inline
@@ -658,6 +680,37 @@ mod tests {
             )]
         );
         assert!(events(b"\x1b]777;nebula-hook;short;AAAA\x07").is_empty());
+    }
+
+    #[test]
+    fn remote_claude_frames_carry_stage_host_and_detail() {
+        let ev = events(b"\x1b]777;pebrel-remote-claude;local;box.example\x07");
+        assert_eq!(
+            ev,
+            vec![(
+                45,
+                OscEvent::RemoteClaude {
+                    stage: "local".into(),
+                    host: "box.example".into(),
+                    detail: String::new(),
+                }
+            )]
+        );
+        // detail 里允许出现分号（只按出现顺序切三段），换行之类由发送端清洗。
+        assert_eq!(
+            events(b"\x1b]777;pebrel-remote-claude;failed;box.example;ssh: exit 255\x07")
+                .into_iter()
+                .map(|(_, event)| event)
+                .collect::<Vec<_>>(),
+            vec![OscEvent::RemoteClaude {
+                stage: "failed".into(),
+                host: "box.example".into(),
+                detail: "ssh: exit 255".into(),
+            }]
+        );
+        // 不认识的阶段名 / 空阶段不是我们的帧。
+        assert!(events(b"\x1b]777;pebrel-remote-claude;;host\x07").is_empty());
+        assert!(events(b"\x1b]777;pebrel-remote-claude;not a stage\x07").is_empty());
     }
 
     #[test]

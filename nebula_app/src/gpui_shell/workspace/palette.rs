@@ -142,7 +142,7 @@ impl NebulaWorkspace {
                     let keep = match self.launcher_filter {
                         crate::display::command_palette::LauncherFilter::All => true,
                         crate::display::command_palette::LauncherFilter::Ssh => {
-                            matches!(row.action, WorkspacePaletteAction::LaunchSshHost(_))
+                            row.action.is_ssh_host()
                         },
                         crate::display::command_palette::LauncherFilter::Shell => {
                             matches!(
@@ -418,47 +418,10 @@ impl NebulaWorkspace {
                     )
                 })
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    // 鼠标点击与键盘 Enter 共用同一份派发（`run_selected_palette_action`）：
+                    // 每个新动作只接一次线，不再维护第二份 action 匹配。
                     this.command_palette_selected = ix;
-                    match action.clone() {
-                        WorkspacePaletteAction::Shared(action) => {
-                            this.run_palette_action(action, window, cx);
-                        },
-                        WorkspacePaletteAction::LayoutRecipes => {
-                            this.dismiss_palette_state();
-                            this.open_layout_recipes(window, cx);
-                        },
-                        WorkspacePaletteAction::FocusTab(tab) => {
-                            this.dismiss_palette_state();
-                            this.activate_tab(tab, window, cx);
-                            this.focus_active(window, cx);
-                            cx.notify();
-                        },
-                        WorkspacePaletteAction::FocusPane { tab, pane } => {
-                            this.dismiss_palette_state();
-                            this.activate_tab(tab, window, cx);
-                            this.focus_pane(tab, pane, window, cx);
-                            this.focus_active(window, cx);
-                            cx.notify();
-                        },
-                        WorkspacePaletteAction::OpenDirectory(path) => {
-                            this.dismiss_palette_state();
-                            this.add_terminal_at(Some(path), None, window, cx);
-                        },
-                        WorkspacePaletteAction::RunAiSession { command, cwd } => {
-                            this.dismiss_palette_state();
-                            this.add_terminal_at(cwd, Some(command), window, cx);
-                        },
-                        WorkspacePaletteAction::LaunchSshHost(host) => {
-                            this.dismiss_palette_state();
-                            this.add_ssh_terminal(host, window, cx);
-                        },
-                        WorkspacePaletteAction::LaunchShell(detected) => {
-                            this.launch_palette_shell(detected, window, cx);
-                        },
-                        WorkspacePaletteAction::LaunchProfile(profile) => {
-                            this.launch_palette_profile(profile, window, cx);
-                        },
-                    }
+                    this.run_selected_palette_action(window, cx);
                 }));
 
             rows.push(row_content.into_any_element());

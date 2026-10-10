@@ -57,6 +57,10 @@ pub enum Event {
     /// 已通过 SSH 通道令牌校验的远端 AI Hook 原始信封。
     AiHookEnvelope(Vec<u8>),
 
+    /// OSC 777 `pebrel-remote-claude`：本机 CLI 上报的会话建立阶段
+    /// （`stage`/`host`/`detail` 语义见 [`crate::osc_cwd::OscEvent::RemoteClaude`]）。
+    RemoteClaude { stage: String, host: String, detail: String },
+
     /// Request to store a text string in the clipboard.
     ClipboardStore(ClipboardType, String),
 
@@ -121,6 +125,9 @@ impl Debug for Event {
             Event::Progress { state, value } => write!(f, "Progress({state}, {value:?})"),
             Event::AiHookEnvelope(envelope) => {
                 write!(f, "AiHookEnvelope({} bytes)", envelope.len())
+            },
+            Event::RemoteClaude { stage, host, .. } => {
+                write!(f, "RemoteClaude({stage} {host})")
             },
             Event::CursorBlinkingChange => write!(f, "CursorBlinkingChange"),
             Event::MouseCursorDirty => write!(f, "MouseCursorDirty"),

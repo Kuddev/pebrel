@@ -65,6 +65,26 @@ impl NebulaWorkspace {
                     self.retry_ssh_pane(tab_ix, pane_id, destination.clone(), window, cx);
                 }
             },
+            TerminalViewEvent::RetryRemoteClaude => {
+                if let Some((tab_ix, pane_id)) = self.locate_pane(view.entity_id()) {
+                    self.retry_remote_claude_pane(tab_ix, pane_id, window, cx);
+                }
+            },
+            // 提示符里的 ssh 标签：选一台主机，然后在该 pane 的目录上起远程
+            // Claude Code（不是普通 SSH tab，所以走自己的选择器入口）。
+            TerminalViewEvent::RemoteClaudeRequest { cwd } => {
+                let Some(origin) = self.locate_pane(view.entity_id()) else { return };
+                let cwd = cwd.clone();
+                let this = cx.entity();
+                // 弹层必须等这次鼠标手势彻底结束：在同一帧里开出来的选择器
+                // 会收到同一个 up 事件，指针底下的那一行会被"连击"选中
+                // （表现为点一下 ssh 就直接开始连接）。
+                window.defer(cx, move |window, cx| {
+                    this.update(cx, |workspace, cx| {
+                        workspace.open_remote_claude_palette(cwd, origin, window, cx);
+                    });
+                });
+            },
             TerminalViewEvent::FontSizeChanged => self.apply_runtime_settings(cx),
             // 任务栏是窗口级的，只反映**正被看着的那个 pane**：后台 tab 里的
             // 构建进度投到同一个按钮上只会互相覆盖，读数还不如没有。

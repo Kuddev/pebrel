@@ -70,6 +70,17 @@ pub(crate) enum SshConnectHit {
     Close,
 }
 
+/// 这张卡片服务哪一种连接：SSH 直连，或"本机回环 + 回连"的远程 Claude Code。
+///
+/// 两种流程共用同一条四节点轨道与同一套按钮，只有阶段文案不同；`SshStage`
+/// 在这里只当 0..=3 的进度槽位用（第 4 槽 = 会话开始前的最后一跳）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ConnectFlow {
+    #[default]
+    Ssh,
+    RemoteClaude,
+}
+
 impl SshConnectHit {
     pub(crate) fn is_none(self) -> bool {
         matches!(self, SshConnectHit::None)
@@ -79,6 +90,7 @@ impl SshConnectHit {
 /// 一个 pane 的连接进度。
 #[derive(Debug, Clone)]
 pub(crate) struct SshConnectState {
+    flow: ConnectFlow,
     /// 用户看到的目标，原样取自 tab 的启动身份。
     destination: String,
     stage: SshStage,
@@ -102,7 +114,17 @@ pub(crate) struct SshConnectState {
 
 impl SshConnectState {
     pub(crate) fn new(destination: String) -> Self {
+        Self::with_flow(ConnectFlow::Ssh, destination)
+    }
+
+    /// 远程 Claude Code 会话的卡片：目标同样是用户选中的 SSH 主机。
+    pub(crate) fn new_remote_claude(destination: String) -> Self {
+        Self::with_flow(ConnectFlow::RemoteClaude, destination)
+    }
+
+    fn with_flow(flow: ConnectFlow, destination: String) -> Self {
         let mut state = Self {
+            flow,
             destination: destination.clone(),
             stage: SshStage::Resolve,
             started: Instant::now(),
@@ -115,6 +137,10 @@ impl SshConnectState {
         };
         state.push_log(format!("resolve   destination = {destination}"));
         state
+    }
+
+    pub(crate) fn flow(&self) -> ConnectFlow {
+        self.flow
     }
 
     fn push_log(&mut self, line: String) {
@@ -892,7 +918,7 @@ pub(super) fn draw_text(
     );
 
     // 阶段标签：已完成 ink_dim、当前 ink、未到 ink_faint。
-    let labels = stage_labels(language);
+    let labels = stage_labels(state.flow, language);
     let active = state.stage_index();
     for (i, label) in labels.iter().enumerate() {
         let ink = if state.failed() && i == active {
@@ -928,7 +954,7 @@ pub(super) fn draw_text(
     // 状态行：左边当前动作，右边计时（失败后计时停在失败时刻）。
     let (msg, msg_ink) = match &state.failure {
         Some(_) => (failure_headline(language), rgb_of(sk.danger)),
-        None => (stage_message(&state.stage, language), sk.ink),
+        None => (stage_message(state.flow, &state.stage, language), sk.ink),
     };
     r.draw_ui_text(
         size,
@@ -1051,23 +1077,54 @@ pub(crate) fn short_name(destination: &str) -> String {
     host.to_owned()
 }
 
-pub(crate) fn stage_labels(language: UiLanguage) -> [String; 4] {
-    [
-        language.pick("解析", "Resolve").to_owned(),
-        language.pick("连接", "Connect").to_owned(),
-        language.pick("认证", "Auth").to_owned(),
-        language.pick("会话", "Shell").to_owned(),
-    ]
+pub(crate) fn stage_labels(flow: ConnectFlow, language: UiLanguage) -> [String; 4] {
+    match flow {
+        ConnectFlow::Ssh => [
+            language.pick("解析", "Resolve").to_owned(),
+            language.pick("连接", "Connect").to_owned(),
+            language.pick("认证", "Auth").to_owned(),
+            language.pick("会话", "Shell").to_owned(),
+        ],
+        ConnectFlow::RemoteClaude => [
+            language.pick("本机通道", "Local").to_owned(),
+            language.pick("回连通道", "Channel").to_owned(),
+            language.pick("回连自检", "Check").to_owned(),
+            language.pick("远程会话", "Session").to_owned(),
+        ],
+    }
 }
 
-pub(crate) fn stage_message(stage: &SshStage, language: UiLanguage) -> String {
-    match stage {
-        SshStage::Resolve => language.pick("正在解析主机…", "Resolving host…"),
-        SshStage::Connect => language.pick("正在建立连接…", "Connecting…"),
-        SshStage::Authenticate => language.pick("正在认证…", "Authenticating…"),
-        SshStage::OpenShell => language.pick("正在打开会话…", "Opening shell…"),
-        SshStage::Ready => language.pick("已连接", "Connected"),
-        SshStage::Failed(_) => language.pick("连接失败", "Connection failed"),
+pub(crate) fn stage_message(flow: ConnectFlow, stage: &SshStage, language: UiLanguage) -> String {
+    match flow {
+        ConnectFlow::Ssh => match stage {
+            SshStage::Resolve => language.pick("正在解析主机…", "Resolving host…"),
+            SshStage::Connect => language.pick("正在建立连接…", "Connecting…"),
+            SshStage::Authenticate => language.pick("正在认证…", "Authenticating…"),
+            SshStage::OpenShell => language.pick("正在打开会话…", "Opening shell…"),
+            SshStage::Ready => language.pick("已连接", "Connected"),
+            SshStage::Failed(_) => language.pick("连接失败", "Connection failed"),
+        },
+        ConnectFlow::RemoteClaude => match stage {
+            SshStage::Resolve => {
+                language.pick("正在启动本机回环服务…", "Starting the local loopback service…")
+            },
+            SshStage::Connect => {
+                language.pick("正在建立回连通道…", "Establishing the reverse channel…")
+            },
+            SshStage::Authenticate => {
+                language.pick("正在自检回连通道…", "Checking the loopback channel…")
+            },
+            SshStage::OpenShell => {
+                language.pick("正在启动远程 Claude Code…", "Starting remote Claude Code…")
+            },
+            // `ready` 之后卡片还要停一会儿等远端首屏（见
+            // `TerminalView::wait_for_remote_claude_paint`），所以这里报的是
+            // 还在启动，而不是已经就绪。
+            SshStage::Ready => {
+                language.pick("正在启动远程 Claude Code…", "Starting remote Claude Code…")
+            },
+            SshStage::Failed(_) => language.pick("连接失败", "Connection failed"),
+        },
     }
     .to_owned()
 }

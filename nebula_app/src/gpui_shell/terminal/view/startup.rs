@@ -111,6 +111,7 @@ impl TerminalView {
             ssh_destination,
             initial_title,
             intro_shell_name,
+            declared_program,
             suggest_env,
             exec_context,
             session_launch,
@@ -169,10 +170,19 @@ impl TerminalView {
                         })
                         .detach();
                 }
+                // 启动身份直接点名了 AI agent（提示符 ssh 标签拉起的 `claude`
+                // 包装会话就是这种）：这类 pane 里没有可嗅探的交互式命令行，
+                // 远端 agent 的 hook 也未必送得到本机，侧栏/标题栏的程序身份
+                // 只能由启动方先声明。真 hook 与 `NEBULA|` 标题之后照旧覆盖它。
+                let declared_program = shell_name
+                    .as_deref()
+                    .and_then(crate::ai_agents::AgentKind::parse)
+                    .map(|agent| agent.slug().to_owned());
                 (
                     None,
                     String::from("shell"),
                     shell_name,
+                    declared_program,
                     suggest_env,
                     Some(exec_context),
                     session_launch,
@@ -182,6 +192,7 @@ impl TerminalView {
             TerminalLaunch::Ssh { destination, cwd } => (
                 Some(destination.clone()),
                 destination.clone(),
+                None,
                 None,
                 crate::display::SuggestEnv::Ssh { destination: destination.clone() },
                 None,
@@ -292,7 +303,7 @@ impl TerminalView {
             title: initial_title,
             cwd: initial_cwd,
             branch: String::new(),
-            running_program: None,
+            running_program: declared_program,
             command_running: false,
             command_running_disproved: false,
             command_started: None,
@@ -321,6 +332,7 @@ impl TerminalView {
             ssh_stage: None,
             ssh_connect: None,
             ssh_connect_last_step: std::time::Instant::now(),
+            remote_claude_awaiting_paint: false,
             ai_session: None,
             ai_session_probe_pending: false,
             ai_session_from_probe: false,
@@ -348,6 +360,7 @@ impl TerminalView {
             hint_config: super::super::osc_links::hint_config(),
             link_hover: None,
             pending_link_open: false,
+            pending_remote_claude: None,
             copy_on_select,
             last_report_point: None,
             cursor_visible: true,

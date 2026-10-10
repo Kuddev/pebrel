@@ -326,6 +326,11 @@ pub enum Subcommands {
     /// (claude, vim, cargo…). All arguments are forwarded to the system `ssh`.
     #[cfg(windows)]
     Ssh(SshOptions),
+    /// Run Claude Code on a remote Linux host while the project stays on this
+    /// computer: a loopback SSH channel sends every file access and command
+    /// back here, and `/resume` history lives in the server's `~/.claude`.
+    #[cfg(windows)]
+    Claude(ClaudeOptions),
 }
 
 /// Query timeout shared by the short commands. Long enough to ride out a busy
@@ -944,6 +949,26 @@ pub struct SetupAiOptions {
 #[derive(Args, Debug)]
 pub struct SshOptions {
     /// All arguments forwarded verbatim to `ssh` (destination and flags).
+    #[clap(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+}
+
+/// Options for the `claude` subcommand. Design and rationale live in
+/// `architecture/notes/nebula_app/remote_claude/2026-10-08-remote-claude-over-ssh.md`.
+///
+/// The local directory is the session anchor: its mirror path on the server
+/// decides which group of remote sessions `/resume` lists.
+#[cfg(windows)]
+#[derive(Args, Debug)]
+pub struct ClaudeOptions {
+    /// SSH host alias (or `user@host`) that runs Claude Code.
+    #[clap(long, value_name = "HOST")]
+    pub ssh: Option<String>,
+    /// Local project directory to open; defaults to the current directory.
+    #[clap(long, value_name = "DIRECTORY", value_hint = ValueHint::DirPath)]
+    pub cwd: Option<PathBuf>,
+    /// Everything after `--` is forwarded to the remote Claude Code
+    /// (`--resume <id>`, `--continue`, `--model`, …).
     #[clap(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
