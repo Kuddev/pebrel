@@ -34,10 +34,24 @@ fn open(cx: &mut TestAppContext) -> (Entity<NebulaWorkspace>, VisualTestContext)
             )
         });
         view.update(cx, |workspace, cx| {
+            let mut hosts = crate::gpui_shell::ssh_hosts::SshHostLists::default();
+            hosts.profiles.upsert(hosts.profiles.for_destination("test-host"));
+            hosts
+                .profiles
+                .set_organization(
+                    "test-host",
+                    crate::ssh_profiles::HostOrganization::from_inputs(
+                        "生产",
+                        "Linux, Équipe",
+                        "Owner: Alice",
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
             workspace.palette_override = Some(shell_palette_rows(
                 vec![shell("cmd"), shell("pwsh")],
                 vec![],
-                [("test-host".into(), String::new())],
+                &hosts,
                 "cmd",
                 workspace_ui_language(),
                 1.0,
@@ -60,6 +74,38 @@ fn draw(cx: &mut VisualTestContext) {
     cx.update(|window, cx| {
         window.refresh();
         window.draw(cx).clear(cx);
+    });
+}
+
+#[gpui::test]
+fn ssh_launcher_search_matches_tags_notes_and_multiple_keywords(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx);
+    for query in ["LINUX", "alice", "生产", "ÉQUIPE", "linux ALICE 生产", "missing-tag"] {
+        // 查询替换只依赖输入框的全选动作，不重复判断平台快捷键。
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+        });
+        cx.simulate_input(query);
+        draw(&mut cx);
+        workspace.read_with(&cx, |workspace, cx| {
+            let rows = workspace.filtered_palette_rows(cx);
+            if query == "missing-tag" {
+                assert!(rows.is_empty(), "unmatched metadata must not show unrelated hosts");
+            } else {
+                assert_eq!(rows.len(), 1, "query: {query}");
+                assert!(matches!(&rows[0].action,
+                    WorkspacePaletteAction::LaunchSshHost(host) if host == "test-host"));
+            }
+            assert!(workspace.tabs.is_empty(), "search must not connect a host");
+        });
+        assert_eq!(cx.debug_bounds("command-palette-row-0").is_some(), query != "missing-tag");
+        assert!(cx.debug_bounds("command-palette-row-1").is_none());
+    }
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    workspace.read_with(&cx, |workspace, _| {
+        assert!(!workspace.command_palette_open);
+        assert!(workspace.tabs.is_empty());
     });
 }
 

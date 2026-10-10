@@ -1987,7 +1987,7 @@ impl NebulaWorkspace {
             crate::terminal_profiles::TerminalProfiles::load()
                 .map(|store| store.as_config_profiles())
                 .unwrap_or_default(),
-            crate::gpui_shell::ssh_hosts::SshHostLists::load().merged_with_labels(),
+            &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
             &default_shell_id,
             language,
             window.scale_factor().max(0.5),

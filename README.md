@@ -120,6 +120,9 @@ discover candidates from the current environment without matching prior commands
 
 ### SSH and Files
 
+- Search SSH hosts by name, address, group, tags or notes in the host library,
+  launcher, command palette and Quick Jump. Space-separated keywords must all match;
+  searches are case-insensitive. The launchers now use the same metadata as the host library.
 - Saved hosts, SSH config aliases, proxy and jump-host options, private-key and
   keyboard-interactive authentication, and host-key verification.
 - SFTP browsing, uploads and downloads, folder transfers, progress, and cancellation.
