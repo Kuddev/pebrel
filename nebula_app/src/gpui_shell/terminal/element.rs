@@ -161,6 +161,9 @@ impl TerminalElement {
         overrides: &Colors,
         cx: &mut App,
     ) {
+        if crate::gpui_shell::wallpaper::cell_backgrounds_over_underlay(cx) {
+            crate::gpui_shell::wallpaper::keep_text_colors_under_veil(snap);
+        }
         self.view.update(cx, |view, _| {
             resolve_app_colors_into(snap, theme, overrides, &mut view.color_resolver);
             for cell in links.values_mut() {
@@ -465,12 +468,17 @@ impl Element for TerminalElement {
             }
         });
 
+        // Explicit cell backgrounds sit above a native video layer like the card surface.
+        let over_underlay = crate::gpui_shell::wallpaper::cell_backgrounds_over_underlay(cx);
         for run in &snap.bg_runs {
             let mut paint = |start: u16, end: u16, color: Color| {
                 if start >= end {
                     return;
                 }
-                let color = theme.resolve(color, &overrides, false);
+                let color = crate::gpui_shell::wallpaper::cell_background(
+                    theme.resolve(color, &overrides, false),
+                    over_underlay,
+                );
                 for visual in math_frame.projected_runs(
                     run.row as usize,
                     start as usize..end as usize,

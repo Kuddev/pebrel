@@ -287,6 +287,10 @@ pub(in crate::gpui_shell::wallpaper) fn media_ready(cx: &App) -> bool {
         || effects.animated.retired_video.as_ref().is_some_and(|v| v.read(cx).has_front())
 }
 
+/// Backends that paint into the GPUI scene never sit below translucent surfaces.
+pub(in crate::gpui_shell::wallpaper) fn underlay_ready(_: &App) -> bool {
+    false
+}
 pub(in crate::gpui_shell::wallpaper) fn video_available() -> bool {
     true
 }

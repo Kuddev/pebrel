@@ -10,6 +10,7 @@ fn cells(text: &str) -> Vec<SnapCell> {
             text: character.to_string(),
             fg: Color::Named(NamedColor::Foreground),
             bg: Color::Named(NamedColor::Background),
+            inverse: false,
             bold: false,
             italic: false,
             underline: false,
