@@ -290,6 +290,7 @@ pub struct TerminalView {
     /// Optional theme line-height multiplier. `None` preserves the shaped
     /// font metrics; a value is applied to the logical font size.
     line_height_multiplier: Option<f32>,
+    terminal_line_height: Option<f32>,
     pub palette: Arc<Palette>,
     /// 把**应用写死的**颜色按当前主题矫正（最低对比度 + 旧主题表面重映射）。
     ///
@@ -480,6 +481,7 @@ impl TerminalView {
         typography::line_height_for_view(
             self.font_size,
             self.line_height_multiplier,
+            self.terminal_line_height,
             natural_height,
             self.font_offset_y,
             scale,
@@ -944,6 +946,7 @@ impl TerminalView {
         self.font_offset_x = settings.font_offset_x;
         self.font_offset_y = settings.font_offset_y;
         self.line_height_multiplier = settings.theme_line_height;
+        self.terminal_line_height = settings.terminal_line_height;
         // 底色换了就把矫正缓存作废，并记下「旧底色 → 新底色」这一跳：应用当初
         // 按旧主题底色画的连续表面（面板、状态栏）要跟着搬过去，否则浅色主题上
         // 会留一整块旧的深色板。旧壳 `apply_nebula_theme` 同一时机做同一件事。

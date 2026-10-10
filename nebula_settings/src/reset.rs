@@ -16,6 +16,7 @@ const RESET_KEYS: &[&str] = &[
     "ui_font_family",
     "ui_font_size",
     "font_size",
+    "terminal_line_height",
     "ctrl_wheel_font_zoom",
     "ligatures",
     "cursor_shape",
@@ -148,6 +149,14 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_restores_automatic_terminal_line_height() {
+        let restored = default_settings_text("terminal_line_height=1.50\ncustom=keep\n");
+        let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+        assert!(settings.terminal_line_height.is_none());
+        assert!(restored.contains("custom=keep"));
+    }
 
     #[test]
     fn reset_preserves_explicit_hook_authorization_and_opt_out() {

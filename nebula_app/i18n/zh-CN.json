@@ -1333,6 +1333,11 @@
       "changed": "主题包在检查后发生了变化。请重新选择文件，再确认安装。"
     }
   },
+  "terminal_line_height": {
+    "label": "行高",
+    "auto": "自动",
+    "description": "0.50–5.00；1.00 为字体自然高度。显式值覆盖主题行高，自动保留主题或自然高度。"
+  },
   "ssh.ports.button": "端口",
   "ssh.ports.title": "SSH 端口转发",
   "ssh.ports.empty": "暂无端口转发",
