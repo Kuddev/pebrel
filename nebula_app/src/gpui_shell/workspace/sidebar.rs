@@ -544,6 +544,7 @@ impl NebulaWorkspace {
                                     .inset_0()
                                     .justify_end()
                                     .items_center()
+                                    .debug_selector(move || format!("sidebar-tab-status-{ix}"))
                                     .group_hover(hover_group.clone(), |item| item.invisible())
                                     .child(status),
                             )
@@ -561,6 +562,9 @@ impl NebulaWorkspace {
                                 .when(tab_close_visible, |slot| {
                                         slot.child(
                                             Button::new(("close-tab", ix))
+                                                .debug_selector(move || {
+                                                    format!("close-sidebar-tab-{ix}")
+                                                })
                                                 .icon(IconName::Close)
                                                 .ghost()
                                                 .xsmall()
@@ -1025,6 +1029,7 @@ impl NebulaWorkspace {
                         .text_size(px(label_px))
                         .font_weight(FontWeight::NORMAL)
                         .text_color(ink)
+                        .debug_selector(|| "collapsed-tab-title".into())
                         .child(title),
                 )
                 // 折叠态没有侧栏行可看，分屏数量只能挂在这里；> 1 才画。
