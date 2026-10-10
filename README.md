@@ -80,6 +80,11 @@ each agent's activity, and read its output without leaving the application.
   close the window. Restoring a conversation after the process exits is a separate
   feature and requires a supported CLI and a usable session identity.
 - Context-aware and history completions, configurable keybindings, and integrated shell prompts.
+- Remapping or disabling terminal shortcuts preserves text fields' native paste keys.
+  Restoring defaults updates existing windows without restarting. Runtime overrides
+  replace their previous rules, avoiding the stale disabled bindings from the append-only
+  path; the saved configuration format is unchanged. See the
+  [shortcut ownership decision](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
 
 ### Intelligent Completion
 

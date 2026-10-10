@@ -753,9 +753,6 @@ pub struct NebulaWorkspace {
     /// spinner 在窗口失焦时冻结为静态状态；重新聚焦后由一次 render 恢复按需帧循环。
     spinner_window_active: bool,
     _spinner_activation_sub: Subscription,
-    /// 本会话已注入的自定义键位 (gpui 绑定串, 动作名)。键位表没有删除
-    /// API,撤销靠后注 `Unbind(动作名)` 精确收回该键;这份清单就是撤销的依据。
-    custom_keybinds_applied: Vec<(String, String)>,
     /// 侧栏「运行中」spinner 的相位（0..1，旧壳 `SPINNER_PERIOD` 800ms 一
     /// 圈）与上次帧时刻。侧栏和顶栏共用 GPUI 屏幕帧时钟。
     spinner_phase: f32,
@@ -986,7 +983,6 @@ impl NebulaWorkspace {
             _appearance_sub: appearance_sub,
             spinner_window_active,
             _spinner_activation_sub: spinner_activation_sub,
-            custom_keybinds_applied: Vec::new(),
             spinner_phase: 0.0,
             spinner_last: std::time::Instant::now(),
             spinner_frame_pending: std::cell::Cell::new(false),
