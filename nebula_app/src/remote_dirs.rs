@@ -74,6 +74,9 @@ fn key(env: &SuggestEnv, dir: &str) -> String {
     match env {
         SuggestEnv::Local => format!("local\u{0}{dir}"),
         SuggestEnv::Wsl { distro } => format!("wsl:{distro}\u{0}{dir}"),
+        SuggestEnv::WslCommand { distro, scope } => {
+            format!("wsl-command:{distro}:{scope:?}\u{0}{dir}")
+        },
         SuggestEnv::Ssh { destination } => format!("ssh:{destination}\u{0}{dir}"),
         SuggestEnv::Shell { .. } => format!("unavailable\0{dir}"),
     }

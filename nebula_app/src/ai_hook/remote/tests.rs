@@ -157,6 +157,170 @@ fn transport_requests_are_framed_and_bootstrap_keeps_token_out_of_assets() {
     assert!(response("PEBREL_INTEGRATION={\"version\":1,\"error\":\"ValueError\"}\n").is_err());
 }
 
+#[test]
+fn terminal_action_installs_shell_prompt_only_and_is_idempotent() {
+    let mut snapshot = snapshot();
+    let edits = snapshot.plan(Action::Terminal).unwrap().unwrap();
+    let names: Vec<_> = edits.iter().map(|edit| edit.name.as_str()).collect();
+    for name in ["shell.py", "bashrc", ".zshenv", ".zprofile", ".zshrc", "manifest"] {
+        assert!(names.contains(&name), "missing terminal asset {name}");
+    }
+    for name in ["claude", "codex", "opencode", "pi", "codex_config", "disabled"] {
+        assert!(!names.contains(&name), "terminal-only action changed agent config {name}");
+    }
+
+    apply(&mut snapshot, edits);
+    assert!(snapshot.raw("claude").unwrap().is_none());
+    assert!(snapshot.raw("codex").unwrap().is_none());
+    assert!(snapshot.raw("disabled").unwrap().is_none());
+    assert!(snapshot.plan(Action::Terminal).unwrap().unwrap().is_empty());
+}
+
+#[test]
+fn terminal_action_respects_opt_out_and_rejects_edited_owned_assets() {
+    let mut disabled = snapshot();
+    put(&mut disabled, "disabled", "user opted out\n");
+    assert!(disabled.plan(Action::Terminal).unwrap().is_none());
+
+    let mut edited = snapshot();
+    put(&mut edited, "bashrc", "# user's custom prompt\n");
+    assert!(edited.plan(Action::Terminal).is_err());
+    assert_eq!(edited.raw("bashrc").unwrap(), Some("# user's custom prompt\n"));
+    assert!(edited.raw(".zshrc").unwrap().is_none(), "planning must not partially mutate files");
+}
+
+#[test]
+fn ssh_bash_prompt_preserves_custom_prompts_and_renders_git_branch_as_literal_text() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let bash = std::env::var_os("NEBULA_BASH")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
+                .into_iter()
+                .find(|path| std::path::Path::new(path).is_file())
+                .map(Into::into)
+        })
+        .or_else(|| {
+            let candidate: std::path::PathBuf = "bash".into();
+            let output = Command::new(&candidate).arg("--version").output().ok()?;
+            let version = String::from_utf8_lossy(&output.stdout);
+            (output.status.success() && version.contains("GNU bash")).then_some(candidate)
+        });
+    let Some(bash) = bash else {
+        eprintln!("skipping Bash runtime check because no native Bash is installed");
+        return;
+    };
+    let run = |ps1: &str, git_branch: bool, platform: &str, expected_icon: &str| {
+        let mut child = Command::new(&bash)
+            .args(["--noprofile", "--norc", "-s"])
+            .env("BASH_ENV", "/dev/null")
+            .env("HOME", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Bash is required for the SSH prompt regression");
+        let bashrc = include_str!("../../../res/shell/bashrc");
+        let mut script = format!(
+            "PEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPEBREL_PROMPT_PLATFORM={platform}\nPS1='{ps1}'\n"
+        );
+        if git_branch {
+            script.push_str("git() { printf '%s\\n' '$(printf${IFS}PEBREL_REVIEW_MARKER)'; }\n");
+        }
+        script.push_str(bashrc);
+        script.push_str("eval \"$PROMPT_COMMAND\" || exit 90\n");
+        if git_branch {
+            script.push_str("[[ ${__pebrel_ssh_prompt_enabled:-0} == 1 ]] || exit 91\n");
+            script.push_str(&format!(
+                "[[ $PS1 == *'{expected_icon}'* ]] || {{ printf 'expected icon {expected_icon}; PS1=%s\\n' \"$PS1\" >&2; exit 96; }}\n"
+            ));
+            script.push_str(
+                "[[ ${__pebrel_ssh_git_branch:-} == '$(printf${IFS}PEBREL_REVIEW_MARKER)' ]] || exit 92\n[[ $PS1 == *'${__pebrel_ssh_git_branch}'* ]] || exit 93\n[[ $PS1 != *'$(printf${IFS}PEBREL_REVIEW_MARKER)'* ]] || exit 94\n",
+            );
+        } else {
+            script.push_str(
+                "[[ ${__pebrel_ssh_prompt_enabled:-0} != 1 && $PS1 == '[dev] \\u@\\h:\\w\\$ ' ]] || exit 95\n",
+            );
+        }
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    for (platform, icon) in [("windows", ""), ("macos", ""), ("linux", "")] {
+        let styled = run(r"\u@\h:\w\$ ", true, platform, icon);
+        assert!(
+            styled.status.success(),
+            "{platform} SSH Bash prompt failed: {}",
+            String::from_utf8_lossy(&styled.stderr)
+        );
+    }
+    let custom = run(r"[dev] \u@\h:\w\$ ", false, "linux", "");
+    assert!(
+        custom.status.success(),
+        "custom SSH Bash prompt failed: {}",
+        String::from_utf8_lossy(&custom.stderr)
+    );
+}
+
+#[test]
+fn ssh_zsh_prompt_styles_the_stock_prompt_and_preserves_custom_prompts() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    if Command::new("zsh").arg("--version").output().is_err() {
+        eprintln!("skipping Zsh runtime check because zsh is not installed");
+        return;
+    }
+    let run = |prompt: &str, git_branch: bool, platform: &str, expected_icon: &str| {
+        let mut child = Command::new("zsh")
+            .args(["-f", "-s"])
+            .env("HOME", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("zsh was found before the prompt regression");
+        let zshrc = include_str!("../../../res/shell/zshrc");
+        let mut script = format!(
+            "HOME=/dev/null\nNEBULA_ZDOTDIR_WAS_SET=0\nPEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPEBREL_PROMPT_PLATFORM={platform}\nsetopt PROMPT_SUBST\nPROMPT='"
+        );
+        script.push_str(prompt);
+        script.push_str("'\n");
+        script.push_str(zshrc);
+        if git_branch {
+            script.push_str(&format!(
+                "\n_nebula_precmd\n[[ $PROMPT == *'{expected_icon}'* ]] || exit 91\n"
+            ));
+            script.push_str(
+                "git() { print -r -- '$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'; }\n_nebula_precmd\nrendered=$(print -P -- \"$PROMPT\")\n[[ $rendered == *'$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'* ]] || exit 92\n",
+            );
+        } else {
+            script.push_str(
+                "\n_nebula_precmd\n[[ ${__pebrel_ssh_prompt_enabled:-0} != 1 && $PROMPT == '[dev] %m%# ' ]] || exit 93\n",
+            );
+        }
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    for (platform, icon) in [("windows", ""), ("macos", ""), ("linux", "")] {
+        let styled = run("%m%# ", true, platform, icon);
+        assert!(
+            styled.status.success(),
+            "{platform} SSH Zsh prompt failed: {}",
+            String::from_utf8_lossy(&styled.stderr)
+        );
+    }
+    let custom = run("[dev] %m%# ", false, "linux", "");
+    assert!(
+        custom.status.success(),
+        "custom SSH Zsh prompt failed: {}",
+        String::from_utf8_lossy(&custom.stderr)
+    );
+}
+
 /// Cross-language acceptance driver: the supplied snapshot must come from an
 /// isolated SSH test account. It exports production plans, not a second policy.
 #[test]

@@ -799,7 +799,8 @@ pub fn wsl_unc_cwd(located: &WslCwd) -> Option<std::path::PathBuf> {
 /// [`ShellIntegration::WslDefault`]——追加 `--exec bash` 是 1.1.0 的实际回归），
 /// 所以既不能改启动参数、也没有宿主侧的 rc 文件可注入。可行的只剩环境变量：
 /// bash 每画一次提示符都会执行 `$PROMPT_COMMAND`，而 `WSLENV` 会把点名的宿主
-/// 变量原样送进来宾。
+/// 变量送进来宾。只在来宾仍使用 Bash 默认提示符时加 Pebrel 外观；用户自己的
+/// Starship/Oh My Posh 或手写提示符继续掌握视觉输出。
 ///
 /// OSC 133;D/A 与终端 shell 状态机同序：`D` 是命令完成的权威边沿，`A`
 /// 标记接下来绘制的提示符；OSC 7 只负责 cwd，绝不再兼任 Agent 生命周期信号。
@@ -817,23 +818,91 @@ pub fn wsl_cwd_report_env(
     if !is_wsl_launcher(program) {
         return Vec::new();
     }
-    // 用 `$PWD` 而不是 `$(pwd)`，整个 PROMPT_COMMAND 只有变量赋值与一个
-    // builtin printf；身份只在首个提示符编码一次。初始提示符多发的 D 无害，
-    // Runtime submit barrier 会拒绝把它错配给尚未真正提交的新命令。
+    // `$PWD` 而不是 `$(pwd)` 生成 cwd；shell token 只在第一个提示符编码一次。
+    // Powerline 开关只在识别到精确默认提示符时读取；Git 分支每次提示符刷新，
+    // 与 Windows 一样放在路径和时钟之间。
+    // 初始提示符多发的 D 无害：Runtime submit barrier 会拒绝错配尚未提交的命令。
     const REPORT: &str = r#"__nebula_status=$?; if [ -z "${__pebrel_shell_token:-}" ]; then __pebrel_shell_token=$(printf '%s' "wsl|${WSL_DISTRO_NAME:-}|bash:${HOSTNAME:-wsl}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n');
 __PEBREL_CONNECTION_HOOK__
+fi; __pebrel_wsl_default_prompt=0; case ${PS1-} in '\u@\h:\w\$ '| '${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '|'\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '| '${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ ') __pebrel_wsl_default_prompt=1 ;; esac; if [[ -z ${__pebrel_wsl_prompt_installed:-} && -z ${STARSHIP_SHELL:-} && -z ${POSH_SHELL:-} && $__pebrel_wsl_default_prompt == 1 ]]; then
+    __pebrel_settings_root=${PEBREL_CONFIG_DIR:-${APPDATA:+$APPDATA/Pebrel}}
+    __pebrel_settings_file=${__pebrel_settings_root:+$__pebrel_settings_root/pebrel_settings.txt}
+    if [[ -n $__pebrel_settings_file && ! -r $__pebrel_settings_file && -r $__pebrel_settings_root/nebula_settings.txt ]]; then
+        __pebrel_settings_file=$__pebrel_settings_root/nebula_settings.txt
+    fi
+    __pebrel_powerline=1
+    if [[ -r $__pebrel_settings_file ]]; then
+        __pebrel_powerline=$(awk -F= '$1 == "powerline" { gsub(/^[ \t]+|[ \t]+$/, "", $2); print tolower($2); found=1; exit } END { if (!found) print "1" }' "$__pebrel_settings_file")
+    fi
+    case $__pebrel_powerline in
+        0|false|no|off)
+            PS1='\[\e[38;5;6m\]\w \[\e[35m\]❯\[\e[0m\] ' ;;
+        *)
+            if ! declare -F clear >/dev/null && ! alias clear >/dev/null 2>&1; then
+                clear() {
+                    command clear "$@"
+                    local clear_status=$?
+                    __pebrel_wsl_prompt_count=0
+                    return "$clear_status"
+                }
+            fi
+            __pebrel_wsl_prompt_last_ps1=$PS1
+            __pebrel_wsl_prompt_managed=1 ;;
+    esac
+    __pebrel_wsl_prompt_installed=1
+fi; if [[ ${__pebrel_wsl_prompt_managed:-} == 1 ]]; then
+    if [[ $PS1 == "$__pebrel_wsl_prompt_last_ps1" ]]; then
+        __pebrel_git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || __pebrel_git_branch=
+        __pebrel_git_prefix=
+        __pebrel_git_suffix=
+        __pebrel_wsl_leading_newline=
+        if [[ ${__pebrel_wsl_prompt_count:-0} -gt 0 ]]; then
+            __pebrel_wsl_leading_newline=$'\n'
+        fi
+        __pebrel_wsl_prompt_count=$(( ${__pebrel_wsl_prompt_count:-0} + 1 ))
+        if [[ -n $__pebrel_git_branch ]]; then
+            __pebrel_git_prefix=' '
+            __pebrel_git_suffix='  '
+        fi
+        PS1="$__pebrel_wsl_leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\]  \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  \\[\\e[38;5;6m\\]\${__pebrel_git_prefix}\${__pebrel_git_branch}\${__pebrel_git_suffix}\\[\\e[0m\\]\\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
+        __pebrel_wsl_prompt_last_ps1=$PS1
+    else
+        __pebrel_wsl_prompt_managed=0
+    fi
 fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"; if typeset -f __pebrel_editor_ready_report >/dev/null; then __pebrel_editor_ready_report; fi; printf '\033]133;D;%s\007\033]7;file://%s%s\007\033]133;A\007' "$__nebula_status" "${HOSTNAME:-wsl}" "$PWD""#;
     // 宿主侧可能已经有 WSLENV（别的工具设的），必须追加而不是覆盖。
     let mut wslenv = current_wslenv
         .map(str::to_owned)
         .or_else(|| std::env::var("WSLENV").ok())
         .unwrap_or_default();
-    if !wslenv.is_empty() && !wslenv.split(':').any(|entry| entry == "PROMPT_COMMAND") {
-        wslenv.push(':');
+    let mut entries: Vec<String> =
+        wslenv.split(':').filter(|entry| !entry.is_empty()).map(str::to_owned).collect();
+    for (name, path_flag) in
+        [("PROMPT_COMMAND", false), ("APPDATA", true), ("PEBREL_CONFIG_DIR", true)]
+    {
+        let existing = entries.iter_mut().find(|current| {
+            current
+                .split('/')
+                .next()
+                .is_some_and(|current_name| current_name.eq_ignore_ascii_case(name))
+        });
+        if let Some(existing) = existing {
+            if path_flag {
+                if let Some((current_name, flags)) = existing.split_once('/') {
+                    if !flags.contains('p') {
+                        *existing = format!("{current_name}/{flags}p");
+                    }
+                } else {
+                    existing.push_str("/p");
+                }
+            }
+        } else if path_flag {
+            entries.push(format!("{name}/p"));
+        } else {
+            entries.push(name.to_owned());
+        }
     }
-    if !wslenv.split(':').any(|entry| entry == "PROMPT_COMMAND") {
-        wslenv.push_str("PROMPT_COMMAND");
-    }
+    wslenv = entries.join(":");
     let report =
         REPORT.replace("__PEBREL_CONNECTION_HOOK__", nebula_terminal::tty::connection_shell());
     vec![("PROMPT_COMMAND".to_owned(), report), ("WSLENV".to_owned(), wslenv)]
@@ -1298,7 +1367,7 @@ mod tests {
 
         assert_eq!(
             additions.get("WSLENV").map(String::as_str),
-            Some("FRESH_REGISTRY_VALUE/u:PROMPT_COMMAND")
+            Some("FRESH_REGISTRY_VALUE/u:PROMPT_COMMAND:APPDATA/p:PEBREL_CONFIG_DIR/p")
         );
         let prompt_command = additions.get("PROMPT_COMMAND").expect("WSL prompt integration");
         assert!(prompt_command.contains("]133;D;%s"));
@@ -1313,7 +1382,7 @@ mod tests {
         use std::process::{Command, Stdio};
 
         let environment = wsl_cwd_report_env("wsl.exe", &[], Some("PROMPT_COMMAND:KEEP/u"));
-        assert_eq!(environment[1].1, "PROMPT_COMMAND:KEEP/u");
+        assert_eq!(environment[1].1, "PROMPT_COMMAND:KEEP/u:APPDATA/p:PEBREL_CONFIG_DIR/p");
         let prompt = &environment[0].1;
         let bash = std::env::var_os("NEBULA_BASH").unwrap_or_else(|| {
             [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
@@ -1337,6 +1406,7 @@ mod tests {
                 .expect("Bash is required for the shell injection regression");
             let script = format!(
                 r#"{user_function}
+__pebrel_editor_ready=1
 (exit 7); eval "$PROMPT_COMMAND" || exit 91
 typeset -f __pebrel_connection >/dev/null || exit 92
 typeset -f ssh >/dev/null || exit 93
@@ -1368,6 +1438,11 @@ test "$token" = "$__pebrel_shell_token" || exit 96
             assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
             assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
             let stdout = String::from_utf8(output.stdout).unwrap();
+            let ready_marker = "]1337;SetUserVar=pebrel_editor_ready=";
+            assert_eq!(stdout.matches(ready_marker).count(), 2);
+            let first_ready = stdout.find(ready_marker).unwrap();
+            assert!(stdout.find("]1337;SetUserVar=pebrel_shell=").unwrap() < first_ready);
+            assert!(first_ready < stdout.find("\x1b]133;D;7\x07").unwrap());
             for marker in
                 ["\x1b]133;D;7\x07", "\x1b]133;D;23\x07", "\x1b]7;file://", "\x1b]133;A\x07"]
             {
@@ -1377,6 +1452,103 @@ test "$token" = "$__pebrel_shell_token" || exit 96
                 );
             }
         }
+    }
+
+    #[test]
+    fn wsl_prompt_styles_the_default_shell_only_and_spaces_later_prompts() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let environment = wsl_cwd_report_env("wsl.exe", &[], None);
+        let prompt = &environment[0].1;
+        let bash = std::env::var_os("NEBULA_BASH").unwrap_or_else(|| {
+            [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
+                .into_iter()
+                .find(|path| std::path::Path::new(path).is_file())
+                .unwrap_or("bash")
+                .into()
+        });
+        let run = |ps1: &str, starship: bool, checks: &str| {
+            let mut child = Command::new(&bash)
+                .args(["--noprofile", "--norc", "-s"])
+                .env("BASH_ENV", "/dev/null")
+                .env("PROMPT_COMMAND", prompt)
+                .env_remove("APPDATA")
+                .env_remove("PEBREL_CONFIG_DIR")
+                .env_remove("STARSHIP_SHELL")
+                .env_remove("POSH_SHELL")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("Bash is required for the WSL prompt regression");
+            let starship_setup = if starship { "STARSHIP_SHELL=bash\n" } else { "" };
+            let script = format!(
+                "PS1='{ps1}'\n{starship_setup}eval \"$PROMPT_COMMAND\" || exit 90\n{checks}\n"
+            );
+            child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+            child.wait_with_output().unwrap()
+        };
+
+        let default_prompt = run(
+            r"\u@\h:\w\$ ",
+            false,
+            r#"[[ "$PS1" == *''* ]] || exit 91
+[[ "$PS1" != $'\n'* ]] || exit 92
+[[ "$PS1" == *''* ]] || exit 93
+[[ "$PS1" == *'${__pebrel_git_branch}'* ]] || exit 94
+eval "$PROMPT_COMMAND" || exit 95
+[[ "$PS1" == $'\n'*''* ]] || exit 96
+[[ "$PS1" == *''* ]] || exit 97"#,
+        );
+        assert!(
+            default_prompt.status.success(),
+            "default WSL prompt failed: {}",
+            String::from_utf8_lossy(&default_prompt.stderr)
+        );
+
+        let custom_prompt = run(
+            r"[dev] \u@\h:\w\$ ",
+            false,
+            r#"[[ "$PS1" == '[dev] \u@\h:\w\$ ' ]] || exit 97
+[[ ${__pebrel_wsl_prompt_managed:-0} != 1 ]] || exit 98"#,
+        );
+        assert!(
+            custom_prompt.status.success(),
+            "custom prompt was changed: {}",
+            String::from_utf8_lossy(&custom_prompt.stderr)
+        );
+
+        let starship_prompt = run(
+            r"\u@\h:\w\$ ",
+            true,
+            r#"[[ "$PS1" == '\u@\h:\w\$ ' ]] || exit 99
+[[ ${__pebrel_wsl_prompt_managed:-0} != 1 ]] || exit 100"#,
+        );
+        assert!(
+            starship_prompt.status.success(),
+            "Starship-managed prompt was changed: {}",
+            String::from_utf8_lossy(&starship_prompt.stderr)
+        );
+
+        let literal_branch = run(
+            r"\u@\h:\w\$ ",
+            false,
+            r#"git() { printf '%s\n' '$(printf${IFS}PEBREL_REVIEW_MARKER)'; }
+PS1='\u@\h:\w\$ '
+__pebrel_wsl_prompt_installed=1
+__pebrel_wsl_prompt_managed=1
+__pebrel_wsl_prompt_last_ps1=$PS1
+__pebrel_wsl_prompt_count=0
+eval "$PROMPT_COMMAND" || exit 101
+[[ ${__pebrel_git_branch:-} == '$(printf${IFS}PEBREL_REVIEW_MARKER)' ]] || exit 102
+[[ "$PS1" == *'${__pebrel_git_branch}'* ]] || exit 103"#,
+        );
+        assert!(
+            literal_branch.status.success(),
+            "git branch text was expanded as shell code: {}",
+            String::from_utf8_lossy(&literal_branch.stderr)
+        );
     }
 
     #[test]
