@@ -24,6 +24,10 @@ Removing either exclusion alone would lose privilege separation or launch identi
 - Tokio 1.50 exposes explicit security attributes and first-instance creation.
   Its named-pipe `poll_flush` is a no-op; disconnecting before the peer consumes
   a reply can discard that reply.
+- [CreateNamedPipe](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createnamedpipea)
+  documents first-instance exclusion. With `max_instances(1)`, the native instance
+  quota can instead produce `ERROR_PIPE_BUSY`; both results require connecting to
+  and verifying the existing owner, not starting a second server.
 
 ## Decision
 

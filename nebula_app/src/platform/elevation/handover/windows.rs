@@ -59,9 +59,12 @@ pub(crate) fn start_or_forward(
             },
             Err(error)
                 if error.raw_os_error()
-                    == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32) =>
+                    == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+                    || error.raw_os_error()
+                        == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32) =>
             {
-                // FIRST_PIPE_INSTANCE 把竞争启动收敛到一个拥有者；只在发送请求前等待忙管道。
+                // 单实例额度已满时 Windows 返回 PIPE_BUSY，同样需要连接已有拥有者。
+                // 只在发送请求前等待忙管道，连接后仍核验对端身份。
                 let client = match runtime.block_on(connect(&name)) {
                     Ok(client) => client,
                     Err(error) if error.kind() == io::ErrorKind::NotFound && retry_closed_owner => {
