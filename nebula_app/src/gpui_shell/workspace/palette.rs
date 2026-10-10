@@ -59,7 +59,7 @@ impl NebulaWorkspace {
     }
 
     pub(super) fn filtered_palette_rows(&self, cx: &App) -> Vec<WorkspacePaletteRow> {
-        let query = self.command_palette_input.read(cx).value().to_ascii_lowercase();
+        let query = self.command_palette_input.read(cx).value().to_lowercase();
         let words: Vec<_> = query.split_whitespace().collect();
         // Rendering must not stat `\\wsl.localhost\…` (it can start the guest or wait
         // on the redirector): a WSL pane offers the action and the handler maps it.
@@ -100,34 +100,11 @@ impl NebulaWorkspace {
             rows.push(recipes::palette_row(language));
             // 启动器混排（旧壳 ⌘K 裁定）：SSH 主机与命令同列，置顶/隐藏
             // 次序由共享 merge 权威裁定。
-            let ssh_icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
-            rows.extend(
-                crate::gpui_shell::ssh_hosts::SshHostLists::load()
-                    .merged_with_labels()
-                    .into_iter()
-                    .map(|(host, label)| {
-                        let glyph = crate::display::ui::os_icons::resolve(
-                            ssh_icons.get(&host).map(String::as_str),
-                        )
-                        .glyph;
-                        let named = (!label.is_empty()).then_some(label.as_str());
-                        let (label, hint) = shell_picker::ssh_host_display(named, &host);
-                        let search =
-                            format!("{label} {host} ssh host remote lianjie 连接").to_lowercase();
-                        WorkspacePaletteRow {
-                            group_order: usize::MAX,
-                            group: language.pick("SSH 主机", "SSH HOSTS").to_owned(),
-                            label,
-                            hint,
-                            hint_style: WorkspacePaletteHintStyle::Metadata,
-                            search,
-                            action: WorkspacePaletteAction::LaunchSshHost(host),
-                            icon: None,
-                            icon_glyph: Some(glyph),
-                            icon_path: None,
-                        }
-                    }),
-            );
+            rows.extend(shell_picker::ssh_palette_rows(
+                &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
+                usize::MAX,
+                language.pick("SSH 主机", "SSH HOSTS"),
+            ));
             rows
         });
         let mut rows: Vec<_> = rows

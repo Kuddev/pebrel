@@ -106,18 +106,37 @@ impl SshProfiles {
                 if terms.is_empty() {
                     return true;
                 }
-                let searchable = format!(
-                    "{} {} {} {} {}",
-                    self.connection_destination(destination),
-                    profile.and_then(|p| p.label.as_deref()).unwrap_or_default(),
-                    organization.group,
-                    organization.tags.join(" "),
-                    organization.notes
-                )
-                .to_lowercase();
+                let searchable =
+                    self.host_search_text(destination, profile.and_then(|p| p.label.as_deref()));
                 terms.iter().all(|term| searchable.contains(term))
             })
             .collect()
+    }
+
+    /// Searchable public metadata for launchers, built once from their loaded snapshot.
+    pub(crate) fn search_texts(&self) -> std::collections::HashMap<&str, String> {
+        self.profiles
+            .iter()
+            .map(|profile| {
+                (
+                    profile.destination.as_str(),
+                    self.host_search_text(&profile.destination, profile.label.as_deref()),
+                )
+            })
+            .collect()
+    }
+
+    fn host_search_text(&self, destination: &str, label: Option<&str>) -> String {
+        let organization = self.organization(destination);
+        format!(
+            "{} {} {} {} {}",
+            self.connection_destination(destination),
+            label.unwrap_or_default(),
+            organization.group,
+            organization.tags.join(" "),
+            organization.notes
+        )
+        .to_lowercase()
     }
 
     pub(crate) fn groups(&self) -> Vec<String> {
