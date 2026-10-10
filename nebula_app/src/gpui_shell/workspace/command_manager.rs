@@ -4,6 +4,9 @@
 //! 弹窗覆盖在终端之上而不参与主布局，避免为了短时管理命令永久压缩 PTY。
 
 use super::*;
+mod bulk;
+pub(super) use bulk::CommandSelection;
+use bulk::Deletion;
 mod groups;
 #[cfg(all(test, feature = "gpui-test-support", target_os = "windows"))]
 mod native_paste_tests;
@@ -13,9 +16,9 @@ use groups::{CommandDrag, ManagerRow};
 
 const PANEL_MAX_WIDTH: f32 = 430.0;
 const PANEL_MAX_HEIGHT: f32 = 360.0;
-const PANEL_EMPTY_HEIGHT: f32 = 196.0;
-// Search padding, list padding, two footer rows and the panel's two borders.
-const PANEL_FIXED_HEIGHT: f32 = 146.0;
+const PANEL_EMPTY_HEIGHT: f32 = 232.0;
+// Search/list padding, management controls, two footer rows and panel borders.
+const PANEL_FIXED_HEIGHT: f32 = 182.0;
 const GROUP_NAV_HEIGHT: f32 = 36.0;
 const PANEL_MARGIN: f32 = 8.0;
 const PANEL_FOOTER_HEIGHT: f32 = 44.0;
@@ -73,11 +76,16 @@ impl NebulaWorkspace {
     ) {
         match event {
             InputEvent::Change => {
-                self.command_manager_selected = 0;
+                self.command_manager_selection.ids.clear();
+                self.command_manager_selection.cursor = 0;
                 self.command_manager_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
                 cx.notify();
             },
-            InputEvent::PressEnter { .. } => self.run_selected_saved_command(window, cx),
+            // Selection-mode Enter is owned by the manager's keyboard handler;
+            // Input emits PressEnter for the same keystroke after it bubbles.
+            InputEvent::PressEnter { .. } if !self.command_manager_selection.selecting => {
+                self.run_selected_saved_command(window, cx);
+            },
             _ => {},
         }
     }
@@ -176,8 +184,9 @@ impl NebulaWorkspace {
             );
         }
         self.command_manager_group = None;
+        self.command_manager_selection = Default::default();
         self.command_group_menu = None;
-        self.command_manager_selected = 0;
+        self.command_manager_selection.cursor = 0;
         self.command_manager_scroll.scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
         cx.notify();
     }
@@ -209,13 +218,14 @@ impl NebulaWorkspace {
             return;
         }
         let len = self.command_manager_rows(cx).len();
-        self.command_manager_selected = if len == 0 {
+        self.command_manager_selection.cursor = if len == 0 {
             0
         } else {
-            (self.command_manager_selected as isize + delta).rem_euclid(len as isize) as usize
+            (self.command_manager_selection.cursor as isize + delta).rem_euclid(len as isize)
+                as usize
         };
         self.command_manager_scroll
-            .scroll_to_item(self.command_manager_selected, gpui::ScrollStrategy::Top);
+            .scroll_to_item(self.command_manager_selection.cursor, gpui::ScrollStrategy::Top);
         cx.notify();
     }
 
@@ -224,7 +234,10 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        match self.command_manager_rows(cx).get(self.command_manager_selected).cloned() {
+        match self.command_manager_rows(cx).get(self.command_manager_selection.cursor).cloned() {
+            Some(ManagerRow::Command(command)) if self.command_manager_selection.selecting => {
+                self.toggle_command_selection(&command.id, cx);
+            },
             Some(ManagerRow::Command(command)) => self.dispatch_saved_command(command, window, cx),
             Some(ManagerRow::Folder { id, .. }) => self.enter_command_group(Some(id), window, cx),
             None => {},
@@ -469,96 +482,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(command) =
-            self.available_saved_commands(cx).into_iter().find(|command| command.id == id)
-        else {
-            return;
-        };
-        let language = crate::gpui_shell::config::ui_language(cx);
-        let workspace = cx.entity().downgrade();
-        let dialog_workspace = workspace.clone();
-        let command_name = command.name.clone();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let delete_workspace = dialog_workspace.clone();
-            let close_workspace = dialog_workspace.clone();
-            let delete_id = id.clone();
-            let body = v_flex()
-                .w_full()
-                .gap_2()
-                .child(div().text_sm().child(format!(
-                    "{}“{}”？",
-                    language.pick("确定删除命令 ", "Delete command "),
-                    command_name
-                )))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(language.pick("删除后无法撤销。", "This action cannot be undone.")),
-                );
-            let footer = DialogFooter::new()
-                .child(div().flex_1())
-                .child(
-                    DialogClose::new().child(
-                        Button::new("saved-command-delete-cancel")
-                            .debug_selector(|| "saved-command-delete-cancel".into())
-                            .label(language.pick("取消", "Cancel")),
-                    ),
-                )
-                .child(
-                    DialogAction::new().child(
-                        Button::new("saved-command-delete-confirm")
-                            .debug_selector(|| "saved-command-delete-confirm".into())
-                            .label(language.pick("删除", "Delete"))
-                            .danger(),
-                    ),
-                );
-            center_modal_dialog(dialog, window, DELETE_DIALOG_HEIGHT)
-                .close_button(false)
-                .overlay_closable(true)
-                .title(
-                    div()
-                        .text_lg()
-                        .font_semibold()
-                        .child(language.pick("删除已保存命令", "Delete Saved Command")),
-                )
-                .footer(footer)
-                .child(body)
-                .on_ok(move |_, window, cx| {
-                    let Some(workspace) = delete_workspace.upgrade() else {
-                        return true;
-                    };
-                    let result = workspace.update(cx, |workspace, cx| {
-                        let result = workspace.saved_commands.remove(&delete_id);
-                        if result.is_ok() {
-                            let len = workspace.filtered_saved_commands(cx).len();
-                            workspace.command_manager_selected =
-                                workspace.command_manager_selected.min(len.saturating_sub(1));
-                            cx.notify();
-                        }
-                        result
-                    });
-                    match result {
-                        Ok(()) => true,
-                        Err(error) => {
-                            crate::gpui_shell::toast::toast(
-                                window,
-                                cx,
-                                crate::display::ToastKind::Warning,
-                                format!("{}: {error}", language.pick("删除失败", "Delete failed")),
-                            );
-                            false
-                        },
-                    }
-                })
-                .on_close(move |_, window, cx| {
-                    if let Some(workspace) = close_workspace.upgrade() {
-                        workspace.update(cx, |workspace, cx| {
-                            workspace.focus_command_manager_or_terminal(window, cx);
-                        });
-                    }
-                })
-        });
+        self.open_command_deletion(Deletion::Commands(vec![id]), window, cx);
     }
 
     pub(super) fn render_command_manager(
@@ -587,8 +511,8 @@ impl NebulaWorkspace {
             (f32::from(viewport.height) - title_bar_height - PANEL_MARGIN * 2.0).max(0.0);
 
         let rows = self.command_manager_rows(cx);
-        self.command_manager_selected =
-            self.command_manager_selected.min(rows.len().saturating_sub(1));
+        self.command_manager_selection.cursor =
+            self.command_manager_selection.cursor.min(rows.len().saturating_sub(1));
         let in_group = self.command_manager_group.is_some();
         let fixed_height = PANEL_FIXED_HEIGHT
             + if in_group { GROUP_NAV_HEIGHT - PANEL_FOOTER_HEIGHT } else { 0.0 };
@@ -683,6 +607,17 @@ impl NebulaWorkspace {
             )
             .on_key_down(cx.listener(|this: &mut Self, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
+                    "enter"
+                        if this.command_manager_selection.selecting
+                            && this
+                                .command_manager_input
+                                .read(cx)
+                                .focus_handle(cx)
+                                .is_focused(window) =>
+                    {
+                        this.run_selected_saved_command(window, cx);
+                        cx.stop_propagation();
+                    },
                     "up" => {
                         this.move_saved_command_selection(-1, cx);
                         cx.stop_propagation();
@@ -728,6 +663,7 @@ impl NebulaWorkspace {
                         cx.listener(|_, _, _, cx| cx.stop_propagation()),
                     )
                     .child(div().w_full().flex_shrink_0().p_2().child(search_box))
+                    .child(self.render_command_bulk_controls(cx))
                     .when(in_group, |panel| panel.child(self.render_command_group_navigation(cx)))
                     .child(div().flex_1().min_h_0().px_2().pb_2().child(list_content))
                     .child(
@@ -834,3 +770,6 @@ mod input_tests;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod group_tests;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod native_tests;
