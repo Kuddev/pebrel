@@ -51,6 +51,177 @@ fn open_manager(
 }
 
 #[gpui::test]
+fn batch_selection_never_runs_commands_and_cancel_keeps_the_store(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved_commands.json");
+    let mut saved = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    let a = saved.insert("Alpha", "echo alpha", true).unwrap();
+    let b = saved.insert("Beta", "echo beta", true).unwrap();
+    let (workspace, mut cx) = open_manager(saved, cx);
+    let button = cx.debug_bounds("command-select-mode").unwrap();
+    cx.simulate_click(button.center(), Modifiers::default());
+    draw(&mut cx);
+    let checkbox = cx.debug_bounds("command-check-0").unwrap();
+    cx.simulate_click(checkbox.center(), Modifiers::default());
+    draw(&mut cx);
+    workspace.read_with(&cx, |this, _| {
+        assert!(this.command_manager_open && this.tabs.is_empty());
+        assert_eq!(this.command_manager_selection.ids.len(), 1);
+    });
+    let row = cx.debug_bounds("saved-command-row-1").unwrap();
+    cx.simulate_click(row.center(), Modifiers::default());
+    draw(&mut cx);
+    workspace.read_with(&cx, |this, _| {
+        assert!(this.command_manager_selection.ids.contains(&a.id));
+        assert!(this.command_manager_selection.ids.contains(&b.id));
+        assert!(this.tabs.is_empty(), "selection must never open a terminal");
+    });
+    let before = std::fs::read(&path).unwrap();
+    for confirm in [false, true] {
+        let button = cx.debug_bounds("command-delete-selected").unwrap();
+        cx.simulate_click(button.center(), Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(std::fs::read(&path).unwrap(), before, "opening confirmation does not write");
+        let action = cx
+            .debug_bounds(if confirm {
+                "saved-command-delete-confirm"
+            } else {
+                "saved-command-delete-cancel"
+            })
+            .unwrap();
+        cx.simulate_click(action.center(), Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(
+            crate::saved_commands::SavedCommands::load_from(&path).unwrap().commands().len(),
+            if confirm { 0 } else { 2 }
+        );
+    }
+    assert!(workspace.read_with(&cx, |this, _| this.command_manager_selection.ids.is_empty()));
+}
+
+#[gpui::test]
+fn builtin_folder_can_be_cleared_and_restored_from_manage(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved_commands.json");
+    let saved = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    let (workspace, mut cx) = open_manager(saved, cx);
+    let delete = cx.debug_bounds("delete-command-group-builtin").unwrap();
+    cx.simulate_click(delete.center(), Modifiers::default());
+    draw(&mut cx);
+    assert!(workspace.read_with(&cx, |this, cx| !this.available_saved_commands(cx).is_empty()));
+    let confirm = cx.debug_bounds("saved-command-delete-confirm").unwrap();
+    cx.simulate_click(confirm.center(), Modifiers::default());
+    draw(&mut cx);
+    assert!(cx.debug_bounds("command-group-builtin").is_none());
+    let manage = cx.debug_bounds("command-manage-menu").unwrap();
+    cx.simulate_click(manage.center(), Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_keystrokes("down down enter");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("command-group-builtin").is_some());
+    assert!(workspace.read_with(&cx, |this, cx| !this.available_saved_commands(cx).is_empty()));
+}
+
+#[gpui::test]
+fn batch_keyboard_filtering_and_failed_delete_preserve_selection(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved_commands.json");
+    let mut saved = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    let a = saved.insert("Alpha", "echo alpha", true).unwrap();
+    saved.insert("QzxBatchFixture", "echo qzx_batch_fixture", true).unwrap();
+    let (workspace, mut cx) = open_manager(saved, cx);
+    let mode = cx.debug_bounds("command-select-mode").unwrap();
+    cx.simulate_click(mode.center(), Modifiers::default());
+    draw(&mut cx);
+    // Search retains keyboard focus after button clicks; Enter toggles, never runs.
+    workspace.read_with(&cx, |this, _| assert!(this.command_manager_selection.selecting));
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    workspace.read_with(&cx, |this, _| {
+        assert!(
+            this.command_manager_selection.ids.contains(&a.id),
+            "mode={} cursor={} selected={:?}",
+            this.command_manager_selection.selecting,
+            this.command_manager_selection.cursor,
+            this.command_manager_selection.ids
+        );
+        assert!(this.tabs.is_empty());
+    });
+    // A short fuzzy query such as "Beta" also matches macOS brew recipes.
+    cx.simulate_input("QzxBatchFixture");
+    draw(&mut cx);
+    assert!(workspace.read_with(&cx, |this, _| this.command_manager_selection.ids.is_empty()));
+    let select = cx.debug_bounds("command-select-visible").unwrap();
+    cx.simulate_click(select.center(), Modifiers::default());
+    draw(&mut cx);
+    workspace.read_with(&cx, |this, _| {
+        assert_eq!(this.command_manager_selection.ids.len(), 1);
+        assert!(!this.command_manager_selection.ids.contains(&a.id));
+    });
+    let before = std::fs::read(&path).unwrap();
+    let lock = crate::atomic_file::try_lock(&path).unwrap().unwrap();
+    let delete = cx.debug_bounds("command-delete-selected").unwrap();
+    cx.simulate_click(delete.center(), Modifiers::default());
+    draw(&mut cx);
+    let confirm = cx.debug_bounds("saved-command-delete-confirm").unwrap();
+    cx.simulate_click(confirm.center(), Modifiers::default());
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("saved-command-delete-confirm").is_some(),
+        "failure leaves retry available"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(workspace.read_with(&cx, |this, _| this.command_manager_selection.ids.len()), 1);
+    drop(lock);
+    let confirm = cx.debug_bounds("saved-command-delete-confirm").unwrap();
+    cx.simulate_click(confirm.center(), Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(crate::saved_commands::SavedCommands::load_from(&path).unwrap().commands(), &[a]);
+    // The explicit global action must not inherit the still-active fixture filter.
+    let manage = cx.debug_bounds("command-manage-menu").unwrap();
+    cx.simulate_click(manage.center(), Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_keystrokes("down enter");
+    draw(&mut cx);
+    let confirm = cx.debug_bounds("saved-command-delete-confirm").unwrap();
+    cx.simulate_click(confirm.center(), Modifiers::default());
+    draw(&mut cx);
+    assert!(crate::saved_commands::SavedCommands::load_from(&path).unwrap().commands().is_empty());
+}
+
+#[gpui::test]
+fn folder_delete_requires_confirmation_and_keeps_commands(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved_commands.json");
+    let mut saved = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    saved.create_group("Work").unwrap();
+    let group = saved.groups()[0].id.clone();
+    let command = saved.insert_in_group("Build", "cargo build", false, Some(&group)).unwrap();
+    let (workspace, mut cx) = open_manager(saved, cx);
+    for confirm in [false, true] {
+        let selector = Box::leak(format!("delete-command-group-{group}").into_boxed_str());
+        let delete = cx.debug_bounds(selector).unwrap();
+        cx.simulate_click(delete.center(), Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(workspace.read_with(&cx, |this, _| this.saved_commands.groups().len()), 1);
+        let button = cx
+            .debug_bounds(if confirm {
+                "saved-command-delete-confirm"
+            } else {
+                "saved-command-delete-cancel"
+            })
+            .unwrap();
+        cx.simulate_click(button.center(), Modifiers::default());
+        draw(&mut cx);
+    }
+    workspace.read_with(&cx, |this, _| {
+        assert!(this.saved_commands.groups().is_empty());
+        assert_eq!(this.saved_commands.commands(), &[command.clone()]);
+        assert_eq!(this.saved_commands.group_for(&command.id), None);
+    });
+}
+
+#[gpui::test]
 fn grouping_drag_and_context_menu_keep_commands_and_keyboard_order(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("saved_commands.json");
@@ -111,7 +282,7 @@ fn grouping_drag_and_context_menu_keep_commands_and_keyboard_order(cx: &mut Test
     workspace
         .read_with(&cx, |this, cx| assert_eq!(this.filtered_saved_commands(cx)[0].id, command.id));
     cx.simulate_keystrokes("down");
-    workspace.read_with(&cx, |this, _| assert_eq!(this.command_manager_selected, 1));
+    workspace.read_with(&cx, |this, _| assert_eq!(this.command_manager_selection.cursor, 1));
 }
 
 #[gpui::test]
@@ -238,7 +409,7 @@ fn command_results_render_only_visible_rows_and_scroll_to_keyboard_selection(
     draw(&mut cx);
     assert!(cx.debug_bounds("saved-command-row-39").is_some());
     assert!(cx.debug_bounds("saved-command-row-0").is_none());
-    workspace.read_with(&cx, |this, _| assert_eq!(this.command_manager_selected, 39));
+    workspace.read_with(&cx, |this, _| assert_eq!(this.command_manager_selection.cursor, 39));
 }
 
 #[gpui::test]
@@ -293,7 +464,7 @@ fn backup_restore_refreshes_an_open_command_manager(cx: &mut TestAppContext) {
         assert!(this.command_manager_open);
         assert_eq!(this.saved_commands.commands()[0].name, "After restore");
         assert!(this.command_manager_group.is_none());
-        assert_eq!(this.command_manager_selected, 0);
+        assert_eq!(this.command_manager_selection.cursor, 0);
     });
     assert!(window.debug_bounds("saved-command-row-0").is_some());
 }

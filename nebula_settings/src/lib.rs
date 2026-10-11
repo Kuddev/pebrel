@@ -42,7 +42,7 @@ mod quick_terminal;
 mod scrolling;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
-    SCROLL_SPEED_STEP, SCROLLBACK_VALUES, normalize_scroll_speed,
+    SCROLL_SPEED_STEP, SCROLLBACK_VALUES, ScrollbarVisibility, normalize_scroll_speed,
 };
 mod terminal_line_height;
 pub use terminal_line_height::{DEFAULT_TERMINAL_LINE_HEIGHT, normalize_terminal_line_height};
@@ -1014,6 +1014,7 @@ pub struct RuntimeSettings {
     pub scrollback_lines: usize,
     /// Wheel multiplier; pixel-precise trackpad input is independent.
     pub scroll_speed: f32,
+    pub scrollbar_visibility: ScrollbarVisibility,
     /// GUI override for mouse.focus_follows_mouse in TOML; absent there too means false.
     pub focus_follows_mouse: Option<bool>,
     /// Preserve the existing dimming of inactive split panes unless explicitly disabled.
@@ -1197,6 +1198,10 @@ impl RuntimeSettings {
                 .f32("terminal_line_height")
                 .filter(|value| value.is_finite())
                 .map(normalize_terminal_line_height),
+            scrollbar_visibility: raw
+                .value("scrollbar_visibility")
+                .and_then(ScrollbarVisibility::from_settings)
+                .unwrap_or_default(),
             ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
             ligatures: raw
                 .value("ligatures")

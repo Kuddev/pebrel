@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const RESET_KEYS: &[&str] = &[
     "scrollback_lines",
     "scroll_speed",
+    "scrollbar_visibility",
     "language",
     "theme",
     "app_icon",
@@ -156,6 +157,16 @@ mod tests {
         let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
         assert!(settings.terminal_line_height.is_none());
         assert!(restored.contains("custom=keep"));
+    }
+
+    #[test]
+    fn reset_restores_auto_scrollbar_visibility() {
+        let text = default_settings_text("scrollbar_visibility=always\ncustom=keep\n");
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_text(&text)).scrollbar_visibility,
+            crate::ScrollbarVisibility::Auto,
+        );
+        assert!(text.contains("custom=keep"));
     }
 
     #[test]
