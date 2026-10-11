@@ -43,6 +43,13 @@ fn main() {
         embed_resource::compile("./windows/nebula.rc", defines).manifest_required().unwrap();
 
         deploy_conpty();
+
+        // Windows 主线程默认只保留 1 MiB 栈，而 debug 构建里 `render_git_tree`
+        // 单帧约 599 KiB，打开 Git 面板会栈溢出（#569）。仅 MSVC 链接器认
+        // `/STACK`。
+        if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+        }
     }
 }
 
