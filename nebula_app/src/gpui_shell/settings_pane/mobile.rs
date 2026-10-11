@@ -35,6 +35,9 @@ pub(super) struct MobileState {
     addresses: Vec<connection::LanAddress>,
     address_select: SharedSelect,
     port_input: Entity<InputState>,
+    port_placeholder: String,
+    port_focus: view::PortFocus,
+    _port_focus_subscription: Subscription,
     qr_payload: Option<String>,
     qr: Option<Arc<RenderImage>>,
     expires_at: Option<u64>,
@@ -53,6 +56,19 @@ pub(super) struct MobileState {
 
 impl MobileState {
     pub(super) fn new(window: &mut Window, cx: &mut Context<SettingsPane>) -> Self {
+        let port_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .pattern(regex::Regex::new(r"^\d{0,5}$").expect("port pattern"))
+        });
+        let port_focus_subscription = cx.subscribe(&port_input, |this, _, event, cx| {
+            let focused = match event {
+                InputEvent::Focus => true,
+                InputEvent::Blur => false,
+                _ => return,
+            };
+            this.mobile.port_focus.set_focused(focused);
+            cx.notify();
+        });
         Self {
             initialized: false,
             loading: false,
@@ -68,10 +84,10 @@ impl MobileState {
             addresses: Vec::new(),
             address_select: cx
                 .new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx)),
-            port_input: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .pattern(regex::Regex::new(r"^\d{0,5}$").expect("port pattern"))
-            }),
+            port_input,
+            port_placeholder: String::new(),
+            port_focus: view::PortFocus::default(),
+            _port_focus_subscription: port_focus_subscription,
             qr_payload: None,
             qr: None,
             expires_at: None,
@@ -162,6 +178,27 @@ fn now() -> u64 {
 }
 
 impl SettingsPane {
+    fn mobile_sync_port_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let placeholder = self
+            .mobile
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.lan.as_ref())
+            .filter(|connection| matches!(connection.status, Status::Waiting | Status::Connected))
+            .and_then(|connection| connection.address.strip_prefix("wss://"))
+            .and_then(|address| address.parse::<std::net::SocketAddr>().ok())
+            .map(|address| address.port().to_string())
+            .unwrap_or_else(|| language.text(Message::MobileAutomatic).to_owned());
+        if self.mobile.port_placeholder != placeholder {
+            // 自动分配的实际端口只是显示提示；不把聚焦、失焦误保存为固定端口。
+            self.mobile.port_placeholder = placeholder.clone();
+            self.mobile
+                .port_input
+                .update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
+        }
+    }
+
     fn mobile_initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.mobile.initialized {
             return;
@@ -179,7 +216,7 @@ impl SettingsPane {
                 let mut preferences = this.mobile.preferences();
                 preferences.address = this.mobile_selected_address(cx).or(preferences.address);
                 if preferences.enabled && preferences.lan_enabled {
-                    this.mobile_apply(preferences, None, false, window, cx);
+                    this.mobile_apply(preferences, None, Some(Mode::Lan), false, window, cx);
                 }
             }
         }));
@@ -196,7 +233,7 @@ impl SettingsPane {
                     Ok(port) if port != this.mobile.preferences().port => {
                         let mut preferences = this.mobile.preferences();
                         preferences.port = port;
-                        this.mobile_apply(preferences, None, false, window, cx);
+                        this.mobile_apply(preferences, None, Some(Mode::Lan), false, window, cx);
                     },
                     Err(_) => {
                         this.mobile.failure = Some(Failure::Invalid);
@@ -311,7 +348,27 @@ impl SettingsPane {
                         }
                     },
                     Err(Failure::Cancelled) => {},
-                    Err(error) => this.mobile.failure = Some(error),
+                    Err(error) => {
+                        this.mobile.failure = Some(error);
+                        // 事务回滚后显示已提交的网卡，不能让草稿地址看起来已经生效。
+                        if let Some(snapshot) = this.mobile.snapshot.as_ref() {
+                            let selected = snapshot.preferences.address.and_then(|address| {
+                                this.mobile
+                                    .addresses
+                                    .iter()
+                                    .position(|entry| entry.address == address)
+                            });
+                            this.mobile.syncing = true;
+                            this.mobile.address_select.update(cx, |select, cx| {
+                                select.set_selected_index(
+                                    selected.map(|row| IndexPath::default().row(row)),
+                                    window,
+                                    cx,
+                                );
+                            });
+                            this.mobile.syncing = false;
+                        }
+                    },
                 }
                 cx.notify();
             });
@@ -324,6 +381,7 @@ impl SettingsPane {
         &mut self,
         preferences: Preferences,
         relay: Option<String>,
+        route: Option<Mode>,
         close_relay: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -332,7 +390,7 @@ impl SettingsPane {
         self.mobile_run(
             Some(generation),
             close_relay,
-            move || connection::apply(generation, preferences, relay),
+            move || connection::apply(generation, preferences, relay, route),
             window,
             cx,
         );
@@ -362,14 +420,14 @@ impl SettingsPane {
             .as_ref()
             .map(|s| s.devices.iter().map(|d| d.id.clone()).collect())
             .unwrap_or_default();
-        self.mobile_apply(preferences, None, false, window, cx);
+        self.mobile_apply(preferences, None, None, false, window, cx);
     }
 
     fn mobile_pause(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut preferences = self.mobile.preferences();
         preferences.enabled = false;
         self.mobile.pairing_open = false;
-        self.mobile_apply(preferences, None, false, window, cx);
+        self.mobile_apply(preferences, None, None, false, window, cx);
     }
 
     fn mobile_pair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -407,7 +465,7 @@ impl SettingsPane {
                 },
                 Mode::Relay => preferences.relay_enabled = true,
             }
-            self.mobile_apply(preferences, None, false, window, cx);
+            self.mobile_apply(preferences, None, Some(mode), false, window, cx);
         } else {
             cx.notify();
         }

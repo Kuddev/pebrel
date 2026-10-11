@@ -2,14 +2,14 @@ mod compiler;
 mod frame;
 
 use super::{colors::Palette, cursor_painter::CursorPaint, view::TerminalView};
+use crate::platform::effect_activity::EffectActivity;
 use gpui::{
     App, AppContext, BackgroundShaderCancellation, Bounds, Context, DevicePixels, Entity, Pixels,
-    PostprocessDescriptor, PostprocessFeedback, StreamImageBudget, StreamImageBudgets,
-    StreamImageHandle, Subscription, Task, WeakEntity, Window, size,
+    PostprocessFeedback, StreamImageBudget, StreamImageBudgets, StreamImageHandle, Subscription,
+    Task, WeakEntity, WgslPostprocessDescriptor, Window, size,
 };
 use nebula_settings::{EffectAnimation, TerminalEffects};
 use nebula_terminal::term::color::Colors;
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     sync::{
         Arc,
@@ -20,18 +20,13 @@ use std::{
 
 const GPU_LIMIT: u64 = 64 * 1024 * 1024;
 
-fn is_foreground(native: isize) -> bool {
-    use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::GetForegroundWindow};
-    native != 0 && unsafe { GetForegroundWindow() == HWND(native as *mut _) }
-}
-
 pub(super) struct TerminalEffect {
     view: WeakEntity<TerminalView>,
     config: TerminalEffects,
     revision: u64,
     epoch: u64,
     extent: [i32; 2],
-    native: isize,
+    activity: EffectActivity,
     window: gpui::AnyWindowHandle,
     owner: Option<StreamImageHandle>,
     ready: bool,
@@ -51,20 +46,13 @@ pub(super) struct TerminalEffect {
 
 impl TerminalEffect {
     fn new(view: WeakEntity<TerminalView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let native = HasWindowHandle::window_handle(window)
-            .ok()
-            .and_then(|handle| match handle.as_raw() {
-                RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
-                _ => None,
-            })
-            .unwrap_or(0);
         let activation = cx.observe_window_activation(window, |this, window, cx| {
-            if !window.is_window_active() {
-                this.history.unfocus();
-            }
+            this.activity = EffectActivity::capture(window);
             this.reconcile(cx);
+            this.notify_view(cx);
         });
-        let bounds = cx.observe_window_bounds(window, |this, _, cx| {
+        let bounds = cx.observe_window_bounds(window, |this, window, cx| {
+            this.activity = EffectActivity::capture(window);
             this.reconcile(cx);
             this.notify_view(cx);
         });
@@ -75,7 +63,7 @@ impl TerminalEffect {
             revision: 0,
             epoch: 0,
             extent: [0; 2],
-            native,
+            activity: EffectActivity::capture(window),
             window: Window::window_handle(window),
             owner: None,
             ready: false,
@@ -143,10 +131,6 @@ impl TerminalEffect {
     }
 
     fn permitted(&self, cx: &App) -> bool {
-        use windows::Win32::{
-            Foundation::HWND,
-            UI::WindowsAndMessaging::{IsIconic, IsWindowVisible},
-        };
         if !self.config.enabled
             || self.failed
             || !self.ready
@@ -162,26 +146,17 @@ impl TerminalEffect {
         if !view.effect_output_visible() {
             return false;
         }
-        let hwnd = HWND(self.native as *mut _);
-        unsafe {
-            IsWindowVisible(hwnd).as_bool()
-                && !IsIconic(hwnd).as_bool()
-                && (self.config.animation == EffectAnimation::Always
-                    || (is_foreground(self.native) && view.effect_pane_focused()))
-        }
+        !self.activity.hidden()
+            && (self.config.animation == EffectAnimation::Always
+                || (self.activity.focused() && view.effect_pane_focused()))
     }
 
     fn reconcile(&mut self, cx: &mut Context<Self>) {
-        use windows::Win32::{
-            Foundation::HWND,
-            UI::WindowsAndMessaging::{IsIconic, IsWindowVisible},
-        };
-        let hwnd = HWND(self.native as *mut _);
-        if !is_foreground(self.native) {
+        if !self.activity.focused() {
             self.history.unfocus();
         }
         let visible = self.view.upgrade().is_some_and(|view| view.read(cx).effect_output_visible())
-            && unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() };
+            && !self.activity.hidden();
         if !visible {
             self.preparation_cancelled.cancel();
             self.preparing.take();
@@ -194,19 +169,28 @@ impl TerminalEffect {
         }
         if !self.permitted(cx) {
             self.timer.take();
+        }
+    }
+
+    fn schedule_after_paint(&mut self, cx: &mut Context<Self>) {
+        if !self.permitted(cx) || self.timer.is_some() {
             return;
         }
-        if self.timer.is_some() {
-            return;
-        }
+        let epoch = self.epoch;
         self.timer = Some(cx.spawn(async move |entity, cx| {
             cx.background_executor().timer(Duration::from_millis(50)).await;
             let _ = entity.update(cx, |this, cx| {
-                this.timer.take();
+                if this.epoch != epoch {
+                    return;
+                }
+                if let Some(task) = this.timer.take() {
+                    task.detach();
+                }
+                this.reconcile(cx);
                 if this.permitted(cx) {
                     this.notify_view(cx);
                 }
-                this.reconcile(cx);
+                // 只有下一次真实 paint 才续期；合成器不再绘制隐藏窗口时没有轮询链。
             });
         }));
     }
@@ -277,10 +261,10 @@ impl TerminalEffect {
         if self.ready || self.preparing.is_some() || self.failed || extent.iter().any(|v| *v <= 0) {
             return;
         }
-        let descriptor = PostprocessDescriptor {
+        let descriptor = WgslPostprocessDescriptor {
             size: size(DevicePixels(extent[0]), DevicePixels(extent[1])),
             uniform_size: compiler::UNIFORM_BYTES,
-            directx_passes: program.passes.clone(),
+            passes: program.passes.clone(),
         };
         let bytes = match descriptor.texture_bytes() {
             Ok(bytes) => bytes + compiler::UNIFORM_BYTES as u64,
@@ -295,7 +279,7 @@ impl TerminalEffect {
         }
         let owner = window.create_stream_image(self.gpu.clone(), cx);
         let cancelled = self.preparation_cancelled.clone();
-        let factory = match owner.prepare_postprocess(descriptor, cancelled.clone()) {
+        let factory = match owner.prepare_postprocess_wgsl(descriptor, cancelled.clone()) {
             Ok(factory) => factory,
             Err(error) => {
                 self.fail(&error, cx);
@@ -359,7 +343,7 @@ pub(super) fn paint(
     cx: &mut App,
 ) {
     let (config, revision) = crate::gpui_shell::wallpaper::terminal_effect_configuration(cx);
-    if !config.enabled {
+    if !config.enabled || !crate::platform::effect_activity::supported(window) {
         view.update(cx, |view, _| {
             view.effect.take();
         });
@@ -378,6 +362,7 @@ pub(super) fn paint(
         (physical(bounds.bottom()) - physical(bounds.top())).max(0),
     ];
     actor.update(cx, |this, cx| {
+        this.activity = EffectActivity::capture(window);
         this.configure(config, revision);
         // 旧几何的场景可能晚到一帧；它的错误不应停用替换后的所有者。
         if this.owner.is_none() || this.extent != extent {
@@ -396,7 +381,7 @@ pub(super) fn paint(
                     scale,
                     cursor,
                     // WM_ACTIVATE 状态在非输入桌面上也可能为真；与动画门控共用前台事实。
-                    focused && is_foreground(this.native),
+                    focused && this.activity.focused(),
                     palette,
                     colors,
                 );
@@ -408,6 +393,7 @@ pub(super) fn paint(
             }
         }
         this.reconcile(cx);
+        this.schedule_after_paint(cx);
     });
 }
 
@@ -417,5 +403,53 @@ pub(super) fn visibility_changed(view: &TerminalView, cx: &mut Context<TerminalV
         cx.defer(move |cx| {
             effect.update(cx, |effect, cx| effect.visibility_changed(cx));
         });
+    }
+}
+
+#[cfg(all(test, not(windows), feature = "gpui-test-support"))]
+mod cadence_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn a_paint_schedules_one_wake_and_hidden_panes_cancel_it(cx: &mut gpui::TestAppContext) {
+        // 复用既有终端会话夹具，终端不挂入绘制树，明确模拟合成器停止送帧的情形。
+        let (view, window, _receiver) = super::super::view::startup_tests::open(cx);
+        let actor = window
+            .update(|window, cx| cx.new(|cx| TerminalEffect::new(view.downgrade(), window, cx)));
+        view.update(window, |view, _| view.effect = Some(actor.clone()));
+        actor.update(window, |effect, cx| {
+            effect.config.enabled = true;
+            effect.config.animation = EffectAnimation::Always;
+            // 本用例只验证调度，不构造 GPU owner，也不把此状态当作后端验收。
+            effect.ready = true;
+            effect.schedule_after_paint(cx);
+            assert!(effect.timer.is_some());
+        });
+        window.run_until_parked();
+        window.executor().advance_clock(Duration::from_millis(50));
+        window.run_until_parked();
+        assert!(actor.read_with(window, |effect, _| effect.timer.is_none()));
+        window.executor().advance_clock(Duration::from_secs(2));
+        window.run_until_parked();
+        assert!(
+            actor.read_with(window, |effect, _| effect.timer.is_none()),
+            "no paint, no recurring timer"
+        );
+
+        window.deactivate_window();
+        actor.update(window, |effect, cx| {
+            effect.config.animation = EffectAnimation::Focused;
+            effect.schedule_after_paint(cx);
+            assert!(effect.timer.is_none());
+            effect.config.animation = EffectAnimation::Off;
+            effect.schedule_after_paint(cx);
+            assert!(effect.timer.is_none());
+            effect.config.animation = EffectAnimation::Always;
+            effect.schedule_after_paint(cx);
+            assert!(effect.timer.is_some(), "always mode still works in an inactive visible pane");
+        });
+        view.update(window, |view, cx| view.set_output_visible(false, cx));
+        window.run_until_parked();
+        assert!(actor.read_with(window, |effect, _| effect.timer.is_none() && !effect.ready));
     }
 }

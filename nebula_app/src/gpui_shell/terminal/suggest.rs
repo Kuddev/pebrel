@@ -3,17 +3,39 @@
 #[cfg(test)]
 pub(super) use crate::completion::history_hint_for_test;
 pub(super) use crate::completion::{Cancellation, record_directory};
-use crate::display::NebulaPaneState;
+use crate::display::{CompletionStyle, NebulaPaneState, SuggestEnv};
+
+/// 候选仍可接受的输入身份；数据源代际不是输入身份的一部分。
+#[derive(PartialEq)]
+pub(super) struct QueryContext {
+    pub cwd: String,
+    pub env: SuggestEnv,
+    pub line: String,
+    pub cursor: usize,
+    pub mode: CompletionStyle,
+    pub style: CompletionStyle,
+    pub syntax: Option<pebrel_completions::command_context::ShellSyntax>,
+    pub revision: u64,
+}
 
 /// 视图释放任务时同时通知已开始的同步计算，不能仅丢弃最后的 UI 回填。
 pub(super) struct Pending {
     _task: gpui::Task<()>,
     cancellation: Cancellation,
+    context: std::sync::Arc<QueryContext>,
 }
 
 impl Pending {
-    pub(super) fn new(task: gpui::Task<()>, cancellation: Cancellation) -> Self {
-        Self { _task: task, cancellation }
+    pub(super) fn new(
+        task: gpui::Task<()>,
+        cancellation: Cancellation,
+        context: std::sync::Arc<QueryContext>,
+    ) -> Self {
+        Self { _task: task, cancellation, context }
+    }
+
+    pub(super) fn matches_context(&self, context: &QueryContext) -> bool {
+        self.context.as_ref() == context
     }
 
     #[cfg(test)]

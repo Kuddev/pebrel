@@ -6,6 +6,8 @@ internal fun reflowTerminal(source: TerminalFrame, columns: Int): TerminalFrame 
     if (columns >= source.columns) return source
     val result = ArrayList<TerminalRow?>()
     val wraps = ArrayList<Boolean>()
+    val sourceOffsets = ArrayList<Int>()
+    var rowSourceOffset = 0
     var text = StringBuilder()
     var cells = IntArray(columns * 6)
     var x = 0
@@ -13,6 +15,7 @@ internal fun reflowTerminal(source: TerminalFrame, columns: Int): TerminalFrame 
     var cursorY = 0
 
     fun finish(wrapped: Boolean = false) {
+        sourceOffsets += rowSourceOffset
         result += TerminalRow(text.toString(), cells)
         wraps += wrapped
         text = StringBuilder()
@@ -21,6 +24,7 @@ internal fun reflowTerminal(source: TerminalFrame, columns: Int): TerminalFrame 
     }
 
     source.rows.forEachIndexed { y, row ->
+        if (x == 0) rowSourceOffset = y * source.columns
         val wrapped = source.wrapped?.getOrNull(y) == true
         var extent = if (wrapped) source.columns else 0
         if (row != null && !wrapped) {
@@ -43,6 +47,7 @@ internal fun reflowTerminal(source: TerminalFrame, columns: Int): TerminalFrame 
             val width = row?.cells?.get(offset + 2) ?: 0
             if (width == 0) { column++; continue }
             if (x + width > columns) finish(wrapped = true)
+            if (x == 0) rowSourceOffset = y * source.columns + column
             if (source.cursorVisible && y == source.cursorY && source.cursorX in column until column + width) {
                 cursorX = x + source.cursorX - column
                 cursorY = result.size
@@ -63,5 +68,5 @@ internal fun reflowTerminal(source: TerminalFrame, columns: Int): TerminalFrame 
     meta[1] = result.size
     meta[2] = cursorX
     meta[3] = cursorY
-    return TerminalFrame(result.toTypedArray(), meta, wraps.toBooleanArray())
+    return TerminalFrame(result.toTypedArray(), meta, wraps.toBooleanArray(), source.history, sourceOffsets.toIntArray())
 }

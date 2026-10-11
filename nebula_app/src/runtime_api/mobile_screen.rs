@@ -45,6 +45,8 @@ impl ScreenBaseline {
             if let Some(wrapped) = screen.get("wrapped") {
                 delta["wrapped"] = wrapped.clone();
             }
+            // 行位置元数据与单元格使用同一序列，不能让新行配上旧历史锚点。
+            delta["history"] = screen.get("history").cloned().unwrap_or(Value::Null);
             // During a full redraw the normal snapshot can be smaller than indexed rows.
             if serde_json::to_vec(&delta).unwrap().len()
                 < serde_json::to_vec(&screen).unwrap().len()

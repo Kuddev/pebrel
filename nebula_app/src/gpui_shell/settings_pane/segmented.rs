@@ -22,7 +22,6 @@ struct SettingsSegments {
     selected: usize,
     height: Pixels,
     labels: Vec<SharedString>,
-    fallback: Option<gpui::AnyElement>,
     buttons: Vec<Button>,
 }
 
@@ -55,12 +54,7 @@ impl RenderOnce for SettingsSegments {
             })
             .fold(px(64.0), |width, next| width.max(next));
         let width = slot_width * self.labels.len() as f32;
-        // Longer translations retain the full dropdown instead of clipping text.
-        if width + px(TRACK_INSET * 2.0) > px(SETTINGS_SELECT_WIDTH) {
-            if let Some(fallback) = self.fallback {
-                return fallback;
-            }
-        }
+        // 已确认的短选项保持胶囊；真实排版宽度交给设置行换行，而非退回下拉框。
         let key = self.key;
         let count = self.buttons.len() as f32;
         let target = self.selected as f32 / count;
@@ -106,7 +100,8 @@ impl RenderOnce for SettingsSegments {
                 blur_radius: px(3.0),
                 ..crate::gpui_shell::theme::card_shadow(cx)
             }]);
-        let indicator = if from == target {
+        let indicator = if from == target || cx.reduce_motion() {
+            position.set(target);
             indicator.into_any_element()
         } else {
             indicator
@@ -140,6 +135,19 @@ impl RenderOnce for SettingsSegments {
     }
 }
 
+pub(super) fn supports(key: &str) -> bool {
+    matches!(
+        key,
+        "density"
+            | "tabs_position"
+            | "tab_reveal"
+            | "new_tab_position"
+            | "vcs_display"
+            | "cell_width_mode"
+            | "completion_style"
+    )
+}
+
 impl SettingsPane {
     pub(super) fn segmented_setting(
         &self,
@@ -147,16 +155,7 @@ impl SettingsPane {
         cx: &Context<Self>,
     ) -> Option<gpui::AnyElement> {
         // Long prose choices (window routing, language, etc.) retain their dropdown.
-        if !matches!(
-            key,
-            "density"
-                | "tabs_position"
-                | "tab_reveal"
-                | "new_tab_position"
-                | "vcs_display"
-                | "cell_width_mode"
-                | "completion_style"
-        ) {
+        if !supports(key) {
             return None;
         }
         let (_, state, values) = self.selects.iter().find(|(candidate, _, _)| *candidate == key)?;
@@ -170,16 +169,6 @@ impl SettingsPane {
                 selected,
                 height,
                 labels: labels.clone(),
-                fallback: Some(
-                    crate::gpui_shell::widgets::settings_select_frame(
-                        SharedString::from(format!("settings-segments-dropdown-{key}")),
-                        Select::new(state).appearance(false).h_full().rounded(px(6.0)),
-                        cx,
-                    )
-                    .debug_selector(move || format!("settings-segments-dropdown-{key}"))
-                    .w(px(SETTINGS_SELECT_WIDTH))
-                    .into_any_element(),
-                ),
                 buttons: values
                     .iter()
                     .copied()

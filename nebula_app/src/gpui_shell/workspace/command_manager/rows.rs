@@ -20,7 +20,10 @@ impl NebulaWorkspace {
         let accent = theme.primary;
         let mono_family = theme.mono_font_family.clone();
         let language = crate::gpui_shell::config::ui_language(cx);
-        let selected = index == self.command_manager_selected;
+        let selected = index == self.command_manager_selection.cursor;
+        let selecting = self.command_manager_selection.selecting;
+        let checked = self.command_manager_selection.ids.contains(&command.id);
+        let select_id = command.id.clone();
         let builtin = command.id.starts_with("builtin:");
         let hover_group = SharedString::from(format!("saved-command-row-hover-{index}"));
         let preview = command
@@ -55,7 +58,7 @@ impl NebulaWorkspace {
         h_flex()
             .id(SharedString::from(format!("saved-command-row-{index}")))
             .debug_selector(move || format!("saved-command-row-{index}").into())
-            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .when(!selecting, |row| row.on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone())))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -76,10 +79,25 @@ impl NebulaWorkspace {
             .when(selected, |row| row.bg(selected_bg))
             .when(!selected, |row| row.group_hover(hover_group.clone(), |row| row.bg(hover_bg)))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.command_manager_selected = index;
-                this.dispatch_saved_command(row_command.clone(), window, cx);
+                this.command_manager_selection.cursor = index;
+                if selecting {
+                    this.toggle_command_selection(&row_command.id, cx);
+                } else {
+                    this.dispatch_saved_command(row_command.clone(), window, cx);
+                }
             }))
-            .child(
+            .child(if selecting {
+                gpui_component::checkbox::Checkbox::new(SharedString::from(format!(
+                    "command-check-{index}"
+                )))
+                .debug_selector(move || format!("command-check-{index}"))
+                .checked(checked)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_command_selection(&select_id, cx);
+                }))
+                .into_any_element()
+            } else {
                 Button::new(SharedString::from(format!("saved-command-run-{index}")))
                     .debug_selector(move || format!("saved-command-run-{index}"))
                     .icon(Icon::new(run_icon).size(px(ROW_ICON_SIZE)))
@@ -90,10 +108,11 @@ impl NebulaWorkspace {
                     .tooltip(run_tooltip)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.command_manager_selected = index;
+                        this.command_manager_selection.cursor = index;
                         this.dispatch_saved_command(run_command.clone(), window, cx);
-                    })),
-            )
+                    }))
+                    .into_any_element()
+            })
             .child(
                 v_flex()
                     .flex_1()

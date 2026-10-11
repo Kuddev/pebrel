@@ -17,6 +17,7 @@ class DesktopTerminalInput(
     private val onAccepted: () -> Unit,
     private val onRejected: (Boolean) -> Unit,
     private val dispatch: (suspend (String, JSONObject) -> Deferred<Unit>)? = null,
+    private val remoteScrollSupported: Boolean = false,
 ) : TerminalInputTarget, Closeable {
     private data class Batch(val commands: List<Command>, val result: CompletableDeferred<Boolean>)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -87,6 +88,12 @@ class DesktopTerminalInput(
     }
 
     override fun text(text: String): Boolean = enqueue(encodeText(text)) != null
+    override val supportsScroll: Boolean get() = remoteScrollSupported && !closed && active()
+    override fun scroll(lines: Int, column: Int, row: Int): Boolean {
+        if (!supportsScroll || lines == 0 || lines !in -32..32 || column !in 0..399 || row !in 0..199) return false
+        return enqueue(listOf(Command("pane.scroll", JSONObject().put("lines", lines)
+            .put("column", column).put("row", row)))) != null
+    }
     override fun paste(text: String): Boolean {
         // The old Runtime bridge has no bracketed-paste capability. Never turn
         // clipboard line breaks into implicit execution. Use the draft instead.

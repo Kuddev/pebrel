@@ -72,7 +72,7 @@ toml_edit = "0.24.0"
 # GPUI v1.16.1 把平台启动入口拆到独立 crate。它必须与 `gpui` 使用完全相同
 # 的 Git URL 和 rev，否则 Cargo 会把同名类型解析成两套互不兼容的 crate。
 # Without font-kit, the macOS platform uses NoopTextSystem and renders no text.
-gpui_platform = { git = "https://github.com/Kuddev/zed", rev = "1a61d74dca11ad8473d75b4d3593b045fd7714a8", version = "=0.1.0", features = ["font-kit"] }
+gpui_platform = { git = "https://github.com/Kuddev/zed", rev = "a71e1757433b6a6892042c98f89113d3c53ca799", version = "=0.1.0", features = ["font-kit"] }
 
 # TODO: Drop this pin and return to the crates.io release once the fix ships there.
 [patch.crates-io]
@@ -190,9 +190,9 @@ winit = { path = "third_party/winit-0.30.13" }
 # Input 补丁 4-5 仍保持独立。
 # 背景流式纹理和 WGSL 原生适配已固定到公开的渲染器基线；组件同步引用
 # 同一提交，避免一套窗口里出现两份不兼容的 GPUI 类型。功能仍显式启用。
-gpui = { git = "https://github.com/Kuddev/zed", rev = "1a61d74dca11ad8473d75b4d3593b045fd7714a8", version = "=0.2.2" }
+gpui = { git = "https://github.com/Kuddev/zed", rev = "a71e1757433b6a6892042c98f89113d3c53ca799", version = "=0.2.2" }
 # Native inputs share rendered text's device-pixel line height and expose a
 # post-paint point lookup. Window selection ends on release even when a child
 # consumes MouseUp or the platform reports the next move without a held button.
-gpui-component = { git = "https://github.com/Kuddev/gpui-component", rev = "15768e3e6247ea9412ae295ca18e9582ae87fdee", version = "=0.5.2" }
-gpui-component-assets = { git = "https://github.com/Kuddev/gpui-component", rev = "15768e3e6247ea9412ae295ca18e9582ae87fdee", version = "=0.5.1" }
+gpui-component = { git = "https://github.com/Kuddev/gpui-component", rev = "e95f47d6562b47c7b13e13a56bf4badc8a736d43", version = "=0.5.2" }
+gpui-component-assets = { git = "https://github.com/Kuddev/gpui-component", rev = "e95f47d6562b47c7b13e13a56bf4badc8a736d43", version = "=0.5.1" }

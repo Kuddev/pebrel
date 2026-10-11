@@ -127,6 +127,7 @@ fn runtime_window_policy(command: &RuntimeCommand) -> RuntimeWindowPolicy {
         | RuntimeCommand::ReadPane { .. }
         | RuntimeCommand::Procs { .. }
         | RuntimeCommand::SendKey { .. }
+        | RuntimeCommand::ScrollPane { .. }
         | RuntimeCommand::Run { .. }
         | RuntimeCommand::Exec { .. }
         | RuntimeCommand::Git { .. }
@@ -849,6 +850,7 @@ fn route_entry(command: &RuntimeCommand, cx: &mut App) -> Result<WindowEntry, Ap
         | RuntimeCommand::ReadPane { window_id, pane_id, .. }
         | RuntimeCommand::Procs { window_id, pane_id }
         | RuntimeCommand::SendKey { window_id, pane_id, .. }
+        | RuntimeCommand::ScrollPane { window_id, pane_id, .. }
         | RuntimeCommand::Run { window_id, pane_id, .. }
         | RuntimeCommand::Exec { window_id, pane_id, .. }
         | RuntimeCommand::Git { window_id, pane_id, .. } => (*window_id, Some(*pane_id)),
@@ -1923,7 +1925,7 @@ mod tests {
                 text: "paste".to_owned(),
                 submit: false,
             },
-            RuntimeCommand::ReadPane { window_id: Some(1), pane_id: 2, lines: 20, screen: false },
+            RuntimeCommand::ReadPane { window_id: Some(1), pane_id: 2, lines: 20, screen: None },
             RuntimeCommand::Procs { window_id: Some(1), pane_id: 2 },
             RuntimeCommand::SendKey {
                 window_id: Some(1),

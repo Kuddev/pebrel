@@ -88,7 +88,7 @@ impl TerminalView {
         let Some(id) = target.session_id.as_deref().filter(|_| target.source == "codex") else {
             return false;
         };
-        self.runtime_read(0, 80, false).is_ok_and(|read| {
+        self.runtime_read(0, 80, None).is_ok_and(|read| {
             let compact: String = read.text.split_whitespace().collect();
             compact.contains(&format!("ERROR:NosavedsessionfoundwithID{id}."))
         })

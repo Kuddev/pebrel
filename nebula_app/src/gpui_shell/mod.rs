@@ -33,6 +33,7 @@ mod file_preview;
 pub mod http;
 pub mod math_view;
 mod molecule_view;
+mod motion;
 pub mod network_settings;
 pub mod prelude;
 mod scientific_render;

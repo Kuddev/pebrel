@@ -44,6 +44,45 @@ else:
 """
 
 
+class LaunchEnvironmentTests(unittest.TestCase):
+    def test_isolated_launch_discards_parent_routing_and_config_overrides(self) -> None:
+        inherited = {
+            name: "parent-owned-value"
+            for name in (
+                "PEBREL_RUNTIME_ENDPOINT", "PEBREL_PROCESS_ID",
+                "PEBREL_PANE_ID", "NEBULA_PANE_ID",
+                "PEBREL_CLI", "NEBULA_CLI", "PEBREL_BIN_DIR", "NEBULA_BIN_DIR",
+                "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
+                "PEBREL_CONFIG_FILE", "NEBULA_CONFIG_FILE",
+                "PEBREL_GPUI_CONFIG", "NEBULA_GPUI_CONFIG",
+            )
+        }
+        with tempfile.TemporaryDirectory(prefix="pebrel-launch-env-") as temporary:
+            # Windows 临时目录可能使用 8.3 别名；预期路径与启动器一样先规范化。
+            root = Path(temporary).resolve()
+            context = ConformanceContext(
+                SimpleNamespace(executable=root / "fixture-app.exe"), "fixture",
+                root / "config", root / "work", root / "artifacts",
+            )
+            context.prepare()
+            with patch.dict(
+                os.environ,
+                {**inherited, "UNRELATED_FIXTURE_ENV": "keep", "PATH": "fixture-path"},
+                clear=True,
+            ):
+                with patch.object(context, "_spawn_process", side_effect=OSError("fixture boundary")) as spawn:
+                    with self.assertRaisesRegex(ConformanceError, "fixture boundary"):
+                        context.start()
+                child = spawn.call_args.args[1]
+                for name in inherited:
+                    self.assertFalse(name in child, name)
+                    self.assertEqual(os.environ[name], inherited[name], "parent environment changed")
+                self.assertEqual(child["PEBREL_CONFIG_DIR"], str(root / "config"))
+                self.assertEqual(child["NEBULA_CONFIG_DIR"], str(root / "config"))
+                self.assertEqual(child["UNRELATED_FIXTURE_ENV"], "keep")
+                self.assertEqual(child.get("PATH"), os.environ.get("PATH"))
+
+
 class OwnedProcessHandle:
     """Retain fixture process identity; never terminate by an unowned PID lookup."""
 

@@ -4,9 +4,11 @@ These sources use the application's terminal-effect ABI. Add `.wgsl` files
 in **Terminal effects**, arrange their order, then enable the chain separately from
 the background. Adding files disables execution until enabled again. Moving or
 removing existing files preserves activation; removing the last file disables it.
-Reload explicitly recompiles all files. Windows product builds include this
-support by default; sources still require explicit activation. Other native
-backends are not yet supported.
+Reload explicitly recompiles all files. Default product builds include the effect
+controller; sources still require explicit activation. Availability is checked
+against the current window's graphics backend. Unsupported windows keep saved
+sources editable and allow effects to be disabled, while adding, enabling and
+reloading remain unavailable.
 
 The chain supports up to eight files and eight total `@fragment` entry points.
 Files run in list order; entries within each file run in declaration order;
