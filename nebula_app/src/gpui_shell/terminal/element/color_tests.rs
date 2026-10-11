@@ -114,7 +114,6 @@ fn sgr_dim_uses_the_palette_dim_slots() {
         dim(Color::Indexed(196)),
         Palette::dim_of(palette.resolve(Color::Indexed(196), &none, false))
     );
-    // Dim wins over bold's brightening.
     assert_eq!(
         palette.resolve_styled(Color::Named(NamedColor::Foreground), &none, true, true),
         palette.dim_foreground
@@ -127,8 +126,6 @@ fn sgr_dim_uses_the_palette_dim_slots() {
         );
     }
 
-    // An OSC 4 override of the source color is dimmed; an override of the dim
-    // slot itself takes precedence.
     let mut overrides = Colors::default();
     let red = Rgb { r: 250, g: 0, b: 0 };
     overrides[NamedColor::Red] = Some(red);
@@ -145,9 +142,6 @@ fn sgr_dim_uses_the_palette_dim_slots() {
     }
 }
 
-/// SGR 2 dims the original foreground before INVERSE swaps the pair, as the
-/// old shell's `RenderableCell::new` does: the text shows the undimmed
-/// original background and the cell background shows the dimmed foreground.
 #[test]
 fn dim_follows_the_original_foreground_under_inverse() {
     let palette = Palette::default();
@@ -167,10 +161,6 @@ fn dim_follows_the_original_foreground_under_inverse() {
     assert_eq!((fg, bg), (rgb(30, 40, 50), rgb(168, 168, 168)));
 }
 
-/// Claude Code and Codex draw reasoning and prompt suggestions with SGR 2 on
-/// the default foreground. On Nord the dimmed foreground misses the minimum
-/// contrast, so the resolver bakes an adjusted `Spec`; painting must not dim
-/// that `Spec` a second time.
 #[test]
 fn dim_text_stays_distinct_after_contrast_adjustment_without_dimming_twice() {
     let nord = palette(nebula_settings::ThemeName::Nord);

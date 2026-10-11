@@ -90,7 +90,6 @@ pub(super) fn dashed_cells<T: EventListener>(
         let Some(vp) = point_to_viewport_from(origin, indexed.point) else { continue };
         if vp.line < rows && vp.column.0 < cols {
             let (mut fg, mut bg) = (indexed.fg, indexed.bg);
-            // Dim follows the original foreground, as in the render snapshot.
             let (mut dim, mut bg_dim) = (indexed.flags.contains(Flags::DIM), false);
             if indexed.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);

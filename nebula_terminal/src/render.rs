@@ -176,11 +176,7 @@ pub struct SnapCell {
     /// 是什么颜色，不是取决于主题底色。
     pub bg: Color,
     pub bold: bool,
-    /// SGR 2 (dim/faint) applies to `fg`. Kept apart from the color so the
-    /// frontend dims with its palette's dim slots instead of a fixed RGB.
     pub dim: bool,
-    /// SGR 2 applies to `bg`: INVERSE moved the dimmed original foreground
-    /// into the background.
     pub bg_dim: bool,
     pub italic: bool,
     pub underline: bool,
@@ -215,7 +211,6 @@ pub struct BgRun {
     pub start: u16,
     pub end: u16,
     pub color: Color,
-    /// SGR 2 applies to `color`, which INVERSE took from the foreground.
     pub dim: bool,
 }
 

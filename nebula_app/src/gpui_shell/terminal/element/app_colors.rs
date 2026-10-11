@@ -1,7 +1,4 @@
-//! Theme correction for colors written by applications: contrast against the
-//! actual cell background and remapping of old theme surfaces. Pure data in,
-//! pure data out; [`super::TerminalElement`] only supplies the resolver owned
-//! by the view.
+//! Theme correction for colors written by applications.
 
 use nebula_terminal::render::RenderSnapshot;
 use nebula_terminal::term::color::Colors;
@@ -24,7 +21,6 @@ pub(super) fn resolve_app_colors_into(
         let base = rgb_from_rgba(theme.resolve_styled(run.color, overrides, false, run.dim));
         let resolved = resolver.resolve_background(base, is_fixed_color(run.color, overrides));
         if resolved != base {
-            // Like the foreground below: the baked `Spec` already carries dim.
             run.color = Color::Spec(resolved.0);
             run.dim = false;
         }
@@ -57,8 +53,7 @@ pub(super) fn resolve_app_colors_into(
 
 /// `Some` when contrast adjustment replaced the color. The returned `Spec`
 /// already carries bold and dim, so the caller must clear `dim`: painting
-/// dims a `Spec` again, while bold leaves it alone. `bg_dim` marks a
-/// background that INVERSE took from a dimmed foreground.
+/// dims a `Spec` again, while bold leaves it alone.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_text_foreground(
     fg: Color,
