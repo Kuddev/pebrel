@@ -98,6 +98,7 @@ impl NebulaWorkspace {
                 })
                 .collect();
             rows.push(recipes::palette_row(language));
+            rows.push(local_profiles::palette_row(language));
             // 启动器混排（旧壳 ⌘K 裁定）：SSH 主机与命令同列，置顶/隐藏
             // 次序由共享 merge 权威裁定。
             rows.extend(shell_picker::ssh_palette_rows(
@@ -399,6 +400,10 @@ impl NebulaWorkspace {
                     match action.clone() {
                         WorkspacePaletteAction::Shared(action) => {
                             this.run_palette_action(action, window, cx);
+                        },
+                        WorkspacePaletteAction::LocalProfiles => {
+                            this.dismiss_palette_state();
+                            this.open_local_profiles(window, cx);
                         },
                         WorkspacePaletteAction::LayoutRecipes => {
                             this.dismiss_palette_state();

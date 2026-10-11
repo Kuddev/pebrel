@@ -1390,5 +1390,27 @@
     "save_failed": "Could not save the effect list. Check that the settings location is writable, then try again.",
     "advanced": "Advanced effects",
     "advanced_active": "Advanced effects · Terminal effects enabled"
-  }
+  },
+  "local_profiles.title": "Local sessions",
+  "local_profiles.manage": "Manage local sessions…",
+  "local_profiles.storage": "Environment values are saved in the local profile configuration. Workspace exports reference the profile; copy its configuration separately to another computer. Changes apply to future launches.",
+  "local_profiles.new": "New session",
+  "local_profiles.duplicate": "Duplicate session",
+  "local_profiles.name": "Session name",
+  "local_profiles.program": "Shell executable (absolute path)",
+  "local_profiles.args": "Arguments (one per line)",
+  "local_profiles.cwd": "Starting directory (optional)",
+  "local_profiles.shell_id": "Shell integration override (optional; inferred from executable)",
+  "local_profiles.add_variable": "Add environment variable",
+  "local_profiles.variable": "Variable name",
+  "local_profiles.value": "Variable value (empty is allowed)",
+  "local_profiles.remove": "Remove variable",
+  "local_profiles.save": "Save session",
+  "local_profiles.delete": "Delete session",
+  "local_profiles.reload": "Reload sessions",
+  "local_profiles.loading": "Loading sessions…",
+  "local_profiles.saved": "Session saved. Open it from the local launcher.",
+  "local_profiles.failed": "Could not save session: {error}",
+  "local_profiles.deleted": "Session deleted.",
+  "local_profiles.advanced": "Advanced shell integration"
 }

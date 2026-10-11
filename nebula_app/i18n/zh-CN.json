@@ -1390,5 +1390,27 @@
     "save_failed": "效果列表保存失败，请检查设置目录的写入权限后重试。",
     "advanced": "高级效果",
     "advanced_active": "高级效果 · 终端效果已启用"
-  }
+  },
+  "local_profiles.title": "本地会话",
+  "local_profiles.manage": "管理本地会话…",
+  "local_profiles.storage": "环境值保存在本地会话配置中。工作区导出引用会话；在另一台电脑使用时需另行复制配置。修改仅在之后启动时生效。",
+  "local_profiles.new": "新建会话",
+  "local_profiles.duplicate": "复制会话",
+  "local_profiles.name": "会话名称",
+  "local_profiles.program": "Shell 可执行文件（绝对路径）",
+  "local_profiles.args": "参数（每行一个）",
+  "local_profiles.cwd": "启动目录（可选）",
+  "local_profiles.shell_id": "Shell 集成覆盖（可选，默认从可执行文件推断）",
+  "local_profiles.add_variable": "添加环境变量",
+  "local_profiles.variable": "变量名称",
+  "local_profiles.value": "变量值（允许为空）",
+  "local_profiles.remove": "移除变量",
+  "local_profiles.save": "保存会话",
+  "local_profiles.delete": "删除会话",
+  "local_profiles.reload": "重新加载会话",
+  "local_profiles.loading": "正在加载会话…",
+  "local_profiles.saved": "会话已保存，可从本地启动器打开。",
+  "local_profiles.failed": "无法保存会话：{error}",
+  "local_profiles.deleted": "会话已删除。",
+  "local_profiles.advanced": "高级 Shell 集成"
 }

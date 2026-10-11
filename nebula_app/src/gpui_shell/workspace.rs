@@ -59,6 +59,7 @@ mod documents;
 mod file_tree;
 mod key_actions;
 mod launcher_menu;
+mod local_profiles;
 mod logos;
 mod notifications;
 mod palette;
@@ -74,6 +75,7 @@ mod rename;
 #[cfg(test)]
 use rename::apply_cancel_rename;
 use rename::{PaneRename, TabRename, apply_commit_rename};
+mod profile_launch;
 mod residency;
 mod runtime_conversation;
 mod runtime_tabs;
@@ -424,6 +426,7 @@ enum WorkspacePaletteAction {
     /// 聚焦已经存在的工作区标签，不创建副本。
     FocusTab(usize),
     LayoutRecipes,
+    LocalProfiles,
     /// 先激活标签，再把焦点交给其中的明确 pane。
     FocusPane {
         tab: usize,
@@ -1061,32 +1064,6 @@ impl NebulaWorkspace {
     /// 进程身份相互矛盾。
     fn default_shell_tag() -> SharedString {
         crate::shell_detect::shell_short_tag(&crate::platform::shell::default_shell_id()).into()
-    }
-
-    /// 把一份冻结的会话 launch 还原为一次 GPUI PTY 启动。逐 pane 选择
-    /// 与旧快照回退由 session_recovery 统一负责。
-    pub(super) fn terminal_launch_from_session(
-        launch: &crate::session::LaunchSession,
-        cwd: Option<std::path::PathBuf>,
-    ) -> crate::gpui_shell::terminal::view::TerminalLaunch {
-        use crate::gpui_shell::terminal::view::TerminalLaunch;
-        use crate::session::LaunchSession;
-
-        match launch {
-            LaunchSession::Default => TerminalLaunch::Local { cwd, shell: None, shell_name: None },
-            LaunchSession::Shell { name, program, args } => TerminalLaunch::Local {
-                cwd,
-                shell: Some(nebula_terminal::tty::Shell::new(program.clone(), args.clone())),
-                shell_name: Some(name.clone()),
-            },
-            LaunchSession::Profile { .. } => {
-                let profile = crate::profile_launch::resolve(launch).expect("profile variant");
-                TerminalLaunch::Profile { cwd: profile.cwd.clone().or(cwd), profile }
-            },
-            LaunchSession::Ssh { host } => {
-                TerminalLaunch::Ssh { destination: host.clone(), cwd: None }
-            },
-        }
     }
 
     fn launch_shell_tag(launch: &crate::session::LaunchSession) -> Option<SharedString> {
@@ -1912,6 +1889,10 @@ impl NebulaWorkspace {
         let Some(action) = action else { return };
         match action {
             WorkspacePaletteAction::Shared(action) => self.run_palette_action(action, window, cx),
+            WorkspacePaletteAction::LocalProfiles => {
+                self.dismiss_palette_state();
+                self.open_local_profiles(window, cx);
+            },
             WorkspacePaletteAction::LayoutRecipes => {
                 self.dismiss_palette_state();
                 self.open_layout_recipes(window, cx);
