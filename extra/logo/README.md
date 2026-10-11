@@ -279,3 +279,13 @@ Hermes (`hermesagent`) is not embedded: its illustration is unreadable at tab si
 Aider, Droid, Auggie, Vibe and Maki have no LobeHub mark in this package and keep
 their glyph until an official asset is reviewed. Recognition and logos do not imply
 Hook, cold-start, resume or fork support.
+
+## Sponsor Logos
+
+### Sidrune AI
+
+`sponsor_sidrune.png` is based on the 2219 x 558 transparent PNG supplied by the
+maintainer for the Sidrune AI sponsor rename. The black artwork is composited onto
+a white background so it remains visible in both light and dark README themes;
+its dimensions and artwork are otherwise unchanged. The asset is used in the
+English and Simplified Chinese README sponsor sections.
