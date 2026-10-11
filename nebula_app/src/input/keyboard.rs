@@ -1211,6 +1211,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             TogglePanelResize => self.ctx.display().request_toggle_panel_resize(),
             OpenDirectoryPicker => self.ctx.display().open_directory_picker(),
             OpenAiSessionPicker => self.ctx.display().open_ai_session_palette(),
+            OpenSshPicker => {
+                let profiles = self.ctx.config().profiles.clone();
+                self.ctx.display().open_ssh_menu(&profiles);
+            },
             ResumeAiSession(command) => {
                 // 非 bracketed：resume 是要**执行**的命令行，bracketed 包裹
                 // 会让部分 shell 把它按纯文本粘着不跑。

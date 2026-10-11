@@ -731,6 +731,7 @@
     "task_start_failed": "Could not start the version control task: {error}"
   },
   "launcher": {
+    "ssh_picker": "SSH hosts...",
     "open_admin": "Open as administrator",
     "set_default": "Set as default Shell",
     "current_default": "Current default Shell",

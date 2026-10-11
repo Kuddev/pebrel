@@ -1,8 +1,85 @@
-//! Shell/profile palette rows and their shared icon fallback.
+//! Shell/SSH launcher lifecycle, palette rows and shared icon fallback.
 
-use super::{
-    WorkspacePaletteAction, WorkspacePaletteHintStyle, WorkspacePaletteRow, ssh_host_icon_ids,
-};
+use super::*;
+use crate::display::command_palette::LauncherFilter;
+
+#[cfg(test)]
+pub(super) struct LauncherHostFixture {
+    pub(super) hosts: crate::gpui_shell::ssh_hosts::SshHostLists,
+    pub(super) loads: std::cell::Cell<usize>,
+}
+
+impl NebulaWorkspace {
+    /// 三点 / Ctrl+K：旧壳 `NewTabMenu` → `open_shell_menu` → `PaletteMode::Profiles`。
+    pub(super) fn open_launcher_palette(
+        &mut self,
+        filter: LauncherFilter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.launcher_menu = None;
+        self.command_manager_open = false;
+        let default_shell_id = crate::platform::shell::effective_shell_id(
+            cx.try_global::<crate::gpui_shell::config::Settings>()
+                .and_then(|settings| settings.shell_id.as_deref()),
+        );
+        let language = workspace_ui_language();
+        let rows = shell_palette_rows(
+            crate::shell_detect::detect_shells(),
+            crate::terminal_profiles::TerminalProfiles::load()
+                .map(|store| store.as_config_profiles())
+                .unwrap_or_default(),
+            &self.load_launcher_hosts(),
+            &default_shell_id,
+            language,
+            window.scale_factor().max(0.5),
+        );
+        self.palette_override = Some(rows);
+        self.shell_picker_open = true;
+        self.launcher_filter = filter;
+        self.quick_jump_filter = None;
+        self.command_palette_open = true;
+        self.command_palette_selected = 0;
+        self.reset_palette_query(
+            WorkspacePaletteFilter::Launcher(filter).placeholder(language),
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(super) fn toggle_shell_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_palette_open && self.shell_picker_open {
+            self.close_command_palette(window, cx);
+            return;
+        }
+        self.open_launcher_palette(LauncherFilter::All, window, cx);
+    }
+
+    pub(super) fn open_shell_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_launcher_palette(LauncherFilter::All, window, cx);
+    }
+
+    pub(super) fn toggle_ssh_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.command_palette_open
+            && self.shell_picker_open
+            && self.launcher_filter == LauncherFilter::Ssh
+        {
+            self.close_command_palette(window, cx);
+        } else {
+            self.open_launcher_palette(LauncherFilter::Ssh, window, cx);
+        }
+    }
+
+    pub(super) fn load_launcher_hosts(&self) -> crate::gpui_shell::ssh_hosts::SshHostLists {
+        #[cfg(test)]
+        if let Some(fixture) = self.launcher_host_fixture.as_ref() {
+            fixture.loads.set(fixture.loads.get() + 1);
+            return fixture.hosts.clone();
+        }
+        crate::gpui_shell::ssh_hosts::SshHostLists::load()
+    }
+}
 
 /// shell 行的回落字形：没有品牌贴图时用 `shell_detect::icon_for_id` 的
 /// id-keyed Nerd Font 字形（与设置页下拉、命令面板同一口径）。

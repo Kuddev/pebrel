@@ -206,6 +206,8 @@ pub enum PaletteAction {
     OpenDirectoryPicker,
     /// 打开「恢复 AI 会话」列表（claude / codex 的本地历史会话）。
     OpenAiSessionPicker,
+    /// Open the existing launcher with only SSH hosts visible.
+    OpenSshPicker,
     /// 把这条 resume 命令行敲进当前聚焦的终端执行。
     ResumeAiSession(String),
     CloseTab,
@@ -576,10 +578,14 @@ impl CommandPalette {
 
     /// Open showing only the quick-launch profiles (the "+" dropdown).
     pub fn open_profiles(&mut self) {
+        self.open_launcher(LauncherFilter::All);
+    }
+
+    pub fn open_launcher(&mut self, filter: LauncherFilter) {
         self.arm_pointer_hover();
         self.open = true;
         self.mode = PaletteMode::Profiles;
-        self.launcher_filter = LauncherFilter::All;
+        self.launcher_filter = filter;
         self.query.clear();
         self.query_selection.clear();
         self.refilter();
@@ -1203,7 +1209,7 @@ impl CommandPalette {
                 os_icon_id: String::new(),
                 icon: String::new(),
                 color_id: String::new(),
-                label: localized_item_label(&ITEMS[index], self.language).to_owned(),
+                label: catalog::localized_item_label(&ITEMS[index], self.language).to_owned(),
                 hint: ITEMS[index].hint.to_string(),
                 is_default: false,
                 chip: String::new(),
@@ -1278,46 +1284,6 @@ impl CommandPalette {
     }
 }
 
-fn localized_item_label(item: &PaletteItem, language: super::UiLanguage) -> &'static str {
-    use PaletteAction::*;
-    if matches!(item.action, CycleCompletionStyle) {
-        return language.text(crate::i18n::Message::SettingsCompletionCycle);
-    } else if language == super::UiLanguage::ZhCn {
-        return item.label;
-    }
-    match item.action {
-        NewTab => "New tab",
-        CopyCwd => "Copy path",
-        RevealCwd => "Reveal in file manager",
-        ToggleSidebar => "Show tab sidebar",
-        TogglePanelResize => "Drag to resize panels",
-        OpenDirectoryPicker => "New terminal in a frequent directory...",
-        OpenAiSessionPicker => "Open quickly...",
-        CloseTab => "Close tab",
-        NextTab => "Next tab",
-        PrevTab => "Previous tab",
-        NewWindow => "New window",
-        SplitRight => "Split right",
-        SplitDown => "Split down",
-        ToggleFilesPanel => "Files panel",
-        ToggleGitPanel => "Git panel",
-        OpenSettings => "Open settings",
-        OpenSettingsFile => "Open configuration file",
-        ToggleGhost => "Toggle ghost completion",
-        CycleCompletionStyle => "Cycle completion mode (inline / list / hybrid)",
-        PickBackgroundImage => "Choose background image...",
-        CycleBackground => "Cycle background color",
-        ResetAppearance => "Restore appearance defaults",
-        SelectTheme(theme) => theme.command_label(),
-        ExportWorkspace => "Export workspace...",
-        ImportWorkspace => "Open workspace...",
-        SyncPush => "Sync: push settings",
-        SyncPull => "Sync: pull settings",
-        LaunchProfile(_) | LaunchShell(_) | LaunchSsh(_) | SetDefaultShell(_)
-        | SetDefaultProfile(_) | NewAtDirectory(_) | ResumeAiSession(_) => item.label,
-    }
-}
-
 /// 命令的分类。分组表头按它分，组的先后也按它排（`ordinal`）。
 ///
 /// 分组的前提是同组的行**连续**，而空查询要把最近用过的命令顶上来、有查询
@@ -1345,7 +1311,7 @@ impl CommandGroup {
             NewTab | CopyCwd | RevealCwd => Self::Cwd,
             OpenDirectoryPicker | CloseTab | NextTab | PrevTab | NewWindow | SplitRight
             | SplitDown => Self::Tabs,
-            OpenAiSessionPicker => Self::Jump,
+            OpenAiSessionPicker | OpenSshPicker => Self::Jump,
             ToggleFilesPanel | ToggleGitPanel | ToggleSidebar | TogglePanelResize => Self::View,
             ExportWorkspace | ImportWorkspace | SyncPush | SyncPull => Self::Workspace,
             PickBackgroundImage | CycleBackground | ResetAppearance | SelectTheme(_) => {

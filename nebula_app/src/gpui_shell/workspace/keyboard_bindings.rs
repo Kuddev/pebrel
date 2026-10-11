@@ -234,6 +234,7 @@ fn workspace_binding_in_context(
     match action {
         Action::ToggleCommandPalette => Some(KeyBinding::new(&combo, ToggleCommandPalette, scope)),
         Action::ToggleShellPicker => Some(KeyBinding::new(&combo, ToggleShellPicker, scope)),
+        Action::ToggleSshPicker => Some(KeyBinding::new(&combo, ToggleSshPicker, scope)),
         Action::CreateNewTab => Some(KeyBinding::new(&combo, NewTerminal, scope)),
         Action::CreateNewWindow => Some(KeyBinding::new(&combo, NewWindow, scope)),
         Action::CloseTab => Some(KeyBinding::new(&combo, CloseActiveTerminal, scope)),

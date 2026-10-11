@@ -174,6 +174,9 @@ impl Render for NebulaWorkspace {
             .on_action(cx.listener(|this, _: &ToggleShellPicker, window, cx| {
                 this.toggle_shell_palette(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ToggleSshPicker, window, cx| {
+                this.toggle_ssh_palette(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &CommandPaletteUp, _, cx| {
                 this.move_command_palette_selection(-1, cx);
             }))

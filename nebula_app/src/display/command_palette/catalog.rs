@@ -190,6 +190,12 @@ pub(super) const ITEMS: &[PaletteItem] = &[
     theme_item(NebulaTheme::CatppuccinMacchiato, "theme 主题 catppuccin macchiato dark"),
     theme_item(NebulaTheme::GlassLight, "theme 主题 slate light glass 雾霾 冷灰"),
     theme_item(NebulaTheme::GlassDark, "theme 主题 glass dark"),
+    PaletteItem {
+        label: "SSH 主机…",
+        hint: "",
+        search: "SSH 主机 连接 ssh hosts launcher connect zhuji lianjie",
+        action: PaletteAction::OpenSshPicker,
+    },
 ];
 
 #[cfg(test)]
@@ -206,5 +212,93 @@ mod tests {
             })
             .collect();
         assert_eq!(themes, nebula_settings::ThemeName::BUILTIN_NAMES);
+    }
+
+    #[test]
+    fn ssh_picker_catalog_entry_uses_typed_label_and_does_not_claim_a_default_key() {
+        let items: Vec<_> =
+            ITEMS.iter().filter(|item| item.action == PaletteAction::OpenSshPicker).collect();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].hint.is_empty());
+        for language in crate::display::UiLanguage::ALL {
+            assert_eq!(
+                localized_item_label(items[0], *language),
+                language.text(crate::i18n::Message::LauncherSshPicker)
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_picker_open_resets_search_and_reuses_shared_host_confirmation() {
+        use super::super::{CommandPalette, LauncherFilter};
+        let mut palette = CommandPalette::new();
+        palette.set_shell_menu(
+            &[crate::shell_detect::DetectedShell {
+                id: "cmd".into(),
+                name: "CMD".into(),
+                program: "cmd.exe".into(),
+                args: vec![],
+            }],
+            &[],
+            "cmd",
+        );
+        palette.set_ssh_hosts(&[("Fixture host".into(), "fixture.invalid".into())]);
+        palette.open_profiles();
+        palette.input_text("cmd");
+        palette.open_launcher(LauncherFilter::Ssh);
+        assert!(palette.query().is_empty());
+        let (rows, _) = palette.visible(10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "Fixture host");
+        assert_eq!(palette.confirm(), Some(PaletteAction::LaunchSsh("fixture.invalid".into())));
+        palette.open_profiles();
+        assert_eq!(palette.launcher_filter(), LauncherFilter::All);
+        assert_eq!(palette.visible(10).0.len(), 2);
+    }
+}
+
+pub(super) fn localized_item_label(
+    item: &PaletteItem,
+    language: crate::display::UiLanguage,
+) -> &'static str {
+    use PaletteAction::*;
+    if matches!(item.action, CycleCompletionStyle) {
+        return language.text(crate::i18n::Message::SettingsCompletionCycle);
+    } else if matches!(item.action, OpenSshPicker) {
+        return language.text(crate::i18n::Message::LauncherSshPicker);
+    } else if language == crate::display::UiLanguage::ZhCn {
+        return item.label;
+    }
+    match item.action {
+        NewTab => "New tab",
+        CopyCwd => "Copy path",
+        RevealCwd => "Reveal in file manager",
+        ToggleSidebar => "Show tab sidebar",
+        TogglePanelResize => "Drag to resize panels",
+        OpenDirectoryPicker => "New terminal in a frequent directory...",
+        OpenAiSessionPicker => "Open quickly...",
+        OpenSshPicker => language.text(crate::i18n::Message::LauncherSshPicker),
+        CloseTab => "Close tab",
+        NextTab => "Next tab",
+        PrevTab => "Previous tab",
+        NewWindow => "New window",
+        SplitRight => "Split right",
+        SplitDown => "Split down",
+        ToggleFilesPanel => "Files panel",
+        ToggleGitPanel => "Git panel",
+        OpenSettings => "Open settings",
+        OpenSettingsFile => "Open configuration file",
+        ToggleGhost => "Toggle ghost completion",
+        CycleCompletionStyle => "Cycle completion mode (inline / list / hybrid)",
+        PickBackgroundImage => "Choose background image...",
+        CycleBackground => "Cycle background color",
+        ResetAppearance => "Restore appearance defaults",
+        SelectTheme(theme) => theme.command_label(),
+        ExportWorkspace => "Export workspace...",
+        ImportWorkspace => "Open workspace...",
+        SyncPush => "Sync: push settings",
+        SyncPull => "Sync: pull settings",
+        LaunchProfile(_) | LaunchShell(_) | LaunchSsh(_) | SetDefaultShell(_)
+        | SetDefaultProfile(_) | NewAtDirectory(_) | ResumeAiSession(_) => item.label,
     }
 }

@@ -118,6 +118,7 @@ gpui::actions!(
         ToggleCommandPalette,
         CloseCommandPalette,
         ToggleShellPicker,
+        ToggleSshPicker,
         CommandPaletteUp,
         CommandPaletteDown,
         ToggleFileTree,
@@ -706,6 +707,8 @@ pub struct NebulaWorkspace {
     launcher_menu: Option<launcher_menu::LauncherContextMenu>,
     launcher_admin_task: Option<gpui::Task<()>>,
     launcher_filter: crate::display::command_palette::LauncherFilter,
+    #[cfg(test)]
+    launcher_host_fixture: Option<shell_picker::LauncherHostFixture>,
     /// `Some` 表示当前是统一 Quick Jump；值就是 provider scope。
     /// 命令面板与 Shell picker 必须保持 `None`，避免跨入口泄漏筛选状态。
     quick_jump_filter: Option<QuickJumpFilter>,
@@ -961,6 +964,8 @@ impl NebulaWorkspace {
             launcher_menu: None,
             launcher_admin_task: None,
             launcher_filter: crate::display::command_palette::LauncherFilter::All,
+            #[cfg(test)]
+            launcher_host_fixture: None,
             quick_jump_filter: None,
             command_palette_scroll: gpui::ScrollHandle::new(),
             _command_palette_subscription: command_palette_subscription,
@@ -1974,47 +1979,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    /// 三点 / Ctrl+K：旧壳 `NewTabMenu` → `open_shell_menu` → `PaletteMode::Profiles`。
-    fn open_shell_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.command_manager_open = false;
-        let default_shell_id = crate::platform::shell::effective_shell_id(
-            cx.try_global::<crate::gpui_shell::config::Settings>()
-                .and_then(|settings| settings.shell_id.as_deref()),
-        );
-        let language = workspace_ui_language();
-        let rows = shell_palette_rows(
-            crate::shell_detect::detect_shells(),
-            crate::terminal_profiles::TerminalProfiles::load()
-                .map(|store| store.as_config_profiles())
-                .unwrap_or_default(),
-            &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
-            &default_shell_id,
-            language,
-            window.scale_factor().max(0.5),
-        );
-        self.palette_override = Some(rows);
-        self.shell_picker_open = true;
-        self.launcher_filter = crate::display::command_palette::LauncherFilter::All;
-        self.quick_jump_filter = None;
-        self.command_palette_open = true;
-        self.command_palette_selected = 0;
-        self.reset_palette_query(
-            WorkspacePaletteFilter::Launcher(crate::display::command_palette::LauncherFilter::All)
-                .placeholder(language),
-            window,
-            cx,
-        );
-        cx.notify();
-    }
-
-    fn toggle_shell_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.command_palette_open && self.shell_picker_open {
-            self.close_command_palette(window, cx);
-            return;
-        }
-        self.open_shell_palette(window, cx);
-    }
-
     fn set_workspace_palette_filter(
         &mut self,
         filter: WorkspacePaletteFilter,
@@ -2128,6 +2092,14 @@ impl NebulaWorkspace {
 
         if action == PaletteAction::OpenAiSessionPicker {
             self.open_quick_jump_palette(window, cx);
+            return;
+        }
+        if action == PaletteAction::OpenSshPicker {
+            self.open_launcher_palette(
+                crate::display::command_palette::LauncherFilter::Ssh,
+                window,
+                cx,
+            );
             return;
         }
         self.dismiss_palette_state();
