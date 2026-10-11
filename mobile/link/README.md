@@ -20,8 +20,10 @@ adapter; no v2 failure ever selects it automatically.
   browser, image generation service or external QR endpoint.
 - A TLS WebSocket relay binary. No application payload logging or decryption,
   database, offline replay, user account system, Docker or Node dependency.
-- Linux systemd 247+ and Alpine/OpenRC install/start/stop/status/uninstall backend. systemd supplies
-  an unprivileged DynamicUser and read-only credentials. Port binding capability
+- Linux systemd 239+ and Alpine/OpenRC install/start/stop/status/uninstall backend. On systemd
+  251+ (which has the `%d` credentials specifier) systemd supplies an
+  unprivileged DynamicUser and read-only credentials; 239-250 use the same
+  drop-to-nobody path as OpenRC. Port binding capability
   is isolated to the service. The installer does not modify firewall rules or
   existing web servers. Keep-configuration uninstall and later reinstall work;
   purge removes only unmodified files listed in the ownership manifest.
