@@ -6,7 +6,7 @@
 //! （看当前这台机器上的文件）就有了两个入口，而且用户得先知道自己在本地还是
 //! 远端才能选对——那本来是程序该知道的事。
 //!
-//! 所以判据是：**抽屉的"文件"视图渲染谁，由聚焦 pane 的身份决定。** 聚焦
+//! 默认抽屉由聚焦 pane 的身份决定；可选双文件树由显式配对的 SSH pane 决定。聚焦
 //! SSH pane 就画远端列表，切回本地 tab 就自动翻回本地目录树。浏览状态按
 //! pane 留着，切回来还在原来那个目录。
 //!
@@ -21,6 +21,8 @@
 //! 丢弃——它描述的是一个已经不存在的意图。
 
 mod drag;
+#[cfg(test)]
+pub(super) mod network_fixture;
 mod target;
 mod transfers;
 use target::RemoteTransferTarget;
@@ -221,7 +223,17 @@ impl RemoteBrowser {
         );
     }
 
-    fn detach(&mut self) {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn files_test_transfer_working(&self) -> bool {
+        self.transfer.as_ref().is_some_and(|controller| {
+            matches!(
+                controller.snapshot().phase,
+                SftpPhase::Working | SftpPhase::Loading | SftpPhase::Connecting
+            )
+        })
+    }
+
+    pub(super) fn detach(&mut self) {
         self.park_active();
         self.pane = None;
         self.destination.clear();
@@ -268,7 +280,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        let focused = self.focused_remote_pane(cx);
+        let focused = self.remote_browser_owner(cx);
         match focused {
             Some((pane, destination)) => {
                 let rebind = self.remote_browser.pane != Some(pane)
@@ -486,6 +498,7 @@ impl NebulaWorkspace {
         let notice = self.remote_notice(language);
 
         v_flex()
+            .debug_selector(|| "remote-files-browser".into())
             .h_full()
             .w_full()
             .min_w_0()
@@ -524,6 +537,7 @@ impl NebulaWorkspace {
             .child(
                 h_flex()
                     .h(px(30.0))
+                    .when(self.dual_files.enabled, |row| row.h_auto().min_h(px(30.0)).w_full().min_w_0().flex_wrap().flex_shrink_0())
                     .px(px(TEXT_INSET))
                     .items_center()
                     .gap_1()
@@ -756,7 +770,7 @@ impl NebulaWorkspace {
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label = row.name.clone();
         let activate = row.clone();
-        let source = (!row.is_parent).then(|| self.current_remote_transfer_target()).flatten();
+        let source = (!row.is_parent).then(|| self.current_remote_transfer_target(cx)).flatten();
         let native_drag = source.map(|source| drag::RemoteFileDrag { source, entry: row.clone() });
         let weak = cx.entity().downgrade();
         let directory = (row.kind == SftpEntryKind::Directory).then(|| row.path.clone());
@@ -949,6 +963,10 @@ where
             result = work() => { let _ = tx.send(result); },
         }
     });
+    #[cfg(test)]
+    if let Some(waiters) = network_fixture::NetworkPump::current() {
+        return network_fixture::NetworkPump::oneshot(rx, waiters).await;
+    }
     rx.await.ok()
 }
 

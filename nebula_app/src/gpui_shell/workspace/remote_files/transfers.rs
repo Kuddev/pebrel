@@ -50,8 +50,17 @@ impl NebulaWorkspace {
         self.remote_browser.transfer = Some(controller.clone());
 
         let target = target.clone();
+        #[cfg(test)]
+        let fixture_pump = network_fixture::NetworkPump::current();
         cx.spawn(async move |this, cx| {
-            while wake_rx.recv().await.is_some() {
+            while {
+                #[cfg(test)]
+                let wake =
+                    network_fixture::NetworkPump::wake(&mut wake_rx, fixture_pump.clone()).await;
+                #[cfg(not(test))]
+                let wake = wake_rx.recv().await;
+                wake.is_some()
+            } {
                 let finished = this
                     .update(cx, |workspace, cx| {
                         workspace.sync_remote_transfer(transfer_id, &target, cx)
@@ -91,7 +100,7 @@ impl NebulaWorkspace {
                 SftpPhase::Ready => {
                     // 用户可在传输期间继续浏览；只有仍停在传输起始目录时才替换
                     // 列表，否则完成结果会把用户从刚进入的目录拉回去。
-                    if self.remote_transfer_target_matches(target)
+                    if self.remote_transfer_target_matches(target, cx)
                         && self.remote_browser.path == snapshot.path
                     {
                         self.remote_browser.entries = snapshot.entries.clone();
@@ -124,7 +133,7 @@ impl NebulaWorkspace {
         target: &RemoteTransferTarget,
         cx: &mut Context<'_, Self>,
     ) {
-        if !self.remote_transfer_target_matches(target) {
+        if !self.remote_transfer_target_matches(target, cx) {
             self.remote_browser.error =
                 Some(workspace_ui_language().text(Message::TransferTargetChanged).to_owned());
             cx.notify();
@@ -155,20 +164,34 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    pub(super) fn current_remote_transfer_target(&self) -> Option<RemoteTransferTarget> {
+    pub(in crate::gpui_shell::workspace) fn current_remote_transfer_target(
+        &self,
+        cx: &App,
+    ) -> Option<RemoteTransferTarget> {
         if self.remote_browser.loading || self.remote_browser.path.is_empty() {
             return None;
         }
+        let (pane, destination) = self.remote_browser_owner(cx)?;
+        if self.remote_browser.pane != Some(pane) || self.remote_browser.destination != destination
+        {
+            return None;
+        }
         Some(RemoteTransferTarget {
-            pane: self.remote_browser.pane?,
+            pane,
             destination: self.remote_browser.destination.clone(),
             path: self.remote_browser.path.clone(),
             navigation_generation: self.remote_browser.generation,
         })
     }
 
-    pub(super) fn remote_transfer_target_matches(&self, target: &RemoteTransferTarget) -> bool {
-        target.is_current(
+    pub(in crate::gpui_shell::workspace) fn remote_transfer_target_matches(
+        &self,
+        target: &RemoteTransferTarget,
+        cx: &App,
+    ) -> bool {
+        self.remote_browser_owner(cx).is_some_and(|(pane, destination)| {
+            pane == target.pane && destination == target.destination
+        }) && target.is_current(
             self.remote_browser.pane,
             &self.remote_browser.destination,
             self.remote_browser.generation,
@@ -188,7 +211,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(target) = self.current_remote_transfer_target() else {
+        let Some(target) = self.current_remote_transfer_target(cx) else {
             self.remote_browser.error =
                 Some(workspace_ui_language().text(Message::TransferNotReady).to_owned());
             cx.notify();
@@ -204,7 +227,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if !self.remote_transfer_target_matches(&target) {
+        if !self.remote_transfer_target_matches(&target, cx) {
             self.remote_browser.error =
                 Some(workspace_ui_language().text(Message::TransferTargetChanged).to_owned());
             cx.notify();
@@ -243,7 +266,7 @@ impl NebulaWorkspace {
                     return;
                 }
                 workspace.remote_browser.preflighting = false;
-                if !workspace.remote_transfer_target_matches(&target) {
+                if !workspace.remote_transfer_target_matches(&target, cx) {
                     workspace.remote_browser.error = Some(
                         workspace_ui_language().text(Message::TransferTargetChanged).to_owned(),
                     );
@@ -302,6 +325,7 @@ impl NebulaWorkspace {
             let footer = DialogFooter::new()
                 .child(
                     Button::new("sftp-conflict-cancel")
+                        .debug_selector(|| "sftp-conflict-cancel".into())
                         .label(language.text(Message::TransferCancel))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(CancelDialog), cx);
@@ -310,6 +334,7 @@ impl NebulaWorkspace {
                 .child(div().flex_1())
                 .child(
                     Button::new("sftp-conflict-skip")
+                        .debug_selector(|| "sftp-conflict-skip".into())
                         .label(language.text(Message::TransferSkip))
                         .on_click(move |_, window, cx| {
                             if let Some(workspace) = skip_workspace.upgrade() {
@@ -327,6 +352,7 @@ impl NebulaWorkspace {
                 )
                 .child(
                     Button::new("sftp-conflict-keep-both")
+                        .debug_selector(|| "sftp-conflict-keep-both".into())
                         .label(language.text(Message::TransferKeepBoth))
                         .on_click(move |_, window, cx| {
                             if let Some(workspace) = keep_workspace.upgrade() {
@@ -344,6 +370,7 @@ impl NebulaWorkspace {
                 )
                 .child(
                     Button::new("sftp-conflict-overwrite")
+                        .debug_selector(|| "sftp-conflict-overwrite".into())
                         .label(language.text(Message::TransferOverwrite))
                         .danger()
                         .disabled(!overwrite_allowed)
@@ -437,7 +464,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(target) = self.current_remote_transfer_target() else { return };
+        let Some(target) = self.current_remote_transfer_target(cx) else { return };
         let picked = crate::platform::file_picker::files(
             window,
             cx,
@@ -466,7 +493,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(target) = self.current_remote_transfer_target() else { return };
+        let Some(target) = self.current_remote_transfer_target(cx) else { return };
         let picked = crate::platform::file_picker::directory(
             window,
             cx,
@@ -492,7 +519,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(target) = self.current_remote_transfer_target() else { return };
+        let Some(target) = self.current_remote_transfer_target(cx) else { return };
         let Some(entry) = self.selected_remote_entry() else { return };
         let picked = crate::platform::file_picker::directory(
             window,

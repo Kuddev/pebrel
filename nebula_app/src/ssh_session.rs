@@ -1000,6 +1000,10 @@ pub(crate) async fn exec_private(
 async fn open_exec_channel(
     raw_destination: &str,
 ) -> Result<russh::Channel<russh::client::Msg>, SessionError> {
+    #[cfg(test)]
+    if let Some(session) = sftp_test_support::session(raw_destination) {
+        return Ok(lifecycle::network("exec channel", session?.channel_open_session()).await?);
+    }
     let profiles_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
     let raw = raw_destination.to_owned();
     let (destination, profile) = tokio::task::spawn_blocking(move || {

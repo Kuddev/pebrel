@@ -1,8 +1,4 @@
 {
-  "dual_files": {
-    "search": "搜索文件和文件夹…",
-    "drag": "将本地文件拖到 SSH 文件树即可上传。"
-  },
   "tray": {
     "show": "显示 Pebrel",
     "quit": "退出"
@@ -1394,5 +1390,15 @@
     "save_failed": "效果列表保存失败，请检查设置目录的写入权限后重试。",
     "advanced": "高级效果",
     "advanced_active": "高级效果 · 终端效果已启用"
+  },
+  "dual_files": {
+    "search": "搜索文件和文件夹…",
+    "toggle": "同时显示本地和 SSH 文件树",
+    "choose": "选择文件树窗格",
+    "no_pair": "请在当前分屏中选择本地窗格和已连接的 SSH 窗格。",
+    "unavailable": "所选窗格已不可用，请重新配对。",
+    "local": "本地文件",
+    "pair": "{local} → {remote}",
+    "drag": "将本地文件拖到 SSH 文件树即可上传。"
   }
 }

@@ -1,8 +1,4 @@
 {
-  "dual_files": {
-    "search": "Search files and folders…",
-    "drag": "Drag local files onto the SSH tree to upload."
-  },
   "tray": {
     "show": "Show Pebrel",
     "quit": "Quit"
@@ -1394,5 +1390,15 @@
     "save_failed": "Could not save the effect list. Check that the settings location is writable, then try again.",
     "advanced": "Advanced effects",
     "advanced_active": "Advanced effects · Terminal effects enabled"
+  },
+  "dual_files": {
+    "search": "Search files and folders…",
+    "toggle": "Show local and SSH file trees",
+    "choose": "Choose file tree panes",
+    "no_pair": "Choose a local pane and a connected SSH pane in this split.",
+    "unavailable": "The selected panes are no longer available. Choose a new pair.",
+    "local": "Local files",
+    "pair": "{local} → {remote}",
+    "drag": "Drag local files onto the SSH tree to upload."
   }
 }

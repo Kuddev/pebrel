@@ -30,6 +30,7 @@ impl Render for NebulaWorkspace {
         self.sync_document_activity(window, cx);
         self.sync_terminal_activity(cx);
         self.sync_document_details(cx);
+        self.sync_dual_files(window, cx);
         if !self.sidebar_collapsed {
             self.sidebar_closing_width = None;
         }
@@ -114,6 +115,7 @@ impl Render for NebulaWorkspace {
             ))
             .on_mouse_move(cx.listener(|this, event, window, cx| {
                 this.update_details_panel_resize(event, window, cx);
+                this.update_local_files_resize(event, window, cx);
                 this.update_left_sidebar_resize(event, window, cx);
                 this.continue_pending_tab_drag(event, window, cx);
                 // pane 拖拽的待命态同理：罩层只在激活后才存在，越阈值那一下
@@ -126,7 +128,7 @@ impl Render for NebulaWorkspace {
                 if event.button != MouseButton::Left {
                     return;
                 }
-                if this.finish_details_panel_resize(cx) || this.finish_left_sidebar_resize(cx) {
+                if this.finish_local_files_resize(cx) || this.finish_details_panel_resize(cx) || this.finish_left_sidebar_resize(cx) {
                     cx.stop_propagation();
                     return;
                 }
@@ -272,6 +274,9 @@ impl Render for NebulaWorkspace {
                     .when(!top_tabs && !settings_active && !reader_focus, |row| {
                         row.child(self.render_sidebar_slot(window, cx))
                     })
+                    .when(!settings_active && !reader_focus, |row| {
+                        row.child(self.render_local_files_slot(window, cx))
+                    })
                     .child(
                         // 终端卡（一体化外壳）：唯一的结构分界。圆角、卡缝、投影、
                         // 竖线四项全部来自 `PaneCardStyle`（主题默认叠用户覆盖），
@@ -389,6 +394,7 @@ impl Render for NebulaWorkspace {
             .children(self.render_left_sidebar_resize_handle(cx))
             .children(self.render_details_panel_resize_handle(window, cx))
             .children(self.render_details_panel_resize_overlay(cx))
+            .children(self.render_local_files_resize_overlay(cx))
             .children(self.tabs_scrollbar_drag_overlay(cx))
             .children(self.pane_drag_overlay(cx))
             .children(self.split_drag_visual(cx))

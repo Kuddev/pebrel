@@ -31,12 +31,27 @@ fn owned_sftp_session_uses_real_channels_and_never_falls_back_after_close() {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "中文 space.txt");
         assert_eq!(entries[0].size, 5);
+        let error = exec_capture(
+            &fixture.destination,
+            "exec sh",
+            crate::ssh_sftp::remote_cwd::probe_script(),
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert_eq!(error, "remote server rejected exec request");
         let destination = fixture.destination.clone();
         drop(fixture);
         let error = match open_sftp(&destination).await {
             Err(error) => error.to_string(),
             Ok(_) => panic!("closed fixture reused a session"),
         };
+        assert!(error.contains("owned SFTP fixture is closed"), "{error}");
+        let error = exec_capture(&destination, "exec sh", b"", Duration::from_secs(3))
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("owned SFTP fixture is closed"), "{error}");
     });
 }

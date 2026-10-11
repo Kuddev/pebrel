@@ -715,6 +715,7 @@ impl NebulaWorkspace {
                             })),
                     )
                     .when_some(port_forward_button, |controls, button| controls.child(button))
+                    .child(self.render_dual_files_button(settings_active, cx))
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()

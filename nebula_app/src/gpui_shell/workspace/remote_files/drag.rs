@@ -61,7 +61,7 @@ impl NebulaWorkspace {
         if paths.is_empty() {
             return;
         }
-        let Some(mut target) = self.current_remote_transfer_target() else {
+        let Some(mut target) = self.current_remote_transfer_target(cx) else {
             return;
         };
         if let Some(directory) = directory {
@@ -79,7 +79,7 @@ impl NebulaWorkspace {
         if !crate::platform::file_drag::supported() || !cx.stop_active_drag(window) {
             return;
         }
-        if !self.remote_transfer_target_matches(&drag.source) {
+        if !self.remote_transfer_target_matches(&drag.source, cx) {
             self.remote_browser.error =
                 Some(workspace_ui_language().text(Message::TransferTargetChanged).to_owned());
             cx.notify();

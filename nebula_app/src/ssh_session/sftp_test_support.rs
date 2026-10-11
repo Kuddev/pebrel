@@ -44,6 +44,14 @@ impl server::Handler for Loopback {
         self.channels.insert(channel.id(), channel);
         Ok(())
     }
+    async fn exec_request(
+        &mut self,
+        id: russh::ChannelId,
+        _: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_failure(id)
+    }
     async fn subsystem_request(
         &mut self,
         id: russh::ChannelId,

@@ -1,7 +1,7 @@
 //! A captured file action may finish only in the browser scope that initiated it.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct RemoteTransferTarget {
+pub(in crate::gpui_shell::workspace) struct RemoteTransferTarget {
     pub pane: u64,
     pub destination: String,
     pub path: String,
@@ -9,7 +9,12 @@ pub(super) struct RemoteTransferTarget {
 }
 
 impl RemoteTransferTarget {
-    pub(super) fn is_current(&self, pane: Option<u64>, destination: &str, generation: u64) -> bool {
+    pub(in crate::gpui_shell::workspace) fn is_current(
+        &self,
+        pane: Option<u64>,
+        destination: &str,
+        generation: u64,
+    ) -> bool {
         pane == Some(self.pane)
             && destination == self.destination
             && generation == self.navigation_generation

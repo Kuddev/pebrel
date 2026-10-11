@@ -28,6 +28,12 @@ pub(super) struct DetailsPanelState {
     transition: u64,
 }
 
+impl DetailsPanelState {
+    pub(super) fn preferred_width(&self) -> f32 {
+        self.width
+    }
+}
+
 impl Default for DetailsPanelState {
     fn default() -> Self {
         Self {
@@ -43,7 +49,7 @@ impl Default for DetailsPanelState {
     }
 }
 
-fn panel_width(preferred: f32, available: f32) -> f32 {
+pub(super) fn panel_width(preferred: f32, available: f32) -> f32 {
     // Preserve a useful document/terminal area in narrow windows. Do not change
     // the preferred width when the window temporarily gets smaller.
     let maximum = (available * 0.46).clamp(160.0, MAX_WIDTH);
@@ -359,12 +365,14 @@ impl NebulaWorkspace {
         if open {
             self.details_panel.closing_width = None;
         }
-        let width = if !open && self.details_panel.closing_width.is_some() {
+        let width = if self.dual_files.enabled {
+            self.details_sidebar_width(window, cx)
+        } else if !open && self.details_panel.closing_width.is_some() {
             self.details_panel.closing_width.unwrap()
         } else if self.details_panel.resize.is_some() {
             self.details_panel.width
         } else {
-            panel_width(self.details_panel.width, f32::from(window.viewport_size().width))
+            self.details_sidebar_width(window, cx)
         };
         let section = self.active_document_section(cx);
         let remote = open && section.is_none() && self.route_remote_browser(window, cx);
@@ -373,6 +381,9 @@ impl NebulaWorkspace {
         } else {
             match self.side_panel.view {
                 PanelView::Files if remote => self.render_remote_files(cx),
+                PanelView::Files if self.dual_files.enabled => {
+                    self.render_dual_files_unavailable(cx)
+                },
                 PanelView::Files => self.render_file_tree(cx),
                 PanelView::Git => self.render_git_tree(window, cx),
             }
@@ -427,10 +438,12 @@ impl NebulaWorkspace {
         if !self.side_panel.open || self.reader_focus_active(cx) || self.settings_open {
             return None;
         }
-        let width = if self.details_panel.resize.is_some() {
+        let width = if self.dual_files.enabled {
+            self.details_sidebar_width(window, cx)
+        } else if self.details_panel.resize.is_some() {
             self.details_panel.width
         } else {
-            panel_width(self.details_panel.width, f32::from(window.viewport_size().width))
+            self.details_sidebar_width(window, cx)
         };
         Some(
             div()
@@ -477,12 +490,12 @@ impl NebulaWorkspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        let maximum = self.details_sidebar_maximum(window, cx);
         let Some(drag) = &mut self.details_panel.resize else { return };
         if event.pressed_button != Some(MouseButton::Left) || !window.is_window_active() {
             self.cancel_details_panel_resize(cx);
             return;
         }
-        let maximum = panel_width(MAX_WIDTH, f32::from(window.viewport_size().width));
         let minimum = MIN_WIDTH.min(maximum);
         let raw = drag.start_width + drag.start_x - f32::from(event.position.x);
         self.details_panel.width = drag.width(raw, minimum, maximum);
