@@ -80,6 +80,18 @@ each agent's activity, and read its output without leaving the application.
   close the window. Restoring a conversation after the process exits is a separate
   feature and requires a supported CLI and a usable session identity.
 - Context-aware and history completions, configurable keybindings, and integrated shell prompts.
+- Saved-command management supports checkbox selection and one confirmation for a
+  batch, replacing repeated single-command deletion. Selection mode never runs a
+  command; changing the search or folder clears the selection. **Select results**
+  selects commands in the current filtered list, including rows below the viewport.
+  **Manage → Delete all commands** clears custom commands and all current built-in
+  recipes across platforms, regardless of the current search or folder; folders stay.
+  Clearing built-ins also includes recipes moved to other folders. Empty built-in
+  folders disappear, and **Manage → Restore built-in commands** restores deleted
+  recipes to their default folder. Custom deletions are not undoable here. Deleting
+  a custom folder requires confirmation and keeps its commands in Ungrouped.
+  Batch changes reuse the existing locked, refreshed, atomic store transaction;
+  the saved file format is unchanged and stale selections preserve unrelated edits.
 - Remapping or disabling terminal shortcuts preserves text fields' native paste keys.
   Restoring defaults updates existing windows without restarting. Runtime overrides
   replace their previous rules, avoiding the stale disabled bindings from the append-only
