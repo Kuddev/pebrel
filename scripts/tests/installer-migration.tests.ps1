@@ -51,6 +51,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Full installer syntax compilation failed.' }
     Write-Output 'installer-migration.tests.ps1: full installer compilation PASS (not executed)'
     & (Join-Path $PSScriptRoot 'installer-context-menu.tests.ps1') -InnoCompiler $InnoCompiler
+    & (Join-Path $PSScriptRoot 'installer-launch.tests.ps1') -InnoCompiler $InnoCompiler
     Write-Output "Fixture evidence: $root"
 } finally {
     $env:TEMP = $previousTemp
