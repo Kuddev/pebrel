@@ -106,3 +106,95 @@ impl WindowContext {
         }
     }
 }
+
+impl WindowContext {
+    /// Spawn and activate a new tab (a single-pane layout) using the default shell.
+    pub(super) fn spawn_tab(&mut self) {
+        if let Some(profile) = Self::default_profile(&self.config, false) {
+            self.spawn_tab_profile_value(profile, TabPlacement::Created);
+            return;
+        }
+        let shell = Self::default_shell_override(&self.config);
+        let requested =
+            self.display.startup_directory().or_else(|| self.config.pty_config().working_directory);
+        let cwd = crate::platform::shell::local_starting_directory(
+            shell.as_ref(),
+            requested,
+            self.focused_cwd(),
+        );
+        self.spawn_tab_at(cwd, TabPlacement::Created);
+    }
+
+    pub(super) fn spawn_tab_profile_value(&mut self, profile: Profile, placement: TabPlacement) {
+        let shell = profile.shell();
+        let requested = profile
+            .cwd
+            .as_ref()
+            .filter(|p| p.is_dir())
+            .cloned()
+            .or_else(|| self.display.startup_directory())
+            .or_else(|| self.config.pty_config().working_directory);
+        let cwd = crate::platform::shell::local_starting_directory(
+            Some(&shell),
+            requested,
+            self.focused_cwd(),
+        );
+        if let Some(id) = self.spawn_profile_pane(cwd, self.display.size_info, shell, &profile.env)
+        {
+            self.insert_tab(
+                TabEntry {
+                    layout: Layout::Leaf(id),
+                    active_pane: id,
+                    has_bell: false,
+                    custom_name: Some(profile.name.clone()),
+                    custom_color: None,
+                    launch: TabLaunch::Profile(profile),
+                    doc: None,
+                    image: None,
+                    settings: false,
+                },
+                placement,
+            );
+            self.resize_active_layout();
+            self.dirty = true;
+        }
+    }
+
+    /// Open a new tab running a detected shell (the new-tab dropdown). Like
+    /// `spawn_tab_profile` but the spec is passed in rather than looked up in
+    /// the config, and the cwd inherits the focused pane's.
+    pub(super) fn spawn_tab_shell(
+        &mut self,
+        name: String,
+        shell: nebula_terminal::tty::Shell,
+        placement: TabPlacement,
+    ) {
+        let requested =
+            self.display.startup_directory().or_else(|| self.config.pty_config().working_directory);
+        let cwd = crate::platform::shell::local_starting_directory(
+            Some(&shell),
+            requested,
+            self.focused_cwd(),
+        );
+        if let Some(id) =
+            self.spawn_pane_detached_with(cwd, self.display.size_info, Some(shell.clone()))
+        {
+            self.insert_tab(
+                TabEntry {
+                    layout: Layout::Leaf(id),
+                    active_pane: id,
+                    has_bell: false,
+                    custom_name: Some(name.clone()),
+                    custom_color: None,
+                    launch: TabLaunch::Shell { name, shell },
+                    doc: None,
+                    image: None,
+                    settings: false,
+                },
+                placement,
+            );
+            self.resize_active_layout();
+            self.dirty = true;
+        }
+    }
+}

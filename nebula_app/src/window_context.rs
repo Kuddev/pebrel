@@ -406,7 +406,10 @@ impl WindowContext {
                     cli_cwd,
                     restored_cwd,
                     display.startup_directory(),
-                    configured_cwd,
+                    default_profile
+                        .as_ref()
+                        .and_then(|profile| profile.cwd.clone())
+                        .or(configured_cwd),
                 );
                 if let Some(profile) = &default_profile {
                     crate::profile_launch::apply_local_profile_options(
@@ -915,18 +918,6 @@ impl WindowContext {
         at
     }
 
-    /// Spawn and activate a new tab (a single-pane layout) using the default shell.
-    fn spawn_tab(&mut self) {
-        if let Some(profile) = Self::default_profile(&self.config, false) {
-            self.spawn_tab_profile_value(profile, TabPlacement::Created);
-            return;
-        }
-        self.spawn_tab_at(
-            self.display.startup_directory().or_else(|| self.focused_cwd()),
-            TabPlacement::Created,
-        );
-    }
-
     /// Spawn a default-shell tab at an already validated explicit directory,
     /// or inherit the caller-provided cwd. Keeping this as the only insertion
     /// path guarantees tree-created terminals behave exactly like Ctrl+Shift+T.
@@ -992,68 +983,6 @@ impl WindowContext {
     fn spawn_tab_profile(&mut self, index: usize) {
         let Some(profile) = self.config.profiles.get(index).cloned() else { return };
         self.spawn_tab_profile_value(profile, TabPlacement::Created);
-    }
-
-    fn spawn_tab_profile_value(&mut self, profile: Profile, placement: TabPlacement) {
-        // Profile cwd wins when it exists; else inherit the focused pane's.
-        let cwd = preferred_tab_cwd(
-            profile.cwd.as_ref().filter(|p| p.is_dir()).cloned(),
-            self.display.startup_directory(),
-            self.focused_cwd(),
-        );
-        let shell = profile.shell();
-        if let Some(id) = self.spawn_profile_pane(cwd, self.display.size_info, shell, &profile.env)
-        {
-            self.insert_tab(
-                TabEntry {
-                    layout: Layout::Leaf(id),
-                    active_pane: id,
-                    has_bell: false,
-                    custom_name: Some(profile.name.clone()),
-                    custom_color: None,
-                    launch: TabLaunch::Profile(profile),
-                    doc: None,
-                    image: None,
-                    settings: false,
-                },
-                placement,
-            );
-            self.resize_active_layout();
-            self.dirty = true;
-        }
-    }
-
-    /// Open a new tab running a detected shell (the new-tab dropdown). Like
-    /// `spawn_tab_profile` but the spec is passed in rather than looked up in
-    /// the config, and the cwd inherits the focused pane's.
-    fn spawn_tab_shell(
-        &mut self,
-        name: String,
-        shell: nebula_terminal::tty::Shell,
-        placement: TabPlacement,
-    ) {
-        if let Some(id) = self.spawn_pane_detached_with(
-            self.display.startup_directory().or_else(|| self.focused_cwd()),
-            self.display.size_info,
-            Some(shell.clone()),
-        ) {
-            self.insert_tab(
-                TabEntry {
-                    layout: Layout::Leaf(id),
-                    active_pane: id,
-                    has_bell: false,
-                    custom_name: Some(name.clone()),
-                    custom_color: None,
-                    launch: TabLaunch::Shell { name, shell },
-                    doc: None,
-                    image: None,
-                    settings: false,
-                },
-                placement,
-            );
-            self.resize_active_layout();
-            self.dirty = true;
-        }
     }
 
     /// Open a saved SSH destination inside the configured default shell.

@@ -152,6 +152,22 @@ impl TerminalProfiles {
         Ok(format!("custom-{}", bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()))
     }
 
+    /// Copy a detected preset's raw options, before platform integration is injected.
+    /// The editor saves this as a new identity through the existing CAS transaction.
+    pub(crate) fn from_detected(
+        shell: &crate::shell_detect::DetectedShell,
+    ) -> io::Result<TerminalProfile> {
+        Ok(TerminalProfile {
+            id: Self::new_id()?,
+            name: shell.name.clone(),
+            command: shell.program.clone().into(),
+            args: shell.args.clone(),
+            cwd: None,
+            shell_id: Some(shell.id.clone()),
+            env: Default::default(),
+        })
+    }
+
     pub(crate) fn profiles(&self) -> &[TerminalProfile] {
         &self.profiles
     }
@@ -183,6 +199,9 @@ impl TerminalProfiles {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod preset_tests;
 
 /// Scan only `directory` and its immediate `bin` child for known Windows shells.
 pub(crate) fn scan_directory(directory: &Path) -> io::Result<Vec<TerminalProfile>> {

@@ -726,7 +726,8 @@ pub struct Profile {
     /// Program arguments.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Optional startup directory; falls back to the focused pane's cwd.
+    /// Optional startup directory; local shells fall back to the focused pane's cwd.
+    /// WSL with neither cwd nor its own directory option starts in guest user home.
     #[serde(default)]
     pub cwd: Option<PathBuf>,
     /// Optional shell family used by imported terminal profiles.
@@ -769,23 +770,28 @@ impl Profile {
 
     /// The PTY shell override this profile launches.
     pub fn shell(&self) -> Shell {
+        let args = crate::shell_detect::wsl_args_with_default_home(
+            &self.command,
+            &self.args,
+            self.cwd.is_some(),
+        );
         #[cfg(windows)]
         match self.shell_id.as_deref() {
             Some("pwsh") | Some("powershell") => {
                 return nebula_terminal::tty::windows::powershell_with_nebula_integration(
                     self.command.clone(),
-                    self.args.clone(),
+                    args,
                 );
             },
             Some("bash") | Some("git-bash") => {
                 return nebula_terminal::tty::windows::bash_with_nebula_integration(
                     self.command.clone(),
-                    self.args.clone(),
+                    args,
                 );
             },
             _ => {},
         }
-        Shell::new(self.command.clone(), self.args.clone())
+        Shell::new(self.command.clone(), args)
     }
 }
 

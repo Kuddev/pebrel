@@ -23,7 +23,7 @@ pub(super) fn resolve_shell_at(
     resolve_shell_id(shell_id).map(|launch| at_explicit_directory(launch, cwd))
 }
 
-fn at_explicit_directory(
+pub(super) fn at_explicit_directory(
     mut launch: crate::session::LaunchSession,
     cwd: Option<&Path>,
 ) -> crate::session::LaunchSession {
@@ -55,9 +55,11 @@ pub(super) fn configured_local_launch(cx: &App) -> crate::session::LaunchSession
     match shell_id.filter(|id| !id.trim().is_empty()) {
         // 设置项是"记着的偏好"：它在别的机器上落空（配置同步、发行版改名）
         // 按既有契约回落默认 shell，不打扰用户。
-        Some(shell_id) => {
-            resolve_shell_id(&shell_id).unwrap_or(crate::session::LaunchSession::Default)
-        },
+        Some(shell_id) => resolve_shell_id_with_startup(
+            &shell_id,
+            super::NebulaWorkspace::startup_directory().as_deref(),
+        )
+        .unwrap_or(crate::session::LaunchSession::Default),
         None => crate::session::LaunchSession::Default,
     }
 }
@@ -73,6 +75,13 @@ pub(super) fn configured_local_launch(cx: &App) -> crate::session::LaunchSession
 /// （`--shell`、IPC 的 `shell`）必须让调用方看见——静默把"用 Ubuntu 打开"
 /// 变成 PowerShell 标签是最难查的一类失败。
 pub(crate) fn resolve_shell_id(shell_id: &str) -> Result<crate::session::LaunchSession, String> {
+    resolve_shell_id_with_startup(shell_id, None)
+}
+
+fn resolve_shell_id_with_startup(
+    shell_id: &str,
+    startup_directory: Option<&std::path::Path>,
+) -> Result<crate::session::LaunchSession, String> {
     let requested = shell_id.trim();
     if requested.is_empty() {
         return Err("--shell needs a shell id".to_owned());
@@ -81,20 +90,27 @@ pub(crate) fn resolve_shell_id(shell_id: &str) -> Result<crate::session::LaunchS
         .into_iter()
         .find(|shell| shell.id.eq_ignore_ascii_case(requested))
     {
-        let shell = detected.shell();
+        let shell = detected.shell_with_starting_directory(startup_directory.is_some());
         return Ok(crate::session::LaunchSession::Shell {
             name: detected.name,
             program: shell.program().to_owned(),
             args: shell.args().to_vec(),
         });
     }
-    if let Some(launch) = crate::terminal_profiles::TerminalProfiles::load()
-        .ok()
-        .and_then(|store| profile_launch_for_id(store.as_config_profiles(), requested))
+    if let Some(launch) =
+        crate::terminal_profiles::TerminalProfiles::load().ok().and_then(|store| {
+            let mut profiles = store.as_config_profiles();
+            for profile in &mut profiles {
+                if profile.cwd.is_none() {
+                    profile.cwd = startup_directory.map(std::path::Path::to_path_buf);
+                }
+            }
+            profile_launch_for_id(profiles, requested)
+        })
     {
         return Ok(launch);
     }
-    if let Some(launch) = wsl_launch_for_id(requested) {
+    if let Some(launch) = wsl_launch_for_id(requested, startup_directory.is_some()) {
         return Ok(launch);
     }
     Err(format!("unknown shell id \"{requested}\"; available: {}", shell_id_menu().join(", ")))
@@ -130,13 +146,15 @@ fn shell_id_menu() -> Vec<String> {
 /// 没要的 PowerShell 标签——后者才是真正难查的那种失败。
 ///
 /// 裸 `wsl` 同理由 `wsl.exe` 自己挑系统默认发行版。
-fn wsl_launch_for_id(shell_id: &str) -> Option<crate::session::LaunchSession> {
+fn wsl_launch_for_id(
+    shell_id: &str,
+    has_starting_directory: bool,
+) -> Option<crate::session::LaunchSession> {
     let (name, args) = wsl_launch_args(shell_id)?;
-    Some(crate::session::LaunchSession::Shell {
-        name,
-        program: crate::platform::shell::wsl_executable()?,
-        args,
-    })
+    let program = crate::platform::shell::wsl_executable()?;
+    let args =
+        crate::shell_detect::wsl_args_with_default_home(&program, &args, has_starting_directory);
+    Some(crate::session::LaunchSession::Shell { name, program, args })
 }
 
 pub(super) fn profile_launch_session(

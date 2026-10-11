@@ -4,10 +4,15 @@ use crate::config::ui_config::Profile;
 use crate::session::LaunchSession;
 
 pub(crate) fn snapshot(profile: Profile) -> LaunchSession {
+    let args = crate::shell_detect::wsl_args_with_default_home(
+        &profile.command,
+        &profile.args,
+        profile.cwd.is_some(),
+    );
     LaunchSession::Profile {
         name: profile.name,
         command: profile.command,
-        args: profile.args,
+        args,
         cwd: profile.cwd.map(|path| path.to_string_lossy().into_owned()),
         shell_id: profile.shell_id,
         profile_id: profile.terminal_profile_id.clone(),
@@ -43,6 +48,11 @@ pub(crate) fn resolve(launch: &LaunchSession) -> Option<Profile> {
         });
         apply_local_profile(&mut profile, local);
     }
+    profile.args = crate::shell_detect::wsl_args_with_default_home(
+        &profile.command,
+        &profile.args,
+        profile.cwd.is_some(),
+    );
     Some(profile)
 }
 
@@ -61,7 +71,12 @@ fn apply_local_profile(profile: &mut Profile, local: Option<Profile>) {
             .flatten();
         *profile = local;
         profile.cwd = location.or(profile.cwd.take());
-        if let Some(args) = guest_args {
+        if profile.cwd.is_some()
+            && let Some(args) =
+                crate::shell_detect::wsl_args_in_host_directory(&profile.command, &profile.args)
+        {
+            profile.args = args;
+        } else if let Some(args) = guest_args {
             profile.args = args;
         }
     }
@@ -167,6 +182,36 @@ mod tests {
         apply_local_profile(&mut restored, Some(local.clone()));
         assert_eq!(restored.cwd.as_deref(), Some(directory.path()));
         assert_eq!(restored.args, local.args);
+    }
+
+    #[test]
+    fn wsl_profile_reload_reapplies_home_and_preserves_explicit_host_directory() {
+        let original = Profile {
+            name: "Synthetic WSL".into(),
+            command: r"C:\Windows\System32\wsl.exe".into(),
+            args: ["-d", "Debian", "--user", "dev"].map(String::from).to_vec(),
+            cwd: None,
+            shell_id: Some("wsl:Debian".into()),
+            terminal_profile_id: Some("synthetic-reload-id".into()),
+            env: Default::default(),
+        };
+        let mut edited = original.clone();
+        edited.args.push("--shell-type=login".into());
+        let mut restored = original.clone();
+        apply_local_profile(&mut restored, Some(edited.clone()));
+        let expected = ["--cd", "~", "-d", "Debian", "--user", "dev", "--shell-type=login"];
+        assert_eq!(restored.shell().args(), expected);
+        assert_eq!(resolve(&snapshot(restored)).unwrap().shell().args(), expected);
+        let host = tempfile::tempdir().unwrap();
+        let mut explicit = original;
+        explicit.cwd = Some(host.path().into());
+        edited.args.splice(0..0, ["--cd".into(), "/old-guest".into()]);
+        apply_local_profile(&mut explicit, Some(edited));
+        assert_eq!(explicit.cwd.as_deref(), Some(host.path()));
+        assert_eq!(
+            explicit.shell().args(),
+            &["-d", "Debian", "--user", "dev", "--shell-type=login"]
+        );
     }
 
     #[test]

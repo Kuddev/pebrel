@@ -63,6 +63,37 @@ pub fn interactive_args(id: &str) -> Vec<String> {
     }
 }
 
+/// Host fallbacks cannot stand in for an unset WSL guest startup directory.
+/// Callers retain the origin of an explicit profile, CLI or global directory.
+pub(crate) fn local_starting_directory(
+    shell: Option<&nebula_terminal::tty::Shell>,
+    requested: Option<std::path::PathBuf>,
+    fallback: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    requested.or_else(|| {
+        let own_guest_directory = shell
+            .and_then(|shell| crate::shell_detect::wsl_launch(shell.program(), shell.args()))
+            .is_some_and(|options| options.chooses_directory);
+        (!own_guest_directory).then_some(fallback).flatten()
+    })
+}
+
+/// Both application adapters pass explicit host directories as PTY inputs.
+/// Resolve WSL's guest-home default through argv, never through host HOME/cwd.
+pub(crate) fn prepare_wsl_startup_directory(options: &mut nebula_terminal::tty::Options) {
+    let Some(shell) = &options.shell else { return };
+    let program = shell.program().to_owned();
+    let args = if options.working_directory.is_some() {
+        crate::shell_detect::wsl_args_in_host_directory(&program, shell.args())
+    } else {
+        crate::shell_detect::is_wsl_launcher(&program)
+            .then(|| crate::shell_detect::wsl_args_with_default_home(&program, shell.args(), false))
+    };
+    if let Some(args) = args {
+        options.shell = Some(nebula_terminal::tty::Shell::new(program, args));
+    }
+}
+
 /// Preserve the actual Windows PTY default in a pane's durable launch snapshot.
 /// Unix keeps an unspecified shell unspecified so the login-shell policy applies.
 pub(crate) fn snapshot_shell(
@@ -247,6 +278,49 @@ pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wsl_startup_options_keep_guest_home_separate_from_explicit_host_directory() {
+        let args =
+            ["-d", "Synthetic Linux", "--user", "guest", "--exec", "zsh", "--cd", "/guest-option"]
+                .map(String::from)
+                .to_vec();
+        let mut options = nebula_terminal::tty::Options::default();
+        options.shell = Some(nebula_terminal::tty::Shell::new(
+            r"C:\Windows\System32\wsl.exe".into(),
+            args.clone(),
+        ));
+        prepare_wsl_startup_directory(&mut options);
+        assert_eq!(
+            options.shell.as_ref().unwrap().args(),
+            [vec!["--cd".into(), "~".into()], args.clone()].concat()
+        );
+        assert!(options.working_directory.is_none());
+        let fallback = tempfile::tempdir().unwrap();
+        assert!(
+            local_starting_directory(options.shell.as_ref(), None, Some(fallback.path().into()),)
+                .is_none()
+        );
+        assert_eq!(
+            local_starting_directory(options.shell.as_ref(), Some(fallback.path().into()), None,)
+                .as_deref(),
+            Some(fallback.path())
+        );
+        let once = options.clone();
+        prepare_wsl_startup_directory(&mut options);
+        assert_eq!(options, once);
+        let host = tempfile::tempdir().unwrap();
+        options.working_directory = Some(host.path().into());
+        prepare_wsl_startup_directory(&mut options);
+        assert_eq!(options.shell.as_ref().unwrap().args(), args);
+        assert_eq!(options.working_directory.as_deref(), Some(host.path()));
+        let mut ordinary = nebula_terminal::tty::Options::default();
+        ordinary.shell =
+            Some(nebula_terminal::tty::Shell::new("pwsh.exe".into(), vec!["-NoLogo".into()]));
+        let unchanged = ordinary.clone();
+        prepare_wsl_startup_directory(&mut ordinary);
+        assert_eq!(ordinary, unchanged);
+    }
 
     #[cfg(windows)]
     #[test]

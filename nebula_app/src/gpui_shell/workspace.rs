@@ -1018,7 +1018,7 @@ impl NebulaWorkspace {
         match startup {
             windowing::WorkspaceStartup::RestoreUpdate(session) => {
                 if !this.restore_update_session(&session, runtime.resume_ai, window, cx) {
-                    this.add_terminal_at(Self::cold_start_cwd(), None, window, cx);
+                    this.add_cold_terminal(window, cx);
                 }
             },
             windowing::WorkspaceStartup::RestoreOrDefault => {
@@ -1026,7 +1026,7 @@ impl NebulaWorkspace {
                 if !runtime.restore_session
                     || !this.try_restore_session(runtime.resume_ai, window, cx)
                 {
-                    this.add_terminal_at(Self::cold_start_cwd(), None, window, cx);
+                    this.add_cold_terminal(window, cx);
                 }
             },
             windowing::WorkspaceStartup::NewTerminal { cwd } => {
@@ -1158,20 +1158,6 @@ impl NebulaWorkspace {
                 })
             })
             .unwrap_or(self.initial_grid)
-    }
-
-    fn add_terminal_at(
-        &mut self,
-        cwd: Option<std::path::PathBuf>,
-        command: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> u64 {
-        // 默认 shell 只在“创建新 Tab”的这一刻取样，并把实际 program/args
-        // 一起冻结进 Tab launch。设置页随后改默认值只影响下一次创建；冷
-        // 恢复也按本 Tab 的 launch 重建，不会把混合工作区抹成同一种 shell。
-        let launch_session = shell_launch::configured_local_launch(cx);
-        self.add_terminal_with(launch_session, cwd, command, window, cx)
     }
 
     /// 用一份指定的 launch 身份建 Tab。默认路径（`add_terminal_at`）冻结
@@ -2052,44 +2038,6 @@ impl NebulaWorkspace {
 
     /// 从弹窗选中的 shell 起一个新终端。走共享 v4 launch 身份，因此冷恢复
     /// 拿得回真正的启动命令，侧栏短标也跟着对。
-    fn launch_palette_shell(
-        &mut self,
-        detected: crate::shell_detect::DetectedShell,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.dismiss_palette_state();
-        let shell = detected.shell();
-        let launch = crate::session::LaunchSession::Shell {
-            name: detected.name.clone(),
-            program: shell.program().to_owned(),
-            args: shell.args().to_vec(),
-        };
-        let cwd = Self::startup_directory().or_else(|| {
-            self.tabs
-                .get(self.active)
-                .and_then(WorkspaceTab::focused_view)
-                .and_then(|view| view.read(cx).local_cwd())
-        });
-        self.add_terminal_with(launch, cwd, None, window, cx);
-    }
-
-    fn launch_palette_profile(
-        &mut self,
-        profile: crate::config::ui_config::Profile,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.dismiss_palette_state();
-        let launch = shell_launch::profile_launch_session(profile);
-        let cwd = Self::startup_directory().or_else(|| {
-            self.tabs
-                .get(self.active)
-                .and_then(WorkspaceTab::focused_view)
-                .and_then(|view| view.read(cx).local_cwd())
-        });
-        self.add_terminal_with(launch, cwd, None, window, cx);
-    }
 
     fn run_palette_action(
         &mut self,

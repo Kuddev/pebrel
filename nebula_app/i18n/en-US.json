@@ -1412,5 +1412,7 @@
   "local_profiles.saved": "Session saved. Open it from the local launcher.",
   "local_profiles.failed": "Could not save session: {error}",
   "local_profiles.deleted": "Session deleted.",
-  "local_profiles.advanced": "Advanced shell integration"
+  "local_profiles.advanced": "Advanced shell integration",
+  "local_profiles.presets": "Start from an installed shell",
+  "local_profiles.wsl_home": "WSL starts in the selected Linux user's home when no starting directory or --cd argument is set. Select saved sessions as the default shell in Settings."
 }

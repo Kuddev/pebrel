@@ -95,3 +95,44 @@ fn directory_override_cannot_turn_an_invalid_shell_request_into_a_default_shell(
     let requested = tempfile::tempdir().unwrap();
     assert!(resolve_shell_at("pebrel-missing-shell-id", Some(requested.path())).is_err());
 }
+
+#[test]
+fn wsl_home_launch_ignores_host_fallback_and_yields_to_explicit_host_directory() {
+    let host = tempfile::tempdir().unwrap();
+    let profile = crate::config::ui_config::Profile {
+        name: "Synthetic WSL".into(),
+        command: r"C:\Windows\System32\wsl.exe".into(),
+        args: ["-d", "Team Linux", "--user", "guest"].map(String::from).to_vec(),
+        cwd: None,
+        shell_id: Some("wsl:Team Linux".into()),
+        terminal_profile_id: Some("synthetic-home-id".into()),
+        env: Default::default(),
+    };
+    let profile = crate::profile_launch::snapshot(profile);
+    let args = ["--cd", "~", "-d", "Team Linux", "--user", "guest"].map(String::from).to_vec();
+    let shell = LaunchSession::Shell {
+        name: "Synthetic WSL".into(),
+        program: r"C:\Windows\System32\wsl.exe".into(),
+        args,
+    };
+    for launch in [profile, shell] {
+        let home = NebulaWorkspace::terminal_launch_from_session(&launch, Some(host.path().into()));
+        let (cwd, home_shell) = match home {
+            TerminalLaunch::Profile { cwd, profile } => (cwd, profile.shell()),
+            TerminalLaunch::Local { cwd, shell: Some(shell), .. } => (cwd, shell),
+            _ => panic!("expected WSL local adapter"),
+        };
+        assert!(cwd.is_none(), "an inherited host path is not the guest home");
+        assert_eq!(home_shell.args(), &["--cd", "~", "-d", "Team Linux", "--user", "guest"]);
+        let explicit = at_explicit_directory(launch, Some(host.path()));
+        let launch =
+            NebulaWorkspace::terminal_launch_from_session(&explicit, Some(host.path().into()));
+        let (cwd, shell) = match launch {
+            TerminalLaunch::Profile { cwd, profile } => (cwd, profile.shell()),
+            TerminalLaunch::Local { cwd, shell: Some(shell), .. } => (cwd, shell),
+            _ => panic!("expected explicit WSL local adapter"),
+        };
+        assert_eq!(cwd.as_deref(), Some(host.path()));
+        assert_eq!(shell.args(), &["-d", "Team Linux", "--user", "guest"]);
+    }
+}

@@ -41,6 +41,7 @@ struct VariableRow {
 struct LocalProfiles {
     path: std::path::PathBuf,
     entries: Vec<TerminalProfile>,
+    presets: Vec<crate::shell_detect::DetectedShell>,
     original: Option<TerminalProfile>,
     id: Option<String>,
     name: Entity<InputState>,
@@ -75,6 +76,7 @@ impl LocalProfiles {
         let mut this = Self {
             path,
             entries: vec![],
+            presets: vec![],
             original: None,
             id: None,
             name,
@@ -100,12 +102,14 @@ impl LocalProfiles {
         }
         self.busy = true;
         let path = self.path.clone();
-        let read =
-            cx.background_executor().spawn(async move { TerminalProfiles::load_from(&path) });
+        let read = cx.background_executor().spawn(async move {
+            (TerminalProfiles::load_from(&path), crate::shell_detect::detect_shells())
+        });
         self.task = Some(cx.spawn(async move |this, cx| {
-            let result = read.await;
+            let (result, presets) = read.await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
+                this.presets = presets;
                 match result {
                     Ok(store) => {
                         this.entries = store.profiles().to_vec();
@@ -117,6 +121,25 @@ impl LocalProfiles {
             });
         }));
         cx.notify();
+    }
+
+    fn select_preset(
+        &mut self,
+        preset: &crate::shell_detect::DetectedShell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        match TerminalProfiles::from_detected(preset) {
+            Ok(profile) => self.select(Some(profile), true, window, cx),
+            Err(error) => {
+                self.error = Some(error.to_string());
+                self.notice = None;
+                cx.notify();
+            },
+        }
     }
 
     fn select(
@@ -368,6 +391,38 @@ impl Render for LocalProfiles {
                         },
                     )),
             )
+            .when(!self.presets.is_empty(), |root| {
+                root.child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_sm().child(language.text(Message::LocalProfilesPresets)))
+                        .child(
+                            v_flex()
+                                .id("local-profile-presets")
+                                .max_h(px(80.0))
+                                .overflow_y_scroll()
+                                .gap_1()
+                                .children(self.presets.clone().into_iter().enumerate().map(
+                                    |(index, preset)| {
+                                        Button::new(SharedString::from(format!(
+                                            "local-profile-preset-{index}"
+                                        )))
+                                        .debug_selector(move || {
+                                            format!("local-profile-preset-{index}")
+                                        })
+                                        .ghost()
+                                        .label(preset.name.clone())
+                                        .disabled(busy)
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.select_preset(&preset, window, cx)
+                                            }),
+                                        )
+                                    },
+                                )),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .id("local-profile-form")
@@ -388,6 +443,12 @@ impl Render for LocalProfiles {
                                 .child(div().text_sm().child(language.text(message)))
                                 .child(Input::new(input).disabled(busy).w_full())
                         }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(language.text(Message::LocalProfilesWslHome)),
                     )
                     .when(self.advanced, |form| {
                         form.child(

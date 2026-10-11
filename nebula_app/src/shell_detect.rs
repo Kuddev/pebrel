@@ -47,18 +47,26 @@ enum ShellIntegration {
 
 impl DetectedShell {
     pub fn shell(&self) -> nebula_terminal::tty::Shell {
+        self.shell_with_starting_directory(false)
+    }
+
+    pub(crate) fn shell_with_starting_directory(
+        &self,
+        has_starting_directory: bool,
+    ) -> nebula_terminal::tty::Shell {
+        let args = wsl_args_with_default_home(&self.program, &self.args, has_starting_directory);
         #[cfg(windows)]
         match self.integration() {
             ShellIntegration::PowerShell => {
                 return nebula_terminal::tty::powershell_with_nebula_integration(
                     self.program.clone(),
-                    self.args.clone(),
+                    args,
                 );
             },
             ShellIntegration::Bash => {
                 return nebula_terminal::tty::bash_with_nebula_integration(
                     self.program.clone(),
-                    self.args.clone(),
+                    args,
                 );
             },
             ShellIntegration::WslDefault
@@ -66,7 +74,7 @@ impl DetectedShell {
             | ShellIntegration::Unsupported => {},
         }
 
-        nebula_terminal::tty::Shell::new(self.program.clone(), self.args.clone())
+        nebula_terminal::tty::Shell::new(self.program.clone(), args)
     }
 
     fn integration(&self) -> ShellIntegration {
@@ -560,6 +568,22 @@ pub(crate) fn wsl_launch<'a>(program: &str, args: &'a [String]) -> Option<WslOpt
     is_wsl_launcher(program).then(|| wsl_options(args))
 }
 
+/// An unset WSL startup directory means the selected guest user's home.
+/// Ask WSL to resolve `~`; the host cannot infer a distro/user's home path.
+/// Explicit host cwd and WSL's own directory choices retain their precedence.
+pub(crate) fn wsl_args_with_default_home(
+    program: &str,
+    args: &[String],
+    has_starting_directory: bool,
+) -> Vec<String> {
+    if has_starting_directory
+        || wsl_launch(program, args).is_none_or(|options| options.chooses_directory)
+    {
+        return args.to_vec();
+    }
+    [vec!["--cd".to_owned(), "~".to_owned()], args.to_vec()].concat()
+}
+
 /// Read only `wsl.exe`'s option region: `--`, `-e` / `--exec` or any argument it
 /// does not know hands the rest to the guest command, whose `-d` or `-u` do not
 /// belong to WSL. [`wsl_args_with_directory`] draws the same boundary.
@@ -988,6 +1012,41 @@ fn find_wsl_distros() -> Vec<DetectedShell> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn wsl_default_home_retains_distribution_user_and_guest_command_arguments() {
+        let program = r"C:\Windows\System32\wsl.exe";
+        let args = ["-d", "Team Linux", "--user", "dev", "--exec", "zsh", "--cd", "/guest-option"]
+            .map(String::from);
+        let home = super::wsl_args_with_default_home(program, &args, false);
+        assert_eq!(home, [vec!["--cd".into(), "~".into()], args.to_vec()].concat());
+        assert_eq!(super::wsl_launch_user(program, &home), Some("dev"));
+        assert_eq!(
+            super::wsl_launch(program, &home).unwrap().spawn_distro(|| None),
+            Some("Team Linux".into())
+        );
+        assert_eq!(super::wsl_args_with_default_home(program, &home, false), home);
+        let current = super::wsl_args_at(program, &home, "/srv/project").unwrap();
+        assert_eq!(current, [vec!["--cd".into(), "/srv/project".into()], args.to_vec()].concat());
+        assert_eq!(super::wsl_args_in_host_directory(program, &home).unwrap(), args);
+    }
+
+    #[test]
+    fn wsl_default_home_respects_explicit_directories_and_other_programs() {
+        for options in [
+            vec!["~", "-d", "Ubuntu"],
+            vec!["--cd", "/srv", "-u", "dev"],
+            vec!["--cd=~", "--distribution=Debian"],
+            vec!["--cd"],
+        ] {
+            let options = options.into_iter().map(String::from).collect::<Vec<_>>();
+            assert_eq!(super::wsl_args_with_default_home("wsl.exe", &options, false), options);
+        }
+        let args = ["--user", "guest", "--", "tool", "--cd", "/command-option"].map(String::from);
+        assert_eq!(super::wsl_args_with_default_home("wsl", &args, true), args);
+        assert_eq!(super::wsl_args_with_default_home("pwsh.exe", &args, false), args);
+        assert_eq!(super::wsl_args_with_default_home("wsl", &[], false), ["--cd", "~"]);
+    }
+
+    #[test]
     fn zellij_discovery_requires_an_installed_program_and_preserves_argv() {
         let directory = tempfile::tempdir().unwrap();
         assert!(super::find_zellij([directory.path().to_path_buf()]).is_none());
@@ -1317,7 +1376,10 @@ mod tests {
     fn wsl_shells_preserve_the_guest_default_shell() {
         let launched = detected("wsl:Ubuntu", "wsl.exe", &["-d", "Ubuntu"]).shell();
         assert_eq!(launched.program(), "wsl.exe");
-        assert_eq!(launched.args(), &["-d".to_owned(), "Ubuntu".to_owned()]);
+        assert_eq!(launched.args(), &["--cd", "~", "-d", "Ubuntu"]);
+        let explicit = detected("wsl:Ubuntu", "wsl.exe", &["-d", "Ubuntu"])
+            .shell_with_starting_directory(true);
+        assert_eq!(explicit.args(), &["-d", "Ubuntu"]);
     }
 
     #[test]

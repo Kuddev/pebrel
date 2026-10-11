@@ -154,3 +154,74 @@ fn local_profile_editor_duplicate_keeps_unchanged_multiline_and_empty_arguments(
     assert_eq!(store.profiles()[1].args, ["--new", "two words"]);
     assert_eq!(store.profiles()[0], original);
 }
+
+#[gpui::test]
+fn detected_preset_editor_real_controls_prefill_save_and_keep_presets_immutable(
+    cx: &mut TestAppContext,
+) {
+    if crate::platform::profile_test_isolation::run_exact_child(
+        "gpui_shell::workspace::local_profiles::tests::detected_preset_editor_real_controls_prefill_save_and_keep_presets_immutable",
+        None,
+    ) {
+        return;
+    }
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("profiles.json");
+    let program = directory.path().join("wsl.exe");
+    std::fs::copy(std::env::current_exe().unwrap(), &program).unwrap();
+    let presets = vec![crate::shell_detect::DetectedShell {
+        name: "Synthetic WSL".into(),
+        id: "wsl:Team Linux".into(),
+        program: program.to_string_lossy().into_owned(),
+        args: ["-d", "Team Linux", "--user", "guest"].map(String::from).to_vec(),
+    }];
+    let (_, window) = cx.add_window_view(|window, cx| Root::new(cx.new(|_| Surface), window, cx));
+    let mut window = window.clone();
+    let editor = window.update(|window, cx| {
+        let editor = cx.new(|cx| LocalProfiles::new(path.clone(), window, cx));
+        let child = editor.clone();
+        window.open_dialog(cx, move |dialog, _, _| dialog.w(px(680.0)).child(child.clone()));
+        editor
+    });
+    draw(&mut window);
+    editor.update(&mut window, |editor, cx| {
+        editor.presets = presets.clone();
+        cx.notify();
+    });
+    click(&mut window, "local-profile-preset-0");
+    editor.read_with(&window, |editor, cx| {
+        assert!(editor.original.is_none(), "preset selection is a new saved session");
+        assert_eq!(editor.name.read(cx).value(), "Synthetic WSL");
+        assert_eq!(editor.program.read(cx).value(), program.to_string_lossy().as_ref());
+        assert_eq!(editor.args.read(cx).value(), "-d\nTeam Linux\n--user\nguest");
+        assert!(editor.cwd.read(cx).value().is_empty());
+    });
+    type_field(&editor, |editor| &editor.name, "WSL custom", &mut window);
+    type_field(
+        &editor,
+        |editor| &editor.args,
+        "-d\nTeam Linux\n--user\nguest\n--shell-type=login",
+        &mut window,
+    );
+    click(&mut window, "local-profile-save");
+    let store = TerminalProfiles::load_from(&path).unwrap();
+    assert_eq!(store.profiles().len(), 1);
+    assert_eq!(
+        store.profiles()[0].args,
+        ["-d", "Team Linux", "--user", "guest", "--shell-type=login"]
+    );
+    assert_eq!(store.profiles()[0].shell_id.as_deref(), Some("wsl:Team Linux"));
+    assert!(store.profiles()[0].cwd.is_none());
+    editor.read_with(&window, |editor, _| assert_eq!(editor.presets, presets));
+    click(&mut window, "local-profile-preset-0");
+    click(&mut window, "local-profile-save");
+    let second = TerminalProfiles::load_from(&path).unwrap();
+    assert_eq!(second.profiles().len(), 2);
+    assert_eq!(second.profiles()[0], store.profiles()[0]);
+    assert_ne!(second.profiles()[0].id, second.profiles()[1].id);
+    assert_eq!(second.profiles()[1].args, presets[0].args);
+}

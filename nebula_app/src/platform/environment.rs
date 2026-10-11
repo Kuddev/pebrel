@@ -8,6 +8,7 @@ pub(crate) const fn names_case_insensitive() -> bool {
 
 /// Refresh local pane environments before adding identity and other pane overrides.
 pub(crate) fn prepare_local_pty(options: &mut nebula_terminal::tty::Options) {
+    super::shell::prepare_wsl_startup_directory(options);
     #[cfg(windows)]
     {
         // 同一次启动共用设置快照，避免重复读盘或两次读取间设置变化。

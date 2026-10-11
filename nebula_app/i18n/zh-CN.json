@@ -1412,5 +1412,7 @@
   "local_profiles.saved": "会话已保存，可从本地启动器打开。",
   "local_profiles.failed": "无法保存会话：{error}",
   "local_profiles.deleted": "会话已删除。",
-  "local_profiles.advanced": "高级 Shell 集成"
+  "local_profiles.advanced": "高级 Shell 集成",
+  "local_profiles.presets": "从已安装的 Shell 创建",
+  "local_profiles.wsl_home": "WSL 未设置启动目录或 --cd 参数时，使用所选 Linux 用户的主目录。可在设置中将已保存的会话选为默认 Shell。"
 }
