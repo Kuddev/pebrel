@@ -686,7 +686,7 @@ pub struct NebulaWorkspace {
     command_manager_group: Option<String>,
     command_group_menu: Option<command_manager::GroupMenu>,
     command_manager_input: Entity<InputState>,
-    command_manager_selected: usize,
+    command_manager_selection: command_manager::CommandSelection,
     command_manager_scroll: gpui::UniformListScrollHandle,
     saved_commands: crate::saved_commands::SavedCommands,
     _command_manager_subscription: Subscription,
@@ -753,9 +753,6 @@ pub struct NebulaWorkspace {
     /// spinner 在窗口失焦时冻结为静态状态；重新聚焦后由一次 render 恢复按需帧循环。
     spinner_window_active: bool,
     _spinner_activation_sub: Subscription,
-    /// 本会话已注入的自定义键位 (gpui 绑定串, 动作名)。键位表没有删除
-    /// API,撤销靠后注 `Unbind(动作名)` 精确收回该键;这份清单就是撤销的依据。
-    custom_keybinds_applied: Vec<(String, String)>,
     /// 侧栏「运行中」spinner 的相位（0..1，旧壳 `SPINNER_PERIOD` 800ms 一
     /// 圈）与上次帧时刻。侧栏和顶栏共用 GPUI 屏幕帧时钟。
     spinner_phase: f32,
@@ -952,7 +949,7 @@ impl NebulaWorkspace {
             command_manager_group: None,
             command_group_menu: None,
             command_manager_input,
-            command_manager_selected: 0,
+            command_manager_selection: Default::default(),
             command_manager_scroll: gpui::UniformListScrollHandle::new(),
             saved_commands: crate::saved_commands::SavedCommands::load().unwrap_or_default(),
             _command_manager_subscription: command_manager_subscription,
@@ -986,7 +983,6 @@ impl NebulaWorkspace {
             _appearance_sub: appearance_sub,
             spinner_window_active,
             _spinner_activation_sub: spinner_activation_sub,
-            custom_keybinds_applied: Vec::new(),
             spinner_phase: 0.0,
             spinner_last: std::time::Instant::now(),
             spinner_frame_pending: std::cell::Cell::new(false),
@@ -1991,7 +1987,7 @@ impl NebulaWorkspace {
             crate::terminal_profiles::TerminalProfiles::load()
                 .map(|store| store.as_config_profiles())
                 .unwrap_or_default(),
-            crate::gpui_shell::ssh_hosts::SshHostLists::load().merged_with_labels(),
+            &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
             &default_shell_id,
             language,
             window.scale_factor().max(0.5),
