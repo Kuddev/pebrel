@@ -21,10 +21,12 @@ pub(super) fn resolve_app_colors_into(
     use crate::display::terminal_color::is_fixed_color;
 
     for run in &mut snap.bg_runs {
-        let base = rgb_from_rgba(theme.resolve(run.color, overrides, false));
+        let base = rgb_from_rgba(theme.resolve_styled(run.color, overrides, false, run.dim));
         let resolved = resolver.resolve_background(base, is_fixed_color(run.color, overrides));
         if resolved != base {
+            // Like the foreground below: the baked `Spec` already carries dim.
             run.color = Color::Spec(resolved.0);
+            run.dim = false;
         }
     }
     for cell in snap.segments.iter_mut().flat_map(|segment| segment.cells.iter_mut()) {
@@ -38,7 +40,14 @@ pub(super) fn resolve_app_colors_into(
         // 什么，而不是主题底色。默认底色的格子没有 bg run，所以 `SnapCell::bg`
         // 单独带着这个值。
         if let Some(fg) = resolve_text_foreground(
-            cell.fg, cell.bg, cell.bold, cell.dim, theme, overrides, resolver,
+            cell.fg,
+            cell.bg,
+            cell.bold,
+            cell.dim,
+            cell.bg_dim,
+            theme,
+            overrides,
+            resolver,
         ) {
             cell.fg = fg;
             cell.dim = false;
@@ -48,18 +57,21 @@ pub(super) fn resolve_app_colors_into(
 
 /// `Some` when contrast adjustment replaced the color. The returned `Spec`
 /// already carries bold and dim, so the caller must clear `dim`: painting
-/// dims a `Spec` again, while bold leaves it alone.
+/// dims a `Spec` again, while bold leaves it alone. `bg_dim` marks a
+/// background that INVERSE took from a dimmed foreground.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_text_foreground(
     fg: Color,
     bg: Color,
     bold: bool,
     dim: bool,
+    bg_dim: bool,
     theme: &Palette,
     overrides: &Colors,
     resolver: &mut TerminalColorResolver,
 ) -> Option<Color> {
     use crate::display::terminal_color::is_fixed_color;
-    let bg_base = rgb_from_rgba(theme.resolve(bg, overrides, false));
+    let bg_base = rgb_from_rgba(theme.resolve_styled(bg, overrides, false, bg_dim));
     let bg = resolver.resolve_background(bg_base, is_fixed_color(bg, overrides));
     // Resolve bold and dim before contrast adjustment; Spec must retain both.
     let base = rgb_from_rgba(theme.resolve_styled(fg, overrides, bold, dim));

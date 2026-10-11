@@ -12,6 +12,7 @@ fn cells(text: &str) -> Vec<SnapCell> {
             bg: Color::Named(NamedColor::Background),
             bold: false,
             dim: false,
+            bg_dim: false,
             italic: false,
             underline: false,
             strikethrough: false,

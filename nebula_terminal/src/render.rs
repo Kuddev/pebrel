@@ -176,9 +176,12 @@ pub struct SnapCell {
     /// 是什么颜色，不是取决于主题底色。
     pub bg: Color,
     pub bold: bool,
-    /// SGR 2 (dim/faint). Kept apart from `fg` so the frontend dims with its
-    /// palette's dim slots instead of a fixed RGB.
+    /// SGR 2 (dim/faint) applies to `fg`. Kept apart from the color so the
+    /// frontend dims with its palette's dim slots instead of a fixed RGB.
     pub dim: bool,
+    /// SGR 2 applies to `bg`: INVERSE moved the dimmed original foreground
+    /// into the background.
+    pub bg_dim: bool,
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
@@ -212,6 +215,8 @@ pub struct BgRun {
     pub start: u16,
     pub end: u16,
     pub color: Color,
+    /// SGR 2 applies to `color`, which INVERSE took from the foreground.
+    pub dim: bool,
 }
 
 pub struct CursorSnapshot {
@@ -288,14 +293,14 @@ impl RenderSnapshot {
             cursor: None,
         };
 
-        fn push_bg(runs: &mut Vec<BgRun>, row: u16, col: u16, color: Color) {
+        fn push_bg(runs: &mut Vec<BgRun>, row: u16, col: u16, color: Color, dim: bool) {
             if let Some(last) = runs.last_mut() {
-                if last.row == row && last.end == col && last.color == color {
+                if last.row == row && last.end == col && last.color == color && last.dim == dim {
                     last.end = col + 1;
                     return;
                 }
             }
-            runs.push(BgRun { row, start: col, end: col + 1, color });
+            runs.push(BgRun { row, start: col, end: col + 1, color, dim });
         }
 
         fn push_sel(runs: &mut Vec<CellRun>, row: u16, col: u16) {
@@ -325,17 +330,21 @@ impl RenderSnapshot {
             let (row, col) = (row as u16, col as u16);
             let flags = indexed.cell.flags;
             let bold = flags.intersects(Flags::BOLD);
-            let dim = flags.contains(Flags::DIM);
             let mut fg = indexed.cell.fg;
             let mut bg = indexed.cell.bg;
+            // SGR 2 dims the original foreground before INVERSE swaps the pair
+            // (the old shell's `RenderableCell::new` order), so dim travels
+            // with that color into the background.
+            let (mut dim, mut bg_dim) = (flags.contains(Flags::DIM), false);
             if flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
+                std::mem::swap(&mut dim, &mut bg_dim);
             }
 
             // Default background is suppressed at the source; anything else
             // is emitted and resolved by the frontend.
             if bg != Color::Named(NamedColor::Background) {
-                push_bg(&mut snap.bg_runs, row, col, bg);
+                push_bg(&mut snap.bg_runs, row, col, bg, bg_dim);
             }
             // 宽字符首格和占位格是一个可渲染单元：命中任一格都必须按整字高亮，
             // 并且只由首格写入两列，避免占位格再生成一条重叠的 selection run。
@@ -393,6 +402,7 @@ impl RenderSnapshot {
                 bg,
                 bold,
                 dim,
+                bg_dim,
                 italic: flags.intersects(Flags::ITALIC),
                 underline: flags.intersects(Flags::ALL_UNDERLINES),
                 strikethrough: flags.contains(Flags::STRIKEOUT),
@@ -652,6 +662,24 @@ mod tests {
         assert_eq!(text, vec![("a", false), ("b", true), ("c", false)]);
         let glyphs: Vec<_> = snap.box_glyphs.iter().map(|glyph| (glyph.ch, glyph.dim)).collect();
         assert_eq!(glyphs, vec![('─', true)]);
+    }
+
+    #[test]
+    fn capture_moves_sgr_dim_to_the_background_under_inverse() {
+        let size = TestSize { cols: 8, rows: 4 };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser: crate::vte::ansi::Processor = crate::vte::ansi::Processor::new();
+        parser.advance(&mut term, "\x1b[2;7mX\x1b[27mY".as_bytes());
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let cells: Vec<_> = snap
+            .segments
+            .iter()
+            .flat_map(|segment| segment.cells.iter())
+            .map(|cell| (cell.text.as_str(), cell.dim, cell.bg_dim))
+            .collect();
+        assert_eq!(cells, vec![("X", false, true), ("Y", true, false)]);
+        let runs: Vec<_> = snap.bg_runs.iter().map(|run| (run.start, run.end, run.dim)).collect();
+        assert_eq!(runs, vec![(0, 1, true)]);
     }
 
     #[test]

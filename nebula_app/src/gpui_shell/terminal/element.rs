@@ -173,6 +173,7 @@ impl TerminalElement {
                     cell.bg,
                     cell.bold,
                     cell.dim,
+                    cell.bg_dim,
                     theme,
                     overrides,
                     &mut view.color_resolver,
@@ -478,7 +479,7 @@ impl Element for TerminalElement {
                 if start >= end {
                     return;
                 }
-                let color = theme.resolve(color, &overrides, false);
+                let color = theme.resolve_styled(color, &overrides, false, run.dim);
                 for visual in math_frame.projected_runs(
                     run.row as usize,
                     start as usize..end as usize,

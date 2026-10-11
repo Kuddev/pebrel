@@ -64,6 +64,7 @@ pub(super) struct LinkCell {
     pub bg: Color,
     pub bold: bool,
     pub dim: bool,
+    pub bg_dim: bool,
 }
 
 pub(super) type LinkCells = HashMap<(u16, u16), LinkCell>;
@@ -89,17 +90,15 @@ pub(super) fn dashed_cells<T: EventListener>(
         let Some(vp) = point_to_viewport_from(origin, indexed.point) else { continue };
         if vp.line < rows && vp.column.0 < cols {
             let (mut fg, mut bg) = (indexed.fg, indexed.bg);
+            // Dim follows the original foreground, as in the render snapshot.
+            let (mut dim, mut bg_dim) = (indexed.flags.contains(Flags::DIM), false);
             if indexed.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
+                std::mem::swap(&mut dim, &mut bg_dim);
             }
             cells.insert(
                 (vp.line as u16, vp.column.0 as u16),
-                LinkCell {
-                    fg,
-                    bg,
-                    bold: indexed.flags.contains(Flags::BOLD),
-                    dim: indexed.flags.contains(Flags::DIM),
-                },
+                LinkCell { fg, bg, bold: indexed.flags.contains(Flags::BOLD), dim, bg_dim },
             );
         }
     }

@@ -145,6 +145,28 @@ fn sgr_dim_uses_the_palette_dim_slots() {
     }
 }
 
+/// SGR 2 dims the original foreground before INVERSE swaps the pair, as the
+/// old shell's `RenderableCell::new` does: the text shows the undimmed
+/// original background and the cell background shows the dimmed foreground.
+#[test]
+fn dim_follows_the_original_foreground_under_inverse() {
+    let palette = Palette::default();
+    let none = Colors::default();
+    let mut term = Term::new(Config::default(), &TermSize::new(8, 1), VoidListener);
+    let mut parser: ansi::Processor = ansi::Processor::new();
+    parser.advance(&mut term, b"\x1b[38;2;255;255;255;48;2;30;40;50;2;7mX");
+    let mut snapshot = RenderSnapshot::capture(&term, &SnapshotConfig { rows: 1, cols: 8 });
+    let mut resolver = TerminalColorResolver::default();
+    resolve_app_colors_into(&mut snapshot, &palette, &none, &mut resolver);
+
+    let cell = &snapshot.segments[0].cells[0];
+    let fg = rgb_from_rgba(palette.resolve_styled(cell.fg, &none, cell.bold, cell.dim));
+    let run = snapshot.bg_runs.iter().find(|run| run.row == 0 && run.start == 0).unwrap();
+    let bg = rgb_from_rgba(palette.resolve_styled(run.color, &none, false, run.dim));
+    let rgb = crate::display::color::Rgb::new;
+    assert_eq!((fg, bg), (rgb(30, 40, 50), rgb(168, 168, 168)));
+}
+
 /// Claude Code and Codex draw reasoning and prompt suggestions with SGR 2 on
 /// the default foreground. On Nord the dimmed foreground misses the minimum
 /// contrast, so the resolver bakes an adjusted `Spec`; painting must not dim
