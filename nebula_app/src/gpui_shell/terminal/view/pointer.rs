@@ -11,9 +11,19 @@ impl TerminalView {
         display_offset: usize,
         history: usize,
     ) -> Option<Bounds<Pixels>> {
+        let visible = self.scrollbar_drag.is_some()
+            || match self.scrollbar_visibility {
+                nebula_settings::ScrollbarVisibility::Auto => display_offset > 0,
+                nebula_settings::ScrollbarVisibility::Hover => self.scrollbar_hovered,
+                nebula_settings::ScrollbarVisibility::Always => true,
+            };
+        visible.then(|| self.scrollbar_geometry(display_offset, history)).flatten()
+    }
+
+    fn scrollbar_geometry(&self, display_offset: usize, history: usize) -> Option<Bounds<Pixels>> {
         let screen = self.rows;
         let total = history + screen;
-        if display_offset == 0 || screen == 0 || total <= screen {
+        if screen == 0 || total <= screen {
             return None;
         }
         let track_top = self.origin.y.as_f32();
@@ -26,7 +36,7 @@ impl TerminalView {
         // 视口顶端之上还剩多少行历史：0 = 拉到最顶，history = 贴着底部。
         let above = (history - display_offset) as f32;
         let max_y = (track_h - thumb_h).max(0.0);
-        let thumb_y = track_top + (track_h * above / total as f32).clamp(0.0, max_y);
+        let thumb_y = track_top + (max_y * above / history as f32).clamp(0.0, max_y);
         // 浮在网格右缘（overlay 风格：不占列宽、不画轨道）。
         let grid_right = self.origin.x.as_f32() + self.cell_width.as_f32() * self.cols as f32;
         Some(Bounds::new(
@@ -37,6 +47,26 @@ impl TerminalView {
 
     pub(in crate::gpui_shell::terminal) fn scrollbar_dragging(&self) -> bool {
         self.scrollbar_drag.is_some()
+    }
+
+    pub(in crate::gpui_shell::terminal) fn scrollbar_highlighted(&self) -> bool {
+        self.scrollbar_dragging() || self.scrollbar_hovered
+    }
+
+    fn scrollbar_hot_zone(&self) -> Bounds<Pixels> {
+        let right = self.origin.x + self.cell_width * self.cols as f32;
+        Bounds::new(
+            point(right - px(SCROLLBAR_W + SCROLLBAR_SLOP), self.origin.y),
+            gpui::size(px(SCROLLBAR_W + 2.0 * SCROLLBAR_SLOP), self.line_height * self.rows as f32),
+        )
+    }
+
+    fn update_scrollbar_hover(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let hovered = self.scrollbar_hot_zone().contains(&position);
+        if self.scrollbar_hovered != hovered {
+            self.scrollbar_hovered = hovered;
+            cx.notify();
+        }
     }
 
     /// 回滚历史行数：拇指高度与拖拽反算的分母来源。
@@ -53,17 +83,10 @@ impl TerminalView {
         history: usize,
     ) -> Option<f32> {
         let thumb = self.scrollbar_thumb(display_offset, history)?;
-        let x = position.x.as_f32();
-        let thumb_x = thumb.origin.x.as_f32();
-        if x < thumb_x - SCROLLBAR_SLOP || x > thumb_x + SCROLLBAR_W + SCROLLBAR_SLOP {
+        if !self.scrollbar_hot_zone().contains(&position) {
             return None;
         }
-        let track_top = self.origin.y.as_f32();
-        let track_h = self.line_height.as_f32() * self.rows as f32;
         let y = position.y.as_f32();
-        if y < track_top || y > track_top + track_h {
-            return None;
-        }
         let thumb_top = thumb.origin.y.as_f32();
         let thumb_h = thumb.size.height.as_f32();
         if y >= thumb_top && y <= thumb_top + thumb_h {
@@ -76,14 +99,15 @@ impl TerminalView {
     /// 把拖动中的指针 y 反算回 `display_offset`——`scrollbar_thumb` 那套定位
     /// 数学的逆运算（旧壳 `scrollbar_target_offset` 同合同）。
     pub(super) fn scrollbar_target_offset(&self, y: f32, grab: f32, history: usize) -> usize {
-        if history == 0 {
+        let Some(thumb) = self.scrollbar_geometry(0, history) else { return 0 };
+        let track_top = self.origin.y.as_f32();
+        let travel = self.line_height.as_f32() * self.rows as f32 - thumb.size.height.as_f32();
+        if travel <= 0.0 {
             return 0;
         }
-        let total = (history + self.rows) as f32;
-        let track_top = self.origin.y.as_f32();
-        let track_h = (self.line_height.as_f32() * self.rows as f32).max(1.0);
-        let above =
-            ((y - grab - track_top) / track_h * total).round().clamp(0.0, history as f32) as usize;
+        let above = ((y - grab - track_top) / travel * history as f32)
+            .round()
+            .clamp(0.0, history as f32) as usize;
         history - above
     }
 
@@ -445,7 +469,8 @@ impl TerminalView {
             return;
         }
         // 滚动条是壳的控件，命中优先于选区和鼠标上报——否则在开了鼠标追踪的
-        // TUI 里（codex/vim）根本抓不住条。贴底时拇指为 None，正常操作零影响。
+        // TUI 里（codex/vim）根本抓不住条。隐藏时不占用正文的输入/选区。
+        self.update_scrollbar_hover(event.position, cx);
         let (display_offset, history) = self.scroll_state();
         if let Some(grab) = self.scrollbar_grab(event.position, display_offset, history) {
             self.scrollbar_drag = Some(grab);
@@ -508,6 +533,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.update_scrollbar_hover(event.position, cx);
         // Retain the pressed link until release; dragging must not retarget it
         // or leak part of the consumed gesture to the application.
         if self.pending_link_open {
@@ -535,6 +561,7 @@ impl TerminalView {
         if let Some(grab) = self.scrollbar_drag {
             if event.pressed_button != Some(MouseButton::Left) {
                 self.scrollbar_drag = None;
+                cx.notify();
                 return;
             }
             let (display_offset, history) = self.scroll_state();
@@ -625,6 +652,7 @@ impl TerminalView {
         }
         self.stop_selection_scroll();
         if self.scrollbar_drag.take().is_some() {
+            self.update_scrollbar_hover(event.position, cx);
             cx.notify();
             return;
         }
@@ -667,6 +695,7 @@ impl TerminalView {
         }
         self.stop_selection_scroll();
         let dragging_scrollbar = self.scrollbar_drag.take().is_some();
+        self.scrollbar_hovered = false;
         self.pending_link_open = false;
         if !self.selecting {
             if dragging_scrollbar {
