@@ -234,3 +234,13 @@ does not make the logo an open-source asset or imply endorsement. The icon is
 used to identify running `antigravity`, `antigravity-cli` and `agy` processes.
 Both UI shells keep its original colors on light and dark themes and resize it
 only for rendering. No LobeHub asset is embedded for Antigravity.
+
+## Sponsor Logos
+
+### Sidrune AI
+
+`sponsor_sidrune.png` is based on the 2219 x 558 transparent PNG supplied by the
+maintainer for the Sidrune AI sponsor rename. The black artwork is composited onto
+a white background so it remains visible in both light and dark README themes;
+its dimensions and artwork are otherwise unchanged. The asset is used in the
+English and Simplified Chinese README sponsor sections.
