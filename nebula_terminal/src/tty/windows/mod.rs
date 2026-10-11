@@ -636,7 +636,7 @@ function global:Nebula-List {
         "$meta$mode$e[0m  $muted$size$e[0m  $muted$date$e[0m  $e]8;;$uri$b$col$($i.Name)$e[0m$e]8;;$b"
     }
 }
-# builtin_ls=0 in the settings file keeps PowerShell's own ls/dir (or the user's alias).
+# builtin_ls=0 in the settings file keeps PowerShell's own ls/dir.
 if (Get-NebulaBoolSetting 'builtin_ls' $true) {
     Remove-Item Alias:ls  -Force -ErrorAction SilentlyContinue
     Remove-Item Alias:dir -Force -ErrorAction SilentlyContinue
