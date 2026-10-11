@@ -108,7 +108,7 @@ fn profile_launch_for_id(
 ) -> Option<crate::session::LaunchSession> {
     profiles
         .into_iter()
-        .find(|profile| profile.settings_id().as_deref() == Some(requested))
+        .find(|profile| profile.matches_settings_id(requested))
         .map(profile_launch_session)
 }
 
@@ -142,13 +142,7 @@ fn wsl_launch_for_id(shell_id: &str) -> Option<crate::session::LaunchSession> {
 pub(super) fn profile_launch_session(
     profile: crate::config::ui_config::Profile,
 ) -> crate::session::LaunchSession {
-    crate::session::LaunchSession::Profile {
-        name: profile.name,
-        command: profile.command,
-        args: profile.args,
-        cwd: profile.cwd.map(|path| path.to_string_lossy().into_owned()),
-        shell_id: profile.shell_id,
-    }
+    crate::profile_launch::snapshot(profile)
 }
 
 /// `wsl:<发行版>` / 裸 `wsl` 的 id 语义：显示名与 argv 尾部。
@@ -184,6 +178,7 @@ mod tests {
                 cwd: None,
                 shell_id: Some("sh".into()),
                 terminal_profile_id: Some(format!("qa-{name}")),
+                env: Default::default(),
             })
             .collect();
         for name in ["Project", "project"] {

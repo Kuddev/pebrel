@@ -94,13 +94,7 @@ impl WindowContext {
                 program: shell.program().to_owned(),
                 args: shell.args().to_vec(),
             },
-            TabLaunch::Profile(profile) => session::LaunchSession::Profile {
-                name: profile.name.clone(),
-                command: profile.command.clone(),
-                args: profile.args.clone(),
-                cwd: profile.cwd.as_ref().map(|path| path.to_string_lossy().into_owned()),
-                shell_id: profile.shell_id.clone(),
-            },
+            TabLaunch::Profile(profile) => crate::profile_launch::snapshot(profile.clone()),
             TabLaunch::Ssh(host) => session::LaunchSession::Ssh { host: host.clone() },
         }
     }

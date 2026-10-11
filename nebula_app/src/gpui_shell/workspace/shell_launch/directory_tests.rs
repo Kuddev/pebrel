@@ -13,22 +13,24 @@ fn explicit_directory_reaches_the_terminal_without_changing_the_saved_profile() 
         args: vec!["--login".into()],
         cwd: Some(saved.path().to_string_lossy().into_owned()),
         shell_id: Some("custom".into()),
+        profile_id: None,
+        env_snapshot: None,
     };
     let snapshot = at_explicit_directory(profile.clone(), Some(requested.path()));
-    let TerminalLaunch::Local { cwd, shell, .. } =
+    let TerminalLaunch::Profile { cwd, profile: resolved } =
         NebulaWorkspace::terminal_launch_from_session(&snapshot, Some(requested.path().into()))
     else {
         panic!("expected a local terminal");
     };
     assert_eq!(cwd.as_deref(), Some(requested.path()));
-    let shell = shell.unwrap();
+    let shell = resolved.shell();
     assert_eq!(shell.program(), "custom-shell");
     assert_eq!(shell.args(), &["--login"]);
 
     // Starting the same saved profile again without an override keeps its default.
     let unchanged = at_explicit_directory(profile.clone(), None);
     assert_eq!(unchanged, profile);
-    let TerminalLaunch::Local { cwd, .. } =
+    let TerminalLaunch::Profile { cwd, .. } =
         NebulaWorkspace::terminal_launch_from_session(&unchanged, None)
     else {
         panic!("expected a local terminal");
@@ -61,6 +63,8 @@ fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_argume
             args: args.clone(),
             cwd: None,
             shell_id: Some("wsl:Team Linux".into()),
+            profile_id: None,
+            env_snapshot: None,
         },
         LaunchSession::Shell {
             name: "WSL project".into(),
@@ -70,14 +74,17 @@ fn explicit_host_directory_replaces_wsl_profile_directory_and_keeps_guest_argume
     ] {
         assert_eq!(at_explicit_directory(launch.clone(), None), launch);
         let snapshot = at_explicit_directory(launch, Some(requested.path()));
-        let TerminalLaunch::Local { cwd, shell, .. } =
-            NebulaWorkspace::terminal_launch_from_session(&snapshot, Some(requested.path().into()))
-        else {
-            panic!("expected WSL to launch through the local PTY");
+        let (cwd, shell) = match NebulaWorkspace::terminal_launch_from_session(
+            &snapshot,
+            Some(requested.path().into()),
+        ) {
+            TerminalLaunch::Local { cwd, shell, .. } => (cwd, shell.unwrap()),
+            TerminalLaunch::Profile { cwd, profile } => (cwd, profile.shell()),
+            _ => panic!("expected WSL to launch through the local PTY"),
         };
         assert_eq!(cwd.as_deref(), Some(requested.path()));
         assert_eq!(
-            shell.unwrap().args(),
+            shell.args(),
             &["-d", "Team Linux", "--user", "guest", "--exec", "zsh", "--cd", "/guest-option",]
         );
     }

@@ -109,7 +109,10 @@ pub(super) fn copy_launch(
 ) -> (LaunchSession, Option<PathBuf>) {
     let mut focused = origin.guest;
     match kind {
-        CopyKind::Split if wsl_program_args(&launch).is_none() => {
+        CopyKind::Split
+            if wsl_program_args(&launch).is_none()
+                && !matches!(launch, LaunchSession::Profile { .. }) =>
+        {
             return (LaunchSession::Default, origin.host_cwd);
         },
         CopyKind::Split | CopyKind::Duplicate => {
@@ -124,6 +127,13 @@ pub(super) fn copy_launch(
                     .is_some_and(|options| options.chooses_directory);
             focused = focused.filter(|_| !own_directory);
         },
+    }
+    if matches!(kind, CopyKind::Split) && wsl_program_args(&launch).is_none() {
+        // A running local profile splits in its current pane directory, while
+        // retaining its launch-time environment and stable profile identity.
+        if let LaunchSession::Profile { cwd, .. } = &mut launch {
+            *cwd = None;
+        }
     }
     let same_guest =
         wsl_program_args(&launch).zip(focused).is_some_and(|((program, args), focused)| {
@@ -235,6 +245,8 @@ mod tests {
             args: ["-d", "Debian", "-u", "guest", "--exec", "zsh", "-l"].map(String::from).to_vec(),
             cwd: None,
             shell_id: None,
+            profile_id: None,
+            env_snapshot: None,
         };
         assert!(inherit_guest_directory(&mut launch, "/home/guest"));
         let LaunchSession::Profile { args, .. } = launch else { panic!("profile identity lost") };
@@ -321,6 +333,46 @@ mod tests {
     }
 
     #[test]
+    fn local_profile_split_follows_current_directory_and_retains_launch_overlay() {
+        use crate::gpui_shell::terminal::view::TerminalLaunch;
+        let initial = tempfile::tempdir().unwrap();
+        let current = tempfile::tempdir().unwrap();
+        let profile = crate::config::ui_config::Profile {
+            name: "synthetic".into(),
+            command: "/bin/sh".into(),
+            args: vec![],
+            cwd: Some(initial.path().into()),
+            shell_id: Some("sh".into()),
+            terminal_profile_id: Some("stable-synthetic".into()),
+            env: crate::profile_environment::ProfileEnvironment::from_pairs([(
+                "QA_VALUE".into(),
+                "frozen".into(),
+            )])
+            .unwrap(),
+        };
+        let expected = profile.clone();
+        let launch = crate::profile_launch::snapshot(profile);
+        let (launch, cwd) = copy_launch(
+            launch,
+            CopyKind::Split,
+            PaneOrigin {
+                guest: None,
+                cwd: current.path().to_str().unwrap(),
+                host_cwd: Some(current.path().into()),
+            },
+        );
+        let TerminalLaunch::Profile { profile, cwd } =
+            NebulaWorkspace::terminal_launch_from_session(&launch, cwd)
+        else {
+            panic!("split lost profile identity")
+        };
+        assert_eq!(cwd.as_deref(), Some(current.path()));
+        assert_eq!(profile.terminal_profile_id, expected.terminal_profile_id);
+        assert_eq!(profile.env, expected.env);
+        assert!(profile.cwd.is_none());
+    }
+
+    #[test]
     fn split_stays_in_the_guest_and_host_panes_keep_the_default_shell() {
         use crate::gpui_shell::terminal::view::TerminalLaunch;
 
@@ -330,6 +382,9 @@ mod tests {
             let (launch, cwd) = copy_launch(session, CopyKind::Split, origin);
             match NebulaWorkspace::terminal_launch_from_session(&launch, cwd) {
                 TerminalLaunch::Local { cwd, shell, .. } => (cwd, shell.map(|s| s.args().to_vec())),
+                TerminalLaunch::Profile { cwd, profile } => {
+                    (cwd, Some(profile.shell().args().to_vec()))
+                },
                 TerminalLaunch::Ssh { .. } => panic!("a local split stays local"),
             }
         };

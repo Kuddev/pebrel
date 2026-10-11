@@ -540,8 +540,10 @@ pub(crate) struct WslOptions<'a> {
     /// Any distribution selector appeared (including `--distribution-id`,
     /// `--system` and an empty name): this launch does not follow the default.
     selects_distribution: bool,
+    opaque_distribution: bool,
     /// The launch picks its own start directory: a leading `~`, `--cd` or `--cd=`.
     pub(crate) chooses_directory: bool,
+    pub(crate) directory: Option<&'a str>,
 }
 
 impl WslOptions<'_> {
@@ -567,7 +569,11 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
     }
     // A leading `~` means "start in the home directory" and does not end the options.
     let home = args.first().is_some_and(|arg| arg == "~");
-    let mut options = WslOptions { chooses_directory: home, ..WslOptions::default() };
+    let mut options = WslOptions {
+        chooses_directory: home,
+        directory: home.then_some("~"),
+        ..WslOptions::default()
+    };
     let mut index = usize::from(home);
     while let Some(arg) = args.get(index) {
         let value = args.get(index + 1).map(String::as_str).and_then(non_empty);
@@ -578,21 +584,29 @@ fn wsl_options(args: &[String]) -> WslOptions<'_> {
                 options.selects_distribution = true;
             },
             "-u" | "--user" => options.user = value,
-            "--distribution-id" => options.selects_distribution = true,
-            "--cd" => options.chooses_directory = true,
+            "--distribution-id" => {
+                options.selects_distribution = true;
+                options.opaque_distribution = true;
+            },
+            "--cd" => {
+                options.chooses_directory = true;
+                options.directory = value;
+            },
             "--shell-type" => {},
             "--" | "-e" | "--exec" => break,
             option => {
                 index -= 1;
                 if option == "--system" || option.starts_with("--distribution-id=") {
                     options.selects_distribution = true;
+                    options.opaque_distribution = true;
                 } else if let Some(distro) = option.strip_prefix("--distribution=") {
                     options.distro = non_empty(distro);
                     options.selects_distribution = true;
                 } else if let Some(user) = option.strip_prefix("--user=") {
                     options.user = non_empty(user);
-                } else if option.starts_with("--cd=") {
+                } else if let Some(directory) = option.strip_prefix("--cd=") {
                     options.chooses_directory = true;
+                    options.directory = non_empty(directory);
                 } else if !option.starts_with("--shell-type=") {
                     break;
                 }
@@ -672,6 +686,25 @@ pub fn wsl_args_pinned(program: &str, args: &[String], distro: &str) -> Option<V
     let mut pinned = args.to_vec();
     pinned.splice(at..at, ["-d".to_owned(), distro.to_owned()]);
     Some(pinned)
+}
+
+/// Carry a raw own directory only when both launches explicitly identify the same guest.
+pub(crate) fn wsl_args_with_restored_directory(
+    previous_program: &str,
+    previous_args: &[String],
+    program: &str,
+    args: &[String],
+) -> Option<Vec<String>> {
+    let previous = wsl_launch(previous_program, previous_args)?;
+    let current = wsl_launch(program, args)?;
+    if previous.opaque_distribution
+        || current.opaque_distribution
+        || previous.distro.zip(current.distro).is_none_or(|(old, new)| old != new)
+        || previous.user.zip(current.user).is_none_or(|(old, new)| old != new)
+    {
+        return None;
+    }
+    wsl_args_with_directory(program, args, Some(previous.directory?))
 }
 
 /// Let WSL inherit an explicit host cwd, removing only its own --cd options.

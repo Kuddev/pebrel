@@ -42,11 +42,10 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
                 };
                 crate::atomic_file::write(&directory.join(name), content.as_bytes())?;
             }
-            if let Some(original) = std::env::var_os("ZDOTDIR") {
-                options.env.insert(
-                    "NEBULA_ORIGINAL_ZDOTDIR".into(),
-                    original.to_string_lossy().into_owned(),
-                );
+            if let Some(original) = options.env.get("ZDOTDIR").cloned().or_else(|| {
+                std::env::var_os("ZDOTDIR").map(|value| value.to_string_lossy().into_owned())
+            }) {
+                options.env.insert("NEBULA_ORIGINAL_ZDOTDIR".into(), original);
                 options.env.insert("NEBULA_ZDOTDIR_WAS_SET".into(), "1".into());
             } else {
                 options.env.insert("NEBULA_ZDOTDIR_WAS_SET".into(), "0".into());

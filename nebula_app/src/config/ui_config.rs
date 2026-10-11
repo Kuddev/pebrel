@@ -168,7 +168,7 @@ impl UiConfig {
             working_directory,
             shell,
             drain_on_exit: false,
-            env: HashMap::new(),
+            env: self.env.clone(),
             #[cfg(target_os = "windows")]
             env_is_complete: false,
             #[cfg(target_os = "windows")]
@@ -737,6 +737,12 @@ pub struct Profile {
     /// setting refer to an imported executable without storing its path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_profile_id: Option<String>,
+    /// Explicit variables for this local launch, after the global environment.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::profile_environment::ProfileEnvironment::is_empty"
+    )]
+    pub env: crate::profile_environment::ProfileEnvironment,
 }
 
 impl Profile {
@@ -747,9 +753,18 @@ impl Profile {
     pub fn settings_id(&self) -> Option<String> {
         Some(format!(
             "profile:{}|{}",
-            self.shell_id.as_deref()?,
+            self.shell_id.as_deref().unwrap_or("custom"),
             self.terminal_profile_id.as_deref()?
         ))
+    }
+
+    /// The stable profile id owns selection even when its integration family changes.
+    pub(crate) fn matches_settings_id(&self, settings_id: &str) -> bool {
+        let id = settings_id
+            .strip_prefix("profile:")
+            .and_then(|id| id.split_once('|'))
+            .map(|(_, id)| id);
+        self.terminal_profile_id.as_deref().is_some_and(|profile_id| id == Some(profile_id))
     }
 
     /// The PTY shell override this profile launches.

@@ -487,9 +487,7 @@ impl CommandPalette {
         // 打开推荐项，检测顺序不再决定谁排第一。
         if let Some(position) = rows.iter().position(|row| match row {
             ProfileRow::Shell { shell, .. } => shell.id == default_shell_id,
-            ProfileRow::Config { profile, .. } => {
-                profile.settings_id().as_deref() == Some(default_shell_id)
-            },
+            ProfileRow::Config { profile, .. } => profile.matches_settings_id(default_shell_id),
         }) {
             let default_row = rows.remove(position);
             rows.insert(0, default_row);
@@ -993,9 +991,9 @@ impl CommandPalette {
             ProfileRow::Shell { shell, .. } => {
                 self.default_shell_id.as_deref() == Some(shell.id.as_str())
             },
-            ProfileRow::Config { profile, .. } => profile
-                .settings_id()
-                .is_some_and(|id| self.default_shell_id.as_deref() == Some(id.as_str())),
+            ProfileRow::Config { profile, .. } => {
+                self.default_shell_id.as_deref().is_some_and(|id| profile.matches_settings_id(id))
+            },
         }
     }
 
@@ -2952,28 +2950,31 @@ mod tests {
         assert_eq!(palette.confirm(), Some(PaletteAction::NewAtDirectory(path)));
     }
 
+    fn local_profile(
+        name: &str,
+        command: &str,
+        shell_id: Option<&str>,
+        id: Option<&str>,
+    ) -> Profile {
+        Profile {
+            name: name.into(),
+            command: command.into(),
+            args: vec![],
+            cwd: None,
+            shell_id: shell_id.map(String::from),
+            terminal_profile_id: id.map(String::from),
+            env: Default::default(),
+        }
+    }
+
     #[test]
     fn profile_picker_query_filters_rows() {
         let mut palette = CommandPalette::new();
         palette.set_shell_menu(
             &[],
             &[
-                Profile {
-                    name: "Windows PowerShell".into(),
-                    command: "powershell.exe".into(),
-                    args: vec![],
-                    cwd: None,
-                    shell_id: None,
-                    terminal_profile_id: None,
-                },
-                Profile {
-                    name: "Git Bash".into(),
-                    command: "bash.exe".into(),
-                    args: vec![],
-                    cwd: None,
-                    shell_id: None,
-                    terminal_profile_id: None,
-                },
+                local_profile("Windows PowerShell", "powershell.exe", None, None),
+                local_profile("Git Bash", "bash.exe", None, None),
             ],
             "powershell",
         );
@@ -3111,14 +3112,9 @@ mod tests {
 
     #[test]
     fn imported_profile_keeps_shell_icon_and_click_snapshot() {
-        let profile = Profile {
-            name: "PowerShell 7".into(),
-            command: r"D:\\tools\\pwsh.exe".into(),
-            args: vec!["-NoLogo".into()],
-            cwd: None,
-            shell_id: Some("pwsh".into()),
-            terminal_profile_id: Some("pwsh-test".into()),
-        };
+        let mut profile =
+            local_profile("PowerShell 7", r"D:\\tools\\pwsh.exe", Some("pwsh"), Some("pwsh-test"));
+        profile.args = vec!["-NoLogo".into()];
         let mut palette = CommandPalette::new();
         palette.set_shell_menu(&[], std::slice::from_ref(&profile), "powershell");
         palette.open_profiles();
@@ -3132,14 +3128,9 @@ mod tests {
     #[test]
     fn imported_profile_can_be_selected_as_default_shell() {
         let shell = shell("CMD", "cmd", r"C:\\Windows\\System32\\cmd.exe");
-        let profile = Profile {
-            name: "PowerShell 7".into(),
-            command: r"D:\\tools\\pwsh.exe".into(),
-            args: vec![],
-            cwd: None,
-            shell_id: Some("pwsh".into()),
-            terminal_profile_id: Some("pwsh-test".into()),
-        };
+        let mut profile =
+            local_profile("PowerShell 7", r"D:\\tools\\pwsh.exe", Some("pwsh"), Some("pwsh-test"));
+        profile.args = vec![];
         let default_id = profile.settings_id().unwrap();
         let mut palette = CommandPalette::new();
         palette.set_default_shell_menu(&[shell], std::slice::from_ref(&profile), &default_id);

@@ -489,7 +489,7 @@ impl WindowContext {
         self.zoom = None;
         let focused = self.focused_pane_id();
         let cwd = self.focused_cwd();
-        if let Some(new_id) = self.spawn_pane_detached(cwd, self.display.size_info) {
+        if let Some(new_id) = self.spawn_pane_for_profile(cwd, self.display.size_info) {
             self.active_layout_mut().split_leaf(focused, new_id, direction, 0.5);
             self.tabs[self.active_tab].active_pane = new_id;
             self.resize_active_layout();

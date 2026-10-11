@@ -140,7 +140,7 @@ impl NebulaWorkspace {
             };
             let mut pane = self.new_pane(grid, launch, None, window, cx);
             pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);
-            if !matches!(launch_session, LaunchSession::Default) {
+            if !matches!(launch_session, LaunchSession::Default | LaunchSession::Profile { .. }) {
                 pane.view.update(cx, |view, _| view.session_launch = launch_session);
             }
             // Display and persist the restored location while the guest shell

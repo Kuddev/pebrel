@@ -63,6 +63,9 @@ mod logos;
 mod notifications;
 mod palette;
 mod pane_header;
+#[cfg(all(test, feature = "gpui-test-support"))]
+#[path = "../platform/profile_environment_tests.rs"]
+mod profile_environment_tests;
 mod quick_jump;
 mod quick_terminal;
 mod recipes;
@@ -1062,7 +1065,7 @@ impl NebulaWorkspace {
 
     /// 把一份冻结的会话 launch 还原为一次 GPUI PTY 启动。逐 pane 选择
     /// 与旧快照回退由 session_recovery 统一负责。
-    fn terminal_launch_from_session(
+    pub(super) fn terminal_launch_from_session(
         launch: &crate::session::LaunchSession,
         cwd: Option<std::path::PathBuf>,
     ) -> crate::gpui_shell::terminal::view::TerminalLaunch {
@@ -1076,20 +1079,9 @@ impl NebulaWorkspace {
                 shell: Some(nebula_terminal::tty::Shell::new(program.clone(), args.clone())),
                 shell_name: Some(name.clone()),
             },
-            LaunchSession::Profile { name, command, args, cwd: profile_cwd, shell_id } => {
-                let profile = crate::config::ui_config::Profile {
-                    name: name.clone(),
-                    command: command.clone(),
-                    args: args.clone(),
-                    cwd: profile_cwd.as_deref().and_then(crate::session::valid_dir),
-                    shell_id: shell_id.clone(),
-                    terminal_profile_id: None,
-                };
-                TerminalLaunch::Local {
-                    cwd: profile.cwd.clone().or(cwd),
-                    shell: Some(profile.shell()),
-                    shell_name: profile.shell_id.clone().or_else(|| Some(profile.name.clone())),
-                }
+            LaunchSession::Profile { .. } => {
+                let profile = crate::profile_launch::resolve(launch).expect("profile variant");
+                TerminalLaunch::Profile { cwd: profile.cwd.clone().or(cwd), profile }
             },
             LaunchSession::Ssh { host } => {
                 TerminalLaunch::Ssh { destination: host.clone(), cwd: None }

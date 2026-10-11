@@ -195,12 +195,20 @@ pub fn merge_terminal_profiles(config: &mut UiConfig) {
 
 fn merge_profile_values(config: &mut UiConfig, imported: Vec<crate::config::ui_config::Profile>) {
     let mut existing: std::collections::HashSet<String> =
-        config.profiles.iter().map(|profile| profile_command_key(&profile.command)).collect();
+        config.profiles.iter().map(profile_identity).collect();
     for profile in imported {
-        if existing.insert(profile_command_key(&profile.command)) {
+        if existing.insert(profile_identity(&profile)) {
             config.profiles.push(profile);
         }
     }
+}
+
+fn profile_identity(profile: &crate::config::ui_config::Profile) -> String {
+    profile
+        .terminal_profile_id
+        .as_ref()
+        .map(|id| format!("profile:{id}"))
+        .unwrap_or_else(|| format!("command:{}", profile_command_key(&profile.command)))
 }
 
 #[cfg(windows)]
@@ -493,6 +501,7 @@ mod tests {
             cwd: None,
             shell_id: None,
             terminal_profile_id: None,
+            env: Default::default(),
         });
         let imported = vec![
             crate::config::ui_config::Profile {
@@ -502,6 +511,7 @@ mod tests {
                 cwd: None,
                 shell_id: Some("pwsh".to_owned()),
                 terminal_profile_id: None,
+                env: Default::default(),
             },
             crate::config::ui_config::Profile {
                 name: "imported".to_owned(),
@@ -510,6 +520,7 @@ mod tests {
                 cwd: None,
                 shell_id: Some("nu".to_owned()),
                 terminal_profile_id: None,
+                env: Default::default(),
             },
         ];
 

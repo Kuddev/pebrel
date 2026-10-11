@@ -705,6 +705,7 @@ fn shell_palette_includes_imported_terminal_profiles() {
         cwd: None,
         shell_id: Some("pwsh".to_owned()),
         terminal_profile_id: Some("pwsh-deadbeef".to_owned()),
+        env: Default::default(),
     };
     let id = profile.settings_id().expect("imported profile id");
     let rows = shell_palette_rows(

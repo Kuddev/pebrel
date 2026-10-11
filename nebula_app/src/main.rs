@@ -99,6 +99,7 @@ mod plugins;
 mod polling;
 mod process_tree;
 mod profile_environment;
+mod profile_launch;
 mod provider_test;
 mod proxy_test;
 mod remote_dirs;

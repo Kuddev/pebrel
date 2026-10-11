@@ -200,20 +200,8 @@ pub enum TerminalViewEvent {
 /// `shell` 是 Tab 创建/恢复时已经裁定好的启动命令。不能只传 cwd 再在
 /// `TerminalView::new` 里读取“此刻的默认 Shell”，否则恢复混合的 PowerShell /
 /// WSL 工作区时，每个 Tab 都会被重新解释成同一个当前默认值。
-pub enum TerminalLaunch {
-    Local {
-        cwd: Option<std::path::PathBuf>,
-        shell: Option<nebula_terminal::tty::Shell>,
-        /// 只用于欢迎屏选择 PowerShell/Bash 形态，不参与 PTY 启动。
-        shell_name: Option<String>,
-    },
-    Ssh {
-        destination: String,
-        /// Remote cwd inherited by duplicate-tab. `None` starts in the
-        /// account's ordinary login directory.
-        cwd: Option<String>,
-    },
-}
+mod launch;
+pub use launch::TerminalLaunch;
 
 pub(crate) fn last_path_component(path: &str) -> Option<String> {
     let name = path

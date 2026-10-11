@@ -4,12 +4,20 @@ use futures::StreamExt as _;
 use gpui::Context;
 use nebula_terminal::event::Event as TermEvent;
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) mod native_fixture;
+
 pub(super) fn attach(
     mut rx: super::event_mailbox::EventReceiver,
     mut stage_rx: futures::channel::mpsc::UnboundedReceiver<crate::ssh_session::SshStage>,
     is_ssh: bool,
     cx: &mut Context<TerminalView>,
 ) {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    let mut rx = match native_fixture::LocalPtyPump::attach(rx, is_ssh, cx) {
+        Ok(()) => return,
+        Err(rx) => rx,
+    };
     cx.spawn(async move |this, cx| {
         while let Some(event) = rx.next().await {
             // 合并同一批到达的事件，避免每个 Wakeup 都独立触发一帧。

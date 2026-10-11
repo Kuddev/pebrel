@@ -26,6 +26,8 @@ pub mod mouse_protocol;
 mod osc_links;
 pub mod session;
 mod session_pump;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) use session_pump::native_fixture::LocalPtyPump;
 mod ssh_connect_overlay;
 pub mod suggest;
 pub mod view;

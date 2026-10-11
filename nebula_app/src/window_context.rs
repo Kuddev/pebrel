@@ -49,6 +49,7 @@ use crate::{input, renderer, session};
 
 mod agent_activity;
 mod agents;
+mod local_launch;
 mod model;
 mod nebula_fetch_art;
 mod runtime;
@@ -390,11 +391,13 @@ impl WindowContext {
                 // tab: the restore below keeps it instead of dismantling it.
                 seed_pinned = cli_cwd.is_some();
                 let cli_shell = options.terminal_options.command().map(Into::into);
-                pty_config.shell = select_initial_shell(
-                    pty_config.shell.take(),
-                    Self::default_shell_override(&config),
-                    cli_shell,
-                );
+                let default_profile = Self::default_profile(&config, cli_shell.is_some());
+                let selected_shell = default_profile
+                    .as_ref()
+                    .map(Profile::shell)
+                    .or_else(Self::detected_default_shell_override);
+                pty_config.shell =
+                    select_initial_shell(pty_config.shell.take(), selected_shell, cli_shell);
                 options.terminal_options.override_pty_config(&mut pty_config);
                 let restored_cwd = restore.as_ref().and_then(|session| {
                     session.tabs.first().and_then(|tab| session::valid_dir(&tab.cwd))
@@ -405,6 +408,14 @@ impl WindowContext {
                     display.startup_directory(),
                     configured_cwd,
                 );
+                if let Some(profile) = &default_profile {
+                    crate::profile_launch::apply_local_profile_options(
+                        &mut pty_config,
+                        &profile.env,
+                    );
+                }
+                let first_launch =
+                    default_profile.map(TabLaunch::Profile).unwrap_or(TabLaunch::Default);
                 let first_pane = Self::create_pane(
                     &display.size_info,
                     window_id,
@@ -422,7 +433,7 @@ impl WindowContext {
                         has_bell: false,
                         custom_name: None,
                         custom_color: None,
-                        launch: TabLaunch::Default,
+                        launch: first_launch,
                         doc: None,
                         image: None,
                         settings: false,
@@ -906,6 +917,10 @@ impl WindowContext {
 
     /// Spawn and activate a new tab (a single-pane layout) using the default shell.
     fn spawn_tab(&mut self) {
+        if let Some(profile) = Self::default_profile(&self.config, false) {
+            self.spawn_tab_profile_value(profile, TabPlacement::Created);
+            return;
+        }
         self.spawn_tab_at(
             self.display.startup_directory().or_else(|| self.focused_cwd()),
             TabPlacement::Created,
@@ -916,6 +931,11 @@ impl WindowContext {
     /// or inherit the caller-provided cwd. Keeping this as the only insertion
     /// path guarantees tree-created terminals behave exactly like Ctrl+Shift+T.
     fn spawn_tab_at(&mut self, cwd: Option<std::path::PathBuf>, placement: TabPlacement) {
+        if let Some(mut profile) = Self::default_profile(&self.config, false) {
+            profile.cwd = cwd.or(profile.cwd);
+            self.spawn_tab_profile_value(profile, placement);
+            return;
+        }
         // The default-shell setting (`shell=<id>` in nebula_settings.txt) may
         // name a detected shell the PTY layer doesn't bootstrap itself (cmd,
         // pwsh, nushell, a WSL distro). `resolve_id` returns `None` for the two
@@ -954,13 +974,15 @@ impl WindowContext {
     ) -> Option<nebula_terminal::tty::Shell> {
         let id = crate::display::nebula_settings_value("shell")
             .or_else(|| crate::display::nebula_settings_value("executor"))?;
-        if let Some(profile) = config
-            .profiles
-            .iter()
-            .find(|profile| profile.settings_id().as_deref() == Some(id.as_str()))
-        {
+        if let Some(profile) = Self::default_profile(config, false) {
             return Some(profile.shell());
         }
+        crate::shell_detect::resolve_id(&id).map(|shell| shell.shell())
+    }
+
+    fn detected_default_shell_override() -> Option<tty::Shell> {
+        let id = crate::display::nebula_settings_value("shell")
+            .or_else(|| crate::display::nebula_settings_value("executor"))?;
         crate::shell_detect::resolve_id(&id).map(|shell| shell.shell())
     }
 
@@ -980,7 +1002,8 @@ impl WindowContext {
             self.focused_cwd(),
         );
         let shell = profile.shell();
-        if let Some(id) = self.spawn_pane_detached_with(cwd, self.display.size_info, Some(shell)) {
+        if let Some(id) = self.spawn_profile_pane(cwd, self.display.size_info, shell, &profile.env)
+        {
             self.insert_tab(
                 TabEntry {
                     layout: Layout::Leaf(id),
@@ -1524,16 +1547,9 @@ impl WindowContext {
                 let shell = nebula_terminal::tty::Shell::new(program.clone(), args.clone());
                 self.spawn_tab_shell(name.clone(), shell, TabPlacement::AfterActive);
             },
-            session::LaunchSession::Profile { name, command, args, cwd, shell_id } => {
+            session::LaunchSession::Profile { .. } => {
                 self.spawn_tab_profile_value(
-                    crate::config::ui_config::Profile {
-                        name: name.clone(),
-                        command: command.clone(),
-                        args: args.clone(),
-                        cwd: cwd.as_ref().map(std::path::PathBuf::from),
-                        shell_id: shell_id.clone(),
-                        terminal_profile_id: None,
-                    },
+                    crate::profile_launch::resolve(launch).expect("profile variant"),
                     TabPlacement::AfterActive,
                 );
             },
@@ -1669,7 +1685,7 @@ impl WindowContext {
                     return Some(Layout::Leaf(id));
                 }
                 let cwd = session::valid_dir(cwd).or_else(|| self.display.startup_directory());
-                self.spawn_pane_detached(cwd, self.display.size_info).map(Layout::Leaf)
+                self.spawn_pane_for_profile(cwd, self.display.size_info).map(Layout::Leaf)
             },
             session::LayoutSession::Split { axis, ratio_permille, first, second } => {
                 let first = self.rebuild_layout(first, seed);
@@ -1847,60 +1863,6 @@ impl WindowContext {
             pane.intro_cols = Some(cols);
             pane.notifier
                 .notify(nebula_fastfetch_intro_command_for(cols, self.display.nebula_shell));
-        }
-    }
-
-    /// Spawn a new pane into the pool without attaching it to any tab. `cwd`
-    /// overrides the shell's startup directory when set. Returns the new pane's
-    /// id, or `None` if the shell failed to start.
-    fn spawn_pane_detached(
-        &mut self,
-        cwd: Option<std::path::PathBuf>,
-        size_info: crate::display::SizeInfo,
-    ) -> Option<PaneId> {
-        self.spawn_pane_detached_with(cwd, size_info, None)
-    }
-
-    /// Like [`Self::spawn_pane_detached`] with an optional shell override
-    /// (quick-launch profiles run their own command instead of the default).
-    fn spawn_pane_detached_with(
-        &mut self,
-        cwd: Option<std::path::PathBuf>,
-        size_info: crate::display::SizeInfo,
-        shell: Option<nebula_terminal::tty::Shell>,
-    ) -> Option<PaneId> {
-        let pane_id = self.next_pane_id;
-        self.next_pane_id += 1;
-
-        let window_id = self.display.window.id();
-        let mut pty_config = self.config.pty_config();
-        // NOTE: the executor choice (PowerShell/Bash) is applied inside
-        // `tty::windows::cmdline` from `nebula_settings.txt` whenever
-        // `pty_config.shell` is `None` — it must NOT be overridden here, or the
-        // bash path would lose its Nebula rcfile (OSC 7 cwd / prompt contract).
-        // A profile override (`shell` param) intentionally bypasses that.
-        if shell.is_some() {
-            pty_config.shell = shell;
-        }
-        if cwd.is_some() {
-            pty_config.working_directory = cwd;
-        }
-        match Self::create_pane(
-            &size_info,
-            window_id,
-            &self.config,
-            pty_config,
-            &self.proxy,
-            pane_id,
-        ) {
-            Ok(pane) => {
-                self.panes.push(pane);
-                Some(pane_id)
-            },
-            Err(err) => {
-                error!("Failed to spawn pane: {err}");
-                None
-            },
         }
     }
 

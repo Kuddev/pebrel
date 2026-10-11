@@ -128,10 +128,20 @@ pub(super) fn local_options(
     shell: Option<tty::Shell>,
     pane_id: u64,
     cwd: Option<std::path::PathBuf>,
+    global_env: Option<&std::collections::BTreeMap<String, String>>,
+    profile_env: &crate::profile_environment::ProfileEnvironment,
 ) -> tty::Options {
     let mut options = tty::Options::default();
     options.shell = shell;
     options.working_directory = cwd;
+    if let Some(global) = global_env {
+        crate::profile_environment::overlay(
+            &mut options.env,
+            global,
+            crate::platform::environment::names_case_insensitive(),
+        );
+    }
+    profile_env.apply(&mut options.env);
     if let Err(error) = crate::platform::shell_integration::prepare(&mut options) {
         log::warn!("Could not prepare shell integration: {error}");
     }

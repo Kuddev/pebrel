@@ -69,7 +69,7 @@ pub(super) fn shell_palette_rows(
         .collect();
     rows.extend(profiles.into_iter().filter_map(|profile| {
         let id = profile.settings_id()?;
-        let is_default = id.eq_ignore_ascii_case(default_shell_id);
+        let is_default = profile.matches_settings_id(default_shell_id);
         let icon_id = profile.shell_id.as_deref().unwrap_or(&id);
         let icon =
             crate::gpui_shell::widgets::shell_brand_image(icon_id, SHELL_ICON_PX, scale_factor);

@@ -484,6 +484,8 @@ mod tests {
             args: Vec::new(),
             cwd: None,
             shell_id: None,
+            profile_id: None,
+            env_snapshot: None,
         })));
     }
 }
