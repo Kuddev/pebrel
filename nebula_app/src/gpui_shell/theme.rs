@@ -1,3 +1,6 @@
+mod transition;
+pub(crate) use transition::ThemeTransition;
+
 use gpui::{App, Bounds, Hsla, Pixels, Rgba as GpuiRgba, Window, fill, hsla, point, px, size};
 use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
 

@@ -17,6 +17,7 @@
   "input": [
     "pane.prompt",
     "pane.send_key",
+    "pane.scroll",
     "git.stage",
     "git.unstage",
     "git.commit",

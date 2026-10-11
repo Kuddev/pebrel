@@ -81,6 +81,40 @@ fn refreshing_interfaces_never_selects_a_replacement_for_saved_tailscale(
 }
 
 #[gpui::test]
+fn failed_network_change_restores_the_committed_interface(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut owner = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane.update(cx, |pane, cx| {
+            pane.mobile.initialized = true;
+            let mut snapshot = fixture(true, false);
+            snapshot.preferences.address = Some("192.0.2.1".parse().unwrap());
+            pane.mobile.display_snapshot(snapshot);
+            pane.mobile_set_addresses(fixture_addresses(), window, cx);
+            pane.mobile.address_select.update(cx, |select, cx| {
+                select.set_selected_index(Some(IndexPath::default().row(1)), window, cx);
+            });
+            assert_eq!(pane.mobile_selected_address(cx), Some("100.64.0.8".parse().unwrap()));
+            pane.mobile_run(None, false, || Err(Failure::Connection), window, cx);
+        });
+        owner = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = owner.unwrap();
+    cx.run_until_parked();
+    pane.read_with(cx, |pane, cx| {
+        assert_eq!(pane.mobile.failure, Some(Failure::Connection));
+        assert!(!pane.mobile.operation);
+        assert_eq!(pane.mobile_selected_address(cx), Some("192.0.2.1".parse().unwrap()));
+        assert_eq!(pane.mobile_selected_address(cx), pane.mobile.preferences().address);
+    });
+}
+
+#[gpui::test]
 fn mobile_three_states_and_manual_copy_use_the_rendered_controls(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -135,15 +169,44 @@ fn mobile_three_states_and_manual_copy_use_the_rendered_controls(cx: &mut gpui::
     assert!(
         pairing.origin.y <= modes.origin.y
             && modes.bottom() <= network.origin.y
-            && network.bottom() <= port.origin.y
-            && port.bottom() <= steps.origin.y
+            && network.origin.y <= port.origin.y
+            && port.bottom() <= network.bottom()
+            && network.bottom() <= steps.origin.y
             && steps.bottom() <= pairing.bottom(),
         "endpoint settings stay inside the pairing card, after the connection type and before the steps"
     );
+    let selector = cx.debug_bounds("mobile-network-select").unwrap();
+    let refresh = cx.debug_bounds("mobile-refresh-addresses").unwrap();
+    assert!(selector.right() < port.left() && port.right() < refresh.left());
+    assert_eq!(selector.center().y, port.center().y);
+    assert_eq!(port.center().y, refresh.center().y);
+    assert_eq!(pane.read_with(cx, |pane, _| pane.mobile.port_placeholder.clone()), "4567");
+    assert!(pane.read_with(cx, |pane, cx| pane.mobile.port_input.read(cx).value().is_empty()));
+    assert_eq!(pane.read_with(cx, |pane, _| pane.mobile.preferences().port), 0);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    cx.simulate_click(port.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(pane.read(cx).mobile.port_input.read(cx).focus_handle(cx).is_focused(window));
+        let _ = window.draw(cx);
+    });
+    let focus_line = cx.debug_bounds("mobile-port-focus-line").unwrap();
+    assert_eq!(focus_line.size.height, px(1.0));
+    assert_eq!(focus_line.size.width, port.size.width);
+    assert_eq!(focus_line.center().x, port.center().x);
     let qr = cx.debug_bounds("mobile-qr").expect("QR has actual layout");
     let copy =
         cx.debug_bounds("mobile-copy-invitation").expect("manual pairing action is rendered");
     assert!(copy.size.height >= px(28.0));
+    // 文字按钮按组件合同不抢输入焦点；用真实 Tab 路径触发失焦再验证收回。
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!pane.read(cx).mobile.port_input.read(cx).focus_handle(cx).is_focused(window));
+        let _ = window.draw(cx);
+    });
+    assert_eq!(cx.debug_bounds("mobile-port-focus-line").unwrap().size.width, px(0.0));
+    assert_eq!(pane.read_with(cx, |pane, _| pane.mobile.preferences().port), 0);
     cx.simulate_click(copy.center(), gpui::Modifiers::default());
     let expected = pane.read_with(cx, |pane, _| pane.mobile.qr_payload.clone().unwrap());
     assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected);
@@ -194,6 +257,13 @@ fn mobile_three_states_and_manual_copy_use_the_rendered_controls(cx: &mut gpui::
         .debug_bounds("mobile-interface-row")
         .expect("network selection remains reachable in a narrow window");
     assert!(narrow_network.origin.x >= px(0.0) && narrow_network.right() <= px(820.0));
+    let narrow_select = cx.debug_bounds("mobile-network-select").unwrap();
+    let narrow_port = cx.debug_bounds("mobile-port-row").unwrap();
+    let narrow_refresh = cx.debug_bounds("mobile-refresh-addresses").unwrap();
+    assert!(
+        narrow_select.right() < narrow_port.left() && narrow_port.right() < narrow_refresh.left()
+    );
+    assert!(narrow_refresh.right() <= narrow_network.right());
     let narrow_qr = cx.debug_bounds("mobile-qr").unwrap();
     assert!(narrow_qr.origin.x >= px(0.0) && narrow_qr.right() <= px(820.0));
     assert_eq!(narrow_qr.size, qr.size, "narrow layouts stack instead of shrinking the QR");
@@ -221,11 +291,28 @@ fn mobile_three_states_and_manual_copy_use_the_rendered_controls(cx: &mut gpui::
     let observed = notifications.clone();
     let _subscription =
         cx.update(|_, cx| cx.observe(&pane, move |_, _| observed.set(observed.get() + 1)));
+    let network = cx.debug_bounds("mobile-interface-row").unwrap();
+    let outside = gpui::point(px(1279.0), px(1599.0));
+    cx.simulate_mouse_move(outside, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+    notifications.set(0);
+    cx.simulate_mouse_move(
+        network.origin + gpui::point(px(4.0), px(4.0)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert_eq!(notifications.get(), 0, "network label/blank space has no whole-row hover");
+    for selector in ["mobile-configure-relay", "mobile-pause"] {
+        let bounds = cx.debug_bounds(selector).unwrap();
+        let height = cx.update(|_, cx| settings_control_height(cx));
+        assert_eq!(bounds.size.height, height, "mobile actions share backup button geometry");
+        assert!(bounds.size.width >= px(48.0));
+    }
     for selector in [
         "mobile-device-row",
         "mobile-lan-row",
-        "mobile-interface-row",
-        "mobile-port-row",
+        "mobile-network-select",
         "mobile-relay-row",
         "mobile-default-permission-row",
         "mobile-notifications-row",

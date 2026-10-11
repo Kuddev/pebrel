@@ -217,7 +217,7 @@ fn start_subscription(
     Ok(Subscription { id, cancelled, shutdown, thread })
 }
 
-fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool) {
+fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool, bool, bool) {
     let request = ApiRequest::new(endpoint.token.clone(), "runtime.describe", json!({}));
     let result = (|| -> io::Result<ApiResponse> {
         let mut reader = BufReader::new(connect(endpoint, &request)?);
@@ -226,7 +226,7 @@ fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool) {
         serde_json::from_slice(&bytes).map_err(io::Error::other)
     })();
     let Some(value) = result.ok().filter(|reply| reply.ok).and_then(|reply| reply.result) else {
-        return (false, false);
+        return (false, false, false, false);
     };
     let stream = value["capabilities"]
         .as_array()
@@ -234,7 +234,16 @@ fn screen_capabilities(endpoint: &Endpoint) -> (bool, bool) {
     let grid = value["features"]
         .as_array()
         .is_some_and(|features| features.iter().any(|feature| feature == "pane.read.screen.v1"));
-    (stream, grid)
+    let scroll = value["capabilities"]
+        .as_array()
+        .is_some_and(|caps| caps.iter().any(|cap| cap == "pane.scroll"))
+        && value["features"].as_array().is_some_and(|features| {
+            features.iter().any(|feature| feature == "pane.read.screen.viewport.v1")
+        });
+    let history = value["features"].as_array().is_some_and(|features| {
+        features.iter().any(|feature| feature == "pane.read.screen.history.v1")
+    });
+    (stream, grid, scroll, history)
 }
 
 pub(crate) fn run(allow_input: bool) -> Result<(), Box<dyn Error>> {
@@ -275,7 +284,8 @@ impl BridgeSession {
         let endpoint =
             read_endpoint().ok_or_else(|| io::Error::other("no resident Pebrel runtime"))?;
         let stopped = Arc::new(AtomicBool::new(false));
-        let (screen_stream, screen_grid) = screen_capabilities(&endpoint);
+        let (screen_stream, screen_grid, terminal_scroll, terminal_history) =
+            screen_capabilities(&endpoint);
         write_frame(
             &output,
             &json!({
@@ -284,7 +294,8 @@ impl BridgeSession {
                     "snapshot": true, "read_tail": true, "state_subscription": true,
                     "input": allow_input, "exclusive_input": false, "replay_notifications": false,
                     "terminal_grid_stream": screen_stream, "screen_delta": screen_grid,
-                    "terminal_grid": screen_grid
+                    "terminal_grid": screen_grid, "terminal_scroll": terminal_scroll,
+                    "terminal_history": terminal_history
                 },
                 "max_request_bytes": MAX_BRIDGE_REQUEST,
                 "max_frame_bytes": MAX_BRIDGE_FRAME
@@ -386,7 +397,8 @@ impl BridgeSession {
         }
         let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
         local.id = request.id.clone();
-        let input_reply = matches!(local.method.as_str(), "pane.prompt" | "pane.send_key");
+        let input_reply =
+            matches!(local.method.as_str(), "pane.prompt" | "pane.send_key" | "pane.scroll");
         // This extension belongs to the link, not the resident Runtime API.
         let baseline = if local.method == "pane.read" && local.params["screen"] == true {
             local
@@ -497,9 +509,14 @@ mod tests {
 
     #[test]
     fn readonly_default_denies_writes_and_unlisted_methods() {
-        for method in
-            ["pane.prompt", "pane.send_key", "pane.exec", "window.close", "runtime.orchestrate"]
-        {
+        for method in [
+            "pane.prompt",
+            "pane.send_key",
+            "pane.scroll",
+            "pane.exec",
+            "window.close",
+            "runtime.orchestrate",
+        ] {
             let request = Request {
                 id: "1".into(),
                 method: method.into(),
@@ -516,6 +533,9 @@ mod tests {
         assert!(request.validate(true).is_err());
         request.params["window_id"] = json!(1);
         assert!(request.validate(true).is_ok());
+        request.method = "pane.scroll".into();
+        assert!(request.validate(true).is_ok());
+        assert!(request.validate(false).is_err());
         request.method = "pane.exec".into();
         assert!(request.validate(true).is_err());
         request.method = "pane.read".into();

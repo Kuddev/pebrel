@@ -40,10 +40,14 @@ internal class DesktopScreenSync {
             require(next != sequence || patch.length() == 0 &&
                 delta.getJSONArray("cursor").toString() == old.getJSONArray("cursor").toString() &&
                 delta.getJSONArray("palette").toString() == old.getJSONArray("palette").toString() &&
+                delta.optJSONObject("history")?.toString() == old.optJSONObject("history")?.toString() &&
                 delta.optJSONArray("wrapped")?.toString() == old.optJSONArray("wrapped")?.toString())
             JSONObject().put("version", old.getInt("version")).put("columns", old.getInt("columns"))
                 .put("rows", replacement).put("cursor", delta.getJSONArray("cursor")).put("palette", delta.getJSONArray("palette"))
-                .apply { delta.optJSONArray("wrapped")?.let { put("wrapped", it) } }
+                .apply {
+                    delta.optJSONArray("wrapped")?.let { put("wrapped", it) }
+                    delta.optJSONObject("history")?.let { put("history", it) }
+                }
         }
         val changed = full != null || target != identity || next != sequence
         screen = updated

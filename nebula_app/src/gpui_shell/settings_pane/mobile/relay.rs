@@ -177,7 +177,7 @@ impl SettingsPane {
         preferences.enabled = true;
         preferences.relay_enabled = true;
         self.mobile.mode = Mode::Relay;
-        self.mobile_apply(preferences, Some(json), true, window, cx);
+        self.mobile_apply(preferences, Some(json), Some(Mode::Relay), true, window, cx);
     }
 
     pub(in crate::gpui_shell::settings_pane) fn mobile_relay_modal(
@@ -382,7 +382,14 @@ impl SettingsPane {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let mut preferences = this.mobile.preferences();
                                 preferences.relay_enabled = false;
-                                this.mobile_apply(preferences, None, true, window, cx);
+                                this.mobile_apply(
+                                    preferences,
+                                    None,
+                                    Some(Mode::Relay),
+                                    true,
+                                    window,
+                                    cx,
+                                );
                             })),
                     )
                     .child(div().flex_1())

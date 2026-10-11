@@ -175,6 +175,13 @@ impl SettingsPane {
             window,
             cx,
         );
+        add_select(
+            "scrollbar_visibility",
+            nebula_settings::ScrollbarVisibility::VALUES,
+            runtime.scrollbar_visibility.settings_value(),
+            window,
+            cx,
+        );
         // 文案照抄旧壳 `accept_label` / `completion_style_label`。
         add_select(
             "bell",
@@ -571,6 +578,11 @@ impl SettingsPane {
              event: &InputEvent,
              _: &mut Window,
              cx: &mut Context<Self>| {
+                match event {
+                    InputEvent::Focus => this.settings_search_focus.set_focused(true),
+                    InputEvent::Blur => this.settings_search_focus.set_focused(false),
+                    _ => {},
+                }
                 if matches!(event, InputEvent::Change | InputEvent::Focus | InputEvent::Blur) {
                     if matches!(event, InputEvent::Change) {
                         this.update_settings_search(cx);
@@ -626,6 +638,8 @@ impl SettingsPane {
             appearance_picker_seq: 0,
             shader_picker: None,
             terminal_effect_picker: None,
+            shader_custom_open: false,
+            effect_settings_open: false,
             media_picker: None,
             media_picker_generation: 0,
             theme_editor: None,
@@ -641,6 +655,7 @@ impl SettingsPane {
             about_last_checked: None,
             about_sponsor_open: false,
             settings_search_input,
+            settings_search_focus: search_header::SearchFocus::default(),
             search_origin_section: None,
             selects,
             shell_select,

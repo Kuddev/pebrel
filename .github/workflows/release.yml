@@ -51,6 +51,13 @@ env:
   MACOS_SIGNING: ${{ inputs.macos_signing || 'adhoc' }}
 
 jobs:
+  native-tests:
+    if: ${{ !inputs.windows_only }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/linux-lua.yml
+
   prepare:
     name: Validate stable release inputs
     runs-on: ubuntu-22.04
@@ -679,7 +686,7 @@ jobs:
   publish:
     name: Publish verified GitHub Release
     if: ${{ !inputs.windows_only && (github.event_name == 'push' || inputs.publish == true) }}
-    needs: [prepare, aggregate]
+    needs: [prepare, native-tests, aggregate]
     runs-on: ubuntu-22.04
     permissions:
       contents: write

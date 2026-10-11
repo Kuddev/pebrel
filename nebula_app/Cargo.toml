@@ -1,6 +1,6 @@
 [package]
 name = "nebula"
-version = "2.1.1"
+version = "2.2.0"
 license = "GPL-3.0-or-later"
 description = "Pebrel — a GPU-accelerated terminal emulator"
 readme = "README.md"
@@ -15,15 +15,15 @@ path = "src/main.rs"
 
 [dependencies.nebula_terminal]
 path = "../nebula_terminal"
-version = "2.1.1"
+version = "2.2.0"
 
 [dependencies.nebula_config_derive]
 path = "../nebula_config_derive"
-version = "2.1.1"
+version = "2.2.0"
 
 [dependencies.nebula_config]
 path = "../nebula_config"
-version = "2.1.1"
+version = "2.2.0"
 
 # 可选：GPUI UI 层（feature = "gpui-shell"，模块 src/gpui_shell/）。
 # GPUI/component 的版本和 Git 来源由根 Cargo.toml 统一精确固定。
@@ -72,7 +72,7 @@ optional = true
 
 [dependencies.pebrel-completions]
 path = "../nebula-completions"
-version = "2.1.1"
+version = "2.2.0"
 
 [dependencies]
 anyhow = { version = "=1.0.104", optional = true }
@@ -156,7 +156,7 @@ naga = { version = "=29.0.4", optional = true, features = ["wgsl-in", "hlsl-out"
 gif = { version = "=0.14.2", optional = true }
 
 [build-dependencies]
-nebula-settings = { path = "../nebula_settings", version = "2.1.1" }
+nebula-settings = { path = "../nebula_settings", version = "2.2.0" }
 gl_generator = { version = "0.14.0", optional = true }
 serde = "1"
 serde_json = "1"
@@ -257,6 +257,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Pipes",
     "Win32_Storage_FileSystem",
     "Win32_Storage_Packaging_Appx",
+    # PrintWindow 的客户端完整内容捕获由 windows-sys 放在 Xps 命名空间。
+    "Win32_Storage_Xps",
     # 剪贴板截图粘贴（clipboard::clipboard_image_png）：OpenClipboard/
     # GetClipboardData(CF_DIB) 与 GlobalLock/GlobalSize。
     "Win32_System_DataExchange",
@@ -319,7 +321,7 @@ gpui-shell = [
 # 否则不带 gpui-shell 的默认 `cargo test -p nebula` 也会编译整棵 GPUI。
 video-background = ["gpui-shell", "dep:anyhow", "dep:raw-window-handle", "windows/Win32_Media_MediaFoundation"]
 gif-background = ["video-background", "dep:gif"]
-shader-background = ["gif-background", "dep:naga", "windows/Win32_Graphics_Direct3D_Fxc"]
+shader-background = ["gif-background", "dep:naga", "gpui/wgsl-postprocess", "windows/Win32_Graphics_Direct3D_Fxc"]
 gpui-test-support = ["gpui-shell", "gpui/test-support", "gpui-component/test-support"]
 # Explicit local updater acceptance harness; compile-rejected in release builds.
 update-test-source = ["gpui-shell"]

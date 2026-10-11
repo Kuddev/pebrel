@@ -224,11 +224,13 @@ impl TerminalView {
     pub(super) fn completion_editor_query_bytes(&self) -> Vec<u8> {
         let powershell =
             self.completion_editor.owner.as_deref().is_some_and(|owner| owner.starts_with("pwsh:"));
-        let key =
-            gpui::Keystroke::parse(if powershell { "ctrl-shift-f12" } else { "f24" }).unwrap();
-        super::super::keymap::encode(&key, &self.term_mode()).unwrap_or_else(|| {
-            if powershell { b"\x1b[24;6~".to_vec() } else { b"\x1b[45~".to_vec() }
-        })
+        if !powershell {
+            // POSIX 绑定接收约定字节，不是物理 F24；ConPTY 的普通 VT 翻译不保留 F24。
+            return b"\x1b[45~".to_vec();
+        }
+        let key = gpui::Keystroke::parse("ctrl-shift-f12").unwrap();
+        super::super::keymap::encode(&key, &self.term_mode())
+            .unwrap_or_else(|| b"\x1b[24;6~".to_vec())
     }
 
     pub(super) fn query_completion_editor(&mut self, cx: &mut Context<Self>) -> bool {
@@ -294,6 +296,73 @@ impl TerminalView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn directory_generation_refresh_keeps_the_visible_c_menu_and_selected_item(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::display::{CompletionStyle, SuggestEnv};
+        let (view, window, _) = super::startup_tests::open(cx);
+        let env = SuggestEnv::Wsl { distro: "stable-c-menu-fixture".into() };
+        crate::remote_dirs::finish_fetch(&env, "/project", Some(Vec::new()));
+        view.update(window, |view, cx| {
+            view.suggest.suggest_env = env.clone();
+            view.suggest.cwd = "/project".into();
+            view.completion_style = CompletionStyle::Popup;
+            view.ghost_enabled = true;
+            view.refresh_suggestion_from_snapshot(Some("c".into()), Some((0, 1)), cx);
+        });
+        window.run_until_parked();
+        let before = view.update(window, |view, _| {
+            assert!(!view.suggest.completion_items.is_empty());
+            view.suggest.completion_popup_move(1);
+            (view.suggest.completion_items.clone(), view.suggest.completion_selected)
+        });
+        crate::remote_dirs::finish_fetch(&env, "/another-directory", Some(Vec::new()));
+        view.update(window, |view, cx| {
+            view.refresh_suggestion_from_snapshot(Some("c".into()), Some((0, 1)), cx);
+            assert_eq!(
+                view.suggest.completion_items, before.0,
+                "revalidation must not blank the menu"
+            );
+            assert_eq!(view.suggest.completion_selected, before.1);
+        });
+        window.run_until_parked();
+        view.update(window, |view, cx| {
+            assert_eq!(view.suggest.completion_selected, before.1);
+            view.refresh_suggestion_from_snapshot(Some("other".into()), Some((0, 5)), cx);
+            assert!(
+                view.suggest.completion_items.is_empty(),
+                "a changed input must not keep old candidates"
+            );
+        });
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn posix_editor_query_keeps_its_bytes_under_win32_input_mode(cx: &mut gpui::TestAppContext) {
+        let (view, window, _) = super::startup_tests::open(cx);
+        view.update(window, |view, _| {
+            let mut parser = nebula_terminal::vte::ansi::Processor::<
+                nebula_terminal::vte::ansi::StdSyncHandler,
+            >::default();
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?9001h");
+            assert!(view.term_mode().contains(TermMode::WIN32_INPUT_MODE));
+            view.completion_editor.advertise("wsl|Debian|bash:fixture");
+            assert_eq!(view.completion_editor_query_bytes(), b"\x1b[45~");
+            view.completion_editor.advertise("pwsh:fixture");
+            assert_eq!(
+                view.completion_editor_query_bytes(),
+                super::super::super::keymap::encode(
+                    &gpui::Keystroke::parse("ctrl-shift-f12").unwrap(),
+                    &view.term_mode(),
+                )
+                .unwrap(),
+                "PowerShell still receives the native chord rather than POSIX query text",
+            );
+        });
+    }
 
     #[cfg(feature = "gpui-test-support")]
     #[gpui::test]

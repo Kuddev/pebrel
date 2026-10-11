@@ -35,8 +35,9 @@ const CTRL_COL_W: f32 = 232.0;
 const MARK_RISE: Duration = Duration::from_millis(260);
 
 #[derive(Clone, Copy)]
-enum RowLayout {
+pub(super) enum RowLayout {
     Standard,
+    IntrinsicControl,
 }
 
 /// One heading role for settings groups, including specialized feature pages.
@@ -114,6 +115,19 @@ impl SettingsPane {
         control: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        self.row_with_reset_layout(label, desc, dirty, on_reset, RowLayout::Standard, control, cx)
+    }
+
+    pub(super) fn row_with_reset_layout(
+        &self,
+        label: &'static str,
+        desc: impl Into<SettingHelp>,
+        dirty: bool,
+        on_reset: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        layout: RowLayout,
+        control: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let hover_group = Self::row_hover_group(label);
         let reset = dirty.then(|| {
             div()
@@ -138,7 +152,7 @@ impl SettingsPane {
                 .child(Icon::new(IconName::Undo2).size(px(16.0)))
                 .into_any_element()
         });
-        self.row_shell(label, desc.into(), reset, dirty, RowLayout::Standard, control, cx)
+        self.row_shell(label, desc.into(), reset, dirty, layout, control, cx)
     }
 
     /// 行 hover 组名。↶ 要跟着**整行**的 hover 显形，而不是自己被指到才现
@@ -188,7 +202,7 @@ impl SettingsPane {
         gpui::StyledText::new(text).with_runs(runs).into_any_element()
     }
 
-    fn row_shell(
+    pub(super) fn row_shell(
         &self,
         label: &'static str,
         desc: SettingHelp,
@@ -264,6 +278,16 @@ impl SettingsPane {
             });
         let control = control.into_any_element();
         let columns = match layout {
+            RowLayout::IntrinsicControl => {
+                // 胶囊依实际文字取宽；空间不足时控件整块换行，不缩字号或截断选项。
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .flex_wrap()
+                    .gap_4()
+                    .child(text.flex_1().min_w(px(180.0)))
+                    .child(h_flex().flex_grow(1.0).justify_end().max_w_full().child(control))
+            },
             RowLayout::Standard => {
                 h_flex().w_full().items_center().gap_4().child(text.flex_1().min_w_0()).child(
                     h_flex()

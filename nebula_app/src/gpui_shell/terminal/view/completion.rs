@@ -295,21 +295,32 @@ impl TerminalView {
             }
             return;
         }
+        let context = std::sync::Arc::new(suggest::QueryContext {
+            cwd: self.suggest.cwd.clone(),
+            env: self.suggest.suggest_env.clone(),
+            line,
+            cursor,
+            mode,
+            style,
+            syntax: editor.as_ref().map(|snapshot| snapshot.syntax),
+            revision,
+        });
+        let preserve_results =
+            self.suggestion_task.as_ref().is_some_and(|pending| pending.matches_context(&context));
         self.suggestion_task = None;
-        self.suggest.begin_completion_query(key.clone());
-        self.completion_viewport.update_query(&line, 0);
-        if self.suggest.completion_suppressed_line.as_deref() == Some(line.as_str()) {
+        // 目录回填只更新候选来源；同一输入的已显示结果不能在重算期间先被清空。
+        self.suggest.begin_completion_query(key.clone(), preserve_results);
+        self.completion_viewport.update_query(&context.line, self.suggest.completion_items.len());
+        if self.suggest.completion_suppressed_line.as_deref() == Some(context.line.as_str()) {
             return;
         }
         self.suggest.completion_suppressed_line = None;
-        let cwd = self.suggest.cwd.clone();
-        let env = self.suggest.suggest_env.clone();
         let cancellation = suggest::Cancellation::default();
         let worker_cancellation = cancellation.clone();
         let request = self.completion_session.request_with_syntax(
-            cwd.clone(),
-            env.clone(),
-            line,
+            context.cwd.clone(),
+            context.env.clone(),
+            context.line.clone(),
             cursor,
             style,
             self.exec_context.as_ref(),
@@ -318,13 +329,14 @@ impl TerminalView {
         // 本地目录也可能位于慢盘/网络挂载；扫描和历史首次加载都不能进入绘制回调。
         let calculation =
             cx.background_spawn(async move { request.calculate(&worker_cancellation) });
+        let expected_context = context.clone();
         let task = cx.spawn(async move |this, cx| {
             let result = calculation.await;
             let _ = this.update(cx, |view, cx| {
                 // 按键、取消与 shell 切换都会使 key 或环境失效，旧结果不得回填。
                 if !view.suggest.completion_query_matches(&key)
-                    || view.suggest.cwd != cwd
-                    || view.suggest.suggest_env != env
+                    || view.suggest.cwd != expected_context.cwd
+                    || view.suggest.suggest_env != expected_context.env
                     || view.completion_style != mode
                     || mode.active_style(view.suggest.completion_popup_requested) != style
                     || !view.ghost_enabled
@@ -347,12 +359,19 @@ impl TerminalView {
                 }
                 view.suggest.suggestion = result.suggestion;
                 view.suggest.suggestion_edit = result.suggestion_edit;
+                let selected = view
+                    .suggest
+                    .completion_selected
+                    .and_then(|index| view.suggest.completion_items.get(index));
+                let next_selection = selected.and_then(|selected| {
+                    result.completion_items.iter().position(|candidate| candidate == selected)
+                });
                 view.suggest.completion_items = result.completion_items;
-                if view.suggest.completion_popup_requested
-                    && !view.suggest.completion_items.is_empty()
-                {
-                    view.suggest.completion_selected = Some(0);
-                }
+                view.suggest.completion_selected = next_selection.or_else(|| {
+                    (view.suggest.completion_popup_requested
+                        && !view.suggest.completion_items.is_empty())
+                    .then_some(0)
+                });
                 let awaiting_directory = result.pending_remote_dir.is_some();
                 view.suggest.pending_remote_dir = result.pending_remote_dir;
                 view.completion_viewport
@@ -360,12 +379,15 @@ impl TerminalView {
                 view.drive_pending_remote_dir(cx);
                 if !awaiting_directory {
                     view.suggest.finish_completion_query();
+                }
+                // 命令候选已经可用时即可接受，不让尚在补充的目录来源占着 Enter。
+                if !awaiting_directory || !view.suggest.completion_items.is_empty() {
                     view.finish_editor_action(cx);
                 }
                 cx.notify();
             });
         });
-        self.suggestion_task = Some(suggest::Pending::new(task, cancellation));
+        self.suggestion_task = Some(suggest::Pending::new(task, cancellation, context));
     }
 
     /// 补齐登记了一个还没缓存的来宾 / 远端目录时，去后台拉一次。
