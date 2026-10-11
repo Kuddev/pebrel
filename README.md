@@ -54,11 +54,13 @@
 <table>
   <tr>
     <td align="center" width="240">
-      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_fluxionai.png" alt="Fluxion AI" width="200" /></a><br />
-      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><strong>Fluxion AI</strong></a>
+      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
+      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
     </td>
     <td>
-      Thanks to Fluxion AI for sponsoring this project! Fluxion AI is one entry point for accessing and managing the world's leading AI models. It serves individual developers, technical teams and enterprises with a unified API; dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices. <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel">Sign up via this link</a> to receive $3 in API credit.
+      <p><strong>One entry point for accessing and managing the world's leading AI models</strong></p>
+      <p>Thanks to Sidrune AI for sponsoring this project! Sidrune AI serves individual developers, technical teams and enterprises with a unified API for accessing and managing the world's leading AI models. Dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices.</p>
+      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">Visit and sign up now</a> to receive $3 in API credit.</p>
     </td>
   </tr>
 </table>
