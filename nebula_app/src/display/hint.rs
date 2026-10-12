@@ -9,7 +9,7 @@ use winit::keyboard::ModifiersState;
 
 use nebula_terminal::grid::{BidirectionalIterator, Dimensions};
 use nebula_terminal::index::{Boundary, Column, Direction, Line, Point};
-use nebula_terminal::term::cell::Hyperlink;
+use nebula_terminal::term::cell::{Flags, Hyperlink};
 use nebula_terminal::term::search::{Match, RegexIter, RegexSearch};
 use nebula_terminal::term::{Term, TermMode};
 
@@ -244,9 +244,84 @@ impl HintMatch {
         let bounds = regex.with_compiled(|regex| {
             regex_match_at(term, *self.bounds.start(), regex, self.hint.post_processing)
         })??;
-        (bounds == self.bounds)
-            .then(|| term.bounds_to_string(*bounds.start(), *bounds.end()).into())
+        (bounds == self.bounds).then(|| {
+            let mut text = term.bounds_to_string(*bounds.start(), *bounds.end());
+            if self.hint.post_processing {
+                let tail = table_cell_continuation(term, *bounds.end());
+                text.push_str(tail.trim_end_matches(is_trailing_delimiter));
+            }
+            text.into()
+        })
     }
+}
+
+/// Program-drawn tables (Pi's `│ cell │`) hard-wrap a long token at the cell
+/// edge without terminal wrap flags. A match that fills its cell continues at
+/// the start of the same cell on the next row, so open the joined target.
+fn table_cell_continuation<T>(term: &Term<T>, mut end: Point) -> String {
+    let grid = term.grid();
+    let blank = |point: Point| {
+        let cell = &grid[point];
+        cell.c == ' ' && !cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+    };
+    let mut tail = String::new();
+    loop {
+        let width = if grid[end].flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+        let right = end.column + width + 1;
+        if right > term.last_column()
+            || !blank(Point::new(end.line, right - 1))
+            || grid[end.line][right].c != '│'
+        {
+            break;
+        }
+        let Some(left) =
+            (0..end.column.0).rev().map(Column).find(|&column| grid[end.line][column].c == '│')
+        else {
+            break;
+        };
+        let line = end.line + 1;
+        let start = Point::new(line, left + 2);
+        if line > term.bottommost_line()
+            || grid[line][left].c != '│'
+            || grid[line][right].c != '│'
+            || !blank(Point::new(line, left + 1))
+            || blank(start)
+        {
+            break;
+        }
+        let mut next = start;
+        while next.column + 1 < right && !blank(Point::new(line, next.column + 1)) {
+            next.column += 1;
+        }
+        tail.push_str(&term.bounds_to_string(start, next));
+        end = next;
+    }
+    tail
+}
+
+fn is_trailing_delimiter(c: char) -> bool {
+    matches!(
+        c,
+        '.' | ','
+            | ':'
+            | ';'
+            | '?'
+            | '!'
+            | '('
+            | '['
+            | '\''
+            | '。'
+            | '，'
+            | '、'
+            | '；'
+            | '！'
+            | '？'
+            | '）'
+            | '】'
+            | '》'
+            | '”'
+            | '’'
+    )
 }
 
 /// Generator for creating new hint labels.
@@ -683,28 +758,7 @@ impl<'a, T> HintPostProcessor<'a, T> {
             }
         }
         while iter.point() != start {
-            if !matches!(
-                c,
-                '.' | ','
-                    | ':'
-                    | ';'
-                    | '?'
-                    | '!'
-                    | '('
-                    | '['
-                    | '\''
-                    | '。'
-                    | '，'
-                    | '、'
-                    | '；'
-                    | '！'
-                    | '？'
-                    | '）'
-                    | '】'
-                    | '》'
-                    | '”'
-                    | '’'
-            ) {
+            if !is_trailing_delimiter(c) {
                 break;
             }
 
@@ -844,6 +898,36 @@ mod tests {
                 let hit = highlighted_at(&term, &config, point, ModifiersState::CONTROL).unwrap();
                 assert_eq!(hit.text(&term).unwrap().as_ref(), expected);
             }
+        }
+    }
+
+    #[test]
+    fn links_wrapped_inside_table_cells_open_the_joined_target() {
+        for (head, tail, padding, expected) in [
+            (
+                "https://github.com/Kuddev/pebrel/blob/main/nebula_ap",
+                "p/src/config/ui_config.rs",
+                0,
+                "https://github.com/Kuddev/pebrel/blob/main/nebula_app/src/config/ui_config.rs",
+            ),
+            (
+                r"C:\Users\g1582\AppData\Local\Temp\pebrel-paste-AxrkA",
+                "a.png (test image)",
+                0,
+                r"C:\Users\g1582\AppData\Local\Temp\pebrel-paste-AxrkAa.png",
+            ),
+            ("https://example.com/docs", "next line", 1, "https://example.com/docs"),
+        ] {
+            let width = head.len() + padding;
+            let content = format!(
+                "│ cell │ {head:<width$} │\r\n│      │ {tail:<width$} │\r\n├──────┼─{}─┤",
+                "─".repeat(width)
+            );
+            let term = mock_term(&content);
+            let config = UiConfig::default();
+            let point = Point::new(Line(0), Column(9));
+            let hit = highlighted_at(&term, &config, point, ModifiersState::CONTROL).unwrap();
+            assert_eq!(hit.text(&term).unwrap().as_ref(), expected);
         }
     }
 
