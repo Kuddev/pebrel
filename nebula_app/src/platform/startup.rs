@@ -76,8 +76,16 @@ pub fn prepare_gui() {
     super::notifications::prepare();
 }
 
-pub(crate) fn start_hidden(settings: &nebula_settings::RuntimeSettings) -> bool {
-    super::CAPABILITIES.hide_window_on_close && settings.silent_start && settings.tray
+pub(crate) const LOGIN_STARTUP_ARGUMENTS: &str = "--gpui --launched-at-login";
+
+pub(crate) fn start_hidden(
+    settings: &nebula_settings::RuntimeSettings,
+    launched_at_login: bool,
+) -> bool {
+    launched_at_login
+        && super::CAPABILITIES.hide_window_on_close
+        && settings.silent_start
+        && settings.tray
 }
 
 /// The installer and Settings manage the same per-user Startup shortcut.
@@ -96,7 +104,7 @@ pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
             CoUninitialize, IPersistFile,
         };
         use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
-        use windows::core::{HSTRING, Interface, w};
+        use windows::core::{HSTRING, Interface};
 
         let path = startup_shortcut()?;
         if !enabled {
@@ -113,7 +121,7 @@ pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
             let result = (|| -> windows::core::Result<()> {
                 let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
                 link.SetPath(&HSTRING::from(executable.as_os_str()))?;
-                link.SetArguments(w!("--gpui"))?;
+                link.SetArguments(&HSTRING::from(LOGIN_STARTUP_ARGUMENTS))?;
                 if let Some(home) = super::dirs::home_dir() {
                     link.SetWorkingDirectory(&HSTRING::from(home.as_os_str()))?;
                 }
@@ -158,7 +166,34 @@ mod tests {
             ("silent_start=1\ntray=1", super::super::CAPABILITIES.hide_window_on_close),
         ] {
             let settings = RuntimeSettings::from_raw(&RawSettings::from_text(text));
-            assert_eq!(super::start_hidden(&settings), expected);
+            assert!(!super::start_hidden(&settings, false), "manual launch: {text}");
+            assert_eq!(super::start_hidden(&settings, true), expected, "login launch: {text}");
         }
+    }
+
+    #[test]
+    fn login_arguments_parse_and_only_the_installer_login_shortcut_uses_them() {
+        use clap::Parser;
+
+        let options = crate::cli::Options::try_parse_from(
+            std::iter::once("pebrel").chain(super::LOGIN_STARTUP_ARGUMENTS.split_whitespace()),
+        )
+        .unwrap();
+        assert!(options.launched_at_login);
+        let installer = include_str!("../../../scripts/installer.iss");
+        let shortcuts = installer.lines().filter(|line| line.starts_with("Name: "));
+        let mut login_shortcuts = 0;
+        for shortcut in shortcuts {
+            if shortcut.contains("{userstartup}") {
+                login_shortcuts += 1;
+                assert!(
+                    shortcut
+                        .contains(&format!("Parameters: \"{}\"", super::LOGIN_STARTUP_ARGUMENTS))
+                );
+            } else {
+                assert!(!shortcut.contains("--launched-at-login"));
+            }
+        }
+        assert_eq!(login_shortcuts, 1);
     }
 }

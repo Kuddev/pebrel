@@ -15,3 +15,4 @@
 - WSL pane 的发行版快照与分屏/新标签继承见 [`shell_detect`](../architecture/notes/nebula_app/shell_detect/)。
 - Windows Acrylic 的运行库回退与窗口生命周期见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-controller.md)。
 - Windows Acrylic 的动画期间透明回退与计时边界见 [`窗口状态切换`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-window-transitions.md)。
+- 登录项的启动意图与首窗静默边界见 [`登录启动`](../architecture/notes/nebula_app/platform/startup/2026-10-10-login-launch-intent.md)。

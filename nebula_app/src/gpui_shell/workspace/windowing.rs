@@ -6,6 +6,8 @@
 
 mod shutdown;
 pub(crate) use shutdown::{quit_all, quit_for_update};
+mod startup;
+pub(crate) use startup::open_initial_window;
 mod startup_geometry;
 pub(super) use startup_geometry::prepare_initial_grid;
 
@@ -251,148 +253,6 @@ fn save_after_window_closed(cx: &mut App) {
     }
 }
 
-pub(crate) fn open_initial_window(
-    cx: &mut App,
-    ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
-    shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
-    initial_cwd: Option<PathBuf>,
-    initial_command: Option<crate::config::ui_config::Program>,
-    shell_id: Option<String>,
-) {
-    if !crate::platform::elevation::requires_isolation()
-        && let Some(sessions) = crate::update_download::handoff::restore_ticket()
-    {
-        let mut sessions = sessions.into_iter();
-        if let Some(first) = sessions.next() {
-            open_workspace_window(
-                cx,
-                WorkspaceStartup::RestoreUpdate(first),
-                Some(ai_events),
-                Some(shell_events),
-                true,
-                WindowRole::Regular,
-            )
-            .expect("failed to reopen updated workspace");
-            for session in sessions {
-                if let Err(error) = open_workspace_window(
-                    cx,
-                    WorkspaceStartup::RestoreUpdate(session),
-                    None,
-                    None,
-                    true,
-                    WindowRole::Regular,
-                ) {
-                    log::warn!("Could not reopen an updated window: {error}");
-                }
-            }
-            return;
-        }
-    }
-    let startup = if shell_id.is_some() {
-        match runtime_window_startup(initial_cwd, shell_id.as_deref()) {
-            Ok(startup) => startup,
-            Err(error) => {
-                log::error!("Could not resolve requested shell: {error:?}");
-                return;
-            },
-        }
-    } else {
-        initial_startup(
-            initial_cwd,
-            initial_command,
-            crate::platform::elevation::requires_isolation(),
-        )
-    };
-    open_workspace_window(
-        cx,
-        startup,
-        Some(ai_events),
-        Some(shell_events),
-        true,
-        WindowRole::Regular,
-    )
-    .expect("failed to open Pebrel GPUI window");
-}
-
-fn initial_startup(
-    cwd: Option<PathBuf>,
-    command: Option<crate::config::ui_config::Program>,
-    isolated: bool,
-) -> WorkspaceStartup {
-    if let Some(command) = command {
-        let program = command.program().to_owned();
-        let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
-        return WorkspaceStartup::LaunchTerminal {
-            cwd,
-            launch: crate::session::LaunchSession::Shell {
-                name,
-                program,
-                args: command.args().to_vec(),
-            },
-        };
-    }
-    if cwd.is_some() || isolated {
-        WorkspaceStartup::NewTerminal { cwd }
-    } else {
-        WorkspaceStartup::RestoreOrDefault
-    }
-}
-
-#[cfg(test)]
-mod startup_tests {
-    use super::*;
-
-    #[cfg(feature = "gpui-test-support")]
-    #[gpui::test]
-    fn invalid_explicit_shell_cannot_create_a_runtime_window(cx: &mut gpui::TestAppContext) {
-        let error = cx
-            .update(|cx| open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into())))
-            .unwrap_err();
-        assert_eq!(error.code, "invalid_shell");
-        assert!(cx.update(|cx| cx.windows().is_empty()));
-    }
-
-    #[test]
-    fn default_runtime_startup_keeps_the_requested_directory() {
-        let cwd = Some(PathBuf::from("project"));
-        assert!(
-            matches!(runtime_window_startup(cwd.clone(), None).unwrap(), WorkspaceStartup::NewTerminal { cwd: actual } if actual == cwd)
-        );
-    }
-
-    #[test]
-    fn explicit_program_is_kept_with_its_arguments_and_directory() {
-        let command = crate::config::ui_config::Program::WithArgs {
-            program: "shell.exe".into(),
-            args: vec!["--literal=two words".into()],
-        };
-        let cwd = Some(PathBuf::from("C:/work area"));
-        let WorkspaceStartup::LaunchTerminal { launch, cwd: actual_cwd } =
-            initial_startup(cwd.clone(), Some(command), true)
-        else {
-            panic!("explicit launch was discarded");
-        };
-        assert_eq!(actual_cwd, cwd);
-        assert_eq!(
-            launch,
-            crate::session::LaunchSession::Shell {
-                name: "shell.exe".into(),
-                program: "shell.exe".into(),
-                args: vec!["--literal=two words".into()]
-            }
-        );
-    }
-
-    #[test]
-    fn privileged_startup_never_restores_the_ordinary_session() {
-        assert!(matches!(initial_startup(None, None, false), WorkspaceStartup::RestoreOrDefault));
-        assert!(matches!(
-            initial_startup(None, None, true),
-            WorkspaceStartup::NewTerminal { cwd: None }
-        ));
-    }
-}
-
 pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App) {
     let result =
         open_workspace_window(cx, WorkspaceStartup::Empty, None, None, true, WindowRole::Regular);
@@ -506,11 +366,20 @@ fn open_workspace_window(
     focus: bool,
     role: WindowRole,
 ) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {
+    open_workspace_window_with_visibility(cx, startup, ai_events, shell_events, focus, role, false)
+}
+
+fn open_workspace_window_with_visibility(
+    cx: &mut App,
+    startup: WorkspaceStartup,
+    ai_events: Option<std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>>,
+    shell_events: Option<std::sync::mpsc::Receiver<GpuiShellEvent>>,
+    focus: bool,
+    role: WindowRole,
+    start_hidden: bool,
+) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {
     let (runtime_window_id, runtime_hub) = allocate_window(cx);
     let runtime = nebula_settings::RuntimeSettings::load();
-    let start_hidden = shell_events.is_some()
-        && matches!(startup, WorkspaceStartup::RestoreOrDefault)
-        && crate::platform::startup::start_hidden(&runtime);
     let mut options = workspace_window_options(cx, focus, role, runtime.sidebar_width);
     if start_hidden {
         options.show = false;

@@ -30,6 +30,7 @@ _pebrel() {
 '--print-events[Print all events to STDOUT]' \
 '(--daemon)--ref-test[Generates ref test]' \
 '--gpui[Launch the GPUI UI shell as the main window]' \
+'--launched-at-login[Identify a launch from the per-user login item]' \
 '(-v)*-q[Reduces the level of verbosity (the min level is -qq)]' \
 '(-q)*-v[Increases the level of verbosity (the max level is -vvv)]' \
 '--daemon[Do not spawn an initial window]' \

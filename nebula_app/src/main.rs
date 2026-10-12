@@ -250,6 +250,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             terminal_options.command(),
             shell_id,
             options.config_file.clone(),
+            options.launched_at_login,
         );
         return Ok(());
     }

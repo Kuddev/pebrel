@@ -413,6 +413,8 @@ fn read_metadata_line(file: impl Read) -> std::io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    mod proc_fixture;
 
     const ROOT_ID: &str = "01a079fa-4a9b-7d93-8a4a-4a7a9edaf247";
     const GUARDIAN_ID: &str = "01a079f7-7e36-7232-882b-f06d3bde9df8";
@@ -555,20 +557,26 @@ mod tests {
         symlink("/bin/sleep", &program).unwrap();
         let pane = "session-symlink-fixture";
         let instance = std::process::id().to_string();
-        for (codex_home, expected) in [
+        let fixture_cwd = root.path().canonicalize().unwrap();
+        let fixture_rollout = rollout.canonicalize().unwrap();
+        let first_line = metadata.to_string();
+        for (case, (codex_home, expected)) in [
             (Some(physical.clone()), true),
             (Some(home.join(".codex")), true),
             (None, true),
             (Some(linked_sessions), true),
             (Some(std::path::PathBuf::from("physical data")), true),
             (Some(unrelated), false),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let mut command = Command::new(&program);
             command
                 .arg("30")
                 .current_dir(root.path())
+                .env_clear()
                 .env("HOME", &home)
-                .env_remove("CODEX_HOME")
                 .env("PEBREL_PANE_ID", pane)
                 .env("NEBULA_PANE_ID", pane)
                 .env(crate::agent_env::PROCESS_ENV, &instance)
@@ -578,23 +586,53 @@ mod tests {
             if let Some(value) = &codex_home {
                 command.env("CODEX_HOME", value);
             }
-            let _child = OwnedChild(command.spawn().unwrap());
+            let mut child = OwnedChild(command.spawn().unwrap());
+            let expected_child = proc_fixture::Expected {
+                pane,
+                instance: &instance,
+                home: &home,
+                codex_home: codex_home.as_deref(),
+                cwd: &fixture_cwd,
+                rollout: &fixture_rollout,
+                first_line: &first_line,
+            };
+            proc_fixture::wait_for_child(&mut child.0, &expected_child).unwrap_or_else(|error| {
+                panic!("case={case} home={codex_home:?}: fixture not ready: {error}")
+            });
             for (query_pane, query_instance, matches) in [
                 (pane, instance.as_str(), expected),
                 ("other-pane", instance.as_str(), false),
                 (pane, "other-instance", false),
             ] {
-                let mut guest = Command::new("sh");
-                guest.args(["-c", PROBE_SCRIPT, "probe", query_pane, query_instance]);
-                for found in
-                    [probe_local_proc(query_pane, query_instance), run_probe_command(guest)]
-                {
-                    assert_eq!(found.is_some(), matches, "home={codex_home:?}");
+                let assert_found = |probe, found: Option<CodexSession>, elapsed: Duration| {
+                    let context = format!(
+                        "probe={probe} case={case} child={} pane={query_pane} \
+                         instance={query_instance} home={codex_home:?} elapsed={elapsed:?}",
+                        child.0.id(),
+                    );
+                    assert_eq!(found.is_some(), matches, "{context}");
                     if let Some(found) = found {
-                        assert_eq!(found.session_id, ROOT_ID);
-                        assert_eq!(Path::new(&found.session_file), rollout);
+                        assert_eq!(found.session_id, ROOT_ID, "{context}");
+                        assert_eq!(Path::new(&found.session_file), rollout, "{context}");
                     }
-                }
+                };
+                // Assert immediately after each single probe. An eager array
+                // erased which implementation failed in the original CI log.
+                let started = Instant::now();
+                let found = probe_local_proc(query_pane, query_instance);
+                assert_found("local_proc", found, started.elapsed());
+
+                let mut guest = Command::new("/bin/sh");
+                guest.env_clear().env("PATH", "/usr/bin:/bin").env("HOME", &home).args([
+                    "-c",
+                    PROBE_SCRIPT,
+                    "probe",
+                    query_pane,
+                    query_instance,
+                ]);
+                let started = Instant::now();
+                let found = run_probe_command(guest);
+                assert_found("guest_shell", found, started.elapsed());
             }
         }
     }
