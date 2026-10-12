@@ -667,10 +667,10 @@ fn ai_tab_is_named_after_reported_task_but_not_stale_task(cx: &mut TestAppContex
         assert_eq!(view.tab_label(), "修复 SSH 标签名称");
         let hover = view.tab_tooltip(&view.tab_label());
         assert!(hover.contains("/home/test/很长的项目目录"));
-        assert!(hover.contains("Codex · 修复 SSH 标签名称"));
+        assert!(hover.contains("codex · 修复 SSH 标签名称"));
         view.process_event(Event::Title("⠂ 修复 SSH 标签名称".into()), cx);
         assert_eq!(view.tab_label(), "修复 SSH 标签名称");
-        view.process_event(Event::Title("Codex".into()), cx);
+        view.process_event(Event::Title("codex".into()), cx);
         assert_eq!(view.tab_label(), "很长的项目目录");
         view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
         view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
