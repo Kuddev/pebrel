@@ -165,7 +165,7 @@ mod tests {
     ) {
         cx.update(|cx| {
             gpui_component::init(cx);
-            crate::gpui_shell::init(cx);
+            crate::gpui_shell::init(cx, None);
             windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
             cx.set_reduce_motion(true);
         });

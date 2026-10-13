@@ -18,7 +18,7 @@ object beyond the delivery call.
 request_user_input handler submits the current question when a numbered option is
 pressed; an extra Enter can submit the next question. Its approval UI advertises
 configured one-key shortcuts. The terminal's shared keyboard encoder already
-supports legacy VT, kitty and ConPTY control-key protocols.
+supports legacy VT, enhanced keyboard and ConPTY control-key protocols.
 
 ## Decision
 

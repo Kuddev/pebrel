@@ -114,6 +114,7 @@ impl WindowContext {
     ) -> session::LayoutSession {
         match layout {
             Layout::Leaf(id) => session::LayoutSession::Pane {
+                custom_name: None,
                 launch: None,
                 cwd: pane_cwd(*id),
                 agent: pane_agent(*id),

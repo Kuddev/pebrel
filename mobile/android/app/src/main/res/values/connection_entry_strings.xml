@@ -1,0 +1,19 @@
+<resources>
+    <string name="new_connection">New</string>
+    <string name="new_computer_hint">Scan a QR code or use an 8-digit pairing code</string>
+    <string name="new_ssh_hint">Enter an address and account to connect</string>
+    <string name="new_deploy_relay">Deploy a relay over SSH</string>
+    <string name="new_deploy_relay_hint">Linux native service, no Docker required</string>
+    <string name="onboarding_connection_title">What would you like to connect first?</string>
+    <string name="onboarding_connection_hint">You can add more connections from the home screen anytime.</string>
+    <string name="onboarding_my_computer">My computer</string>
+    <string name="onboarding_my_computer_hint">Follow terminals and agents in Pebrel desktop</string>
+    <string name="onboarding_other_ways">Other ways</string>
+    <string name="onboarding_ssh_host">SSH host</string>
+    <string name="onboarding_phone_terminal">Phone terminal</string>
+    <string name="onboarding_phone_terminal_hint">Run a shell on this phone</string>
+    <string name="onboarding_later">Maybe later</string>
+    <string name="home_empty_title">No sessions yet</string>
+    <string name="home_empty_hint">Connect your computer to see its running terminals here.</string>
+    <string name="home_open_local">Open local terminal</string>
+</resources>

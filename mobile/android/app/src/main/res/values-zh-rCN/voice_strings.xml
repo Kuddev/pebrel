@@ -1,0 +1,18 @@
+<resources>
+    <string name="voice_hold">按住说话；轻点管理语音模型</string>
+    <string name="voice_finish">结束并识别</string>
+    <string name="voice_transcribing">正在手机上识别…</string>
+    <string name="voice_release_cancel">松开取消</string>
+    <string name="voice_release_finish">松开识别</string>
+    <string name="voice_slide_cancel">上滑取消 · 文字只填入草稿</string>
+    <string name="voice_elapsed">%1$d / 60 秒</string>
+    <string name="voice_model_description">本地多语种识别，支持中文和英文。模型约 148 MB，不会自动下载。录音不离开手机，识别后不会自动执行命令。</string>
+    <string name="voice_download_progress">模型下载中：%1$d%%</string>
+    <string name="voice_download">下载模型 · 148 MB</string>
+    <string name="voice_model_ready">模型已安装，长按麦克风即可说话。首次允许麦克风权限后，请再次长按开始。</string>
+    <string name="voice_remove">删除已下载模型</string>
+    <string name="voice_permission">需要麦克风权限，请在应用权限中允许，再次长按说话。</string>
+    <string name="voice_too_short">录音时间太短，请按住多说一会儿。</string>
+    <string name="voice_model_failed">模型下载、校验或删除失败，请检查网络和存储空间后重试。</string>
+    <string name="voice_engine_failed">当前构建的本地语音引擎不可用。</string>
+</resources>

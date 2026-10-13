@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Business and sponsorship / 商业合作与赞助
+    url: https://github.com/Kuddev/pebrel/blob/main/CONTRIBUTING.md#commercial-promotion-policy
+    about: Email fickleheartedkeys@163.com for business requests. Unauthorized promotional PRs or Issues will be closed directly. / 商业需求请发邮件，未经授权的推广 PR 或 Issue 将直接关闭。
   - name: Existing issues / 已有 issue
     url: https://github.com/Kuddev/pebrel/issues
     about: Search existing reports before opening a new issue. / 先搜一下是否已有人反馈。

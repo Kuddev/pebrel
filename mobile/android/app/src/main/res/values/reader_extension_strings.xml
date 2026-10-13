@@ -1,0 +1,4 @@
+<resources>
+    <string name="reader_extension_error">Rendering failed. Expand the source to inspect it.</string>
+    <string name="reader_extension_loading">Rendering…</string>
+</resources>

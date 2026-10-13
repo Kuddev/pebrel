@@ -27,7 +27,7 @@ struct Target {
 
 impl Target {
     fn from_shell(shell: &tty::Shell) -> Option<Self> {
-        (crate::display::extract_program(shell.program()).as_deref() == Some("wsl")).then(|| Self {
+        crate::shell_detect::is_wsl_launcher(shell.program()).then(|| Self {
             distro: crate::shell_detect::wsl_launch_distro(shell.program(), shell.args())
                 .map(str::to_owned),
             user: crate::shell_detect::wsl_launch_user(shell.program(), shell.args())
@@ -232,5 +232,8 @@ mod tests {
         );
         assert_eq!(shell.args()[4..], ["--cd", "/work/my project"]);
         assert!(Target::from_shell(&tty::Shell::new("pwsh.exe".into(), vec![])).is_none());
+        // Same detector as every other WSL rule: an unquoted spaced path is still WSL.
+        let spaced = tty::Shell::new(r"C:\Program Files\WSL\wsl.exe".into(), vec![]);
+        assert!(Target::from_shell(&spaced).is_some());
     }
 }

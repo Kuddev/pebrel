@@ -63,9 +63,10 @@ fn certificates_are_signed_by_the_agent_and_accepted_by_the_real_server() {
 #[test]
 fn rsa_agent_signatures_follow_the_servers_sha256_or_sha512_advertisement() {
     use russh::keys::ssh_key::{Algorithm, HashAlg, PrivateKey};
+    // 素数搜索耗时不固定且不会让出执行权；它是夹具准备，不占用 SSH 交互超时。
+    let key =
+        Arc::new(PrivateKey::random(&mut rand::rng(), Algorithm::Rsa { hash: None }).unwrap());
     check(async {
-        let key =
-            Arc::new(PrivateKey::random(&mut rand::rng(), Algorithm::Rsa { hash: None }).unwrap());
         for (hash, expected) in [(HashAlg::Sha256, 2), (HashAlg::Sha512, 4)] {
             let agent = Agent::new(vec![Identity::plain(key.clone())]);
             let stats = agent.stats.clone();

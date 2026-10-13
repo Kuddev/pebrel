@@ -36,14 +36,18 @@ try {
     if (Test-Path (Join-Path $root 'rejected')) { throw 'Files were created before archive verification.' }
     if ($ArchivePath) {
         $otherArchitecture = if ($Architecture -eq 'arm64') { 'x64' } else { 'arm64' }
-        $rejected = $false
-        try { & $prepare -Destination (Join-Path $root 'wrong-arch') -ArchivePath $ArchivePath -Architecture $otherArchitecture }
-        catch {
-            if ($_.Exception.Message -notlike '*SHA256 verification*') { throw }
-            $rejected = $true
+        # The same package includes both architectures; repair a DLL installed for the wrong target.
+        $otherDestination = Join-Path $root 'other-arch'
+        & $prepare -Destination $otherDestination -ArchivePath $ArchivePath -Architecture $otherArchitecture
+        $otherDll = Join-Path $otherDestination 'conpty.dll'
+        if ((Get-FileHash $otherDll -Algorithm SHA256).Hash -eq $originalHash) {
+            throw 'The same runtime was selected for different architectures.'
         }
-        if (-not $rejected) { throw 'An archive for the other architecture was accepted.' }
-        if (Test-Path (Join-Path $root 'wrong-arch')) { throw 'A wrong-architecture archive was extracted.' }
+        Copy-Item -LiteralPath $otherDll -Destination $dll -Force
+        & $prepare -Destination $destination -ArchivePath $ArchivePath -Architecture $Architecture
+        if ((Get-FileHash $dll -Algorithm SHA256).Hash -ne $originalHash) {
+            throw 'A runtime for the other architecture was reused.'
+        }
     }
     Write-Output "windows-runtime.tests.ps1: PASS ($Architecture pinned files, reuse, repair, rejected archives)"
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }

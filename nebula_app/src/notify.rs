@@ -96,7 +96,7 @@ pub enum Notification {
     CommandDone { duration: Duration, program: Option<String> },
     /// Shell-reported nonzero exit status, including short failed commands.
     CommandFailed { duration: Duration, program: Option<String>, exit_code: i32 },
-    /// Free-text notification from a program (OSC 9, iTerm style). Claude
+    /// Free-text notification from a program (OSC 9). Claude
     /// Code emits these (with the turn's actual message) when its notif
     /// channel is `iterm2`/`iterm2_with_bell`. Carries the tracked program
     /// name so the toast is titled "claude" instead of "Pebrel".
@@ -696,7 +696,6 @@ mod delivery_tests {
             ("unknown", Some(AiTurnOutcome::Unknown)),
             ("future", Some(AiTurnOutcome::Unknown)),
             ("length", Some(AiTurnOutcome::Incomplete)),
-            ("toolUse", Some(AiTurnOutcome::Incomplete)),
         ] {
             let event = pi_result(Some(reason), None);
             let notification = Notification::from_ai_hook(&event, None, false);
@@ -708,7 +707,7 @@ mod delivery_tests {
                 result => panic!("unexpected {reason} result: {result:?}"),
             }
         }
-        for reason in [None, Some("stop")] {
+        for reason in [None, Some("stop"), Some("toolUse")] {
             let mut payload = serde_json::json!({"kind": "done"});
             if let Some(reason) = reason {
                 payload["stop_reason"] = reason.into();
@@ -716,7 +715,10 @@ mod delivery_tests {
             let wire = format!("nebula-hook/1 source=pi\n{payload}");
             let event = crate::ai_hook::parse_remote_envelope(wire.as_bytes(), Some(1)).unwrap();
             let note = Notification::from_ai_hook(&event, None, false).unwrap();
-            assert_eq!(matches!(note, Notification::AiTurn { .. }), reason == Some("stop"));
+            assert_eq!(
+                matches!(note, Notification::AiTurn { .. }),
+                matches!(reason, Some("stop") | Some("toolUse"))
+            );
         }
     }
 

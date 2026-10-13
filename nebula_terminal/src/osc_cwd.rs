@@ -1,8 +1,8 @@
 //! Sniffer for OSC sequences the vte parser drops: OSC 7 / OSC 9;9 (working
-//! directory) and OSC 133;A (FinalTerm/semantic prompt mark).
+//! directory) and OSC 133;A (semantic prompt mark).
 //!
 //! The vte parser Nebula uses (crates.io `vte` 0.15) does not decode OSC 7
-//! (`file://` URI), OSC 9;9 (ConEmu path) or OSC 133 (semantic prompt zones) —
+//! (`file://` URI), OSC 9;9 (working directory) or OSC 133 (semantic prompt zones) —
 //! it logs them as "unhandled" and drops them. Rather than fork the parser, we
 //! tee the raw PTY byte stream through this tiny state machine.
 //!
@@ -12,8 +12,8 @@
 //! `parser.advance` call at these offsets and applies each mark in between —
 //! zero vte changes, perfect cursor accuracy.
 //!
-//! On Windows the cwd channels differ by convention: Nushell/Windows-Terminal
-//! shells default to OSC 9;9 (Nushell's OSC 7 is off by default on Windows),
+//! On Windows, Nushell defaults to OSC 9;9 for working-directory reports
+//! (its OSC 7 reporting is off by default there),
 //! while PowerShell/pwsh and most Unix shells use OSC 7. We accept both.
 //! OSC 133;A comes from Nebula's own shell integration (PS1/prompt hooks) or
 //! natively from shells like Nushell.
@@ -55,7 +55,7 @@ pub enum OscEvent {
     /// (the OSC 1337 shell-integration convention). Carries Nebula queries
     /// (`nebula_ai_query`) from the `#`-line interception, among others.
     UserVar { name: String, value: String },
-    /// OSC 9 — free-text program notification (iTerm style).
+    /// OSC 9 — free-text program notification.
     Notify(String),
     /// OSC 9;4 — ConEmu 任务进度。`state` 是原始状态码，`value` 是 0..=100 的
     /// 百分比（只有 state 1 和 4 带值）。
@@ -67,7 +67,7 @@ pub enum OscEvent {
     Progress { state: u8, value: Option<u8> },
     /// Nebula 远端 Hook 私有 OSC：随机通道令牌 + 原始 Hook 信封。
     RemoteHook { token: String, envelope: Vec<u8> },
-    /// OSC 1337 `File=...inline=1:<base64>` — an iTerm2 inline image.
+    /// OSC 1337 `File=...inline=1:<base64>` — an inline image.
     /// Only static PNG/JPEG/GIF input is accepted; animated GIFs are rendered
     /// as their first frame by the frontend.
     /// `width`/`height` come from the encoded image header, in pixels.
@@ -208,7 +208,7 @@ impl CwdSniffer {
             return parse_remote_hook(rest);
         }
         if let Some(rest) = self.payload.strip_prefix(b"133;") {
-            // Semantic prompt zones (FinalTerm). `A` may carry kitty-style
+            // Semantic prompt zones. `A` may carry optional
             // `;key=value` params — accept those too.
             let phased = |ch: u8| rest.first() == Some(&ch) && (rest.len() == 1 || rest[1] == b';');
             if phased(b'A') {
@@ -233,8 +233,8 @@ impl CwdSniffer {
             return None;
         }
         if let Some(rest) = self.payload.strip_prefix(b"9;") {
-            // OSC 9 family. `9;9;` (cwd) matched above; `9;4;` is ConEmu
-            // progress; anything else is an iTerm-style text notification.
+            // OSC 9 family. `9;9;` (cwd) matched above; `9;4;` reports
+            // progress; anything else is a free-text notification.
             if let Some(progress) = rest.strip_prefix(b"4;") {
                 let mut fields = progress.split(|&b| b == b';');
                 let state = fields
@@ -312,7 +312,7 @@ fn parse_osc1337_image(rest: &[u8]) -> Option<OscEvent> {
     let colon = rest.iter().position(|&b| b == b':')?;
     let (args, data) = (&rest[..colon], &rest[colon + 1..]);
 
-    // `inline=1` is required — without it iTerm2 semantics are "download".
+    // `inline=1` is required — without it the protocol semantics are "download".
     let inline = args.split(|&b| b == b';').any(|arg| arg == b"inline=1");
     if !inline {
         return None;
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn osc133_with_params() {
-        // kitty-style extra params on A are still a prompt mark.
+        // Extra parameters on A are still a prompt mark.
         assert_eq!(events(b"\x1b]133;A;cl=m\x07"), vec![(13, OscEvent::PromptMark)]);
     }
 

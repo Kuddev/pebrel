@@ -29,7 +29,7 @@ pub enum Event {
     /// bundled PowerShell prompt emits).
     CwdReport(String),
 
-    /// An iTerm2 OSC 1337 inline image, sniffed out of the PTY stream.
+    /// An OSC 1337 inline image, sniffed out of the PTY stream.
     ///
     /// `abs_line` anchors the image's top row in the grid's absolute line
     /// numbering (see `Grid::scrolled_out`); `width`/`height` are the display
@@ -47,7 +47,7 @@ pub enum Event {
     /// queries and future channels).
     UserVar { name: String, value: String },
 
-    /// OSC 9 — free-text notification from a program (iTerm style).
+    /// OSC 9 — free-text notification from a program.
     Notify(String),
 
     /// OSC 9;4 — ConEmu 任务进度（`state` 原始码，`value` 为 0..=100）。

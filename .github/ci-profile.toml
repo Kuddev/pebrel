@@ -21,3 +21,4 @@ smol = { opt-level = 0 }
 gpui = { opt-level = 0 }
 gpui_macros = { opt-level = 0 }
 nebula_terminal = { opt-level = 0 }
+nebula-gpui = { opt-level = 0 }

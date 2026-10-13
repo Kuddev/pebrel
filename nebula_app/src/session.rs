@@ -133,6 +133,9 @@ impl AgentSession {
 pub enum LayoutSession {
     Pane {
         cwd: String,
+        /// User pane title, independent of the tab title and shell-reported title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_name: Option<String>,
         /// v4 的追加可选字段（老文件缺省、老版本忽略，无需升版）：快照时
         /// 该 pane 前台的 AI CLI 对话，冷恢复据此自动接续。
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -467,6 +470,7 @@ mod tests {
             axis: SplitAxis::LeftRight,
             ratio_permille: 618,
             first: Box::new(LayoutSession::Pane {
+                custom_name: Some("前端".into()),
                 launch: None,
                 cwd: "D:/work".into(),
                 agent: Some(AgentSession {
@@ -479,11 +483,13 @@ mod tests {
                 axis: SplitAxis::TopBottom,
                 ratio_permille: 500,
                 first: Box::new(LayoutSession::Pane {
+                    custom_name: Some("后端".into()),
                     launch: None,
                     cwd: "D:/logs".into(),
                     agent: None,
                 }),
                 second: Box::new(LayoutSession::Pane {
+                    custom_name: None,
                     launch: None,
                     cwd: String::new(),
                     agent: None,
@@ -507,10 +513,16 @@ mod tests {
         let session = parse(json).expect("v4 without agent must parse");
         assert_eq!(
             session.tabs[0].layout,
-            Some(LayoutSession::Pane { launch: None, cwd: "D:/w".into(), agent: None })
+            Some(LayoutSession::Pane {
+                custom_name: None,
+                launch: None,
+                cwd: "D:/w".into(),
+                agent: None
+            })
         );
 
         let with_agent = LayoutSession::Pane {
+            custom_name: None,
             launch: None,
             cwd: "D:/w".into(),
             agent: Some(AgentSession {
@@ -561,12 +573,23 @@ mod tests {
         let tree = LayoutSession::Split {
             axis: SplitAxis::LeftRight,
             ratio_permille: 500,
-            first: Box::new(LayoutSession::Pane { launch: None, cwd: "a".into(), agent: None }),
+            first: Box::new(LayoutSession::Pane {
+                custom_name: None,
+                launch: None,
+                cwd: "a".into(),
+                agent: None,
+            }),
             second: Box::new(LayoutSession::Split {
                 axis: SplitAxis::TopBottom,
                 ratio_permille: 500,
-                first: Box::new(LayoutSession::Pane { launch: None, cwd: "b".into(), agent: None }),
+                first: Box::new(LayoutSession::Pane {
+                    custom_name: None,
+                    launch: None,
+                    cwd: "b".into(),
+                    agent: None,
+                }),
                 second: Box::new(LayoutSession::Pane {
+                    custom_name: None,
                     launch: None,
                     cwd: "c".into(),
                     agent: None,
@@ -595,6 +618,7 @@ mod tests {
             .map(|id| {
                 let mut tab = TabSession::single("/home/user/project".into(), None, None);
                 tab.layout = Some(LayoutSession::Pane {
+                    custom_name: None,
                     launch: None,
                     cwd: "/home/user/project".into(),
                     agent: Some(AgentSession {

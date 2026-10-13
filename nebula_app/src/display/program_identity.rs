@@ -47,21 +47,30 @@ impl AiLogo {
         }
     }
 
-    pub(crate) fn tint_pixels(self, pixels: &mut [u8], ink: [u8; 3]) {
-        let preserve_luma = match self {
-            Self::OpenAi | Self::Pi => false,
+    fn tint_preserves_luma(self) -> Option<bool> {
+        match self {
+            Self::OpenAi | Self::Pi => Some(false),
             // OpenCode stores a luma map: the frame is white, the inner block gray.
             // Kimi's letterform is solid white with a small blue accent: embedded
             // unchanged it vanishes on light themes, so it rides the luma map too —
             // the K tracks the theme ink at full strength, the accent dims with it.
-            Self::OpenCode | Self::Kimi => true,
+            Self::OpenCode | Self::Kimi => Some(true),
             Self::Claude
             | Self::Grok
             | Self::Antigravity
             | Self::Trae
             | Self::OhMyPi
-            | Self::CodeBuddy => return,
-        };
+            | Self::CodeBuddy => None,
+        }
+    }
+
+    /// Reuse a prepared texture only when neither its source nor tint depends on theme.
+    pub(crate) fn shares_theme_texture(self) -> bool {
+        self.tint_preserves_luma().is_none() && std::ptr::eq(self.png(false), self.png(true))
+    }
+
+    pub(crate) fn tint_pixels(self, pixels: &mut [u8], ink: [u8; 3]) {
+        let Some(preserve_luma) = self.tint_preserves_luma() else { return };
         for pixel in pixels.chunks_exact_mut(4) {
             let luma = if preserve_luma { u16::from(pixel[0]) } else { 255 };
             for channel in 0..3 {

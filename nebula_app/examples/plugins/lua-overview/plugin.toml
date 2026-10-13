@@ -1,0 +1,12 @@
+manifest_version = 1
+api_version = 1
+id = "example.lua-overview"
+name = "Lua Runtime Overview"
+version = "0.1.0"
+entry = "init.lua"
+permissions = ["runtime.describe"]
+
+[[commands]]
+id = "summary"
+title = "Summarize runtime capabilities"
+handler = "summary"

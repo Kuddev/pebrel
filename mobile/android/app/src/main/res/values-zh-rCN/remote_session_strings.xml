@@ -1,0 +1,8 @@
+<resources>
+    <string name="refresh">刷新</string>
+    <string name="remote_sessions">持久会话</string>
+    <string name="remote_sessions_empty">此 SSH 账户下未发现支持的持久会话。</string>
+    <string name="remote_sessions_hint">点按会话可查看窗口或标签页。打开时建立独立连接，已有会话保持运行。</string>
+    <string name="remote_discovery_failed">部分会话信息读取失败。请确认此 SSH 账户可访问会话管理器后刷新。</string>
+    <string name="remote_attach_target">连接到：%1$s</string>
+</resources>

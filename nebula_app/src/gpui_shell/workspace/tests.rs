@@ -77,7 +77,7 @@ mod title_bar_panel_control_tests {
     }
 
     #[derive(Default)]
-    struct TopTabGeometryProbe;
+    struct TopTabGeometryProbe(nebula_settings::DensityName);
 
     impl Render for TopTabGeometryProbe {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -89,9 +89,10 @@ mod title_bar_panel_control_tests {
                     div()
                         .debug_selector(|| "top-tab-geometry-probe".to_owned())
                         .w(px(160.0))
-                        .h(px(super::top_tabs::TOP_TAB_H)),
+                        .h(px(super::tab_scroll::tab_row_height(self.0))),
                 )
                 .child(super::top_tabs::top_tab_action_slot(
+                    self.0,
                     super::top_tabs::top_new_tab_control(
                         crate::i18n::UiLanguage::EnUs,
                         |_, _, _| {},
@@ -99,6 +100,7 @@ mod title_bar_panel_control_tests {
                     .debug_selector(|| "top-new-tab-geometry-probe".to_owned()),
                 ))
                 .child(super::top_tabs::top_tab_action_slot(
+                    self.0,
                     h_flex().debug_selector(|| "top-tabs-menu-geometry-probe".to_owned()).child(
                         super::top_tabs::top_tabs_menu_button(false, crate::i18n::UiLanguage::EnUs),
                     ),
@@ -113,16 +115,27 @@ mod title_bar_panel_control_tests {
     #[gpui::test]
     fn top_tab_action_buttons_share_the_tab_vertical_center(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
-        let (_, cx) = cx.add_window_view(|_, _| TopTabGeometryProbe);
-        let tab = cx.debug_bounds("top-tab-geometry-probe").expect("tab bounds");
-        let new_tab = cx.debug_bounds("top-new-tab-geometry-probe").expect("new-tab bounds");
-        let menu = cx.debug_bounds("top-tabs-menu-geometry-probe").expect("menu bounds");
+        let (probe, cx) = cx.add_window_view(|_, _| TopTabGeometryProbe::default());
+        for (density, height) in [
+            (nebula_settings::DensityName::Standard, 34.0),
+            (nebula_settings::DensityName::Compact, 32.0),
+            (nebula_settings::DensityName::Standard, 34.0),
+        ] {
+            probe.update(cx, |probe, cx| {
+                probe.0 = density;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let tab = cx.debug_bounds("top-tab-geometry-probe").expect("tab bounds");
+            let new_tab = cx.debug_bounds("top-new-tab-geometry-probe").expect("new-tab bounds");
+            let menu = cx.debug_bounds("top-tabs-menu-geometry-probe").expect("menu bounds");
 
-        assert_eq!(f32::from(tab.size.height), 34.0);
-        assert_eq!(f32::from(new_tab.size.height), 32.0);
-        assert_eq!(f32::from(menu.size.height), 32.0);
-        assert_eq!(vertical_center(new_tab), vertical_center(tab));
-        assert_eq!(vertical_center(menu), vertical_center(tab));
+            assert_eq!(f32::from(tab.size.height), height);
+            assert_eq!(f32::from(new_tab.size.height), 32.0);
+            assert_eq!(f32::from(menu.size.height), 32.0);
+            assert_eq!(vertical_center(new_tab), vertical_center(tab));
+            assert_eq!(vertical_center(menu), vertical_center(tab));
+        }
     }
 }
 
@@ -543,6 +556,16 @@ fn copying_cwd_accepts_reported_guest_paths_without_host_filesystem_access() {
 
 /// 新建终端弹窗：默认 shell 必须占首行，因为「开弹窗 → 回车」是旧壳
 /// 点 "+" 后最常走的一条路，它必须等于「开一个默认终端」。
+fn palette_ssh_hosts(hosts: &[(&str, &str)]) -> crate::gpui_shell::ssh_hosts::SshHostLists {
+    let mut lists = crate::gpui_shell::ssh_hosts::SshHostLists::default();
+    for (host, label) in hosts {
+        let mut profile = lists.profiles.for_destination(host);
+        profile.label = Some((*label).to_owned());
+        lists.profiles.upsert(profile);
+    }
+    lists
+}
+
 #[test]
 fn shell_palette_puts_the_default_shell_first() {
     let shells = ["pwsh", "powershell", "cmd", "nu"]
@@ -560,7 +583,7 @@ fn shell_palette_puts_the_default_shell_first() {
     let rows = shell_palette_rows(
         shells.clone(),
         Vec::new(),
-        [("box.example".to_owned(), String::new())],
+        &palette_ssh_hosts(&[("box.example", "")]),
         "nu",
         language,
         1.0,
@@ -587,14 +610,8 @@ fn shell_palette_puts_the_default_shell_first() {
     assert_eq!(rows[4].group, "SSH 主机");
 
     // 默认 id 没在检测结果里（WSL 发行版被卸载等）：不置顶也不 panic。
-    let rows = shell_palette_rows(
-        shells,
-        Vec::new(),
-        None::<(String, String)>,
-        "wsl:Ghost",
-        language,
-        1.0,
-    );
+    let rows =
+        shell_palette_rows(shells, Vec::new(), &Default::default(), "wsl:Ghost", language, 1.0);
     assert!(matches!(
         &rows[0].action,
         WorkspacePaletteAction::LaunchShell(shell) if shell.id == "pwsh"
@@ -609,10 +626,7 @@ fn shell_palette_ssh_rows_show_the_configured_host_name() {
     let rows = shell_palette_rows(
         Vec::new(),
         Vec::new(),
-        [
-            ("root@box.example".to_owned(), "生产机".to_owned()),
-            ("plain.example".to_owned(), String::new()),
-        ],
+        &palette_ssh_hosts(&[("root@box.example", "生产机"), ("plain.example", "")]),
         "cmd",
         crate::display::UiLanguage::ZhCn,
         1.0,
@@ -655,7 +669,7 @@ fn shell_palette_falls_back_to_an_id_glyph_when_brand_art_is_absent() {
     let rows = shell_palette_rows(
         shells,
         Vec::new(),
-        None::<(String, String)>,
+        &Default::default(),
         "zsh",
         crate::display::UiLanguage::ZhCn,
         1.0,
@@ -696,7 +710,7 @@ fn shell_palette_includes_imported_terminal_profiles() {
     let rows = shell_palette_rows(
         Vec::new(),
         vec![profile],
-        None::<(String, String)>,
+        &Default::default(),
         &id,
         crate::display::UiLanguage::ZhCn,
         1.0,
@@ -724,8 +738,18 @@ fn wsl_file_tree_terminal_changes_directory_without_forcing_bash() {
     };
 
     assert_eq!(program, "wsl.exe");
-    assert_eq!(args, ["-d", "Ubuntu", "--cd", "/home/user/project"]);
+    assert_eq!(args, ["--cd", "/home/user/project", "-d", "Ubuntu"]);
     assert!(!args.iter().any(|arg| arg == "--exec" || arg.eq_ignore_ascii_case("bash")));
+
+    // A path wsl.exe cannot receive only enters the distribution.
+    let launch = super::file_tree::wsl_terminal_launch_at(
+        String::new(),
+        "wsl.exe".to_owned(),
+        "Ubuntu".to_owned(),
+        "/tmp/i\" touch /tmp/x #".to_owned(),
+    );
+    let crate::session::LaunchSession::Shell { args, .. } = launch else { unreachable!() };
+    assert_eq!(args, ["-d", "Ubuntu"]);
 }
 
 #[test]
@@ -909,6 +933,7 @@ mod boot_breaker_tests {
             color: None,
             launch: Some(launch.clone()),
             layout: Some(LayoutSession::Pane {
+                custom_name: None,
                 cwd: String::new(),
                 agent: Some(saved.clone()),
                 launch: Some(launch),

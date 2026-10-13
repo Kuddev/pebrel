@@ -3,7 +3,8 @@ param(
     [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z.-]*$')]
     [string] $Version = 'unreleased',
 
-    [ValidateSet('debug', 'release')]
+    # GPUI 调试构建会从编译机源码目录加载 HLSL，不能作为可分发的便携包。
+    [ValidateSet('release')]
     [string] $Configuration = 'release',
 
     [ValidateSet('NebulaTerminal', 'Pebrel')]

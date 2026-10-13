@@ -1,0 +1,258 @@
+{
+  "project": "https://github.com/tabler/tabler-icons",
+  "revision": "0239805680a36bab4e1070529b6744924402d804",
+  "style": "outline",
+  "license_sha256": "b740a1d46122672da62833e97f7e7c8a13fa85cbc7445b584b297cc00dde93db",
+  "icons": {
+    "ic_file_md": {
+      "source": "icons/outline/markdown.svg",
+      "source_sha256": "c6d601b604d677116ba6b059d3a9b812f4b880ff7df7c54bcaae2e6c485af1ba",
+      "xml_sha256": "235c715b7ef256bb19d1b1c8b854fe67d5ad00820efc5215348952d7f52d93ff"
+    },
+    "ic_file_code": {
+      "source": "icons/outline/file-code.svg",
+      "source_sha256": "bb5f7c1f8276556503176f3e31b84ee1f5b55d804de942002e0d8519c313235a",
+      "xml_sha256": "1ab8eed474da844052befae8b9d6322eac8b403ecdce343d0ab6bb618db7efa8"
+    },
+    "ic_file_text": {
+      "source": "icons/outline/file-description.svg",
+      "source_sha256": "4fc9056cfa4c0d5aadc529e59859dd5ae6ecfea8306e38cb57dc8b4800d6537c",
+      "xml_sha256": "693216e18ee458a3fd1dec248ad77c9f3d5b3b69a46880fd0c4e172ec98d2c33"
+    },
+    "ic_file_txt": {
+      "source": "icons/outline/file-text.svg",
+      "source_sha256": "b76d018034764160f7661768f56a38003ed208a20843781a0a04aaae01dcbf66",
+      "xml_sha256": "b36064789653c8c586ef029db6a4585c4c4a17df9ddff727ea461ad1f7b1568f"
+    },
+    "ic_file_rs": {
+      "source": "icons/outline/brand-rust.svg",
+      "source_sha256": "c1b7c01b6bac8d9463031215b07408dfb5d11ea6965a0351e374d824f821df7e",
+      "xml_sha256": "9c95b9abbb8bc6d6ab3f86242eaef8967af6f71ad56b597110c64057275e4e30"
+    },
+    "ic_file_py": {
+      "source": "icons/outline/brand-python.svg",
+      "source_sha256": "10f67887b6f1ea11e687ead00f46a349b08ae3ef79bcdc55ce8fdfd657bb2976",
+      "xml_sha256": "3a89b322cfda6366cbcf32188901865b146bd91e5267f812c8b68aa0705a9dba"
+    },
+    "ic_file_js": {
+      "source": "icons/outline/brand-javascript.svg",
+      "source_sha256": "ee13ad573e34b3b0dbd87ec536f35b43d4e1f5d608ca2d3467056a33a600e4b6",
+      "xml_sha256": "9c84a1519dc85a56a26e8fd93f445a3e98720cb0252b8fdeb5354510f21ede01"
+    },
+    "ic_file_jsx": {
+      "source": "icons/outline/brand-react.svg",
+      "source_sha256": "c00d1a9612f12058124085c268ddc39106e0d242ac225cf6787cfe45792c37ec",
+      "xml_sha256": "7fa4e479a9b06afd3fac4653ed40551b84cfd01f350f989de54804334398aa2a"
+    },
+    "ic_file_ts": {
+      "source": "icons/outline/brand-typescript.svg",
+      "source_sha256": "bbfc12a8cf9cf8495665e3bad4953b6f501917b311ebbeee00c50ac2f9e440f3",
+      "xml_sha256": "1dfbacb958857d557eb841310868e6c2373e92d6befe972e9c37eeca17889cac"
+    },
+    "ic_file_tsx": {
+      "source": "icons/outline/brand-react.svg",
+      "source_sha256": "c00d1a9612f12058124085c268ddc39106e0d242ac225cf6787cfe45792c37ec",
+      "xml_sha256": "7fa4e479a9b06afd3fac4653ed40551b84cfd01f350f989de54804334398aa2a"
+    },
+    "ic_file_vue": {
+      "source": "icons/outline/brand-vue.svg",
+      "source_sha256": "193c1a2bc0516a84d91fe06a84b974a17f4379f5c75513522533ebea9dbf56fc",
+      "xml_sha256": "191a8d9b9f8e3bd2ad9d72e18793b42d3c0918e1adaa0731f8e7f211b17cff53"
+    },
+    "ic_file_c": {
+      "source": "icons/outline/hexagon-letter-c.svg",
+      "source_sha256": "2031609b383b2cfcb9a7ec1a5e725eafd388512d1c4ea28cdee71da8f635c02a",
+      "xml_sha256": "2f1d1aa564bd161629ff7d52afc3f2b0285161ac6628aa776ef92b962cfccc9b"
+    },
+    "ic_file_cpp": {
+      "source": "icons/outline/brand-cpp.svg",
+      "source_sha256": "0dcec5101354c3012a0f4dfa20cfa7b3faff9bf74324b3216ee6a07a617616f7",
+      "xml_sha256": "6b14bb9e04de6aac6c89fc4b3132840d8057a19f2b98c408f7cde06676c29e1d"
+    },
+    "ic_file_c_sharp": {
+      "source": "icons/outline/brand-c-sharp.svg",
+      "source_sha256": "6d8f570d22e9d86efca2028de6a0dbda9607e8c5cf2ff3c565c6e1090259012d",
+      "xml_sha256": "cee285f3d2e0fc40317af4ad9b00f931515c0d103e8e2a1e939087634b0beafa"
+    },
+    "ic_file_html": {
+      "source": "icons/outline/brand-html5.svg",
+      "source_sha256": "5d1864aef2097fb053e18ed0790c2af875ec4674da0926302b2667a6d6a980df",
+      "xml_sha256": "43e157a1410be82b15a1c076855617aa6b496efcf5166c83fedf8a2eb4bb1471"
+    },
+    "ic_file_css": {
+      "source": "icons/outline/brand-css3.svg",
+      "source_sha256": "10e81608ca9d8a42ff5e9847f3799a1616029d536f6655e994c7984c5ed8417c",
+      "xml_sha256": "b2fb9015c11b1c72d729ab3d88311399444639519792f3264fc3c59281dc76fa"
+    },
+    "ic_file_kt": {
+      "source": "icons/outline/brand-kotlin.svg",
+      "source_sha256": "cc00adba5ade033c550d786307d8032bcaa9fb62b5370f3b9d340fca3d7e5a98",
+      "xml_sha256": "dd1fc4e2d644b53d31556ff239ac84d8b808ddf70f9b8ced35e752953a3b6f33"
+    },
+    "ic_file_go": {
+      "source": "icons/outline/brand-golang.svg",
+      "source_sha256": "ec1039a31009c78e300c14689530544712b1e239272056f898aca892feae7443",
+      "xml_sha256": "63eef43bad92e8c6a4512277be948d255977c6a24376cae5c321a21c912ab57f"
+    },
+    "ic_file_swift": {
+      "source": "icons/outline/brand-swift.svg",
+      "source_sha256": "8b1484f370c26b2f60d156521733169c634db5f9c70e8b3fff4935d94f61a3ef",
+      "xml_sha256": "d9a4b39ed42dc9656ba0062fc9f10ac6a29c5e253402e300930abbf26851c97a"
+    },
+    "ic_file_php": {
+      "source": "icons/outline/brand-php.svg",
+      "source_sha256": "d3fe17706bfd14fe6165865608c0ec09fe291084b9dd747584607786cdbac238",
+      "xml_sha256": "47a6c0ad3117c1e01b98150101e60601eca2efb885086e893f23ebbb76cc372f"
+    },
+    "ic_file_svelte": {
+      "source": "icons/outline/brand-svelte.svg",
+      "source_sha256": "5f1af473f59904d277e56d57b887bea3a5724ec5b41c9dcbfbae15b0c275c81e",
+      "xml_sha256": "e2390367158d4909e17461e9f7f0f5d3b048b517a99b3598da80c27d19ee3dc0"
+    },
+    "ic_file_docker": {
+      "source": "icons/outline/brand-docker.svg",
+      "source_sha256": "4a4410ec39d37fa21d4a605e7fede273db571978fe2c04c05547d944b84b6ace",
+      "xml_sha256": "7e69c5036f1962679a760d9f19a7e068f4801f98e2feddfee33e1e2d24d99c89"
+    },
+    "ic_file_powershell": {
+      "source": "icons/outline/brand-powershell.svg",
+      "source_sha256": "fc3ae0a29847180178472ec6ea29539e62648d4d71b18ff95fb6a270236084e5",
+      "xml_sha256": "0880d3c1aa583f0642a8ee4b3d7c2521b8759953deae212257c493df3a9395e0"
+    },
+    "ic_file_sql": {
+      "source": "icons/outline/database.svg",
+      "source_sha256": "cf6f390ac33cfa83f054547137ce20e1702f9cc69af10db314ee1dc879f86df7",
+      "xml_sha256": "4d9e0a209dcb044680340131cbd8d1083f1cb181fbaa47c62751b7a91c8f65ad"
+    },
+    "ic_file_csv": {
+      "source": "icons/outline/table.svg",
+      "source_sha256": "e60f7b59ea11f99bc5f2a14be14eed7b54dc64b75ce3ad19012c9218d5241442",
+      "xml_sha256": "fbe3b3e859208d1351cbfead8623a02c70545576afce994c9f92234a680ba1db"
+    },
+    "ic_file_ini": {
+      "source": "icons/outline/file-settings.svg",
+      "source_sha256": "fdabffcf13fe6a3df281cde68f6153e144097b51b3a81a515940699e674098a3",
+      "xml_sha256": "8b3f68978dd66d3c7354d0181bed1f05e5fd036611c75d8006aaa481f99818f6"
+    },
+    "ic_file_lock": {
+      "source": "icons/outline/lock.svg",
+      "source_sha256": "19ef0a4888688ea415b611b7c9e085134683a7fbdce5517be1f722a65e28928d",
+      "xml_sha256": "f4d9b88e08807920c9187ec1b804e262b2461d2d160c5cb42c0851f3a758bf22"
+    },
+    "ic_file_image": {
+      "source": "icons/outline/photo.svg",
+      "source_sha256": "2f0a835916079838ea1e8d1934562f3def335ec55540d8fef058f877f34ebc25",
+      "xml_sha256": "f284acc9b4640bec8d73f397eb070445e6757924854bb91b20782867635c2add"
+    },
+    "ic_file_png": {
+      "source": "icons/outline/photo.svg",
+      "source_sha256": "2f0a835916079838ea1e8d1934562f3def335ec55540d8fef058f877f34ebc25",
+      "xml_sha256": "f284acc9b4640bec8d73f397eb070445e6757924854bb91b20782867635c2add"
+    },
+    "ic_file_jpg": {
+      "source": "icons/outline/photo.svg",
+      "source_sha256": "2f0a835916079838ea1e8d1934562f3def335ec55540d8fef058f877f34ebc25",
+      "xml_sha256": "f284acc9b4640bec8d73f397eb070445e6757924854bb91b20782867635c2add"
+    },
+    "ic_file_svg": {
+      "source": "icons/outline/file-vector.svg",
+      "source_sha256": "6b99129144d67b8a74acdd4dd80c3709cebc2542aff10e2abe8e152dd0a69211",
+      "xml_sha256": "0a823aa21dc65e89ddec2e171c51db04a4e3205f1822a779851f8223506cc5f5"
+    },
+    "ic_file_pdf": {
+      "source": "icons/outline/file-type-pdf.svg",
+      "source_sha256": "f17f25d5d2728b807625ecab7a5ab2cfa0e1ba00c05cf8112aad0fe1f119601f",
+      "xml_sha256": "0296dd4a604fe776ecd6fbee5fe2f34d5670134fe585bed15350340c758a6ef6"
+    },
+    "ic_file_zip": {
+      "source": "icons/outline/file-zip.svg",
+      "source_sha256": "866cc7e522c85925564b845619345ab6ddfd81e77f91d672981e0775a11760f2",
+      "xml_sha256": "fe7da2567b7e964033ac8c4853e130d3d40b527158068175eecccfe98f92a032"
+    },
+    "ic_file_archive": {
+      "source": "icons/outline/archive.svg",
+      "source_sha256": "a86f8be54c36bbb139cf879f7a77a298874695b33af5736d6c2233144779c57d",
+      "xml_sha256": "335cf5eb33b9b2dd4d9c49f11532a68a024533fde9fb56e440d6197137aa293a"
+    },
+    "ic_file_audio": {
+      "source": "icons/outline/file-music.svg",
+      "source_sha256": "1b225ffd51cdb9d77d6bf30fb9086eff641feabf94e3375e22b2c664b563fc65",
+      "xml_sha256": "095aec67e6ca0549edf76c44962fc1de629040dcd6dcc07d792014cab61e398b"
+    },
+    "ic_file_video": {
+      "source": "icons/outline/movie.svg",
+      "source_sha256": "03bd0516897048ed1dab42bda31c365cd4b3551e75e9694af17a277995965446",
+      "xml_sha256": "bbe2f476a50e64aed79e94c9d80249b1b475ce24ae83ebf0437f04206f809f85"
+    },
+    "ic_file_doc": {
+      "source": "icons/outline/file-word.svg",
+      "source_sha256": "5a2d3b7d6f29c6cd4aaaf1cbf8bbde69845723d0f6c1df089c0e1f5b0964c85f",
+      "xml_sha256": "9009ca3299ca53ac849c7e9c9aa83b710c7d4645b4dd68a0846d0e2f7861a601"
+    },
+    "ic_file_xls": {
+      "source": "icons/outline/file-excel.svg",
+      "source_sha256": "21ba96dc35800641cda119c7635f7d4fadd3ea20d7c86448fa93ad18a1cf473a",
+      "xml_sha256": "9c44cd62b4af80d1cff1ef84a1c4837fdcfdc5389ea3e48f237e139af2b0b735"
+    },
+    "ic_file_ppt": {
+      "source": "icons/outline/presentation.svg",
+      "source_sha256": "c6dccc252ebb4236ec36093d7edfd989671026d47a394cfb47d364f5ed58d32c",
+      "xml_sha256": "910439c864e0f7e6638375485d1f9e711f6ef1fd6bc8df785d40b346368e57cb"
+    },
+    "ic_brackets_curly": {
+      "source": "icons/outline/braces.svg",
+      "source_sha256": "154a18ec98ecff0f00fb92fd0d956df68b4b0349d147e94c9d80410c083e8e95",
+      "xml_sha256": "8000785d12a24d008ae94caea2e8ef19cb107cf66caf047006981d3e9d455a3d"
+    },
+    "ic_brackets_square": {
+      "source": "icons/outline/brackets.svg",
+      "source_sha256": "efb5e683ea42c6afa86d49bdde581d354aef403cf3e0b1118c25310b85bc72c1",
+      "xml_sha256": "4de70841d8bf89e1b4d36eb6446e57214fae4e6b341fda58d1db00664d55433f"
+    },
+    "ic_list_dashes": {
+      "source": "icons/outline/list-tree.svg",
+      "source_sha256": "25ea6b4afa0c5c2b00f48f1ebdeaf559c47c67ab27b5a30c879eefce0a9b72bf",
+      "xml_sha256": "40edb20b22f0885d5e7e6fbf2e233d705c952e25afc8e3067cbb12d27639127b"
+    },
+    "ic_code": {
+      "source": "icons/outline/code.svg",
+      "source_sha256": "dcebc6b4a9ff0a4367624487b17bea6ac08468ae0a1b7eaf300243e780b5d119",
+      "xml_sha256": "3d84fd70c011840305588e58173ebf6533ee66c1d9d1cda661bc8a9b53f206f7"
+    },
+    "ic_sliders_horizontal": {
+      "source": "icons/outline/adjustments-horizontal.svg",
+      "source_sha256": "66b3be63d0ae4f75c6707ac802ef2bad9eb5f9c0af9ab77c7a1f9c7f1694a178",
+      "xml_sha256": "e59b4663d84e22a2f472437d69268221b645b597498b69f5e5e7aba258010fe0"
+    },
+    "ic_file_git": {
+      "source": "icons/outline/brand-git.svg",
+      "source_sha256": "0249363086b99402ed941b0fd9a50637232a5c82a66ba9b94afb140a3109cbb6",
+      "xml_sha256": "4fb6a80029a78fcaee4eb368be14a5f0218e930de4ca35da20158909d6e7f454"
+    },
+    "ic_terminal_window": {
+      "source": "icons/outline/terminal-2.svg",
+      "source_sha256": "ad87e8361f3f1cf1fa64f0481edb24030d329a4656b0a970525a9355a150c2fe",
+      "xml_sha256": "6f831d3b6e5be60aa80767f14cf2e9fdeac7168732a6e5e7f842b2bfe6e353fe"
+    },
+    "ic_key": {
+      "source": "icons/outline/key.svg",
+      "source_sha256": "b36c19b63957f09c2925dbb9246a7ac652205390f2cc3753760a66f8e2d38088",
+      "xml_sha256": "05d7d4490ff2cbd237149802843fc90f865cc6275f06beb47ed05bd35431224a"
+    },
+    "ic_folder_open": {
+      "source": "icons/outline/folder-open.svg",
+      "source_sha256": "891d9a1f6309ca6ad1731be7b0cb12e5d6c678ec04c84808ecb98a4706b3a891",
+      "xml_sha256": "daf48dfa21e0fcadd7c2b62e51bc2bd3e64a90b448f2deda7858bccd51c89778"
+    },
+    "ic_git_folder": {
+      "source": "icons/outline/folder.svg",
+      "source_sha256": "2dff6b74080049d05c695f75a443ffafa88fd7d3c94728f02d64451b2d9181eb",
+      "xml_sha256": "aa99d292045789b1de2238870ef39ed6cbd275066dfb574c06c4ac4696aaf796"
+    },
+    "ic_git_file": {
+      "source": "icons/outline/file.svg",
+      "source_sha256": "dafd413378bd36151892f59328e29b1e5fcd6b2a5de4f44a029a237161e2edb4",
+      "xml_sha256": "80ffdaaa594db7bda074b0eecace9a32be5ae158b5581fd5f36fb1991b32999b"
+    }
+  }
+}

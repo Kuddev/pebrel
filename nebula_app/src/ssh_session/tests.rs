@@ -23,6 +23,18 @@ fn parses_saved_destinations() {
 }
 
 #[test]
+fn copied_profile_resolves_the_endpoint_but_retains_its_credential_identity() {
+    let mut profiles = crate::ssh_profiles::SshProfiles::default();
+    profiles.duplicate_host("alice@192.0.2.42:2200", "pebrel-host-copy-test").unwrap();
+    let resolved = SshDestination::resolve_profile("pebrel-host-copy-test", &profiles).unwrap();
+    assert_eq!(resolved.original, "pebrel-host-copy-test");
+    assert_eq!(
+        (resolved.user.as_str(), resolved.host.as_str(), resolved.port),
+        ("alice", "192.0.2.42", 2200)
+    );
+}
+
+#[test]
 fn parses_resolved_ssh_config() {
     let config =
         "user deploy\nhostname server.internal\nport 2200\nidentityfile ~/.ssh/id_ed25519\n";

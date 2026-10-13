@@ -316,13 +316,7 @@ pub fn save_api_key(id: &str, key: &str) -> io::Result<String> {
     if key.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "API key is empty"));
     }
-    #[cfg(windows)]
     crate::ssh_credentials::store_generic_secret(&credential_target(id), key.as_bytes())?;
-    #[cfg(not(windows))]
-    return Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "system credential storage is not available on this build",
-    ));
     Ok(api_key_hint(key))
 }
 
@@ -337,41 +331,8 @@ pub fn store_provider_api_key(provider: &mut AiProvider, key: &str) -> io::Resul
     Ok(())
 }
 
-/// Ask for and persist a provider key through the native OS credential dialog.
-///
-/// This is the secure UI-neutral path for GPUI: unlike a masked text widget,
-/// the native password control does not expose copy/cut actions to the app.
-#[cfg(windows)]
-pub fn prompt_and_store_api_key(provider: &mut AiProvider) -> io::Result<bool> {
-    let Some(bytes) =
-        crate::ssh_credentials::prompt_generic_secret(&credential_target(&provider.id), "Pebrel")?
-    else {
-        return Ok(false);
-    };
-    let key = Zeroizing::new(
-        String::from_utf8(bytes)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "API key is not UTF-8"))?,
-    );
-    store_provider_api_key(provider, key.as_str())?;
-    Ok(true)
-}
-
-#[cfg(not(windows))]
-pub fn prompt_and_store_api_key(_provider: &mut AiProvider) -> io::Result<bool> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "system credential prompt is not available on this build",
-    ))
-}
-
 pub fn delete_api_key(id: &str) -> io::Result<()> {
-    #[cfg(windows)]
     crate::ssh_credentials::delete_generic_secret(&credential_target(id))?;
-    #[cfg(not(windows))]
-    return Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "system credential storage is not available on this build",
-    ));
     Ok(())
 }
 
@@ -392,13 +353,7 @@ pub fn remove_provider(store: &mut ProviderStore, id: &str) -> io::Result<()> {
 }
 
 pub fn load_api_key(id: &str) -> io::Result<Option<Vec<u8>>> {
-    #[cfg(windows)]
-    return crate::ssh_credentials::load_generic_secret(&credential_target(id));
-    #[cfg(not(windows))]
-    {
-        let _ = id;
-        Ok(None)
-    }
+    crate::ssh_credentials::load_generic_secret(&credential_target(id))
 }
 
 fn test_url(provider: &AiProvider) -> Result<String, ProviderTestOutcome> {

@@ -20,6 +20,18 @@ impl LanguagePreference {
 }
 
 impl UiLanguage {
+    pub fn completion_style_label(
+        self,
+        style: nebula_settings::CompletionStyleName,
+    ) -> &'static str {
+        use nebula_settings::CompletionStyleName;
+        self.text(match style {
+            CompletionStyleName::Inline => Message::SettingsCompletionInline,
+            CompletionStyleName::Popup => Message::SettingsCompletionPopup,
+            CompletionStyleName::Hybrid => Message::SettingsCompletionHybrid,
+        })
+    }
+
     pub fn for_locale(locale: Option<&str>) -> Self {
         locale
             .and_then(nebula_settings::LanguagePref::from_locale)

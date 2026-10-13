@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts import check_prohibited_names
 
@@ -20,6 +21,29 @@ def run_git(repository: Path, *args: str) -> None:
 
 
 class ProhibitedNamesTests(unittest.TestCase):
+    def test_truncated_unicode_hunk_context_preserves_added_source_checks(self) -> None:
+        context = "managed generation 改变时，旧回调".encode("utf-8")[:-1]
+        sample = "++" + check_prohibited_names.PROHIBITED_EXAMPLES[0]
+        for parents, header, prefix in ((None, b"@@ -1 +1 @@ ", b"+"), (2, b"@@@ -1 -1 +1 @@@ ", b"++")):
+            with self.subTest(parents=parents):
+                diff = (
+                    b"+++ b/source.rs\n" + header + context + b"\n"
+                    + prefix + b"safe\n" + prefix + sample.encode("utf-8") + b"\n"
+                )
+                lines = list(check_prohibited_names.added_patch_lines(diff, parents))
+                self.assertEqual(lines, [(3, "safe"), (4, sample)])
+                self.assertTrue(check_prohibited_names.prohibited_source_line("source.rs", lines[1][1]))
+                if parents is None:
+                    with patch.object(check_prohibited_names, "git", return_value=diff):
+                        self.assertEqual(list(check_prohibited_names.added_lines("source.rs", "--cached")), lines)
+
+    def test_invalid_added_utf8_is_not_hidden_by_a_truncated_hunk_header(self) -> None:
+        for parents, prefix in ((None, b"+"), (2, b"++")):
+            with self.subTest(parents=parents):
+                diff = b"@@@ context \xe8\xb0\n" + prefix + b"bad \xff\n"
+                with self.assertRaises(UnicodeDecodeError):
+                    list(check_prohibited_names.added_patch_lines(diff, parents))
+
     def check_staged(self, repository: Path):
         return subprocess.run(
             [sys.executable, str(CHECKER), "staged"], cwd=repository,
@@ -128,6 +152,81 @@ class ProhibitedNamesTests(unittest.TestCase):
         dependency = 'gpui = { git = "https://github.com/ghostty/ghostty", rev = "deadbeef" }'
         self.assertFalse(check_prohibited_names.prohibited_source_line("Cargo.toml", dependency))
         self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", dependency))
+
+    def test_mobile_build_and_session_references_preserve_their_interfaces(self) -> None:
+        cases = (
+            ("mobile/android/third_party/reader-build/package-lock.json", '"node_modules/@types/d3-contour": {'),
+            ("mobile/android/app/build.gradle.kts", 'implementation(project(":ghostty"))'),
+            ("mobile/android/settings.gradle.kts", 'include(":app", ":ghostty")'),
+            ("mobile/tools/generate_assets.py", 'root / "mobile/android/ghostty/UPSTREAM.json"'),
+            (".github/workflows/android-release.yml", "path: 'mobile/android/ghostty/build/upstream'"),
+            (".github/workflows/android-release.yml", "key: native-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json') }}"),
+            ("mobile/tools/generate_assets.py", 'notices / "Ghostty"'),
+            ("mobile/tools/test_apk_audit.py", '"assets/licenses/Ghostty/Ghostty-MIT.txt": b"fixture"'),
+            ("mobile/android/ghostty/src/main/cpp/bridge.h", '#include <ghostty/vt.h>'),
+            ("mobile/android/ghostty/UPSTREAM.json", '"project": "https://github.com/ghostty-org/ghostty",'),
+            ("mobile/ssh/licenses/SOURCE.json", '"url": "https://raw.githubusercontent.com/warp-tech/russh/revision/LICENSE.txt",'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'TMUX("tmux"), HERDR("herdr")'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.TMUX -> "exec tmux new-session -A -s \'pebrel\'"'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.HERDR -> "exec herdr"'),
+            ("mobile/android/app/src/androidTest/SshIntegrationTest.kt", '"tmux kill-session -t \'session\'" else "herdr session stop \'session\'"'),
+        )
+        for path, text in cases:
+            with self.subTest(path=path, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                # 合法引用仅保护自身，不能让同行追加的比较文案一起逃逸。
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with Ghostty'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+
+    def test_remote_discovery_commands_and_wire_tags_are_not_promotion(self) -> None:
+        path = "mobile/android/app/src/main/java/io/github/kuddev/pebrel/mobile/connection/RemoteSessions.kt"
+        cases = (
+            "if command -v tmux >/dev/null; then",
+            "if command -v herdr >/dev/null; then herdr session list --json; fi",
+            "tmux list-sessions -F '#{session_id}'",
+            "tmux list-windows -a -F '#{window_id}'",
+            "if (Get-Command herdr -ErrorAction SilentlyContinue) { & herdr session list --json }",
+            '"tmux select-window -t ${quote(window.id)}"',
+            '"$(tmux display-message -p -t ${quote(session.id)})"',
+            '"exec tmux attach-session -t ${quote(session.id)}"',
+            '"& herdr session attach ${psQuote(session.id)}"',
+            '"herdr --session ${quote(session.id)} tab focus ${quote(window.id)}"',
+            '"& herdr --session ${psQuote(session.id)} workspace list"',
+            '"& herdr --session ${psQuote(session.id)} tab list"',
+            'val sessions = data["tmux"].orEmpty()',
+            'data["herdr"]?.let { body ->',
+            'RemoteSession("tmux", id, name)',
+            'RemoteSession("herdr", id, name)',
+            'if (session.kind != "herdr") return session.windows',
+            'require(session.kind == "herdr")',
+            '    "tmux" -> {',
+            '    "herdr" -> {',
+            '}.onFailure { warnings += "herdr" }',
+            "[Console]::Write([char]30 + 'herdr' + [char]10)",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+                for name in ("tmux", "herdr", "Ghostty"):
+                    self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + "; compare with " + name))
+        for text in ('val label = "herdr"', '"tmux is better"', 'herdr unknown-command', 'tmux unknown-command'):
+            with self.subTest(text=text):
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(
+            path.replace("RemoteSessions.kt", "Other.kt"), 'RemoteSession("tmux", id, name)',
+        ))
+
+    def test_mobile_reference_paths_do_not_exempt_ordinary_mentions(self) -> None:
+        for path in (
+            "mobile/tools/generate_assets.py", "mobile/android/app/build.gradle.kts",
+            ".github/workflows/android-release.yml",
+            "mobile/android/ghostty/UPSTREAM.json", "mobile/ssh/licenses/SOURCE.json",
+            "mobile/android/app/src/main/java/connection/SshSessionMode.kt",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"description": "Inspired by Ghostty"'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"url": "https://example.invalid/ghostty"'))
 
     def test_staged_hook_configuration_is_not_exempt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

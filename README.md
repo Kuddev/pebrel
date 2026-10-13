@@ -54,14 +54,18 @@
 <table>
   <tr>
     <td align="center" width="240">
-      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_fluxionai.png" alt="Fluxion AI" width="200" /></a><br />
-      <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel"><strong>Fluxion AI</strong></a>
+      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><img src="extra/logo/sponsor_sidrune.png" alt="Sidrune AI" width="200" /></a><br />
+      <a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel"><strong>Sidrune AI</strong></a>
     </td>
     <td>
-      Thanks to Fluxion AI for sponsoring this project! Fluxion AI is one entry point for accessing and managing the world's leading AI models. It serves individual developers, technical teams and enterprises with a unified API; dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices. <a href="https://fluxionai.space/register?source=github&campaign=pebrel&promo=pebrel">Sign up via this link</a> to receive $3 in API credit.
+      <p><strong>One entry point for accessing and managing the world's leading AI models</strong></p>
+      <p>Thanks to Sidrune AI for sponsoring this project! Sidrune AI serves individual developers, technical teams and enterprises with a unified API for accessing and managing the world's leading AI models. Dynamic multi-route scheduling improves availability, and model performance, response time and cost stay transparent. Depending on the model and route, API calls can cost 40%–98% less than official or benchmark prices.</p>
+      <p><a href="https://sidrune.ai/register?source=github&campaign=pebrel&promo=pebrel">Visit and sign up now</a> to receive $3 in API credit.</p>
     </td>
   </tr>
 </table>
+
+For business cooperation or sponsorship, contact: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
 
 ## One Workspace
 
@@ -77,10 +81,62 @@ each agent's activity, and read its output without leaving the application.
 - On Windows, optional background residency keeps running sessions alive when you
   close the window. Restoring a conversation after the process exits is a separate
   feature and requires a supported CLI and a usable session identity.
-- History and path completions, configurable keybindings, and integrated shell prompts.
+- Context-aware and history completions, configurable keybindings, and integrated shell prompts.
+- Saved-command management supports checkbox selection and one confirmation for a
+  batch, replacing repeated single-command deletion. Selection mode never runs a
+  command; changing the search or folder clears the selection. **Select results**
+  selects commands in the current filtered list, including rows below the viewport.
+  **Manage → Delete all commands** clears custom commands and all current built-in
+  recipes across platforms, regardless of the current search or folder; folders stay.
+  Clearing built-ins also includes recipes moved to other folders. Empty built-in
+  folders disappear, and **Manage → Restore built-in commands** restores deleted
+  recipes to their default folder. Custom deletions are not undoable here. Deleting
+  a custom folder requires confirmation and keeps its commands in Ungrouped.
+  Batch changes reuse the existing locked, refreshed, atomic store transaction;
+  the saved file format is unchanged and stale selections preserve unrelated edits.
+- Remapping or disabling terminal shortcuts preserves text fields' native paste keys.
+  Restoring defaults updates existing windows without restarting. Runtime overrides
+  replace their previous rules, avoiding the stale disabled bindings from the append-only
+  path; the saved configuration format is unchanged. See the
+  [shortcut ownership decision](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
+
+### Intelligent Completion
+
+Get suggestions from your current Git repository, project scripts, SSH config,
+and filesystem—even when you have never run the command before. On Windows,
+Pebrel also completes registered WSL distributions. These candidates come from
+Pebrel's own completion engine, without a shell completion plugin or an AI request.
+
+Five commands in a real Windows/PowerShell terminal: Git branches, npm scripts,
+SSH aliases, WSL distributions, and a quoted filename with `cat`. Typed one
+character at a time with the built-in Powerline prompt.
+
+<p align="center">
+  <img src="docs/screenshots/intelligent-completion.gif" alt="First-use completion for Git, npm, SSH, WSL, and cat in Pebrel" width="960" />
+</p>
+
+Choose **Inline** (Tab accepts the suggestion), **List** (Tab accepts the selected
+candidate), or **Hybrid** (→ accepts the inline suggestion; Tab opens the list)
+in Settings.
+
+<details>
+<summary>How history completion differs</summary>
+
+History completion recalls a command you have already executed. Here, `echo dep`
+recalls `echo deployment finished` after its first run. The five examples above
+discover candidates from the current environment without matching prior commands.
+
+<p align="center">
+  <img src="docs/screenshots/history-completion.gif" alt="Recalling a previously executed command with history completion" width="960" />
+</p>
+
+</details>
 
 ### SSH and Files
 
+- Search SSH hosts by name, address, group, tags or notes in the host library,
+  launcher, command palette and Quick Jump. Space-separated keywords must all match;
+  searches are case-insensitive. The launchers now use the same metadata as the host library.
 - Saved hosts, SSH config aliases, proxy and jump-host options, private-key and
   keyboard-interactive authentication, and host-key verification.
 - SFTP browsing, uploads and downloads, folder transfers, progress, and cancellation.
@@ -146,10 +202,29 @@ Ad-hoc-signed macOS builds may require **Open Anyway** in **System Settings >
 Privacy & Security** on first launch. Native macOS CI runs on macOS 15; the
 deployment target alone does not establish validation on every older OS version.
 
-Windows currently also provides tray residency, the global quick-terminal hotkey,
-automatic local AI-hook setup, and automatic update installation. These integrations
-are not yet available on Linux or macOS. See [installation details](INSTALL.md) for
-platform requirements and upgrading an existing Nebula installation.
+Pebrel 2.1 connects native tray actions, quick-terminal shortcuts, login startup,
+and local AI-hook setup on Windows, macOS, and Linux. Linux tray integration uses
+a status notifier, and Wayland shortcuts use the desktop portal. Windows and
+macOS provide native update installation; Linux upgrades use its package manager
+or a new package. See [installation details](INSTALL.md) for platform requirements
+and upgrading an existing Nebula installation.
+
+## Self-hosted relay
+
+On your phone, save an SSH host with password or private-key authentication, then
+select that host in relay setup. For key authentication, the credential field is
+the private-key passphrase; leave it empty for an unencrypted key. It is not a
+relay password. After installation, select the SSH host under desktop
+**Settings → Phone connection → Relay**, then generate the phone pairing QR code.
+
+See [offline relay installation](mobile/relay-native/INSTALL.md) for server
+requirements, verification and management. The original v2.1.1 Release assets
+did not include an offline relay kit. A source checkout containing that installer
+can use `mobile/tools/package_manual_relay.py` to generate a two-architecture Linux
+kit and SHA256 sidecar from a verified APK. The tool does not download executables
+or publish or replace Release assets.
+Older APKs also need Cargo dependency notices collected from their matching source;
+the installation guide includes those commands.
 
 ## Configure
 
@@ -189,17 +264,13 @@ through the explicit `legacy-shell` feature.
 
 ## Contact
 
-Email: [fickleheartedkeys@163.com](mailto:fickleheartedkeys@163.com)
-
 Discord: [discord.gg/VFn4rcxmhn](https://discord.gg/VFn4rcxmhn)
 
 ## Acknowledgements
 
-Pebrel builds on [Alacritty](https://github.com/alacritty/alacritty),
-[GPUI](https://github.com/zed-industries/zed), and
-[gpui-component](https://github.com/longbridge/gpui-component). Terminal text uses
-Maple Mono, and native formulas use Latin Modern Math. Upstream copyright and
-license notices are preserved in `THIRD-PARTY-NOTICES` and `licenses/`.
+Pebrel includes third-party terminal, interface and font components. Their
+provenance, copyright and license notices are preserved in
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [licenses/](licenses/).
 
 ## Community
 

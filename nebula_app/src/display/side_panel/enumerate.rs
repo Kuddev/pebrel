@@ -116,8 +116,8 @@ pub(crate) fn run_wsl_find_lenient(
     distro: &str,
     args: impl IntoIterator<Item = OsString>,
 ) -> Option<(Vec<u8>, bool)> {
-    let mut command = std::process::Command::new("wsl.exe");
-    command.args(["-d", distro, "--", "find"]).args(args);
+    let mut command = crate::shell_detect::wsl_exec_command(distro);
+    command.arg("find").args(args);
     crate::platform::process::hidden_command(&mut command);
     let output = match command_output_with_timeout(command, Some(WSL_COMMAND_TIMEOUT)) {
         Ok(output) => output,
@@ -143,24 +143,13 @@ pub(crate) fn run_wsl_find(
     exit_ok.then_some(stdout)
 }
 
-/// `find -printf` 的格式串：类型 + NUL + 全路径 + NUL。**反斜杠必须写两遍**。
+/// `find -printf` 的格式串：类型 + NUL + 全路径 + NUL。
 ///
-/// 2026-08-21 实测：`wsl.exe -d <发行版> -- <命令>` 在把参数转发给来宾时会吞掉
-/// 一层反斜杠。同一条 find、同一个目录，三种写法的输出对照：
-///
-/// | 传入 | NUL 个数 | 输出开头 |
-/// |---|---|---|
-/// | `%y\0%f\0`   | **0**  | `l0lib0d0opt0…` |
-/// | `%y\\0%f\\0` | 54     | `l\0lib\0d\0opt\0…` |
-/// | `sh -c` 包一层 | 54   | `l\0lib\0d\0opt\0…` |
-///
-/// 也就是说单反斜杠版本让 find 收到的是 `%y0%f0`，输出用字面字符 `'0'` 分隔、
-/// 一个 NUL 都没有，[`parse_wsl_find_pairs`] 因此永远配不出记录、返回空列表——
-/// UI 再把空列表显示成"此目录为空"。这就是 WSL 文件树空白的根因。
-///
-/// 用双反斜杠而不是 `sh -c` 包装：后者要为含空格/引号的来宾路径再做一层 shell
-/// 引用，而这里只需要把转义层数补对。
-pub(crate) const WSL_FIND_PATH_FORMAT: &str = r"%y\\0%p\\0";
+/// 单反斜杠：[`crate::shell_detect::wsl_exec_command`] 直接 exec `find`，不经
+/// 来宾 shell（`search/walk.rs` 同理）。旧的 `wsl.exe -d <发行版> -- find` 会让
+/// 来宾 shell 解释路径里的 `$(…)`，还会吞掉一层反斜杠（2026-08-21 实测单反斜杠
+/// 版本一个 NUL 都输出不了，文件树因此全空），所以当时写两遍；那条路已弃用。
+pub(crate) const WSL_FIND_PATH_FORMAT: &str = r"%y\0%p\0";
 
 /// 一趟 `find` 的结果，按父目录分桶。
 pub(crate) struct WslDirListing {

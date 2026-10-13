@@ -5,22 +5,22 @@
 //! global palette so a test cannot pass by only exercising a state callback.
 
 use super::*;
+use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 use crate::theme_library::{ThemeDocument, ThemeFormat, ThemeLibraryStore};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, size};
 use gpui_component::Root;
 use nebula_settings::{RawSettings, RuntimeSettings, ThemeDefinition, ThemeName};
 
+#[path = "theme_background_tests.rs"]
+mod background_tests;
+#[path = "theme_package_tests.rs"]
+mod package_tests;
+#[cfg(feature = "shader-background")]
+#[path = "terminal_effect_tests.rs"]
+mod terminal_effect_tests;
+
 const TEST_SETTINGS: &str =
     "theme=Nord\nfollow_system_theme=0\napp_icon=graphite-violet\nfont_size=15\n";
-
-// These rendered fixtures share the real settings path and theme library.
-// Readers must hold the same guard as Save/Apply tests so their before/after
-// snapshots cannot observe another fixture's writes or restoration cleanup.
-// Only this fixture group is serialized; the rest of the native suite stays parallel.
-fn lock_theme_studio() -> std::sync::MutexGuard<'static, ()> {
-    static FIXTURES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    FIXTURES.lock().unwrap_or_else(|error| error.into_inner())
-}
 
 #[derive(Clone, Debug, PartialEq)]
 struct RuntimeSnapshot {
@@ -158,6 +158,53 @@ fn scrolling_controls_persist_dropdown_and_slider_without_changing_existing_hist
     assert_eq!(existing.grid().history_size(), 10_000);
 }
 
+#[gpui::test]
+fn scrollbar_menu_persists_all_modes_and_reopens_with_the_selected_value(cx: &mut TestAppContext) {
+    use crate::gpui_shell::config::Settings;
+    use nebula_settings::ScrollbarVisibility;
+
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    std::fs::create_dir_all(nebula_settings::settings_dir()).unwrap();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS).unwrap();
+    let (pane, mut window) = open_settings(cx);
+    pane.update(&mut window, |pane, cx| {
+        pane.active_section = 1;
+        cx.notify();
+    });
+    window.simulate_resize(size(px(1280.0), px(1800.0)));
+    draw(&mut window);
+    for mode in [ScrollbarVisibility::Hover, ScrollbarVisibility::Always, ScrollbarVisibility::Auto]
+    {
+        click("settings-select-scrollbar_visibility", &mut window);
+        if mode == ScrollbarVisibility::Auto {
+            press("up", &mut window);
+            press("up", &mut window);
+        } else {
+            press("down", &mut window);
+        }
+        press("enter", &mut window);
+        assert_eq!(RuntimeSettings::load().scrollbar_visibility, mode);
+        assert_eq!(window.read(|cx| cx.global::<Settings>().scrollbar_visibility), mode);
+        let reopened = window.update(|window, cx| cx.new(|cx| SettingsPane::new(window, cx)));
+        reopened.read_with(&mut window, |pane, cx| {
+            assert_eq!(pane.runtime.scrollbar_visibility, mode);
+            assert_eq!(
+                pane.select_of("scrollbar_visibility")
+                    .unwrap()
+                    .read(cx)
+                    .selected_index(cx)
+                    .unwrap()
+                    .row,
+                ScrollbarVisibility::VALUES
+                    .iter()
+                    .position(|value| *value == mode.settings_value())
+                    .unwrap(),
+            );
+        });
+    }
+}
+
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -265,6 +312,30 @@ fn open_theme_editor(cx: &mut VisualTestContext) {
     assert!(cx.debug_bounds("theme-editor-dialog").is_some());
 }
 
+fn reveal_editor_control(selector: &'static str, cx: &mut VisualTestContext) {
+    let viewport = cx
+        .debug_bounds("theme-editor-fields-scroll")
+        .or_else(|| cx.debug_bounds("theme-editor-scroll"))
+        .expect("editor scroll viewport");
+    let target = cx.debug_bounds(selector).expect("editor control layout");
+    // 双栏和窄窗使用不同滚动容器；按真实布局滚动，避免点击落在固定底栏上。
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(
+            px(0.0),
+            viewport.center().y - target.center().y,
+        )),
+        touch_phase: gpui::TouchPhase::Moved,
+        modifiers: Modifiers::default(),
+    });
+    draw(cx);
+    let target = cx.debug_bounds(selector).expect("scrolled editor control");
+    assert!(
+        target.top() >= viewport.top() && target.bottom() <= viewport.bottom(),
+        "{selector} must be reachable above the footer: {target:?}, viewport: {viewport:?}"
+    );
+}
+
 fn runtime_snapshot() -> RuntimeSnapshot {
     let runtime = RuntimeSettings::load();
     RuntimeSnapshot {
@@ -288,31 +359,6 @@ fn custom_theme_ids() -> Vec<String> {
 
 fn custom_theme_documents() -> Vec<ThemeDocument> {
     ThemeLibraryStore::default().list().expect("list native theme library").custom
-}
-
-struct SettingsBytesGuard {
-    path: std::path::PathBuf,
-    bytes: Option<Vec<u8>>,
-}
-
-impl SettingsBytesGuard {
-    fn capture() -> Self {
-        let path = nebula_settings::settings_path();
-        Self { bytes: std::fs::read(&path).ok(), path }
-    }
-}
-
-impl Drop for SettingsBytesGuard {
-    fn drop(&mut self) {
-        match &self.bytes {
-            Some(bytes) => {
-                let _ = std::fs::write(&self.path, bytes);
-            },
-            None => {
-                let _ = std::fs::remove_file(&self.path);
-            },
-        }
-    }
 }
 
 #[derive(Default)]
@@ -483,6 +529,28 @@ fn editor_template(pane: &Entity<SettingsPane>, cx: &mut VisualTestContext) -> T
     pane.read_with(cx, |pane, _| pane.theme_editor.as_ref().expect("theme editor state").template)
 }
 
+fn emit_advanced_picker_color(
+    pane: &Entity<SettingsPane>,
+    field: super::theme_advanced::ThemeAdvancedField,
+    color: [u8; 3],
+    cx: &mut VisualTestContext,
+) {
+    let picker = pane
+        .read_with(cx, |pane, _| pane.theme_advanced_picker(field).expect("advanced color picker"));
+    picker.update(cx, |_, cx| {
+        let [r, g, b] = color;
+        let hsla: gpui::Hsla = gpui::Rgba {
+            r: f32::from(r) / 255.0,
+            g: f32::from(g) / 255.0,
+            b: f32::from(b) / 255.0,
+            a: 1.0,
+        }
+        .into();
+        cx.emit(gpui_component::color_picker::ColorPickerEvent::Change(Some(hsla)));
+    });
+    draw(cx);
+}
+
 #[gpui::test]
 fn theme_editor_opens_from_the_picker_with_common_fields_and_collapsed_advanced(
     cx: &mut TestAppContext,
@@ -508,10 +576,19 @@ fn theme_editor_opens_from_the_picker_with_common_fields_and_collapsed_advanced(
     assert!(window.debug_bounds("theme-editor-advanced-toggle").is_some());
     assert!(window.debug_bounds("theme-editor-ansi-0").is_none());
 
-    click("theme-editor-advanced-toggle", &mut window);
-    assert!(window.debug_bounds("theme-editor-ansi-0").is_some());
-    click("theme-editor-advanced-toggle", &mut window);
-    assert!(window.debug_bounds("theme-editor-ansi-0").is_none());
+    for viewport in [size(px(1280.0), px(1000.0)), size(px(680.0), px(740.0))] {
+        window.simulate_resize(viewport);
+        draw(&mut window);
+        reveal_editor_control("theme-editor-advanced-toggle", &mut window);
+        click("theme-editor-advanced-toggle", &mut window);
+        assert!(window.debug_bounds("theme-editor-ansi-0").is_some());
+        reveal_editor_control("theme-editor-ansi-0", &mut window);
+        let save = window.debug_bounds("theme-editor-save-apply").expect("fixed save button");
+        assert!(save.bottom() <= viewport.height);
+        reveal_editor_control("theme-editor-advanced-toggle", &mut window);
+        click("theme-editor-advanced-toggle", &mut window);
+        assert!(window.debug_bounds("theme-editor-ansi-0").is_none());
+    }
 }
 
 #[gpui::test]
@@ -537,6 +614,41 @@ fn theme_editor_input_is_a_local_draft_until_apply_and_preserves_builtin_source(
     assert_eq!(runtime_snapshot(), before_runtime);
     assert_eq!(palette_snapshot(&mut window), before_palette);
     assert_eq!(settings_file_snapshot(), before_settings_file);
+}
+
+#[gpui::test]
+fn theme_editor_single_color_reset_preserves_other_colors_and_recovers_invalid_hex(
+    cx: &mut TestAppContext,
+) {
+    let _fixture_guard = lock_theme_studio();
+    let (pane, mut window) = open_settings(cx);
+    let before_runtime = runtime_snapshot();
+    let before_file = settings_file_snapshot();
+    open_theme_editor(&mut window);
+    let original = editor_draft(&pane, &mut window);
+    // 模拟带独立界面色的合法草稿，重置一个色块不能覆盖其他已编辑颜色。
+    pane.update(&mut window, |pane, cx| {
+        pane.theme_editor.as_mut().unwrap().draft.ui.warning = [17, 34, 51];
+        cx.notify();
+    });
+    draw(&mut window);
+    edit_input("theme-editor-accent", "#102030", &mut window);
+    let mut expected = editor_draft(&pane, &mut window);
+    expected.ui.accent = original.resolved_ui().accent;
+    click("theme-editor-reset-theme-editor-accent", &mut window);
+    assert_eq!(editor_draft(&pane, &mut window), expected);
+
+    edit_input("theme-editor-foreground", "invalid", &mut window);
+    assert!(
+        pane.read_with(&mut window, |pane, _| pane.theme_editor.as_ref().unwrap().error.is_some())
+    );
+    click("theme-editor-reset-theme-editor-foreground", &mut window);
+    assert!(
+        pane.read_with(&mut window, |pane, _| pane.theme_editor.as_ref().unwrap().error.is_none())
+    );
+    assert_eq!(editor_draft(&pane, &mut window), expected);
+    assert_eq!(runtime_snapshot(), before_runtime);
+    assert_eq!(settings_file_snapshot(), before_file);
 }
 
 #[gpui::test]
@@ -726,6 +838,93 @@ fn theme_editor_save_and_apply_persists_copy_and_reloads_its_foreground(cx: &mut
     assert_eq!(reloaded_runtime.custom_theme.as_deref(), Some(applied_id));
     assert_eq!(reloaded_palette_snapshot(&mut window, &reloaded_runtime), after_palette);
     assert_eq!(palette_foreground(&mut window), applied.color("terminal", "foreground").unwrap());
+}
+
+#[gpui::test]
+fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_reopen(
+    cx: &mut TestAppContext,
+) {
+    use super::theme_advanced::ThemeAdvancedField;
+
+    let _fixture_guard = lock_theme_studio();
+    let _settings_guard = SettingsBytesGuard::capture();
+    std::fs::write(nebula_settings::settings_path(), TEST_SETTINGS)
+        .expect("write isolated advanced color settings");
+    let mut theme_cleanup = CustomThemeCleanup::default();
+    let (pane, mut window) = open_settings(cx);
+    let before_library_ids = custom_theme_ids();
+    let saved_name = format!("Advanced colors native test {}", std::process::id());
+    let selection_background = [0x1b, 0x2c, 0x3d];
+    let selection_foreground = [0xe1, 0xd2, 0xc3];
+    let cursor_text = [0x12, 0xeb, 0x77];
+
+    open_theme_editor(&mut window);
+    edit_input("theme-editor-name", &saved_name, &mut window);
+    reveal_editor_control("theme-editor-advanced-toggle", &mut window);
+    click("theme-editor-advanced-toggle", &mut window);
+    assert!(window.debug_bounds("theme-editor-preview-cursor").is_some());
+
+    emit_advanced_picker_color(
+        &pane,
+        ThemeAdvancedField::SelectionBackground,
+        selection_background,
+        &mut window,
+    );
+    emit_advanced_picker_color(
+        &pane,
+        ThemeAdvancedField::SelectionForeground,
+        selection_foreground,
+        &mut window,
+    );
+    emit_advanced_picker_color(&pane, ThemeAdvancedField::CursorText, cursor_text, &mut window);
+
+    let draft = editor_draft(&pane, &mut window);
+    assert_eq!(draft.terminal.selection_background, Some(selection_background));
+    assert_eq!(draft.terminal.selection_foreground, Some(selection_foreground));
+    assert_eq!(draft.terminal.cursor_text, Some(cursor_text));
+
+    click("theme-editor-save-apply", &mut window);
+    assert!(window.debug_bounds("theme-editor-dialog").is_none());
+
+    let after_documents = custom_theme_documents();
+    for document in &after_documents {
+        if document.id().is_some_and(|id| !before_library_ids.iter().any(|before| before == id))
+            && document.name().starts_with(&saved_name)
+        {
+            theme_cleanup.track(document);
+        }
+    }
+    let applied_id = RuntimeSettings::load().custom_theme.expect("advanced color theme is active");
+    let applied = after_documents
+        .iter()
+        .find(|document| document.id() == Some(applied_id.as_str()))
+        .expect("advanced color theme remains in the library");
+    let applied_definition = applied.definition().expect("saved advanced color definition");
+    assert_eq!(applied_definition.terminal.selection_background, Some(selection_background));
+    assert_eq!(applied_definition.terminal.selection_foreground, Some(selection_foreground));
+    assert_eq!(applied_definition.terminal.cursor_text, Some(cursor_text));
+
+    window.read(|cx| {
+        let palette = &cx.global::<crate::gpui_shell::config::Settings>().palette;
+        let bytes = |color: gpui::Rgba| {
+            [
+                (color.r * 255.0).round() as u8,
+                (color.g * 255.0).round() as u8,
+                (color.b * 255.0).round() as u8,
+            ]
+        };
+        assert_eq!(bytes(palette.selection), selection_background);
+        assert_eq!(palette.selection_foreground.map(bytes), Some(selection_foreground));
+        assert_eq!(palette.cursor_text.map(bytes), Some(cursor_text));
+    });
+
+    click("open-theme-picker", &mut window);
+    assert!(window.debug_bounds("appearance-picker-dialog").is_some());
+    click("customize-theme", &mut window);
+    let reopened = editor_draft(&pane, &mut window);
+    assert_eq!(reopened.terminal.selection_background, Some(selection_background));
+    assert_eq!(reopened.terminal.selection_foreground, Some(selection_foreground));
+    assert_eq!(reopened.terminal.cursor_text, Some(cursor_text));
 }
 
 #[gpui::test]
@@ -957,6 +1156,10 @@ fn theme_picker_foreground_swatches_are_local_until_apply(cx: &mut TestAppContex
     let before_runtime = runtime_snapshot();
     let before_palette = palette_snapshot(&mut window);
     click("open-theme-picker", &mut window);
+    let customize = window.debug_bounds("customize-theme").expect("custom theme entry");
+    let apply = window.debug_bounds("apply-appearance-picker").expect("apply entry");
+    assert!(customize.right() < apply.left(), "custom theme stays at the footer's left edge");
+    assert!((customize.bottom() - apply.bottom()).abs() < px(12.0));
 
     for index in 0..3 {
         let selector = match index {
@@ -965,6 +1168,8 @@ fn theme_picker_foreground_swatches_are_local_until_apply(cx: &mut TestAppContex
             _ => "theme-foreground-swatch-2",
         };
         click(selector, &mut window);
+        let hit = window.debug_bounds(selector).expect("foreground color hit area");
+        assert_eq!(hit.size, size(px(32.0), px(32.0)));
         assert!(pane.read_with(&mut window, |pane, _| {
             pane.appearance_picker.as_ref().is_some_and(|picker| picker.draft.is_theme())
         }));
@@ -990,6 +1195,84 @@ fn theme_picker_foreground_swatches_are_local_until_apply(cx: &mut TestAppContex
     click("confirm-dialog-ok", &mut window);
     assert_eq!(runtime_snapshot(), before_runtime);
     assert_eq!(palette_snapshot(&mut window), before_palette);
+}
+
+/// 仅按需显示真实 GPUI 控件；使用独立配置目录，不启动 PTY 或修改用户配置。
+#[test]
+#[ignore = "manual theme visual review; requires isolated PEBREL_CONFIG_DIR and PEBREL_THEME_QA_DIR"]
+fn native_theme_picker_visual_review() {
+    use std::{path::PathBuf, time::Duration};
+    let config = PathBuf::from(std::env::var_os("PEBREL_CONFIG_DIR").expect("isolated config"));
+    let output = PathBuf::from(std::env::var_os("PEBREL_THEME_QA_DIR").expect("QA output"));
+    let mode = std::env::var("PEBREL_THEME_QA_MODE").unwrap_or_else(|_| "cards".into());
+    assert!(config.is_absolute() && output.is_absolute());
+    assert!(!config.join("pebrel_settings.txt").exists(), "use a fresh isolated config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(
+        config.join("pebrel_settings.txt"),
+        "theme=Nord\nfollow_system_theme=0\nlanguage=zh-CN\nfont_size=14\n",
+    )
+    .unwrap();
+    gpui_platform::application().with_assets(crate::gpui_shell::NebulaAssets).run(move |cx| {
+        crate::gpui_shell::init(cx, None);
+        let mut pane = None;
+        let handle = cx
+            .open_window(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                        gpui::point(px(30.0), px(20.0)),
+                        size(px(1100.0), px(690.0)),
+                    ))),
+                    focus: false,
+                    show: true,
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let settings = cx.new(|cx| SettingsPane::new(window, cx));
+                    settings.update(cx, |settings, cx| {
+                        settings.active_section = 1;
+                        if mode != "appearance" {
+                            settings.open_appearance_picker(true, window, cx);
+                        }
+                    });
+                    pane = Some(settings.clone());
+                    let host = cx.new(|_| ThemeStudioHost { pane: settings });
+                    cx.new(|cx| Root::new(host, window, cx))
+                },
+            )
+            .unwrap();
+        let pane = pane.unwrap();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_millis(800)).await;
+            cx.update_window(handle.into(), |_, window, cx| {
+                pane.update(cx, |pane, cx| match mode.as_str() {
+                    "palette" => pane.open_theme_foreground_picker(window, cx),
+                    "editor" => pane.open_theme_editor(window, cx),
+                    _ => {},
+                });
+                window.refresh();
+            })
+            .unwrap();
+            cx.background_executor().timer(Duration::from_millis(800)).await;
+            std::fs::write(
+                output.join("ready.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "pid": std::process::id(), "mode": mode,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            for _ in 0..240 {
+                if output.join("capture-complete").exists() {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+            }
+            cx.update(|cx| cx.quit());
+        })
+        .detach();
+    });
 }
 
 #[gpui::test]
@@ -1071,6 +1354,22 @@ fn theme_picker_foreground_swatches_fit_above_footer_in_a_short_window(cx: &mut 
     window.simulate_resize(size(px(900.0), px(590.0)));
     draw(&mut window);
     click("open-theme-picker", &mut window);
+
+    let preview = window.debug_bounds("theme-picker-terminal-preview").expect("theme preview");
+    for selector in ["theme-preview-name", "theme-preview-mode"] {
+        let label = window.debug_bounds(selector).expect("preview caption");
+        assert!(
+            f32::from(label.center().x - preview.center().x).abs() < 1.0,
+            "{selector} must be centered beneath the preview"
+        );
+    }
+    let first = window.debug_bounds("theme-foreground-swatch-0").unwrap();
+    let last = window.debug_bounds("theme-foreground-custom-swatch").unwrap();
+    let swatch_center = (first.left() + last.right()) / 2.0;
+    assert!(
+        f32::from(swatch_center - preview.center().x).abs() < 1.0,
+        "the swatches must be centered as a group"
+    );
 
     let footer =
         window.debug_bounds("apply-appearance-picker").expect("appearance picker apply button");
@@ -1433,4 +1732,50 @@ fn theme_editor_save_only_forks_a_non_active_custom_template_without_publishing_
     );
     assert_eq!(settings_file_snapshot(), before_save_settings);
     assert_eq!(settings_file_snapshot(), before_settings_file);
+}
+
+#[gpui::test]
+fn theme_list_scroll_keeps_preview_visible_and_narrow_picker_accessible(cx: &mut TestAppContext) {
+    let _fixture_guard = lock_theme_studio();
+    let (pane, mut window) = open_settings(cx);
+    window.simulate_resize(size(px(900.0), px(590.0)));
+    draw(&mut window);
+    click("open-theme-picker", &mut window);
+    click_first_theme_option(&mut window);
+    let preview_before = window.debug_bounds("theme-picker-terminal-preview").unwrap();
+    let grid_before = window.debug_bounds("appearance-theme-grid").unwrap();
+    let list = window.debug_bounds("appearance-theme-list-scroll").unwrap();
+    let footer = window.debug_bounds("apply-appearance-picker").unwrap();
+    assert!(preview_before.bottom() < footer.top());
+    window.simulate_event(gpui::ScrollWheelEvent {
+        position: list.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-350.0))),
+        touch_phase: gpui::TouchPhase::Moved,
+        modifiers: Modifiers::default(),
+    });
+    draw(&mut window);
+    assert!(window.debug_bounds("appearance-theme-grid").unwrap().top() < grid_before.top());
+    assert_eq!(window.debug_bounds("theme-picker-terminal-preview").unwrap(), preview_before);
+    assert_eq!(window.debug_bounds("apply-appearance-picker").unwrap(), footer);
+
+    press("end", &mut window);
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().unwrap();
+        assert_eq!(Some(&picker.draft), picker.choices().last());
+    });
+    assert_eq!(window.debug_bounds("theme-picker-terminal-preview").unwrap(), preview_before);
+    window.simulate_resize(size(px(620.0), px(590.0)));
+    draw(&mut window);
+    assert!(window.debug_bounds("appearance-theme-list-scroll").is_none());
+    let preview = window.debug_bounds("theme-picker-terminal-preview").unwrap();
+    let grid = window.debug_bounds("appearance-theme-grid").unwrap();
+    assert!(grid.top() > preview.bottom(), "narrow layout retains the stacked preview");
+    let dialog = window.debug_bounds("appearance-picker-dialog").unwrap();
+    let apply = window.debug_bounds("apply-appearance-picker").unwrap();
+    assert!(apply.bottom() <= dialog.bottom(), "the footer remains reachable");
+    press("home", &mut window);
+    pane.read_with(&mut window, |pane, _| {
+        let picker = pane.appearance_picker.as_ref().unwrap();
+        assert_eq!(Some(&picker.draft), picker.choices().first());
+    });
 }

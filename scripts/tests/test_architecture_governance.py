@@ -1,7 +1,9 @@
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import unittest
+from urllib.parse import unquote, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +24,18 @@ NOTE_REQUIRED_SECTIONS = (
     "Consequences", "Validation", "Supersedes", "Revisit when",
 )
 MAX_NOTE_LINES = 200
+
+
+def unresolved_document_links(document):
+    text = document.read_text(encoding="utf-8")
+    for link in re.findall(r"\]\(([^)]+)\)", text):
+        target = urlsplit(link)
+        # URI 的 scheme 不要求带 //；mailto 不是仓库相对路径。
+        if target.scheme or target.netloc or not target.path:
+            continue
+        path = unquote(target.path)
+        if not (document.parent / path).exists():
+            yield path
 
 
 def decision_note_errors(text):
@@ -123,13 +137,26 @@ class GovernanceTests(unittest.TestCase):
     def test_relative_document_links_resolve(self):
         for name in PUBLIC_GUIDES:
             document = ROOT / name
-            text = document.read_text(encoding="utf-8")
-            for link in re.findall(r"\]\(([^)]+)\)", text):
-                if "://" in link or link.startswith("#"):
-                    continue
-                target = link.split("#", 1)[0]
-                with self.subTest(document=name, target=target):
-                    self.assertTrue((document.parent / target).exists())
+            with self.subTest(document=name):
+                self.assertEqual(list(unresolved_document_links(document)), [])
+
+    def test_uri_links_do_not_hide_missing_relative_document_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = root / "guide.md"
+            (root / "中文 guide.md").write_text("# Guide\n", encoding="utf-8")
+            document.write_text(
+                "[email](mailto:maintainer@example.com)\n"
+                "[web](https://example.com/guide)\n"
+                "[cdn](//example.com/guide)\n"
+                "[section](#details)\n"
+                "[local](中文%20guide.md#details)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(list(unresolved_document_links(document)), [])
+            with document.open("a", encoding="utf-8") as stream:
+                stream.write("[broken](missing.md#details)\n")
+            self.assertEqual(list(unresolved_document_links(document)), ["missing.md"])
 
     def test_decision_note_contract_accepts_and_rejects_known_examples(self):
         valid = "# Decision\n\n" + "\n\n".join(

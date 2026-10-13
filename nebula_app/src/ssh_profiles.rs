@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 #[path = "ssh_profiles/connection.rs"]
 mod connection;
+pub(crate) mod duplication;
 #[path = "ssh_profiles/exchange.rs"]
 pub(crate) mod exchange;
 #[path = "ssh_profiles/organization.rs"]
@@ -75,6 +76,9 @@ pub struct SshProfiles {
     usernames: Vec<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     organization: std::collections::BTreeMap<String, HostOrganization>,
+    /// 副本的列表/凭据身份独立于连接地址；旧主机没有此项，仍以地址作为身份。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    targets: std::collections::BTreeMap<String, String>,
     #[serde(skip)]
     source_bytes: Option<Vec<u8>>,
 }
@@ -86,6 +90,7 @@ impl Default for SshProfiles {
             profiles: Vec::new(),
             usernames: Vec::new(),
             organization: Default::default(),
+            targets: Default::default(),
             source_bytes: None,
         }
     }
@@ -107,12 +112,17 @@ impl SshProfiles {
             value.validate().map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         }
         normalize_usernames(&mut profiles.usernames);
+        profiles
+            .validate_targets()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         profiles.version = PROFILE_VERSION;
         profiles.source_bytes = Some(data);
         Ok(profiles)
     }
 
     pub fn save(&mut self, path: &Path) -> io::Result<()> {
+        self.validate_targets()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -182,7 +192,9 @@ impl SshProfiles {
     pub fn usernames(&self) -> Vec<String> {
         let mut usernames = self.usernames.clone();
         for profile in &self.profiles {
-            if let Some(username) = destination_username(&profile.destination) {
+            if let Some(username) =
+                destination_username(self.connection_destination(&profile.destination))
+            {
                 push_unique_username(&mut usernames, username);
             }
         }
@@ -236,6 +248,7 @@ impl SshProfiles {
     pub fn remove(&mut self, destination: &str) {
         self.profiles.retain(|profile| profile.destination != destination);
         self.organization.remove(destination);
+        self.targets.remove(destination);
     }
 
     pub fn jump_dependents(&self, destination: &str) -> Vec<String> {
@@ -252,6 +265,7 @@ impl SshProfiles {
 
     pub fn rename(&mut self, old: &str, new: &str) {
         let organization = self.organization.remove(old);
+        let target = self.targets.remove(old);
         if let Some(mut profile) =
             self.profiles.iter().find(|profile| profile.destination == old).cloned()
         {
@@ -261,6 +275,9 @@ impl SshProfiles {
         }
         if let Some(organization) = organization {
             self.organization.insert(new.to_owned(), organization);
+        }
+        if let Some(target) = target {
+            self.targets.insert(new.to_owned(), target);
         }
         for profile in &mut self.profiles {
             if profile.connection.jump_mode == SshHostJumpMode::Host
@@ -321,6 +338,106 @@ fn deduplicate_key_paths(paths: &mut Vec<PathBuf>) {
 mod tests {
     use super::{SshAuthMode, SshProfileAuth, SshProfiles};
     use std::path::PathBuf;
+
+    #[test]
+    fn host_copies_keep_independent_targets_metadata_and_csv_roundtrips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ssh_profiles.json");
+        let mut profiles = SshProfiles::default();
+        let mut source = profiles.for_destination("root@example.com:2222");
+        source.label = Some("生产".into());
+        source.auth = SshAuthMode::PublicKey;
+        source.private_keys.push("key.pem".into());
+        source.icon = Some("debian".into());
+        source.connection.jump_mode = super::SshHostJumpMode::Host;
+        source.connection.jump_host = "bastion".into();
+        profiles.upsert(source.clone());
+        let organization =
+            super::HostOrganization::from_inputs("公司", "linux,db", "中文备注").unwrap();
+        profiles.set_organization(&source.destination, organization.clone()).unwrap();
+        assert_eq!(profiles.duplicate_host(&source.destination, "copy-a").unwrap(), "生产 1");
+        assert_eq!(profiles.duplicate_host(&source.destination, "copy-b").unwrap(), "生产 2");
+        profiles.duplicate_host("copy-a", "copy-c").unwrap();
+        let mut expected = source.clone();
+        expected.destination = "copy-a".into();
+        expected.label = Some("生产 1".into());
+        assert_eq!(profiles.for_destination("copy-a"), expected);
+        assert_eq!(profiles.organization("copy-a"), &organization);
+        assert_eq!(profiles.connection_destination("copy-c"), source.destination);
+        assert_eq!(
+            profiles.edited_identity(Some("copy-a"), "operator@other:2200").unwrap(),
+            "copy-a"
+        );
+        assert_eq!(profiles.for_destination(&source.destination), source);
+        assert_eq!(profiles.connection_destination("copy-b"), source.destination);
+        profiles.remove("copy-a");
+        profiles.save(&path).unwrap();
+        let restored = SshProfiles::load(&path).unwrap();
+        assert_eq!(restored.connection_destination("copy-b"), source.destination);
+        let csv = restored.export_csv();
+        let mut imported = SshProfiles::default();
+        imported.import_missing(&super::exchange::parse_csv(&csv).unwrap()).unwrap();
+        assert_eq!(imported.connection_destination("copy-b"), source.destination);
+        assert_eq!(imported.organization("copy-c"), &organization);
+        assert_eq!(
+            imported.filter_hosts(vec!["copy-b".into()], "example.com", false, None),
+            vec!["copy-b"]
+        );
+    }
+
+    #[test]
+    fn copying_credentials_commits_only_after_success_and_rolls_back_failed_profile_writes() {
+        use crate::ssh_credentials::credential_target;
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ssh_profiles.json");
+        let mut profiles = SshProfiles::default();
+        let mut source = profiles.for_destination("root@host");
+        source.connection.proxy_mode = super::SshHostProxyMode::Socks5;
+        source.connection.proxy_host = "proxy".into();
+        source.connection.proxy_username = "user".into();
+        let proxy_key = source.connection.proxy_credential_target("root@host").unwrap();
+        let copied_proxy_key = source.connection.proxy_credential_target("copy-a").unwrap();
+        profiles.upsert(source);
+        profiles.save(&path).unwrap();
+        let stale = profiles.clone();
+        let original = HashMap::from([
+            (credential_target("root@host"), b"password".to_vec()),
+            (proxy_key, b"proxy-secret".to_vec()),
+        ]);
+        let secrets = RefCell::new(original.clone());
+        let copy = |profiles, identity| {
+            super::duplication::save_duplicate(
+                profiles,
+                &path,
+                "root@host",
+                identity,
+                |key| Ok(secrets.borrow().get(key).cloned()),
+                |key, value| {
+                    secrets.borrow_mut().insert(key.to_owned(), value.to_vec());
+                    Ok(())
+                },
+                |key| {
+                    secrets.borrow_mut().remove(key);
+                    Ok(())
+                },
+            )
+        };
+        let (updated, _) = copy(profiles, "copy-a").unwrap();
+        assert_eq!(secrets.borrow()[&credential_target("copy-a")], b"password");
+        assert_eq!(secrets.borrow()[&copied_proxy_key], b"proxy-secret");
+        let saved = std::fs::read(&path).unwrap();
+        let credentials = secrets.borrow().clone();
+        assert!(copy(stale, "copy-b").is_err(), "stale writes must not overwrite another copy");
+        assert_eq!(*secrets.borrow(), credentials);
+        assert_eq!(std::fs::read(&path).unwrap(), saved);
+        assert!(!String::from_utf8(saved).unwrap().contains("proxy-secret"));
+        assert_eq!(updated.connection_destination("copy-a"), "root@host");
+        for (key, value) in original {
+            assert_eq!(secrets.borrow()[&key], value);
+        }
+    }
 
     #[test]
     fn missing_profile_defaults_to_auto_without_keys() {

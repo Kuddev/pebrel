@@ -297,8 +297,10 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 
 `pane.exec` 与 `pane.run` 是两种刻意分开的执行语义：它直接接收 argv，不经过 shell 展开，
 在 Pane 当前上报的本地 cwd 中启动独立 non-TTY child，不写入 Grid、history 或交互 shell
-环境。WSL Pane 通过对应 distribution 和 guest cwd 执行；SSH Pane 返回
-`remote_exec_unsupported`。stdout/stderr 始终并行排水，每条默认最多保留 1 MiB、可配置上限
+环境。WSL Pane 通过对应 distribution 和 guest cwd 执行；argv 通过 `--exec` 保留原生参数边界，
+包括参数内部的双引号。当前启动目录模型不接收含 `"` 的 guest cwd，此时返回
+`exec_argument_unsupported`（`details.argument` 为该目录），不会改写后执行。
+SSH Pane 返回 `remote_exec_unsupported`。stdout/stderr 始终并行排水，每条默认最多保留 1 MiB、可配置上限
 16 MiB；响应的 `stdout`/`stderr` 是直接字符串，`capture` 分别报告 encoding、总字节数、保留
 字节数和截断状态。超时会回收整个子进程树，并保留已捕获输出与 `timed_out: true`。
 
@@ -329,10 +331,10 @@ managed generation 改变时，旧回调直接丢弃，不会寻找替代 pane�
 SSH pane 只有进入 `Ready` 后允许读取或写入。解析、连接、认证、打开 Shell 或 Failed 阶段会
 返回 `ssh_not_ready`，避免把密码提示和连接错误屏误当成远端 Agent 的正常输出。
 
-默认 GPUI 产品当前只有一个 workspace window，稳定 `window_id` 为 1。该窗口上的
-snapshot/focus/tab.new/pane.split/pane.prompt/pane.read 都操作真实 workspace；GPUI 尚未建立
-第二个拥有独立 hook/runtime 接收器的 workspace，因此 `window.create` 明确返回
-`runtime_unavailable`，不会伪造一个新窗口 id。旧 winit 壳仍支持真实多窗口创建。
+GPUI 的进程级窗口分发器处理 `window.create`，为每个新 workspace 分配稳定的
+`window_id`，并返回首个 Pane 的 ID。Shell/AI 事件通过窗口注册表路由到对应 workspace，
+而不是为每个窗口复制事件接收器。`window.create` 创建可见窗口但不抢前台；显式
+`window.focus` 才激活窗口。旧 winit 壳也保留自己的多窗口创建路径。
 
 ## 等待语义与 `state_change_seq`
 

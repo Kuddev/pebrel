@@ -21,8 +21,13 @@ pub use self::windows::*;
 
 /// Shared SSH/WSL execution reports for local and bootstrapped bash/zsh shells.
 pub fn connection_shell() -> &'static str {
-    static SCRIPT: LazyLock<Cow<'static, str>> =
-        LazyLock::new(|| shell_line_endings(include_str!("connection.sh")));
+    static SCRIPT: LazyLock<Cow<'static, str>> = LazyLock::new(|| {
+        Cow::Owned(format!(
+            "{}\n{}",
+            shell_line_endings(include_str!("connection.sh")),
+            shell_line_endings(include_str!("completion.sh"))
+        ))
+    });
     &SCRIPT
 }
 

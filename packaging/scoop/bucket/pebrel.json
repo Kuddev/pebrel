@@ -1,0 +1,36 @@
+{
+    "version": "1.9.1",
+    "description": "GPU-accelerated terminal with native UI and AI-agent integration",
+    "homepage": "https://github.com/Kuddev/pebrel",
+    "license": "GPL-3.0-or-later",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/Kuddev/pebrel/releases/download/v1.9.1/Pebrel-v1.9.1-windows-x64.zip",
+            "hash": "2d602adb86347d9d160296b3ba89dce740a4f75f78f681f01ac213b655edbbbb"
+        },
+        "arm64": {
+            "url": "https://github.com/Kuddev/pebrel/releases/download/v1.9.1/Pebrel-v1.9.1-windows-arm64.zip",
+            "hash": "5d33dbd411bd6998843c820ce6fe5aefc2897cab793f43faa58ad79da07215c8"
+        }
+    },
+    "pre_install": "[IO.File]::WriteAllText((Join-Path $dir 'pebrel-distribution'), \"scoop`n\", [Text.UTF8Encoding]::new($false))",
+    "bin": "pebrel.exe",
+    "shortcuts": [
+        [
+            "pebrel.exe",
+            "Pebrel",
+            "--gpui"
+        ]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/Kuddev/pebrel/releases/download/v$version/Pebrel-v$version-windows-x64.zip"
+            },
+            "arm64": {
+                "url": "https://github.com/Kuddev/pebrel/releases/download/v$version/Pebrel-v$version-windows-arm64.zip"
+            }
+        }
+    }
+}

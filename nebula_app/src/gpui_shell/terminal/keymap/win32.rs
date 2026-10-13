@@ -13,7 +13,7 @@ pub(super) fn win32_encodes_keystroke(ks: &Keystroke) -> bool {
         return true;
     }
     let key = ks.key.as_str();
-    if key == "space" {
+    if key == "space" || key == "/" {
         return false;
     }
     let mut chars = key.chars();
@@ -23,15 +23,14 @@ pub(super) fn win32_encodes_keystroke(ks: &Keystroke) -> bool {
     }
 }
 
-/// GPUI 键名 → Win32 虚拟键码。
+/// GPUI 键名 → Win32 虚拟键码及布局所需的修饰键。
 ///
 /// 旧壳从 winit fork 的 `RawKeyEventInfo` 直接拿到系统报的 VK；GPUI 的
-/// `Keystroke` 只有键名，所以这里按名字反查。表只覆盖**编码器会处理的键**
-/// （控制键、方向、功能键）——可打印字符在 GPUI 走 IME 管道，不经这里。
-pub(super) fn virtual_key_of(key: &str) -> Option<u16> {
+/// `Keystroke` 只有键名，所以这里按名字反查；普通文本仍走 IME 管道。
+pub(super) fn virtual_key_of(key: &str) -> Option<(u16, u16)> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_HOME, VK_INSERT, VK_LEFT,
-        VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
+        VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP, VkKeyScanW,
     };
 
     let vk = match key {
@@ -50,6 +49,11 @@ pub(super) fn virtual_key_of(key: &str) -> Option<u16> {
         "delete" => VK_DELETE,
         "pageup" => VK_PRIOR,
         "pagedown" => VK_NEXT,
+        "/" => {
+            // GPUI 将布局所需的 Shift 合入键名，不能写死美式布局的 VK_OEM_2。
+            let mapping = unsafe { VkKeyScanW(b'/' as u16) };
+            return (mapping != -1).then_some((mapping as u16 & 0xff, mapping as u16 >> 8));
+        },
         // F1..F24 在 VK 表里连号。
         key if key.starts_with('f') => {
             let index: u16 = key[1..].parse().ok()?;
@@ -68,14 +72,14 @@ pub(super) fn virtual_key_of(key: &str) -> Option<u16> {
             c.to_ascii_uppercase() as u16
         },
     };
-    Some(vk)
+    Some((vk, 0))
 }
 
 /// 控制键必须携带真实 `KEY_EVENT_RECORD` 的字符值（Esc=0x1B、Enter=0x0D、
 /// Tab=0x09、Backspace=0x08）：OpenConsole 1.22 的 VT 翻译层会丢弃 uChar=0
 /// 的 VK_ESCAPE，于是读字节流的那类应用（Claude Code）收不到 Esc。修饰键与
 /// 功能键保持 0，与真实键盘一致。逐条同旧壳 `control_char_fallback`。
-fn unicode_char_of(ks: &Keystroke, scan_code: u32) -> u16 {
+fn unicode_char_of(ks: &Keystroke, virtual_key: u16, scan_code: u32) -> u16 {
     // 平台已经判出文本的（含 Ctrl 变体）以它为准，与 WM_CHAR 语义一致。
     // `key_char` 若是 NUL，当作没文本：真实键盘的 Esc 不会写出 U+0000。
     if let Some(text) = ks.key_char.as_deref() {
@@ -88,7 +92,8 @@ fn unicode_char_of(ks: &Keystroke, scan_code: u32) -> u16 {
     }
     match ks.key.as_str() {
         "escape" => 0x1b,
-        "enter" => crate::platform::keyboard::enter_character(
+        "enter" => crate::platform::keyboard::native_character(
+            virtual_key,
             scan_code,
             ks.modifiers.shift,
             ks.modifiers.control,
@@ -106,6 +111,24 @@ fn unicode_char_of(ks: &Keystroke, scan_code: u32) -> u16 {
             }
         },
         "space" => b' ' as u16,
+        // GPUI 丢弃 Ctrl+字母的 C0 文本；Win32 记录必须恢复它，adb 等字节流
+        // 应用才能收到 Ctrl+C。只补缺失文本，不把 AltGr 等组合合成为控制字符。
+        _ if ks.key_char.is_none()
+            && ks.modifiers.control
+            && !ks.modifiers.alt
+            && !ks.modifiers.platform
+            && !ks.modifiers.function
+            && matches!(virtual_key, 0x41..=0x5a) =>
+        {
+            let character = crate::platform::keyboard::native_character(
+                virtual_key,
+                scan_code,
+                ks.modifiers.shift,
+                ks.modifiers.control,
+                ks.modifiers.alt,
+            );
+            if character <= 0x1f { character } else { 0 }
+        },
         _ => 0,
     }
 }
@@ -121,17 +144,17 @@ pub(super) fn win32_input_record(ks: &Keystroke, key_down: bool) -> Option<Vec<u
     const LEFT_ALT_PRESSED: u32 = 0x0002;
     const LEFT_CTRL_PRESSED: u32 = 0x0008;
 
-    let vk = virtual_key_of(ks.key.as_str())?;
+    let (vk, layout_modifiers) = virtual_key_of(ks.key.as_str())?;
     // 扫描码问系统要，不硬编码：非 US 布局与笔记本键盘上这张表并不通用。
     let scan_code = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC) };
     let mut control_key_state = 0u32;
-    if ks.modifiers.shift {
+    if ks.modifiers.shift || layout_modifiers & 1 != 0 {
         control_key_state |= SHIFT_PRESSED;
     }
-    if ks.modifiers.alt {
+    if ks.modifiers.alt || layout_modifiers & 4 != 0 {
         control_key_state |= LEFT_ALT_PRESSED;
     }
-    if ks.modifiers.control {
+    if ks.modifiers.control || layout_modifiers & 2 != 0 {
         control_key_state |= LEFT_CTRL_PRESSED;
     }
     let key_down = u8::from(key_down);
@@ -140,7 +163,7 @@ pub(super) fn win32_input_record(ks: &Keystroke, key_down: bool) -> Option<Vec<u
             "\x1b[{};{};{};{key_down};{};1_",
             vk,
             scan_code,
-            unicode_char_of(ks, scan_code),
+            unicode_char_of(ks, vk, scan_code),
             control_key_state
         )
         .into_bytes(),

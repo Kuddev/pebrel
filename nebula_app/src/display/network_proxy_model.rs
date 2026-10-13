@@ -49,6 +49,18 @@ pub(crate) fn manual_proxy_value(protocol: ManualProxyProtocol, address: &str) -
     }
 }
 
+/// A recognized scheme in the address box wins over the protocol dropdown.
+/// Pasting `http://127.0.0.1:7890` while SOCKS5 stays selected still persists HTTP.
+pub(crate) fn compose_manual_proxy_url(
+    dropdown: ManualProxyProtocol,
+    typed: &str,
+) -> (ManualProxyProtocol, String) {
+    let typed = typed.trim();
+    let (parsed, host) = manual_proxy_parts(typed);
+    let protocol = if host.len() == typed.len() { dropdown } else { parsed };
+    (protocol, manual_proxy_value(protocol, host))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ManualProxyProtocol, manual_proxy_parts, manual_proxy_value};
@@ -72,6 +84,22 @@ mod tests {
             "socks5://127.0.0.1:1080"
         );
         assert_eq!(manual_proxy_value(ManualProxyProtocol::Http, ""), "");
+    }
+
+    #[test]
+    fn typed_scheme_overrides_the_protocol_dropdown() {
+        use super::compose_manual_proxy_url;
+        let (protocol, url) =
+            compose_manual_proxy_url(ManualProxyProtocol::Socks5, "http://127.0.0.1:7890");
+        assert_eq!(protocol, ManualProxyProtocol::Http);
+        assert_eq!(url, "http://127.0.0.1:7890");
+        let (protocol, url) = compose_manual_proxy_url(ManualProxyProtocol::Http, "127.0.0.1:7890");
+        assert_eq!(protocol, ManualProxyProtocol::Http);
+        assert_eq!(url, "http://127.0.0.1:7890");
+        let (protocol, url) =
+            compose_manual_proxy_url(ManualProxyProtocol::Http, "socks5://127.0.0.1:7890");
+        assert_eq!(protocol, ManualProxyProtocol::Socks5);
+        assert_eq!(url, "socks5://127.0.0.1:7890");
     }
 
     #[test]

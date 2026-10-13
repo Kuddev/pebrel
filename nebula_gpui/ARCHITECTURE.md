@@ -68,8 +68,11 @@ application boundary.
 
 ## Dependency Policy
 
-The v1.16.1 migration baseline is pinned by both package version and immutable
-Git revision:
+The v1.16.1 migration baseline was pinned by both package version and immutable
+Git revision. The revisions below record that historical migration, not the
+active dependency pins. Current revisions and patch rationale are maintained
+in the root [`Cargo.toml`](../Cargo.toml), with resolution in
+[`Cargo.lock`](../Cargo.lock):
 
 ```toml
 gpui = "=0.2.2"

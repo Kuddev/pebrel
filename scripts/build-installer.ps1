@@ -3,7 +3,8 @@ param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')]
     [string] $Version,
 
-    [ValidateSet('debug', 'release')]
+    # 与便携包相同，安装器只能收录已内嵌 GPUI 着色器的发布构建。
+    [ValidateSet('release')]
     [string] $Configuration = 'release',
 
     [ValidateSet('NebulaTerminal', 'Pebrel')]

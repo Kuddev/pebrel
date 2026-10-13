@@ -94,4 +94,50 @@ mod tests {
         assert!(supports("zsh", &["-l".into()]));
         assert_eq!(supports("bash", &[]), !cfg!(target_os = "macos"));
     }
+
+    #[test]
+    fn zsh_integration_enables_colors_for_macos_bsd_ls() {
+        let zshrc = include_str!("../../res/shell/zshrc");
+        assert!(zshrc.contains("${CLICOLOR=1}"));
+        assert!(zshrc.contains("${LSCOLORS=GxFxCxDxBxegedabagaced}"));
+        assert!(zshrc.contains("export CLICOLOR LSCOLORS"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_zsh_color_defaults_respect_user_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let integration = directory.path().join("integration.zsh");
+        std::fs::write(&integration, include_str!("../../res/shell/zshrc")).unwrap();
+        for (rc, expected) in [
+            ("", "1:GxFxCxDxBxegedabagaced:unset"),
+            ("CLICOLOR=0; LSCOLORS=custom; alias ls='ls -lah'", "0:custom:ls -lah"),
+            ("CLICOLOR=''; LSCOLORS=''", "::unset"),
+            ("NO_COLOR=1", "unset:unset:unset"),
+            ("TERM=dumb", "unset:unset:unset"),
+        ] {
+            std::fs::write(directory.path().join(".zshrc"), rc).unwrap();
+            let output = std::process::Command::new("/bin/zsh")
+                .args([
+                    "-d",
+                    "-f",
+                    "-c",
+                    "source \"$1\"; print -r -- \"${CLICOLOR-unset}:${LSCOLORS-unset}:${aliases[ls]-unset}\"",
+                    "pebrel-color-test",
+                ])
+                .arg(&integration)
+                .env("NEBULA_ZDOTDIR_WAS_SET", "1")
+                .env("NEBULA_ORIGINAL_ZDOTDIR", directory.path())
+                .env("ZDOTDIR", directory.path())
+                .env("TERM", "xterm-256color")
+                .env_remove("CLICOLOR")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("LSCOLORS")
+                .env_remove("NO_COLOR")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{rc}: {:?}", output.stderr);
+            assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected, "{rc}");
+        }
+    }
 }

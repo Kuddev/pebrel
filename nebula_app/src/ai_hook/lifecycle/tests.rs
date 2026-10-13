@@ -151,6 +151,42 @@ fn runtime_submission_does_not_finish_on_the_previous_idle_frame() {
 }
 
 #[test]
+fn local_mode_command_keeps_activity_and_real_prompts_keep_the_submission_barrier() {
+    for native_hook in [false, true] {
+        let mut activity = AgentActivity::default();
+        if native_hook {
+            let wire = b"nebula-hook/1 source=codex codex_hooks=full\n{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s\"}";
+            let event = parse_remote_envelope(wire, Some(1)).unwrap();
+            activity.apply_hook(&event);
+        } else {
+            activity.begin_command(true);
+            for _ in 0..2 {
+                activity.observe_screen(screen(AgentStatus::Idle));
+            }
+        }
+        let source = activity.source();
+        activity.submitted_text("codex", "/plan");
+        assert_eq!(activity.status(), AgentStatus::Idle);
+        assert_eq!(activity.source(), source);
+        assert!(!activity.pending_submit);
+        activity.submitted_text("codex", "请问我一个选择题");
+        for _ in 0..8 {
+            activity.observe_screen(screen(AgentStatus::Idle));
+        }
+        assert_eq!(activity.status(), AgentStatus::Working);
+        assert!(activity.pending_submit);
+        activity.submitted_text("codex", "/plan");
+        assert_eq!(activity.status(), AgentStatus::Working, "a mode switch cannot finish work");
+    }
+    for (program, text) in [("claude", "/plan"), ("codex", "/review"), ("codex", "/plan\nmy task")]
+    {
+        let mut activity = AgentActivity::default();
+        activity.submitted_text(program, text);
+        assert!(activity.pending_submit, "{program}: {text}");
+    }
+}
+
+#[test]
 fn nested_local_or_remote_sessions_cannot_replace_primary_ownership() {
     for pid in [None, Some(10)] {
         let mut activity = AgentActivity::default();

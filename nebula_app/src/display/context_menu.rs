@@ -448,7 +448,7 @@ fn fade_ink(base: Rgba, ink: Rgb, opacity: f32) -> Rgb {
 /// Paint the menu after the chrome/logo pass and before true modal dialogs.
 pub(super) fn draw(display: &mut Display) {
     let Some(mut menu) = display.nebula_context_menu.clone() else { return };
-    menu.motion.step(display.nebula_ui_anims.frame());
+    menu.motion.step(display.ui_animations.frame());
     if menu.finished() {
         display.nebula_context_menu = None;
         return;

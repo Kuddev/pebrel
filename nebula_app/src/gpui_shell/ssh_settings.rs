@@ -215,6 +215,9 @@ impl SettingsPane {
         status: SshStatus,
         cx: &mut Context<Self>,
     ) {
+        if self.ssh_library.busy {
+            return;
+        }
         // 列表将被改写，未决删除的快照会过期：先提交它。
         self.commit_pending_ssh_delete();
         let mut updated = self.ssh_hosts.clone();
@@ -233,6 +236,9 @@ impl SettingsPane {
     /// 二次确认后的删除：立刻移出列表并写盘，但 Profile 与凭据留到 8 秒
     /// 撤销窗口结束（旧壳 Undo 合同——期内撤销可完整恢复）。
     pub(super) fn delete_ssh_host(&mut self, host: &str, cx: &mut Context<Self>) {
+        if self.ssh_library.busy {
+            return;
+        }
         let profile_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
         let profiles = match crate::ssh_profiles::SshProfiles::load(&profile_path) {
             Ok(profiles) => profiles,
@@ -368,6 +374,9 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.ssh_library.busy {
+            return;
+        }
         let adding = destination.is_none();
         let profile_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
         let profiles =
@@ -376,8 +385,12 @@ impl SettingsPane {
                 crate::ssh_profiles::SshProfiles::default()
             });
         let profile = destination.as_deref().map(|host| profiles.for_destination(host));
-        let (address_with_user, port) =
-            destination.as_deref().map(crate::display::split_destination_port).unwrap_or_default();
+        let (address_with_user, port) = destination
+            .as_deref()
+            .map(|identity| {
+                crate::display::split_destination_port(profiles.connection_destination(identity))
+            })
+            .unwrap_or_default();
         let (mut username, address) = crate::display::split_destination_user(&address_with_user);
         // 新增主机的常用服务器账号直接给出可编辑实值；placeholder 不会参与
         // destination 拼装，用户只填 IP 时此前实际会退回本机账号。
@@ -712,6 +725,15 @@ impl SettingsPane {
             },
         };
         let previous_connection = original.as_deref().map(|_| editor.original_connection.clone());
+        let destination = match profiles.edited_identity(original.as_deref(), &destination) {
+            Ok(identity) => identity,
+            Err(error) => {
+                self.ssh_status = Some(SshStatus::Error(error));
+                self.ssh_editor = Some(editor);
+                cx.notify();
+                return;
+            },
+        };
         // 保存会改列表：未决删除的快照过期，先提交。
         self.commit_pending_ssh_delete();
         // 先在副本里计算新列表，直到 Profile 与 settings 两份数据都写成功
@@ -727,7 +749,8 @@ impl SettingsPane {
             ),
             value => value.to_owned(),
         };
-        let (address, _) = crate::display::split_destination_port(&destination);
+        let (address, _) =
+            crate::display::split_destination_port(profiles.connection_destination(&destination));
         let (username, _) = crate::display::split_destination_user(&address);
         profiles.remember_username(&username);
         profiles.upsert(crate::ssh_profiles::SshProfileAuth {
@@ -837,11 +860,12 @@ impl SettingsPane {
         self.ssh_username_picker_open = false;
         editor.private_keys.clear();
         self.ssh_editor = None;
+        let saved_address = profiles.connection_destination(&destination).to_owned();
         self.ssh_status = credential_cleanup_error.map_or_else(
-            || Some(SshStatus::Saved(destination.clone())),
+            || Some(SshStatus::Saved(saved_address.clone())),
             |error| {
                 Some(SshStatus::SavedWithCleanupError {
-                    destination: destination.clone(),
+                    destination: saved_address.clone(),
                     error: error.to_string(),
                 })
             },

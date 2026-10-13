@@ -93,8 +93,11 @@ pub trait ActionContext<T: EventListener> {
     }
     fn terminal(&self) -> &Term<T>;
     fn terminal_mut(&mut self) -> &mut Term<T>;
-    fn nebula_accept(&self) -> crate::display::AcceptKey {
-        crate::display::AcceptKey::default()
+    fn nebula_completion_style(&self) -> crate::display::CompletionStyle {
+        crate::display::CompletionStyle::default()
+    }
+    fn nebula_completion_popup_request(&mut self) -> bool {
+        false
     }
     fn nebula_take_suggestion(&mut self) -> String {
         String::new()

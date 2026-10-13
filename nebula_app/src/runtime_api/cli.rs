@@ -29,6 +29,110 @@ pub(super) fn request_once(
         .map_err(|error| input_transport_error(method, error))
 }
 
+/// 插件的命令入口使用相同协议，但为响应保留量和整次 I/O 设置独立上限。
+pub(crate) fn request_once_bounded(
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<ApiResponse, ApiError> {
+    let endpoint = read_endpoint()
+        .ok_or_else(|| ApiError::new("runtime_unavailable", "no resident Pebrel runtime found"))?;
+    let request = ApiRequest::new(endpoint.token.clone(), method, params);
+    let mut bytes = serde_json::to_vec(&request)
+        .map_err(|error| ApiError::invalid_params(error.to_string()))?;
+    if bytes.len() > MAX_REQUEST_BYTES {
+        return Err(ApiError::new("request_too_large", "plugin request exceeds 128 KiB"));
+    }
+    bytes.push(b'\n');
+    let response = bounded_exchange(&endpoint, &bytes, timeout)
+        .and_then(|bytes| decode_plugin_response(&request, &bytes));
+    response.map_err(|error| {
+        let error = input_transport_error(method, error);
+        if let Some(error) = error.downcast_ref::<CliError>() {
+            ApiError::new(error.code(), error.message.clone())
+        } else {
+            ApiError::new("runtime_transport", error.to_string())
+        }
+    })
+}
+
+fn decode_plugin_response(
+    request: &ApiRequest,
+    bytes: &[u8],
+) -> Result<ApiResponse, Box<dyn Error>> {
+    let response: ApiResponse = serde_json::from_slice(bytes)?;
+    if response.protocol != PROTOCOL_NAME
+        || response.version != PROTOCOL_VERSION
+        || response.id != request.id
+        || (response.ok && (response.result.is_none() || response.error.is_some()))
+        || (!response.ok && (response.error.is_none() || response.result.is_some()))
+    {
+        return Err(CliError::new(
+            "invalid_response",
+            "runtime response identity or envelope mismatch",
+        )
+        .into());
+    }
+    Ok(response)
+}
+
+fn bounded_exchange(
+    endpoint: &Endpoint,
+    request: &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    const MAX_RESPONSE: usize = 256 * 1024;
+    let deadline = Instant::now() + timeout;
+    let remaining = || {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                IoError::new(std::io::ErrorKind::TimedOut, "plugin runtime request timed out")
+            })
+    };
+    let mut stream =
+        TcpStream::connect_timeout(&endpoint_addr(endpoint), remaining()?.min(CONNECT_TIMEOUT))?;
+    let mut pending = request;
+    while !pending.is_empty() {
+        stream.set_write_timeout(Some(remaining()?))?;
+        let written = stream.write(pending)?;
+        if written == 0 {
+            return Err(IoError::new(std::io::ErrorKind::WriteZero, "runtime write stopped").into());
+        }
+        pending = &pending[written..];
+    }
+    // The newline frames the complete request. A fast peer may already have
+    // replied and closed here; shutting down the write half can then fail with
+    // NotConnected on macOS before we read its buffered response.
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 4096];
+    loop {
+        stream.set_read_timeout(Some(remaining()?))?;
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            return Err(CliError::new(
+                "runtime_no_response",
+                "runtime closed before a complete JSON line",
+            )
+            .into());
+        }
+        let newline = buffer[..count].iter().position(|byte| *byte == b'\n');
+        let end = newline.unwrap_or(count);
+        if bytes.len() + end > MAX_RESPONSE {
+            return Err(CliError::new(
+                "runtime_response_too_large",
+                "plugin response exceeds 256 KiB",
+            )
+            .into());
+        }
+        bytes.extend_from_slice(&buffer[..end]);
+        if newline.is_some() {
+            return Ok(bytes);
+        }
+    }
+}
+
 fn read_response(
     endpoint: &Endpoint,
     request: &ApiRequest,
@@ -591,6 +695,76 @@ impl Error for CliError {}
 #[cfg(test)]
 mod output_tests {
     use super::*;
+
+    #[test]
+    fn plugin_response_checks_identity_and_envelope() {
+        let request = ApiRequest::new("fixture".to_owned(), "runtime.describe", json!({}));
+        let response = ApiResponse::success(&request.id, json!({"name":"中文"}));
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            decode_plugin_response(&request, &serde_json::to_vec(&value).unwrap()).unwrap(),
+            response
+        );
+        let null = ApiResponse::success(&request.id, Value::Null);
+        assert_eq!(
+            decode_plugin_response(&request, &serde_json::to_vec(&null).unwrap()).unwrap(),
+            null
+        );
+        let mut missing_result = value.clone();
+        missing_result.as_object_mut().unwrap().remove("result");
+        assert!(
+            decode_plugin_response(&request, &serde_json::to_vec(&missing_result).unwrap())
+                .is_err()
+        );
+        for (key, replacement) in [
+            ("id", json!("other")),
+            ("protocol", json!("other")),
+            ("version", json!(2)),
+            ("ok", json!(false)),
+        ] {
+            let mut invalid = value.clone();
+            invalid[key] = replacement;
+            assert!(
+                decode_plugin_response(&request, &serde_json::to_vec(&invalid).unwrap()).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_exchange_bounds_response_and_requires_complete_line() {
+        for (response, expected_error) in [
+            (b"{\"ok\":true}\n".to_vec(), None),
+            (vec![b'x'; 256 * 1024 + 1], Some("runtime_response_too_large")),
+            (b"{}".to_vec(), Some("runtime_no_response")),
+        ] {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let endpoint = Endpoint {
+                port: listener.local_addr().unwrap().port(),
+                token: "fixture".to_owned(),
+            };
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut request = String::new();
+                BufReader::new(&mut stream).read_line(&mut request).unwrap();
+                assert_eq!(request, "{}\n");
+                // 超额回复的接收方可提前关流；写方无需等待对方接受被丢弃的数据。
+                let _ = stream.write_all(&response);
+            });
+            let result = bounded_exchange(&endpoint, b"{}\n", Duration::from_secs(2));
+            server.join().unwrap();
+            if let Some(code) = expected_error {
+                let error = result.unwrap_err();
+                let response_error = error
+                    .downcast_ref::<CliError>()
+                    .unwrap_or_else(|| panic!("expected {code}, got {error:?}"));
+                assert_eq!(response_error.code(), code);
+            } else {
+                assert_eq!(result.unwrap(), b"{\"ok\":true}");
+            }
+        }
+    }
 
     #[test]
     fn runtime_submission_missing_or_zero_baseline_cannot_wait_on_old_idle() {

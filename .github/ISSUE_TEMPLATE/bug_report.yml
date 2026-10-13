@@ -9,6 +9,10 @@ body:
         Thanks for taking the time to report a bug. A report we can reproduce gets fixed in the next release; one we cannot reproduce is asked for details and waits.
         感谢反馈。**能复现的问题会进下个版本；说不清的问题只能先挂起等补充。** 下拉选项会自动转成标签。
 
+        Advertising, commercial promotion, and traffic solicitation are prohibited. Business requests must use the email in the [contribution policy](https://github.com/Kuddev/pebrel/blob/main/CONTRIBUTING.md#commercial-promotion-policy).
+        PRs or Issues containing unauthorized promotion will be closed directly.
+        严禁利用 PR 或 Issue 推广、引流，未经授权的推广将直接关闭；商业需求请通过贡献指南中的邮箱沟通，已获批准的赞助按批准范围处理。
+
   - type: dropdown
     id: platform
     attributes:

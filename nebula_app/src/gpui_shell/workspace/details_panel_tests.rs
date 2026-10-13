@@ -50,6 +50,63 @@ fn width_limits_keep_room_for_the_document_without_losing_preference() {
 }
 
 #[gpui::test]
+fn switching_to_instant_removes_closed_panel_geometry(cx: &mut TestAppContext) {
+    use crate::gpui_shell::config::Settings;
+    use nebula_settings::TabRevealName;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("instant.md");
+    std::fs::write(&path, "# Heading\n\nBody").unwrap();
+    let (workspace, mut cx) = open(path, cx);
+    cx.update(|_, cx| {
+        cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
+        // 必须保留真实动画路径，否则系统减弱动态效果会掩盖偏好切换的问题。
+        cx.set_reduce_motion(false);
+    });
+    for close_before_switch in [false, true] {
+        workspace.update(&mut cx, |view, cx| {
+            cx.global_mut::<Settings>().tab_reveal = TabRevealName::Slide;
+            view.toggle_side_panel(view.side_panel.view, cx);
+            view.toggle_side_panel(view.side_panel.view, cx);
+            if close_before_switch {
+                view.toggle_side_panel(view.side_panel.view, cx);
+            }
+            assert!(view.side_panel_anim_armed);
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| {
+            cx.global_mut::<Settings>().tab_reveal = TabRevealName::Instant;
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        if !close_before_switch {
+            assert!(cx.debug_bounds("workspace-details-slot").unwrap().size.width > px(0.0));
+            let close = cx.debug_bounds("workspace-details-close").unwrap();
+            cx.simulate_click(close.center(), Modifiers::default());
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+        assert!(cx.debug_bounds("workspace-details-slot").is_none());
+        workspace.read_with(&cx, |view, _| {
+            assert!(!view.side_panel.open);
+            assert!(!view.side_panel_anim_armed);
+        });
+        workspace.update(&mut cx, |view, cx| view.toggle_document_details(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("workspace-details-slot").unwrap().size.width > px(0.0));
+    }
+    cx.update(|window, cx| {
+        workspace.update(cx, |view, cx| view.open_settings(window, cx));
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("workspace-details-slot").is_none());
+    cx.update(|window, cx| {
+        workspace.update(cx, |view, cx| view.leave_settings(window, cx));
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("workspace-details-slot").unwrap().size.width > px(0.0));
+}
+
+#[gpui::test]
 fn file_path_edit_navigates_and_keeps_the_last_directory_on_error_or_escape(
     cx: &mut TestAppContext,
 ) {

@@ -64,6 +64,45 @@ fn first_and_repeated_translation_lookups_allocate_nothing() {
 }
 
 #[test]
+fn translation_lookup_fits_a_small_stack() {
+    const CHILD: &str = "PEBREL_I18N_SMALL_STACK_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                for language in i18n::UiLanguage::ALL {
+                    assert!(
+                        !black_box(language).text(black_box(i18n::Message::VcsChanges)).is_empty()
+                    );
+                    assert!(!black_box(language).tr(black_box("vcs.changes")).is_empty());
+                    assert!(
+                        !black_box(language)
+                            .pick(black_box("紫罗兰"), black_box("Violet"))
+                            .is_empty()
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        return;
+    }
+    // A stack overflow aborts the process. Isolate the regression so a failure
+    // reports the child status instead of taking down the whole contract suite.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "translation_lookup_fits_a_small_stack", "--nocapture"])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "translation lookup exceeded a 64 KiB stack: {}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn embedded_translations_stay_within_the_initial_payload_budget() {
     assert!(i18n::TRANSLATED_BYTES < 256 * 1024);
     assert!(i18n::MESSAGE_COUNT >= 200);
@@ -77,4 +116,20 @@ fn vcs_messages_follow_resolved_english_and_fall_back_for_partial_locales() {
     assert_eq!(i18n::UiLanguage::ZhCn.tr("vcs.changes"), "变更");
     assert_eq!(i18n::UiLanguage::FrFr.tr("vcs.changes"), "Changes");
     assert_eq!(english.tr_args("vcs.refresh_status", &[("vcs", "Git")]), "Refresh Git status");
+}
+
+#[test]
+fn background_messages_keep_chinese_text_through_catalog_generation() {
+    let catalog: serde_json::Value =
+        serde_json::from_str(include_str!("../i18n/zh-CN.json")).unwrap();
+    for (key, value) in catalog["wallpaper"].as_object().unwrap() {
+        let text = value.as_str().unwrap();
+        // 问号替换仍是合法 UTF-8/JSON，结构校验单独通过也不能证明中文未损坏。
+        assert!(text.chars().any(|ch| ('\u{3400}'..='\u{9fff}').contains(&ch)), "{key}");
+        assert!(!text.contains("??") && !text.contains('\u{fffd}'), "{key}");
+    }
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperShaderSource), "自定义背景效果");
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::TerminalEffectAdvanced), "高级效果");
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperGif), "GIF 动图");
+    assert_eq!(i18n::UiLanguage::ZhCn.text(i18n::Message::WallpaperMediaSelecting), "选择中…");
 }

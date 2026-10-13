@@ -888,6 +888,8 @@ mod tests {
                 active_tab: 0,
                 focused_pane_id: Some(pane_id),
                 tabs: vec![RuntimeTab {
+                    tab_id: None,
+                    file: None,
                     index: 0,
                     active: true,
                     label: "test".into(),

@@ -229,13 +229,9 @@ fn agent_reasoning_style_is_distinct_from_final_answer_style() {
     assert!(!formula_uses_reasoning_style(&final_answer));
 }
 
-/// 行内定界符只跨软换行。跨真实换行会把互不相关的两行终端输出合成
-/// 一个公式（`$x` / `$y` 两行、WSL bash 两个提示符之间的整段输出），
-/// 代价是 Agent TUI 硬换行的**行内**公式恢复不了——那种情况保持原文，
-/// 是安全的失败模式。块级公式仍然跨真实换行，见
-/// [`display_math_can_cross_hard_terminal_rows`]。
+/// 美元定界符按数学片段恢复硬折行；BRE 也会使用的反斜杠括号仍只跨软折行。
 #[test]
-fn explicit_inline_formulas_cross_soft_wraps_only() {
+fn explicit_inline_formulas_keep_their_delimiter_specific_wrap_boundaries() {
     for mut grid in [
         TextGrid::from_rows(&["$e^    ", r"{i\pi}+1=0$"]),
         TextGrid::from_rows(&[r"\(e^    ", r"{i\pi}+1=0\)"]),
@@ -247,12 +243,12 @@ fn explicit_inline_formulas_cross_soft_wraps_only() {
         assert!(overlays[0].source.contains(r"{i\pi}+1=0"));
 
         grid.wrapped[0] = false;
-        assert!(scan_grid(&grid).is_empty(), "真实换行必须断开行内公式");
+        let is_dollar = grid.character(GridPosition { row: 0, column: 0 }) == Some('$');
+        assert_eq!(scan_grid(&grid).len(), usize::from(is_dollar));
     }
 }
 
-/// Agent TUI 的硬换行：**块级**形态（`\[ \]`、裸 `[`、`$$`）照旧恢复，
-/// 行内形态保持原文。
+/// Agent TUI 的硬换行：块级形态（`\[ \]`、裸 `[`、`$$`）保留原有恢复规则。
 #[test]
 fn screenshot_display_formulas_survive_agent_hard_wraps() {
     for rows in [
@@ -867,8 +863,12 @@ fn bare_parens_reject_regex_prose_and_single_letter_escapes() {
 #[test]
 fn explicit_delimiters_still_require_content_evidence() {
     assert!(sources(&[r"escaped \$x$"]).is_empty());
-    // 货币、全大写环境变量、散文、配置串：噪音否决层与证据层各管一段。
-    assert!(sources(&["price $5$ and $12.50$"]).is_empty());
+    // 成对美元定界符明确表示数字公式；真实金额使用单个美元符号，仍保持原文。
+    assert_eq!(
+        sources(&["values $5$ and $12.50$"]),
+        vec![("5".into(), false), ("12.50".into(), false)]
+    );
+    assert!(sources(&["price $5 and $12.50"]).is_empty());
     assert!(sources(&["env $LONG_VARIABLE$"]).is_empty());
     assert!(sources(&["quote $USD 20$ today"]).is_empty());
     assert!(sources(&["literal $hello$ text"]).is_empty());
@@ -890,7 +890,7 @@ fn ordinary_shell_output_stays_literal() {
     // 变量 sigil 成对出现，中间那截会被当成源码。
     assert!(sources(&["echo $HOME $USER"]).is_empty());
     assert!(sources(&["echo $HOME"]).is_empty());
-    // sh 家族提示符以 `$ ` 结尾——`$` 后紧跟空白直接否决。
+    // sh 家族提示符后的命令不具备公式证据，不能借下一个提示符闭合。
     assert!(sources(&["$ npm install", "$ npm test"]).is_empty());
     assert!(sources(&["user@host:~$ echo hello", "hello", "user@host:~$ ls"]).is_empty());
     // 行内定界符不跨真实换行，两行各自的 `$` 不配对。
@@ -904,16 +904,16 @@ fn ordinary_shell_output_stays_literal() {
     assert!(sources(&[r"grep '\(foo\|bar\)' log.txt"]).is_empty());
 }
 
-/// 软换行仍要跨——这是行内公式在窄窗口里的正常形态；跨的是软换行，
-/// 不是真实换行。
+/// 终端软折行和 AI 的硬折行都可接数学片段，但硬折行不能穿过普通正文。
 #[test]
-fn inline_formula_crosses_soft_wrap_but_not_a_real_newline() {
+fn inline_formula_crosses_soft_wrap_and_math_only_hard_rows() {
     let mut wrapped = TextGrid::from_rows(&["prefix $x^2", "+ y^2$ tail"]);
     wrapped.wrapped[0] = true;
     assert_eq!(scan_grid(&wrapped).len(), 1, "soft wrap 内的行内公式要接起来");
 
     let hard = TextGrid::from_rows(&["prefix $x^2", "+ y^2$ tail"]);
-    assert!(scan_grid(&hard).is_empty(), "真实换行必须断开行内公式");
+    assert_eq!(scan_grid(&hard).len(), 1, "有数学证据的硬折行仍属于同一公式");
+    assert!(sources(&["prefix $x^2", "ordinary prose", "+ y^2$ tail"]).is_empty());
 }
 
 /// display 定界符照旧跨真实换行：`$$` / `\[ \]` 占住它们之间的整块，
@@ -971,6 +971,45 @@ fn unclosed_bare_delimiters_stay_within_budget() {
 fn single_dollar_accepts_only_explicit_math_shapes() {
     assert_eq!(sources(&["$x$ $x_1$ $2+2$ $a/b$ $x=y$ $f(x)$ $f(x)=0$"]).len(), 7);
     assert_eq!(sources(&[r"$\frac{1}{2}$ $\sin x$ $x^2$"]).len(), 3);
+}
+
+#[test]
+fn issue420_inline_atoms_and_polynomials_do_not_consume_neighboring_formulas() {
+    assert_eq!(
+        sources(&[
+            r"其中 $E$ 表示能量，$0$ 是初值，$2.71828$ 是近似值；$ax^2+bx+c=0$，$\pm$ 表示两个解。"
+        ]),
+        vec![
+            ("E".into(), false),
+            ("0".into(), false),
+            ("2.71828".into(), false),
+            ("ax^2+bx+c=0".into(), false),
+            (r"\pm".into(), false),
+        ]
+    );
+    assert_eq!(
+        sources(&[r"for $USD$ use $x$ and $\ln(1+x)$"]),
+        vec![("x".into(), false), (r"\ln(1+x)".into(), false)]
+    );
+}
+
+#[test]
+fn issue420_inline_tex_recovers_bounded_agent_line_breaks() {
+    let found = sources(&[
+        r"定积分示例：$\displaystyle\int_0^1 x^2,dx",
+        r"  = \dfrac{1}{3}$（表示函数在区间 $[0,1]$ 上的积分）",
+    ]);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].0.starts_with(r"\displaystyle\int_0^1"));
+    assert!(found[0].0.ends_with(r"\dfrac{1}{3}"));
+    assert_eq!(found[1], ("[0,1]".into(), false));
+    assert_eq!(sources(&[r"formula $ \frac{1}{2} $ ends"]), vec![(r"\frac{1}{2}".into(), false)]);
+    assert!(sources(&["price $5", "another amount $7"]).is_empty());
+    assert_eq!(sources(&[r"unclosed $\frac{1}{2}", "", "next $x$"]), vec![("x".into(), false)]);
+    assert_eq!(
+        sources(&[r"unclosed $\frac{1}{2}", "ordinary text", "next $x$"]),
+        vec![("x".into(), false)]
+    );
 }
 
 #[test]

@@ -1,0 +1,11 @@
+{
+  "name": "pebrel-offline-reader-build",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "devDependencies": {
+    "core-js": "3.50.0",
+    "esbuild": "0.28.2",
+    "mermaid": "11.17.2"
+  }
+}

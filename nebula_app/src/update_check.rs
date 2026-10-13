@@ -122,6 +122,9 @@ struct GitHubReleaseAsset {
 /// already knows how to display, deduplicate and dismiss.
 #[cfg(feature = "legacy-shell")]
 pub fn spawn_once(proxy: EventLoopProxy<Event>) {
+    if crate::platform::distribution::current().externally_managed() {
+        return;
+    }
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
@@ -157,6 +160,9 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
 /// 轻通知，再由用户决定是否打开更新详情弹窗。
 #[cfg(feature = "gpui-shell")]
 pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiShellEvent>) {
+    if crate::platform::distribution::current().externally_managed() {
+        return;
+    }
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::SeqCst) {
         return;
@@ -215,6 +221,7 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
 /// 立即检查 GitHub 最新 release；调用方必须把它放到后台执行器，避免
 /// 网络等待阻塞 UI 线程。
 pub fn check_now() -> Result<UpdateCheckResult, String> {
+    crate::platform::distribution::require_direct_update()?;
     let release = fetch_latest_release()?;
     let current = env!("CARGO_PKG_VERSION").to_owned();
     let update_available = can_install_version(&release.version)?;

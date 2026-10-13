@@ -195,6 +195,9 @@ pub(super) async fn run<H: SshEventHost>(
                 },
                 Err(error) => return Err(error),
             };
+        let (_transcript_scope, reader) =
+            super::transcript::TranscriptScope::new(&acquired.session);
+        event_proxy.ssh_transcript_reader(Some(reader));
         super::report_stage(Some(&event_proxy), SshStage::Ready);
         let result =
             pump(&mut channel, hook_token, initial_size, &terminal, &event_proxy, &mut input).await;
@@ -225,6 +228,7 @@ fn finish<H: SshEventHost>(
     terminal: &Arc<FairMutex<Term<H>>>,
     event_proxy: &H,
 ) {
+    event_proxy.ssh_transcript_reader(None);
     match result {
         Ok(()) => terminal.lock().exit(),
         Err(error) => {

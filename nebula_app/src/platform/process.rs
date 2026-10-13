@@ -1,10 +1,10 @@
-//! 从本进程启动控制台子进程时的统一抑制入口。
+//! 非交互子进程的平台适配：抑制控制台窗口，隔离并回收一次性进程树。
 //!
 //! Pebrel 是 `windows_subsystem = "windows"` 的 GUI 进程（见 `main.rs`），
 //! **自己没有控制台可以给子进程继承**；`cargo test --bin pebrel` 的测试二进制
 //! 从同一个 crate root 编出来，同样没有。于是任何没带 `CREATE_NO_WINDOW` 的
 //! 控制台子进程（`git`、`ssh -G`、`wsl.exe`…）都会被 Windows 分配一个新控制台
-//! ——在默认终端应用是 Windows Terminal 的机器上，那就是**用户屏幕上弹一整扇
+//! ——在默认终端应用使用独立宿主的机器上，那就是**用户屏幕上弹一整扇
 //! 窗口**。2026-09-14 实测：整跑一次测试弹出 86 个窗口。
 //!
 //! 用法：构造完参数、`spawn()` 之前过一道。
@@ -19,7 +19,8 @@
 //! 靠继承父控制台工作，见 `ssh::run`）；同理，`notepad` / `explorer` / `open`
 //! 那几处是**故意**要给用户看见窗口的。
 
-use std::process::Command;
+use std::io;
+use std::process::{Child, Command};
 
 /// `CREATE_NO_WINDOW` 的**唯一定义处**。
 ///
@@ -52,11 +53,203 @@ pub(crate) fn hidden_command_with(command: &mut Command, extra_flags: u32) -> &m
     command
 }
 
+#[cfg(unix)]
+pub(crate) fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt as _;
+    command.process_group(0);
+}
+
+/// Windows：`pane.exec` 的子进程绝不允许弹出控制台窗口。
+///
+/// Pebrel 自己是 `windows_subsystem = "windows"` 的 GUI 进程（见 `main.rs`），
+/// **没有控制台**可给子进程继承；不抑制的话 Windows 会给每条 exec 命令分配一个
+/// 新控制台，而默认终端应用会托管新控制台的机器上那就是**弹一整扇窗口**
+/// （同 [`crate::ssh_session`] 里 `ssh.exe -G` 那条注释说的现象）。
+///
+/// exec 的 stdin 是 null、stdout/stderr 走管道，从头到尾没有交互，也就不需要
+/// 控制台——和 wsl/git 那些 spawn 用 `CREATE_NO_WINDOW` 是同一条规矩。
+#[cfg(windows)]
+pub(crate) fn configure_process_group(command: &mut Command) {
+    // Attach the owned job before the child can execute or create descendants.
+    hidden_command_with(command, windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn configure_process_group(_: &mut Command) {}
+
+pub(crate) struct ProcessGroup {
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+    #[cfg(unix)]
+    process_group: i32,
+}
+
+impl ProcessGroup {
+    pub(crate) fn attach(child: &Child) -> io::Result<Self> {
+        #[cfg(windows)]
+        {
+            use std::mem::{size_of, zeroed};
+            use std::os::windows::io::AsRawHandle as _;
+            use std::ptr;
+            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows_sys::Win32::System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+
+            // SAFETY: all pointers reference initialized POD values for the duration of each
+            // call. The returned job handle is owned by ProcessGroup and closed exactly once.
+            unsafe {
+                let job = CreateJobObjectW(ptr::null(), ptr::null());
+                if job.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) == 0
+                {
+                    let error = io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(error);
+                }
+                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                    let error = io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(error);
+                }
+                let group = Self { job };
+                resume_owned_child(child.id())?;
+                return Ok(group);
+            }
+        }
+        #[cfg(unix)]
+        {
+            Ok(Self { process_group: child.id() as i32 })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = child;
+            Ok(Self {})
+        }
+    }
+
+    pub(crate) fn terminate(&self, child: &mut Child) {
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+            let _ = TerminateJobObject(self.job, 1);
+        }
+        #[cfg(unix)]
+        unsafe {
+            let _ = libc::kill(-self.process_group, libc::SIGKILL);
+        }
+        let _ = child.kill();
+    }
+
+    pub(crate) fn finish(self) {
+        #[cfg(unix)]
+        unsafe {
+            let _ = libc::kill(-self.process_group, libc::SIGKILL);
+        }
+        // Windows uses JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE in Drop.
+    }
+}
+
+#[cfg(windows)]
+fn resume_owned_child(process_id: u32) -> io::Result<()> {
+    use std::mem::{size_of, zeroed};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    // CREATE_SUSPENDED leaves only the initial thread executable by this owner.
+    // The snapshot is used solely to find that thread in our new child process.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let mut entry: THREADENTRY32 = zeroed();
+        entry.dwSize = size_of::<THREADENTRY32>() as u32;
+        let mut found = Thread32First(snapshot, &mut entry);
+        let mut result =
+            Err(io::Error::new(io::ErrorKind::NotFound, "owned child thread not found"));
+        while found != 0 {
+            if entry.th32OwnerProcessID == process_id {
+                let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                if thread.is_null() {
+                    result = Err(io::Error::last_os_error());
+                } else {
+                    let resumed = ResumeThread(thread);
+                    result =
+                        if resumed == u32::MAX { Err(io::Error::last_os_error()) } else { Ok(()) };
+                    CloseHandle(thread);
+                }
+                break;
+            }
+            found = Thread32Next(snapshot, &mut entry);
+        }
+        CloseHandle(snapshot);
+        result
+    }
+}
+
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            // SAFETY: `job` is the live handle created and exclusively owned by this guard.
+            unsafe {
+                let _ = windows_sys::Win32::Foundation::CloseHandle(self.job);
+            }
+        }
+        #[cfg(unix)]
+        {
+            // A reader-thread creation failure must not leave the child tree
+            // alive with one inherited pipe still open.
+            unsafe {
+                let _ = libc::kill(-self.process_group, libc::SIGKILL);
+            }
+        }
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use std::io::Write as _;
     use std::process::Stdio;
+
+    #[test]
+    fn owned_fast_child_waits_for_job_attachment_before_executing() {
+        use std::io::{Read as _, Seek as _};
+        let mut output = tempfile::tempfile().unwrap();
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/d", "/c", "echo owned-probe"])
+            .stdout(output.try_clone().unwrap())
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(child.try_wait().unwrap().is_none(), "the child must wait for its job owner");
+        assert_eq!(output.metadata().unwrap().len(), 0, "no output before attachment");
+        let group = ProcessGroup::attach(&child).unwrap();
+        assert!(child.wait().unwrap().success());
+        group.finish();
+        output.rewind().unwrap();
+        let mut bytes = String::new();
+        output.read_to_string(&mut bytes).unwrap();
+        assert_eq!(bytes, "owned-probe\r\n");
+    }
 
     #[test]
     fn hidden_console_children_keep_pipes_and_exit_status() {

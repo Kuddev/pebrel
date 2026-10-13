@@ -115,6 +115,12 @@ fi
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo="$(cd "$script_directory/.." && pwd -P)"
 binary="$(cd "$(dirname "$binary")" && pwd -P)/$(basename "$binary")"
+hook_binary="$(dirname "$binary")/pebrel-hook"
+if [[ ! -f "$hook_binary" || ! -x "$hook_binary" ]] || \
+  ! readelf -h "$hook_binary" | grep -Fq "Advanced Micro Devices X86-64"; then
+  echo "missing or incompatible native hook helper: $hook_binary" >&2
+  exit 1
+fi
 python3 "$script_directory/preview_release.py" --check-binary "$binary"
 linuxdeploy="$(cd "$(dirname "$linuxdeploy")" && pwd -P)/$(basename "$linuxdeploy")"
 mkdir -p "$output_directory"
@@ -226,6 +232,7 @@ mkdir -p \
   "$common_root/usr/share/zsh/vendor-completions"
 
 install -m 0755 "$binary" "$common_root/usr/bin/pebrel"
+install -m 0755 "$hook_binary" "$common_root/usr/bin/pebrel-hook"
 install -m 0644 "$desktop_source" \
   "$common_root/usr/share/applications/$desktop_id.desktop"
 install -m 0644 "$metainfo_source" \

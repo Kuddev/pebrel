@@ -11,9 +11,19 @@ impl TerminalView {
         display_offset: usize,
         history: usize,
     ) -> Option<Bounds<Pixels>> {
+        let visible = self.scrollbar_drag.is_some()
+            || match self.scrollbar_visibility {
+                nebula_settings::ScrollbarVisibility::Auto => display_offset > 0,
+                nebula_settings::ScrollbarVisibility::Hover => self.scrollbar_hovered,
+                nebula_settings::ScrollbarVisibility::Always => true,
+            };
+        visible.then(|| self.scrollbar_geometry(display_offset, history)).flatten()
+    }
+
+    fn scrollbar_geometry(&self, display_offset: usize, history: usize) -> Option<Bounds<Pixels>> {
         let screen = self.rows;
         let total = history + screen;
-        if display_offset == 0 || screen == 0 || total <= screen {
+        if screen == 0 || total <= screen {
             return None;
         }
         let track_top = self.origin.y.as_f32();
@@ -26,7 +36,7 @@ impl TerminalView {
         // 视口顶端之上还剩多少行历史：0 = 拉到最顶，history = 贴着底部。
         let above = (history - display_offset) as f32;
         let max_y = (track_h - thumb_h).max(0.0);
-        let thumb_y = track_top + (track_h * above / total as f32).clamp(0.0, max_y);
+        let thumb_y = track_top + (max_y * above / history as f32).clamp(0.0, max_y);
         // 浮在网格右缘（overlay 风格：不占列宽、不画轨道）。
         let grid_right = self.origin.x.as_f32() + self.cell_width.as_f32() * self.cols as f32;
         Some(Bounds::new(
@@ -37,6 +47,26 @@ impl TerminalView {
 
     pub(in crate::gpui_shell::terminal) fn scrollbar_dragging(&self) -> bool {
         self.scrollbar_drag.is_some()
+    }
+
+    pub(in crate::gpui_shell::terminal) fn scrollbar_highlighted(&self) -> bool {
+        self.scrollbar_dragging() || self.scrollbar_hovered
+    }
+
+    fn scrollbar_hot_zone(&self) -> Bounds<Pixels> {
+        let right = self.origin.x + self.cell_width * self.cols as f32;
+        Bounds::new(
+            point(right - px(SCROLLBAR_W + SCROLLBAR_SLOP), self.origin.y),
+            gpui::size(px(SCROLLBAR_W + 2.0 * SCROLLBAR_SLOP), self.line_height * self.rows as f32),
+        )
+    }
+
+    fn update_scrollbar_hover(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let hovered = self.scrollbar_hot_zone().contains(&position);
+        if self.scrollbar_hovered != hovered {
+            self.scrollbar_hovered = hovered;
+            cx.notify();
+        }
     }
 
     /// 回滚历史行数：拇指高度与拖拽反算的分母来源。
@@ -53,17 +83,10 @@ impl TerminalView {
         history: usize,
     ) -> Option<f32> {
         let thumb = self.scrollbar_thumb(display_offset, history)?;
-        let x = position.x.as_f32();
-        let thumb_x = thumb.origin.x.as_f32();
-        if x < thumb_x - SCROLLBAR_SLOP || x > thumb_x + SCROLLBAR_W + SCROLLBAR_SLOP {
+        if !self.scrollbar_hot_zone().contains(&position) {
             return None;
         }
-        let track_top = self.origin.y.as_f32();
-        let track_h = self.line_height.as_f32() * self.rows as f32;
         let y = position.y.as_f32();
-        if y < track_top || y > track_top + track_h {
-            return None;
-        }
         let thumb_top = thumb.origin.y.as_f32();
         let thumb_h = thumb.size.height.as_f32();
         if y >= thumb_top && y <= thumb_top + thumb_h {
@@ -76,14 +99,15 @@ impl TerminalView {
     /// 把拖动中的指针 y 反算回 `display_offset`——`scrollbar_thumb` 那套定位
     /// 数学的逆运算（旧壳 `scrollbar_target_offset` 同合同）。
     pub(super) fn scrollbar_target_offset(&self, y: f32, grab: f32, history: usize) -> usize {
-        if history == 0 {
+        let Some(thumb) = self.scrollbar_geometry(0, history) else { return 0 };
+        let track_top = self.origin.y.as_f32();
+        let travel = self.line_height.as_f32() * self.rows as f32 - thumb.size.height.as_f32();
+        if travel <= 0.0 {
             return 0;
         }
-        let total = (history + self.rows) as f32;
-        let track_top = self.origin.y.as_f32();
-        let track_h = (self.line_height.as_f32() * self.rows as f32).max(1.0);
-        let above =
-            ((y - grab - track_top) / track_h * total).round().clamp(0.0, history as f32) as usize;
+        let above = ((y - grab - track_top) / travel * history as f32)
+            .round()
+            .clamp(0.0, history as f32) as usize;
         history - above
     }
 
@@ -184,12 +208,15 @@ impl TerminalView {
             hover.hint.text(&*term).map(|t| t.into_owned())
         };
         let Some(text) = text else { return };
-        let cwd = self.local_cwd();
+        let cwd =
+            super::super::osc_links::link_base_directory(&self.cwd, self.wsl_distro(), || {
+                self.local_cwd()
+            });
         super::super::osc_links::open_hint_match(
             &hover.hint,
             &text,
             cwd.as_deref(),
-            &self.session_launch,
+            self.wsl_distro(),
             window,
             cx,
         );
@@ -329,14 +356,47 @@ impl TerminalView {
     /// 继续透传成一次命令执行。
     pub(super) fn accept_completion_popup(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(item) = suggest::popup_take(&mut self.suggest) else { return false };
+        self.accept_completion_item(item, cx)
+    }
+
+    pub(super) fn accept_completion_item(
+        &mut self,
+        item: crate::display::NebulaCompletionItem,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let insert = item.insert;
+        if !self.completion_editor.permits_insert(&insert) {
+            return false;
+        }
         self.completion_viewport.clear();
-        let mut before = if self.suggest.screen_line.is_empty() {
-            self.suggest.line_buf.clone()
-        } else {
-            self.suggest.screen_line.clone()
-        };
-        if item.replace_chars > 0 {
+        let snapshot = self.completion_editor.snapshot(self.prompt_input_epoch).cloned();
+        if item.replace_after_chars > 0 && snapshot.is_none() {
+            return false;
+        }
+        let original =
+            snapshot.as_ref().map(|snapshot| snapshot.line.clone()).unwrap_or_else(|| {
+                if self.suggest.screen_line.is_empty() {
+                    self.suggest.line_buf.clone()
+                } else {
+                    self.suggest.screen_line.clone()
+                }
+            });
+        let cursor = snapshot.as_ref().map_or(original.len(), |snapshot| snapshot.cursor);
+        let Some(head) = original.get(..cursor) else { return false };
+        let Some(tail) = original.get(cursor..) else { return false };
+        let tail: String = tail.chars().skip(item.replace_after_chars).collect();
+        let mut before = head.to_owned();
+        if item.replace_after_chars > 0 {
+            // zsh need not bind Delete's CSI sequence. Traverse proven text,
+            // then use the same native Backspace path as end-of-line edits.
+            let right = super::super::keymap::encode(
+                &gpui::Keystroke::parse("right").unwrap(),
+                &self.term_mode(),
+            )
+            .unwrap_or_else(|| b"\x1b[C".to_vec());
+            self.write_bytes(right.repeat(item.replace_after_chars));
+        }
+        if item.replace_chars + item.replace_after_chars > 0 {
             let backspace = super::super::keymap::encode(
                 &gpui::Keystroke::parse("backspace").unwrap(),
                 &self
@@ -346,7 +406,7 @@ impl TerminalView {
                     .unwrap_or_default(),
             )
             .unwrap_or_else(|| vec![0x7f]);
-            self.write_bytes(backspace.repeat(item.replace_chars));
+            self.write_bytes(backspace.repeat(item.replace_chars + item.replace_after_chars));
             for _ in 0..item.replace_chars {
                 before.pop();
                 crate::display::nebula_input_backspace(&mut self.suggest);
@@ -355,10 +415,13 @@ impl TerminalView {
         for c in insert.chars() {
             crate::display::nebula_input_char(&mut self.suggest, c);
         }
-        self.suggest.completion_suppressed_line = Some(format!("{before}{insert}"));
+        let expected = format!("{before}{insert}{tail}");
+        self.suggest.completion_suppressed_line = Some(expected.clone());
         if !insert.is_empty() {
             self.write_user_text(insert.clone(), false, insert.into_bytes(), cx);
         }
+        self.suggest.expect_completion_echo(original, expected);
+        self.completion_editor.invalidate();
         true
     }
 
@@ -406,7 +469,8 @@ impl TerminalView {
             return;
         }
         // 滚动条是壳的控件，命中优先于选区和鼠标上报——否则在开了鼠标追踪的
-        // TUI 里（codex/vim）根本抓不住条。贴底时拇指为 None，正常操作零影响。
+        // TUI 里（codex/vim）根本抓不住条。隐藏时不占用正文的输入/选区。
+        self.update_scrollbar_hover(event.position, cx);
         let (display_offset, history) = self.scroll_state();
         if let Some(grab) = self.scrollbar_grab(event.position, display_offset, history) {
             self.scrollbar_drag = Some(grab);
@@ -469,6 +533,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.update_scrollbar_hover(event.position, cx);
         // Retain the pressed link until release; dragging must not retarget it
         // or leak part of the consumed gesture to the application.
         if self.pending_link_open {
@@ -496,6 +561,7 @@ impl TerminalView {
         if let Some(grab) = self.scrollbar_drag {
             if event.pressed_button != Some(MouseButton::Left) {
                 self.scrollbar_drag = None;
+                cx.notify();
                 return;
             }
             let (display_offset, history) = self.scroll_state();
@@ -586,6 +652,7 @@ impl TerminalView {
         }
         self.stop_selection_scroll();
         if self.scrollbar_drag.take().is_some() {
+            self.update_scrollbar_hover(event.position, cx);
             cx.notify();
             return;
         }
@@ -628,6 +695,7 @@ impl TerminalView {
         }
         self.stop_selection_scroll();
         let dragging_scrollbar = self.scrollbar_drag.take().is_some();
+        self.scrollbar_hovered = false;
         self.pending_link_open = false;
         if !self.selecting {
             if dragging_scrollbar {
@@ -739,8 +807,8 @@ impl TerminalView {
         true
     }
 
-    /// 右键行为：有选区直接复制，无选区直接粘贴。
-    /// Ctrl+右键保留选区菜单，供显式调用 Send to Chat。
+    /// Manual selection uses the context menu. Copy-on-select keeps quick
+    /// copy/paste, while Ctrl+right-click always requests the menu.
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -771,20 +839,17 @@ impl TerminalView {
             .as_ref()
             .and_then(|session| session.term.lock().selection_to_string())
             .filter(|text| !text.is_empty());
-        if let Some(text) = selected_text {
-            if event.modifiers.control {
-                cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
-                    position: event.position,
-                    text,
-                });
-            } else {
-                self.copy_selection(true, window, cx);
-            }
-            cx.stop_propagation();
+        if event.modifiers.control || !self.copy_on_select {
+            cx.emit(TerminalViewEvent::SelectionContextMenuRequested {
+                position: event.position,
+                text: selected_text.unwrap_or_default(),
+            });
+        } else if selected_text.is_some() {
+            self.copy_selection(true, window, cx);
         } else {
             self.paste(window, cx);
-            cx.stop_propagation();
         }
+        cx.stop_propagation();
     }
 
     pub(super) fn on_right_up(
@@ -860,9 +925,12 @@ impl TerminalView {
         // 旧壳 `mouse_wheel_input`：Ctrl+滚轮先于一切滚动消费者，一步 1
         // 逻辑像素，钳在 4–64。设置页步进会写盘；这里同样写 `font_size=`，
         // 让下次启动跟上（旧壳只在其它设置落盘时顺便带走当前字号）。
+        // 开关关闭时手势仍被整体消费：既不缩放，也不回落给下面的滚动逻辑。
         if event.modifiers.control && !event.modifiers.alt && delta_y != 0.0 {
-            let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
-            self.zoom_font_size(step, cx);
+            if crate::gpui_shell::config::ctrl_wheel_font_zoom(cx) {
+                let step = if delta_y > 0.0 { 1.0 } else { -1.0 };
+                self.zoom_font_size(step, cx);
+            }
             cx.stop_propagation();
             return;
         }

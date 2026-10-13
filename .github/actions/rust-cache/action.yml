@@ -20,6 +20,9 @@ inputs:
   save-if:
     description: Allow publishing caches; PR consumers can restore without competing with the default branch
     default: "true"
+  restore-downloads:
+    description: Restore and populate shared downloads; disable only when an earlier call in this job already restored them
+    default: "true"
 
 outputs:
   cache-key:
@@ -90,6 +93,7 @@ runs:
         PY
     - name: Restore shared Cargo downloads
       id: downloads
+      if: inputs.restore-downloads == 'true'
       uses: actions/cache/restore@v4
       with:
         # Preserve Git source checkouts with their mtimes. Recreating them from
@@ -173,7 +177,7 @@ runs:
           echo "legacy-fallback-outcome=$legacy_outcome"
         } >> "$GITHUB_OUTPUT"
     - name: Populate complete downloads before sharing the cache
-      if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true'
+      if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true' && inputs.restore-downloads == 'true'
       shell: bash
       env:
         CACHE_OS: ${{ runner.os }}
@@ -193,7 +197,7 @@ runs:
             ;;
         esac
     - name: Save complete shared Cargo downloads
-      if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true'
+      if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true' && inputs.restore-downloads == 'true'
       uses: actions/cache/save@v4
       with:
         path: |

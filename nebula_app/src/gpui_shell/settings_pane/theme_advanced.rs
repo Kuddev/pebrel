@@ -136,6 +136,7 @@ impl ThemeAdvancedEditor {
         let ansi_pickers = (0..ANSI_COUNT)
             .map(|index| {
                 new_color_picker(
+                    ThemeAdvancedField::Ansi(index),
                     Some(definition.terminal.palette.get(index).unwrap_or([0, 0, 0])),
                     ansi_inputs[index].clone(),
                     window,
@@ -145,6 +146,7 @@ impl ThemeAdvancedEditor {
             })
             .collect();
         let selection_background_picker = new_color_picker(
+            ThemeAdvancedField::SelectionBackground,
             definition.terminal.selection_background,
             selection_background_input.clone(),
             window,
@@ -152,6 +154,7 @@ impl ThemeAdvancedEditor {
             &mut picker_subscriptions,
         );
         let selection_foreground_picker = new_color_picker(
+            ThemeAdvancedField::SelectionForeground,
             definition.terminal.selection_foreground,
             selection_foreground_input.clone(),
             window,
@@ -159,6 +162,7 @@ impl ThemeAdvancedEditor {
             &mut picker_subscriptions,
         );
         let cursor_text_picker = new_color_picker(
+            ThemeAdvancedField::CursorText,
             definition.terminal.cursor_text,
             cursor_text_input.clone(),
             window,
@@ -208,6 +212,17 @@ impl ThemeAdvancedEditor {
             ThemeAdvancedField::Radius => Some(&self.radius_input),
             ThemeAdvancedField::Gutter => Some(&self.gutter_input),
             ThemeAdvancedField::Divider => Some(&self.divider_input),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn picker(&self, field: ThemeAdvancedField) -> Option<&Entity<ColorPickerState>> {
+        match field {
+            ThemeAdvancedField::Ansi(index) => self.ansi_pickers.get(index),
+            ThemeAdvancedField::SelectionBackground => Some(&self.selection_background_picker),
+            ThemeAdvancedField::SelectionForeground => Some(&self.selection_foreground_picker),
+            ThemeAdvancedField::CursorText => Some(&self.cursor_text_picker),
+            _ => None,
         }
     }
 
@@ -557,6 +572,7 @@ impl ThemeAdvancedEditor {
 }
 
 fn new_color_picker(
+    field: ThemeAdvancedField,
     color: Option<Rgb8>,
     input: Entity<InputState>,
     window: &mut Window,
@@ -590,6 +606,7 @@ fn new_color_picker(
             input.update(cx, |state, cx| {
                 state.set_value(format_hex_rgb(rgb), window, cx);
             });
+            this.on_theme_advanced_input(field, window, cx);
         },
     );
     subscriptions.push(subscription);

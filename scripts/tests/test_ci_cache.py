@@ -195,6 +195,18 @@ class CacheIdentityTests(unittest.TestCase):
             body = source.split(f"- name: {step}", 1)[1].split("\n    - name:", 1)[0]
             self.assertIn("if: inputs.save-if == 'true' && steps.downloads.outputs.cache-hit != 'true'", body)
 
+    def test_second_workload_can_reuse_downloads_without_restoring_or_saving_them_again(self):
+        source = self.action_text()
+        option = source.split("\n  restore-downloads:\n", 1)[1].split("\noutputs:", 1)[0]
+        self.assertIn('default: "true"', option)
+        for step in ("Restore shared Cargo downloads", "Populate complete downloads before sharing the cache",
+                     "Save complete shared Cargo downloads"):
+            body = source.split(f"- name: {step}", 1)[1].split("\n    - name:", 1)[0]
+            condition = next(line for line in body.splitlines() if line.strip().startswith("if:"))
+            self.assertIn("inputs.restore-downloads == 'true'", condition)
+        target = source.split("- name: Restore compiled targets", 1)[1].split("\n    - name:", 1)[0]
+        self.assertNotIn("restore-downloads", target)
+
     @unittest.skipUnless(os.name == "nt", "Windows cache migration")
     def test_windows_migration_preserves_compiler_and_workload_boundaries(self):
         before = self.identity()

@@ -116,6 +116,49 @@ class ShellIntegrationTests(unittest.TestCase):
         session.command('print -r -- "RCS=$options[rcs] GLOBAL_RCS=$options[globalrcs]"',
                         b"RCS=on GLOBAL_RCS=off")
 
+    def zsh_color_state(self, rc: str) -> bytes:
+        session = self.start("zsh", rc)
+        return session.command(
+            'print -r -- "COLORS=${CLICOLOR-unset}:${LSCOLORS-unset} ALIAS=${aliases[ls]-unset}"',
+            b"\x1b]133;D;0\x07")
+
+    def test_zsh_macos_color_defaults_do_not_replace_ls(self) -> None:
+        output = self.zsh_color_state("OSTYPE=darwin\n")
+        self.assertIn(b"COLORS=1:GxFxCxDxBxegedabagaced ALIAS=unset", output)
+
+    def test_zsh_macos_preserves_user_color_settings_and_alias(self) -> None:
+        output = self.zsh_color_state(
+            "OSTYPE=darwin\nCLICOLOR=0\nLSCOLORS=exfxcxdxbxegedabagacad\nalias ls='ls -lah'\n")
+        self.assertIn(b"COLORS=0:exfxcxdxbxegedabagacad ALIAS=ls -lah", output)
+
+    def test_zsh_macos_preserves_explicit_empty_colors(self) -> None:
+        output = self.zsh_color_state("OSTYPE=darwin\nCLICOLOR=''\nLSCOLORS=''\n")
+        self.assertIn(b"COLORS=: ALIAS=unset", output)
+
+    def test_zsh_macos_honors_no_color(self) -> None:
+        output = self.zsh_color_state("OSTYPE=darwin\nNO_COLOR=1\n")
+        self.assertIn(b"COLORS=unset:unset ALIAS=unset", output)
+
+    def test_zsh_macos_dumb_terminal_does_not_enable_colors(self) -> None:
+        output = self.zsh_color_state("OSTYPE=darwin\nTERM=dumb\n")
+        self.assertIn(b"COLORS=unset:unset ALIAS=unset", output)
+
+    def test_zsh_linux_keeps_color_policy_unchanged(self) -> None:
+        output = self.zsh_color_state("OSTYPE=linux-gnu\n")
+        self.assertIn(b"COLORS=unset:unset ALIAS=unset", output)
+
+    def test_zsh_macos_preserves_ls_function(self) -> None:
+        session = self.start("zsh", "OSTYPE=darwin\nls() { print -r -- CUSTOM_LS; }\n")
+        output = session.command("ls", b"\x1b]133;D;0\x07")
+        self.assertIn(b"CUSTOM_LS\r\n", output)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires native BSD ls")
+    def test_zsh_macos_bsd_ls_emits_color_in_a_pty(self) -> None:
+        (self.home / "colored-directory").mkdir()
+        session = self.start("zsh")
+        output = session.command("/bin/ls -d colored-directory", b"\x1b]133;D;0\x07")
+        self.assertRegex(output, rb"\x1b\[[0-9;]*mcolored-directory")
+
     def test_bash_preserves_prompt_command(self) -> None:
         session = self.start("bash", "PROMPT_COMMAND=\"printf 'USER_PROMPT\\\\n'\"\n")
         session.command("(exit 7)", b"\x1b]133;D;7\x07")

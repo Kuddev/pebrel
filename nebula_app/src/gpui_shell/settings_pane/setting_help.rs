@@ -108,8 +108,8 @@ pub(super) fn help(key: &str, language: UiLanguage) -> SettingHelp {
             Some(language.pick("如果 Tab 与 Shell 自带补全冲突，可改用右方向键。", "Use Right arrow if Tab conflicts with the shell's own completion.")),
         ),
         "completion_style" => (
-            language.pick("选择行内建议或候选列表。", "Chooses inline suggestions or a list of candidates."),
-            Some(language.pick("行内建议不遮挡下方输出；候选列表能同时显示多项建议。", "Inline suggestions leave output visible. A popup list shows several candidates at once.")),
+            language.text(crate::i18n::Message::SettingsCompletionDescription),
+            Some(language.text(crate::i18n::Message::SettingsCompletionDetails)),
         ),
         "copy_on_select" => (
             language.pick("松开鼠标自动复制，右键直接粘贴。", "Copies on mouse release and pastes on right-click."),

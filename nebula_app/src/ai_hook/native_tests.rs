@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn non_successful_turns_do_not_emit_a_completion_notification() {
-    for reason in ["error", "aborted", "length", "toolUse"] {
+    for reason in ["error", "aborted", "length"] {
         let payload = serde_json::json!({"kind":"done", "stop_reason":reason});
         let event = parse_remote_envelope(
             format!("nebula-hook/1 source=pi\n{payload}").as_bytes(),
@@ -25,6 +25,17 @@ fn non_successful_turns_do_not_emit_a_completion_notification() {
     )
     .unwrap();
     assert!(crate::notify::Notification::from_ai_hook(&event, None, false,).is_some());
+    // Host-finished turns (plan menu, completed goal) end on a tool call; they
+    // must notify like an ordinary completion, not as a failure.
+    let event = parse_remote_envelope(
+        b"nebula-hook/1 source=pi
+{\"kind\":\"done\",\"stop_reason\":\"toolUse\"}",
+        Some(1),
+    )
+    .unwrap();
+    let notification = crate::notify::Notification::from_ai_hook(&event, None, false)
+        .expect("host-finished turns notify like ordinary completions");
+    assert!(!notification.is_failure(), "a toolUse finish is not a failure");
 }
 #[test]
 fn pi_result_metadata_distinguishes_legacy_unknown_and_background_work() {
@@ -36,7 +47,7 @@ fn pi_result_metadata_distinguishes_legacy_unknown_and_background_work() {
         (",\"stop_reason\":\"error\"", AiTurnOutcome::Failed, AgentStatus::Idle, true),
         (",\"stop_reason\":\"aborted\"", AiTurnOutcome::Cancelled, AgentStatus::Idle, false),
         (",\"stop_reason\":\"length\"", AiTurnOutcome::Incomplete, AgentStatus::Idle, true),
-        (",\"stop_reason\":\"toolUse\"", AiTurnOutcome::Incomplete, AgentStatus::Idle, true),
+        (",\"stop_reason\":\"toolUse\"", AiTurnOutcome::Succeeded, AgentStatus::Done, true),
         (",\"stop_reason\":\"future\"", AiTurnOutcome::Unknown, AgentStatus::Idle, true),
         (",\"stop_reason\":null", AiTurnOutcome::Unknown, AgentStatus::Idle, true),
         (",\"stop_reason\":42", AiTurnOutcome::Unknown, AgentStatus::Idle, true),

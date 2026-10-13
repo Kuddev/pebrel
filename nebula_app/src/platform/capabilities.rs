@@ -10,8 +10,7 @@
 /// 编译期常量的能力集合。字段顺序按用户可见程度排列。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
-    /// 关窗后进程驻留并隐藏窗口（Windows `SW_HIDE`）。Unix 尚无实现：
-    /// `hide_native_window` 在那里是 no-op，开着会导致「既不关也不藏」。
+    /// 关窗后保留窗口和 PTY；具体显隐方式由窗口系统适配器提供。
     pub hide_window_on_close: bool,
     /// 系统托盘图标（`crate::tray`）。
     pub system_tray: bool,
@@ -31,7 +30,7 @@ pub struct Capabilities {
     pub system_font_enumeration: bool,
     /// 系统凭据后端已实现；Linux 还需 credentials::can_store 检查运行依赖。
     pub credential_store: bool,
-    /// 安装版可把「在此处打开 Nebula」挂进资源管理器右键菜单。
+    /// 系统文件管理器可向应用传递目录，安装包声明对应入口。
     pub shell_context_menu: bool,
 }
 
@@ -55,17 +54,17 @@ pub const CAPABILITIES: Capabilities = {
     #[cfg(not(windows))]
     {
         Capabilities {
-            hide_window_on_close: false,
-            system_tray: false,
-            launch_at_login: false,
+            hide_window_on_close: true,
+            system_tray: true,
+            launch_at_login: true,
             system_notifications: true,
-            system_bell: false,
+            system_bell: true,
             self_update_install: cfg!(target_os = "macos"),
-            ai_hook_server: false,
-            quick_terminal_hotkey: false,
+            ai_hook_server: true,
+            quick_terminal_hotkey: true,
             system_font_enumeration: true,
             credential_store: true,
-            shell_context_menu: false,
+            shell_context_menu: true,
         }
     }
 };
@@ -95,13 +94,13 @@ mod tests {
             assert!(CAPABILITIES.system_notifications);
             assert!(CAPABILITIES.system_font_enumeration);
             assert!(CAPABILITIES.credential_store);
-            assert!(!CAPABILITIES.hide_window_on_close);
-            assert!(!CAPABILITIES.system_tray);
-            assert!(!CAPABILITIES.system_bell);
+            assert!(CAPABILITIES.hide_window_on_close);
+            assert!(CAPABILITIES.system_tray);
+            assert!(CAPABILITIES.system_bell);
             assert_eq!(CAPABILITIES.self_update_install, cfg!(target_os = "macos"));
-            assert!(!CAPABILITIES.ai_hook_server);
-            assert!(!CAPABILITIES.quick_terminal_hotkey);
-            assert!(!CAPABILITIES.shell_context_menu);
+            assert!(CAPABILITIES.ai_hook_server);
+            assert!(CAPABILITIES.quick_terminal_hotkey);
+            assert!(CAPABILITIES.shell_context_menu);
         }
     }
 }

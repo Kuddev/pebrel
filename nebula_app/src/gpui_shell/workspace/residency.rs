@@ -39,10 +39,11 @@ fn runtime_close_confirmation(process: String, details: Value) -> ApiError {
 pub(super) fn residency_close_action(
     keep_session: bool,
     has_live_panes: bool,
+    empty_workspace: bool,
     tray: bool,
 ) -> ResidencyCloseAction {
     let _ = tray;
-    if keep_session && has_live_panes {
+    if keep_session && (has_live_panes || empty_workspace) {
         ResidencyCloseAction::Hide
     } else {
         ResidencyCloseAction::Close
@@ -102,29 +103,33 @@ impl NebulaWorkspace {
                 },
                 // 更新通知由进程级 windowing dispatcher 选择 MRU 窗口；这个
                 // 旧的 workspace-local 分发器没有 Window，不能在此打开 Dialog。
-                GpuiShellEvent::UpdateAvailable(_) | GpuiShellEvent::SshPrompt(_) => {},
+                GpuiShellEvent::UpdateAvailable(_)
+                | GpuiShellEvent::SshPrompt(_)
+                | GpuiShellEvent::OpenDirectories(_) => {},
             }
         }
     }
 
     fn queue_or_answer_runtime(&mut self, dispatch: Arc<RuntimeDispatch>, cx: &mut Context<Self>) {
+        if super::runtime_tabs::dispatch_read(&dispatch, &cx.entity().downgrade(), cx) {
+            return;
+        }
         match &dispatch.command {
             RuntimeCommand::NewWindow { .. } => {
                 dispatch.respond(Err(ApiError::new(
                     "runtime_unavailable",
-                    "the GPUI runtime currently owns one workspace window; window.create is unavailable",
+                    "window.create is handled by the process-level window dispatcher",
                 )));
             },
-            RuntimeCommand::Exec { pane_id, argv, timeout_ms, max_output_bytes, .. } => {
-                match self.runtime_exec_context(*pane_id, cx) {
-                    Ok((context, cwd)) => crate::runtime_exec::spawn(
-                        dispatch.clone(),
-                        context,
-                        cwd,
-                        argv.clone(),
-                        *timeout_ms,
-                        *max_output_bytes,
-                    ),
+            RuntimeCommand::Exec { window_id, pane_id, .. }
+            | RuntimeCommand::Git { window_id, pane_id, .. } => {
+                match self
+                    .runtime_window_requested(*window_id)
+                    .and_then(|()| self.runtime_exec_context(*pane_id, cx))
+                {
+                    Ok((context, cwd)) => {
+                        crate::runtime_exec::spawn(dispatch.clone(), context, cwd)
+                    },
                     Err(error) => dispatch.respond(Err(error)),
                 }
             },
@@ -142,6 +147,8 @@ impl NebulaWorkspace {
                 self.runtime_pending.push(dispatch);
             },
             RuntimeCommand::Snapshot
+            | RuntimeCommand::Conversation { .. }
+            | RuntimeCommand::Tab { .. }
             | RuntimeCommand::CloseWindow { .. }
             | RuntimeCommand::CloseTab { .. }
             | RuntimeCommand::RenameTab { .. }
@@ -150,6 +157,7 @@ impl NebulaWorkspace {
             | RuntimeCommand::ZoomPane { .. }
             | RuntimeCommand::ResizePane { .. }
             | RuntimeCommand::ReadPane { .. }
+            | RuntimeCommand::ScrollPane { .. }
             | RuntimeCommand::Procs { .. }
             | RuntimeCommand::AgentRead { .. }
             | RuntimeCommand::AgentFork { .. } => {
@@ -173,13 +181,19 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> Result<serde_json::Value, ApiError> {
         match command {
+            RuntimeCommand::Conversation { window_id, pane_id, request } => self
+                .conversation_view(*window_id, *pane_id, cx)?
+                .update(cx, |view, cx| view.runtime_conversation_apply(request, cx)),
+            RuntimeCommand::Tab { window_id, request } => {
+                self.execute_tab_request(*window_id, request, window, cx)
+            },
             RuntimeCommand::Snapshot => {
                 serde_json::to_value(self.publish_runtime_snapshot(window, cx))
                     .map_err(|error| ApiError::new("serialization_failed", error.to_string()))
             },
             RuntimeCommand::NewWindow { .. } => Err(ApiError::new(
                 "runtime_unavailable",
-                "window.create is not queued in the GPUI runtime",
+                "window.create is handled by the process-level window dispatcher",
             )),
             RuntimeCommand::CloseWindow { window_id } => {
                 self.runtime_window_requested(*window_id)?;
@@ -260,37 +274,7 @@ impl NebulaWorkspace {
             },
             RuntimeCommand::CloseTab { window_id, tab_index } => {
                 self.runtime_window_requested(*window_id)?;
-                if *tab_index >= self.tabs.len() {
-                    return Err(ApiError::new(
-                        "target_not_found",
-                        format!(
-                            "tab {tab_index} does not exist in window {}",
-                            self.runtime_window_id
-                        ),
-                    ));
-                }
-                if let Some(process) = self.busy_process_in_tab(*tab_index, None, cx) {
-                    return Err(runtime_close_confirmation(
-                        process,
-                        json!({
-                            "target": "tab",
-                            "window_id": self.runtime_window_id,
-                            "tab_index": tab_index
-                        }),
-                    ));
-                }
-                self.close_tab(*tab_index, window, cx);
-                let action = json!({
-                    "window_id": self.runtime_window_id,
-                    "tab_index": tab_index,
-                    "closed": true
-                });
-                if self.tabs.is_empty() {
-                    let snapshot = super::windowing::publish_runtime_snapshot(cx);
-                    Ok(json!({ "action": action, "snapshot": snapshot }))
-                } else {
-                    self.runtime_result(action, window, cx)
-                }
+                self.close_runtime_tab(*tab_index, window, cx)
             },
             RuntimeCommand::RenameTab { window_id, tab_index, name } => {
                 self.runtime_window_requested(*window_id)?;
@@ -550,7 +534,7 @@ impl NebulaWorkspace {
                     cx,
                 )
             },
-            RuntimeCommand::ReadPane { window_id, pane_id, lines } => {
+            RuntimeCommand::ReadPane { window_id, pane_id, lines, screen } => {
                 self.runtime_window_requested(*window_id)?;
                 let Some(tab_ix) = self.tab_of_pane(*pane_id) else {
                     return Err(ApiError::new(
@@ -565,11 +549,30 @@ impl NebulaWorkspace {
                         .expect("tab_of_pane resolved a terminal pane")
                         .view
                         .read(cx)
-                        .runtime_read(self.runtime_window_id, *lines),
+                        .runtime_read(self.runtime_window_id, *lines, *screen),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 }?;
                 serde_json::to_value(read)
                     .map_err(|error| ApiError::new("serialization_failed", error.to_string()))
+            },
+            RuntimeCommand::ScrollPane { window_id, pane_id, lines, column, row } => {
+                self.runtime_window_requested(*window_id)?;
+                let tab_ix = self.tab_of_pane(*pane_id).ok_or_else(|| {
+                    ApiError::new("target_not_found", "scroll pane does not exist")
+                })?;
+                let view = match &self.tabs[tab_ix] {
+                    WorkspaceTab::Terminal { panes, .. } => panes
+                        .iter()
+                        .find(|pane| pane.id == *pane_id)
+                        .expect("resolved pane")
+                        .view
+                        .clone(),
+                    _ => unreachable!("tab_of_pane only resolves terminal tabs"),
+                };
+                view.update(cx, |view, cx| view.runtime_scroll(*lines, *column, *row, window, cx))?;
+                // 连续手势不改变窗口清单；不为每个滚轮回执重建整窗状态快照。
+                Ok(json!({"action": {"window_id": self.runtime_window_id,
+                    "pane_id": pane_id, "lines": lines}}))
             },
             RuntimeCommand::Procs { window_id, pane_id } => {
                 self.runtime_window_requested(*window_id)?;
@@ -651,7 +654,7 @@ impl NebulaWorkspace {
                     cx,
                 )
             },
-            RuntimeCommand::Exec { .. } => Err(ApiError::new(
+            RuntimeCommand::Exec { .. } | RuntimeCommand::Git { .. } => Err(ApiError::new(
                 "invalid_runtime_command",
                 "pane.exec must be prepared before entering the synchronous GPUI dispatcher",
             )),
@@ -801,7 +804,7 @@ impl NebulaWorkspace {
                         .expect("tab_of_pane resolved a terminal pane")
                         .view
                         .read(cx)
-                        .runtime_read(self.runtime_window_id, *lines),
+                        .runtime_read(self.runtime_window_id, *lines, None),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 }?;
                 Ok(json!({ "agent": managed, "read": read }))
@@ -826,7 +829,7 @@ impl NebulaWorkspace {
         }
     }
 
-    fn runtime_window_requested(&self, requested: Option<u64>) -> Result<(), ApiError> {
+    pub(super) fn runtime_window_requested(&self, requested: Option<u64>) -> Result<(), ApiError> {
         if requested.is_none_or(|id| id == self.runtime_window_id) {
             Ok(())
         } else {
@@ -837,7 +840,7 @@ impl NebulaWorkspace {
         }
     }
 
-    fn runtime_result(
+    pub(super) fn runtime_result(
         &self,
         action: serde_json::Value,
         window: &Window,
@@ -898,6 +901,8 @@ impl NebulaWorkspace {
                     WorkspaceTab::Code { .. } => ("code", None, None, None, Vec::new()),
                 };
                 RuntimeTab {
+                    tab_id: self.tab_meta.get(index).map(|meta| meta.runtime_id.0.clone()),
+                    file: tab.runtime_file_info(cx),
                     index,
                     active: index == self.active,
                     label: self.tab_title(index, cx).to_string(),
@@ -1004,6 +1009,13 @@ impl NebulaWorkspace {
         }
     }
 
+    pub(super) fn close_empty_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.keep_session_on_close(window, cx) {
+            super::windowing::close_empty_workspace_window(self.runtime_window_id, window, cx);
+        }
+        cx.notify();
+    }
+
     /// 旧壳 detach：关窗不杀 PTY、不弹忙进程确认。GPUI 用 hide 代替拆 pane。
     pub(super) fn keep_session_on_close(
         &mut self,
@@ -1011,7 +1023,9 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> bool {
         // Private administrator windows have no public resident discovery path.
-        if crate::platform::elevation::requires_isolation() {
+        if self.window_role != super::windowing::WindowRole::Regular
+            || crate::platform::elevation::requires_isolation()
+        {
             return false;
         }
         let runtime = nebula_settings::RuntimeSettings::load();
@@ -1021,6 +1035,7 @@ impl NebulaWorkspace {
         if residency_close_action(
             runtime.keep_session && can_hide,
             self.has_live_terminal_panes(),
+            self.tabs.is_empty(),
             runtime.tray,
         ) != ResidencyCloseAction::Hide
         {
@@ -1029,7 +1044,11 @@ impl NebulaWorkspace {
         if let Err(error) = super::windowing::save_current_window_session(
             self.runtime_window_id,
             self.snapshot_session(cx),
-            super::session_persistence::SaveReason::Checkpoint,
+            if self.tabs.is_empty() {
+                super::session_persistence::SaveReason::TabsClosed
+            } else {
+                super::session_persistence::SaveReason::Checkpoint
+            },
             cx,
         ) {
             log::warn!("Could not checkpoint before hiding window: {error}");
@@ -1042,9 +1061,8 @@ impl NebulaWorkspace {
             );
             return true;
         }
-        crate::gpui_shell::hide_native_window(window);
-        self.window_hidden = true;
-        true
+        self.window_hidden = crate::gpui_shell::hide_native_window(window);
+        self.window_hidden
     }
 
     fn has_live_terminal_panes(&self) -> bool {
@@ -1107,15 +1125,91 @@ fn runtime_layout(tree: &SplitTree<u64>) -> RuntimeLayout {
 mod tests {
     use super::{ResidencyCloseAction, residency_close_action};
 
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn remote_scroll_returns_compact_reply_without_switching_tabs(cx: &mut gpui::TestAppContext) {
+        use super::*;
+        use crate::gpui_shell::workspace::windowing;
+        use gpui::AppContext as _;
+        use gpui_component::Root;
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            crate::gpui_shell::workspace::init(cx);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| {
+                NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                )
+            });
+            workspace.update(cx, |workspace, cx| {
+                for _ in 0..2 {
+                    workspace.add_terminal_with(
+                        crate::session::LaunchSession::Shell {
+                            name: "scroll fixture".into(),
+                            program: "pebrel-test-missing-shell-executable".into(),
+                            args: vec![],
+                        },
+                        None,
+                        None,
+                        window,
+                        cx,
+                    );
+                    workspace.tabs[workspace.active].focused_view().unwrap().update(
+                        cx,
+                        |view, _| {
+                            view.install_completion_test_session();
+                        },
+                    );
+                }
+                let active = workspace.active;
+                let target = workspace.tabs[0].focused_view().unwrap().read(cx).pane_id;
+                let command = RuntimeCommand::ScrollPane {
+                    window_id: Some(1),
+                    pane_id: target,
+                    lines: 1,
+                    column: 0,
+                    row: 0,
+                };
+                let reply = workspace.execute_runtime_command(&command, window, cx).unwrap();
+                assert!(reply.get("snapshot").is_none());
+                assert_eq!(reply["action"]["pane_id"], target);
+                assert_eq!(workspace.active, active);
+            });
+            Root::new(workspace, window, cx)
+        });
+        window.run_until_parked();
+    }
+
+    #[test]
+    fn closing_last_tab_can_reside_without_preserving_a_terminal_process() {
+        for tray in [false, true] {
+            assert_eq!(residency_close_action(true, false, true, tray), ResidencyCloseAction::Hide);
+            assert_eq!(
+                residency_close_action(false, false, true, tray),
+                ResidencyCloseAction::Close
+            );
+        }
+    }
+
     #[test]
     fn keep_session_hides_even_when_tray_is_off() {
         assert_eq!(
-            residency_close_action(true, true, false),
+            residency_close_action(true, true, false, false),
             ResidencyCloseAction::Hide,
             "tray=false must still hide, never minimize"
         );
-        assert_eq!(residency_close_action(true, true, true), ResidencyCloseAction::Hide);
-        assert_eq!(residency_close_action(false, true, false), ResidencyCloseAction::Close);
-        assert_eq!(residency_close_action(true, false, true), ResidencyCloseAction::Close);
+        assert_eq!(residency_close_action(true, true, false, true), ResidencyCloseAction::Hide);
+        assert_eq!(residency_close_action(false, true, false, false), ResidencyCloseAction::Close);
+        assert_eq!(residency_close_action(true, false, false, true), ResidencyCloseAction::Close);
     }
 }

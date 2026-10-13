@@ -13,6 +13,8 @@ use serde_json::json;
 
 use crate::runtime_api::ApiError;
 
+pub(crate) mod status;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorktreeProvenance {
     pub repo_root: PathBuf,
@@ -288,7 +290,7 @@ impl WorktreeTransaction {
 ///
 /// Pebrel 是 `windows_subsystem = "windows"` 的 GUI 进程（见 `main.rs`），本身没有
 /// 控制台可给子进程继承；不加 `CREATE_NO_WINDOW` 时 Windows 会给每条 git 命令分配
-/// 一个新控制台——在默认终端应用是 Windows Terminal 的机器上，那就是**每跑一条
+/// 一个新控制台——在默认终端应用会托管新控制台的机器上，那就是**每跑一条
 /// git 弹一扇窗口**。worktree 操作会连着跑好几条，用户看到的就是一串窗口。
 ///
 /// 名字里的 `hidden` 不是装饰：`gpui_shell::code_tab` 里已有一个签名完全不同的

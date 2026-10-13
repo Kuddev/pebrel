@@ -99,6 +99,26 @@ pub(crate) fn merge_groups(
     let hooks = hooks.as_object_mut().ok_or("hooks must be an object")?;
     let previous = previous.as_object().ok_or("hook ownership marker must be an object")?;
     let desired = desired.as_object().ok_or("desired hooks must be an object")?;
+    // 没有托管内容变更时保留原始字节和钩子位置，避免无谓改写触发外部审核或文件监听。
+    // 重复条目仍走下方修复流程；被编辑的条目仍由原有归属检查拦住。
+    let unchanged = previous == desired
+        && previous.iter().all(|(event, owned)| {
+            owned.as_array().is_some_and(|groups| {
+                hooks.get(event).and_then(Value::as_array).is_some_and(|entries| {
+                    groups
+                        .iter()
+                        .all(|group| entries.iter().filter(|entry| *entry == group).count() == 1)
+                })
+            })
+        });
+    if unchanged && let Some(raw) = raw {
+        return Ok((
+            raw.to_owned(),
+            serde_json::to_string_pretty(&Value::Object(desired.clone()))
+                .map_err(|error| error.to_string())?
+                + "\n",
+        ));
+    }
     for (event, owned) in previous {
         let owned = owned.as_array().ok_or("owned hook groups must be arrays")?;
         let Some(current) = hooks.get_mut(event) else { continue };
@@ -184,6 +204,12 @@ mod tests {
         assert_eq!(
             merge_groups(Some(&first), Some(&marker), &desired).unwrap(),
             (first.clone(), marker.clone())
+        );
+        let mut duplicated: Value = serde_json::from_str(&first).unwrap();
+        duplicated["hooks"]["Stop"].as_array_mut().unwrap().push(desired["Stop"][0].clone());
+        assert_eq!(
+            merge_groups(Some(&duplicated.to_string()), Some(&marker), &desired).unwrap().0,
+            first,
         );
         let full = codex_groups("new-helper", Some("windows-helper"), CodexHookMode::Full);
         let (upgraded, marker) = merge_groups(Some(&first), Some(&marker), &full).unwrap();

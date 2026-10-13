@@ -1,0 +1,53 @@
+* { box-sizing: border-box; }
+html { color-scheme: light dark; background: var(--background); color: var(--foreground); }
+body { margin: 0; font: 16px/1.65 sans-serif; overflow-wrap: anywhere; }
+main { max-width: 820px; margin: auto; padding: 12px 18px 40px; }
+h1,h2,h3,h4,h5,h6 { line-height: 1.35; margin: 1.5em 0 .65em; scroll-margin-top: 12px; }
+h1 { font-size: 1.65em; } h2 { font-size: 1.4em; } h3 { font-size: 1.2em; }
+p,ul,ol { margin: .75em 0; } ul,ol { padding-left: 1.5em; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+blockquote { margin: 1em 0; padding: 0 1em; border-left: 2px solid var(--border); color: var(--muted); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
+code,pre { font-family: monospace; font-size: 13px; }
+code { background: var(--code-surface); padding: .1em .3em; border-radius: 3px; }
+pre { margin: 0; padding: 12px; overflow-x: auto; line-height: 1.6; tab-size: 4; }
+pre code { padding: 0; background: none; border-radius: 0; }
+.code-block { position: relative; margin: 1em 0; background: var(--code-surface); border-radius: 6px; }
+.copy-code { position: absolute; top: 0; right: 0; min-height: 44px; min-width: 60px; padding: 10px 12px; font-size: 12px; text-align: center; text-decoration: none; background: var(--code-surface); border-radius: 0 6px 0 0; }
+figcaption { padding: 0 12px 10px; text-align: right; color: var(--muted); font: 11px/1.4 monospace; }
+table { display: block; max-width: 100%; width: max-content; border-collapse: collapse; overflow-x: auto; margin: 1em 0; }
+th,td { border: 1px solid var(--border); padding: 8px 12px; min-width: 80px; }
+th { text-align: left; background: var(--surface); }
+input[type=checkbox] { accent-color: var(--accent); margin-right: 6px; }
+.image-link { display: block; padding: 12px 0; }
+.source-layout { display: flex; overflow: auto; margin: -12px -18px 0; padding: 12px 0; }
+.source-layout pre { overflow: visible; padding: 0 12px 0 0; }
+.source-layout .line-numbers { position: sticky; left: 0; text-align: right; color: var(--muted); background: var(--background); padding: 0 12px; user-select: none; border-right: 1px solid var(--border); margin-right: 12px; }
+.hljs-comment,.hljs-quote { color: var(--muted); font-style: italic; }
+.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-meta { color: var(--accent); font-weight: 600; }
+.hljs-title,.hljs-function,.hljs-section { color: var(--accent); }
+.hljs-string,.hljs-attr,.hljs-number,.hljs-symbol { color: var(--foreground); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+.conversation article { padding: 14px 0 18px; border-bottom: 1px solid var(--border); }
+.conversation article:last-child { border-bottom: 0; }
+.message-author { color: var(--muted); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.conversation .user-message { background: var(--surface); padding: 12px 14px; border-radius: 6px; }
+.user-message > :first-child { margin-top: 0; } .user-message > :last-child { margin-bottom: 0; }
+.tool-message { margin: 6px 0; }
+.tool-message summary { cursor: pointer; min-height: 48px; padding: 12px 0; color: var(--muted); font-size: 14px; }
+.tool-message summary:focus-visible { outline: 2px solid var(--accent); }
+.message-notice { color: var(--muted); font-size: 12px; margin: 8px 0; }
+.formula { position: relative; }
+.formula-display { display: block; margin: 1em 0; max-width: 100%; }
+.math-render { user-select: text; }
+.formula-display .math-render { display: block; overflow-x: auto; overflow-y: hidden; padding: 6px 0; }
+.formula-actions { position: absolute; z-index: 2; right: 0; bottom: 100%; display: none; background: var(--surface); border: 1px solid var(--border); white-space: nowrap; }
+.formula:hover > .formula-actions,.formula:focus-within > .formula-actions { display: flex; }
+.formula-actions a { min-height: 44px; padding: 10px 12px; font: 12px/24px sans-serif; text-decoration: none; }
+.render-error { font: 13px/1.6 monospace; white-space: pre-wrap; }
+.diagram { margin: 1em 0; }
+.diagram-render { max-width: 100%; overflow-x: auto; padding: 8px 0; }
+.diagram-render svg { display: block; margin: auto; max-width: none !important; }
+.diagram > details > summary { min-height: 44px; padding: 10px 0; color: var(--muted); font-size: 12px; cursor: pointer; }
+[data-render-error],[data-render-loading] { color: var(--muted); font-size: 13px; }

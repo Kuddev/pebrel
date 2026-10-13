@@ -1,6 +1,6 @@
 //! Visual cursor trajectory; never writes terminal coordinates.
 //!
-//! Behavioral reference: silkmux CursorMotionTracker / projection retreat guard.
+//! Monotonic visual interpolation with a projection retreat guard.
 //! Match Flutter Curves.easeOutCubic, including its 0.001 Bezier x tolerance.
 
 use std::collections::VecDeque;

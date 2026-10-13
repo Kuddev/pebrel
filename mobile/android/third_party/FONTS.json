@@ -1,0 +1,17 @@
+{
+  "JetBrains Mono": {
+    "version": "2.304",
+    "source": "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip",
+    "archive_sha256": "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf",
+    "file": "assets/fonts/JetBrainsMono-Regular.ttf",
+    "sha256": "a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f",
+    "license": "SIL Open Font License 1.1"
+  },
+  "Maple Mono NF CN": {
+    "version": "7.900",
+    "file": "assets/fonts/MapleMono-NF-CN-Regular.ttf",
+    "sha256": "8b4f149beaead3eac78ffb84adf31513ebf06fe6dbc6e181ccd9debad3c70f1a",
+    "source": "https://github.com/subframe7536/maple-font",
+    "license": "SIL Open Font License 1.1"
+  }
+}

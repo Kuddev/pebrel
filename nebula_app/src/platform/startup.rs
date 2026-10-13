@@ -8,6 +8,37 @@ pub(crate) fn report_error(error: &dyn std::fmt::Display, gui_launch: bool) {
 
 #[cfg(windows)]
 mod console;
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod first_frame;
+#[cfg(any(unix, test))]
+mod login;
+
+/// Match GPUI's primary-monitor DPI query before a native window is created.
+/// Other platforms retain post-creation sizing until their display API exposes scale.
+pub(crate) fn primary_display_scale() -> Option<f32> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
+        use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+
+        // SAFETY: the monitor is borrowed and both DPI outputs are valid local pointers.
+        unsafe {
+            let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+            let (mut x, mut y) = (0, 0);
+            if monitor.is_null()
+                || GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) < 0
+                || x == 0
+                || x != y
+            {
+                return None;
+            }
+            Some(x as f32 / 96.0)
+        }
+    }
+    #[cfg(not(windows))]
+    None
+}
 
 /// Prepare process-wide GUI state before worker threads or terminal children exist.
 pub(crate) fn prepare_gui_process() -> std::io::Result<()> {
@@ -53,8 +84,8 @@ pub(crate) fn start_hidden(settings: &nebula_settings::RuntimeSettings) -> bool 
 pub(crate) fn launch_at_login() -> bool {
     #[cfg(windows)]
     return startup_shortcut().is_ok_and(|path| path.is_file());
-    #[cfg(not(windows))]
-    false
+    #[cfg(unix)]
+    return login::entry_path().is_ok_and(|path| path.is_file());
 }
 
 pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
@@ -92,10 +123,9 @@ pub(crate) fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
             result.map_err(std::io::Error::other)
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        let _ = enabled;
-        Err(std::io::ErrorKind::Unsupported.into())
+        login::set_enabled(enabled)
     }
 }
 

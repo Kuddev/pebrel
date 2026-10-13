@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
 from scripts.stable_release import (
     STABLE_SHA256_PLACEHOLDER,
@@ -23,6 +24,11 @@ VERSION = "1.6.0"
 
 
 def write_fake_asset(path: Path) -> None:
+    if path.suffix == ".apk":
+        with zipfile.ZipFile(path, "w") as apk:
+            apk.writestr("AndroidManifest.xml", "fixture")
+            apk.writestr("classes.dex", b"fixture" + b"\0" * MIN_ASSET_SIZE)
+        return
     if path.suffix == ".exe":
         header = b"MZ" + b"\0" * 6
     elif path.suffix == ".zip":
@@ -69,19 +75,27 @@ def notes(checksum_placeholder: bool = True) -> str:
 
 
 class StableReleaseTests(unittest.TestCase):
-    def test_stable_workflow_packages_without_repeating_native_tests(self) -> None:
-        # The Full native tests workflow already covers every PR, merge group
-        # and main push; the release run only packages and verifies the runtime
-        # conformance evidence of each package, so its wall time is bounded by
-        # the slowest build rather than by test scheduling.
+    def assert_release_native_gate(self, workflow: str) -> None:
+        self.assertIn("\n  native-tests:\n", workflow)
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  prepare:\n", 1)[0]
+        self.assertIn("if: ${{ !inputs.windows_only }}", native)
+        self.assertIn("uses: ./.github/workflows/linux-lua.yml", native)
+        self.assertIn("actions: read", native)
+        self.assertNotIn("continue-on-error", native)
+        publish = workflow.split("\n  publish:\n", 1)[1]
+        self.assertIn("needs: [prepare, native-tests, aggregate]", publish)
+        self.assertNotIn("always()", publish)
+
+    def test_stable_workflow_requires_same_commit_native_tests_before_publication(self) -> None:
+        # tag 可以直接指向尚未进入 main 的发布提交；main 的历史绿灯不覆盖它。
+        # 复用同一套原生测试，并与打包并行；发布必须等待两者成功。
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        self.assertNotIn("  native-tests:\n", workflow)
-        self.assertNotIn("uses: ./.github/workflows/linux-lua.yml", workflow)
+        self.assert_release_native_gate(workflow)
         shared = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
         # Platform coverage comes from the event plan, not literal runner names
         # in YAML. Verify both the consumer wiring and the full caller matrices.
-        for output in ("native_matrix", "release_matrix"):
+        for output in ("native_matrix", "check_matrix"):
             self.assertIn(f"fromJSON(needs.lint.outputs.{output})", shared)
         self.assertIn("runs-on: ${{ matrix.os }}", shared)
         for event in ("push", "merge_group", "workflow_call", "workflow_dispatch"):
@@ -101,7 +115,8 @@ class StableReleaseTests(unittest.TestCase):
         self.assertIn("tools/i18n-contract/Cargo.toml", shared)
         self.assertNotIn("continue-on-error", shared)
         aggregate = workflow.split("\n  aggregate:\n", 1)[1].split("\n  publish:\n", 1)[0]
-        self.assertIn("needs: [prepare, linux, macos, windows, windows-arm64]", aggregate)
+        self.assertIn("needs: [prepare, linux, macos, windows, windows-arm64, android]", aggregate)
+        self.assertIn("--verify-evidence", aggregate)
         self.assertIn("windows_arm64=True", aggregate)
         arm = workflow.split("\n  windows-arm64:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
         for required in ("runs-on: windows-11-arm", "host: aarch64-pc-windows-msvc",
@@ -111,6 +126,21 @@ class StableReleaseTests(unittest.TestCase):
             self.assertIn(required, arm)
         self.assertNotIn("continue-on-error", arm)
         self.assertNotIn("always()", aggregate)
+
+    def test_release_native_gate_rejects_unvalidated_tag_publication(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        mutations = (
+            ("needs: [prepare, native-tests, aggregate]", "needs: [prepare, aggregate]"),
+            ("uses: ./.github/workflows/linux-lua.yml", "uses: ./unrelated.yml"),
+            ("  native-tests:\n    if: ${{ !inputs.windows_only }}", "  native-tests:\n    if: false"),
+            ("  native-tests:\n", "  native-tests:\n    continue-on-error: true\n"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(mutation=replacement):
+                self.assertIn(original, workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_release_native_gate(workflow.replace(original, replacement, 1))
 
     def test_native_packagers_expose_stable_channel_without_preview_id(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -142,7 +172,7 @@ class StableReleaseTests(unittest.TestCase):
             with self.subTest(version=version):
                 names = expected_asset_names(version)
                 parsed = tuple(map(int, version.split('.')))
-                self.assertEqual(len(names), 9 if parsed >= (1, 9, 2) else 8 if parsed >= (1, 9, 0) else 7)
+                self.assertEqual(len(names), 10 if parsed >= (2, 0, 0) else 9 if parsed >= (1, 9, 2) else 8 if parsed >= (1, 9, 0) else 7)
                 self.assertIn(f"Pebrel-v{version}-windows-x64-setup.exe", names)
                 self.assertNotIn(f"NebulaTerminal-{version}-windows-x64-setup.exe", names)
 
@@ -156,6 +186,41 @@ class StableReleaseTests(unittest.TestCase):
             self.assertEqual(len(validate_assets(root, version)), 8)
             (root / "Pebrel-v1.9.0-windows-arm64.zip").unlink()
             with self.assertRaisesRegex(StableReleaseError, "missing: Pebrel-v1.9.0-windows-arm64.zip"):
+                validate_assets(root, version)
+
+    def test_20_requires_valid_android_apk_without_changing_historical_assets(self) -> None:
+        for version in ("1.9.0", "1.9.1", "1.9.2", "1.10.0"):
+            self.assertFalse(any(name.endswith(".apk") for name in expected_asset_names(version)))
+        version = "2.0.0"
+        name = "Pebrel-v2.0.0-android-universal-preview.apk"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in expected_asset_names(version):
+                write_fake_asset(root / asset)
+            self.assertEqual(len(validate_assets(root, version)), 10)
+            (root / name).unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing: " + name):
+                validate_assets(root, version)
+            (root / name).write_bytes(b"PK\x03\x04" + b"x" * MIN_ASSET_SIZE)
+            with self.assertRaisesRegex(StableReleaseError, "invalid ZIP structure"):
+                validate_assets(root, version)
+            with zipfile.ZipFile(root / name, "w") as apk:
+                apk.writestr("not-an-app", b"x" * MIN_ASSET_SIZE)
+            with self.assertRaisesRegex(StableReleaseError, "manifest or DEX"):
+                validate_assets(root, version)
+
+    def test_offline_relay_is_required_for_future_releases_not_existing_211_assets(self) -> None:
+        self.assertFalse(any("relay-manual" in name for name in expected_asset_names("2.1.1")))
+        version = "2.1.2"
+        name = f"Pebrel-v{version}-relay-manual.tar.gz"
+        self.assertIn(name, expected_asset_names(version))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for asset in expected_asset_names(version):
+                write_fake_asset(root / asset)
+            self.assertEqual(len(validate_assets(root, version)), 11)
+            (root / name).unlink()
+            with self.assertRaisesRegex(StableReleaseError, "missing:"):
                 validate_assets(root, version)
 
     def test_post_191_requires_native_windows_arm64_installer(self) -> None:

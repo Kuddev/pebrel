@@ -65,6 +65,13 @@ be incorrect. Do not add such a blacklist without semantic evidence and fixtures
 
 Required human review rules:
 
+- Apply the [commercial promotion policy](../CONTRIBUTING.md#commercial-promotion-policy)
+  to PRs, Issues, and comments. Check the user need and any new provider, external
+  link, or brand placement; passing CI and contributor status do not authorize
+  promotion. Once unauthorized promotion is verified, close the PR or Issue
+  directly without requesting further maintainer confirmation. Direct business
+  requests to the policy's email contact. Preserve explicitly approved sponsorship
+  within its scope.
 - One authority for shared behavior: persistence, language registry, split rules,
   terminal state and domain transitions must not be reimplemented per UI shell.
 - Group by capability and lifecycle. Extract domain rules, I/O adapters, rendering

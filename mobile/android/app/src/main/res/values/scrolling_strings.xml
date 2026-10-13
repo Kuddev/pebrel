@@ -1,0 +1,5 @@
+<resources>
+    <string name="terminal_history">Scrollback history</string>
+    <string name="terminal_history_lines">%1$d lines</string>
+    <string name="terminal_history_hint">Applies to new local and SSH terminals; existing sessions keep their history. Default: 1000 lines. The device memory class limits the choice to %1$d lines per terminal. Drag the edge scrollbar to navigate.</string>
+</resources>
