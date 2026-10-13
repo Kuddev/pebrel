@@ -1,4 +1,5 @@
 //! Semantic prompt marks and input boundaries owned by the terminal grid.
+use super::cell::Flags;
 use super::{Term, TermMode};
 use crate::event::EventListener;
 use crate::grid::{Dimensions, Scroll};
@@ -87,6 +88,49 @@ impl<T> Term<T> {
         let point = Point::new(Line(i32::try_from(relative).ok()?), column);
         (point.line >= self.grid.topmost_line() && point.line <= self.grid.bottommost_line())
             .then_some(point)
+    }
+
+    /// Characters from the cursor to `target` inside the current prompt input,
+    /// negative to the left, so a click can move the shell cursor with arrow
+    /// keys. Targets past the typed text land after it; points before the
+    /// input or outside the cursor's logical line yield `None`.
+    pub fn nebula_prompt_cursor_offset(&self, target: Point) -> Option<isize> {
+        let start = self.nebula_prompt_input_point()?;
+        let cursor = self.grid.cursor.point;
+        let end = self.line_search_right(cursor);
+        if start.column.0 >= self.columns() || cursor < start || target < start || target > end {
+            return None;
+        }
+        let next = |point: Point| {
+            if point.column < self.last_column() {
+                Point::new(point.line, point.column + 1)
+            } else {
+                Point::new(point.line + 1, Column(0))
+            }
+        };
+        let mut text_end = start;
+        let mut point = start;
+        while point <= end {
+            let cell = &self.grid[point];
+            if cell.c != ' ' || cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                text_end = next(point);
+            }
+            point = next(point);
+        }
+        let mut target = target.min(text_end);
+        if self.grid[target].flags.contains(Flags::WIDE_CHAR_SPACER) {
+            target.column -= 1;
+        }
+        let (mut point, until) = (cursor.min(target), cursor.max(target));
+        let mut characters = 0;
+        while point < until {
+            let flags = self.grid[point].flags;
+            if !flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                characters += 1;
+            }
+            point = next(point);
+        }
+        Some(if target < cursor { -characters } else { characters })
     }
 
     /// Scroll the viewport to the previous (`up`) or next shell prompt mark.

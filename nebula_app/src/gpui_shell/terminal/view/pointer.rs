@@ -666,7 +666,7 @@ impl TerminalView {
             );
             return;
         }
-        self.selecting = false;
+        let clicked = std::mem::take(&mut self.selecting);
         let (point, _) = self.grid_point(event.position);
         let open_link = pending_link_open
             && self.selection_is_empty()
@@ -676,7 +676,24 @@ impl TerminalView {
         } else if self.copy_on_select {
             self.copy_selection(false, window, cx);
         }
+        let plain_click =
+            clicked && event.click_count == 1 && event.modifiers == gpui::Modifiers::default();
+        if plain_click && self.selection_is_empty() {
+            self.move_prompt_cursor_to(point, cx);
+        }
         cx.notify();
+    }
+
+    /// Editor-style click-to-move inside an idle prompt's input. Plain CSI
+    /// arrows keep the native prompt alive, and are never broadcast because
+    /// other panes have different input geometry.
+    fn move_prompt_cursor_to(&mut self, point: TermPoint, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else { return };
+        let Some(offset) = session.term.lock().nebula_prompt_cursor_offset(point) else { return };
+        if offset != 0 {
+            let arrow: &[u8] = if offset < 0 { b"\x1b[D" } else { b"\x1b[C" };
+            self.write_input(arrow.repeat(offset.unsigned_abs()), cx);
+        }
     }
 
     /// 指针在终端之外松手（拖到 tab 栏、别的 pane，或按下后甩出窗口——

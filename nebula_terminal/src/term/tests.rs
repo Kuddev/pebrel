@@ -781,6 +781,37 @@ fn reflow_keeps_prompt_input_at_the_logical_cursor() {
 }
 
 #[test]
+fn prompt_click_offsets_count_characters_inside_the_logical_input() {
+    let size = TermSize::new(8, 3);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+    term.nebula_add_prompt_mark();
+    for c in "$ ".chars() {
+        term.input(c);
+    }
+    term.nebula_mark_prompt_input();
+    // "$ ab中cd" fills the first row; "ef" soft-wraps onto the second.
+    for c in "ab中cdef".chars() {
+        term.input(c);
+    }
+    assert_eq!(term.grid.cursor.point, Point::new(Line(1), Column(2)));
+
+    let offset =
+        |line, column| term.nebula_prompt_cursor_offset(Point::new(Line(line), Column(column)));
+    assert_eq!(offset(0, 2), Some(-7));
+    // The right half of a wide character targets that character.
+    assert_eq!(offset(0, 5), Some(-5));
+    assert_eq!(offset(1, 1), Some(-1));
+    // Past the typed text lands after it.
+    assert_eq!(offset(1, 6), Some(0));
+    assert_eq!(offset(0, 0), None);
+    assert_eq!(offset(2, 0), None);
+
+    // Clicking past text that ends with a wide character lands after it.
+    term.input('中');
+    assert_eq!(term.nebula_prompt_cursor_offset(Point::new(Line(1), Column(6))), Some(0));
+}
+
+#[test]
 fn reflow_preserves_pending_wrap_before_the_next_input() {
     let size = TermSize::new(6, 3);
     let mut term = Term::new(Config::default(), &size, VoidListener);

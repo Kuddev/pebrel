@@ -361,6 +361,35 @@ fn plain_click_and_wrong_modifier_do_not_open_links(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn plain_click_moves_the_prompt_cursor_but_selection_gestures_do_not(cx: &mut TestAppContext) {
+    let (view, mut window, receiver) = link_fixture(cx, b"");
+    view.update(&mut window, |view, _| {
+        view.session.as_ref().unwrap().term.lock().nebula_add_prompt_mark();
+        super::super::startup_tests::feed(view, b"$ ");
+        view.session.as_ref().unwrap().term.lock().nebula_mark_prompt_input();
+        super::super::startup_tests::feed(view, b"echo hi");
+    });
+    draw(&mut window);
+    let (target, other) = (cell(&view, &window, 2), cell(&view, &window, 5));
+    let shift = Modifiers { shift: true, ..Modifiers::default() };
+    window.simulate_mouse_down(target, MouseButton::Left, shift);
+    window.simulate_mouse_up(target, MouseButton::Left, shift);
+    window.simulate_mouse_down(target, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_move(other, Some(MouseButton::Left), Modifiers::default());
+    window.simulate_mouse_up(other, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_down(target, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    let inputs = receiver
+        .try_iter()
+        .filter_map(|event| match event {
+            Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(inputs, [b"\x1b[D".repeat(7)]);
+}
+
+#[gpui::test]
 fn link_drag_cannot_retarget_or_leave_a_pending_open(cx: &mut TestAppContext) {
     let (view, mut window, _) = link_fixture(cx, b"https://one.test https://two.test");
     let start = cell(&view, &window, 1);
