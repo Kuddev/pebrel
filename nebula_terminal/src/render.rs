@@ -21,7 +21,7 @@ use crate::event::{EventListener, WindowSize};
 use crate::term::cell::Flags;
 use crate::term::color::Colors;
 use crate::term::{Term, point_to_viewport_from};
-use crate::vte::ansi::{Color, CursorShape, NamedColor};
+use crate::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 /// Cell metrics measured by the frontend (logical pixels + device scale).
 ///
@@ -261,6 +261,19 @@ pub struct SnapshotConfig {
     pub cols: u16,
 }
 
+/// SGR 2 (faint): named colors take their dim palette slot, truecolor scales by
+/// the same 0.66 factor as the dim palette.
+fn dimmed(color: Color) -> Color {
+    match color {
+        Color::Named(named) => Color::Named(named.to_dim()),
+        Color::Spec(rgb) => {
+            let scale = |c: u8| (f32::from(c) * 0.66) as u8;
+            Color::Spec(Rgb { r: scale(rgb.r), g: scale(rgb.g), b: scale(rgb.b) })
+        },
+        indexed => indexed,
+    }
+}
+
 impl RenderSnapshot {
     pub fn capture<T: EventListener>(term: &Term<T>, cfg: &SnapshotConfig) -> Self {
         let rows = cfg.rows as usize;
@@ -321,7 +334,11 @@ impl RenderSnapshot {
             let (row, col) = (row as u16, col as u16);
             let flags = indexed.cell.flags;
             let bold = flags.intersects(Flags::BOLD);
-            let mut fg = indexed.cell.fg;
+            let mut fg = if flags.contains(Flags::DIM) && !bold {
+                dimmed(indexed.cell.fg)
+            } else {
+                indexed.cell.fg
+            };
             let mut bg = indexed.cell.bg;
             if flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
@@ -524,6 +541,24 @@ mod tests {
 
     fn cfg(rows: u16, cols: u16) -> SnapshotConfig {
         SnapshotConfig { rows, cols }
+    }
+
+    #[test]
+    fn capture_applies_faint_to_foreground() {
+        let mut term = term_with(&["ab"]);
+        let cell = &mut term.grid_mut()[Line(0)][Column(0)];
+        cell.flags.insert(Flags::DIM);
+        cell.fg = Color::Named(NamedColor::Foreground);
+        let cell = &mut term.grid_mut()[Line(0)][Column(1)];
+        cell.flags.insert(Flags::DIM);
+        cell.fg = Color::Spec(Rgb { r: 100, g: 200, b: 50 });
+
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let fg: Vec<_> = snap.segments[0].cells.iter().map(|cell| cell.fg).collect();
+        assert_eq!(
+            fg,
+            [Color::Named(NamedColor::DimForeground), Color::Spec(Rgb { r: 66, g: 132, b: 33 })]
+        );
     }
 
     #[test]
