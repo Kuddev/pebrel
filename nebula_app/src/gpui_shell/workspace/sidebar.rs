@@ -5,6 +5,15 @@ use crate::i18n::Message;
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
 const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
 
+/// 标签行的水平内边距。图标列从这里开始，并与上方折叠箭头对齐。
+const TAB_ROW_PAD_X: f32 = 8.0;
+/// 标签色光条画在行首内边距里，右缘与图标之间留 `TAB_STRIP_GAP`。旧壳
+/// 的光条（左内缩 4）配的是 14px 内容起点；照搬到 8px 内边距会让光条
+/// 贴住图标，所以位置从内边距反推，不另立一个字面量。
+const TAB_STRIP_W: f32 = 2.5;
+const TAB_STRIP_GAP: f32 = 4.5;
+const TAB_STRIP_LEFT: f32 = TAB_ROW_PAD_X - TAB_STRIP_GAP - TAB_STRIP_W;
+
 /// `SidebarActivity::WaitingInput` / `Attention` 共用的字位：Nerd Font
 /// `nf-fa-hand_paper_o`（开掌）。已核对打包字体
 /// `assets/fonts/MapleMonoNormal-NF-CN-Regular.ttf` 的 cmap 覆盖这个码位；换字体
@@ -254,9 +263,8 @@ impl NebulaWorkspace {
                     row_w * 0.45,
                 );
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
-                // 用户明确设置过的标签色：行左侧一条竖光条（旧壳 strip，位置与
-                // 尺寸同源：左内缩 4、上下各留 7、宽 2.5）。默认标签不占这层
-                // 视觉层级。
+                // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7，与旧壳
+                // 同源；水平位置见 `TAB_STRIP_LEFT`）。默认标签不占这层视觉层级。
                 let strip = tab_color.map(|color| gpui::Rgba {
                     r: color.r as f32 / 255.0,
                     g: color.g as f32 / 255.0,
@@ -362,7 +370,7 @@ impl NebulaWorkspace {
                 // 撑开的行会重新引入上面那个症状。
                 .overflow_hidden()
                 .gap_2()
-                .px_2()
+                .px(px(TAB_ROW_PAD_X))
                 .h(px(row_height))
                 .items_center()
                 // 旧壳 pill 圆角 = UI_CORNER_RADIUS_LOGICAL(8)，rounded_md(6)
@@ -416,9 +424,9 @@ impl NebulaWorkspace {
                     row.child(
                         div()
                             .absolute()
-                            .left(px(4.0))
+                            .left(px(TAB_STRIP_LEFT))
                             .top(px(7.0))
-                            .w(px(2.5))
+                            .w(px(TAB_STRIP_W))
                             .h(px(row_height - 14.0))
                             .rounded_full()
                             .bg(color),
