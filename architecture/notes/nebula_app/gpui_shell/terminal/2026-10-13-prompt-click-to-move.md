@@ -27,8 +27,11 @@ logical line, and clamps clicks past the typed text to just after it. Points
 before the input start or outside that logical line return `None`.
 
 The GPUI pointer path calls it only for a plain left click that went through the
-ordinary selection path and left no selection. It writes that many CSI Left or
-Right arrows through `write_input`, never through broadcast input.
+ordinary selection path and left no selection, while the `click_to_move_cursor`
+setting (Interaction → Mouse and selection, on by default) is enabled. It clears
+the typed-line mirror and ghost suggestion as keyboard arrows do, then writes
+that many CSI Left or Right arrows through `write_input`, never through
+broadcast input.
 
 ## Rejected alternatives
 
@@ -52,7 +55,9 @@ by hard newlines are not targeted.
 `prompt_click_offsets_count_characters_inside_the_logical_input` covers wide
 characters, soft wraps, clicks past the text and points outside the input.
 `plain_click_moves_the_prompt_cursor_but_selection_gestures_do_not` covers the
-real GPUI mouse path, Shift+click and drag selection.
+real GPUI mouse path, Shift+click, drag selection, the cleared suggestion and the
+disabled setting. `click_to_move_cursor_setting_is_searchable_and_has_a_visible_switch`
+covers the settings control.
 
 ## Supersedes
 

@@ -676,8 +676,10 @@ impl TerminalView {
         } else if self.copy_on_select {
             self.copy_selection(false, window, cx);
         }
-        let plain_click =
-            clicked && event.click_count == 1 && event.modifiers == gpui::Modifiers::default();
+        let plain_click = clicked
+            && event.click_count == 1
+            && event.modifiers == gpui::Modifiers::default()
+            && cx.try_global::<Settings>().is_none_or(|settings| settings.click_to_move_cursor);
         if plain_click && self.selection_is_empty() {
             self.move_prompt_cursor_to(point, cx);
         }
@@ -691,6 +693,8 @@ impl TerminalView {
         let Some(session) = &self.session else { return };
         let Some(offset) = session.term.lock().nebula_prompt_cursor_offset(point) else { return };
         if offset != 0 {
+            // Like keyboard arrows, cursor movement invalidates the typed-line mirror.
+            crate::display::nebula_clear_line(&mut self.suggest);
             let arrow: &[u8] = if offset < 0 { b"\x1b[D" } else { b"\x1b[C" };
             self.write_input(arrow.repeat(offset.unsigned_abs()), cx);
         }

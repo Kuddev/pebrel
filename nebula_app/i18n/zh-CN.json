@@ -182,7 +182,9 @@
     "search_empty": "没有匹配的设置",
     "mouse": {
       "focus_follows_mouse": "焦点跟随鼠标",
-      "focus_follows_mouse_description": "鼠标移入终端窗格时自动聚焦，默认关闭。"
+      "focus_follows_mouse_description": "鼠标移入终端窗格时自动聚焦，默认关闭。",
+      "click_to_move_cursor": "点击移动光标",
+      "click_to_move_cursor_description": "在命令行输入中单击，光标即移到点击处。需要 Shell 集成；拖选、修饰键点击和全屏程序不受影响。"
     },
     "panes": {
       "dim_inactive": "调暗非活动窗格",

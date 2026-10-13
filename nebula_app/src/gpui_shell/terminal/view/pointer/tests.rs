@@ -368,6 +368,8 @@ fn plain_click_moves_the_prompt_cursor_but_selection_gestures_do_not(cx: &mut Te
         super::super::startup_tests::feed(view, b"$ ");
         view.session.as_ref().unwrap().term.lock().nebula_mark_prompt_input();
         super::super::startup_tests::feed(view, b"echo hi");
+        view.suggest.line_buf = "echo hi".into();
+        view.suggest.suggestion = " --help".into();
     });
     draw(&mut window);
     let (target, other) = (cell(&view, &window, 2), cell(&view, &window, 5));
@@ -379,14 +381,25 @@ fn plain_click_moves_the_prompt_cursor_but_selection_gestures_do_not(cx: &mut Te
     window.simulate_mouse_up(other, MouseButton::Left, Modifiers::default());
     window.simulate_mouse_down(target, MouseButton::Left, Modifiers::default());
     window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
-    let inputs = receiver
-        .try_iter()
-        .filter_map(|event| match event {
-            Msg::Input(bytes) => Some(bytes.into_owned()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(inputs, [b"\x1b[D".repeat(7)]);
+    let inputs = |receiver: &std::sync::mpsc::Receiver<Msg>| {
+        receiver
+            .try_iter()
+            .filter_map(|event| match event {
+                Msg::Input(bytes) => Some(bytes.into_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(inputs(&receiver), [b"\x1b[D".repeat(7)]);
+    // The typed-line mirror and its ghost suggestion are stale after the move.
+    view.read_with(&window, |view, _| {
+        assert!(view.suggest.line_buf.is_empty() && view.suggest.suggestion.is_empty());
+    });
+
+    window.update(|_, cx| cx.global_mut::<Settings>().click_to_move_cursor = false);
+    window.simulate_mouse_down(other, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(other, MouseButton::Left, Modifiers::default());
+    assert!(inputs(&receiver).is_empty());
 }
 
 #[gpui::test]
