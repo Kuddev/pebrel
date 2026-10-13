@@ -27,6 +27,7 @@ use super::cursor_painter::{CursorPaint, paint_box_glyph};
 use super::view::TerminalView;
 use super::view::cursor::CursorGeometry;
 
+mod cell_fit;
 #[cfg(test)]
 #[path = "element/color_tests.rs"]
 mod color_tests;
@@ -732,11 +733,12 @@ impl Element for TerminalElement {
                     }
                     cells = &remaining[count..];
                 } else {
-                    let shaped = window.text_system().shape_line(
-                        SharedString::from(cell.text.clone()),
+                    let shaped = cell_fit::shape_cell(
+                        window.text_system(),
+                        &cell.text,
                         font_size,
-                        &[run.clone()],
-                        None,
+                        &run,
+                        layout.cell_width,
                     );
                     let _ = shaped.paint(
                         origin,
