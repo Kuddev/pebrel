@@ -204,6 +204,39 @@ pub fn spawn(
     Ok((TerminalSession { term, notifier, native_prompt, shell_pid, remote_reader }, rx, stage_rx))
 }
 
+/// 启动一个串口会话：无 PTY，字节流直接进入 grid。端口打开失败由调用方展示。
+pub fn spawn_serial(
+    destination: &str,
+    window_size: WindowSize,
+    term_config: Config,
+) -> std::io::Result<SpawnedSession> {
+    let term_config = crate::ssh_session::terminal_config(term_config);
+    let (tx, rx) = super::event_mailbox::channel();
+    let (stage_tx, stage_rx) = unbounded();
+    let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
+
+    let grid = GridSize {
+        columns: window_size.num_cols as usize,
+        screen_lines: window_size.num_lines as usize,
+    };
+    let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+    let native_prompt = proxy.events.native_prompt.clone();
+    let remote_reader = proxy.remote_reader.clone();
+    let sender = crate::serial_session::spawn_session(destination, Arc::clone(&term), proxy)?;
+
+    Ok((
+        TerminalSession {
+            term,
+            notifier: Notifier(sender),
+            native_prompt,
+            shell_pid: 0,
+            remote_reader,
+        },
+        rx,
+        stage_rx,
+    ))
+}
+
 /// 启动一个 SSH 直连会话（russh，与旧壳 `create_ssh_pane` 同一业务层）：
 /// 地址解析/认证/代理/跳板全部在共享 Runtime 内完成；连接失败的原因由
 /// 业务层写进 grid，阶段流交给视图画连接横幅。

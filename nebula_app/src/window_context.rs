@@ -1517,7 +1517,7 @@ impl WindowContext {
         let before = self.tabs.len();
         let launch = tab.launch.as_ref().unwrap_or(&session::LaunchSession::Default);
         match launch {
-            session::LaunchSession::Default => {
+            session::LaunchSession::Default | session::LaunchSession::Serial { .. } => {
                 self.append_default_tab(tab);
             },
             session::LaunchSession::Shell { name, program, args } => {

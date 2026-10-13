@@ -114,6 +114,7 @@ mod saved_commands;
 mod scheduler;
 #[cfg(test)]
 mod scientific_corpus;
+mod serial_session;
 mod session;
 mod shell_detect;
 mod ssh;

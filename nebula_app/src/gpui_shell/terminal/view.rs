@@ -213,6 +213,9 @@ pub enum TerminalLaunch {
         /// account's ordinary login directory.
         cwd: Option<String>,
     },
+    Serial {
+        destination: String,
+    },
 }
 
 pub(crate) fn last_path_component(path: &str) -> Option<String> {

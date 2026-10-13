@@ -77,7 +77,7 @@ pub(crate) fn startup_shell(shell_id: Option<String>) -> Option<nebula_terminal:
         .unwrap_or(crate::session::LaunchSession::Default);
     let shell = match super::NebulaWorkspace::terminal_launch_from_session(&launch, None) {
         TerminalLaunch::Local { shell, .. } => shell,
-        TerminalLaunch::Ssh { .. } => return None,
+        TerminalLaunch::Ssh { .. } | TerminalLaunch::Serial { .. } => return None,
     };
     crate::platform::shell::snapshot_shell(shell)
 }

@@ -330,7 +330,9 @@ mod tests {
             let (launch, cwd) = copy_launch(session, CopyKind::Split, origin);
             match NebulaWorkspace::terminal_launch_from_session(&launch, cwd) {
                 TerminalLaunch::Local { cwd, shell, .. } => (cwd, shell.map(|s| s.args().to_vec())),
-                TerminalLaunch::Ssh { .. } => panic!("a local split stays local"),
+                TerminalLaunch::Ssh { .. } | TerminalLaunch::Serial { .. } => {
+                    panic!("a local split stays local")
+                },
             }
         };
         let (cwd, args) = split(shell("wsl", "wsl.exe", &["~"]), guest("Ubuntu"), "/home/dev");
