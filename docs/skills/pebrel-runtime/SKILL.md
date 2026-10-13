@@ -171,6 +171,19 @@ Example intent mapping:
 - Use `state_change_seq`, not elapsed time or repeated text, to establish that a new transition occurred.
 - Use each returned worktree path as that Agent's exclusive checkout. Merge or cherry-pick results through an explicit later workflow; do not make two Agents edit the source checkout.
 
+## Notifying The User
+
+When an operation needs the user's hands or eyes — a hardware SSH key touch, a password prompt, a long job finishing — compose the notification yourself and send it from your own pane:
+
+```text
+pebrel ctl notify-pane --pane "$PEBREL_PANE_ID" --title "SSH key" --message "Touch your security key to continue"
+```
+
+- `--message` is one plain-text line saying what the user must do and where; `--title` is optional and names the source. Do not put secrets in either.
+- Pebrel plays the user's configured bell (flash and/or sound), marks the tab, and raises a toast when the pane is not in front. It never steals focus or writes into the terminal.
+- Use it only when the user's action is actually needed. It is throttled, so repeating the same alert does not help; fix the cause instead.
+- Failure to notify (`method_not_found`, `runtime_unavailable`) means the user will not be alerted; say so in your reply instead of assuming they saw it.
+
 ## Safety Boundaries
 
 - Never send newline, ESC, control characters, shell key sequences, or pasted terminal output through `agent.prompt` or `pane.prompt`. Use `pane.send_key` only for a deliberate supported control key.
