@@ -25,6 +25,24 @@ impl TerminalView {
         receiver
     }
 
+    pub(crate) fn install_remote_files_test_session(
+        &mut self,
+        destination: &str,
+        cx: &mut Context<Self>,
+    ) -> Receiver<Msg> {
+        let receiver = self.install_completion_test_session();
+        self.ssh_destination = Some(destination.into());
+        self.suggest.suggest_env =
+            crate::display::SuggestEnv::Ssh { destination: destination.into() };
+        self.cwd.clear();
+        self.apply_ssh_stage(crate::ssh_session::SshStage::Ready, cx);
+        receiver
+    }
+
+    pub(crate) fn remote_files_test_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
+        self.process_event(event, cx);
+    }
+
     pub(crate) fn completion_test_state(
         &self,
     ) -> (String, bool, usize, bool, crate::display::CompletionStyle) {

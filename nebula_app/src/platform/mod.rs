@@ -58,6 +58,7 @@ pub(crate) mod window_chrome;
 pub(crate) mod window_material;
 #[cfg(all(unix, feature = "gpui-shell"))]
 pub(crate) mod window_visibility;
+pub(crate) mod wsl_guest_shell;
 pub(crate) mod wsl_hooks;
 
 pub use capabilities::CAPABILITIES;
