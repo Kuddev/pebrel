@@ -208,7 +208,8 @@ class NativeSuiteTests(unittest.TestCase):
                 "filter": "test(=completion::tests::completion_requests_work_without_a_view_and_keep_repository_invalidation)"
                           " or test(=completion::tests::editor_cursor_requests_replace_only_the_active_token_and_keep_following_options)"
                           " or test(=completion::tests::checkout_completion_combines_branches_and_paths_and_scopes_remote_demand)"
-                          " or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)",
+                          " or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)"
+                          " or test(=completion::tests::network_completion_reads_configured_remotes_and_refspecs_without_network_access)",
                 "threads-required": "num-test-threads",
             }],
         })
