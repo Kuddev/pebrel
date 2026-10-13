@@ -21,6 +21,8 @@
 //! 丢弃——它描述的是一个已经不存在的意图。
 
 mod drag;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod follow_tests;
 mod target;
 mod transfers;
 use target::RemoteTransferTarget;
@@ -56,6 +58,8 @@ struct RemoteDirectorySnapshot {
     entries: Vec<SftpEntry>,
     error: Option<String>,
     selected: Option<String>,
+    shell_cwd: Option<String>,
+    retry_path: Option<String>,
 }
 
 /// 远端浏览器的状态。
@@ -80,6 +84,13 @@ pub(super) struct RemoteBrowser {
     scrolls: HashMap<u64, gpui::UniformListScrollHandle>,
     /// 当前列出的目录。
     path: String,
+    /// Last cwd reported by this pane. Manual browsing survives repeated
+    /// prompts/polls until the shell actually changes directory.
+    shell_cwd: Option<String>,
+    pending_path: Option<String>,
+    following_cwd: bool,
+    navigation: Option<gpui::Task<()>>,
+    retry_path: Option<String>,
     entries: Vec<SftpEntry>,
     /// 正在等一次列目录的响应。
     loading: bool,
@@ -142,6 +153,15 @@ impl RemoteBrowser {
                 entries: self.entries.clone(),
                 error: self.error.clone(),
                 selected: self.selected.clone(),
+                // A switch cancels unfinished navigation. Reobserve the pane
+                // cwd when it returns rather than treating its old listing as
+                // already synchronized with the cancelled target.
+                shell_cwd: if self.loading && self.following_cwd {
+                    None
+                } else {
+                    self.shell_cwd.clone()
+                },
+                retry_path: self.retry_path.clone(),
             },
         );
     }
@@ -150,6 +170,9 @@ impl RemoteBrowser {
     fn bind(&mut self, pane: u64, destination: String) -> bool {
         self.last_outcome = None;
         self.park_active();
+        self.navigation = None;
+        self.pending_path = None;
+        self.following_cwd = false;
         self.generation = self.generation.wrapping_add(1);
         self.pane = Some(pane);
         self.destination = destination.clone();
@@ -173,6 +196,8 @@ impl RemoteBrowser {
             self.entries = snapshot.entries;
             self.error = snapshot.error;
             self.selected = snapshot.selected;
+            self.shell_cwd = snapshot.shell_cwd;
+            self.retry_path = snapshot.retry_path;
             return true;
         }
 
@@ -182,6 +207,8 @@ impl RemoteBrowser {
         self.entries.clear();
         self.error = None;
         self.selected = None;
+        self.shell_cwd = None;
+        self.retry_path = None;
         false
     }
 
@@ -201,6 +228,11 @@ impl RemoteBrowser {
             self.error = None;
             self.loading = false;
             self.selected = None;
+            self.shell_cwd = None;
+            self.retry_path = None;
+            self.pending_path = None;
+            self.following_cwd = false;
+            self.navigation = None;
             self.generation = self.generation.wrapping_add(1);
         }
     }
@@ -216,6 +248,11 @@ impl RemoteBrowser {
         self.error = None;
         self.loading = false;
         self.selected = None;
+        self.shell_cwd = None;
+        self.retry_path = None;
+        self.pending_path = None;
+        self.following_cwd = false;
+        self.navigation = None;
         // 世代号往前走一格：已经在路上的响应回来时会发现自己过期了。
         self.generation = self.generation.wrapping_add(1);
     }
@@ -238,11 +275,11 @@ impl NebulaWorkspace {
     ///
     /// 双条件门控在 [`TerminalView::ready_ssh_destination`] 里：既要是 SSH
     /// pane，又要握手已完成。
-    pub(super) fn focused_remote_pane(&self, cx: &App) -> Option<(u64, String)> {
+    pub(super) fn focused_remote_pane(&self, cx: &App) -> Option<(u64, String, Option<String>)> {
         let view = self.tabs.get(self.active).and_then(super::WorkspaceTab::focused_view)?;
         let view = view.read(cx);
         let destination = view.ready_ssh_destination()?.to_owned();
-        Some((view.pane_id, destination))
+        Some((view.pane_id, destination, view.remote_cwd()))
     }
 
     /// 每帧把抽屉路由到聚焦 pane 的身份上。
@@ -251,23 +288,32 @@ impl NebulaWorkspace {
     /// 空态文案都问它，不各自重新判断一遍，否则三处判据迟早会分叉。
     pub(super) fn route_remote_browser(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        let focused = self.focused_remote_pane(cx);
-        match focused {
-            Some((pane, destination)) => {
+        self.sync_remote_browser_to_active(cx);
+        self.remote_browser.active()
+    }
+
+    /// Shared by terminal cwd events, drawer polling and render routing. Remote
+    /// paths stay with the SFTP adapter and never reach the local filesystem tree.
+    pub(super) fn sync_remote_browser_to_active(&mut self, cx: &mut Context<Self>) -> bool {
+        match self.focused_remote_pane(cx) {
+            Some((pane, destination, cwd)) => {
                 let rebind = self.remote_browser.pane != Some(pane)
                     || self.remote_browser.destination != destination;
                 if rebind {
-                    self.attach_remote_browser(pane, destination, window, cx);
+                    self.attach_remote_browser(pane, destination, cwd, cx);
+                    true
+                } else {
+                    self.follow_remote_shell_cwd(cwd, cx)
                 }
-                true
             },
             None => {
                 if self.remote_browser.active() {
                     self.remote_browser.detach();
                     cx.notify();
+                    return true;
                 }
                 false
             },
@@ -279,19 +325,36 @@ impl NebulaWorkspace {
         &mut self,
         pane: u64,
         destination: String,
-        _window: &mut Window,
+        cwd: Option<String>,
         cx: &mut Context<'_, Self>,
     ) {
         let restored = self.remote_browser.bind(pane, destination.clone());
         self.remote_files_scroll = self.remote_browser.scroll_for(pane);
+        if self.follow_remote_shell_cwd(cwd, cx) {
+            return;
+        }
         if restored {
             cx.notify();
             return;
         }
 
-        // 第一次进入才问终端当前在哪个目录，问不到再退到根。切回已有 pane
-        // 已在上面恢复完整快照，绝不能走到这里制造一次隐式刷新。
+        // A reported pane cwd takes precedence over the connection-wide probe:
+        // pooled connections can contain several PTYs with different directories.
+        // Only a pane with no report or snapshot needs the existing fallback.
         self.navigate_remote_to_shell_cwd(pane, destination, cx);
+    }
+
+    fn follow_remote_shell_cwd(&mut self, cwd: Option<String>, cx: &mut Context<Self>) -> bool {
+        let Some(cwd) = cwd else { return false };
+        if self.remote_browser.shell_cwd.as_ref() == Some(&cwd) {
+            return false;
+        }
+        self.remote_browser.shell_cwd = Some(cwd.clone());
+        if self.remote_browser.path != cwd || self.remote_browser.pending_path.is_some() {
+            self.navigate_remote(cwd, cx);
+            self.remote_browser.following_cwd = true;
+        }
+        true
     }
 
     /// 问远端"用户此刻在哪个目录"，然后导航过去。
@@ -304,12 +367,8 @@ impl NebulaWorkspace {
         self.remote_browser.loading = true;
         cx.notify();
         let generation = self.bump_remote_generation();
-        cx.spawn(async move |this, cx| {
-            let probed =
-                remote_call(
-                    || async move { crate::ssh_sftp::remote_cwd::probe(&destination).await },
-                )
-                .await;
+        self.remote_browser.navigation = Some(cx.spawn(async move |this, cx| {
+            let probed = remote_call(|| probe_remote_shell_cwd(destination)).await;
             let _ = this.update(cx, |workspace, cx| {
                 if workspace.remote_browser.generation != generation
                     || workspace.remote_browser.pane != Some(pane)
@@ -325,8 +384,7 @@ impl NebulaWorkspace {
                 };
                 workspace.navigate_remote(start, cx);
             });
-        })
-        .detach();
+        }));
     }
 
     /// 世代号 +1 并返回新值。所有会改变"当前该显示什么"的操作都要先过这里。
@@ -338,6 +396,7 @@ impl NebulaWorkspace {
     /// 列出一个远端目录并显示它。
     pub(super) fn navigate_remote(&mut self, path: String, cx: &mut Context<'_, Self>) {
         self.remote_browser.last_outcome = None;
+        self.remote_browser.following_cwd = false;
         let Some(pane) = self.remote_browser.pane else { return };
         let Some(session) = self.remote_browser.browse_sessions.get(&pane).cloned() else {
             self.remote_browser.loading = false;
@@ -347,10 +406,11 @@ impl NebulaWorkspace {
         };
         let generation = self.bump_remote_generation();
         self.remote_browser.loading = true;
+        self.remote_browser.pending_path = Some(path.clone());
         cx.notify();
 
         let target = path.clone();
-        cx.spawn(async move |this, cx| {
+        self.remote_browser.navigation = Some(cx.spawn(async move |this, cx| {
             let listed = remote_call(|| async move { session.list_dir(&target).await }).await;
             let _ = this.update(cx, |workspace, cx| {
                 // 世代号和 pane 都要对：前者防乱序，后者防用户在等待期间切到
@@ -361,23 +421,29 @@ impl NebulaWorkspace {
                     return;
                 }
                 workspace.remote_browser.loading = false;
+                workspace.remote_browser.pending_path = None;
+                workspace.remote_browser.following_cwd = false;
                 match listed {
                     Some(Ok(entries)) => {
                         workspace.remote_browser.entries = entries;
                         workspace.remote_browser.path = path.clone();
                         workspace.remote_browser.error = None;
                         workspace.remote_browser.selected = None;
+                        workspace.remote_browser.retry_path = None;
                     },
-                    Some(Err(message)) => workspace.remote_browser.error = Some(message),
+                    Some(Err(message)) => {
+                        workspace.remote_browser.error = Some(message);
+                        workspace.remote_browser.retry_path = Some(path.clone());
+                    },
                     None => {
                         workspace.remote_browser.error =
-                            Some("远端连接不可用，请稍后重试".to_owned())
+                            Some("远端连接不可用，请稍后重试".to_owned());
+                        workspace.remote_browser.retry_path = Some(path.clone());
                     },
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        }));
     }
 
     /// 回到上一级。
@@ -388,7 +454,11 @@ impl NebulaWorkspace {
 
     /// 重新列当前目录。
     fn remote_refresh(&mut self, cx: &mut Context<'_, Self>) {
-        let path = self.remote_browser.path.clone();
+        let path = self
+            .remote_browser
+            .retry_path
+            .clone()
+            .unwrap_or_else(|| self.remote_browser.path.clone());
         self.navigate_remote(path, cx);
     }
 
@@ -885,6 +955,20 @@ impl NebulaWorkspace {
     }
 }
 
+async fn probe_remote_shell_cwd(destination: String) -> crate::ssh_sftp::remote_cwd::RemoteCwd {
+    #[cfg(not(test))]
+    {
+        crate::ssh_sftp::remote_cwd::probe(&destination).await
+    }
+    #[cfg(test)]
+    {
+        // GUI regressions own their synthetic sessions. Never authenticate or
+        // read host credentials for a connection-wide fallback in a unit test.
+        let _ = destination;
+        crate::ssh_sftp::remote_cwd::RemoteCwd::Ambiguous
+    }
+}
+
 fn local_metadata_matches(metadata: &std::fs::Metadata, remote: &SftpEntry) -> bool {
     remote.kind == SftpEntryKind::File
         && metadata.is_file()
@@ -935,6 +1019,10 @@ where
             result = work() => { let _ = tx.send(result); },
         }
     });
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    if follow_tests::NetworkPump::enabled() {
+        return follow_tests::NetworkPump::receive(rx).await;
+    }
     rx.await.ok()
 }
 
