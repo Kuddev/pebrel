@@ -18,6 +18,8 @@ const PROBE_BUDGET: Duration = Duration::from_secs(10);
 /// A failed or timed-out probe is not repeated before this.
 const RETRY_AFTER: Duration = Duration::from_secs(300);
 const MAX_OUTPUT: usize = 4 * 1024;
+/// 缓存与在途探测共用上限，避免不同发行版/用户不断累积线程和常驻条目。
+const MAX_GUEST_TARGETS: usize = 32;
 
 const PROBE_SCRIPT: &str = include_str!("../../res/shell/wsl-guest-probe.sh");
 
@@ -104,6 +106,28 @@ fn cache() -> &'static Mutex<HashMap<Target, Entry>> {
     CACHE.get_or_init(Default::default)
 }
 
+fn make_room_for_probe(cache: &mut HashMap<Target, Entry>, target: &Target) -> bool {
+    if cache.contains_key(target) || cache.len() < MAX_GUEST_TARGETS {
+        return true;
+    }
+    // 在途条目负责去重，失败条目负责冷却；逐出任一者都会让同一客体过早重试。
+    let oldest = cache
+        .iter()
+        .filter(|(_, entry)| match entry.verdict.get() {
+            Some(Some(_)) => true,
+            Some(None) => entry.started.elapsed() >= RETRY_AFTER,
+            None => false,
+        })
+        .min_by_key(|(_, entry)| entry.started)
+        .map(|(target, _)| target.clone());
+    if let Some(oldest) = oldest {
+        cache.remove(&oldest);
+        true
+    } else {
+        false
+    }
+}
+
 /// The cached verdict for a guest, or `None` while it is unknown. A guest seen
 /// for the first time, or one whose probe failed [`RETRY_AFTER`] ago, starts a
 /// probe worker (it writes the bootstrap, then asks the guest); the caller never
@@ -116,6 +140,9 @@ pub(crate) fn verified(target: &Target) -> Option<GuestShell> {
             Some(None) if entry.started.elapsed() >= RETRY_AFTER => {},
             _ => return None,
         }
+    }
+    if !make_room_for_probe(&mut cache, target) {
+        return None;
     }
     let verdict: Arc<OnceLock<Option<GuestShell>>> = Arc::default();
     let worker = {
@@ -190,6 +217,61 @@ mod tests {
 
     fn bootstrap() -> PathBuf {
         PathBuf::from(r"C:\Users\me\AppData\Roaming\Pebrel\wsl-zsh")
+    }
+
+    #[test]
+    fn completed_probe_entries_stay_bounded() {
+        let mut entries = HashMap::new();
+        for index in 0..MAX_GUEST_TARGETS + 8 {
+            let target = Target { distro: format!("fixture-{index}"), user: None };
+            assert!(make_room_for_probe(&mut entries, &target));
+            entries.insert(
+                target,
+                Entry {
+                    verdict: Arc::new(OnceLock::from(Some(GuestShell::default()))),
+                    started: Instant::now(),
+                },
+            );
+            assert!(entries.len() <= MAX_GUEST_TARGETS);
+        }
+        assert_eq!(entries.len(), MAX_GUEST_TARGETS);
+    }
+
+    #[test]
+    fn full_running_probe_cache_preserves_owners_and_defers_new_targets() {
+        let mut entries = HashMap::new();
+        for index in 0..MAX_GUEST_TARGETS {
+            entries.insert(
+                Target { distro: format!("fixture-{index}"), user: None },
+                Entry { verdict: Arc::default(), started: Instant::now() },
+            );
+        }
+        let next = Target { distro: "next".into(), user: None };
+        assert!(!make_room_for_probe(&mut entries, &next));
+        assert_eq!(entries.len(), MAX_GUEST_TARGETS);
+        let completed = Target { distro: "fixture-0".into(), user: None };
+        entries[&completed].verdict.set(Some(GuestShell::default())).unwrap();
+        assert!(make_room_for_probe(&mut entries, &next));
+        assert!(!entries.contains_key(&completed));
+        assert_eq!(entries.len(), MAX_GUEST_TARGETS - 1);
+        assert!(entries.values().all(|entry| entry.verdict.get().is_none()));
+    }
+
+    #[test]
+    fn failed_probe_backoff_survives_cache_pressure() {
+        let mut entries = HashMap::new();
+        for index in 0..MAX_GUEST_TARGETS {
+            entries.insert(
+                Target { distro: format!("fixture-{index}"), user: None },
+                Entry { verdict: Arc::new(OnceLock::from(None)), started: Instant::now() },
+            );
+        }
+        let next = Target { distro: "next".into(), user: None };
+        assert!(!make_room_for_probe(&mut entries, &next));
+        let expired = Target { distro: "fixture-0".into(), user: None };
+        entries.get_mut(&expired).unwrap().started = Instant::now() - RETRY_AFTER;
+        assert!(make_room_for_probe(&mut entries, &next));
+        assert!(!entries.contains_key(&expired));
     }
 
     #[test]
