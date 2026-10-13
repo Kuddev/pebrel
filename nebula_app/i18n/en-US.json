@@ -48,6 +48,14 @@
       "speed": "Scrolling speed",
       "speed_description": "Mouse wheel multiplier. Takes effect immediately; trackpad scrolling is unchanged."
     },
+    "runtime_api": {
+      "title": "Panel API",
+      "exposure": "Remote access",
+      "off": "Off",
+      "local": "This computer",
+      "lan": "Local network",
+      "description": "Lets other apps control Pebrel through the panel API on port 47600. Restart to apply. Clients authenticate with the token in runtime-remote.token in the Pebrel data folder. Traffic is not encrypted, so use Local network only on trusted networks."
+    },
     "sidebar": {
       "application": "Application",
       "appearance": "Appearance",

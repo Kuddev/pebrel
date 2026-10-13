@@ -13,6 +13,7 @@ pub(crate) mod git;
 pub(crate) mod mobile_bridge;
 mod mobile_screen;
 mod orchestrate;
+mod remote;
 mod server;
 pub(crate) mod tabs;
 mod terminal_read;
