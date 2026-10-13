@@ -10,15 +10,16 @@ pub(super) fn shape_cell(
     text_system: &gpui::WindowTextSystem,
     text: &str,
     font_size: Pixels,
-    run: TextRun,
+    run: &TextRun,
     cell_width: Pixels,
 ) -> gpui::ShapedLine {
     use unicode_width::UnicodeWidthChar as _;
 
+    // 两次塑形只读取相同样式，借用即可，避免逐格绘制时重复克隆 TextRun。
     let shaped = text_system.shape_line(
         SharedString::from(text.to_owned()),
         font_size,
-        &[run.clone()],
+        std::slice::from_ref(run),
         None,
     );
     let mut chars = text.chars();
@@ -31,5 +32,10 @@ pub(super) fn shape_cell(
         return shaped;
     }
     let fitted = font_size * (cell_width / shaped.width);
-    text_system.shape_line(SharedString::from(text.to_owned()), fitted, &[run], None)
+    text_system.shape_line(
+        SharedString::from(text.to_owned()),
+        fitted,
+        std::slice::from_ref(run),
+        None,
+    )
 }

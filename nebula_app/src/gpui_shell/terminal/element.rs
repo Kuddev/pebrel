@@ -737,7 +737,7 @@ impl Element for TerminalElement {
                         window.text_system(),
                         &cell.text,
                         font_size,
-                        run.clone(),
+                        &run,
                         layout.cell_width,
                     );
                     let _ = shaped.paint(
