@@ -194,23 +194,19 @@ impl SettingsPane {
         if !skip_bare_key_guard && bare_printable_key_needs_guard(&combo) {
             let language = crate::gpui_shell::config::ui_language(cx);
             let pane = cx.entity().downgrade();
-            let description = match language.pick("zh", "en") {
-                "zh" => format!(
-                    "{combo} 是正常输入键(没有 Ctrl/Alt 等修饰),绑定后它不再能作为文本输入。要仍然绑定吗?"
-                ),
-                _ => format!(
-                    "'{combo}' has no modifiers; binding it makes the key unusable for normal typing. Bind anyway?"
-                ),
-            };
+            let description = language.format(
+                crate::i18n::Message::SettingsKeymapBareDescription,
+                &[("combo", combo.as_str())],
+            );
             window.open_dialog(cx, move |dialog, window, _cx| {
                 let pane = pane.clone();
                 let combo = combo.clone();
                 confirm_dialog(
                     dialog,
                     window,
-                    language.pick("绑定裸键?", "Bind a bare key?"),
+                    language.text(crate::i18n::Message::SettingsKeymapBareTitle),
                     description.as_str(),
-                    language.pick("仍然绑定", "Bind anyway"),
+                    language.text(crate::i18n::Message::SettingsKeymapBareConfirm),
                     language.text(crate::i18n::Message::CommonCancel),
                     ButtonVariant::Danger,
                 )

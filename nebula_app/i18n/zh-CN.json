@@ -123,7 +123,10 @@
       "conflict": "{combo} 同时绑定了「{first}」与「{second}」——只有排前面的「{first}」会触发",
       "help": "点击快捷键后按新组合键；Backspace 清空，Esc 取消。右侧可清空或恢复默认。",
       "clear": "清空快捷键（传给终端）",
-      "restore": "恢复此动作的默认快捷键"
+      "restore": "恢复此动作的默认快捷键",
+      "bare_title": "绑定裸键？",
+      "bare_description": "{combo} 是正常输入键（没有 Ctrl/Alt 等修饰），绑定后它不再能作为文本输入。仍然绑定吗？",
+      "bare_confirm": "仍然绑定"
     },
     "input": {
       "backup_secret": "凭据只写入系统凭据管理器"
