@@ -279,7 +279,7 @@ fn table_cell_continuation<T>(term: &Term<T>, mut end: Point) -> String {
         else {
             break;
         };
-        let line = end.line + 1;
+        let line = end.line + 1usize;
         let start = Point::new(line, left + 2);
         if line > term.bottommost_line()
             || grid[line][left].c != '│'
