@@ -106,7 +106,7 @@ fn cache() -> &'static Mutex<HashMap<Target, Entry>> {
     CACHE.get_or_init(Default::default)
 }
 
-fn make_room_for_probe(cache: &mut HashMap<Target, Entry>, target: &Target) -> bool {
+fn make_room_for_probe(cache: &mut HashMap<Target, Entry>, target: &Target, now: Instant) -> bool {
     if cache.contains_key(target) || cache.len() < MAX_GUEST_TARGETS {
         return true;
     }
@@ -115,7 +115,7 @@ fn make_room_for_probe(cache: &mut HashMap<Target, Entry>, target: &Target) -> b
         .iter()
         .filter(|(_, entry)| match entry.verdict.get() {
             Some(Some(_)) => true,
-            Some(None) => entry.started.elapsed() >= RETRY_AFTER,
+            Some(None) => now.saturating_duration_since(entry.started) >= RETRY_AFTER,
             None => false,
         })
         .min_by_key(|(_, entry)| entry.started)
@@ -141,7 +141,7 @@ pub(crate) fn verified(target: &Target) -> Option<GuestShell> {
             _ => return None,
         }
     }
-    if !make_room_for_probe(&mut cache, target) {
+    if !make_room_for_probe(&mut cache, target, Instant::now()) {
         return None;
     }
     let verdict: Arc<OnceLock<Option<GuestShell>>> = Arc::default();
@@ -224,7 +224,7 @@ mod tests {
         let mut entries = HashMap::new();
         for index in 0..MAX_GUEST_TARGETS + 8 {
             let target = Target { distro: format!("fixture-{index}"), user: None };
-            assert!(make_room_for_probe(&mut entries, &target));
+            assert!(make_room_for_probe(&mut entries, &target, Instant::now()));
             entries.insert(
                 target,
                 Entry {
@@ -247,11 +247,11 @@ mod tests {
             );
         }
         let next = Target { distro: "next".into(), user: None };
-        assert!(!make_room_for_probe(&mut entries, &next));
+        assert!(!make_room_for_probe(&mut entries, &next, Instant::now()));
         assert_eq!(entries.len(), MAX_GUEST_TARGETS);
         let completed = Target { distro: "fixture-0".into(), user: None };
         entries[&completed].verdict.set(Some(GuestShell::default())).unwrap();
-        assert!(make_room_for_probe(&mut entries, &next));
+        assert!(make_room_for_probe(&mut entries, &next, Instant::now()));
         assert!(!entries.contains_key(&completed));
         assert_eq!(entries.len(), MAX_GUEST_TARGETS - 1);
         assert!(entries.values().all(|entry| entry.verdict.get().is_none()));
@@ -260,17 +260,22 @@ mod tests {
     #[test]
     fn failed_probe_backoff_survives_cache_pressure() {
         let mut entries = HashMap::new();
+        let started = Instant::now();
         for index in 0..MAX_GUEST_TARGETS {
             entries.insert(
                 Target { distro: format!("fixture-{index}"), user: None },
-                Entry { verdict: Arc::new(OnceLock::from(None)), started: Instant::now() },
+                Entry {
+                    verdict: Arc::new(OnceLock::from(None)),
+                    started: started + Duration::from_secs(index as u64),
+                },
             );
         }
         let next = Target { distro: "next".into(), user: None };
-        assert!(!make_room_for_probe(&mut entries, &next));
+        // 向前推进受控时刻，不从 Instant 减去五分钟，避免测试依赖机器启动时长。
+        let now = started + Duration::from_secs(MAX_GUEST_TARGETS as u64);
+        assert!(!make_room_for_probe(&mut entries, &next, now));
         let expired = Target { distro: "fixture-0".into(), user: None };
-        entries.get_mut(&expired).unwrap().started = Instant::now() - RETRY_AFTER;
-        assert!(make_room_for_probe(&mut entries, &next));
+        assert!(make_room_for_probe(&mut entries, &next, started + RETRY_AFTER));
         assert!(!entries.contains_key(&expired));
     }
 

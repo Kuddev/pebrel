@@ -41,6 +41,8 @@ the existing non-invasive startup behavior until their verdict is available.
 Deterministic tests cover repeated completed targets, full running admission,
 eligible eviction and preservation of failed-probe backoff. The source-extracted pre-fix probe fails
 the 32-entry assertion. This does not claim native WSL startup timing.
+The admission helper takes an explicit instant for deterministic backoff tests;
+the tests advance time rather than subtracting from the host's current instant.
 
 ## Supersedes
 
