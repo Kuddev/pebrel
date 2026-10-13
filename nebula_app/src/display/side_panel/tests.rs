@@ -290,6 +290,8 @@ mod tests {
         }));
 
         *panel.snapshot_slot.lock().unwrap() = Some(PanelSnapshot {
+            revision: panel.snapshot_revision,
+            tree_revision: panel.tree_revision,
             root: root.clone(),
             files_wsl: Some(located.clone()),
             rows: Vec::new(),
@@ -300,6 +302,8 @@ mod tests {
         assert_eq!(panel.git().map(|git| git.branch.as_str()), Some("keep-until-ready"));
 
         *panel.snapshot_slot.lock().unwrap() = Some(PanelSnapshot {
+            revision: panel.snapshot_revision,
+            tree_revision: panel.tree_revision,
             root,
             files_wsl: Some(located),
             rows: Vec::new(),
