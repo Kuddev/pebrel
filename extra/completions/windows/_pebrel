@@ -291,6 +291,18 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(notify-pane)
+_arguments "${_arguments_options[@]}" : \
+'--window=[]:WINDOW:_default' \
+'--pane=[]:PANE:_default' \
+'--title=[]:TITLE:_default' \
+'--message=[]:MESSAGE:_default' \
+'--timeout-ms=[Maximum time to wait for a command response]:TIMEOUT_MS:_default' \
+'--pretty[Pretty-print one-shot JSON responses. Streaming subscriptions stay JSON Lines]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (zoom-pane)
 _arguments "${_arguments_options[@]}" : \
 '--window=[]:WINDOW:_default' \
@@ -522,6 +534,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (close-pane)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(notify-pane)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1406,6 +1422,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(notify-pane)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (zoom-pane)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1881,6 +1901,7 @@ _pebrel__ctl_commands() {
 'move-tab:Move a tab to another index in the same window' \
 'split:Split the focused pane in the target window' \
 'close-pane:Close an idle pane' \
+'notify-pane:Notify the user about a pane with the built-in bell flash/sound and a toast' \
 'zoom-pane:Explicitly enable or disable focused-pane zoom for the pane'\''s tab' \
 'resize-pane:Set this pane'\''s share of its direct parent split' \
 'prompt:Send one plain-text prompt to a pane, optionally submitting it with Enter' \
@@ -1989,6 +2010,7 @@ _pebrel__ctl__help_commands() {
 'move-tab:Move a tab to another index in the same window' \
 'split:Split the focused pane in the target window' \
 'close-pane:Close an idle pane' \
+'notify-pane:Notify the user about a pane with the built-in bell flash/sound and a toast' \
 'zoom-pane:Explicitly enable or disable focused-pane zoom for the pane'\''s tab' \
 'resize-pane:Set this pane'\''s share of its direct parent split' \
 'prompt:Send one plain-text prompt to a pane, optionally submitting it with Enter' \
@@ -2093,6 +2115,11 @@ _pebrel__ctl__help__new-window_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel ctl help new-window commands' commands "$@"
 }
+(( $+functions[_pebrel__ctl__help__notify-pane_commands] )) ||
+_pebrel__ctl__help__notify-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel ctl help notify-pane commands' commands "$@"
+}
 (( $+functions[_pebrel__ctl__help__orchestrate_commands] )) ||
 _pebrel__ctl__help__orchestrate_commands() {
     local commands; commands=()
@@ -2177,6 +2204,11 @@ _pebrel__ctl__new-tab_commands() {
 _pebrel__ctl__new-window_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel ctl new-window commands' commands "$@"
+}
+(( $+functions[_pebrel__ctl__notify-pane_commands] )) ||
+_pebrel__ctl__notify-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel ctl notify-pane commands' commands "$@"
 }
 (( $+functions[_pebrel__ctl__orchestrate_commands] )) ||
 _pebrel__ctl__orchestrate_commands() {
@@ -2357,6 +2389,7 @@ _pebrel__help__ctl_commands() {
 'move-tab:Move a tab to another index in the same window' \
 'split:Split the focused pane in the target window' \
 'close-pane:Close an idle pane' \
+'notify-pane:Notify the user about a pane with the built-in bell flash/sound and a toast' \
 'zoom-pane:Explicitly enable or disable focused-pane zoom for the pane'\''s tab' \
 'resize-pane:Set this pane'\''s share of its direct parent split' \
 'prompt:Send one plain-text prompt to a pane, optionally submitting it with Enter' \
@@ -2454,6 +2487,11 @@ _pebrel__help__ctl__new-tab_commands() {
 _pebrel__help__ctl__new-window_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel help ctl new-window commands' commands "$@"
+}
+(( $+functions[_pebrel__help__ctl__notify-pane_commands] )) ||
+_pebrel__help__ctl__notify-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'pebrel help ctl notify-pane commands' commands "$@"
 }
 (( $+functions[_pebrel__help__ctl__orchestrate_commands] )) ||
 _pebrel__help__ctl__orchestrate_commands() {
