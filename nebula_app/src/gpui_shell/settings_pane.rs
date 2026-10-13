@@ -1359,15 +1359,17 @@ impl SettingsPane {
                         self.runtime.copy_on_select,
                         cx,
                     ))
-                    .child(self.switch_row(
-                        "click_to_move_cursor",
-                        language.text(crate::i18n::Message::SettingsMouseClickToMoveCursor),
-                        language.text(
-                            crate::i18n::Message::SettingsMouseClickToMoveCursorDescription,
+                    .child(
+                        self.switch_row(
+                            "click_to_move_cursor",
+                            language.text(crate::i18n::Message::SettingsMouseClickToMoveCursor),
+                            language.text(
+                                crate::i18n::Message::SettingsMouseClickToMoveCursorDescription,
+                            ),
+                            self.runtime.click_to_move_cursor,
+                            cx,
                         ),
-                        self.runtime.click_to_move_cursor,
-                        cx,
-                    ))
+                    )
                     .child(self.switch_row(
                         "multiline_paste_confirm",
                         language.pick("粘贴前确认", "Confirm pastes"),
