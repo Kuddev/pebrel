@@ -969,6 +969,47 @@ pub(crate) fn wslenv_name(entry: &str) -> &str {
     entry.split('/').next().unwrap_or(entry)
 }
 
+/// WSL automount 路径（仅 `/mnt/<单个盘符>`）→ 宿主盘路径，只做字符串
+/// 转换，不访问文件系统。
+///
+/// 菜单项的可用性必须能在 UI 线程同步判断；`\\wsl.localhost\…` 上的
+/// `is_dir` 会访问 9P 共享，慢共享会卡住菜单。真正的存在性检查留给用户
+/// 激活动作之后、在后台线程执行。
+pub fn wsl_mounted_host_path(guest: &str) -> Option<std::path::PathBuf> {
+    let guest = guest.trim();
+    if guest.chars().any(char::is_control) {
+        return None;
+    }
+    let suffix = guest.strip_prefix("/mnt/")?;
+    let bytes = suffix.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    if bytes.len() > 1 && bytes[1] != b'/' {
+        return None;
+    }
+    let drive = (bytes[0] as char).to_ascii_uppercase();
+    let tail = suffix[1..].replace('/', "\\");
+    Some(std::path::PathBuf::from(if tail.is_empty() {
+        format!("{drive}:\\")
+    } else {
+        format!("{drive}:{tail}")
+    }))
+}
+
+/// 任何 WSL 来宾绝对路径 → 宿主可见路径（automount 优先，否则 UNC），
+/// 纯字符串转换、不探测存在性。空发行版不猜默认值，返回 `None`。
+pub fn wsl_host_path(located: &WslCwd) -> Option<std::path::PathBuf> {
+    if located.distro.is_empty() || located.distro.chars().any(char::is_control) {
+        return None;
+    }
+    let guest = wsl_guest_cwd(&located.guest)?;
+    if guest.chars().any(char::is_control) {
+        return None;
+    }
+    wsl_mounted_host_path(guest).or_else(|| Some(wsl_unc_path(&located.distro, guest)))
+}
+
 /// WSL automount 路径（仅 `/mnt/<盘>`）→ 宿主可见且已确认存在的目录。
 ///
 /// 先做严格形态门控很重要：Windows 会把 POSIX `/` 当成当前盘根目录；若先
@@ -1376,6 +1417,45 @@ mod tests {
             super::wsl_unc_path("Ubuntu-24.04", "/"),
             std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu-24.04\")
         );
+    }
+
+    #[test]
+    fn wsl_mounted_host_path_maps_drives_without_probing_the_share() {
+        for (guest, host) in [
+            ("/mnt/d/Projects/demo", r"D:\Projects\demo"),
+            ("/mnt/c/Users/me", r"C:\Users\me"),
+            ("/mnt/d", r"D:\"),
+            ("/mnt/d/", r"D:\"),
+        ] {
+            assert_eq!(
+                super::wsl_mounted_host_path(guest),
+                Some(std::path::PathBuf::from(host)),
+                "{guest}"
+            );
+        }
+        for invalid in ["/home/guest", "/mnt/dd/x", "/mnt/1/x", "/mnt/", "/mnt", "relative"] {
+            assert_eq!(super::wsl_mounted_host_path(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn wsl_host_path_prefers_automount_and_keeps_unknown_distros_unmapped() {
+        let mounted = super::WslCwd { distro: "Ubuntu".into(), guest: "/mnt/d/x".into() };
+        assert_eq!(super::wsl_host_path(&mounted), Some(std::path::PathBuf::from(r"D:\x")));
+
+        let guest = super::WslCwd { distro: "Ubuntu".into(), guest: "/home/me/x".into() };
+        assert_eq!(
+            super::wsl_host_path(&guest),
+            Some(std::path::PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\x"))
+        );
+
+        let unknown = super::WslCwd { distro: String::new(), guest: "/home/me/x".into() };
+        assert_eq!(super::wsl_host_path(&unknown), None);
+
+        for (distro, guest) in [("Ubuntu\n", "/home/me/x"), ("Ubuntu", "/home/me\n/x")] {
+            let invalid = super::WslCwd { distro: distro.into(), guest: guest.into() };
+            assert_eq!(super::wsl_host_path(&invalid), None, "{distro:?} {guest:?}");
+        }
     }
 
     fn detected(id: &str, program: &str, args: &[&str]) -> super::DetectedShell {

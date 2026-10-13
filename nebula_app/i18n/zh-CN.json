@@ -1060,6 +1060,7 @@
     "open_terminal_here": "在此处打开终端",
     "tree": {
       "open_in_explorer": "在资源管理器中打开",
+      "open_folder": "打开文件夹",
       "follow_refresh": "跟随当前终端并刷新 (Alt+R)"
     },
     "copy_linux_path": "复制 Linux 路径",

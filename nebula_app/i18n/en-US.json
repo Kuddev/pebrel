@@ -1060,6 +1060,7 @@
     "open_terminal_here": "Open terminal here",
     "tree": {
       "open_in_explorer": "Open in File Explorer",
+      "open_folder": "Open folder",
       "follow_refresh": "Follow the current terminal and refresh (Alt+R)"
     },
     "copy_linux_path": "Copy Linux path",
