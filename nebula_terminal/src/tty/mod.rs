@@ -19,6 +19,20 @@ pub mod windows;
 #[cfg(windows)]
 pub use self::windows::*;
 
+/// 提示符 ssh 标签前的图标字形（Nerd Font 码位）。
+///
+/// Windows 的 PowerShell 提示符按这个码位画出图标（见
+/// `windows::NEBULA_PROMPT_PS1`）；Pebrel 自己的 GPUI 壳在网格里认出同一格后
+/// 改画项目自带的 Claude 品牌图（`extra/logo/ai_claude.png`，与侧栏标签页
+/// 标题前那枚同一张）。字形本身是别的终端与旧壳看到的回落。
+///
+/// 必须留在 BMP：PS1 用 `[char]0x….` 写字形，而 PowerShell 的 `[char]` 是
+/// UTF-16 单元，星平面码位（Nerd Font 的 MDI 区图标大多在那里，包括项目里
+/// `program_icon("claude")` 用的那枚）会直接报错，整格字形被吞掉——实测
+/// U+F0CE5 就是这样消失的。这里取字体里最像那枚 12 芒火花的 BMP 字形：
+/// 实心六芒星号，配品牌橙。
+pub const REMOTE_CLAUDE_CHIP_GLYPH: char = '\u{f069}';
+
 /// Shared SSH/WSL execution reports for local and bootstrapped bash/zsh shells.
 pub fn connection_shell() -> &'static str {
     static SCRIPT: LazyLock<Cow<'static, str>> = LazyLock::new(|| {

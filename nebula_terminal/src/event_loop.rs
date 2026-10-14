@@ -236,6 +236,9 @@ impl StreamProcessor {
                         event_proxy.send_event(Event::AiHookEnvelope(envelope));
                     }
                 },
+                OscEvent::RemoteClaude { stage, host, detail } => {
+                    event_proxy.send_event(Event::RemoteClaude { stage, host, detail });
+                },
                 OscEvent::PromptMark => {
                     terminal.nebula_add_prompt_mark();
                 },

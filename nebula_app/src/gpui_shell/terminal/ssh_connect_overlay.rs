@@ -37,10 +37,44 @@ pub(super) fn update_connection_state(
     }
 }
 
+/// 本机 CLI 上报的阶段名 → 卡片槽位。命名是 CLI 与宿主之间的稳定契约
+/// （见 `remote_claude::session` 的 `stage_frame`）。
+pub(super) fn remote_claude_stage(
+    stage: &str,
+    detail: &str,
+) -> Option<crate::ssh_session::SshStage> {
+    use crate::ssh_session::SshStage;
+
+    Some(match stage {
+        "local" => SshStage::Resolve,
+        "tunnel" => SshStage::Connect,
+        "probe" => SshStage::Authenticate,
+        "session" => SshStage::OpenShell,
+        "ready" => SshStage::Ready,
+        "failed" => SshStage::Failed(detail.to_owned()),
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod connection_state_tests {
     use super::*;
     use crate::ssh_session::SshStage;
+
+    /// CLI 阶段名 → 卡片槽位：四步进度 + 失败原因，未知名一律忽略。
+    #[test]
+    fn remote_claude_frames_map_onto_the_shared_card_slots() {
+        assert_eq!(remote_claude_stage("local", ""), Some(SshStage::Resolve));
+        assert_eq!(remote_claude_stage("tunnel", ""), Some(SshStage::Connect));
+        assert_eq!(remote_claude_stage("probe", ""), Some(SshStage::Authenticate));
+        assert_eq!(remote_claude_stage("session", ""), Some(SshStage::OpenShell));
+        assert_eq!(remote_claude_stage("ready", ""), Some(SshStage::Ready));
+        assert_eq!(
+            remote_claude_stage("failed", "ssh: exit 255"),
+            Some(SshStage::Failed("ssh: exit 255".into()))
+        );
+        assert_eq!(remote_claude_stage("mystery", ""), None);
+    }
 
     #[test]
     fn a_disconnected_ready_session_regains_a_retry_surface() {
@@ -430,7 +464,7 @@ pub(super) fn overlay(
         );
 
     // ── 轨道 + 阶段标签（首尾贴齐轨道两端，中间以节点为中心）──
-    let labels = stage_labels(lang);
+    let labels = stage_labels(state.flow(), lang);
     let active = state.stage_index();
     let caption_h = ui_px * 0.75;
     let rail_block =
@@ -484,7 +518,7 @@ pub(super) fn overlay(
     let (msg, msg_ink) = if state.failed() {
         (ssh_connect::failure_headline(lang), danger)
     } else {
-        (stage_message(&state.stage(), lang), ink)
+        (stage_message(state.flow(), &state.stage(), lang), ink)
     };
     let status_row = h_flex()
         .w_full()
@@ -580,6 +614,8 @@ pub(super) fn overlay(
     };
     let retry_target = cx.entity().downgrade();
     let retry_destination = state.destination().to_owned();
+    let retry_remote_claude =
+        state.flow() == crate::display::ssh_connect::ConnectFlow::RemoteClaude;
     let buttons = h_flex()
         .w_full()
         .mt(px(24.0))
@@ -599,9 +635,13 @@ pub(super) fn overlay(
                                             && state.destination() == retry_destination.as_str()
                                     });
                                 if still_same_failure {
-                                    cx.emit(super::view::TerminalViewEvent::RetrySsh(
-                                        retry_destination.clone(),
-                                    ));
+                                    cx.emit(if retry_remote_claude {
+                                        super::view::TerminalViewEvent::RetryRemoteClaude
+                                    } else {
+                                        super::view::TerminalViewEvent::RetrySsh(
+                                            retry_destination.clone(),
+                                        )
+                                    });
                                 }
                             });
                         }

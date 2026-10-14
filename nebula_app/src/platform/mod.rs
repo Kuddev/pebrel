@@ -41,6 +41,8 @@ pub(crate) mod process_output;
 pub(crate) mod process_snapshot;
 #[cfg(all(windows, feature = "gpui-shell"))]
 pub(crate) mod quick_window;
+#[cfg(windows)]
+pub(crate) mod remote_claude;
 pub mod shell;
 pub mod shell_integration;
 #[cfg(unix)]

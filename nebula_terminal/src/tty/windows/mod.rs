@@ -334,6 +334,12 @@ $global:NebPromptArrow = [char]0x276F
 $global:NebFolderIcon = [char]0xE70F
 $global:NebGitBranchIcon = [char]0xF418
 $global:NebClockIcon = [char]0xF017
+# ssh 标签前的 Claude 图标（码位与 `tty::REMOTE_CLAUDE_CHIP_GLYPH` 一致）：宿主
+# 的 GPUI 壳认出这一格后会把项目自带的品牌图 extra/logo/ai_claude.png 直接画在
+# 格子上；这里写下的字形是别的终端与旧壳看到的回落（必须留在 BMP——`[char]`
+# 装不下星平面码位），配 Claude 品牌橙。
+$global:NebClaudeIcon = [char]0xF069
+$global:NebClaudeInk = '38;2;217;119;87'
 $global:NebulaPromptCount = 0
 $global:PebrelSettingsFile = if ($env:PEBREL_CONFIG_DIR) {
     Join-Path $env:PEBREL_CONFIG_DIR 'pebrel_settings.txt'
@@ -505,6 +511,14 @@ $global:NebulaPromptTemplate = {
         if ($LASTEXITCODE -eq 0 -and $b) { $branch = $b }
         $time = Get-Date -Format 'HH:mm:ss'
 
+        # 目录后面挂一枚可点的 "ssh" 标签：宿主收到 pebrel-ssh:// 链接（载荷是
+        # 本机目录的 base64url）后弹出 SSH 主机选择，并在该目录启动远程
+        # Claude Code。前端不支持该 scheme 的终端只会看到一段普通文字。
+        $sshPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cwd)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        $sshOpen = "$e]8;;pebrel-ssh://$sshPayload$e\"
+        $sshClose = "$e]8;;$e\"
+        $sshLink = "$sshOpen $e[$NebClaudeInk m$NebClaudeIcon $e[38;5;6mssh $sshClose"
+
         $boundary = if ($outermost) { "$e]133;A$([char]7)$e]2;NEBULA|$cwd|$branch$([char]7)" } else { '' }
         $leadingNewline = ''
         try {
@@ -526,11 +540,12 @@ $global:NebulaPromptTemplate = {
             $output = "$boundary$userPrompt"
         } elseif (-not (Get-NebulaBoolSetting 'powerline' $true)) {
             $branchText = if ($branch) { " ($branch)" } else { "" }
-            $output = "$leadingNewline$boundary$e[38;5;6m$loc$branchText $e[35m$NebPromptArrow $reset"
+            $output = "$leadingNewline$boundary$e[38;5;6m$loc$sshLink$branchText $e[35m$NebPromptArrow $reset"
         } else {
             $segs = New-Object System.Collections.ArrayList
             [void]$segs.Add(@{ bg=4; fg='38;5;0'; t=" $NebFolderIcon " })
             [void]$segs.Add(@{ bg=$null; fg='39'; t="  $loc  " })
+            [void]$segs.Add(@{ bg=$null; fg='38;5;6'; t=" $sshLink " })
             if ($branch) { [void]$segs.Add(@{ bg=$null; fg='38;5;6'; t=" $NebGitBranchIcon $branch  " }) }
             [void]$segs.Add(@{ bg=$null; fg='39'; t=" $NebClockIcon $time  " })
 
@@ -1203,6 +1218,30 @@ mod test {
     #[test]
     fn powershell_cat_defaults_to_utf8() {
         assert!(NEBULA_PROMPT_PS1.contains("PSDefaultParameterValues['Get-Content:Encoding']"));
+    }
+
+    /// 目录后面那枚 ssh 标签是提示符与宿主之间的契约：OSC 8 链接 + 内部
+    /// scheme（载荷 = base64url 本机目录），由 GPUI 壳的左键单击消费。
+    #[test]
+    fn powershell_prompt_carries_a_clickable_ssh_chip_after_the_cwd() {
+        assert!(NEBULA_PROMPT_PS1.contains(r#"$sshOpen = "$e]8;;pebrel-ssh://$sshPayload$e\""#));
+        // 标签前面那格用 `REMOTE_CLAUDE_CHIP_GLYPH` 同一码位：宿主按它认出这一格
+        // 并改画品牌图，两边对不上时这枚字形就会留在屏幕上。
+        assert!(NEBULA_PROMPT_PS1.contains(&format!(
+            "$global:NebClaudeIcon = [char]0x{:X}",
+            crate::tty::REMOTE_CLAUDE_CHIP_GLYPH as u32
+        )));
+        assert!(NEBULA_PROMPT_PS1.contains(
+            r#"$sshLink = "$sshOpen $e[$NebClaudeInk m$NebClaudeIcon $e[38;5;6mssh $sshClose""#
+        ));
+        assert!(NEBULA_PROMPT_PS1.contains(".TrimEnd('=').Replace('+', '-').Replace('/', '_')"));
+        let cwd_segment = NEBULA_PROMPT_PS1
+            .find(r#"t="  $loc  ""#)
+            .expect("the powerline prompt draws the directory segment");
+        let ssh_segment = NEBULA_PROMPT_PS1
+            .find(r#"t=" $sshLink ""#)
+            .expect("the ssh chip must be a prompt segment");
+        assert!(cwd_segment < ssh_segment, "the ssh chip belongs right after the directory");
     }
 
     #[test]

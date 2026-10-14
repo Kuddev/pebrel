@@ -20,6 +20,10 @@ param(
     [switch] $Force,
     [string] $OutputDirectory,
 
+    # 固定版本 OpenSSH 归档（Win32-OpenSSH 的 OpenSSH-Win64.zip / OpenSSH-ARM64.zip）。
+    # 省略时由 prepare-windows-openssh.ps1 按固定 SHA256 取用（本机缓存或下载）。
+    [string] $OpenSshArchivePath,
+
     # Cargo target directory to build into and package from. Defaults to the
     # repo's own `target/`.
     #
@@ -149,6 +153,20 @@ function Assert-FreshBinaries {
 
 if (-not $SkipBuild) {
     & (Join-Path $PSScriptRoot 'build-windows-product.ps1') -Configuration $Configuration -TargetDirectory $cargoTargetRoot
+}
+
+# 随包分发的回环 OpenSSH 服务端（需求 §6）：哈希与 PE 架构在
+# prepare-windows-openssh.ps1 里逐文件固定，已校验的文件原样复用。
+$openSshDirectory = Join-Path $targetRoot 'runtime\openssh'
+& (Join-Path $PSScriptRoot 'prepare-windows-openssh.ps1') -Destination $openSshDirectory `
+    -ArchivePath $OpenSshArchivePath -Architecture $Architecture | Out-Null
+$openSshFiles = @(Get-ChildItem -LiteralPath $openSshDirectory -File | Sort-Object Name)
+if ($openSshFiles.Count -eq 0 -or
+    -not (Test-Path -LiteralPath (Join-Path $openSshDirectory 'sshd.exe') -PathType Leaf)) {
+    throw "The prepared OpenSSH runtime is incomplete: $openSshDirectory"
+}
+foreach ($file in $openSshFiles) {
+    $manifest["runtime/openssh/$($file.Name)"] = $file.FullName
 }
 
 $missing = @($manifest.GetEnumerator() | Where-Object {

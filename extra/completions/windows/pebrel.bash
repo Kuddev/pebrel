@@ -19,6 +19,9 @@ _pebrel() {
             pebrel,agent)
                 cmd="pebrel__agent"
                 ;;
+            pebrel,claude)
+                cmd="pebrel__claude"
+                ;;
             pebrel,config)
                 cmd="pebrel__config"
                 ;;
@@ -312,6 +315,9 @@ _pebrel() {
                 ;;
             pebrel__help,agent)
                 cmd="pebrel__help__agent"
+                ;;
+            pebrel__help,claude)
+                cmd="pebrel__help__claude"
                 ;;
             pebrel__help,config)
                 cmd="pebrel__help__config"
@@ -677,7 +683,7 @@ _pebrel() {
 
     case "${cmd}" in
         pebrel)
-            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --config-file --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh help"
+            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --config-file --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh claude help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1040,6 +1046,31 @@ _pebrel() {
                     ;;
                 --timeout-ms)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__claude)
+            opts="-h --ssh --cwd --help [ARGS]..."
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --ssh)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cwd)
+                    COMPREPLY=()
+                    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+                        compopt -o plusdirs
+                    fi
                     return 0
                     ;;
                 *)
@@ -2581,7 +2612,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__help)
-            opts="ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh help"
+            opts="ctl env window tab pane agent migrate config plugin theme notify-test setup-ai ssh claude help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2681,6 +2712,20 @@ _pebrel() {
         pebrel__help__agent__wait)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        pebrel__help__claude)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

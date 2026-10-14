@@ -121,9 +121,36 @@ Keep the extracted directory structure intact:
 | `README.md` | overview and usage |
 | `runtime/pebrel-hook.exe` | AI turn-notification bridge (Claude Code / Codex) |
 | `runtime/conpty.dll` + `runtime/OpenConsole.exe` | modern ConPTY host (correct resize, fast tab spawn) |
+| `runtime/openssh/` | pinned OpenSSH server used by `pebrel claude --ssh` for the loopback channel |
 | `docs/CHANGELOG.md` + `docs/INSTALL.md` + `docs/lua-configuration.md` | release changes, installation, and Lua configuration |
 | `skills/pebrel-runtime/` | instructions for controlling Pebrel through its Runtime API |
 | `licenses/` | Pebrel and third-party license notices |
+
+### Remote Claude Code over SSH
+
+`pebrel claude --ssh <host>` runs Claude Code on a Linux server while the project
+stays on this computer. `--cwd <dir>` picks the local directory (default: the
+current one) and everything after `--` goes to Claude Code unchanged, for
+example:
+
+```text
+pebrel claude --ssh ipxair-cc --cwd C:\work\proj -- --resume
+```
+
+The server needs an SSH login that works without an interactive prompt, an
+installed Claude Code, and a completed `claude auth login`. Pebrel starts a
+temporary SSH server bound to `127.0.0.1` with freshly generated keys, forwards
+its port to the server's loopback, and points Claude Code's file and command
+work back at this computer through that channel. The session history lives in
+the server's `~/.claude`, grouped by a stable per-directory mirror path.
+
+The login key exists only for the session: it never touches this computer's disk
+and the server deletes its copy when the session ends. The loopback host key is
+removed with the session directory when the command ends, and reclaimed on the
+next run if Pebrel was killed. **While a session is running, the server can read
+and change files and run commands as this Windows user.** Only connect to a
+server you trust; close the command (Ctrl+C or exit Claude Code) to end the
+channel.
 
 ## Build from source
 

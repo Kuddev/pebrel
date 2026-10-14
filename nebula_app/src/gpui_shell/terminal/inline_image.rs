@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use gpui::RenderImage;
+use gpui::{Bounds, ContentMask, Corners, Pixels, RenderImage, Window, point, px, size};
 use image::{Frame, ImageFormat};
 
 const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
@@ -128,6 +128,49 @@ impl InlineImageStore {
             .retain(|(_, image)| image.abs_line.saturating_add(image.row_span) > scrollback_floor);
         self.decoded_bytes = self.images.iter().map(|(_, image)| image.decoded_bytes).sum();
         self.images.iter().map(|(_, image)| image.clone()).collect()
+    }
+}
+
+/// 画一帧的终端图片：只画与视口相交的那些，锚点是事件带来的绝对行。
+///
+/// 图片是普通 scrollback 内容，`clip` 之外的部分由内容掩码裁掉；GPUI 按
+/// RenderImage 的 id 缓存纹理，稳态滚动因此只是一次裁剪后的贴图绘制。
+pub(super) fn paint_frame(
+    window: &mut Window,
+    clip: Bounds<Pixels>,
+    line_height: Pixels,
+    viewport_top_abs: i64,
+    images: &[InlineImage],
+) {
+    if images.is_empty() {
+        return;
+    }
+    let device_scale = window.scale_factor().max(0.1);
+    let viewport_top = clip.origin.y.as_f32();
+    let viewport_bottom = viewport_top + clip.size.height.as_f32();
+    for inline in images {
+        let y = clip.origin.y + line_height * (inline.abs_line as i64 - viewport_top_abs) as f32;
+        let mut width = inline.display_width / device_scale;
+        let mut height = inline.display_height / device_scale;
+        let fit = (clip.size.width.as_f32() / width.max(1.0)).min(1.0);
+        width *= fit;
+        height *= fit;
+        let image_top = y.as_f32();
+        if image_top + height <= viewport_top || image_top >= viewport_bottom {
+            continue;
+        }
+        let target =
+            Bounds::new(point(clip.origin.x, y), size(px(width.max(1.0)), px(height.max(1.0))));
+        window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+            let _ = window.paint_image(
+                target,
+                target,
+                Corners::all(px(0.0)),
+                inline.image.clone(),
+                0,
+                false,
+            );
+        });
     }
 }
 

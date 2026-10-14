@@ -205,6 +205,12 @@ pub struct HintMatch {
 }
 
 impl HintMatch {
+    /// 内部链接（见 `terminal::osc_links::REMOTE_CLAUDE_SCHEME`）没有正则命中，
+    /// 只有 OSC 8 的范围：宿主用它给不需要修饰键的链接构造同一份悬停状态。
+    pub(crate) fn for_hyperlink(bounds: Match, hyperlink: Hyperlink, hint: Arc<Hint>) -> Self {
+        Self { bounds, hyperlink: Some(hyperlink), hint }
+    }
+
     #[inline]
     pub fn should_highlight(&self, point: Point, pointed_hyperlink: Option<&Hyperlink>) -> bool {
         self.hyperlink.as_ref() == pointed_hyperlink
@@ -517,7 +523,7 @@ pub fn highlighted_at_with_mouse_override<T>(
 /// Retrieve the hyperlink with its range, if there is one at the specified point.
 ///
 /// This will only return contiguous cells, even if another hyperlink with the same ID exists.
-fn hyperlink_at<T>(term: &Term<T>, point: Point) -> Option<(Hyperlink, Match)> {
+pub(crate) fn hyperlink_at<T>(term: &Term<T>, point: Point) -> Option<(Hyperlink, Match)> {
     // The caller derives `point` from a `SizeInfo` that can momentarily lead
     // the grid by a column/row during a resize or sidebar toggle (the
     // asymmetric-padding reflow lands a frame later). Indexing the grid with a

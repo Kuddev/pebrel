@@ -360,6 +360,63 @@ fn plain_click_and_wrong_modifier_do_not_open_links(cx: &mut TestAppContext) {
     }
 }
 
+/// 提示符里的 ssh 标签是**单击**开的：命中 `pebrel-ssh://` 就发出
+/// `RemoteClaudeRequest`，把链接里的本机目录交给宿主去选主机；拖动或松手
+/// 离开标签都不触发。
+#[gpui::test]
+fn plain_click_on_the_prompt_ssh_chip_requests_remote_claude(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    use std::cell::RefCell;
+
+    let cwd = r"E:\work\proj";
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cwd);
+    let output = format!("\x1b]8;;pebrel-ssh://{payload}\x1b\\ ssh \x1b]8;;\x1b\\");
+    let (view, mut window, _) = link_fixture(cx, output.as_bytes());
+    window.update(|_, cx| {
+        cx.global_mut::<Settings>().ui_language = crate::i18n::UiLanguage::ZhCn;
+    });
+    let seen: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let recorder = seen.clone();
+    let _subscription = window.update(|_, cx| {
+        cx.subscribe(&view, move |_, event: &TerminalViewEvent, _| {
+            if let TerminalViewEvent::RemoteClaudeRequest { cwd } = event {
+                recorder.borrow_mut().push(cwd.clone());
+            }
+        })
+    });
+
+    let chip = cell(&view, &window, 2);
+    // 普通悬停就给出可读预览：**不需要** Ctrl/Command。
+    window.simulate_mouse_move(chip, None, Modifiers::default());
+    assert_eq!(
+        view.read_with(&window, |view, _| view
+            .link_hover
+            .as_ref()
+            .map(|hover| hover.preview.clone())),
+        Some(
+            crate::i18n::UiLanguage::ZhCn
+                .text(crate::i18n::Message::RemoteClaudePromptHint)
+                .to_owned()
+        )
+    );
+
+    window.simulate_mouse_down(chip, MouseButton::Left, Modifiers::default());
+    assert!(view.read_with(&window, |view, _| view.pending_remote_claude.is_some()));
+    window.simulate_mouse_up(chip, MouseButton::Left, Modifiers::default());
+    assert_eq!(seen.borrow().as_slice(), [cwd.to_owned()]);
+    assert!(view.read_with(&window, |view, _| view.pending_remote_claude.is_none()));
+    // 它不是外部链接：系统打开器一律不动。
+    assert_eq!(clipboard(&mut window).as_deref(), Some("before"));
+
+    // 按下后拖到别处再松手 = 取消，不发请求。
+    seen.borrow_mut().clear();
+    let away = cell(&view, &window, 20);
+    window.simulate_mouse_down(chip, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_move(away, Some(MouseButton::Left), Modifiers::default());
+    window.simulate_mouse_up(away, MouseButton::Left, Modifiers::default());
+    assert!(seen.borrow().is_empty());
+}
+
 #[gpui::test]
 fn link_drag_cannot_retarget_or_leave_a_pending_open(cx: &mut TestAppContext) {
     let (view, mut window, _) = link_fixture(cx, b"https://one.test https://two.test");

@@ -504,6 +504,7 @@ jobs:
         run: |
           ./scripts/tests/installer.tests.ps1 -TargetDirectory target
           ./scripts/tests/package-release.tests.ps1 -TargetDirectory target
+          ./scripts/tests/openssh-runtime.tests.ps1
       - name: Package ZIP and installer
         shell: pwsh
         run: |
@@ -578,6 +579,7 @@ jobs:
         run: |
           ./scripts/prepare-windows-runtime.ps1 -Destination assets/windows/conhost -Architecture arm64
           ./scripts/tests/windows-runtime.tests.ps1 -Architecture arm64
+          ./scripts/tests/openssh-runtime.tests.ps1 -Architecture arm64
           ./scripts/tests/windows-package-architecture.tests.ps1
       - name: Build native ARM64 application and hook
         shell: pwsh

@@ -22,6 +22,7 @@ on:
       - "scripts/build-*"
       - "scripts/installer*"
       - "scripts/prepare-windows-runtime.ps1"
+      - "scripts/prepare-windows-openssh.ps1"
       - "scripts/preview_release.py"
       - "scripts/conformance/**"
       - "scripts/tests/test_preview_release.py"
