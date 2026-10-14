@@ -111,6 +111,12 @@ their rationale. A change to a budget or rule is a dedicated governance change, 
 an unexplained edit hidden inside a feature PR. No automatic exception-adding or
 budget-increasing command is provided.
 
+The maintainer-controlled `size-exempt` label applies only to the default PR
+changed-source-line threshold described in the contribution guide. It cannot waive
+the absolute PR-size ceiling, per-file architecture limits, dependency rules or
+other required checks. A coherent feature module is the review unit; line counts
+do not justify mechanical splitting or establish that a change is well designed.
+
 Emergency/security repairs must not be forced into a dangerous broad refactor just
 to preserve a flawed metric. Escalate the demonstrated conflict to a maintainer,
 record the scoped policy decision and its regression test, then repair the contract.
