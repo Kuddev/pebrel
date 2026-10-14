@@ -5,15 +5,6 @@ use crate::i18n::Message;
 /// 折叠箭头的固定布局槽。图标是 SVG，不应借任一字体的 advance 决定留白。
 const TABS_DISCLOSURE_SLOT_W: f32 = 24.0;
 
-/// 标签行的水平内边距。图标列从这里开始，并与上方折叠箭头对齐。
-const TAB_ROW_PAD_X: f32 = 8.0;
-/// 标签色光条画在行首内边距里，右缘与图标之间留 `TAB_STRIP_GAP`。旧壳
-/// 的光条（左内缩 4）配的是 14px 内容起点；照搬到 8px 内边距会让光条
-/// 贴住图标，所以位置从内边距反推，不另立一个字面量。
-const TAB_STRIP_W: f32 = 2.5;
-const TAB_STRIP_GAP: f32 = 4.5;
-const TAB_STRIP_LEFT: f32 = TAB_ROW_PAD_X - TAB_STRIP_GAP - TAB_STRIP_W;
-
 /// `SidebarActivity::WaitingInput` / `Attention` 共用的字位：Nerd Font
 /// `nf-fa-hand_paper_o`（开掌）。已核对打包字体
 /// `assets/fonts/MapleMonoNormal-NF-CN-Regular.ttf` 的 cmap 覆盖这个码位；换字体
@@ -263,8 +254,13 @@ impl NebulaWorkspace {
                     row_w * 0.45,
                 );
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
-                // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7，与旧壳
-                // 同源；水平位置见 `TAB_STRIP_LEFT`）。默认标签不占这层视觉层级。
+                // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7、宽 2.5，
+                // 与旧壳 strip 同源）。默认标签不占这层视觉层级。
+                //
+                // 光条贴住行左缘，不沿用旧壳的左内缩 4：旧壳内容起点是 14px，这里
+                // 是 `px_2` = 0.5rem，rem 跟随界面字号（默认 14 → 7px，最小 10 →
+                // 5px）。内缩会让光条贴上图标；贴边时间隙就是内边距减光条宽，随
+                // 字号一起缩放。
                 let strip = tab_color.map(|color| gpui::Rgba {
                     r: color.r as f32 / 255.0,
                     g: color.g as f32 / 255.0,
@@ -370,7 +366,7 @@ impl NebulaWorkspace {
                 // 撑开的行会重新引入上面那个症状。
                 .overflow_hidden()
                 .gap_2()
-                .px(px(TAB_ROW_PAD_X))
+                .px_2()
                 .h(px(row_height))
                 .items_center()
                 // 旧壳 pill 圆角 = UI_CORNER_RADIUS_LOGICAL(8)，rounded_md(6)
@@ -424,9 +420,9 @@ impl NebulaWorkspace {
                     row.child(
                         div()
                             .absolute()
-                            .left(px(TAB_STRIP_LEFT))
+                            .left_0()
                             .top(px(7.0))
-                            .w(px(TAB_STRIP_W))
+                            .w(px(2.5))
                             .h(px(row_height - 14.0))
                             .rounded_full()
                             .bg(color),
