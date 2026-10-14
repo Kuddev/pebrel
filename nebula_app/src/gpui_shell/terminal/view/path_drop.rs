@@ -101,6 +101,7 @@ impl TerminalView {
             );
             return;
         };
+        self.cancel_auto_continue();
         let distro = self
             .exec_context
             .as_ref()

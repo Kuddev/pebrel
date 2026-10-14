@@ -210,7 +210,7 @@ impl Execution {
         args: &[&str],
         deadline: Instant,
         limit: usize,
-        cancelled: &dyn Fn() -> bool,
+        cancelled: &(dyn Fn() -> bool + Sync),
     ) -> Option<Vec<u8>> {
         let mut argv =
             ["git", "-c", "core.warnAmbiguousRefs=true", "-c", "completion.snapshot=true"]
@@ -229,6 +229,43 @@ impl Execution {
             true,
             cancelled,
         )
+    }
+
+    pub(crate) fn git_pair(
+        &self,
+        cwd: &str,
+        directories: &[String],
+        first_args: &[&str],
+        second_args: &[&str],
+        deadline: Instant,
+        limit: usize,
+        cancelled: &(dyn Fn() -> bool + Sync),
+    ) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        let Self::Process { context, scope: SuggestEnv::Local } = self else {
+            let first = self.git(cwd, directories, first_args, deadline, limit, cancelled);
+            let second = first
+                .as_ref()
+                .and_then(|_| self.git(cwd, directories, second_args, deadline, limit, cancelled));
+            return (first, second);
+        };
+        let first_execution = Self::Process { context: context.clone(), scope: SuggestEnv::Local };
+        let second_execution = Self::Process { context: context.clone(), scope: SuggestEnv::Local };
+        std::thread::scope(|threads| {
+            let first = std::thread::Builder::new().spawn_scoped(threads, move || {
+                first_execution.git(cwd, directories, first_args, deadline, limit, cancelled)
+            });
+            let Ok(first) = first else {
+                return (None, None);
+            };
+            let second = std::thread::Builder::new().spawn_scoped(threads, move || {
+                second_execution.git(cwd, directories, second_args, deadline, limit, cancelled)
+            });
+            let Ok(second) = second else {
+                let _ = first.join();
+                return (None, None);
+            };
+            (first.join().unwrap_or(None), second.join().unwrap_or(None))
+        })
     }
 
     pub(super) fn read(

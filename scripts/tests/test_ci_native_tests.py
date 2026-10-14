@@ -185,6 +185,7 @@ class NativeSuiteTests(unittest.TestCase):
                 "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)"
                           " or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll)"
                           " or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)"
+                          " or test(ai_auto_continue_setting_is_searchable_and_has_a_visible_switch)"
                           " or test(environment_refresh_switch_is_searchable_and_persists)"
                           " or test(pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url)"
                           " or test(capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection)"

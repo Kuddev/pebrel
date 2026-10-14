@@ -1,5 +1,6 @@
 """Bounded, fail-open provider hook delivery to the owning SSH terminal."""
 import base64
+import errno
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -147,7 +148,7 @@ def send(source, native, mode, payload, token):
         if len(envelope) > MAX_ENVELOPE:
             # Lifecycle must still arrive when a tool or answer is huge. Keep
             # protocol identities and drop content, without inventing a result.
-            keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
+            keep = ("hook_event_name", "type", "kind", "session_id", "session_file", "transcript_path", "thread-id", "turn_id", "turn-id", "prompt_id", "source", "bridge_instance", "bridge_sequence", "event_id", "notification_type", "permission_mode", "stop_reason", "error", "background_tasks", "agent_id", "agent_type")
             question_input = payload.get("tool_input") if payload.get("tool_name") in ("request_user_input", "AskUserQuestion") else None
             tool_name = payload.get("tool_name")
             payload = {key: payload[key] for key in keep if key in payload}
@@ -157,11 +158,20 @@ def send(source, native, mode, payload, token):
         if len(envelope) > MAX_ENVELOPE:
             return
         osc = b"\x1b]777;nebula-hook;" + token.encode() + b";" + base64.b64encode(envelope) + b"\x07"
-        write_terminal(osc)
+        write_terminal(osc, source)
 
 
-def write_terminal(osc):
-    fd = os.open("/dev/tty", os.O_WRONLY | os.O_NONBLOCK)
+def write_terminal(osc, source=None):
+    try:
+        fd = os.open("/dev/tty", os.O_WRONLY | os.O_NONBLOCK)
+    except OSError as error:
+        if source != "claude" or error.errno != errno.ENXIO:
+            raise
+        # Claude runs hooks without a controlling terminal. Its interactive
+        # output path accepts allowlisted OSC 777, including on StopFailure.
+        # Only fall back before writing any bytes, never after a partial frame.
+        print(json.dumps({"terminalSequence": osc.decode("ascii")}), flush=True)
+        return
     offset = 0
     deadline = time.monotonic() + 0.5
     try:

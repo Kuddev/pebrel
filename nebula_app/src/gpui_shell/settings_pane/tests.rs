@@ -329,6 +329,67 @@ fn ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch(
     cx.update(|_, cx| assert!(!crate::gpui_shell::config::ctrl_wheel_font_zoom(cx)));
 }
 
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn ai_auto_continue_setting_is_searchable_and_has_a_visible_switch(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    // 点击开关会写 `ai_auto_continue=`：与 theme studio 夹具同一把锁，
+    // 并原样恢复用户的设置文件。
+    let _fixture_guard = lock_theme_studio();
+    let _guard = SettingsBytesGuard::capture();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        let mut settings = crate::gpui_shell::config::Settings::load(ThemeName::Nord);
+        settings.ai_auto_continue = true;
+        cx.set_global(settings);
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, _| {
+            pane.runtime = RuntimeSettings::from_raw(&nebula_settings::RawSettings::default());
+        });
+        pane_out = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("自动续跑", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 2);
+    // 未改动时开关跟随出厂默认（开启），重置按钮回写 "1"。
+    assert_eq!(
+        pane.read_with(cx, |pane, _| pane.setting_override("ai_auto_continue")),
+        Some((false, "1".to_owned()))
+    );
+    let bounds = cx
+        .debug_bounds("nebula-switch-ai_auto_continue")
+        .expect("Claude auto continue switch 已渲染");
+    assert!(bounds.size.width > px(0.0) && bounds.size.height > px(0.0));
+    assert!(bounds.origin.y >= px(0.0) && bounds.bottom() <= px(1600.0));
+
+    // 点击必须真的落到运行时字段上：关闭后该键变脏，重置目标仍是 "1"。
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(!pane.read_with(cx, |pane, _| pane.runtime.ai_auto_continue));
+    assert_eq!(
+        pane.read_with(cx, |pane, _| pane.setting_override("ai_auto_continue")),
+        Some((true, "1".to_owned()))
+    );
+    cx.update(|_, cx| {
+        assert!(!cx.global::<crate::gpui_shell::config::Settings>().ai_auto_continue)
+    });
+}
+
 #[test]
 fn settings_nav_visibility_hides_providers_and_keeps_stable_routes() {
     let visibility: Vec<_> = (0..SECTION_IDS.len()).map(is_nav_section_visible).collect();

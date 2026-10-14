@@ -75,6 +75,7 @@ struct StagedImage {
 impl TerminalView {
     pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(payload) = cx.read_from_clipboard().and_then(clipboard_payload) else { return };
+        self.cancel_auto_continue();
         match payload {
             ClipboardPayload::Text(text) => {
                 let lines = paste_line_count(&text);
