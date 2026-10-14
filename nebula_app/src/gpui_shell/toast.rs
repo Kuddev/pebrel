@@ -16,12 +16,13 @@
 //! 与旧壳合同的已知差异：默认停留 5s（旧壳 4.2s）；同屏保留最新三条，
 //! 重复冷却在本层补齐（600ms，同文本）。
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _,
-    Window, div, px,
+    Window, WindowId, div, px,
 };
 use gpui_component::notification::Notification;
 use gpui_component::{Root, WindowExt as _};
@@ -52,8 +53,28 @@ const TOAST_MAX_WIDTH: f32 = 440.0;
 /// 一眼；无人值守时也保证自己退场。手动点掉仍然立刻生效。
 const BANNER_TTL: Duration = Duration::from_secs(90);
 
-static LAST_TOAST: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 static PANE_BANNERS: Mutex<PaneBannerGate> = Mutex::new(PaneBannerGate { recent: Vec::new() });
+
+/// Each open window owns its own most recent toast. The App owns this gate and
+/// its close subscription, so separate Apps and closed windows retain no state.
+struct ToastGate {
+    recent: HashMap<WindowId, (String, Instant)>,
+    _closed: gpui::Subscription,
+}
+
+impl gpui::Global for ToastGate {}
+
+impl ToastGate {
+    fn is_duplicate(&mut self, window_id: WindowId, text: &str, now: Instant) -> bool {
+        let duplicate = self.recent.get(&window_id).is_some_and(|(previous, born)| {
+            previous == text && now.saturating_duration_since(*born) < DUPLICATE_COOLDOWN
+        });
+        if !duplicate {
+            self.recent.insert(window_id, (text.to_owned(), now));
+        }
+        duplicate
+    }
+}
 
 /// A component notification identity, not a separate queue or lifetime manager.
 struct AiToast;
@@ -103,15 +124,18 @@ impl PaneBannerGate {
     }
 }
 
-fn is_duplicate(text: &str) -> bool {
-    let mut last = LAST_TOAST.lock().unwrap_or_else(|poison| poison.into_inner());
-    let duplicate = last
-        .as_ref()
-        .is_some_and(|(prev, born)| prev == text && born.elapsed() < DUPLICATE_COOLDOWN);
-    if !duplicate {
-        *last = Some((text.to_owned(), Instant::now()));
+fn is_duplicate(window: &Window, cx: &mut App, text: &str) -> bool {
+    if !cx.has_global::<ToastGate>() {
+        let closed = cx.on_window_closed(|cx, window_id| {
+            cx.global_mut::<ToastGate>().recent.remove(&window_id);
+        });
+        cx.set_global(ToastGate { recent: HashMap::new(), _closed: closed });
     }
-    duplicate
+    cx.global_mut::<ToastGate>().is_duplicate(
+        window.window_handle().window_id(),
+        text,
+        Instant::now(),
+    )
 }
 
 fn note(kind: ToastKind, text: String) -> Notification {
@@ -183,7 +207,7 @@ pub fn render_layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
 /// 弹一条短提示（默认自动消失）。空文本与 600ms 内的重复文本静默丢弃。
 pub fn toast(window: &mut Window, cx: &mut App, kind: ToastKind, text: impl Into<String>) {
     let text = text.into();
-    if text.trim().is_empty() || is_duplicate(&text) {
+    if text.trim().is_empty() || is_duplicate(window, cx, &text) {
         return;
     }
     log::info!("toast [{kind:?}]: {text}");
@@ -450,14 +474,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duplicate_gate_blocks_only_rapid_identical_text() {
-        // 进程级状态：用本测试独有的文本，别的测试并发跑也不会撞。
-        assert!(!is_duplicate("toast-dup-gate-a"));
-        assert!(is_duplicate("toast-dup-gate-a"));
-        assert!(!is_duplicate("toast-dup-gate-b"), "不同文本不受冷却影响");
-    }
-
-    #[test]
     fn pane_banners_keep_distinct_sources_and_attention() {
         let now = Instant::now();
         let mut gate = PaneBannerGate::default();
@@ -521,6 +537,49 @@ mod tests {
             cx.run_until_parked();
             cx.background_executor.advance_clock(Duration::from_millis(200));
             cx.run_until_parked();
+        }
+
+        #[gpui::test]
+        fn duplicate_gate_is_owned_by_each_open_window(cx: &mut TestAppContext) {
+            initialize(cx, true);
+            let (_, first) =
+                cx.add_window_view(|window, cx| Root::new(cx.new(|_| Empty), window, cx));
+            let mut first = first.clone();
+            let (_, second) =
+                cx.add_window_view(|window, cx| Root::new(cx.new(|_| Empty), window, cx));
+            let mut second = second.clone();
+            let first_id = first.update(|window, cx| {
+                toast(window, cx, ToastKind::Success, "Copied synthetic selection");
+                window.window_handle().window_id()
+            });
+            let second_id = second.update(|window, cx| {
+                toast(window, cx, ToastKind::Success, "Copied synthetic selection");
+                window.window_handle().window_id()
+            });
+            assert_eq!(ids(&mut first).len(), 1);
+            assert_eq!(ids(&mut second).len(), 1, "another window reports its own copy");
+            for window in [&mut first, &mut second] {
+                window.update(|window, cx| {
+                    toast(window, cx, ToastKind::Success, "Copied synthetic selection");
+                });
+                assert_eq!(ids(window).len(), 1, "same-window cooldown remains intact");
+            }
+            cx.update(|cx| {
+                let gate = cx.global_mut::<ToastGate>();
+                let now = Instant::now();
+                assert!(!gate.is_duplicate(first_id, "Different result", now));
+                assert!(gate.is_duplicate(first_id, "Different result", now));
+                assert!(!gate.is_duplicate(first_id, "Different result", now + DUPLICATE_COOLDOWN));
+                assert_eq!(gate.recent.len(), 2);
+            });
+            first.update(|window, _| window.remove_window());
+            cx.run_until_parked();
+            cx.update(|cx| {
+                let gate = cx.global::<ToastGate>();
+                assert!(!gate.recent.contains_key(&first_id), "closed-window state is released");
+                assert!(gate.recent.contains_key(&second_id));
+                assert_eq!(gate.recent.len(), 1);
+            });
         }
 
         #[gpui::test]
