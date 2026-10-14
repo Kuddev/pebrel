@@ -34,6 +34,7 @@ pub(super) fn connect(endpoint: Endpoint, destination: &str) -> Result<DynamicAg
 
 #[derive(Clone, Default)]
 pub(super) struct ServerOptions {
+    pub username: Option<String>,
     pub key: Option<PublicKey>,
     pub password: Option<String>,
     pub second_factor: bool,
@@ -43,6 +44,7 @@ pub(super) struct ServerOptions {
 
 #[derive(Default)]
 pub(super) struct ServerStats {
+    pub password_users: Mutex<Vec<String>>,
     pub offered: Mutex<Vec<PublicKey>>,
     pub passwords: AtomicUsize,
     pub accepted: AtomicUsize,
@@ -108,13 +110,18 @@ impl server::Handler for Server {
         self.auth_publickey(user, &PublicKey::new(cert.public_key().clone(), "")).await
     }
 
-    async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
+    async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         self.stats.passwords.fetch_add(1, Ordering::SeqCst);
-        Ok(if self.options.password.as_deref() == Some(password) {
-            Auth::Accept
-        } else {
-            Auth::reject()
-        })
+        self.stats.password_users.lock().unwrap().push(user.to_owned());
+        Ok(
+            if self.options.password.as_deref() == Some(password)
+                && self.options.username.as_deref().is_none_or(|expected| expected == user)
+            {
+                Auth::Accept
+            } else {
+                Auth::reject()
+            },
+        )
     }
 
     async fn channel_open_direct_tcpip(
