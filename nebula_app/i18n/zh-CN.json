@@ -471,6 +471,8 @@
     "preview_limited": "此文档较大，富文本预览已缩短。切换到编辑可查看已加载的源码。"
   },
   "commands": {
+    "input_copied": "已复制",
+    "input_cut": "已剪切",
     "select": "多选",
     "select_visible": "选择当前列表",
     "delete_selected": "删除（{count}）",
