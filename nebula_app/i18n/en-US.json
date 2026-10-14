@@ -469,6 +469,8 @@
     "preview_limited": "The rich preview is shortened for this large document. Switch to Edit to read the loaded source."
   },
   "commands": {
+    "input_copied": "Copied",
+    "input_cut": "Cut to clipboard",
     "select": "Select",
     "select_visible": "Select results",
     "delete_selected": "Delete ({count})",

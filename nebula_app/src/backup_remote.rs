@@ -17,6 +17,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use log::warn;
 
+#[cfg(not(test))]
+use crate::platform::credentials;
+#[cfg(not(test))]
+use std::env::var as credential_environment;
+// Exercise the public backup operations without reading the host's credentials
+// or environment. The production build uses the existing native adapter above.
+#[cfg(test)]
+use credential_tests::{self as credentials, environment as credential_environment};
+
+#[cfg(test)]
+mod credential_tests;
 mod listing;
 pub(crate) mod preferences;
 pub(crate) use listing::Snapshot;
@@ -33,10 +44,8 @@ const ARCHIVE_SUFFIX: &str = ".nbk";
 /// 每个远端保留的归档份数。
 pub(crate) const KEEP_ARCHIVES: usize = 10;
 
-/// Windows 凭据管理器条目（与 `sync.rs` 的通用 DPAPI 存取同一后端）。
-#[cfg(windows)]
+/// 系统安全凭据存储中的条目；保留已有 Windows target 名称。
 const WEBDAV_PASSWORD_TARGET: &str = "Pebrel Backup WebDAV Password";
-#[cfg(windows)]
 const S3_SECRET_TARGET: &str = "Pebrel Backup S3 Secret Key";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -237,7 +246,7 @@ impl BackupRemoteConfig {
     }
 }
 
-// ---- 凭据（Windows 凭据管理器；其余平台用环境变量） ----
+// ---- 凭据（系统安全存储；环境变量优先） ----
 
 pub fn has_webdav_password() -> bool {
     webdav_password().is_some()
@@ -247,66 +256,34 @@ pub fn has_s3_secret() -> bool {
     s3_secret().is_some()
 }
 
-#[cfg(windows)]
 pub fn store_webdav_password(username: &str, secret: &str) -> Result<(), String> {
-    crate::ssh_credentials::windows_store::save_secret(
-        WEBDAV_PASSWORD_TARGET,
-        username,
-        secret.trim().as_bytes(),
-    )
-    .map_err(|err| format!("保存到凭据管理器失败：{err}"))
+    store_secret(WEBDAV_PASSWORD_TARGET, username, secret)
 }
 
-#[cfg(windows)]
 pub fn store_s3_secret(access_key: &str, secret: &str) -> Result<(), String> {
-    crate::ssh_credentials::windows_store::save_secret(
-        S3_SECRET_TARGET,
-        access_key,
-        secret.trim().as_bytes(),
-    )
-    .map_err(|err| format!("保存到凭据管理器失败：{err}"))
+    store_secret(S3_SECRET_TARGET, access_key, secret)
 }
 
-#[cfg(not(windows))]
-pub fn store_webdav_password(_username: &str, _secret: &str) -> Result<(), String> {
-    Err("此平台请设环境变量 PEBREL_BACKUP_WEBDAV_PASSWORD".to_owned())
-}
-
-#[cfg(not(windows))]
-pub fn store_s3_secret(_access_key: &str, _secret: &str) -> Result<(), String> {
-    Err("此平台请设环境变量 PEBREL_BACKUP_S3_SECRET".to_owned())
+fn store_secret(target: &str, username: &str, secret: &str) -> Result<(), String> {
+    credentials::store_with_username(target, username, secret.trim().as_bytes())
+        .map_err(|err| format!("保存到凭据管理器失败：{err}"))
 }
 
 fn webdav_password() -> Option<String> {
-    for name in ["PEBREL_BACKUP_WEBDAV_PASSWORD"] {
-        if let Ok(password) = std::env::var(name) {
-            if !password.trim().is_empty() {
-                return Some(password.trim().to_owned());
-            }
-        }
-    }
-    #[cfg(windows)]
-    if let Ok(Some(secret)) =
-        crate::ssh_credentials::windows_store::load_secret(WEBDAV_PASSWORD_TARGET)
-    {
-        return String::from_utf8(secret).ok();
-    }
-    None
+    load_secret(WEBDAV_PASSWORD_TARGET, "PEBREL_BACKUP_WEBDAV_PASSWORD")
 }
 
 fn s3_secret() -> Option<String> {
-    for name in ["PEBREL_BACKUP_S3_SECRET"] {
-        if let Ok(secret) = std::env::var(name) {
-            if !secret.trim().is_empty() {
-                return Some(secret.trim().to_owned());
-            }
+    load_secret(S3_SECRET_TARGET, "PEBREL_BACKUP_S3_SECRET")
+}
+
+fn load_secret(target: &str, environment: &str) -> Option<String> {
+    if let Ok(secret) = credential_environment(environment) {
+        if !secret.trim().is_empty() {
+            return Some(secret.trim().to_owned());
         }
     }
-    #[cfg(windows)]
-    if let Ok(Some(secret)) = crate::ssh_credentials::windows_store::load_secret(S3_SECRET_TARGET) {
-        return String::from_utf8(secret).ok();
-    }
-    None
+    credentials::load(target).ok().flatten().and_then(|secret| String::from_utf8(secret).ok())
 }
 
 /// 当前协议的密文字段是否已经有可用凭据（设置页占位文案用）。
