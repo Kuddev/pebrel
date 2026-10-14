@@ -21,6 +21,7 @@ pub(crate) fn prepare_local_pty(options: &mut nebula_terminal::tty::Options) {
 
 #[cfg(windows)]
 fn prepare_windows_local_pty(options: &mut nebula_terminal::tty::Options, refresh: bool) {
+    super::shell::prepare_startup_directory(options);
     if refresh && let Err(error) = nebula_terminal::tty::refresh_environment(options) {
         log::warn!("Could not refresh the Windows environment for a new pane: {error}");
     }

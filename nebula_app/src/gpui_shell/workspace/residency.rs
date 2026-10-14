@@ -101,6 +101,15 @@ impl NebulaWorkspace {
                 GpuiShellEvent::RuntimeControl(dispatch) => {
                     self.queue_or_answer_runtime(dispatch.clone(), cx);
                 },
+                GpuiShellEvent::ElevatedLaunch(request) => {
+                    let request = request.clone();
+                    cx.defer(move |cx| {
+                        super::windowing::dispatch_shell_events(
+                            vec![GpuiShellEvent::ElevatedLaunch(request)],
+                            cx,
+                        )
+                    });
+                },
                 // 更新通知由进程级 windowing dispatcher 选择 MRU 窗口；这个
                 // 旧的 workspace-local 分发器没有 Window，不能在此打开 Dialog。
                 GpuiShellEvent::UpdateAvailable(_)
