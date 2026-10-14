@@ -227,8 +227,9 @@ pub(super) fn chrome_control_centers(
     let min_x = max_x - s(46.0);
     // Drawer view toggles sit left of the window controls, separated by a gap
     // so the destructive (close) and modal (panel) clusters don't read as one.
-    let git_x = min_x - s(58.0);
-    let files_x = git_x - s(42.0);
+    // Increased spacing to avoid shadow clipping against rounded corners on macOS.
+    let git_x = min_x - s(72.0);
+    let files_x = git_x - s(52.0);
 
     [
         (ChromeHit::PanelFiles, files_x, center_y),
