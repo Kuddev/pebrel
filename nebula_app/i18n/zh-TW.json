@@ -177,7 +177,7 @@
       "save_failed": "無法變更啟動設定：{error}"
     },
     "agents": {
-      "title": "程式設計代理程式",
+      "title": "代理程式 CLI & TUI",
       "description": "在 Pebrel 中顯示執行狀態、完成通知和授權請求。Claude Code 與 Codex 預設開啟。",
       "refresh": "重新整理",
       "platform_unsupported": "目前只有 Windows 支援自動安裝 hooks。",

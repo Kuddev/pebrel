@@ -202,7 +202,7 @@
       "save_failed": "Could not change startup settings: {error}"
     },
     "agents": {
-      "title": "Coding agents",
+      "title": "Agents CLI & TUI",
       "description": "Show agent activity, completion and approval requests in Pebrel. Claude Code and Codex are enabled by default.",
       "refresh": "Refresh",
       "platform_unsupported": "Automatic hook installation is currently available on Windows.",

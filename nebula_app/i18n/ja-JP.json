@@ -194,7 +194,7 @@
       "save_failed": "起動設定を変更できませんでした: {error}"
     },
     "agents": {
-      "title": "コーディングエージェント",
+      "title": "エージェント CLI & TUI",
       "description": "エージェントの動作状況、完了、承認リクエストを Pebrel に表示します。Claude Code と Codex は既定で有効です。",
       "refresh": "更新",
       "platform_unsupported": "フックの自動インストールは現在 Windows でのみ利用できます。",
