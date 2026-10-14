@@ -34,6 +34,7 @@ pub(crate) fn dispatch_shell_events(events: Vec<GpuiShellEvent>, cx: &mut App) {
                 }
             },
             GpuiShellEvent::RuntimeControl(dispatch) => dispatch_runtime(dispatch, cx),
+            GpuiShellEvent::ElevatedLaunch(request) => elevated_launch::dispatch(request, cx),
             GpuiShellEvent::UpdateInstalled(notes) => {
                 update_dialog::queue_installed_notes(notes, cx);
             },
