@@ -328,7 +328,7 @@ pub fn card_content_bg(cx: &App) -> Hsla {
         .try_global::<crate::gpui_shell::config::Settings>()
         .map(|s| s.palette.background.into())
         .unwrap_or_else(|| cx.theme().background);
-    bg.a *= crate::gpui_shell::wallpaper::chrome_surface_opacity(cx);
+    bg.a *= crate::gpui_shell::wallpaper::card_surface_opacity(cx);
     bg
 }
 

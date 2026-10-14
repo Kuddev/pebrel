@@ -2,7 +2,10 @@
 #[cfg(all(windows, feature = "video-background"))]
 #[path = "animated/native.rs"]
 mod implementation;
-#[cfg(not(all(windows, feature = "video-background")))]
+#[cfg(all(target_os = "macos", feature = "video-background"))]
+#[path = "animated/av_player.rs"]
+mod implementation;
+#[cfg(not(all(any(windows, target_os = "macos"), feature = "video-background")))]
 #[path = "animated/unavailable.rs"]
 mod implementation;
 

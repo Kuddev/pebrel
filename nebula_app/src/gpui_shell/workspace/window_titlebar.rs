@@ -108,7 +108,16 @@ impl NebulaWorkspace {
         let title_bar_height = effective_title_bar_height(self.density, native_layout);
         let bar = TitleBar::new()
             .h(px(title_bar_height))
-            .when(!settings_active, |bar| bar.bg(gpui::transparent_black()).border_b_0())
+            .when(!settings_active, |bar| {
+                // The window root normally supplies the shell color here; a
+                // native wallpaper below GPUI clears it, so the bar paints its own.
+                let fill = if crate::gpui_shell::wallpaper::native_underlay_active(cx) {
+                    cx.theme().title_bar
+                } else {
+                    gpui::transparent_black()
+                };
+                bar.bg(fill).border_b_0()
+            })
             .when(settings_active, |bar| {
                 bar.border_b_1().border_color(crate::gpui_shell::theme::settings_hairline(cx))
             })

@@ -175,6 +175,8 @@ pub struct SnapCell {
     /// 前端要它来算对比度：应用写死的前景色是否可读，取决于它**这一格**底下
     /// 是什么颜色，不是取决于主题底色。
     pub bg: Color,
+    /// Whether `fg` and `bg` were swapped by INVERSE.
+    pub inverse: bool,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -385,6 +387,7 @@ impl RenderSnapshot {
                 text,
                 fg,
                 bg,
+                inverse: flags.contains(Flags::INVERSE),
                 bold,
                 italic: flags.intersects(Flags::ITALIC),
                 underline: flags.intersects(Flags::ALL_UNDERLINES),
