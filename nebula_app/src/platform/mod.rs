@@ -46,6 +46,8 @@ pub mod shell_integration;
 #[cfg(unix)]
 mod sound;
 pub(crate) mod ssh_agent;
+#[cfg(all(test, target_os = "macos"))]
+mod ssh_config_probe_tests;
 pub mod startup;
 #[cfg(unix)]
 pub(crate) mod tray_native;

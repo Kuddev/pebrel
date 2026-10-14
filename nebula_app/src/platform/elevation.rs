@@ -6,6 +6,9 @@ use std::path::Path;
 
 pub(crate) const SUPPORTED: bool = cfg!(windows);
 
+#[cfg(feature = "gpui-shell")]
+pub(crate) mod handover;
+
 /// A failed token query must not publish a potentially privileged control plane.
 pub(crate) fn requires_isolation() -> bool {
     is_elevated().unwrap_or(true)

@@ -126,6 +126,17 @@ mod tests {
         }
     }
 
+    struct TransferredPortsProbe {
+        terminal: Entity<TerminalView>,
+        render_terminal: bool,
+    }
+
+    impl Render for TransferredPortsProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+            div().size_full().children(self.render_terminal.then(|| self.terminal.clone()))
+        }
+    }
+
     fn click(cx: &mut gpui::VisualTestContext, selector: &'static str) {
         let bounds = cx.debug_bounds(selector).expect("SSH dialog button is visible");
         cx.simulate_click(
@@ -325,6 +336,95 @@ mod tests {
         });
         assert!(cx.debug_bounds("confirm-dialog-ok").is_none());
     }
+    #[gpui::test]
+    fn pending_ports_task_finishes_after_its_source_window_closes(cx: &mut TestAppContext) {
+        cx.update(|cx| gpui_component::init(cx));
+        let (_, source) =
+            cx.add_window_view(|window, cx| Root::new(cx.new(|_| DialogProbe), window, cx));
+        let mut source = source.clone();
+        let owner = source.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalView::new(
+                    42,
+                    (80, 24),
+                    crate::gpui_shell::terminal::view::TerminalLaunch::Local {
+                        cwd: None,
+                        shell: Some(nebula_terminal::tty::Shell::new(
+                            "pebrel-test-missing-shell-executable".into(),
+                            vec![],
+                        )),
+                        shell_name: None,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        let (result, delivered) = futures::channel::oneshot::channel();
+        source.update(|_, cx| {
+            start_port_forward_task(
+                &owner,
+                "fixture@localhost".into(),
+                (3000, 3001),
+                crate::gpui_shell::config::ui_language(cx),
+                async move { delivered.await.ok() },
+                cx,
+            );
+        });
+        assert!(owner.read_with(&source, |view, _| view.port_forward_task.is_some()));
+        // add_window_view draws immediately. Keep ownership in the destination
+        // root while deliberately deferring the terminal's first render.
+        let holder =
+            cx.new(|_| TransferredPortsProbe { terminal: owner.clone(), render_terminal: false });
+        let (_, destination) =
+            cx.add_window_view(|window, cx| Root::new(holder.clone(), window, cx));
+        let mut destination = destination.clone();
+        let source_window = source.update(|window, _| {
+            let handle = window.window_handle();
+            window.remove_window();
+            handle
+        });
+        assert!(!cx.windows().contains(&source_window));
+        assert!(cx.update(|cx| source_window.update(cx, |_, _, _| ())).is_err());
+        assert!(
+            cx.update(|cx| cx.with_window(owner.entity_id(), |window, _| window.window_handle()))
+                .is_none()
+        );
+        result.send(Err("synthetic registration refusal".into())).ok().unwrap();
+        destination.run_until_parked();
+        owner.read_with(&destination, |view, _| {
+            assert!(
+                view.port_forward_task.is_none(),
+                "entity completion must release pending state before destination draw"
+            );
+            assert!(view.port_forwards.is_empty());
+        });
+        destination.update(|window, cx| {
+            holder.update(cx, |holder, cx| {
+                holder.render_terminal = true;
+                cx.notify();
+            });
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        let destination_window = destination.update(|window, _| window.window_handle());
+        assert_eq!(
+            cx.update(|cx| cx.with_window(owner.entity_id(), |window, _| window.window_handle())),
+            Some(destination_window)
+        );
+        destination.update(|_, cx| {
+            start_port_forward_task(
+                &owner,
+                "fixture@localhost".into(),
+                (1080, 3001),
+                crate::gpui_shell::config::ui_language(cx),
+                async { None },
+                cx,
+            )
+        });
+        destination.run_until_parked();
+        assert!(owner.read_with(&destination, |view, _| view.port_forward_task.is_none()));
+    }
 }
 
 impl NebulaWorkspace {
@@ -515,79 +615,86 @@ fn show_port_forward_dialog(
             if owner.read(cx).port_forward_task.is_some() {
                 return false;
             }
-            let weak = submit_target.clone();
-            let expected_destination = submit_destination.clone();
             let work_destination = submit_destination.clone();
-            let window_handle = window.window_handle();
-            let task = cx.spawn(async move |cx| {
-                let result = super::remote_files::remote_call(move || async move {
+            start_port_forward_task(
+                &owner,
+                submit_destination.clone(),
+                (local_port, remote_port),
+                language,
+                super::remote_files::remote_call(move || async move {
                     crate::ssh_session::open_local_forward(
                         &work_destination,
                         local_port,
                         remote_port,
                     )
                     .await
-                })
-                .await;
-                let _ = window_handle.update(cx, move |_, window, cx| {
-                    let Some(view) = weak.upgrade() else {
-                        return;
-                    };
-                    if view.read(cx).ready_ssh_destination() != Some(expected_destination.as_str())
-                    {
-                        return;
-                    }
-                    view.update(cx, |view, cx| {
-                        view.port_forward_task = None;
-                        cx.notify();
-                    });
-                    match result {
-                        Some(Ok(forward)) => {
-                            if let Some(view) = weak.upgrade()
-                                && view.read(cx).ready_ssh_destination()
-                                    == Some(expected_destination.as_str())
-                            {
-                                view.update(cx, |view, cx| {
-                                    view.port_forwards.push(forward);
-                                    cx.notify();
-                                });
-                                crate::gpui_shell::toast::toast(
-                                    window,
-                                    cx,
-                                    crate::display::ToastKind::Info,
-                                    language.format(
-                                        Message::SshPortsStarted,
-                                        &[
-                                            ("local", &local_port.to_string()),
-                                            ("host", &expected_destination),
-                                            ("remote", &remote_port.to_string()),
-                                        ],
-                                    ),
-                                );
-                            }
-                        },
-                        Some(Err(error)) => crate::gpui_shell::toast::toast(
-                            window,
-                            cx,
-                            crate::display::ToastKind::Warning,
-                            error.to_string(),
-                        ),
-                        None => crate::gpui_shell::toast::toast(
-                            window,
-                            cx,
-                            crate::display::ToastKind::Warning,
-                            language.text(Message::SshPortsUnavailable),
-                        ),
-                    }
-                });
-            });
-            owner.update(cx, |view, cx| {
-                view.port_forward_task = Some(task);
-                cx.notify();
-            });
+                }),
+                cx,
+            );
             true
         })
     });
     focus_input.update(cx, |input, cx| input.focus(window, cx));
     inputs
+}
+
+fn start_port_forward_task(
+    owner: &Entity<TerminalView>,
+    destination: String,
+    (local, remote): (u16, u16),
+    language: crate::i18n::UiLanguage,
+    result: impl std::future::Future<
+        Output = Option<
+            Result<crate::ssh_session::LocalForward, Box<dyn std::error::Error + Send + Sync>>,
+        >,
+    > + 'static,
+    cx: &mut App,
+) {
+    let weak = owner.downgrade();
+    let task = cx.spawn(async move |cx| {
+        let result = result.await;
+        cx.update(move |cx| {
+            let Some(owner) = weak.upgrade() else { return };
+            let notice = owner.update(cx, |view, cx| {
+                // This entity may have moved while the transport request was pending.
+                view.port_forward_task = None;
+                cx.notify();
+                if view.ready_ssh_destination() != Some(destination.as_str()) {
+                    return None;
+                }
+                match result {
+                    Some(Ok(forward)) => {
+                        view.port_forwards.push(forward);
+                        Some((
+                            crate::display::ToastKind::Info,
+                            language.format(
+                                Message::SshPortsStarted,
+                                &[
+                                    ("local", &local.to_string()),
+                                    ("host", &destination),
+                                    ("remote", &remote.to_string()),
+                                ],
+                            ),
+                        ))
+                    },
+                    Some(Err(error)) => {
+                        Some((crate::display::ToastKind::Warning, error.to_string()))
+                    },
+                    None => Some((
+                        crate::display::ToastKind::Warning,
+                        language.text(Message::SshPortsUnavailable).to_owned(),
+                    )),
+                }
+            });
+            if let Some((kind, message)) = notice {
+                cx.with_window(owner.entity_id(), |window, cx| {
+                    crate::gpui_shell::toast::toast(window, cx, kind, message);
+                });
+            }
+        });
+    });
+    owner.update(cx, |view, cx| {
+        view.port_forward_task = Some(task);
+        cx.notify();
+    });
 }
