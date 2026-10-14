@@ -5,7 +5,9 @@
 //! global palette so a test cannot pass by only exercising a state callback.
 
 use super::*;
-use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+use crate::gpui_shell::settings_fixture::{
+    SettingsBytesGuard, SettingsPaneHost, lock_theme_studio,
+};
 use crate::theme_library::{ThemeDocument, ThemeFormat, ThemeLibraryStore};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, size};
 use gpui_component::Root;
@@ -258,27 +260,6 @@ fn edit_input(selector: &'static str, value: &str, cx: &mut VisualTestContext) {
     draw(cx);
 }
 
-struct ThemeStudioHost {
-    pane: Entity<SettingsPane>,
-}
-
-impl Render for ThemeStudioHost {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(self.pane.clone())
-            // `SettingsPane` owns the dialog requests, while the test host
-            // owns the component library's global modal layer just like the
-            // production workspace does. Keep it above the feature overlays
-            // (theme editor=0, component popovers=1, transfer=6) so real dialog buttons receive
-            // pointer events in the same order as the application shell.
-            .child(
-                deferred(div().size_full().children(Root::render_dialog_layer(window, cx)))
-                    .with_priority(10),
-            )
-    }
-}
-
 fn open_settings(cx: &mut TestAppContext) -> (Entity<SettingsPane>, VisualTestContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -296,7 +277,7 @@ fn open_settings(cx: &mut TestAppContext) -> (Entity<SettingsPane>, VisualTestCo
             pane.runtime = test_runtime();
         });
         pane = Some(view.clone());
-        let host = cx.new(|_| ThemeStudioHost { pane: view });
+        let host = cx.new(|_| SettingsPaneHost { pane: view });
         Root::new(host, window, cx)
     });
     window.simulate_resize(size(px(1280.0), px(1000.0)));
@@ -1237,7 +1218,7 @@ fn native_theme_picker_visual_review() {
                         }
                     });
                     pane = Some(settings.clone());
-                    let host = cx.new(|_| ThemeStudioHost { pane: settings });
+                    let host = cx.new(|_| SettingsPaneHost { pane: settings });
                     cx.new(|cx| Root::new(host, window, cx))
                 },
             )
