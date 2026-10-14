@@ -115,6 +115,7 @@ mod saved_commands;
 mod scheduler;
 #[cfg(test)]
 mod scientific_corpus;
+mod scrollbar;
 mod session;
 mod shell_detect;
 mod ssh;
