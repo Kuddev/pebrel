@@ -547,17 +547,17 @@ pub fn ssh_config_hosts() -> Vec<String> {
 }
 
 fn askpass_destination_from_args(args: &[String]) -> Option<String> {
-    destination_argument(args).map(|(_, destination)| destination)
+    destination_argument(args).map(|(_, _, destination)| destination)
 }
 
-fn destination_argument(args: &[String]) -> Option<(usize, String)> {
+fn destination_argument(args: &[String]) -> Option<(usize, usize, String)> {
     let (mut login_user, mut port) = (None, None);
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
         if arg == "--" {
             return args.get(i + 1).map(|dest| {
-                (i + 1, format_destination(dest, login_user.as_deref(), port.as_deref()))
+                (i + 1, i, format_destination(dest, login_user.as_deref(), port.as_deref()))
             });
         }
         let bytes = arg.as_bytes();
@@ -583,25 +583,25 @@ fn destination_argument(args: &[String]) -> Option<(usize, String)> {
             i += if consumed_next { 2 } else { 1 };
             continue;
         }
-        return Some((i, format_destination(arg, login_user.as_deref(), port.as_deref())));
+        return Some((i, i, format_destination(arg, login_user.as_deref(), port.as_deref())));
     }
     None
 }
 
 fn resolve_saved_destination(
-    args: &mut [String],
+    args: &mut Vec<String>,
     profiles: &crate::ssh_profiles::SshProfiles,
 ) -> Option<String> {
-    let (index, destination) = destination_argument(args)?;
-    let identity = &args[index];
-    let target = profiles.connection_destination(identity);
-    if target == identity {
-        return Some(destination);
-    }
-    // 系统 SSH 只接收真实地址；AskPass 仍使用副本自己的凭据键。
-    let identity = identity.clone();
-    args[index] = crate::ssh_session::ssh_config_probe_target(target).into_owned();
-    Some(identity)
+    let (index, options_at, destination) = destination_argument(args)?;
+    let identity = args[index].clone();
+    let target = profiles.connection_destination(&identity);
+    let copied = target != identity;
+    // 系统 SSH 接收规范化后的真实地址；AskPass 保留原始或副本凭据身份。
+    let mut normalized = crate::ssh_session::ssh_config_probe_args(target);
+    args[index] = normalized.pop().expect("probe arguments contain a host");
+    normalized.pop(); // Preserve the caller's actual destination boundary.
+    args.splice(options_at..options_at, normalized);
+    Some(if copied { identity } else { destination })
 }
 
 /// Per-pane data for launching SSH from the configured default shell. The
@@ -815,6 +815,72 @@ mod ssh_config_tests {
             "HostName ignored.example\r\n",
         );
         assert_eq!(parse_ssh_config_hosts(config), vec!["rain", "staging", "ignored"]);
+    }
+    #[test]
+    fn jumpserver_cli_encodes_system_argv_without_changing_askpass_identity() {
+        use super::resolve_saved_destination;
+        let profiles = crate::ssh_profiles::SshProfiles::default();
+        for (destination, expected) in [
+            ("jumpserverUser@root@host", "jumpserverUser@root@host"),
+            ("jumpserverUser@root@host:2222", "ssh://jumpserverUser%40root@host:2222"),
+            ("literal%40@root@host:2222", "ssh://literal%2540%40root@host:2222"),
+        ] {
+            let mut args =
+                ["-i", "synthetic-key", "--", destination, "printf ok"].map(String::from).to_vec();
+            assert_eq!(
+                resolve_saved_destination(&mut args, &profiles).as_deref(),
+                Some(destination)
+            );
+            assert_eq!(args, ["-i", "synthetic-key", "--", expected, "printf ok"]);
+        }
+        let mut profiles = profiles;
+        profiles.duplicate_host("jumpserverUser@root@host:2222", "copy-host").unwrap();
+        let mut args = vec!["copy-host".to_owned()];
+        assert_eq!(resolve_saved_destination(&mut args, &profiles).as_deref(), Some("copy-host"));
+        assert_eq!(args, ["ssh://jumpserverUser%40root@host:2222"]);
+        let mut args = vec![
+            "-l".into(),
+            "cli-user".into(),
+            "-p".into(),
+            "2022".into(),
+            "-i".into(),
+            "--".into(),
+            "--".into(),
+            "ssh://jumpserverUser@root@[::1]:2222".into(),
+            "printf ok".into(),
+        ];
+        assert_eq!(
+            resolve_saved_destination(&mut args, &profiles).as_deref(),
+            Some("ssh://jumpserverUser@root@[::1]:2222")
+        );
+        assert_eq!(
+            args,
+            [
+                "-l",
+                "cli-user",
+                "-p",
+                "2022",
+                "-i",
+                "--",
+                "-l",
+                "jumpserverUser@root",
+                "-p",
+                "2222",
+                "--",
+                "::1",
+                "printf ok"
+            ]
+        );
+        let mut args =
+            ["-i", "--", "--", "运维@root@gateway:2222", "printf ok"].map(String::from).to_vec();
+        assert_eq!(
+            resolve_saved_destination(&mut args, &profiles).as_deref(),
+            Some("运维@root@gateway:2222")
+        );
+        assert_eq!(
+            args,
+            ["-i", "--", "-o", "User=运维@root", "-p", "2222", "--", "gateway", "printf ok"]
+        );
     }
 }
 
