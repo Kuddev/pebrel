@@ -18,7 +18,7 @@ use super::tokens::{Density, radius};
 use crate::renderer::ui::{Rgba, UiQuad};
 
 pub(crate) use super::geometry::{centered_y, pane_geometry, pane_geometry_in_horizontal_bounds};
-pub(crate) use super::scrollbar::{OverlayScrollbar, overlay_scrollbar};
+pub(crate) use crate::scrollbar::{OverlayScrollbar, overlay_scrollbar};
 
 pub(crate) type Rect = (f32, f32, f32, f32);
 
@@ -558,8 +558,8 @@ pub(crate) fn push_spinner(
 #[cfg(test)]
 mod tests {
     use super::{
-        ChipState, ToggleMotion, opaque_panel, overlay_scrollbar, push_chip, push_radio,
-        push_toggle, radio_rect, toggle_rect,
+        ChipState, ToggleMotion, opaque_panel, push_chip, push_radio, push_toggle, radio_rect,
+        toggle_rect,
     };
     use crate::display::ui::theme::NebulaTheme;
     use crate::renderer::ui::{Rgba, UiQuad};
@@ -642,28 +642,5 @@ mod tests {
         assert_eq!(quiet[1].color0, skin.toggle_track_off);
         assert_eq!(selected[1].color0, skin.toggle_track_on);
         assert_eq!(selected[2].color0, skin.knob_on);
-    }
-
-    #[test]
-    fn overlay_scrollbar_has_a_wide_invisible_hit_area() {
-        let bar = overlay_scrollbar((0.0, 0.0, 400.0, 300.0), 300.0, 900.0, 300.0, 1.0)
-            .expect("overflowing content needs a scrollbar");
-        assert_eq!(bar.thumb.2, 5.0);
-        assert_eq!(bar.hit.2, 14.0);
-        assert!(bar.hit.0 < bar.thumb.0);
-    }
-
-    #[test]
-    fn overlay_scrollbar_drag_maps_to_the_full_scroll_range() {
-        let bar = overlay_scrollbar((0.0, 0.0, 400.0, 300.0), 300.0, 900.0, 0.0, 1.0)
-            .expect("overflowing content needs a scrollbar");
-        let grab = bar.thumb.3 * 0.5;
-        assert_eq!(bar.target_offset(bar.hit.1 + grab, grab, 20), 0);
-        assert_eq!(bar.target_offset(bar.hit.1 + bar.hit.3, grab, 20), 20);
-    }
-
-    #[test]
-    fn overlay_scrollbar_is_absent_without_overflow() {
-        assert!(overlay_scrollbar((0.0, 0.0, 400.0, 300.0), 300.0, 300.0, 0.0, 1.0).is_none());
     }
 }
