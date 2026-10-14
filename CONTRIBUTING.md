@@ -129,10 +129,15 @@ raise any existing tracked private artifact for an explicit maintainer decision.
    cross-layer dependency, persisted format, core abstraction or threading model
    before implementing it. Record significant decisions under the owning path in
    `architecture/notes/`; ordinary fixes do not create a note.
-2. Keep one conceptual change per PR. A necessary extraction and its behavior
-   tests may accompany the feature; unrelated rewrites and formatting may not.
-   The `pr-size` check fails above 1500 changed source lines (docs, lockfiles
-   and assets excluded); split instead of asking for an exemption.
+2. Organize each PR around a complete, independently verifiable feature module.
+   A necessary extraction and its behavior tests may accompany the feature;
+   unrelated rewrites and formatting may not. Prefer cohesive boundaries to
+   mechanical splitting. The default `pr-size` limit is 1500 changed source lines
+   (additions plus deletions; docs, lockfiles and assets excluded). Maintainers may
+   approve individual exceptions with `size-exempt` and a brief rationale when
+   keeping the module together makes the change easier to review and verify.
+   **No PR may exceed 5000 counted source lines, even with `size-exempt`.**
+   The label does not waive code review, tests, dependency rules or per-file limits.
 3. Put shared rules in their existing authority. UI modules adapt those rules;
    they must not fork persistence, state transitions or domain behavior.
 4. Add regression tests that fail for the defect, and test error/cancellation
@@ -238,7 +243,7 @@ feature work; there is no routine `--skip-architecture` option.
 ## 中文摘要
 
 - 先读架构图、工程合同和决策记录；按职责拆分，不按行号切片。
-- 一个 PR 只做一件事；改动超过 1500 行源码（不计文档、lockfile、资源）`pr-size` 会失败，请拆分。
+- PR 以完整、可独立验证的功能模块为主，按职责边界拆分，不机械切片。源码增删行默认门槛为 1500（不计文档、lockfile、资源）；维护者可说明理由并用 `size-exempt` 批准个别例外，但任何 PR 都不得超过 5000 行。豁免不替代 review、测试、依赖规则或单文件行数约束。
 - Draft 和 Ready PR 共用路径策略：文档不构建原生应用，普通共享代码跑完整 Linux 测试，平台路径及条件编译追加相应原生架构，依赖/CI/打包等改动跑全量。main、每日定时和手动验证保留五平台。十项必需检查名称不变，结果汇总明确注明未运行的平台，已选择的测试失败仍阻止合并；原生套件和 doctest 不删减。
 - 附加截图留在贡献者 fork 中生成；上游按需执行，不重复自动跑整套截图构建，也不上传 PR 专属的大型编译缓存。截图与原生回归测试不能互相替代。
 - 2000 行是现有仓库的防灾上限，800 行只提示审查，不是“大厂标准”。
