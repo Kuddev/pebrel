@@ -43,3 +43,28 @@ impl Drop for SettingsBytesGuard {
         }
     }
 }
+
+use gpui::{
+    Context, Entity, IntoElement, ParentElement as _, Render, Styled as _, Window, deferred, div,
+};
+use gpui_component::Root;
+
+use super::settings_pane::SettingsPane;
+
+/// SettingsPane 发起弹窗请求，宿主像真实工作区一样提供模态绘制层。
+pub(super) struct SettingsPaneHost {
+    pub(super) pane: Entity<SettingsPane>,
+}
+
+impl Render for SettingsPaneHost {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .child(self.pane.clone())
+            // 模态层高于功能浮层和组件弹出框，鼠标事件才能到达真正的确认按钮。
+            .child(
+                deferred(div().size_full().children(Root::render_dialog_layer(window, cx)))
+                    .with_priority(10),
+            )
+    }
+}
