@@ -30,6 +30,7 @@ pub(super) fn span_len(cells: &[SnapCell], allowed: impl Fn(&SnapCell, usize) ->
                 && cell.fg == first.fg
                 && cell.bg == first.bg
                 && cell.bold == first.bold
+                && cell.dim == first.dim
                 && cell.italic == first.italic
                 && cell.underline == first.underline
                 && cell.strikethrough == first.strikethrough

@@ -5,8 +5,10 @@
 
 use super::*;
 mod bulk;
+mod clipboard;
 pub(super) use bulk::CommandSelection;
 use bulk::Deletion;
+use clipboard::editor_clipboard_input;
 mod groups;
 #[cfg(all(test, feature = "gpui-test-support", target_os = "windows"))]
 mod native_paste_tests;
@@ -359,7 +361,10 @@ impl NebulaWorkspace {
                         .w_full()
                         .gap_1()
                         .child(div().text_sm().font_semibold().child(language.pick("名称", "Name")))
-                        .child(Input::new(&name).w_full().accessibility_id("saved-command-name")),
+                        .child(editor_clipboard_input(
+                            Input::new(&name).w_full().accessibility_id("saved-command-name"),
+                            &name,
+                        )),
                 )
                 .child(
                     v_flex()
@@ -368,10 +373,11 @@ impl NebulaWorkspace {
                         .child(
                             div().text_sm().font_semibold().child(language.pick("命令", "Command")),
                         )
-                        .child(
+                        .child(editor_clipboard_input(
                             command_editor_input(&command, cx)
                                 .accessibility_id("saved-command-text"),
-                        ),
+                            &command,
+                        )),
                 )
                 .child(
                     gpui_component::checkbox::Checkbox::new("saved-command-append-enter")
@@ -767,6 +773,9 @@ mod tests {
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod input_tests;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod clipboard_tests;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod group_tests;

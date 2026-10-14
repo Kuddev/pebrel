@@ -7,3 +7,4 @@
 - 发布脚本还必须遵循 [`../packaging/AGENTS.md`](../packaging/AGENTS.md)。
 - 门禁语义、扫描边界或治理流程的非平凡变化写入 `architecture/notes/scripts/<area>/`。
 - 原生 CI 的平台选择由 `ci_plan.py` 统一维护；当前路径策略见 [`native validation`](../architecture/notes/scripts/ci/2026-09-29-path-based-native-validation.md)。
+- PR 按完整模块组织、个别规模豁免及不可豁免上限见 [`PR size`](../architecture/notes/scripts/ci/2026-10-14-cohesive-pr-size-exceptions.md)。

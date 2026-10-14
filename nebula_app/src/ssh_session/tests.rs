@@ -175,6 +175,58 @@ fn openssh_probe_normalizes_legacy_destinations_with_explicit_ports() {
 }
 
 #[test]
+fn jumpserver_openssh_probe_encodes_only_the_uri_username_and_keeps_identity() {
+    for (spec, expected) in [
+        ("jumpserverUser@root@example.com", "jumpserverUser@root@example.com"),
+        ("jumpserverUser@root@example.com:2222", "ssh://jumpserverUser%40root@example.com:2222"),
+        ("ssh://jumpserverUser@root@[::1]:2222", "ssh://jumpserverUser%40root@[::1]:2222"),
+        ("ssh://jumpserverUser@root@example.com", "ssh://jumpserverUser%40root@example.com"),
+        ("literal%40@root@example.com:2222", "ssh://literal%2540%40root@example.com:2222"),
+        ("运维@root@example.com:2222", "ssh://%E8%BF%90%E7%BB%B4%40root@example.com:2222"),
+    ] {
+        let parsed = SshDestination::parse(spec).unwrap();
+        let probe = ssh_config_probe_target(spec);
+        assert_eq!(probe, expected);
+        assert_eq!(parsed.original, spec);
+        assert_eq!(
+            crate::ssh_credentials::credential_target(&parsed.original),
+            format!("Pebrel/SSH/{spec}")
+        );
+    }
+    assert_eq!(
+        super::ssh_config_probe_args("ssh://literal%40@root@[::1]:2222"),
+        ["-l", "literal%40@root", "-p", "2222", "--", "::1"]
+    );
+    assert_eq!(super::ssh_config_probe_args("root@::1"), ["-l", "root", "--", "::1"]);
+    assert_eq!(
+        super::ssh_config_probe_args("运维@root@gateway:2222"),
+        ["-o", "User=运维@root", "-p", "2222", "--", "gateway"]
+    );
+    assert_eq!(
+        super::ssh_config_probe_args("运维@root@gateway"),
+        ["-o", "User=运维@root", "--", "gateway"]
+    );
+    assert_eq!(
+        super::ssh_config_probe_args("ssh://运维@root@[::1]:2222"),
+        ["-o", "User=运维@root", "-p", "2222", "--", "::1"]
+    );
+    for spec in [
+        "运维%40@root@gateway:2222",
+        "运维${USER}@root@gateway:2222",
+        "运维$(id)@root@gateway:2222",
+        "运维{root}@gateway:2222",
+        "-运维@root@gateway:2222",
+        "运维\\@gateway:2222",
+    ] {
+        assert_eq!(
+            super::ssh_config_probe_args(spec),
+            ["--".to_owned(), ssh_config_probe_target(spec).into_owned()],
+            "a configuration User option must not expand tokens or bypass native username checks"
+        );
+    }
+}
+
+#[test]
 fn duplicated_ssh_tabs_quote_their_remote_working_directory() {
     assert_eq!(
         initial_remote_cd_command(Some("/srv/Team's App")),

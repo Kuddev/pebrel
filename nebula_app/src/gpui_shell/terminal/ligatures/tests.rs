@@ -11,6 +11,8 @@ fn cells(text: &str) -> Vec<SnapCell> {
             fg: Color::Named(NamedColor::Foreground),
             bg: Color::Named(NamedColor::Background),
             bold: false,
+            dim: false,
+            bg_dim: false,
             italic: false,
             underline: false,
             strikethrough: false,
@@ -26,6 +28,7 @@ fn shaping_stops_at_cell_styles_gaps_and_non_ascii_text() {
     }
     for change in [
         |cell: &mut SnapCell| cell.bold = true,
+        |cell: &mut SnapCell| cell.dim = true,
         |cell: &mut SnapCell| cell.italic = true,
         |cell: &mut SnapCell| cell.underline = true,
         |cell: &mut SnapCell| cell.strikethrough = true,

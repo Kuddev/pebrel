@@ -61,3 +61,31 @@ pub(crate) fn overlay_scrollbar(
         max_scroll,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::overlay_scrollbar;
+
+    #[test]
+    fn overlay_scrollbar_has_a_wide_invisible_hit_area() {
+        let bar = overlay_scrollbar((0.0, 0.0, 400.0, 300.0), 300.0, 900.0, 300.0, 1.0)
+            .expect("overflowing content needs a scrollbar");
+        assert_eq!(bar.thumb.2, 5.0);
+        assert_eq!(bar.hit.2, 14.0);
+        assert!(bar.hit.0 < bar.thumb.0);
+    }
+
+    #[test]
+    fn overlay_scrollbar_drag_maps_to_the_full_scroll_range() {
+        let bar = overlay_scrollbar((0.0, 0.0, 400.0, 300.0), 300.0, 900.0, 0.0, 1.0)
+            .expect("overflowing content needs a scrollbar");
+        let grab = bar.thumb.3 * 0.5;
+        assert_eq!(bar.target_offset(bar.hit.1 + grab, grab, 20), 0);
+        assert_eq!(bar.target_offset(bar.hit.1 + bar.hit.3, grab, 20), 20);
+    }
+
+    #[test]
+    fn overlay_scrollbar_is_absent_without_overflow() {
+        assert!(overlay_scrollbar((0.0, 0.0, 400.0, 300.0), 300.0, 300.0, 0.0, 1.0).is_none());
+    }
+}

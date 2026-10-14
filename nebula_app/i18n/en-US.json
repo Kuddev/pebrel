@@ -158,7 +158,10 @@
       "conflict": "{combo} is assigned to both \"{first}\" and \"{second}\"; only the earlier \"{first}\" action will run.",
       "help": "Click a shortcut and press a new combination. Backspace clears it; Esc cancels. Use the row buttons to clear or restore defaults.",
       "clear": "Clear shortcut (pass through to terminal)",
-      "restore": "Restore this action’s default shortcut"
+      "restore": "Restore this action’s default shortcut",
+      "bare_title": "Bind a bare key?",
+      "bare_description": "'{combo}' has no modifiers; binding it makes the key unusable for normal typing. Bind anyway?",
+      "bare_confirm": "Bind anyway"
     },
     "input": {
       "backup_secret": "Credentials are stored only in the system credential manager"
@@ -464,6 +467,8 @@
     "preview_limited": "The rich preview is shortened for this large document. Switch to Edit to read the loaded source."
   },
   "commands": {
+    "input_copied": "Copied",
+    "input_cut": "Cut to clipboard",
     "select": "Select",
     "select_visible": "Select results",
     "delete_selected": "Delete ({count})",
