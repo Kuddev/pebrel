@@ -228,6 +228,55 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keychain_secret_survives_a_process_boundary_and_is_removed() {
+        const CHILD_TARGET: &str = "PEBREL_TEST_KEYCHAIN_TARGET";
+        const PREFIX: &str = "Pebrel/Test/BackupKeychain/";
+        const SECRET: &str = "synthetic backup secret \u{53e3}\u{4ee4}";
+        if let Ok(target) = std::env::var(CHILD_TARGET) {
+            assert!(target.starts_with(PREFIX));
+            assert_eq!(load(&target).unwrap().as_deref(), Some(SECRET.as_bytes()));
+            return;
+        }
+
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = delete(&self.0);
+            }
+        }
+
+        let nonce =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        for username in ["webdav-user", "s3-access-key"] {
+            // 唯一测试命名空间避免触碰用户备份凭据；子进程读回排除内存假存储。
+            let target = format!("{PREFIX}{}-{nonce}/{username}", std::process::id());
+            assert_eq!(load(&target).unwrap(), None);
+            let cleanup = Cleanup(target.clone());
+            store_with_username(&target, username, SECRET.as_bytes()).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "platform::credentials::tests::keychain_secret_survives_a_process_boundary_and_is_removed",
+                    "--nocapture",
+                ])
+                .env(CHILD_TARGET, &target)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "Keychain reader failed: {} {}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"));
+            delete(&target).unwrap();
+            assert_eq!(load(&target).unwrap(), None);
+            drop(cleanup);
+        }
+    }
+
     fn key(identity: &CredentialIdentity<'_>) -> (String, String) {
         (identity.service.to_owned(), identity.target.to_string())
     }
