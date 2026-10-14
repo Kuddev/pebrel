@@ -26,6 +26,7 @@ pub struct EventProxy {
     events: super::event_mailbox::EventSender,
     stages: UnboundedSender<crate::ssh_session::SshStage>,
     remote_reader: Arc<std::sync::Mutex<Option<crate::ssh_session::TranscriptReader>>>,
+    remote_forwarder: Arc<std::sync::Mutex<Option<crate::ssh_session::Forwarder>>>,
 }
 
 impl EventListener for EventProxy {
@@ -38,6 +39,11 @@ impl crate::ssh_session::SshEventHost for EventProxy {
     fn ssh_transcript_reader(&self, reader: Option<crate::ssh_session::TranscriptReader>) {
         if let Ok(mut current) = self.remote_reader.lock() {
             *current = reader;
+        }
+    }
+    fn ssh_port_forwarder(&self, forwarder: Option<crate::ssh_session::Forwarder>) {
+        if let Ok(mut current) = self.remote_forwarder.lock() {
+            *current = forwarder;
         }
     }
     fn ssh_stage(&self, stage: crate::ssh_session::SshStage) {
@@ -74,6 +80,7 @@ pub struct TerminalSession {
     /// SSH 没有本地 shell 进程，固定为 0。
     pub shell_pid: u32,
     pub(super) remote_reader: Arc<std::sync::Mutex<Option<crate::ssh_session::TranscriptReader>>>,
+    pub(super) remote_forwarder: Arc<std::sync::Mutex<Option<crate::ssh_session::Forwarder>>>,
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -92,7 +99,12 @@ pub(super) fn test_session_with_events() -> (
 ) {
     let (events, event_rx) = super::event_mailbox::channel();
     let (stages, _) = unbounded();
-    let proxy = EventProxy { events, stages, remote_reader: Default::default() };
+    let proxy = EventProxy {
+        events,
+        stages,
+        remote_reader: Default::default(),
+        remote_forwarder: Default::default(),
+    };
     let term =
         Term::new(Config::default(), &GridSize { columns: 80, screen_lines: 24 }, proxy.clone());
     let (sender, receiver) = nebula_terminal::event_loop::EventLoopSender::standalone().unwrap();
@@ -103,6 +115,7 @@ pub(super) fn test_session_with_events() -> (
             native_prompt: proxy.events.native_prompt.clone(),
             shell_pid: 0,
             remote_reader: proxy.remote_reader.clone(),
+            remote_forwarder: proxy.remote_forwarder.clone(),
         },
         receiver,
         event_rx,
@@ -176,7 +189,12 @@ pub fn spawn(
 ) -> std::io::Result<SpawnedSession> {
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
+    let proxy = EventProxy {
+        events: tx,
+        stages: stage_tx,
+        remote_reader: Default::default(),
+        remote_forwarder: Default::default(),
+    };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -193,6 +211,7 @@ pub fn spawn(
     let record = std::env::var_os("NEBULA_PTY_RECORD").is_some();
     let native_prompt = proxy.events.native_prompt.clone();
     let remote_reader = proxy.remote_reader.clone();
+    let remote_forwarder = proxy.remote_forwarder.clone();
     let mut event_loop =
         EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
     if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
@@ -201,7 +220,18 @@ pub fn spawn(
     let notifier = Notifier(event_loop.channel());
     let _io_thread = event_loop.spawn();
 
-    Ok((TerminalSession { term, notifier, native_prompt, shell_pid, remote_reader }, rx, stage_rx))
+    Ok((
+        TerminalSession {
+            term,
+            notifier,
+            native_prompt,
+            shell_pid,
+            remote_reader,
+            remote_forwarder,
+        },
+        rx,
+        stage_rx,
+    ))
 }
 
 /// 启动一个 SSH 直连会话（russh，与旧壳 `create_ssh_pane` 同一业务层）：
@@ -216,7 +246,12 @@ pub fn spawn_ssh(
     let term_config = crate::ssh_session::terminal_config(term_config);
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
+    let proxy = EventProxy {
+        events: tx,
+        stages: stage_tx,
+        remote_reader: Default::default(),
+        remote_forwarder: Default::default(),
+    };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -225,6 +260,7 @@ pub fn spawn_ssh(
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
     let native_prompt = proxy.events.native_prompt.clone();
     let remote_reader = proxy.remote_reader.clone();
+    let remote_forwarder = proxy.remote_forwarder.clone();
     let sender = crate::ssh_session::spawn_session_at(
         destination,
         initial_remote_cwd,
@@ -240,6 +276,7 @@ pub fn spawn_ssh(
             native_prompt,
             shell_pid: 0,
             remote_reader,
+            remote_forwarder,
         },
         rx,
         stage_rx,

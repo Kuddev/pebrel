@@ -344,7 +344,7 @@ pub struct TerminalView {
     /// SSH 直连目的地（`user@host[:port]`）；本地会话为 None。
     pub ssh_destination: Option<String>,
     /// 本 pane 拥有的本地端口转发；pane 销毁即停止监听。
-    pub(crate) port_forwards: Vec<crate::ssh_session::LocalForward>,
+    pub(crate) port_forwards: Vec<crate::ssh_session::PortForward>,
     pub(crate) port_forward_task: Option<gpui::Task<()>>,
     ssh_label: Option<String>,
     /// 创建本地 PTY 时冻结的受控环境，供独立 `pane.exec` child 复用。
@@ -1021,6 +1021,11 @@ impl TerminalView {
         }
         let destination = self.ssh_destination.as_deref()?;
         matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Ready)).then_some(destination)
+    }
+
+    pub(crate) fn port_forwarder(&self) -> Option<crate::ssh_session::Forwarder> {
+        self.ready_ssh_destination()?;
+        self.session.as_ref()?.remote_forwarder.lock().ok()?.clone()
     }
 
     fn term_mode(&self) -> TermMode {

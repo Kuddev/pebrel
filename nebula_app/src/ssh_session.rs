@@ -34,7 +34,8 @@ mod integration;
 mod lifecycle;
 mod route;
 mod transcript;
-pub(crate) use forward::{LocalForward, open_local_forward};
+pub use forward::Forwarder;
+pub(crate) use forward::{ForwardKind, PortForward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
 pub use transcript::TranscriptReader;
@@ -50,7 +51,20 @@ pub(crate) fn terminal_config(
 
 type SessionError = Box<dyn std::error::Error + Send + Sync>;
 type ClientSession = client::Handle<ClientHandler>;
-type SharedSession = Arc<ClientSession>;
+type SharedSession = Arc<SharedConnection>;
+
+struct SharedConnection {
+    session: ClientSession,
+    remote_forwards: Arc<forward::remote::Registry>,
+}
+
+impl std::ops::Deref for SharedConnection {
+    type Target = ClientSession;
+
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
 
 struct AcquiredSession {
     key: String,
@@ -61,6 +75,7 @@ struct AcquiredSession {
 
 struct OpenedTransport {
     session: ClientSession,
+    remote_forwards: Arc<forward::remote::Registry>,
     jump_sessions: Vec<SharedSession>,
 }
 
@@ -75,6 +90,9 @@ pub trait SshEventHost:
 {
     /// A read capability belongs to this pane's live authenticated transport.
     fn ssh_transcript_reader(&self, _reader: Option<TranscriptReader>) {}
+
+    /// Port operations borrow this pane's authenticated connection and lifetime.
+    fn ssh_port_forwarder(&self, _forwarder: Option<Forwarder>) {}
 
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
@@ -458,6 +476,7 @@ struct ClientHandler {
     port: u16,
     allow_prompt: bool,
     handshake: lifecycle::Handshake,
+    remote_forwards: Arc<forward::remote::Registry>,
     #[cfg(test)]
     known_hosts_path: Option<PathBuf>,
 }
@@ -501,6 +520,20 @@ impl ClientHandler {
 
 impl client::Handler for ClientHandler {
     type Error = russh::Error;
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        address: &str,
+        port: u32,
+        _: &str,
+        _: u32,
+        reply: client::ChannelOpenHandle,
+        _: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        self.remote_forwards.dispatch(channel, address, port, reply);
+        Ok(())
+    }
 
     async fn check_server_key(
         &mut self,
@@ -714,7 +747,10 @@ async fn authenticated_route<H: SshEventHost>(
         authenticate(&mut transport.session, &route.destination, &route.profile).await?;
     }
 
-    let session = Arc::new(transport.session);
+    let session = Arc::new(SharedConnection {
+        session: transport.session,
+        remote_forwards: transport.remote_forwards,
+    });
     if unattended {
         return Ok(AcquiredSession {
             key,
@@ -757,11 +793,13 @@ async fn open_transport(
 ) -> Result<OpenedTransport, SessionError> {
     let destination = &route.destination;
     let handshake = lifecycle::Handshake::default();
+    let remote_forwards = Arc::new(forward::remote::Registry::default());
     let handler = ClientHandler {
         host: destination.host.clone(),
         port: destination.port,
         allow_prompt: allow_host_key_prompt,
         handshake: handshake.clone(),
+        remote_forwards: remote_forwards.clone(),
         #[cfg(test)]
         known_hosts_path: route.known_hosts_path.clone(),
     };
@@ -830,7 +868,7 @@ async fn open_transport(
             handshake.connect(client::connect_stream(config, stream, handler)).await?
         },
     };
-    Ok(OpenedTransport { session, jump_sessions })
+    Ok(OpenedTransport { session, remote_forwards, jump_sessions })
 }
 
 async fn authenticate(

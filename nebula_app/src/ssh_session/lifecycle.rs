@@ -198,6 +198,8 @@ pub(super) async fn run<H: SshEventHost>(
         let (_transcript_scope, reader) =
             super::transcript::TranscriptScope::new(&acquired.session);
         event_proxy.ssh_transcript_reader(Some(reader));
+        let (_forward_scope, forwarder) = super::forward::Scope::new(&acquired.session);
+        event_proxy.ssh_port_forwarder(Some(forwarder));
         super::report_stage(Some(&event_proxy), SshStage::Ready);
         let result =
             pump(&mut channel, hook_token, initial_size, &terminal, &event_proxy, &mut input).await;
@@ -229,6 +231,7 @@ fn finish<H: SshEventHost>(
     event_proxy: &H,
 ) {
     event_proxy.ssh_transcript_reader(None);
+    event_proxy.ssh_port_forwarder(None);
     match result {
         Ok(()) => terminal.lock().exit(),
         Err(error) => {

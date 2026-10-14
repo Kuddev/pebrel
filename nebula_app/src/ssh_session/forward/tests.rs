@@ -7,9 +7,31 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+mod modes;
+
+#[derive(Debug, PartialEq, Eq)]
+enum ForwardEvent {
+    Requested(u32),
+    Cancelled(u32),
+}
+
 struct Echo {
     opened: mpsc::UnboundedSender<u32>,
+    targets: mpsc::UnboundedSender<String>,
+    events: mpsc::UnboundedSender<ForwardEvent>,
+    remotes: std::collections::HashMap<u32, JoinHandle<()>>,
+    registration_gate: Option<Arc<tokio::sync::Semaphore>>,
+    cancellation_gate: Option<Arc<tokio::sync::Semaphore>>,
+    refuse_cancel: bool,
     streams: JoinSet<()>,
+}
+
+impl Drop for Echo {
+    fn drop(&mut self) {
+        for task in self.remotes.values() {
+            task.abort();
+        }
+    }
 }
 
 impl server::Handler for Echo {
@@ -29,7 +51,6 @@ impl server::Handler for Echo {
         reply: server::ChannelOpenHandle,
         _: &mut server::Session,
     ) -> Result<(), Self::Error> {
-        assert_eq!(host, "127.0.0.1");
         assert_eq!(origin, "127.0.0.1");
         if port == 1 {
             reply.reject(russh::ChannelOpenFailure::AdministrativelyProhibited).await;
@@ -37,6 +58,7 @@ impl server::Handler for Echo {
         } // Exercise a real SSH channel-open rejection.
         reply.accept().await;
         self.opened.send(port).unwrap();
+        let _ = self.targets.send(host.to_owned());
         self.streams.spawn(async move {
             let mut stream = channel.into_stream();
             let mut bytes = [0; 128];
@@ -52,11 +74,74 @@ impl server::Handler for Echo {
         });
         Ok(())
     }
+
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        session: &mut server::Session,
+    ) -> Result<bool, Self::Error> {
+        assert_eq!(address, "127.0.0.1");
+        let _ = self.events.send(ForwardEvent::Requested(*port));
+        if *port == 1 {
+            return Ok(false);
+        }
+        let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, *port as u16)).await else {
+            return Ok(false);
+        };
+        if let Some(gate) = &self.registration_gate {
+            gate.acquire().await.unwrap().forget();
+        }
+        let port = *port;
+        let handle = session.handle();
+        self.remotes.insert(port, tokio::spawn(async move {
+            let mut copies = JoinSet::new();
+            loop {
+                tokio::select! {
+                    Ok((mut socket, peer)) = listener.accept() => {
+                        let handle = handle.clone();
+                        copies.spawn(async move {
+                            if let Ok(channel) = handle.channel_open_forwarded_tcpip("127.0.0.1", port, peer.ip().to_string(), u32::from(peer.port())).await {
+                                let _ = tokio::io::copy_bidirectional(&mut socket, &mut channel.into_stream()).await;
+                            }
+                        });
+                    },
+                    Some(_) = copies.join_next(), if !copies.is_empty() => {},
+                }
+            }
+        }));
+        Ok(true)
+    }
+
+    async fn cancel_tcpip_forward(
+        &mut self,
+        address: &str,
+        port: u32,
+        _: &mut server::Session,
+    ) -> Result<bool, Self::Error> {
+        assert_eq!(address, "127.0.0.1");
+        let _ = self.events.send(ForwardEvent::Cancelled(port));
+        if let Some(gate) = &self.cancellation_gate {
+            gate.acquire().await.unwrap().forget();
+        }
+        if self.refuse_cancel {
+            return Ok(false);
+        }
+        if let Some(task) = self.remotes.remove(&port) {
+            task.abort();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 struct Fixture {
     session: SharedSession,
     opened: mpsc::UnboundedReceiver<u32>,
+    targets: mpsc::UnboundedReceiver<String>,
+    events: mpsc::UnboundedReceiver<ForwardEvent>,
+    server_handle: server::Handle,
     server: JoinHandle<()>,
     _directory: tempfile::TempDir,
 }
@@ -69,6 +154,18 @@ impl Drop for Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_gate(None).await
+    }
+
+    async fn with_gate(registration_gate: Option<Arc<tokio::sync::Semaphore>>) -> Self {
+        Self::with_cancellation(registration_gate, None, false).await
+    }
+
+    async fn with_cancellation(
+        registration_gate: Option<Arc<tokio::sync::Semaphore>>,
+        cancellation_gate: Option<Arc<tokio::sync::Semaphore>>,
+        refuse_cancel: bool,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let known_hosts = directory.path().join("known_hosts");
         let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
@@ -87,16 +184,30 @@ impl Fixture {
         });
         let (client_io, server_io) = tokio::io::duplex(65536);
         let (sender, opened) = mpsc::unbounded_channel();
+        let (targets_tx, targets) = mpsc::unbounded_channel();
+        let (events_tx, events) = mpsc::unbounded_channel();
+        let (handle_tx, handle_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let session = server::run_stream(
                 config,
                 server_io,
-                Echo { opened: sender, streams: JoinSet::new() },
+                Echo {
+                    opened: sender,
+                    targets: targets_tx,
+                    events: events_tx,
+                    remotes: Default::default(),
+                    registration_gate,
+                    cancellation_gate,
+                    refuse_cancel,
+                    streams: JoinSet::new(),
+                },
             )
             .await
             .unwrap();
+            let _ = handle_tx.send(session.handle());
             let _ = session.await;
         });
+        let remote_forwards = Arc::new(remote::Registry::default());
         let mut session = client::connect_stream(
             Arc::new(client::Config::default()),
             client_io,
@@ -105,21 +216,32 @@ impl Fixture {
                 port: 22,
                 allow_prompt: false,
                 handshake: super::super::lifecycle::Handshake::default(),
+                remote_forwards: remote_forwards.clone(),
                 known_hosts_path: Some(known_hosts),
             },
         )
         .await
         .unwrap();
         assert!(session.authenticate_none("fixture").await.unwrap().success());
-        Self { session: Arc::new(session), opened, server, _directory: directory }
+        Self {
+            session: Arc::new(super::super::SharedConnection { session, remote_forwards }),
+            opened,
+            targets,
+            events,
+            server_handle: handle_rx.await.unwrap(),
+            server,
+            _directory: directory,
+        }
     }
 }
 
 fn check(future: impl std::future::Future<Output = ()>) {
+    check_with_budget(Duration::from_secs(10), future);
+}
+
+fn check_with_budget(budget: Duration, future: impl std::future::Future<Output = ()>) {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-        tokio::time::timeout(Duration::from_secs(10), future)
-            .await
-            .expect("forward regression timed out");
+        tokio::time::timeout(budget, future).await.expect("forward regression timed out");
     });
 }
 

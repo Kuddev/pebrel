@@ -1363,6 +1363,12 @@
   "ssh.ports.pending": "正在启动端口转发…",
   "ssh.ports.unavailable": "SSH 网络运行时不可用",
   "ssh.ports.started": "正在将 127.0.0.1:{local} 转发至 {host} 的 {remote} 端口",
+  "ssh.ports.mode_local": "本地（−L）",
+  "ssh.ports.mode_remote": "远程（−R）",
+  "ssh.ports.mode_dynamic": "动态（−D）",
+  "ssh.ports.dynamic_help": "本机 SOCKS5 CONNECT 代理。域名由 SSH 主机解析。",
+  "ssh.ports.started_remote": "正在将 {host} 的 {remote} 端口转发至 127.0.0.1:{local}",
+  "ssh.ports.started_dynamic": "SOCKS5 代理已监听 127.0.0.1:{local}",
   "terminal_effect": {
     "title": "自定义终端效果",
     "description": "为文字和光标所在的终端画面添加效果，不改变背景设置。导入后点击启用。",

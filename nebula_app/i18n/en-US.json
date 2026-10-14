@@ -1363,6 +1363,12 @@
   "ssh.ports.pending": "Starting port forwarding…",
   "ssh.ports.unavailable": "SSH network runtime unavailable",
   "ssh.ports.started": "Forwarding 127.0.0.1:{local} to {host} port {remote}",
+  "ssh.ports.mode_local": "Local (−L)",
+  "ssh.ports.mode_remote": "Remote (−R)",
+  "ssh.ports.mode_dynamic": "Dynamic (−D)",
+  "ssh.ports.dynamic_help": "SOCKS5 CONNECT proxy on this computer. Names are resolved on the SSH host.",
+  "ssh.ports.started_remote": "Forwarding {host} port {remote} to 127.0.0.1:{local}",
+  "ssh.ports.started_dynamic": "SOCKS5 proxy listening on 127.0.0.1:{local}",
   "terminal_effect": {
     "title": "Custom terminal effects",
     "description": "Apply effects to the terminal text and cursor without changing the background. Enable after importing.",

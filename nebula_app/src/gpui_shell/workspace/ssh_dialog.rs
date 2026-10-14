@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, ParentElement as _,
     Styled as _, Window, div,
@@ -11,6 +12,7 @@ use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::TerminalView;
 use crate::i18n::Message;
 use crate::ssh_prompt::{Prompt, PromptKind, PromptResponse};
+use crate::ssh_session::ForwardKind;
 
 use super::{NebulaWorkspace, workspace_ui_language};
 
@@ -131,6 +133,20 @@ mod tests {
             ),
             Modifiers::default(),
         );
+    }
+
+    fn press(cx: &mut gpui::VisualTestContext, key: &str) {
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
     }
 
     #[gpui::test]
@@ -285,6 +301,95 @@ mod tests {
         assert!(cx.debug_bounds("confirm-dialog-ok").is_none());
     }
     #[gpui::test]
+    fn ports_modes_use_real_clicks_and_dynamic_ignores_the_hidden_remote_input(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) =
+            cx.add_window_view(|window, cx| Root::new(cx.new(|_| DialogProbe), window, cx));
+        let owner = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalView::new(
+                    42,
+                    (80, 24),
+                    crate::gpui_shell::terminal::view::TerminalLaunch::Local {
+                        cwd: None,
+                        shell: Some(nebula_terminal::tty::Shell::new(
+                            "pebrel-test-missing-shell-executable".into(),
+                            vec![],
+                        )),
+                        shell_name: None,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        let inputs = cx.update(|window, cx| {
+            show_port_forward_dialog(owner.clone(), "fixture@localhost".into(), window, cx)
+        });
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        for selector in
+            ["ssh-forward-mode-local", "ssh-forward-mode-remote", "ssh-forward-mode-dynamic"]
+        {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            assert!(f32::from(bounds.size.height) >= 28.0);
+            assert!(f32::from(bounds.size.width) >= 90.0);
+        }
+        // Focus starts in the remote input. Tab traversal reaches actual mode
+        // buttons; Space/Enter must select modes without confirming the dialog.
+        press(cx, "shift-tab");
+        press(cx, "ctrl-space");
+        assert!(cx.debug_bounds("ssh-forward-remote").is_some());
+        press(cx, "space");
+        assert!(cx.debug_bounds("ssh-forward-remote").is_none());
+        assert!(cx.debug_bounds("confirm-dialog-ok").is_some());
+        click(cx, "ssh-forward-local");
+        press(cx, "shift-tab");
+        press(cx, "shift-tab");
+        press(cx, "enter");
+        assert!(cx.debug_bounds("ssh-forward-remote").is_some());
+        assert!(cx.debug_bounds("confirm-dialog-ok").is_some());
+        click(cx, "ssh-forward-mode-remote");
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(cx.debug_bounds("ssh-forward-remote").is_some());
+        let original_width = cx.debug_bounds("ssh-forward-local").unwrap().size.width;
+        click(cx, "ssh-forward-mode-dynamic");
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(cx.debug_bounds("ssh-forward-remote").is_none());
+        assert!(cx.debug_bounds("ssh-forward-local").unwrap().size.width > original_width);
+        click(cx, "ssh-forward-local");
+        cx.simulate_input("1080");
+        assert_eq!(inputs[1].read_with(cx, |input, _| input.value()).as_ref(), "1080");
+        assert!(inputs[0].read_with(cx, |input, _| input.value()).is_empty());
+        click(cx, "confirm-dialog-ok");
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            cx.debug_bounds("confirm-dialog-ok").is_none(),
+            "dynamic validates only its visible local port"
+        );
+        owner.read_with(cx, |view, _| {
+            assert!(view.port_forward_task.is_none());
+            assert!(view.port_forwards.is_empty());
+        });
+    }
+
+    #[gpui::test]
     fn pending_ports_task_finishes_after_its_source_window_closes(cx: &mut TestAppContext) {
         cx.update(|cx| gpui_component::init(cx));
         let (_, source) =
@@ -313,7 +418,7 @@ mod tests {
             start_port_forward_task(
                 &owner,
                 "fixture@localhost".into(),
-                (3000, 3001),
+                (ForwardKind::Local, 3000, 3001),
                 crate::gpui_shell::config::ui_language(cx),
                 async move { delivered.await.ok() },
                 cx,
@@ -364,7 +469,7 @@ mod tests {
             start_port_forward_task(
                 &owner,
                 "fixture@localhost".into(),
-                (1080, 3001),
+                (ForwardKind::Dynamic, 1080, 0),
                 crate::gpui_shell::config::ui_language(cx),
                 async { None },
                 cx,
@@ -425,7 +530,9 @@ fn show_port_forward_dialog(
         view.read(cx)
             .port_forwards
             .iter()
-            .map(|forward| (forward.local_port(), forward.remote_port()))
+            .map(|forward| {
+                (forward.id(), forward.kind(), forward.local_port(), forward.remote_port())
+            })
             .collect::<Vec<_>>(),
     );
     let remote_input = cx.new(|cx| InputState::new(window, cx).placeholder("3000"));
@@ -434,6 +541,7 @@ fn show_port_forward_dialog(
     let inputs = [remote_input.clone(), local_input.clone()];
     let target = view.downgrade();
     let language = workspace_ui_language();
+    let kind = Rc::new(Cell::new(ForwardKind::Local));
 
     window.open_dialog(cx, move |dialog, window, _cx| {
         let submit_target = target.clone();
@@ -445,6 +553,8 @@ fn show_port_forward_dialog(
         let content_remote = remote_input.clone();
         let content_local = local_input.clone();
         let content_destination = destination.clone();
+        let submit_kind = kind.clone();
+        let content_kind = kind.clone();
         confirm_dialog(
             dialog,
             window,
@@ -464,7 +574,7 @@ fn show_port_forward_dialog(
                         .child(language.text(Message::SshPortsEmpty)),
                 );
             } else {
-                for (index, (local_port, remote_port)) in
+                for (index, (id, kind, local_port, remote_port)) in
                     content_forwards.iter().copied().enumerate()
                 {
                     let stop_target = content_target.clone();
@@ -473,7 +583,7 @@ fn show_port_forward_dialog(
                             .w_full()
                             .items_center()
                             .justify_between()
-                            .child(format!("127.0.0.1:{local_port} → 127.0.0.1:{remote_port}"))
+                            .child(forward_label(language, kind, local_port, remote_port))
                             .child(
                                 Button::new(("ssh-port-stop", index))
                                     .icon(IconName::Close)
@@ -483,10 +593,10 @@ fn show_port_forward_dialog(
                                     .on_click(move |_, window, cx| {
                                         if let Some(view) = stop_target.upgrade() {
                                             view.update(cx, |view, cx| {
-                                                if let Some(position) =
-                                                    view.port_forwards.iter().position(|forward| {
-                                                        forward.local_port() == local_port
-                                                    })
+                                                if let Some(position) = view
+                                                    .port_forwards
+                                                    .iter()
+                                                    .position(|forward| forward.id() == id)
                                                 {
                                                     view.port_forwards.remove(position);
                                                     cx.notify();
@@ -499,24 +609,72 @@ fn show_port_forward_dialog(
                     );
                 }
             }
+            let mut modes = h_flex().w_full().gap_2();
+            for (mode, message, selector) in [
+                (ForwardKind::Local, Message::SshPortsModeLocal, "ssh-forward-mode-local"),
+                (ForwardKind::Remote, Message::SshPortsModeRemote, "ssh-forward-mode-remote"),
+                (ForwardKind::Dynamic, Message::SshPortsModeDynamic, "ssh-forward-mode-dynamic"),
+            ] {
+                let selected = content_kind.clone();
+                let keyboard_selected = content_kind.clone();
+                let enter_selected = content_kind.clone();
+                modes = modes.child(
+                    Button::new(selector)
+                        .debug_selector(move || selector.to_owned())
+                        .flex_1()
+                        .label(language.text(message))
+                        .selected(content_kind.get() == mode)
+                        .on_key_down(move |event, window, cx| {
+                            if event.keystroke.key == "space"
+                                && !event.keystroke.modifiers.modified()
+                            {
+                                keyboard_selected.set(mode);
+                                window.refresh();
+                                cx.stop_propagation();
+                            }
+                        })
+                        // Enter is a Dialog action; handle it at the focused
+                        // mode button so selecting a mode does not submit.
+                        .on_action(move |_: &gpui_component::dialog::ConfirmDialog, window, cx| {
+                            enter_selected.set(mode);
+                            window.refresh();
+                            cx.stop_propagation();
+                        })
+                        .on_click(move |_, window, _| {
+                            selected.set(mode);
+                            window.refresh();
+                        }),
+                );
+            }
+            body = body.child(modes);
+            if content_kind.get() == ForwardKind::Dynamic {
+                body = body.child(
+                    div()
+                        .text_sm()
+                        .text_color(_cx.theme().muted_foreground)
+                        .child(language.text(Message::SshPortsDynamicHelp)),
+                );
+            }
             body = body.child(
                 h_flex()
                     .w_full()
                     .gap_3()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .gap_1()
-                            .child(language.text(Message::SshPortsRemote))
-                            .child(
-                                div()
-                                    .debug_selector(|| "ssh-forward-remote".to_owned())
-                                    .w_full()
-                                    .h_8()
-                                    .flex_shrink_0()
-                                    .child(Input::new(&content_remote).w_full()),
-                            ),
-                    )
+                    .when(content_kind.get() != ForwardKind::Dynamic, |row| {
+                        row.child(
+                            v_flex()
+                                .flex_1()
+                                .gap_1()
+                                .child(language.text(Message::SshPortsRemote))
+                                .child(
+                                    div()
+                                        .debug_selector(|| "ssh-forward-remote".to_owned())
+                                        .w_full()
+                                        .h_8()
+                                        .flex_shrink_0()
+                                        .child(Input::new(&content_remote).w_full()),
+                                ),
+                        )
+                    })
                     .child(
                         v_flex()
                             .flex_1()
@@ -540,8 +698,12 @@ fn show_port_forward_dialog(
                 .child(body)
         })
         .on_ok(move |_, window, cx| {
-            let remote_port =
-                submit_remote.read(cx).value().trim().parse::<u16>().ok().filter(|port| *port != 0);
+            let kind = submit_kind.get();
+            let remote_port = if kind == ForwardKind::Dynamic {
+                Some(0)
+            } else {
+                submit_remote.read(cx).value().trim().parse::<u16>().ok().filter(|port| *port != 0)
+            };
             let local_port =
                 submit_local.read(cx).value().trim().parse::<u16>().ok().filter(|port| *port != 0);
             let (Some(remote_port), Some(local_port)) = (remote_port, local_port) else {
@@ -563,19 +725,16 @@ fn show_port_forward_dialog(
             if owner.read(cx).port_forward_task.is_some() {
                 return false;
             }
-            let work_destination = submit_destination.clone();
+            let Some(forwarder) = owner.read(cx).port_forwarder() else {
+                return true;
+            };
             start_port_forward_task(
                 &owner,
                 submit_destination.clone(),
-                (local_port, remote_port),
+                (kind, local_port, remote_port),
                 language,
                 super::remote_files::remote_call(move || async move {
-                    crate::ssh_session::open_local_forward(
-                        &work_destination,
-                        local_port,
-                        remote_port,
-                    )
-                    .await
+                    forwarder.open(kind, local_port, remote_port).await
                 }),
                 cx,
             );
@@ -589,11 +748,11 @@ fn show_port_forward_dialog(
 fn start_port_forward_task(
     owner: &Entity<TerminalView>,
     destination: String,
-    (local, remote): (u16, u16),
+    (kind, local, remote): (ForwardKind, u16, u16),
     language: crate::i18n::UiLanguage,
     result: impl std::future::Future<
         Output = Option<
-            Result<crate::ssh_session::LocalForward, Box<dyn std::error::Error + Send + Sync>>,
+            Result<crate::ssh_session::PortForward, Box<dyn std::error::Error + Send + Sync>>,
         >,
     > + 'static,
     cx: &mut App,
@@ -611,12 +770,16 @@ fn start_port_forward_task(
                     return None;
                 }
                 match result {
-                    Some(Ok(forward)) => {
+                    Some(Ok(forward)) if forward.is_active() => {
                         view.port_forwards.push(forward);
                         Some((
                             crate::display::ToastKind::Info,
                             language.format(
-                                Message::SshPortsStarted,
+                                match kind {
+                                    ForwardKind::Local => Message::SshPortsStarted,
+                                    ForwardKind::Remote => Message::SshPortsStartedRemote,
+                                    ForwardKind::Dynamic => Message::SshPortsStartedDynamic,
+                                },
                                 &[
                                     ("local", &local.to_string()),
                                     ("host", &destination),
@@ -625,6 +788,7 @@ fn start_port_forward_task(
                             ),
                         ))
                     },
+                    Some(Ok(_)) => None,
                     Some(Err(error)) => {
                         Some((crate::display::ToastKind::Warning, error.to_string()))
                     },
@@ -645,4 +809,25 @@ fn start_port_forward_task(
         view.port_forward_task = Some(task);
         cx.notify();
     });
+}
+
+fn forward_label(
+    language: crate::i18n::UiLanguage,
+    kind: ForwardKind,
+    local: u16,
+    remote: u16,
+) -> String {
+    match kind {
+        ForwardKind::Local => format!(
+            "{}  127.0.0.1:{local} → 127.0.0.1:{remote}",
+            language.text(Message::SshPortsModeLocal)
+        ),
+        ForwardKind::Remote => format!(
+            "{}  127.0.0.1:{remote} → 127.0.0.1:{local}",
+            language.text(Message::SshPortsModeRemote)
+        ),
+        ForwardKind::Dynamic => {
+            format!("{}  SOCKS5 127.0.0.1:{local}", language.text(Message::SshPortsModeDynamic))
+        },
+    }
 }

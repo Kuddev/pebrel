@@ -76,6 +76,7 @@ fn unknown_host_needs_explicit_trust_and_changed_keys_remain_rejected() {
         port: 2200,
         allow_prompt: false,
         handshake: super::lifecycle::Handshake::default(),
+        remote_forwards: Default::default(),
         known_hosts_path: Some(path.clone()),
     };
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

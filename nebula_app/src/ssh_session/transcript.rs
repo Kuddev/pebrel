@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 
-use super::{ClientSession, SessionError, SharedSession, exec};
+use super::{SessionError, SharedConnection, SharedSession, exec};
 
 #[derive(Clone)]
 pub struct TranscriptReader {
-    session: Weak<ClientSession>,
+    session: Weak<SharedConnection>,
     closed: watch::Receiver<bool>,
 }
 
