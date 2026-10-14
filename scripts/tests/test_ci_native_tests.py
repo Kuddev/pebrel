@@ -194,7 +194,8 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(review_regression_font_fields_align_and_dropdown_toggles_with_search)"
                           " or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)"
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_reuses_window_and_preserves_each_program_and_directory)"
-                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)",
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)"
+                          " or test(=gpui_shell::settings_pane::tests::rename_keymap_row_is_searchable_and_enters_capture)",
                 "test-group": "theme-studio",
             }, {
                 "filter": "test(=gpui_shell::terminal::view::startup_tests::"
