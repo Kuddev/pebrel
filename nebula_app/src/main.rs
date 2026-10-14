@@ -15,6 +15,7 @@
 ))]
 compile_error!(r#"at least one of the "x11"/"wayland" features must be enabled"#);
 
+#[cfg(feature = "legacy-shell")]
 use std::env;
 use std::error::Error;
 use std::fmt::Write as _;
@@ -114,6 +115,7 @@ mod saved_commands;
 mod scheduler;
 #[cfg(test)]
 mod scientific_corpus;
+mod scrollbar;
 mod session;
 mod shell_detect;
 mod ssh;
@@ -244,6 +246,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         #[cfg(windows)]
         if try_hand_over_to_resident(&options) {
             return Ok(());
+        }
+        // The first WSL pane spawns before any guest could answer; ask its guest
+        // now, off this thread, so a running distribution has answered by then
+        // (see `platform::wsl_guest_shell`). An explicit command opens no shell.
+        if terminal_options.command().is_none() {
+            let shell_id = shell_id.clone();
+            platform::wsl_guest_shell::warm_up(move || {
+                crate::gpui_shell::workspace::shell_launch::startup_shell(shell_id)
+            });
         }
         gpui_shell::run_shell(
             initial_cwd,
@@ -581,13 +592,7 @@ fn resident_launch_directory(
     options: &cli::TerminalOptions,
     settings: &nebula_settings::RuntimeSettings,
 ) -> Option<std::path::PathBuf> {
-    // 进程 cwd 只是缺省值，不能在交接前把它提升成覆盖用户设置的显式目录。
-    options
-        .resolved_working_directory()
-        .or_else(|| settings.startup_directory_path())
-        .or_else(|| env::current_dir().ok())
-        .filter(|path| path.is_dir())
-        .and_then(|path| std::path::absolute(path).ok())
+    platform::startup::resident_launch_directory(options.resolved_working_directory(), settings)
 }
 
 #[cfg(test)]
