@@ -258,11 +258,19 @@ impl HintMatch {
 /// Program-drawn tables (Pi's `│ cell │`) hard-wrap a long token at the cell
 /// edge without terminal wrap flags. A match that fills its cell continues at
 /// the start of the same cell on the next row, so open the joined target.
+/// Only a row whose other cells are blank and whose cell text is not itself a
+/// link counts as a continuation; anything else is the next record.
 fn table_cell_continuation<T>(term: &Term<T>, mut end: Point) -> String {
     let grid = term.grid();
     let blank = |point: Point| {
         let cell = &grid[point];
         cell.c == ' ' && !cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+    };
+    let others_blank = |line: Line, left: Column, right: Column| {
+        (0..=term.last_column().0)
+            .filter(|column| !(left.0..=right.0).contains(column))
+            .map(|column| Point::new(line, Column(column)))
+            .all(|point| grid[point].c == '│' || blank(point))
     };
     let mut tail = String::new();
     loop {
@@ -286,6 +294,7 @@ fn table_cell_continuation<T>(term: &Term<T>, mut end: Point) -> String {
             || grid[line][right].c != '│'
             || !blank(Point::new(line, left + 1))
             || blank(start)
+            || !others_blank(line, left, right)
         {
             break;
         }
@@ -293,7 +302,11 @@ fn table_cell_continuation<T>(term: &Term<T>, mut end: Point) -> String {
         while next.column + 1 < right && !blank(Point::new(line, next.column + 1)) {
             next.column += 1;
         }
-        tail.push_str(&term.bounds_to_string(start, next));
+        let piece = term.bounds_to_string(start, next);
+        if piece.contains("://") {
+            break;
+        }
+        tail.push_str(&piece);
         end = next;
     }
     tail
@@ -928,6 +941,21 @@ mod tests {
             let point = Point::new(Line(0), Column(9));
             let hit = highlighted_at(&term, &config, point, ModifiersState::CONTROL).unwrap();
             assert_eq!(hit.text(&term).unwrap().as_ref(), expected);
+        }
+    }
+
+    #[test]
+    fn table_records_are_not_joined_to_a_complete_link() {
+        for (content, column) in [
+            ("│ https://a.test/a │\r\n│ https://b.test/b │", 4),
+            ("│ one │ https://a.test/a │\r\n│ two │ https://b.test/b │", 10),
+            ("│ one │ https://a.test/a │\r\n│ two │ plain-words-here │", 10),
+        ] {
+            let term = mock_term(content);
+            let config = UiConfig::default();
+            let point = Point::new(Line(0), Column(column));
+            let hit = highlighted_at(&term, &config, point, ModifiersState::CONTROL).unwrap();
+            assert_eq!(hit.text(&term).unwrap().as_ref(), "https://a.test/a");
         }
     }
 
