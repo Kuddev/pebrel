@@ -219,4 +219,4 @@ pub(super) async fn read_bounded(
 
 #[cfg(test)]
 #[path = "document/tests.rs"]
-mod tests;
+pub(crate) mod tests;

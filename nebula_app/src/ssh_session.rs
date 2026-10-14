@@ -33,6 +33,8 @@ mod forward;
 mod integration;
 mod lifecycle;
 mod route;
+#[cfg(test)]
+pub(crate) mod sftp_test_support;
 mod transcript;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
@@ -1017,6 +1019,10 @@ async fn open_exec_channel(
 pub(crate) async fn open_sftp(
     raw_destination: &str,
 ) -> Result<russh_sftp::client::SftpSession, SessionError> {
+    #[cfg(test)]
+    if let Some(session) = sftp_test_support::session(raw_destination) {
+        return open_sftp_channel(&session?).await;
+    }
     let profiles_path = crate::display::nebula_data_dir().join("ssh_profiles.json");
     let raw = raw_destination.to_owned();
     let (destination, profile) = tokio::task::spawn_blocking(move || {
@@ -1033,6 +1039,12 @@ pub(crate) async fn open_sftp(
 
     // SFTP 面板自己有加载态，不参与终端 pane 的连接卡片。
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
+    open_sftp_channel(&session).await
+}
+
+async fn open_sftp_channel(
+    session: &SharedSession,
+) -> Result<russh_sftp::client::SftpSession, SessionError> {
     let channel = lifecycle::network("SFTP channel", session.channel_open_session()).await?;
     channel.request_subsystem(true, "sftp").await?;
     // 显式给参数而不是用上游默认值：默认单包 256 KiB 会让每个 READ/WRITE 都

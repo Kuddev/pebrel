@@ -170,6 +170,10 @@ use crate::macos::locale;
 use crate::polling::{IoListener, ipc};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    if gpui_shell::workspace::files_native_qa::run_if_requested()? {
+        return Ok(());
+    }
     #[cfg(all(target_os = "macos", feature = "gpui-shell"))]
     if let Some(code) = update_download::handoff::macos::run_helper_if_requested() {
         std::process::exit(code);

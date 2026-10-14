@@ -239,6 +239,20 @@ impl RemoteBrowser {
 
     /// 解绑：聚焦回本地 pane 时调用。目录、选择和滚动位置先按 pane 停放；
     /// 连接本身由下层按目的地缓存，这里不触碰 transport。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn files_test_snapshot(&mut self, pane: u64, destination: &str, path: &str) {
+        self.snapshots.insert(
+            pane,
+            RemoteDirectorySnapshot {
+                destination: destination.to_owned(),
+                path: path.to_owned(),
+                entries: Vec::new(),
+                error: None,
+                selected: None,
+            },
+        );
+    }
+
     fn detach(&mut self) {
         self.park_active();
         self.pane = None;

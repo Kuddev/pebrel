@@ -5,10 +5,10 @@ use crate::i18n::Message;
 use gpui::{EntityId, KeyDownEvent, Task};
 
 #[derive(Clone, PartialEq)]
-struct PathOrigin {
-    view: Option<EntityId>,
-    root: Option<PathBuf>,
-    wsl: Option<crate::shell_detect::WslCwd>,
+pub(in crate::gpui_shell::workspace) struct PathOrigin {
+    pub(in crate::gpui_shell::workspace) view: Option<EntityId>,
+    pub(in crate::gpui_shell::workspace) root: Option<PathBuf>,
+    pub(in crate::gpui_shell::workspace) wsl: Option<crate::shell_detect::WslCwd>,
 }
 
 pub(in crate::gpui_shell::workspace) struct PathEditor {
@@ -19,7 +19,7 @@ pub(in crate::gpui_shell::workspace) struct PathEditor {
     _subscription: Subscription,
 }
 
-fn display_path(path: &std::path::Path) -> String {
+pub(in crate::gpui_shell::workspace) fn display_path(path: &std::path::Path) -> String {
     let value = path.to_string_lossy();
     if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{unc}")
@@ -28,7 +28,7 @@ fn display_path(path: &std::path::Path) -> String {
     }
 }
 
-fn resolve_directory(
+pub(in crate::gpui_shell::workspace) fn resolve_directory(
     origin: &PathOrigin,
     text: &str,
 ) -> std::io::Result<(PathBuf, Option<String>)> {

@@ -14,6 +14,11 @@ impl Render for Surface {
 }
 
 impl TerminalView {
+    pub(crate) fn files_test_ssh_ready(&mut self, cx: &mut Context<Self>) {
+        self.exited = None;
+        self.apply_ssh_stage(crate::ssh_session::SshStage::Ready, cx);
+    }
+
     // 工作区级按键回归复用同一个终端夹具，避免另造一套输入/会话状态。
     pub(crate) fn install_completion_test_session(&mut self) -> Receiver<Msg> {
         let (session, receiver) = session::test_session();

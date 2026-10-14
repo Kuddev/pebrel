@@ -22,7 +22,7 @@ use crate::i18n::Message;
 use super::NebulaWorkspace;
 
 mod path_bar;
-pub(super) use path_bar::PathEditor;
+pub(super) use path_bar::{PathEditor, PathOrigin, display_path, resolve_directory};
 
 /// 行距（旧壳 `PanelLayout::row_h`）。
 pub(super) const ROW_PITCH: f32 = 34.0;

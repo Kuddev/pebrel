@@ -1,4 +1,8 @@
 {
+  "dual_files": {
+    "search": "Search files and folders…",
+    "drag": "Drag local files onto the SSH tree to upload."
+  },
   "tray": {
     "show": "Show Pebrel",
     "quit": "Quit"

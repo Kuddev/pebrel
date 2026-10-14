@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
-pub(super) struct Node {
+pub(crate) struct Node {
     pub data: Vec<u8>,
     pub permissions: u32,
     pub uid: u32,
@@ -17,7 +17,7 @@ pub(super) struct Node {
 }
 
 impl Node {
-    pub(super) fn new(data: &[u8]) -> Self {
+    pub(crate) fn new(data: &[u8]) -> Self {
         Self { data: data.to_vec(), permissions: 0o100640, uid: 1001, gid: 1002, modified: 10 }
     }
 
@@ -34,7 +34,7 @@ impl Node {
 }
 
 #[derive(Default)]
-pub(super) struct Store {
+pub(crate) struct Store {
     pub files: BTreeMap<String, Node>,
     pub aliases: BTreeMap<String, String>,
     pub fail_writes: bool,
@@ -44,7 +44,7 @@ pub(super) struct Store {
     pub cancel_after_backup: Option<DocumentOperation>,
 }
 
-struct Peer {
+pub(crate) struct Peer {
     store: Arc<Mutex<Store>>,
     handles: BTreeMap<String, String>,
 }
@@ -59,6 +59,10 @@ fn success(id: u32) -> Status {
 }
 
 impl Peer {
+    pub(crate) fn new(store: Arc<Mutex<Store>>) -> Self {
+        Self { store, handles: BTreeMap::new() }
+    }
+
     fn attributes(&self, path: &str) -> Result<FileAttributes, StatusCode> {
         let store = self.store.lock().unwrap();
         let path = store.aliases.get(path).map(String::as_str).unwrap_or(path);
@@ -70,6 +74,64 @@ impl russh_sftp::server::Handler for Peer {
     type Error = StatusCode;
     fn unimplemented(&self) -> Self::Error {
         StatusCode::OpUnsupported
+    }
+
+    async fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, StatusCode> {
+        let mut store = self.store.lock().unwrap();
+        if store.files.contains_key(&path) {
+            return Err(StatusCode::Failure);
+        }
+        let parent = path
+            .rsplit_once('/')
+            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+            .ok_or(StatusCode::NoSuchFile)?;
+        if !store.files.get(parent).is_some_and(|node| node.permissions & 0o170000 == 0o040000) {
+            return Err(StatusCode::NoSuchFile);
+        }
+        store.files.insert(
+            path,
+            Node {
+                permissions: 0o040000 | attrs.permissions.unwrap_or(0o755) & 0o7777,
+                ..Node::new(&[])
+            },
+        );
+        Ok(success(id))
+    }
+
+    async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, StatusCode> {
+        if self.attributes(&path)?.permissions.unwrap_or(0) & 0o170000 != 0o040000 {
+            return Err(StatusCode::NoSuchFile);
+        }
+        let handle = format!("directory-{id}");
+        self.handles.insert(handle.clone(), path);
+        Ok(Handle { id, handle })
+    }
+
+    async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, StatusCode> {
+        let path = self.handles.remove(&handle).ok_or(StatusCode::Eof)?;
+        let prefix = format!("{}/", path.trim_end_matches('/'));
+        let store = self.store.lock().unwrap();
+        let files = store
+            .files
+            .iter()
+            .filter_map(|(path, node)| {
+                let name = path.strip_prefix(&prefix)?;
+                if name.is_empty() || name.contains('/') {
+                    return None;
+                }
+                Some(File {
+                    filename: name.to_owned(),
+                    longname: String::new(),
+                    attrs: node.attributes(),
+                })
+            })
+            .collect();
+        Ok(Name { id, files })
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, StatusCode> {
@@ -220,7 +282,7 @@ impl russh_sftp::server::Handler for Peer {
     }
 }
 
-pub(super) async fn connect(
+pub(crate) async fn connect(
     data: &[u8],
 ) -> (Arc<Mutex<Store>>, Arc<russh_sftp::client::SftpSession>) {
     let store = Arc::new(Mutex::new(Store::default()));

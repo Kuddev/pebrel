@@ -1,4 +1,8 @@
 {
+  "dual_files": {
+    "search": "搜索文件和文件夹…",
+    "drag": "将本地文件拖到 SSH 文件树即可上传。"
+  },
   "tray": {
     "show": "显示 Pebrel",
     "quit": "退出"

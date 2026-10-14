@@ -1,6 +1,6 @@
 use super::*;
 #[path = "tests/peer.rs"]
-mod peer;
+pub(crate) mod peer;
 
 fn run(future: impl std::future::Future<Output = ()>) {
     tokio::runtime::Builder::new_multi_thread()
