@@ -6,7 +6,7 @@ impl TextFileView {
     pub(super) fn render_toolbar(
         &self,
         editable: bool,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let language = super::super::config::ui_language(cx);
@@ -64,7 +64,15 @@ impl TextFileView {
                         )
                     }),
             )
-            .child(div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border))
+            .when(self.markdown, |bar| bar.child(self.render_view_modes(window, cx)))
+            .child(
+                div()
+                    .debug_selector(|| "file-toolbar-divider".into())
+                    .w(px(1.0))
+                    .h(px(18.0))
+                    .mx_1()
+                    .bg(cx.theme().border),
+            )
             .when(!self.details_hosted, |bar| {
                 bar.child(
                     Button::new("file-details-toggle")
@@ -102,9 +110,7 @@ impl TextFileView {
                         })),
                 )
             })
-            .when(self.markdown, |bar| {
-                bar.child(self.render_document_menu(cx)).child(self.render_view_modes(cx))
-            })
+            .when(self.markdown, |bar| bar.child(self.render_document_menu(cx)))
             .child(
                 Button::new("file-fullscreen")
                     .ghost()
@@ -164,11 +170,30 @@ impl TextFileView {
             .into_any_element()
     }
 
-    fn render_view_modes(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_view_modes(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let language = super::super::config::ui_language(cx);
-        let theme = cx.theme();
-        let mut modes =
-            h_flex().id("file-view-modes").gap(px(2.0)).p(px(2.0)).rounded(px(9.0)).bg(theme.muted);
+        let target = if self.preview { 0.0 } else { 0.5 };
+        let indicator = div()
+            .id("file-mode-indicator")
+            .debug_selector(|| "file-mode-indicator".to_owned())
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(gpui::relative(target))
+            .w(gpui::relative(0.5))
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .shadow_sm();
+        let indicator = crate::gpui_shell::widgets::segmented::animate_segment_indicator(
+            format!("file-mode-{}", cx.entity_id()).into(),
+            indicator,
+            target,
+            window,
+            cx,
+        );
+        let mut modes = h_flex().relative().child(indicator);
         for (preview, id, icon, label) in [
             (true, "file-mode-reading", IconName::Eye, Message::EditorReading),
             (false, "file-mode-source", IconName::Code, Message::EditorSource),
@@ -177,25 +202,27 @@ impl TextFileView {
             modes = modes.child(
                 Button::new(id)
                     .debug_selector(move || id.to_owned())
-                    .ghost()
+                    .custom(
+                        gpui_component::button::ButtonCustomVariant::new(cx)
+                            .foreground(if selected {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .hover(cx.theme().foreground.opacity(0.04))
+                            .active(cx.theme().foreground.opacity(0.08)),
+                    )
                     .size(px(design::CONTROL_HEIGHT))
                     .rounded(px(7.0))
                     .border_1()
                     .border_color(gpui::transparent_black())
                     .icon(Icon::new(icon).size(px(design::ICON_SIZE)))
-                    .selected(selected)
+                    .toggled(selected)
                     .aria_label(language.text(label))
                     .tooltip(
                         language
                             .format(Message::EditorModeShortcut, &[("mode", language.text(label))]),
                     )
-                    .when(selected, |button| {
-                        button
-                            .bg(theme.background)
-                            .border_color(theme.border)
-                            .text_color(theme.foreground)
-                            .shadow_sm()
-                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         // 同一模式重复点击不切换，避免丢掉当前输入焦点与选择。
                         if this.preview != preview {
@@ -204,7 +231,14 @@ impl TextFileView {
                     })),
             );
         }
-        modes.into_any_element()
+        h_flex()
+            .id("file-view-modes")
+            .debug_selector(|| "file-view-modes".to_owned())
+            .p(px(2.0))
+            .rounded(px(9.0))
+            .bg(cx.theme().muted)
+            .child(modes)
+            .into_any_element()
     }
 
     fn render_document_menu(&self, cx: &mut Context<Self>) -> gpui::AnyElement {

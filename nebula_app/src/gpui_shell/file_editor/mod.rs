@@ -24,6 +24,7 @@ mod inline_selection;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod inline_selection_tests;
 mod input_rules;
+mod link_actions;
 mod live_commands;
 mod live_edit;
 mod live_navigation;
@@ -134,6 +135,8 @@ pub struct TextFileView {
     live_mode: bool,
     live_edit: Option<live_edit::LiveEdit>,
     object_edit: Option<object_edit::ObjectEdit>,
+    link_hover: Option<link_actions::LinkHover>,
+    link_hide_task: Option<Task<()>>,
     render_active: bool,
     preview_stale: bool,
     last_edit_cursor: Option<activity::EditCursor>,
@@ -295,6 +298,8 @@ impl TextFileView {
             outline: Outline::default(),
             blocks: Rc::default(),
             inline_views: Rc::default(),
+            link_hover: None,
+            link_hide_task: None,
             scroll: ListState::new(0, ListAlignment::Top, px(500.0)),
             preview_selection_scroll_epoch: 0,
             preview_selection_scroll_active: false,
@@ -616,6 +621,8 @@ impl TextFileView {
     }
 
     fn apply_outline(&mut self, outline: Outline, cx: &mut Context<Self>) {
+        self.link_hover = None;
+        self.link_hide_task = None;
         self.preview_stale = false;
         self.preview_code_languages.clear();
         self.inline_views.borrow_mut().clear();
@@ -646,6 +653,8 @@ impl TextFileView {
         }
         self.finish_live_edit(cx);
         self.preview = !self.preview;
+        self.link_hover = None;
+        self.link_hide_task = None;
         self.preview_images.update(cx, |images, cx| {
             images.set_active(self.render_active && self.preview, window, cx);
         });
@@ -1025,6 +1034,7 @@ impl Render for TextFileView {
                 )
             })
             .child(self.render_toolbar(editable, window, cx))
+            .child(self.render_link_actions(cx))
             .when_some(notice, |root, notice| {
                 root.child(div().px_3().py_1().text_xs().text_color(muted).child(notice))
             })
