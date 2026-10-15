@@ -115,8 +115,7 @@ unrelated generated files. Preserve third-party license/attribution notices and
 identify the source of any externally copied code or assets for license review.
 
 Keep one-off test scripts and probe outputs under `tmp/`; external project checkouts
-and investigation notes belong in the reserved `research/`, `reference-projects/`
-or `external-probes/` local directories. These are not vendored build dependencies:
+and investigation notes belong outside the checkout. These are not vendored build dependencies:
 do not blanket-ignore `third_party/` or maintained test/diagnostic sources. `docs/`
 is private by default; public documentation needs an exact reviewed allowlist entry
 in `.gitignore`. Do not publish competitor studies or HTML prototypes by opening a

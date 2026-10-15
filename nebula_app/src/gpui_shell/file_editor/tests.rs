@@ -2,6 +2,281 @@ use super::*;
 use gpui::{TestAppContext, VisualTestContext};
 use gpui_component::Root;
 
+#[test]
+fn link_destination_edit_preserves_nested_labels_titles_and_other_occurrences() {
+    use super::link_actions::replace_destination;
+    let source = r#"[a [nested] `](` \\*label*](https://old.test "title ]( &amp; tail")"#;
+    let replacement = replace_destination(source, "https://new.test/?a=1&copy;=2").unwrap();
+    assert!(replacement.starts_with(r#"[a [nested] `](` \\*label*](<"#));
+    let ast = markdown::to_mdast(&replacement, &markdown::ParseOptions::gfm()).unwrap();
+    let link = ast.children().unwrap()[0]
+        .children()
+        .unwrap()
+        .iter()
+        .find_map(
+            |node| {
+                if let markdown::mdast::Node::Link(link) = node { Some(link) } else { None }
+            },
+        )
+        .unwrap();
+    assert_eq!(link.url, "https://new.test/?a=1&copy;=2");
+    assert_eq!(link.title.as_deref(), Some("title ]( & tail"));
+    assert_eq!(
+        replace_destination("[same][ref]", "https://new.test").unwrap(),
+        "[same](<https://new.test>)"
+    );
+}
+
+#[gpui::test]
+fn rewritten_preview_edits_the_link_occurrence_after_matching_code_text(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("link-occurrence.md");
+    let raw = "[same](https://example.com)";
+    let source = format!("`{raw}` <img src=\"a.png\"> {raw} and {raw}");
+    std::fs::write(&path, &source).unwrap();
+    let (file, mut window) = open(path, cx);
+    // 预览重写使偏移变化；代码里的同样语法不能计为一个真实链接。
+    let rendered = source.replace("a.png", "https://example.com/expanded-image.png");
+    let start = rendered.rfind(raw).unwrap();
+    window.update(|_, cx| {
+        file.update(cx, |view, cx| {
+            view.update_link_hover(
+                0,
+                None,
+                &rendered,
+                Some(gpui_component::text::TextLinkHover {
+                    url: "https://example.com".into(),
+                    source_range: Some(start..start + raw.len()),
+                    position: gpui::point(px(20.0), px(20.0)),
+                    line_height: px(20.0),
+                }),
+                cx,
+            );
+            assert_eq!(
+                view.link_hover.as_ref().unwrap().range,
+                Some(source.rfind(raw).unwrap()..source.len())
+            );
+        })
+    });
+}
+
+#[gpui::test]
+fn link_hover_callbacks_release_evicted_text_views(cx: &mut TestAppContext) {
+    for source in [
+        "[link](https://example.com)",
+        "- [link](https://example.com)",
+        "[link](https://example.com) $x$",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hover-lifetime.md");
+        std::fs::write(&path, source).unwrap();
+        let (file, mut window) = open(path, cx);
+        window.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let views = file.read_with(&window, |view, _| {
+            view.blocks
+                .borrow()
+                .iter()
+                .flatten()
+                .map(Entity::downgrade)
+                .chain(view.inline_views.borrow().values().cloned())
+                .collect::<Vec<_>>()
+        });
+        assert!(!views.is_empty());
+        window.update(|window, cx| file.update(cx, |view, cx| view.toggle_preview(window, cx)));
+        for _ in 0..2 {
+            window.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+        }
+        assert!(
+            views.iter().all(|view| view.upgrade().is_none()),
+            "a hover callback must not retain its own text view"
+        );
+    }
+}
+
+#[gpui::test]
+fn link_hover_actions_copy_and_open_the_complete_target_without_editing(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("link-actions.md");
+    let url = format!("https://example.com/{}7", "123456".repeat(80));
+    let source = format!("[visible link]({url})");
+    std::fs::write(&path, &source).unwrap();
+    let (file, mut cx) = open(path.clone(), cx);
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let block = cx.debug_bounds("markdown-preview-block-0").unwrap();
+    cx.simulate_mouse_move(
+        gpui::point(block.left() + px(20.0), block.top() + px(12.0)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let copy = cx.debug_bounds("markdown-link-copy").expect("hover creates the action strip");
+    cx.simulate_mouse_move(copy.center(), None, gpui::Modifiers::default());
+    cx.simulate_click(copy.center(), gpui::Modifiers::default());
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), url);
+    let open = cx.debug_bounds("markdown-link-open").unwrap();
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    assert_eq!(cx.opened_url(), Some(url));
+    file.read_with(&cx, |view, cx| {
+        assert_eq!(view.draft(cx), source);
+        assert!(!view.dirty);
+    });
+    assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+}
+
+#[gpui::test]
+fn link_edit_cancel_apply_and_reader_undo_change_only_the_selected_occurrence(
+    cx: &mut TestAppContext,
+) {
+    struct DialogLayer;
+    impl Render for DialogLayer {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().children(Root::render_dialog_layer(window, cx))
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("link-edit.md");
+    let source = "[same][ref] and [same][ref]\n\n[ref]: https://old.example";
+    std::fs::write(&path, source).unwrap();
+    let (file, mut cx) = open(path.clone(), cx);
+    cx.update(|window, cx| {
+        cx.set_reduce_motion(true);
+        let layer = cx.new(|_| DialogLayer);
+        window.replace_root(cx, |window, cx| Root::new(layer, window, cx));
+    });
+    let start = source.rfind("[same][ref]").unwrap();
+    for cancel in [true, false] {
+        cx.update(|window, cx| {
+            file.update(cx, |view, cx| {
+                view.edit_link(
+                    start..start + "[same][ref]".len(),
+                    "https://old.example".into(),
+                    view.content_revision,
+                    window,
+                    cx,
+                );
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let modifier = match crate::platform::Platform::current() {
+            crate::platform::Platform::MacOS => "cmd",
+            _ => "ctrl",
+        };
+        cx.simulate_keystrokes(&format!("{modifier}-a"));
+        cx.simulate_input("https://new.example/full7");
+        let button = cx
+            .debug_bounds(if cancel { "confirm-dialog-cancel" } else { "confirm-dialog-ok" })
+            .unwrap();
+        cx.simulate_click(button.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        let expected = if cancel {
+            source.to_owned()
+        } else {
+            source.replacen("and [same][ref]", "and [same](<https://new.example/full7>)", 1)
+        };
+        assert_eq!(file.read_with(&cx, |view, cx| view.draft(cx)), expected);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            source,
+            "link editing uses the normal unsaved document transaction"
+        );
+    }
+    cx.update(|window, cx| {
+        file.update(cx, |view, cx| {
+            view.travel_history(false, window, cx);
+        })
+    });
+    assert_eq!(file.read_with(&cx, |view, cx| view.draft(cx)), source);
+}
+
+#[gpui::test]
+fn reader_mode_segment_precedes_divider_and_tracks_selected_button(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reader-mode.md");
+    std::fs::write(&path, "# Reader").unwrap();
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (file, mut cx) = open(path, cx);
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let modes = cx.debug_bounds("file-view-modes").unwrap();
+    let divider = cx.debug_bounds("file-toolbar-divider").unwrap();
+    assert!(modes.right() < divider.left());
+    let source = cx.debug_bounds("file-mode-source").unwrap();
+    cx.simulate_click(source.center(), gpui::Modifiers::default());
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        assert!(!file.read(cx).preview);
+    });
+    let indicator = cx.debug_bounds("file-mode-indicator").unwrap();
+    assert!((indicator.center().x - source.center().x).abs() < px(1.0));
+    let reader = cx.debug_bounds("file-mode-reading").unwrap();
+    cx.simulate_click(reader.center(), gpui::Modifiers::default());
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        assert!(file.read(cx).preview);
+    });
+    let indicator = cx.debug_bounds("file-mode-indicator").unwrap();
+    assert!((indicator.center().x - reader.center().x).abs() < px(1.0));
+}
+
+#[gpui::test]
+fn list_and_table_links_keep_the_same_hover_actions(cx: &mut TestAppContext) {
+    for source in [
+        "- [link](https://example.com/full7)",
+        "| Name |\n| --- |\n| [link](https://example.com/full7) |",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("structured-link.md");
+        std::fs::write(&path, source).unwrap();
+        let (file, mut window) = open(path, cx);
+        let part = file.read_with(&window, |view, _| {
+            view.outline.structures[0]
+                .as_ref()
+                .unwrap()
+                .parts
+                .iter()
+                .position(|part| source[part.range.clone()].contains("[link]"))
+                .unwrap()
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let selector = match part {
+            0 => "markdown-part-0-0",
+            1 => "markdown-part-0-1",
+            _ => panic!("unexpected fixture part {part}"),
+        };
+        let bounds = window.debug_bounds(selector).unwrap();
+        window.simulate_mouse_move(
+            gpui::point(bounds.left() + px(20.0), bounds.top() + px(12.0)),
+            None,
+            gpui::Modifiers::default(),
+        );
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let copy = window.debug_bounds("markdown-link-copy").unwrap();
+        window.simulate_click(copy.center(), gpui::Modifiers::default());
+        assert_eq!(
+            window.read_from_clipboard().unwrap().text().unwrap(),
+            "https://example.com/full7"
+        );
+    }
+}
+
 pub(super) fn open(
     path: PathBuf,
     cx: &mut TestAppContext,

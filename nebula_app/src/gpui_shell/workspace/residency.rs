@@ -565,7 +565,14 @@ impl NebulaWorkspace {
                 serde_json::to_value(read)
                     .map_err(|error| ApiError::new("serialization_failed", error.to_string()))
             },
-            RuntimeCommand::ScrollPane { window_id, pane_id, lines, column, row } => {
+            RuntimeCommand::ScrollPane {
+                window_id,
+                pane_id,
+                lines,
+                column,
+                row,
+                application_only,
+            } => {
                 self.runtime_window_requested(*window_id)?;
                 let tab_ix = self.tab_of_pane(*pane_id).ok_or_else(|| {
                     ApiError::new("target_not_found", "scroll pane does not exist")
@@ -579,7 +586,9 @@ impl NebulaWorkspace {
                         .clone(),
                     _ => unreachable!("tab_of_pane only resolves terminal tabs"),
                 };
-                view.update(cx, |view, cx| view.runtime_scroll(*lines, *column, *row, window, cx))?;
+                view.update(cx, |view, cx| {
+                    view.runtime_scroll(*lines, *column, *row, *application_only, window, cx)
+                })?;
                 // 连续手势不改变窗口清单；不为每个滚轮回执重建整窗状态快照。
                 Ok(json!({"action": {"window_id": self.runtime_window_id,
                     "pane_id": pane_id, "lines": lines}}))
@@ -1189,6 +1198,7 @@ mod tests {
                     lines: 1,
                     column: 0,
                     row: 0,
+                    application_only: false,
                 };
                 let reply = workspace.execute_runtime_command(&command, window, cx).unwrap();
                 assert!(reply.get("snapshot").is_none());
