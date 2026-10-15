@@ -69,6 +69,9 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
     (Action::IncreaseFontSize, "增大字号", "Font size up"),
     (Action::DecreaseFontSize, "减小字号", "Font size down"),
     (Action::ResetFontSize, "重置字号", "Reset font size"),
+    // GPUI 壳的清屏没有静态默认键（⌘K 归 Shell 选择器）；这一行让用户
+    // 能把任意键（含 ⌘K）绑到清屏，落到 ClearTerminal 动作。
+    (Action::ClearHistory, "清屏", "Clear screen"),
 ];
 
 /// 设置页分组（无框裁定 2026-08-09：只用段标题+间距分组，不画容器）。
@@ -78,7 +81,7 @@ pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
     ("标签页", "Tabs", 5),
     ("窗格", "Panes", 7),
     ("侧栏面板", "Side panels", 2),
-    ("终端", "Terminal", 9),
+    ("终端", "Terminal", 10),
 ];
 
 /// 只读展示行（无法在图形页编辑，TOML/settings 行仍可覆盖其中的表驱动键）。
@@ -180,10 +183,10 @@ pub(crate) fn action_label(
     row: &(Action, &'static str, &'static str),
     language: super::UiLanguage,
 ) -> &'static str {
-    if row.0 == Action::RenameTab {
-        language.text(crate::i18n::Message::CommonRenameTab)
-    } else {
-        language.pick(row.1, row.2)
+    match row.0 {
+        Action::RenameTab => language.text(crate::i18n::Message::CommonRenameTab),
+        Action::ClearHistory => language.text(crate::i18n::Message::CommonClearScreen),
+        _ => language.pick(row.1, row.2),
     }
 }
 
@@ -1008,6 +1011,21 @@ mod tests {
             assert!(!action_label(row, *language).is_empty());
         }
         assert_eq!(action_label(row, super::super::UiLanguage::ZhCn), "重命名标签页");
+    }
+
+    #[test]
+    fn clear_screen_is_editable_and_localized_through_the_typed_message() {
+        use super::*;
+        let row =
+            EDITABLE_ACTIONS.iter().find(|(action, ..)| *action == Action::ClearHistory).unwrap();
+        for language in super::super::UiLanguage::ALL {
+            assert_eq!(
+                action_label(row, *language),
+                language.text(crate::i18n::Message::CommonClearScreen)
+            );
+            assert!(!action_label(row, *language).is_empty());
+        }
+        assert_eq!(action_label(row, super::super::UiLanguage::ZhCn), "清屏");
     }
 
     #[test]
