@@ -65,6 +65,7 @@ fn execute(command: &Command) -> super::Result<Value> {
             "manifest": package.manifest,
             "lua_executed": false,
             "validation": "manifest_and_entry_paths",
+            "host_runtime_methods": super::boundary::RUNTIME_METHODS,
         })),
         Command::Run { command, args, timeout_ms, .. } => {
             if args.len() > MAX_JSON_BYTES {
@@ -102,4 +103,41 @@ fn runtime_error(error: crate::runtime_api::ApiError) -> Error {
     // 部分完成与清理回执属于 Runtime 的结果，插件适配层不得将它们折叠成字符串。
     result.details = error.details;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXAMPLE: &str = include_str!("../../examples/plugins/native-overview/plugin.toml");
+
+    #[test]
+    fn check_reports_the_host_boundary_without_running_a_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("plugin.toml"), EXAMPLE).unwrap();
+        let result = execute(&Command::Check { path: dir.path().to_owned() }).unwrap();
+        assert_eq!(result["lua_executed"], false);
+        assert_eq!(result["host_runtime_methods"], json!(["runtime.describe"]));
+    }
+
+    #[test]
+    fn check_and_run_reject_self_granted_core_control_before_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            EXAMPLE.replace("runtime.describe", "window.close"),
+        )
+        .unwrap();
+        for command in [
+            Command::Check { path: dir.path().to_owned() },
+            Command::Run {
+                path: dir.path().to_owned(),
+                command: "describe".to_owned(),
+                args: "{}".to_owned(),
+                timeout_ms: 1000,
+            },
+        ] {
+            assert_eq!(execute(&command).unwrap_err().code, "unsupported_plugin_capability");
+        }
+    }
 }
