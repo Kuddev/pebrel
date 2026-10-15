@@ -4,6 +4,9 @@
 
 Implemented at the code level; compositor-specific behavior needs native acceptance.
 
+Initial visibility and the direct-XCB adapter are superseded by
+[Linux desktop lifecycle](2026-10-14-linux-desktop-lifecycle.md).
+
 ## Context
 
 Several desktop settings were exposed only on Windows. A window, its PTY, and

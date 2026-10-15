@@ -350,15 +350,21 @@ class TerminalSnapshotView(context: Context) : View(context) {
         val target = scrollTarget
         val source = frame
         // 先移动已在手机上的网格；本地边缘以外仍遵守原有远端滚轮及权限边界。
-        if (!wrapLines && source != null && source.history?.applicationScroll != false &&
+        if (source != null && source.history?.applicationScroll != false &&
             source.rows.isNotEmpty() && source.columns > 0 &&
             target?.supportsScroll == true) {
             val remaining = dy - (offsetY - previousY)
             scrollRemainder = (scrollRemainder - remaining / cellHeight).coerceIn(-32f, 32f)
             val lines = scrollRemainder.toInt()
             if (lines != 0) {
-                val column = ((gestureX + offsetX) / cellWidth).toInt().coerceIn(0, source.columns - 1)
-                val row = ((gestureY + offsetY) / cellHeight).toInt().coerceIn(0, source.rows.size - 1)
+                val visual = renderedFrame ?: source
+                val visualRow = ((gestureY + offsetY) / cellHeight).toInt().coerceIn(0, visual.rows.lastIndex)
+                val visualColumn = ((gestureX + offsetX) / cellWidth).toInt().coerceIn(0, visual.columns - 1)
+                // 手机换行只是显示投影，滚轮仍须指向原网格的格子，不能发送投影行列。
+                val cell = visual.sourceOffsets?.getOrNull(visualRow)?.plus(visualColumn)
+                    ?: (visualRow * source.columns + visualColumn)
+                val column = (cell % source.columns).coerceIn(0, source.columns - 1)
+                val row = (cell / source.columns).coerceIn(0, source.rows.size - 1)
                 if (target.scroll(lines, column, row)) {
                     scrollRemainder -= lines
                     followOutput = false
