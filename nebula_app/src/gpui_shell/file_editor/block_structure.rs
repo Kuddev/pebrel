@@ -14,11 +14,18 @@ pub(super) enum PartKind {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct ImageReference {
+    pub identifier: String,
+    pub alt: String,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct EditPart {
     pub range: Range<usize>,
     pub kind: PartKind,
     pub heading: Option<u8>,
     pub preview: Option<String>,
+    pub image_reference: Option<ImageReference>,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +92,7 @@ impl BlockStructure {
         let delta = length as isize - old.len() as isize;
         self.parts[part].range.end = old.start + length;
         self.parts[part].preview = None;
+        self.parts[part].image_reference = None;
         for (i, edit) in self.parts.iter_mut().enumerate() {
             if i != part {
                 shift(&mut edit.range, &old, delta);
@@ -183,7 +191,7 @@ pub(super) fn add(
     heading: Option<u8>,
 ) -> usize {
     let index = parts.len();
-    parts.push(EditPart { range, kind, heading, preview: None });
+    parts.push(EditPart { range, kind, heading, preview: None, image_reference: None });
     index
 }
 
