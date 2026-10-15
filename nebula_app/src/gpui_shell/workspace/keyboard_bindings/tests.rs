@@ -106,12 +106,12 @@ fn clear_history_maps_to_the_clear_terminal_action() {
         )
         .unwrap(),
     ];
+    // 对照组：⌘K 的静态默认键（Shell 选择器）必须存在，否则「用户绑定的
+    // 清屏压过静态默认键」的断言空跑。键表级构造三平台同形；macOS 上
+    // ⌘ 别名只在运行时注册的平台差异由
+    // `command_shortcut_registration_follows_runtime_platform` 单独守住。
     let mut statics = default_workspace_bindings();
-    if cfg!(target_os = "macos") {
-        // 对照组：macOS 的 ⌘K 静态默认键（Shell 选择器）必须存在，
-        // 否则「用户清屏压过默认键」的断言空跑。
-        statics.push(custom_workspace_binding("cmd+k", &Action::ToggleShellPicker).unwrap());
-    }
+    statics.push(custom_workspace_binding("cmd+k", &Action::ToggleShellPicker).unwrap());
     let keymap = Keymap::new(with_user_keybindings(&Keymap::new(statics), user));
 
     let contexts = [
