@@ -64,7 +64,6 @@ impl TextFileView {
                         )
                     }),
             )
-            .when(self.markdown, |bar| bar.child(self.render_document_menu(cx)))
             .child(div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border))
             .when(!self.details_hosted, |bar| {
                 bar.child(
@@ -103,6 +102,9 @@ impl TextFileView {
                         })),
                 )
             })
+            .when(self.markdown, |bar| {
+                bar.child(self.render_document_menu(cx)).child(self.render_view_modes(cx))
+            })
             .child(
                 Button::new("file-fullscreen")
                     .ghost()
@@ -138,46 +140,138 @@ impl TextFileView {
                         }
                     })),
             )
-            .child(
-                Button::new("file-save")
-                    .ghost()
-                    .xsmall()
-                    .h(px(design::CONTROL_HEIGHT))
-                    .px(px(12.0))
-                    .flex_shrink_0()
-                    .text_size(px(design::CHROME_SIZE))
-                    .label(language.text(if self.saving {
-                        Message::EditorSaving
-                    } else {
-                        Message::EditorSave
-                    }))
-                    .tooltip(language.text(Message::EditorSaveShortcut))
-                    .disabled(!editable || !self.dirty || self.saving)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.save(cx).detach();
-                    })),
-            )
+            .when(!self.markdown, |bar| {
+                bar.child(
+                    Button::new("file-save")
+                        .ghost()
+                        .xsmall()
+                        .h(px(design::CONTROL_HEIGHT))
+                        .px(px(12.0))
+                        .flex_shrink_0()
+                        .text_size(px(design::CHROME_SIZE))
+                        .label(language.text(if self.saving {
+                            Message::EditorSaving
+                        } else {
+                            Message::EditorSave
+                        }))
+                        .tooltip(language.text(Message::EditorSaveShortcut))
+                        .disabled(!editable || !self.dirty || self.saving)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.save(cx).detach();
+                        })),
+                )
+            })
             .into_any_element()
+    }
+
+    fn render_view_modes(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let language = super::super::config::ui_language(cx);
+        let theme = cx.theme();
+        let mut modes =
+            h_flex().id("file-view-modes").gap(px(2.0)).p(px(2.0)).rounded(px(9.0)).bg(theme.muted);
+        for (preview, id, icon, label) in [
+            (true, "file-mode-reading", IconName::Eye, Message::EditorReading),
+            (false, "file-mode-source", IconName::Code, Message::EditorSource),
+        ] {
+            let selected = self.preview == preview;
+            modes = modes.child(
+                Button::new(id)
+                    .debug_selector(move || id.to_owned())
+                    .ghost()
+                    .size(px(design::CONTROL_HEIGHT))
+                    .rounded(px(7.0))
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .icon(Icon::new(icon).size(px(design::ICON_SIZE)))
+                    .selected(selected)
+                    .aria_label(language.text(label))
+                    .tooltip(
+                        language
+                            .format(Message::EditorModeShortcut, &[("mode", language.text(label))]),
+                    )
+                    .when(selected, |button| {
+                        button
+                            .bg(theme.background)
+                            .border_color(theme.border)
+                            .text_color(theme.foreground)
+                            .shadow_sm()
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        // 同一模式重复点击不切换，避免丢掉当前输入焦点与选择。
+                        if this.preview != preview {
+                            this.toggle_preview(window, cx);
+                        }
+                    })),
+            );
+        }
+        modes.into_any_element()
     }
 
     fn render_document_menu(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let language = super::super::config::ui_language(cx);
-        let source = !self.preview;
-        let owner = cx.weak_entity();
+        let path = self.source.display();
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let local = !self.source.is_remote();
+        let reveal = self.path.clone();
+        let external = self.path.clone();
         Button::new("file-document-menu")
+            .debug_selector(|| "file-document-menu".to_owned())
             .ghost()
             .size(px(design::CONTROL_HEIGHT))
             .icon(IconName::Ellipsis)
+            .aria_label(language.text(Message::EditorDocumentActions))
             .tooltip(language.text(Message::EditorDocumentActions))
             .dropdown_menu(move |menu, _, _| {
-                let owner = owner.clone();
+                let path = path.clone();
+                let name = name.clone();
+                let reveal = reveal.clone();
+                let external = external.clone();
                 menu.item(
-                    gpui_component::menu::PopupMenuItem::new(language.text(Message::EditorSource))
-                        .checked(source)
-                        .on_click(move |_, window, cx| {
-                            let _ = owner.update(cx, |view, cx| view.toggle_preview(window, cx));
-                        }),
+                    gpui_component::menu::PopupMenuItem::new(
+                        language.text(Message::EditorCopyPath),
+                    )
+                    .on_click(move |_, window, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.clone()));
+                        super::super::toast::toast(
+                            window,
+                            cx,
+                            crate::display::ToastKind::Success,
+                            language.text(Message::EditorClipboardCopied),
+                        );
+                    }),
                 )
+                .item(
+                    gpui_component::menu::PopupMenuItem::new(
+                        language.text(Message::EditorCopyName),
+                    )
+                    .on_click(move |_, window, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(name.clone()));
+                        super::super::toast::toast(
+                            window,
+                            cx,
+                            crate::display::ToastKind::Success,
+                            language.text(Message::EditorClipboardCopied),
+                        );
+                    }),
+                )
+                .when(local, |menu| {
+                    menu.item(
+                        gpui_component::menu::PopupMenuItem::new(
+                            language.text(Message::EditorReveal),
+                        )
+                        .on_click(move |_, _, _| {
+                            super::super::workspace::reveal_in_file_manager(&reveal)
+                        }),
+                    )
+                    .item(
+                        gpui_component::menu::PopupMenuItem::new(
+                            language.text(Message::EditorOpenExternal),
+                        )
+                        .on_click(move |_, _, _| {
+                            super::super::workspace::open_in_file_manager(&external)
+                        }),
+                    )
+                })
             })
             .into_any_element()
     }
