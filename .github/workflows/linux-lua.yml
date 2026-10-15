@@ -111,6 +111,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake pkg-config zsh libasound2-dev libdbus-1-dev libudev-dev \
+            xvfb xauth x11-utils weston libvulkan1 mesa-vulkan-drivers \
             libfontconfig1-dev libfreetype6-dev \
             libegl1-mesa-dev libgl1-mesa-dev \
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
@@ -171,6 +172,17 @@ jobs:
           ./scripts/tests/windows-runtime.tests.ps1 -Architecture $architecture
       - name: Test complete workspace and native harness
         run: python scripts/ci_native_tests.py --runner nextest
+      - name: Test native Linux silent startup and window residency
+        if: ${{ runner.os == 'Linux' }}
+        run: python scripts/ci_linux_desktop.py --output "${{ runner.temp }}/pebrel-desktop-evidence"
+      - name: Upload Linux desktop lifecycle evidence
+        if: ${{ always() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-lifecycle
+          path: ${{ runner.temp }}/pebrel-desktop-evidence
+          if-no-files-found: warn
+          retention-days: 14
       - name: Check source architecture
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: python scripts/check_architecture.py
