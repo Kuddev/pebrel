@@ -49,7 +49,7 @@ use nebula_terminal::index::{Column, Line, Point as TermPoint, Side};
 use nebula_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
 use nebula_terminal::selection::{Selection, SelectionType};
 use nebula_terminal::term::TermMode;
-use nebula_terminal::vte::ansi::CursorStyle;
+use nebula_terminal::vte::ansi::{ClearMode, CursorStyle, Handler as _};
 
 use std::sync::Arc;
 
@@ -1065,6 +1065,32 @@ impl TerminalView {
             cx.notify();
         }
         true
+    }
+
+    /// 清屏（设置页「清屏」动作的落点）。应用侧立刻清掉可见屏与回滚（零
+    /// 延迟反馈），随后按前台状态分流：
+    /// - 提示符状态（shell 在等输入，OSC 133 跟踪）：发 ^L 让 shell 光标归
+    ///   顶并重绘提示符，行状态与屏幕保持同步；
+    /// - 命令运行中：shell 读不到 ^L（只会排队到命令结束后再清一次屏，冲
+    ///   掉运行期输出），应用侧直接把光标归顶，顺序输出从顶部继续；
+    /// - 备用屏（vim/less 等全屏程序）：^L 不是清屏，整键不动。
+    pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else { return };
+        {
+            let mut term = session.term.lock();
+            if term.mode().contains(TermMode::ALT_SCREEN) {
+                return;
+            }
+            term.clear_screen(ClearMode::All);
+            term.clear_screen(ClearMode::Saved);
+            if term.nebula_prompt_active() {
+                drop(term);
+                self.write_bytes(b"\x0c".to_vec());
+            } else {
+                term.goto(0, 0);
+            }
+        }
+        cx.notify();
     }
 
     fn paste_now(&mut self, text: &str, cx: &mut Context<Self>) {

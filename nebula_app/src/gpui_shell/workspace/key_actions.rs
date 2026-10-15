@@ -123,4 +123,13 @@ impl NebulaWorkspace {
             view.update(cx, |view, cx| view.paste(window, cx));
         }
     }
+
+    /// 清空焦点终端。清屏由焦点 pane 的视图执行（提示符状态随附的 ^L
+    /// 也只写该 pane 的 PTY）；它不是用户输入事件，与复制/粘贴一样不走
+    /// 广播扇出。
+    pub(super) fn clear_focused_terminal(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = self.tabs.get(self.active).and_then(WorkspaceTab::focused_view) {
+            view.update(cx, |view, cx| view.clear_screen(cx));
+        }
+    }
 }

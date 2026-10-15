@@ -85,6 +85,57 @@ mod macos_command_keys {
     }
 }
 
+/// 清屏动作必须能被 keybind= 行表达：此前 `Action::ClearHistory` 落入
+/// `_ => None` 被静默丢弃，用户解绑 ⌘K 后该键成为惰性键（#238 note 的
+/// 已知遗留）。这条守住适配分支不再消失。
+#[test]
+fn clear_history_maps_to_the_clear_terminal_action() {
+    use crate::config::Action;
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let bound = workspace_binding_in_context("cmd+k", &Action::ClearHistory, None)
+        .expect("ClearHistory 必须有对应的 gpui 绑定");
+    assert!(bound.action().as_any().is::<ClearTerminal>());
+
+    // 运行时形状：update_keybinds 在两个作用域各注册一次，这里照抄。
+    let user = vec![
+        bound,
+        workspace_binding_in_context(
+            "cmd+k",
+            &Action::ClearHistory,
+            Some(crate::gpui_shell::terminal::KEY_CONTEXT),
+        )
+        .unwrap(),
+    ];
+    let mut statics = default_workspace_bindings();
+    if cfg!(target_os = "macos") {
+        // 对照组：macOS 的 ⌘K 静态默认键（Shell 选择器）必须存在，
+        // 否则「用户清屏压过默认键」的断言空跑。
+        statics.push(custom_workspace_binding("cmd+k", &Action::ToggleShellPicker).unwrap());
+    }
+    let keymap = Keymap::new(with_user_keybindings(&Keymap::new(statics), user));
+
+    let contexts = [
+        KeyContext::parse("Root").unwrap(),
+        KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap(),
+    ];
+    let (bindings, pending) =
+        keymap.bindings_for_input(&[Keystroke::parse("cmd-k").unwrap()], &contexts);
+    assert!(!pending);
+    assert!(
+        bindings[0].action().as_any().is::<ClearTerminal>(),
+        "用户绑定的清屏必须压过静态默认键"
+    );
+    // Shell 选择器自身的默认键不受影响：Ctrl+K 在所有平台都是它的
+    // 工作区默认键，用户给 ⌘K 绑清屏不改变这一点。
+    let (bindings, pending) =
+        keymap.bindings_for_input(&[Keystroke::parse("ctrl-k").unwrap()], &contexts);
+    assert!(!pending);
+    assert!(
+        bindings[0].action().as_any().is::<ToggleShellPicker>(),
+        "清屏绑定不得挤占 Shell 选择器的默认键"
+    );
+}
+
 #[test]
 fn cleared_shortcut_reaches_terminal_and_can_be_restored_without_restart() {
     use crate::config::Action;
@@ -806,6 +857,7 @@ mod dispatch {
         focus: FocusHandle,
         selected: Option<usize>,
         renamed: usize,
+        cleared: usize,
         mode: TermMode,
         input: Vec<Keystroke>,
         encoded: Vec<u8>,
@@ -819,6 +871,7 @@ mod dispatch {
                     this.selected = action.index_for(10);
                 }))
                 .on_action(cx.listener(|this, _: &RenameActiveTab, _, _| this.renamed += 1))
+                .on_action(cx.listener(|this, _: &ClearTerminal, _, _| this.cleared += 1))
                 .child(
                     div()
                         .size_full()
@@ -852,6 +905,7 @@ mod dispatch {
                 focus: cx.focus_handle(),
                 selected: None,
                 renamed: 0,
+                cleared: 0,
                 mode: TermMode::empty(),
                 input: Vec::new(),
                 encoded: Vec::new(),
@@ -928,6 +982,7 @@ mod dispatch {
                 focus: cx.focus_handle(),
                 selected: None,
                 renamed: 0,
+                cleared: 0,
                 mode: TermMode::empty(),
                 input: Vec::new(),
                 encoded: Vec::new(),
@@ -965,5 +1020,50 @@ mod dispatch {
                 }
             });
         }
+    }
+
+    /// `keybind=cmd+k:ClearHistory`（设置页「清屏」行录制 ⌘K 的落盘形状）
+    /// 必须端到端派发 ClearTerminal，且按键不进入终端输入流。
+    #[gpui::test]
+    fn clear_screen_shortcut_dispatches_and_stays_out_of_the_terminal_stream(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            init(cx);
+            // 运行时形状：update_keybinds 对每条 keybind= 行在两个作用域
+            // 各注册一次。
+            for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
+                cx.bind_keys([workspace_binding_in_context(
+                    "cmd+k",
+                    &crate::config::Action::ClearHistory,
+                    scope,
+                )
+                .unwrap()]);
+            }
+        });
+        let mut probe_out = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let probe = cx.new(|cx| TerminalKeyProbe {
+                focus: cx.focus_handle(),
+                selected: None,
+                renamed: 0,
+                cleared: 0,
+                mode: TermMode::empty(),
+                input: Vec::new(),
+                encoded: Vec::new(),
+            });
+            let focus = probe.read(cx).focus.clone();
+            focus.focus(window, cx);
+            probe_out = Some(probe.clone());
+            Root::new(probe, window, cx)
+        });
+        let probe = probe_out.unwrap();
+        press("cmd-k", cx);
+        probe.read_with(cx, |p, _| {
+            assert_eq!(p.cleared, 1, "清屏绑定必须派发 ClearTerminal");
+            assert!(p.input.is_empty(), "清屏快捷键不得进入 PTY 输入流");
+            assert!(p.encoded.is_empty());
+        });
     }
 }

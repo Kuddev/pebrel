@@ -187,6 +187,13 @@ pub(super) struct SelectTab {
 #[action(namespace = nebula_workspace, no_json)]
 pub(super) struct QuitApp;
 
+/// 清屏（`Action::ClearHistory` 的 GPUI 落点），与 SelectTab/QuitApp 同属
+/// 适配层动作。没有静态默认绑定：⌘K 已归 Shell 选择器，清屏只能经设置页
+/// keybind= 行注册。
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = nebula_workspace, no_json)]
+pub(super) struct ClearTerminal;
+
 impl SelectTab {
     fn from_config(action: &crate::config::Action) -> Option<Self> {
         use crate::config::Action;
@@ -260,6 +267,13 @@ fn workspace_binding_in_context(
         Action::Paste => Some(KeyBinding::new(
             &combo,
             PasteClipboard,
+            scope.or(Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
+        )),
+        // 清屏只有用户 keybind= 行会走到这里（无静态默认，⌘K 归 Shell
+        // 选择器）；作用域与 Copy/Paste 同型，输入框聚焦时不抢键。
+        Action::ClearHistory => Some(KeyBinding::new(
+            &combo,
+            ClearTerminal,
             scope.or(Some(crate::gpui_shell::terminal::KEY_CONTEXT)),
         )),
         Action::ToggleFullscreen => Some(KeyBinding::new(&combo, ToggleFullscreen, scope)),
