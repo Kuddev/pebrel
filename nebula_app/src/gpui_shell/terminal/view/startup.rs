@@ -275,6 +275,7 @@ impl TerminalView {
             effect: None,
             answers: crate::assistant_answer::AnswerInbox::default(),
             answer_reader: None,
+            reading: super::super::reading::ReadingState::default(),
             confirmation: super::super::confirmation::ConfirmationState::default(),
             font: mono_font(&families[0], FontWeight::NORMAL, FontStyle::Normal, ligatures),
             font_bold: mono_font(&families[1], FontWeight::BOLD, FontStyle::Normal, ligatures),
