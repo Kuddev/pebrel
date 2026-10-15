@@ -111,6 +111,7 @@ mod tests;
 
 mod switch;
 pub use switch::NebulaSwitch;
+pub(crate) mod segmented;
 
 /// 设置行动作按钮。组件库 `Button` 的转发壳，四个 kind 映射到它的 variant。
 #[derive(IntoElement)]

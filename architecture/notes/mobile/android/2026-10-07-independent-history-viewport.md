@@ -4,6 +4,9 @@
 
 Proposed for review with the history viewport implementation.
 
+The application-mode classification is superseded by
+[2026-10-15 application wheel routing](terminal/2026-10-15-application-wheel-routing.md).
+
 ## Context
 
 The phone previously received only the desktop viewport. Local panning stopped at

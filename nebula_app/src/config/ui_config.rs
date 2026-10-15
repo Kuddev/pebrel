@@ -35,13 +35,14 @@ use crate::config::terminal::Terminal;
 use crate::config::window::WindowConfig;
 
 /// Regex used for default terminal hints (Markdown links, URLs, and local paths).
+/// 裸链接须在中文句读处结束，避免把无空格的后续正文也变成点击目标。
 #[rustfmt::skip]
 pub const DEFAULT_HINT_REGEX: &str = "(?:\
     (?m:^[a-z0-9_.-]+@[a-z0-9_.-]+:/[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s`]*[$#])|\
     \"(?:[a-z]:[/\\\\]|\\\\\\\\|~[/\\\\])[^\u{0000}-\u{001F}\u{007F}-\u{009F}\"\\r\\n]+\"|\
     '(?:[a-z]:[/\\\\]|\\\\\\\\|~[/\\\\])[^\u{0000}-\u{001F}\u{007F}-\u{009F}'\\r\\n]+'|\
     \\[[^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n\\]]+\\]\\((?:[^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n()]|\\([^\u{0000}-\u{001F}\u{007F}-\u{009F}\r\n()]*\\))+\\)|\
-    (ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`\\\\]+|\
+    (ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`，。；：！？、\\\\]+|\
     (?:(?-u:\\b)[a-z]:[/\\\\]|\\\\\\\\)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`*?:，。；：！？、]+|\
     ~[/\\\\][^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`*?:，。；：！？、]+(?:[/\\\\][^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`*?:，。；：！？、]+)*\
 )";
@@ -864,12 +865,17 @@ mod tests {
             "[Markdown With Space](<D:/My Documents/project spec.md>)",
             "[app](C:/Program Files (x86)/foo.exe)",
             "[Rust](https://en.wikipedia.org/wiki/Rust_(programming_language))",
+            "[中文章节](https://example.com/章节。第一节?说明=甲，乙)",
             "[Local File](./README.md)",
             "https://www.example.org",
+            "https://例子.测试/文档/安装?主题=浅色#概要",
+            "https://example.com/a,b;c?x=1&y=2#part",
+            "https://example.com/%E7%AB%A0%E8%8A%82%E3%80%82%E7%AC%AC%E4%B8%80%E8%8A%82",
             "file:///C:/Windows/",
             "D:/work/git/project/file.md",
             r"C:\Users\admin\Desktop\notes.txt",
             r"[Windows Path With Space](C:\Users\admin\My Documents\notes.txt)",
+            r#""D:/项目/说明，修订。md""#,
             r"\\server\share\file.txt",
             "~/docs/spec.md",
             "~/工作文档/新手引导.md",
@@ -915,28 +921,30 @@ mod tests {
 
     #[test]
     fn cjk_punctuation_separation_test() {
-        let text1 = "D:/work/spec.md，然后继续";
-        let term1 = mock_term(text1);
-        let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
-        let matches1 = visible_regex_match_iter(&term1, &mut regex).collect::<Vec<_>>();
-        assert_eq!(matches1.len(), 1);
-        assert_eq!(
-            term1.bounds_to_string(*matches1[0].start(), *matches1[0].end()),
-            "D:/work/spec.md"
-        );
-
-        let text2 = "见 D:/docs/spec.md、D:/docs/plan.md。";
-        let term2 = mock_term(text2);
-        let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
-        let matches2 = visible_regex_match_iter(&term2, &mut regex).collect::<Vec<_>>();
-        assert_eq!(matches2.len(), 2);
-        assert_eq!(
-            term2.bounds_to_string(*matches2[0].start(), *matches2[0].end()),
-            "D:/docs/spec.md"
-        );
-        assert_eq!(
-            term2.bounds_to_string(*matches2[1].start(), *matches2[1].end()),
-            "D:/docs/plan.md"
-        );
+        for (text, expected) in [
+            ("D:/work/spec.md，然后继续", vec!["D:/work/spec.md"]),
+            ("见 D:/docs/spec.md、D:/docs/plan.md。", vec!["D:/docs/spec.md", "D:/docs/plan.md"]),
+            (
+                "https://example.com/onehttps://example.com/two。原有换行链接用例",
+                vec!["https://example.com/onehttps://example.com/two"],
+            ),
+            ("https://example.com/docs，然后继续", vec!["https://example.com/docs"]),
+            ("https://example.com/docs；接着处理", vec!["https://example.com/docs"]),
+            ("https://example.com/docs：详细说明", vec!["https://example.com/docs"]),
+            ("https://example.com/docs！继续", vec!["https://example.com/docs"]),
+            ("https://example.com/docs？下一步", vec!["https://example.com/docs"]),
+            (
+                "见 https://example.com/a、https://example.com/b。下一条",
+                vec!["https://example.com/a", "https://example.com/b"],
+            ),
+            ("https://例子.测试/文档/安装。继续阅读", vec!["https://例子.测试/文档/安装"]),
+        ] {
+            let term = mock_term(text);
+            let mut regex = RegexSearch::new(DEFAULT_HINT_REGEX).unwrap();
+            let matches: Vec<_> = visible_regex_match_iter(&term, &mut regex)
+                .map(|bounds| term.bounds_to_string(*bounds.start(), *bounds.end()))
+                .collect();
+            assert_eq!(matches, expected, "{text}");
+        }
     }
 }

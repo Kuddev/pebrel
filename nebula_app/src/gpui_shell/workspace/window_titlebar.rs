@@ -1,4 +1,5 @@
 use super::*;
+use crate::{gpui_shell::widgets::toolbar_button, i18n::Message};
 
 fn title_bar_height(_density: nebula_settings::DensityName) -> f32 {
     // Content density must not compress the application chrome.
@@ -97,6 +98,29 @@ fn title_bar_frame() -> gpui::Div {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn render_terminal_find_button(
+        &self,
+        settings_active: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui_component::button::Button {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        toolbar_button("terminal-find", IconName::Search)
+            .debug_selector(|| "terminal-find".to_owned())
+            .disabled(
+                settings_active
+                    || self.tabs.get(self.active).and_then(WorkspaceTab::focused_view).is_none(),
+            )
+            .aria_label(language.text(Message::TerminalReadingOpen))
+            .tooltip(language.text(Message::TerminalReadingShortcut))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.run_workspace_palette_action(
+                    WorkspacePaletteAction::TerminalReading { commands: false },
+                    window,
+                    cx,
+                );
+            }))
+    }
+
     pub(super) fn render_window_title_bar(
         &self,
         settings_active: bool,
@@ -107,6 +131,12 @@ impl NebulaWorkspace {
         let native_layout = crate::platform::window_chrome::layout(window);
         let title_bar_height = effective_title_bar_height(self.density, native_layout);
         let bar = TitleBar::new()
+            .on_close_window(cx.listener(|workspace, _, window, cx| {
+                // Linux 的客户端标题栏默认直接销毁窗口；必须复用系统关窗的会话与文档守卫。
+                if workspace.should_close_window(window, cx) {
+                    window.remove_window();
+                }
+            }))
             .h(px(title_bar_height))
             .when(!settings_active, |bar| bar.bg(gpui::transparent_black()).border_b_0())
             .when(settings_active, |bar| {
@@ -137,6 +167,50 @@ mod tests {
         Root, WindowExt,
         text::{TextView, TextViewState},
     };
+
+    #[gpui::test]
+    fn terminal_find_precedes_command_manager_in_both_tab_layouts(cx: &mut TestAppContext) {
+        use crate::gpui_shell::workspace::windowing;
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            super::super::init(cx);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+        });
+        let mut workspace = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                )
+            });
+            workspace = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let workspace = workspace.unwrap();
+        window.simulate_resize(gpui::size(px(1200.0), px(800.0)));
+        for position in
+            [nebula_settings::TabsPositionName::Sidebar, nebula_settings::TabsPositionName::Top]
+        {
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.tabs_position = position;
+                    cx.notify();
+                });
+                window.draw(cx).clear(cx);
+            });
+            let find = window.debug_bounds("terminal-find").unwrap();
+            let commands = window.debug_bounds("command-manager-toggle").unwrap();
+            assert!(find.right() < commands.left(), "{position:?}");
+        }
+    }
 
     struct DocumentWindow(Entity<TextViewState>);
 

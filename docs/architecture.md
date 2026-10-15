@@ -25,6 +25,7 @@ to rename all existing directories or create abstract interfaces everywhere.
 | `nebula_app/src/display/suggest_engine.rs` | Shared candidate calculation from input snapshots; compatibility adapter for pane state | A second source registry or access to the terminal grid during calculation |
 | `nebula_hook` | Small process/lifecycle hook bridge | An application dependency container |
 | `nebula_app/src/i18n` | Static lookup, locale resolution and formatting | Runtime catalog parsing or UI ownership |
+| `nebula_app/src/scrollbar.rs` | Shared overlay-scrollbar geometry, hit testing and drag mapping | A renderer, view owner or input dispatcher |
 | `nebula_app/src/math` | Parse, validate, layout, compile and cache responsibilities | A duplicated per-shell math engine |
 | `nebula_app/src/platform` | Explicit platform capabilities and native adapters | A dumping ground for unrelated logic |
 | `nebula_app/src/ai_hook` | Normalized provider facts, bounded ordering, one shared pane lifecycle and owned installation policy; native Windows/Unix transports | Screen keyword rules or a separate state machine per UI shell |

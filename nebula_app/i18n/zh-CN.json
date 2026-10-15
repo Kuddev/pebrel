@@ -1,4 +1,35 @@
 {
+  "terminal_reading": {
+    "options": "查找选项",
+    "shortcut": "在终端中查找（Ctrl+Shift+H / ⌘F）",
+    "match_case": "区分大小写",
+    "no_matches": "没有匹配结果",
+    "refresh": "搜索最新输出",
+    "open": "在终端中查找",
+    "placeholder": "查找文本",
+    "close": "关闭搜索（Esc）",
+    "previous": "上一个匹配（Shift+Enter）",
+    "next": "下一个匹配（Enter）",
+    "count": "{current} / {total}",
+    "choose": "选择一次执行",
+    "all": "搜索保留的全部输出",
+    "copy": "复制本次输出",
+    "copy_last": "复制上次 shell 输出",
+    "copied": "已复制",
+    "copying": "正在复制…",
+    "start": "跳转到输出开头",
+    "end": "跳转到输出结尾",
+    "no_commands": "暂无可确认边界的 shell 输出，可能缺少 shell 集成或内容已不在回滚中。",
+    "execution": "Shell 执行 #{id}",
+    "changed": "输出已改变或过期，请重新选择执行或搜索。",
+    "unavailable": "此屏幕不支持读取 shell 执行输出。",
+    "query_limit": "请输入单行文本，最多 4 KiB。",
+    "cell_limit": "单个终端单元格超过读取上限。",
+    "copy_limit": "输出超过 8 MiB 复制上限，剪贴板未修改。",
+    "empty": "本次执行没有可复制的输出。",
+    "searching": "正在搜索…",
+    "truncated": "仅显示前 10,000 个匹配，请缩小搜索范围。"
+  },
   "tray": {
     "show": "显示 Pebrel",
     "quit": "退出"
@@ -17,6 +48,7 @@
     "en_us": "English"
   },
   "settings": {
+    "quick_terminal_unavailable": "全局快捷键注册失败：{error}。请启用桌面的 GlobalShortcuts portal，或从托盘打开 Pebrel。",
     "completion": {
       "mode": "补齐模式",
       "cycle": "切换补齐模式",
@@ -158,7 +190,10 @@
       "conflict": "{combo} 同时绑定了「{first}」与「{second}」——只有排前面的「{first}」会触发",
       "help": "点击快捷键后按新组合键；Backspace 清空，Esc 取消。右侧可清空或恢复默认。",
       "clear": "清空快捷键（传给终端）",
-      "restore": "恢复此动作的默认快捷键"
+      "restore": "恢复此动作的默认快捷键",
+      "bare_title": "绑定裸键？",
+      "bare_description": "{combo} 是正常输入键（没有 Ctrl/Alt 等修饰），绑定后它不再能作为文本输入。仍然绑定吗？",
+      "bare_confirm": "仍然绑定"
     },
     "input": {
       "backup_secret": "凭据只写入系统凭据管理器"
@@ -193,7 +228,7 @@
     "reset_description": "这将重置你的设置与快捷键。SSH 主机、凭据和历史将保留，当前设置会备份。是否继续？",
     "startup": {
       "launch_at_login": "登录时自启动",
-      "launch_at_login_help": "登录 Windows 后启动 Pebrel，与安装器使用同一个启动快捷方式。",
+      "launch_at_login_help": "登录系统后启动 Pebrel，使用当前用户的系统登录启动项。",
       "silent_start": "静默启动",
       "silent_start_help": "启动后在后台运行，不显示窗口。开启时会同时启用系统托盘，点击托盘图标可重新打开窗口。托盘启用时生效，显式打开目录时除外。",
       "save_failed": "无法更改启动设置：{error}"
@@ -459,11 +494,30 @@
     "line_ending": "换行符",
     "status": "状态",
     "copy_name": "复制文件名",
+    "clipboard_copied": "已复制",
     "reveal": "在文件管理器中显示",
     "open_external": "用默认应用打开",
-    "preview_limited": "此文档较大，富文本预览已缩短。切换到编辑可查看已加载的源码。"
+    "preview_limited": "此文档较大，富文本预览已缩短。切换到编辑可查看已加载的源码。",
+    "cursor_position": "第 {line} 行，第 {column} 列",
+    "mode_shortcut": "切换为{mode}（Ctrl+/ 或 ⌘/）",
+    "object_latex_source": "LaTeX 源码",
+    "object_inline_math": "行内公式",
+    "object_display_math": "独立公式",
+    "object_image": "图片",
+    "object_image_address": "图片地址",
+    "object_image_alt": "替代文字",
+    "object_choose_image": "选择本地图片",
+    "object_invalid_math": "请检查公式语法，并将长度控制在 4096 字节以内。",
+    "object_invalid_image": "请输入有效的图片地址，替代文字请保持为单行。",
+    "object_image_failed": "无法加载图片，请检查地址或选择其他文件。",
+    "object_image_loading": "正在加载图片…",
+    "object_image_dimensions": "{width} × {height} 像素",
+    "object_finish_first": "请先完成或取消当前修改，再继续操作。",
+    "object_conflict": "文档已发生变化，请取消本次修改后重新打开该对象。"
   },
   "commands": {
+    "input_copied": "已复制",
+    "input_cut": "已剪切",
     "select": "多选",
     "select_visible": "选择当前列表",
     "delete_selected": "删除（{count}）",

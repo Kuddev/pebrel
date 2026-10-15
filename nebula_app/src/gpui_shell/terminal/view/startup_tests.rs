@@ -6,10 +6,12 @@ use std::sync::mpsc::Receiver;
 
 // Keep the terminal entity off the layout tree so tests control each viewport
 // and PTY event explicitly, while using real GPUI tasks and terminal parsing.
-struct Surface;
+struct Surface {
+    focus: FocusHandle,
+}
 impl Render for Surface {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full()
+        div().id("terminal-test-surface").size_full().track_focus(&self.focus)
     }
 }
 
@@ -23,6 +25,24 @@ impl TerminalView {
         self.exec_context = None;
         self.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
         receiver
+    }
+
+    pub(crate) fn install_remote_files_test_session(
+        &mut self,
+        destination: &str,
+        cx: &mut Context<Self>,
+    ) -> Receiver<Msg> {
+        let receiver = self.install_completion_test_session();
+        self.ssh_destination = Some(destination.into());
+        self.suggest.suggest_env =
+            crate::display::SuggestEnv::Ssh { destination: destination.into() };
+        self.cwd.clear();
+        self.apply_ssh_stage(crate::ssh_session::SshStage::Ready, cx);
+        receiver
+    }
+
+    pub(crate) fn remote_files_test_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
+        self.process_event(event, cx);
     }
 
     pub(crate) fn completion_test_state(
@@ -71,8 +91,11 @@ fn open_at(
             )
         });
         let receiver = view.update(cx, |view, _| view.install_completion_test_session());
+        // 测试直接发送按键前也需聚焦终端；只挂接焦点，不让真实布局改变手动设置的网格。
+        let focus = view.read(cx).focus_handle.clone();
+        window.focus(&focus, cx);
         result = Some((view, receiver));
-        Root::new(cx.new(|_| Surface), window, cx)
+        Root::new(cx.new(|_| Surface { focus }), window, cx)
     });
     let (view, receiver) = result.unwrap();
     (view, window, receiver)
@@ -1297,7 +1320,7 @@ fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut Test
                 b"\x1b[?1000h\x1b[?1006h",
             );
             receiver.try_iter().for_each(drop);
-            view.runtime_scroll(2, 3, 4, window, cx).unwrap();
+            view.runtime_scroll(2, 3, 4, false, window, cx).unwrap();
             let bytes: Vec<u8> = receiver
                 .try_iter()
                 .filter_map(|m| match m {
@@ -1311,7 +1334,7 @@ fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut Test
                 &mut *view.session.as_ref().unwrap().term.lock(),
                 b"\x1b[?1000l\x1b[?1006l\x1b[?1049h\x1b[?1007h",
             );
-            view.runtime_scroll(-2, 3, 4, window, cx).unwrap();
+            view.runtime_scroll(-2, 3, 4, true, window, cx).unwrap();
             let bytes: Vec<u8> = receiver
                 .try_iter()
                 .filter_map(|m| match m {
@@ -1325,10 +1348,17 @@ fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut Test
             for _ in 0..40 {
                 parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"history\r\n");
             }
-            view.runtime_scroll(3, 3, 4, window, cx).unwrap();
+            // 排队中的手机滚轮遇到应用已退出备用屏，不能移动 PC 历史。
+            view.runtime_scroll(3, 3, 4, true, window, cx).unwrap();
+            assert_eq!(view.session.as_ref().unwrap().term.lock().grid().display_offset(), 0);
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?1000h");
+            view.runtime_scroll(3, 3, 4, true, window, cx).unwrap();
+            assert!(receiver.try_iter().all(|m| !matches!(m, Msg::Input(_))));
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?1000l");
+            view.runtime_scroll(3, 3, 4, false, window, cx).unwrap();
             assert_eq!(view.session.as_ref().unwrap().term.lock().grid().display_offset(), 3);
             assert!(receiver.try_iter().all(|m| !matches!(m, Msg::Input(_))));
-            assert!(view.runtime_scroll(1, 400, 0, window, cx).is_err());
+            assert!(view.runtime_scroll(1, 400, 0, false, window, cx).is_err());
         });
     });
 }

@@ -410,13 +410,16 @@ const PALETTE_METADATA_MAX_WIDTH: f32 = 260.0;
 /// 与 Shell 选择器的 launcher row 共用同一命中高度；不能只放大文字或底色，
 /// 否则 hover、点击和键盘选中会再次出现三套几何。
 const PALETTE_ROW_HEIGHT: f32 = 42.0;
-const PALETTE_GROUP_HEADER_HEIGHT: f32 = 26.0;
-const PALETTE_FILTER_BAR_HEIGHT: f32 = 26.0;
+const PALETTE_GROUP_HEADER_HEIGHT: f32 = 40.0;
+const PALETTE_FILTER_BAR_HEIGHT: f32 = 40.0;
 const PALETTE_ROW_GAP: f32 = 4.0;
 const PALETTE_SCROLLBAR_CONTENT_GUTTER: f32 = 16.0;
 
 #[derive(Clone)]
 enum WorkspacePaletteAction {
+    TerminalReading {
+        commands: bool,
+    },
     Shared(crate::display::command_palette::PaletteAction),
     /// 聚焦已经存在的工作区标签，不创建副本。
     FocusTab(usize),
@@ -1791,16 +1794,15 @@ impl NebulaWorkspace {
         if !self.side_panel.open {
             return false;
         }
-        // 远端 pane 的位置不在本机文件系统里。不早退的话，`side_panel_follow`
-        // 会拿远端路径去问宿主 `is_dir`（必然为假），于是本地树保留上一个有效
-        // 根——用户在 SSH tab 上看到的是**上一个本地目录**的内容，而且没有任何
-        // 提示。这正是"远端浏览器识别不到"的观感来源。
+        // SSH cwd reports drive SFTP browsing; remote paths must stay out of the
+        // local filesystem model. Bind first so pane switches use the new owner.
+        let remote_changed = self.sync_remote_browser_to_active(cx);
         if self.remote_browser.active() {
-            return false;
+            return remote_changed;
         }
         let (cwd, wsl) = self.side_panel_follow(cx);
         let cleared = reset_browse_root && self.side_panel.clear_custom_root();
-        self.side_panel.sync_at(cwd, wsl) || cleared
+        self.side_panel.sync_at(cwd, wsl) || cleared || remote_changed
     }
 
     fn toggle_file_tree(&mut self, cx: &mut Context<Self>) {
@@ -1910,52 +1912,6 @@ impl NebulaWorkspace {
             ));
         }
         cx.notify();
-    }
-
-    fn run_selected_palette_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let action = self
-            .filtered_palette_rows(cx)
-            .get(self.command_palette_selected)
-            .map(|item| item.action.clone());
-        let Some(action) = action else { return };
-        match action {
-            WorkspacePaletteAction::Shared(action) => self.run_palette_action(action, window, cx),
-            WorkspacePaletteAction::LayoutRecipes => {
-                self.dismiss_palette_state();
-                self.open_layout_recipes(window, cx);
-            },
-            WorkspacePaletteAction::FocusTab(tab) => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::FocusPane { tab, pane } => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_pane(tab, pane, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::OpenDirectory(path) => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(Some(path), None, window, cx);
-            },
-            WorkspacePaletteAction::RunAiSession { command, cwd } => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(cwd, Some(command), window, cx);
-            },
-            WorkspacePaletteAction::LaunchSshHost(host) => {
-                self.dismiss_palette_state();
-                self.add_ssh_terminal(host, window, cx);
-            },
-            WorkspacePaletteAction::LaunchShell(detected) => {
-                self.launch_palette_shell(detected, window, cx);
-            },
-            WorkspacePaletteAction::LaunchProfile(profile) => {
-                self.launch_palette_profile(profile, window, cx);
-            },
-        }
     }
 
     fn open_quick_jump_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
