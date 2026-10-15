@@ -7,7 +7,8 @@ use tokio::sync::watch;
 
 pub(crate) struct Portal {
     change: Option<watch::Sender<String>>,
-    pressed: mpsc::Receiver<()>,
+    pressed: mpsc::Receiver<Option<String>>,
+    failures: mpsc::Receiver<String>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -15,6 +16,7 @@ impl Portal {
     pub(crate) fn start(combo: String) -> std::io::Result<Self> {
         let (change, mut changes) = watch::channel(combo);
         let (pressed, receive) = mpsc::sync_channel(1);
+        let (failed, failures) = mpsc::sync_channel(1);
         let worker =
             std::thread::Builder::new().name("pebrel-shortcut-portal".into()).spawn(move || {
                 let Ok(runtime) =
@@ -30,7 +32,8 @@ impl Portal {
                                 Ok(true) => continue,
                                 Ok(false) => return,
                                 Err(error) => {
-                                    log::warn!("Global shortcut portal unavailable: {error}")
+                                    log::warn!("Global shortcut portal unavailable: {error}");
+                                    let _ = failed.try_send(error.to_string());
                                 },
                             }
                         }
@@ -41,7 +44,7 @@ impl Portal {
                     }
                 });
             })?;
-        Ok(Self { change: Some(change), pressed: receive, worker: Some(worker) })
+        Ok(Self { change: Some(change), pressed: receive, failures, worker: Some(worker) })
     }
 
     pub(crate) fn set_combo(&self, combo: String) {
@@ -56,12 +59,16 @@ impl Portal {
         }
     }
 
-    pub(crate) fn take_pressed(&self) -> bool {
-        let mut pressed = false;
-        while self.pressed.try_recv().is_ok() {
-            pressed = true;
+    pub(crate) fn take_pressed(&self) -> Option<Option<String>> {
+        let mut pressed = None;
+        while let Ok(token) = self.pressed.try_recv() {
+            pressed = Some(token);
         }
         pressed
+    }
+
+    pub(crate) fn take_failure(&self) -> Option<String> {
+        self.failures.try_iter().last()
     }
 }
 
@@ -76,7 +83,7 @@ impl Drop for Portal {
 
 async fn register(
     combo: &str,
-    pressed: &mpsc::SyncSender<()>,
+    pressed: &mpsc::SyncSender<Option<String>>,
     changes: &mut watch::Receiver<String>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let setup = async {
@@ -101,7 +108,11 @@ async fn register(
                 event = events.next() => {
                     let Some(event) = event else { return Ok(false) };
                     if event.shortcut_id() == "quick-terminal" && Some(event.session_handle().as_str()) == session_handle.as_str() {
-                        let _ = pressed.try_send(());
+                        // 授权令牌属于本次按键；只传布尔值会让 Wayland 拒绝后续窗口激活。
+                        let token = event.options().get("activation_token")
+                            .and_then(|value| <&str>::try_from(value).ok())
+                            .map(str::to_owned);
+                        let _ = pressed.try_send(token);
                     }
                 },
                 changed = changes.changed() => return Ok(changed.is_ok()),

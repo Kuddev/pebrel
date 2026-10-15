@@ -396,6 +396,12 @@ impl BridgeSession {
             }
         }
         let mut local = ApiRequest::new(endpoint.token.clone(), request.method, request.params);
+        if local.method == "pane.scroll" {
+            // 手机历史是只读分页；旧帧排队的全屏滚轮也不能回退为移动 PC 历史。
+            if let Some(params) = local.params.as_object_mut() {
+                params.insert("application_only".into(), true.into());
+            }
+        }
         local.id = request.id.clone();
         let input_reply =
             matches!(local.method.as_str(), "pane.prompt" | "pane.send_key" | "pane.scroll");

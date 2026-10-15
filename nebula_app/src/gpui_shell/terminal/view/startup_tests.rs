@@ -1326,7 +1326,7 @@ fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut Test
                 b"\x1b[?1000h\x1b[?1006h",
             );
             receiver.try_iter().for_each(drop);
-            view.runtime_scroll(2, 3, 4, window, cx).unwrap();
+            view.runtime_scroll(2, 3, 4, false, window, cx).unwrap();
             let bytes: Vec<u8> = receiver
                 .try_iter()
                 .filter_map(|m| match m {
@@ -1340,7 +1340,7 @@ fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut Test
                 &mut *view.session.as_ref().unwrap().term.lock(),
                 b"\x1b[?1000l\x1b[?1006l\x1b[?1049h\x1b[?1007h",
             );
-            view.runtime_scroll(-2, 3, 4, window, cx).unwrap();
+            view.runtime_scroll(-2, 3, 4, true, window, cx).unwrap();
             let bytes: Vec<u8> = receiver
                 .try_iter()
                 .filter_map(|m| match m {
@@ -1354,10 +1354,17 @@ fn remote_scroll_reuses_mouse_alternate_screen_and_history_routing(cx: &mut Test
             for _ in 0..40 {
                 parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"history\r\n");
             }
-            view.runtime_scroll(3, 3, 4, window, cx).unwrap();
+            // 排队中的手机滚轮遇到应用已退出备用屏，不能移动 PC 历史。
+            view.runtime_scroll(3, 3, 4, true, window, cx).unwrap();
+            assert_eq!(view.session.as_ref().unwrap().term.lock().grid().display_offset(), 0);
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?1000h");
+            view.runtime_scroll(3, 3, 4, true, window, cx).unwrap();
+            assert!(receiver.try_iter().all(|m| !matches!(m, Msg::Input(_))));
+            parser.advance(&mut *view.session.as_ref().unwrap().term.lock(), b"\x1b[?1000l");
+            view.runtime_scroll(3, 3, 4, false, window, cx).unwrap();
             assert_eq!(view.session.as_ref().unwrap().term.lock().grid().display_offset(), 3);
             assert!(receiver.try_iter().all(|m| !matches!(m, Msg::Input(_))));
-            assert!(view.runtime_scroll(1, 400, 0, window, cx).is_err());
+            assert!(view.runtime_scroll(1, 400, 0, false, window, cx).is_err());
         });
     });
 }
