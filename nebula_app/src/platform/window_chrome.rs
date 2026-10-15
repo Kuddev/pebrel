@@ -7,6 +7,52 @@ use gpui::{Window, WindowOptions};
 #[cfg(target_os = "macos")]
 mod macos;
 
+pub(crate) fn application_id(_fallback: &str) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        use std::sync::OnceLock;
+        static ID: OnceLock<&'static str> = OnceLock::new();
+        ID.get_or_init(|| {
+            // 从同一安装前缀的桌面文件判定渠道；AppImage、解包版和 deb 共用此布局。
+            let applications = std::env::current_exe().ok().and_then(|executable| {
+                Some(executable.parent()?.parent()?.join("share/applications"))
+            });
+            if applications.is_some_and(|directory| {
+                directory.join("io.github.kuddev.pebrel.preview.desktop").is_file()
+                    && !directory.join("io.github.kuddev.pebrel.desktop").is_file()
+            }) {
+                crate::brand::LINUX_PREVIEW_APP_ID
+            } else {
+                crate::brand::LINUX_APP_ID
+            }
+        })
+        .to_string()
+    }
+    #[cfg(not(target_os = "linux"))]
+    _fallback.to_owned()
+}
+
+#[cfg(test)]
+pub(crate) fn native_test_window_id(_window: &Window) -> Option<(&'static str, u32)> {
+    #[cfg(target_os = "linux")]
+    {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        match HasWindowHandle::window_handle(_window).ok()?.as_raw() {
+            RawWindowHandle::Xcb(handle) => return Some(("x11", handle.window.get())),
+            RawWindowHandle::Wayland(handle) => {
+                #[link(name = "wayland-client")]
+                unsafe extern "C" {
+                    fn wl_proxy_get_id(proxy: *mut std::ffi::c_void) -> u32;
+                }
+                // 借用仍存活的 GPUI surface，只读协议 ID 以核对真实 compositor trace。
+                return Some(("wayland", unsafe { wl_proxy_get_id(handle.surface.as_ptr()) }));
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
 pub(crate) fn configure_options(options: WindowOptions) -> WindowOptions {
     #[cfg(target_os = "macos")]
     {

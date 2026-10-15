@@ -4,6 +4,10 @@ This module implements an explicit, command-scoped plugin entry. It does not ins
 keep plugins resident, register UI panels, or start a plugin worker during normal GUI startup.
 The product adds no dependency or new language runtime for this entry.
 
+The division between optional plugins, product bug fixes and extension-point PRs is defined in
+[BOUNDARIES.md](BOUNDARIES.md). Appearance extensions are explicitly in scope for plugins; this
+command slice is not the implementation of that entire product scope.
+
 ## Public entry
 
 From the repository root, using a newly built `pebrel` binary:
@@ -17,6 +21,7 @@ pebrel plugin run nebula_app/examples/plugins/lua-overview summary --pretty
 
 `check` validates the UTF-8 TOML manifest, contribution rules, declared entry path and source-size
 metadata. It does not read, compile or execute Lua. Its result explicitly identifies this scope.
+It also validates requested methods against the host boundary and returns `host_runtime_methods`.
 `run` invokes exactly one declared command. `--args` accepts a JSON object overriding that
 command's default `params`; `--timeout-ms` accepts 1 through 30000, defaulting to 3000.
 Both commands output JSON and return a nonzero exit code on failure.
@@ -41,8 +46,11 @@ The check command is offline. The examples do not create panes or modify setting
 - The Lua entry is a single UTF-8 text file returning a command-function table. A handler receives
   `(ctx, args)` and returns one JSON-compatible value. Arbitrary module loading is not part of this
   initial entry; the existing configuration Lua module loader is unchanged.
-- `ctx.runtime.call(method, params)` yields to the Rust driver. The manifest grants exact method
-  names; `events.subscribe` is excluded because this entry handles one-shot replies. Runtime owns
+- `ctx.runtime.call(method, params)` yields to the Rust driver. The manifest requests exact method
+  names; it does not grant access. Only methods explicitly exposed by `boundary.rs` are accepted
+  at package validation and again at dispatch. Currently this is `runtime.describe` only.
+  All other methods, including sensitive reads and core control, fail before Runtime transport;
+  `events.subscribe` remains excluded because this entry handles one-shot replies. Runtime owns
   semantic argument validation, state and target identity. The discovery token remains in Rust.
 - `ctx.null` represents JSON null. `ctx.array()` marks an empty array; nonempty arrays must have
   dense integer keys. Mixed, sparse, non-UTF-8 and unsupported values fail rather than lose data.
@@ -50,6 +58,13 @@ The check command is offline. The examples do not create panes or modify setting
   automatically retried. Transport errors after submitting input retain the existing uncertainty
   description from the Runtime client. Unhandled Runtime errors retain their code and details,
   including partial-operation and deferred-cleanup receipts, across the Lua boundary.
+
+This closes the earlier behavior where a package could name any one-shot Runtime method in its
+own manifest and call it. New Runtime methods and aliases are not automatically plugin APIs.
+The ordinary Runtime CLI is unchanged. A Runtime capability listed by `runtime.describe` is not
+a plugin grant; `result.host_runtime_methods` in the CLI check output describes this entry's scope.
+Future sensitive capabilities require host-owned authorization and target/lifecycle boundaries;
+neither an installed package nor its own permissions list supplies that authorization today.
 
 ## Resource and execution budgets
 

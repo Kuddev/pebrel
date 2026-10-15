@@ -16,29 +16,10 @@ impl TerminalView {
         let language = crate::gpui_shell::config::ui_language(cx);
         let t = |message| language.text(message);
         let Some(panel) = &self.reading.panel else {
-            let mut entry = div().absolute().top_1().right_3().occlude().child(
-                Button::new("terminal-find")
-                    .debug_selector(|| "terminal-find".to_owned())
-                    .ghost()
-                    .size(px(32.0))
-                    .icon(IconName::Search)
-                    .aria_label(t(Message::TerminalReadingOpen))
-                    .tooltip(t(Message::TerminalReadingShortcut))
-                    .on_click(
-                        cx.listener(|view, _, window, cx| view.open_reading(false, window, cx)),
-                    ),
-            );
-            // 搜索入口只消费自己的命中区域，不把点击继续交给终端鼠标协议。
-            for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
-                entry = entry
-                    .on_mouse_down(button, |_, _, cx| cx.stop_propagation())
-                    .on_mouse_up(button, |_, _, cx| cx.stop_propagation());
-            }
             return div()
                 .absolute()
                 .inset_0()
                 .child(self.output_hover_chrome(cx))
-                .child(entry)
                 .into_any_element();
         };
         let copied = panel.feedback.read(cx).is_copied();
