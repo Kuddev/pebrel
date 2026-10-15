@@ -4,6 +4,9 @@
 
 Implemented command slice. It is not a resident UI host.
 
+The permission boundary is superseded by
+[core experience ownership](2026-10-01-core-experience-boundary.md); the original rationale below is retained.
+
 ## Context
 
 The user selected performance and memory as the primary constraints and rejected adding TS/JS,

@@ -920,9 +920,22 @@ impl TerminalView {
     pub(super) fn on_scroll(
         &mut self,
         event: &ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.on_scroll_target(event, false, window, cx);
+    }
+
+    pub(super) fn on_scroll_target(
+        &mut self,
+        event: &ScrollWheelEvent,
+        application_only: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if application_only && !self.term_mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
         if let Some(session) = &self.session {
             session.term.lock().cancel_redraw_anchor();
         }
@@ -959,18 +972,32 @@ impl TerminalView {
         if lines == 0 {
             return;
         }
-        let mode = self.term_mode();
+        let (point, _) = self.grid_point(event.position);
+        let Some(session) = &self.session else { return };
+        // 当前模式检查、编码和入队共享终端锁，退出备用屏不能插在检查与发送之间。
+        let mut term = session.term.lock();
+        let mode = *term.mode();
+        if application_only && !mode.contains(TermMode::ALT_SCREEN) {
+            return;
+        }
         // 应用接管鼠标时滚轮也归应用（htop 列表滚动）；Shift 旁路回本地回滚。
         if !event.modifiers.shift && mode.intersects(TermMode::MOUSE_MODE) {
             let code =
                 if lines > 0 { mouse_protocol::WHEEL_UP } else { mouse_protocol::WHEEL_DOWN };
-            for _ in 0..lines.unsigned_abs() {
-                self.send_mouse_report(event.position, code, true, &event.modifiers);
+            self.last_report_point = Some(point);
+            let mods = mouse_protocol::ReportMods {
+                shift: event.modifiers.shift,
+                alt: event.modifiers.alt,
+                control: event.modifiers.control,
+            };
+            if let Some(bytes) = mouse_protocol::report(&mode, point, code, true, mods) {
+                for _ in 0..lines.unsigned_abs() {
+                    session.notifier.notify(bytes.clone());
+                }
             }
             cx.notify();
             return;
         }
-        let Some(session) = &self.session else { return };
         if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
             // 备用屏（less/vim）：滚轮翻译成方向键。
             let seq: &[u8] = if mode.contains(TermMode::APP_CURSOR) {
@@ -985,8 +1012,8 @@ impl TerminalView {
                 bytes.extend_from_slice(seq);
             }
             session.notifier.notify(bytes);
-        } else {
-            session.term.lock().scroll_display(Scroll::Delta(lines));
+        } else if !application_only {
+            term.scroll_display(Scroll::Delta(lines));
         }
         cx.notify();
     }

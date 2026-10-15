@@ -91,8 +91,8 @@ pub(crate) fn capture_terminal_history<T: EventListener>(
     let oldest = term.grid().scrolled_out() as u64;
     let live_start = oldest + term.history_size() as u64;
     let end = live_start + term.screen_lines() as u64;
-    let application_scroll = term.mode().intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE);
-    // 程序接管滚轮时仍返回实时网格；普通历史则由手机自己的绝对行锚点读取。
+    let application_scroll = term.mode().contains(TermMode::ALT_SCREEN);
+    // 主屏即使开启鼠标报告也保留手机独立历史；备用屏才需要应用自己滚动。
     let rows = if application_scroll {
         term.screen_lines()
     } else {
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(page.rows.len(), 100);
         let history = page.history.unwrap();
         assert_eq!(history.first + 100, history.end);
-        for mode in ["\x1b[?1049h", "\x1b[?1000h"] {
+        for mode in ["\x1b[?1049h", "\x1b[?1049h\x1b[?1000h"] {
             let term = terminal(12, 2, &format!("old\r\nnew\r\n{mode}live"));
             let page = capture_terminal_history(&term, |_| Rgb { r: 0, g: 0, b: 0 }, Some(0), 200)
                 .unwrap();
@@ -352,6 +352,14 @@ mod tests {
             assert_eq!(history.first, history.live_start);
             assert_eq!(page.rows, capture(&term).rows);
         }
+        let mut term = terminal(12, 2, "old\r\nnew\r\n\x1b[?1000hlive");
+        term.scroll_display(Scroll::Top);
+        let offset = term.grid().display_offset();
+        let page =
+            capture_terminal_history(&term, |_| Rgb { r: 0, g: 0, b: 0 }, Some(0), 200).unwrap();
+        assert!(!page.history.as_ref().unwrap().application_scroll);
+        assert_eq!(page.rows[0][0].0, "o");
+        assert_eq!(term.grid().display_offset(), offset);
     }
 
     #[test]
@@ -445,9 +453,18 @@ mod tests {
             );
             assert!(matches!(
                 RuntimeCommand::from_request(&request).unwrap(),
-                RuntimeCommand::ScrollPane { .. }
+                RuntimeCommand::ScrollPane { application_only: false, .. }
             ));
         }
+        let application = ApiRequest::new(
+            "fixture".into(),
+            "pane.scroll",
+            serde_json::json!({"pane_id":2,"lines":1,"column":0,"row":0,"application_only":true}),
+        );
+        assert!(matches!(
+            RuntimeCommand::from_request(&application).unwrap(),
+            RuntimeCommand::ScrollPane { application_only: true, .. }
+        ));
         for params in [
             serde_json::json!({"pane_id":2,"lines":0,"column":0,"row":0}),
             serde_json::json!({"pane_id":2,"lines":33,"column":0,"row":0}),

@@ -144,6 +144,32 @@ class GhosttyEngineTest {
         assertEquals("\u001b[200~中[201~文\u001b[201~", core.paste("中\u001b[201~文").toString(Charsets.UTF_8))
     }
 
+    @Test fun wheelKeepsPrimaryHistoryLocalAndRoutesAlternateScreenInput() = GhosttyCore(20, 4).use { core ->
+        core.resize(20, 4, 10, 20)
+        core.feed((0..30).joinToString("\r\n") { "line-$it" }.toByteArray())
+        core.feed("\u001b[?1000h\u001b[?1006h".toByteArray())
+        assertFalse(core.snapshot().alternateScreen)
+        assertTrue(core.wheel(-5, 3, 2).isEmpty())
+        assertFalse(core.snapshot().text().contains("line-30"))
+        core.scroll(Int.MAX_VALUE)
+        core.feed("\u001b[?1049h".toByteArray())
+        assertTrue(core.snapshot().alternateScreen)
+        assertEquals("\u001b[<64;4;3M\u001b[<64;4;3M", core.wheel(-2, 3, 2).toString(Charsets.UTF_8))
+        assertEquals("\u001b[<65;4;3M", core.wheel(1, 3, 2).toString(Charsets.UTF_8))
+        core.feed("\u001b[?1000l\u001b[?1007h\u001b[?1h".toByteArray())
+        assertEquals("\u001bOA", core.wheel(-1, 3, 2).toString(Charsets.UTF_8))
+        core.feed("\u001b[?1l".toByteArray())
+        assertEquals("\u001b[B", core.wheel(1, 3, 2).toString(Charsets.UTF_8))
+        core.feed("\u001b[?1007l".toByteArray())
+        assertTrue(core.wheel(1, 3, 2).isEmpty())
+        core.feed("\u001b[?1049l".toByteArray())
+        assertFalse(core.snapshot().alternateScreen)
+        assertTrue(core.snapshot().text().contains("line-30"))
+        val offset = core.snapshot().scrollOffset
+        assertTrue(core.wheel(-5, 3, 2, applicationOnly = true).isEmpty())
+        assertEquals("queued application wheel must not fall back to restored primary history", offset, core.snapshot().scrollOffset)
+    }
+
     @Test fun scrollbackAndNativeLifetime() {
         repeat(20) {
             val core = GhosttyCore(20, 4)

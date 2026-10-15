@@ -513,7 +513,15 @@ pub fn settings_hairline(cx: &App) -> Hsla {
 /// a dark outline makes the control look stuck. Keyboard navigation keeps the
 /// accent ring; pointer interaction folds the ring into the normal input line.
 pub fn sync_component_focus_ring(window: &Window, cx: &mut App) {
-    let ring = if window.last_input_was_keyboard() { cx.theme().link } else { cx.theme().input };
+    sync_component_focus_ring_for_input(window.last_input_was_keyboard(), cx);
+}
+
+fn sync_component_focus_ring_for_input(last_input_was_keyboard: bool, cx: &mut App) {
+    let ring = if last_input_was_keyboard { cx.theme().link } else { cx.theme().input };
+    // GPUI 的 global_mut 即使写回相同颜色也会通知观察者；动画帧不应重复广播主题变化。
+    if cx.theme().ring == ring {
+        return;
+    }
     Theme::global_mut(cx).ring = ring;
 }
 
@@ -815,6 +823,50 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
 mod tests {
     use super::{PaneCardStyle, resolve_theme_name, theme_card_persist_updates};
     use nebula_settings::{RawSettings, RuntimeSettings, ThemeName};
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn repeated_focus_ring_sync_does_not_notify_theme_observers(cx: &mut gpui::TestAppContext) {
+        use gpui_component::Theme;
+        use std::{cell::Cell, rc::Rc};
+
+        cx.update(|cx| {
+            let mut theme = Theme::default();
+            theme.input = gpui::rgb(0x303744).into();
+            theme.link = gpui::rgb(0x88c0d0).into();
+            theme.ring = theme.input;
+            cx.set_global(theme);
+        });
+        let notifications = Rc::new(Cell::new(0));
+        let observed = notifications.clone();
+        let _subscription =
+            cx.update(|cx| cx.observe_global::<Theme>(move |_| observed.set(observed.get() + 1)));
+
+        for _ in 0..24 {
+            cx.update(|cx| super::sync_component_focus_ring_for_input(false, cx));
+        }
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 0, "unchanged animation frames must not rebroadcast Theme");
+
+        cx.update(|cx| {
+            super::sync_component_focus_ring_for_input(true, cx);
+            assert_eq!(Theme::global(cx).ring, Theme::global(cx).link);
+        });
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 1, "keyboard focus still updates the visible ring");
+        for _ in 0..24 {
+            cx.update(|cx| super::sync_component_focus_ring_for_input(true, cx));
+        }
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 1);
+
+        cx.update(|cx| {
+            super::sync_component_focus_ring_for_input(false, cx);
+            assert_eq!(Theme::global(cx).ring, Theme::global(cx).input);
+        });
+        cx.run_until_parked();
+        assert_eq!(notifications.get(), 2, "pointer input restores the neutral ring once");
+    }
 
     #[test]
     fn square_panes_fill_the_column_despite_saved_card_spacing_and_shadow() {

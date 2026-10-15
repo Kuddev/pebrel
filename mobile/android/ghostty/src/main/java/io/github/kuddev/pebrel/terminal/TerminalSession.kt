@@ -204,6 +204,12 @@ class TerminalSession(private val transport: SessionTransport, private val callb
     fun scrollTo(offset: Int) {
         scope.launch(stateDispatcher) { core?.scrollTo(offset); requestFrame() }
     }
+    fun wheel(lines: Int, column: Int, row: Int) {
+        if (frame?.alternateScreen != true) { scroll(lines); return }
+        // 与文字/按键共用有界写队列，在实际发送时再次按当前 VT 模式编码。
+        if (!offer(4096) { engine -> engine.wheel(lines, column, row, applicationOnly = true).also { requestFrame() } })
+            reportRejected()
+    }
     fun previewText(): String {
         val current = frame ?: return ""
         val end = current.cursorY.coerceIn(0, current.rows.lastIndex)
