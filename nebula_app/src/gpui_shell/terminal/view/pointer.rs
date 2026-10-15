@@ -145,7 +145,11 @@ impl TerminalView {
         let term = session.term.lock();
         let viewport_origin = term.viewport_origin_for(self.rows);
         let point = term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)));
-        self.math.source_point(point, side, viewport_origin)
+        if self.reading.panel.is_some() {
+            (point, side)
+        } else {
+            self.math.source_point(point, side, viewport_origin)
+        }
     }
 
     pub(super) fn selection_is_empty(&self) -> bool {
@@ -533,6 +537,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.update_output_hover(event, cx);
         self.update_scrollbar_hover(event.position, cx);
         // Retain the pressed link until release; dragging must not retarget it
         // or leak part of the consumed gesture to the application.
