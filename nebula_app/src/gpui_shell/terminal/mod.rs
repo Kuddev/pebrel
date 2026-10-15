@@ -24,6 +24,7 @@ pub mod math_overlay;
 mod molecule_overlay;
 pub mod mouse_protocol;
 mod osc_links;
+mod reading;
 pub mod session;
 mod session_pump;
 mod ssh_connect_overlay;
