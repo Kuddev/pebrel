@@ -21,6 +21,7 @@ mod notifications;
 mod output_tests;
 mod path_drop;
 mod pointer;
+mod reading;
 mod runtime;
 mod startup;
 mod startup_command;
@@ -269,6 +270,7 @@ pub struct TerminalView {
     pub(super) answers: crate::assistant_answer::AnswerInbox,
     confirmation: super::confirmation::ConfirmationState,
     pub(super) answer_reader: Option<gpui::Entity<super::answer_reader::AnswerReader>>,
+    pub(super) reading: super::reading::ReadingState,
     pub pane_id: u64,
     pub session: Option<TerminalSession>,
     pub focus_handle: FocusHandle,
@@ -531,6 +533,9 @@ impl TerminalView {
         visible: bool,
         cx: &mut Context<Self>,
     ) {
+        if !visible {
+            self.clear_output_hover(cx);
+        }
         if self.output_visible != visible {
             self.cursor_animation.reset();
 
@@ -567,6 +572,7 @@ impl TerminalView {
         }
         match event {
             TermEvent::Wakeup => {
+                self.observe_reading_output(cx);
                 self.flush_pending_runtime_submit(cx);
                 self.flush_pending_shell_command(cx);
                 if self.output_visible {
@@ -736,6 +742,13 @@ impl TerminalView {
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
+        self.clear_output_hover(cx);
+        self.reading.cancel_query();
+        self.reading.cancel_copy();
+        if let Some(panel) = self.reading.panel.as_mut() {
+            panel.running = false;
+            panel.feedback.update(cx, |feedback, cx| feedback.clear(cx));
+        }
         self.port_forward_task = None;
         self.port_forwards.clear();
         self.confirmation.invalidate();
@@ -1115,6 +1128,10 @@ impl TerminalView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // 搜索输入具有独立焦点，祖先终端不得再次把同一按键写入 PTY。
+        if !self.focus_handle.is_focused(window) {
+            return;
+        }
         if self.exited.is_some() || self.answer_reader.is_some() {
             return;
         }
@@ -1126,6 +1143,24 @@ impl TerminalView {
         }
         let ks = &event.keystroke;
         let mods = &ks.modifiers;
+
+        if self.reading.panel.is_some() && ks.key.as_str() == "escape" {
+            self.close_reading(window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if !mods.alt
+            && !mods.function
+            && ((mods.control && mods.shift && ks.key.as_str() == "h")
+                || (crate::platform::Platform::current() == crate::platform::Platform::MacOS
+                    && mods.platform
+                    && !mods.shift
+                    && ks.key.as_str() == "f"))
+        {
+            self.open_reading(false, window, cx);
+            cx.stop_propagation();
+            return;
+        }
 
         // 终端惯例快捷键优先于编码器。
         if mods.control && mods.shift {
@@ -1230,6 +1265,10 @@ impl TerminalView {
     }
 
     fn on_terminal_tab(&mut self, _: &TerminalTab, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus_handle.is_focused(window) {
+            cx.propagate();
+            return;
+        }
         self.dispatch_terminal_tab(false, window, cx);
     }
 
@@ -1239,6 +1278,10 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.focus_handle.is_focused(window) {
+            cx.propagate();
+            return;
+        }
         self.dispatch_terminal_tab(true, window, cx);
     }
 
@@ -1263,7 +1306,13 @@ impl Drop for TerminalView {
 impl Focusable for TerminalView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.answer_reader.as_ref().map_or_else(
-            || self.focus_handle.clone(),
+            || {
+                // 工作区会在分屏聚焦或标签恢复后延迟设置焦点，搜索输入仍须拥有它。
+                self.reading.panel.as_ref().map_or_else(
+                    || self.focus_handle.clone(),
+                    |panel| panel.input.read(cx).focus_handle(cx),
+                )
+            },
             |reader| reader.read(cx).focus_handle.clone(),
         )
     }
@@ -1311,10 +1360,10 @@ impl gpui::EntityInputHandler for TerminalView {
         &mut self,
         _range: Option<std::ops::Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.answer_reader.is_some() {
+        if self.answer_reader.is_some() || !self.focus_handle.is_focused(window) {
             return;
         }
         let had_marked_text = self.marked_text.take().is_some();
@@ -1335,10 +1384,10 @@ impl gpui::EntityInputHandler for TerminalView {
         _range: Option<std::ops::Range<usize>>,
         new_text: &str,
         _new_selected_range: Option<std::ops::Range<usize>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.answer_reader.is_some() {
+        if self.answer_reader.is_some() || !self.focus_handle.is_focused(window) {
             return;
         }
         let marked_text = if new_text.is_empty() { None } else { Some(new_text.to_string()) };
@@ -1380,7 +1429,11 @@ impl Render for TerminalView {
         let drop_highlight = cx.theme().accent.opacity(0.18);
         let mut root = div()
             .id("nebula-terminal")
-            .key_context(KEY_CONTEXT)
+            .key_context(if self.reading.panel.is_some() && !self.focus_handle.is_focused(window) {
+                "NebulaTerminalReading"
+            } else {
+                KEY_CONTEXT
+            })
             .size_full()
             // SSH 连接卡片使用 absolute + inset_0；本 pane 必须成为它的
             // containing block，否则坐标会逃到工作区/窗口根，轨道和粒子
@@ -1429,8 +1482,9 @@ impl Render for TerminalView {
                     this.paste_dropped_paths(&[drag.path_text.clone()], window, cx);
                 },
             ))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if !*hovered {
+                    this.leave_output_hover(Some(window.mouse_position()), cx);
                     if std::mem::take(&mut this.scrollbar_hovered) {
                         cx.notify();
                     }
@@ -1482,12 +1536,19 @@ impl Render for TerminalView {
                 );
             }
         }
+        if self.session.is_some() {
+            root = root.child(self.reading_chrome(cx));
+        }
         root.into_any_element()
     }
 }
 
 impl TerminalView {
     fn open_answer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_output_hover(cx);
+        self.reading.cancel_query();
+        self.reading.cancel_copy();
+        self.reading.panel = None;
         let Some(snapshot) = self.answers.latest.clone() else { return };
         let reader = cx.new(|cx| super::answer_reader::AnswerReader::new(snapshot, cx));
         if self.agent_activity.status() == crate::ai_agents::AgentStatus::Blocked {
