@@ -34,8 +34,16 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertIn('DEFAULT_CLASS: &str = "Pebrel";', window)
         gpui = self.source("nebula_app/src/gpui_shell/workspace/windowing.rs")
         self.assertIn('window.set_window_title(crate::brand::NAME)', gpui)
-        self.assertIn('app_id: Some("pebrel".to_owned())', gpui)
-        self.assertIn('app_id: Some("pebrel-quick-terminal".to_owned())', gpui)
+        for fallback in ('pebrel', 'pebrel-quick-terminal'):
+            self.assertRegex(gpui, rf'application_id\(\s*"{fallback}"\s*,?\s*\)')
+        for constant, desktop in (
+            ('LINUX_APP_ID', 'io.github.kuddev.pebrel'),
+            ('LINUX_PREVIEW_APP_ID', 'io.github.kuddev.pebrel.preview'),
+        ):
+            self.assertIn(f'pub const {constant}: &str = "{desktop}";', brand)
+            entry = self.source(f'packaging/linux/{desktop}.desktop')
+            self.assertIn(f'StartupWMClass={desktop}', entry.splitlines())
+            self.assertIn(f'Icon={desktop}', entry.splitlines())
         welcome = self.source("nebula_app/src/window_context/welcome.rs")
         self.assertIn('crate::brand::NAME', welcome)
         self.assertNotIn('Nebula Terminal', welcome)

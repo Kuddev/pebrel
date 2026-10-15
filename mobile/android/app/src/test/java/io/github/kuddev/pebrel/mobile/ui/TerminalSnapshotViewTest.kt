@@ -207,6 +207,43 @@ class TerminalSnapshotViewTest {
         assertSame(original, view.frame)
     }
 
+    @Test fun reflowedAlternateScreenSwipeUsesOriginalCellsAndKeepsHistoryReadOnly() {
+        val view = view(row("abcdefgh"), width = 39, height = 200)
+        view.frame = TerminalFrame(arrayOf(row("abcdefgh")),
+            intArrayOf(8, 1, 0, 0, 0, background, red, 2),
+            history = TerminalHistory(0, 0, 1, 0, 1, true))
+        view.wrapLines = true
+        val scrolls = mutableListOf<Triple<Int, Int, Int>>()
+        view.scrollTarget = object : TerminalInputTarget {
+            override val supportsScroll = true
+            override fun scroll(lines: Int, column: Int, row: Int): Boolean {
+                scrolls += Triple(lines, column, row)
+                return true
+            }
+            override fun text(text: String): Boolean = error("scroll must not type")
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int): Boolean =
+                error("application scroll is encoded by the desktop")
+        }
+        val down = eventTime
+        touch(view, down, MotionEvent.ACTION_DOWN, 10f to 10f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 10f to 140f)
+        touch(view, down, MotionEvent.ACTION_CANCEL, 10f to 140f)
+        assertTrue("phone reflow must not disable application scrolling", scrolls.isNotEmpty())
+        assertTrue("coordinates refer to the original one-row grid", scrolls.all { it.second in 0..7 && it.third == 0 })
+        val count = scrolls.size
+        view.frame = TerminalFrame(Array(200) { row("abcdefgh") },
+            intArrayOf(8, 200, 0, 0, 0, background, red, 2),
+            history = TerminalHistory(100, 0, 500, 480, 20, false))
+        val requests = mutableListOf<Long?>()
+        view.onHistoryPage = { requests += it }
+        val next = eventTime
+        touch(view, next, MotionEvent.ACTION_DOWN, 10f to 10f)
+        touch(view, next, MotionEvent.ACTION_MOVE, 10f to 20000f)
+        touch(view, next, MotionEvent.ACTION_CANCEL, 10f to 20000f)
+        assertEquals("primary history never sends a PC wheel", count, scrolls.size)
+        assertTrue(requests.any { it != null && it < 100 })
+    }
+
     @Test fun doubleTapCopiesWordAndTripleTapCopiesOnlyItsVisualRow() {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         val view = TerminalSnapshotView(activity).apply {
