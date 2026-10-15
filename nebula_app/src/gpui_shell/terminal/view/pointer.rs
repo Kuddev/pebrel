@@ -225,7 +225,9 @@ impl TerminalView {
     /// 应用是否接管了鼠标（vim/htop 等）。Shift 按住时强制旁路——这是
     /// 终端的通用逃生门：应用吃鼠标时用户仍能选择/复制。
     pub(super) fn mouse_mode_active(&self, mods: &gpui::Modifiers) -> bool {
-        !mods.shift && self.term_mode().intersects(TermMode::MOUSE_MODE)
+        self.session_input_alive()
+            && !mods.shift
+            && self.term_mode().intersects(TermMode::MOUSE_MODE)
     }
 
     /// 把一次鼠标事件按当前协议（SGR/normal/UTF-8）编码上报给应用。
@@ -956,7 +958,7 @@ impl TerminalView {
         }
         let mode = self.term_mode();
         // 应用接管鼠标时滚轮也归应用（htop 列表滚动）；Shift 旁路回本地回滚。
-        if !event.modifiers.shift && mode.intersects(TermMode::MOUSE_MODE) {
+        if self.mouse_mode_active(&event.modifiers) {
             let code =
                 if lines > 0 { mouse_protocol::WHEEL_UP } else { mouse_protocol::WHEEL_DOWN };
             for _ in 0..lines.unsigned_abs() {
@@ -966,7 +968,10 @@ impl TerminalView {
             return;
         }
         let Some(session) = &self.session else { return };
-        if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+        if self.session_input_alive()
+            && mode.contains(TermMode::ALT_SCREEN)
+            && mode.contains(TermMode::ALTERNATE_SCROLL)
+        {
             // 备用屏（less/vim）：滚轮翻译成方向键。
             let seq: &[u8] = if mode.contains(TermMode::APP_CURSOR) {
                 if lines > 0 { b"\x1bOA" } else { b"\x1bOB" }

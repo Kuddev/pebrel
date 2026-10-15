@@ -17,6 +17,12 @@
     "en_us": "English"
   },
   "settings": {
+    "session": {
+      "keep_ssh": "Keep ended SSH sessions",
+      "keep_ssh_help": "Keep SSH tabs and scrollback after the remote shell exits, including idle timeouts and logout. Use Reconnect to start a new session. Startup restore follows the existing restore setting. Applies to future exits in open sessions; off by default.",
+      "ended": "SSH session ended",
+      "reconnect": "Reconnect"
+    },
     "completion": {
       "mode": "Completion mode",
       "cycle": "Cycle completion mode",

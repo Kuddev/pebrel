@@ -68,6 +68,8 @@ mod shell_picker;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shell_picker_tests;
 mod sponsor;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod ssh_retention_tests;
 mod status;
 mod theme_advanced;
 mod theme_editor;
@@ -779,6 +781,7 @@ impl SettingsPane {
             "cjk_bold_regular" => flag!(cjk_bold_regular),
             "fetch" => flag!(fetch),
             "keep_session" => flag!(keep_session),
+            "keep_ssh_session" => flag!(keep_ssh_session),
             "restore_session" => flag!(restore_session),
             "resume_ai" => flag!(resume_ai),
             "tray" => flag!(tray),
@@ -1451,6 +1454,13 @@ impl SettingsPane {
                     cx,
                 ))
             })
+            .child(self.switch_row(
+                "keep_ssh_session",
+                language.text(crate::i18n::Message::SettingsSessionKeepSsh),
+                language.text(crate::i18n::Message::SettingsSessionKeepSshHelp),
+                self.runtime.keep_ssh_session,
+                cx,
+            ))
             .child(self.switch_row(
                 "restore_session",
                 language.pick("启动时恢复上次标签", "Restore previous tabs at startup"),

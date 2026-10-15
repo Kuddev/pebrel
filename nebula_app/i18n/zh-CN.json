@@ -17,6 +17,12 @@
     "en_us": "English"
   },
   "settings": {
+    "session": {
+      "keep_ssh": "保留已结束的 SSH 会话",
+      "keep_ssh_help": "远程 Shell 退出后保留 SSH 标签和历史输出，包括空闲超时和主动退出。可点击重连启动新会话；启动恢复遵循原恢复设置。对已打开会话的后续退出生效，默认关闭。",
+      "ended": "SSH 会话已结束",
+      "reconnect": "重连"
+    },
     "completion": {
       "mode": "补齐模式",
       "cycle": "切换补齐模式",

@@ -187,6 +187,9 @@ fn ssh_exit_and_failure_cancel_pending_forward_and_hide_remote_actions(cx: &mut 
             view.ssh_destination = Some("fixture@localhost".into());
             view.apply_ssh_stage(crate::ssh_session::SshStage::Ready, cx);
             assert_eq!(view.ready_ssh_destination(), Some("fixture@localhost"));
+            view.running_program = Some("codex".into());
+            assert!(view.runtime_chat_agent().is_some());
+            view.progress = crate::taskbar::TaskProgress::Indeterminate;
             view.port_forward_task =
                 Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
             if failed {
@@ -199,6 +202,41 @@ fn ssh_exit_and_failure_cancel_pending_forward_and_hide_remote_actions(cx: &mut 
             }
             assert!(view.port_forward_task.is_none());
             assert!(view.ready_ssh_destination().is_none());
+            assert!(view.runtime_chat_agent().is_none());
+            assert_eq!(view.progress, crate::taskbar::TaskProgress::None);
         });
     }
+}
+
+#[gpui::test]
+fn ended_ssh_history_bypasses_stale_mouse_and_alternate_scroll_modes(cx: &mut TestAppContext) {
+    let (view, window, receiver) = open(cx);
+    view.update(window, |view, cx| {
+        view.ssh_destination = Some("fixture@localhost".into());
+        view.apply_ssh_stage(crate::ssh_session::SshStage::Ready, cx);
+        feed(view, b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?1007hretained output");
+        assert!(view.mouse_mode_active(&gpui::Modifiers::default()));
+        view.process_event(TermEvent::Exit, cx);
+        assert!(!view.mouse_mode_active(&gpui::Modifiers::default()));
+        assert!(view.session.as_ref().unwrap().term.lock().mode().contains(TermMode::ALT_SCREEN));
+    });
+    while receiver.try_recv().is_ok() {}
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.on_scroll(
+                &gpui::ScrollWheelEvent {
+                    position: gpui::point(view.origin.x + px(8.0), view.origin.y + px(8.0)),
+                    delta: gpui::ScrollDelta::Lines(gpui::point(0.0, 3.0)),
+                    touch_phase: gpui::TouchPhase::Moved,
+                    modifiers: Default::default(),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    assert!(
+        receiver.try_recv().is_err(),
+        "history scrolling cannot send input to a dead remote app"
+    );
 }

@@ -111,6 +111,7 @@ impl TerminalView {
         );
         self.ssh_connect_last_step = std::time::Instant::now();
         if matches!(stage, crate::ssh_session::SshStage::Failed(_)) {
+            self.clear_session_progress(cx);
             self.port_forward_task = None;
             self.port_forwards.clear();
             self.pending_runtime_submit = None;
@@ -238,6 +239,9 @@ impl TerminalView {
     /// 恢复/分叉保留历史身份，不能单独证明 CLI 仍在前台；进程树已经反证命令
     /// 结束时也必须立即排除，避免把多行引用送回普通 shell。
     pub fn runtime_chat_agent(&self) -> Option<crate::runtime_api::RuntimeAgent> {
+        if !self.session_input_alive() {
+            return None;
+        }
         let kind = runtime_chat_agent_kind(
             self.running_program.as_deref(),
             self.command_running_disproved,

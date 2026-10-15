@@ -51,6 +51,7 @@ const RESET_KEYS: &[&str] = &[
     "auto_check_updates",
     "auto_download_updates",
     "keep_session",
+    "keep_ssh_session",
     "restore_session",
     "resume_ai",
     "tray",
@@ -266,6 +267,13 @@ mod tests {
         assert!(runtime.font_size_px.is_none());
         assert!(runtime.shell.is_none());
         assert!(crate::keybind_pairs_from_text(&result).is_empty());
+    }
+
+    #[test]
+    fn reset_restores_ended_ssh_default_without_removing_unknown_settings() {
+        let restored = default_settings_text("keep_ssh_session=1\nprivate_key=keep\n");
+        assert_eq!(restored, "private_key=keep\n");
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).keep_ssh_session);
     }
 
     #[test]

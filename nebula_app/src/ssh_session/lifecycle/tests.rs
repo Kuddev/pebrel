@@ -65,6 +65,7 @@ enum Mode {
     RejectShell,
     DropWithoutStatus,
     ExitAfterEof,
+    ExitNonZero,
     HangFirstConnection,
     ExecEof,
     ExecHang,
@@ -238,9 +239,12 @@ impl server::Handler for Loopback {
                 session.eof(channel)?;
                 session.close(channel)?;
             },
-            Mode::ExitAfterEof => {
+            Mode::ExitAfterEof | Mode::ExitNonZero => {
                 session.eof(channel)?;
-                session.exit_status_request(channel, 0)?;
+                session.exit_status_request(
+                    channel,
+                    if self.mode == Mode::ExitNonZero { 23 } else { 0 },
+                )?;
                 session.close(channel)?;
             },
             _ => {},
@@ -570,6 +574,25 @@ impl Fixture {
         authenticated_route(&self.route, None::<&NoopSshEventHost>, false, true).await.unwrap()
     }
 
+    async fn connect_without_credentials(&self) -> AcquiredSession {
+        // This exact exit-status fixture must fail if synthetic none-auth is
+        // rejected, without entering the production key/agent/password fallback.
+        let config =
+            Arc::new(russh::client::Config { inactivity_timeout: None, ..Default::default() });
+        let mut transport =
+            super::super::open_transport(&self.route, config, true, false).await.unwrap();
+        assert!(
+            transport.session.authenticate_none("fixture").await.unwrap().success(),
+            "owned loopback none-auth must succeed"
+        );
+        AcquiredSession {
+            key: self.route.pool_key(),
+            session: Arc::new(transport.session),
+            reused: false,
+            jump_sessions: transport.jump_sessions,
+        }
+    }
+
     async fn forget(&self, session: &SharedSession) {
         super::super::evict_pooled_session(&self.route.pool_key(), session).await;
     }
@@ -758,19 +781,19 @@ fn ssh_resize_updates_grid_and_remote_pty() {
 #[test]
 fn unexpected_disconnect_preserves_pane_but_explicit_exit_closes_it() {
     check(async {
-        for mode in [Mode::DropWithoutStatus, Mode::ExitAfterEof] {
+        for mode in [Mode::DropWithoutStatus, Mode::ExitAfterEof, Mode::ExitNonZero] {
             let fixture = Fixture::new(mode).await;
-            let acquired = fixture.connect().await;
+            let acquired = fixture.connect_without_credentials().await;
             let events = Events::default();
             let terminal = terminal(&events);
             let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
             let (_input_tx, mut input) = mpsc::unbounded_channel();
             let result = pump(&mut channel, token, size(), &terminal, &events, &mut input).await;
-            assert_eq!(result.is_ok(), mode == Mode::ExitAfterEof);
+            assert_eq!(result.is_ok(), mode != Mode::DropWithoutStatus);
             finish(result, &terminal, &events);
             assert_eq!(
                 events.exits.load(std::sync::atomic::Ordering::Relaxed),
-                usize::from(mode == Mode::ExitAfterEof)
+                usize::from(mode != Mode::DropWithoutStatus)
             );
             assert_eq!(
                 events

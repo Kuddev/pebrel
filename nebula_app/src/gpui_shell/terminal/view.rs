@@ -12,6 +12,7 @@ mod conversation;
 pub(super) mod cursor;
 mod cwd_report;
 mod editor;
+mod ended_session;
 mod image_paste;
 mod layout;
 #[cfg(all(test, windows, feature = "gpui-test-support"))]
@@ -736,6 +737,11 @@ impl TerminalView {
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
+        // Retained SSH panes stay mounted after exit and must clear their
+        // taskbar state. Local exit keeps its existing event contract.
+        if self.ssh_destination.is_some() {
+            self.clear_session_progress(cx);
+        }
         self.port_forward_task = None;
         self.port_forwards.clear();
         self.confirmation.invalidate();
@@ -1467,19 +1473,8 @@ impl Render for TerminalView {
                     }
                 }
             }
-            if let Some(exited) = &self.exited {
-                root = root.child(
-                    div()
-                        .absolute()
-                        .bottom_2()
-                        .left_2()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(gpui::opaque_grey(0.2, 0.9))
-                        .text_sm()
-                        .child(exited.clone()),
-                );
+            if let Some(status) = self.ended_session_status(cx) {
+                root = root.child(status);
             }
         }
         root.into_any_element()

@@ -45,7 +45,15 @@ impl NebulaWorkspace {
             TerminalViewEvent::Exited => {
                 if let Some((tab_ix, pane_id)) = self.locate_pane(view.entity_id()) {
                     self.runtime_hub.record_pane_exited(self.runtime_window_id, pane_id);
-                    self.close_pane(tab_ix, pane_id, window, cx);
+                    if view.read(cx).ssh_destination.is_some()
+                        && cx.global::<crate::gpui_shell::config::Settings>().keep_ssh_session
+                    {
+                        // Exit remains authoritative for runtime state. Retention only
+                        // controls presentation; it never restarts a remote command.
+                        cx.notify();
+                    } else {
+                        self.close_pane(tab_ix, pane_id, window, cx);
+                    }
                 }
             },
             TerminalViewEvent::FocusRequested => {
@@ -261,3 +269,7 @@ mod tests {
         check(0, false, false, false, [1, 1, 0]);
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+#[path = "terminal_activity/ssh_retention_tests.rs"]
+mod ssh_retention_tests;

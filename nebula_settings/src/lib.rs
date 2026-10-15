@@ -1059,6 +1059,9 @@ pub struct RuntimeSettings {
     /// Optional background package download; never grants install permission.
     pub auto_download_updates: bool,
     pub keep_session: bool,
+    /// Keep completed built-in SSH panes visible until closed or reconnected.
+    /// Defaults off; changes apply to subsequent exits in already open sessions.
+    pub keep_ssh_session: bool,
     /// Start the first window hidden when a system tray is available and enabled.
     pub silent_start: bool,
     pub restore_session: bool,
@@ -1261,6 +1264,7 @@ impl RuntimeSettings {
             auto_check_updates: raw.bool_on("auto_check_updates").unwrap_or(true),
             auto_download_updates: raw.bool_on("auto_download_updates").unwrap_or(false),
             keep_session: raw.bool_on("keep_session").unwrap_or(false),
+            keep_ssh_session: raw.bool_on("keep_ssh_session").unwrap_or(false),
             silent_start: raw.bool_on("silent_start").unwrap_or(false),
             restore_session: raw.bool_on("restore_session").unwrap_or(true),
             resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
@@ -1647,6 +1651,28 @@ mod tests {
             !RuntimeSettings::from_raw(&RawSettings::from_text("auto_check_updates=0\n"))
                 .auto_check_updates
         );
+    }
+
+    #[test]
+    fn ended_ssh_retention_is_opt_in_and_round_trips_independently() {
+        assert!(!RuntimeSettings::from_raw(&RawSettings::default()).keep_ssh_session);
+        for value in ["", "invalid", "0", "false", "NO", "Off"] {
+            let raw = RawSettings::from_text(&format!("keep_ssh_session={value}\n"));
+            assert!(!RuntimeSettings::from_raw(&raw).keep_ssh_session, "{value:?}");
+        }
+        for value in ["1", "true", "YES", "On"] {
+            let raw = RawSettings::from_text(&format!("keep_ssh_session={value}\n"));
+            assert!(RuntimeSettings::from_raw(&raw).keep_ssh_session, "{value:?}");
+        }
+        let original = "# preferences\nkeep_session=1\nshell=zsh\ncustom_key=keep\n";
+        let enabled = apply_updates(original, &[("keep_ssh_session", "1".into())]);
+        let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&enabled));
+        assert!(settings.keep_ssh_session && settings.keep_session);
+        assert_eq!(settings.shell.as_deref(), Some("zsh"));
+        assert!(enabled.contains("custom_key=keep\n"));
+        let disabled = apply_updates(&enabled, &[("keep_ssh_session", "0".into())]);
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&disabled)).keep_ssh_session);
+        assert_eq!(disabled.matches("keep_ssh_session=").count(), 1);
     }
 
     #[test]
