@@ -31,6 +31,7 @@ mod cell_fit;
 #[cfg(test)]
 #[path = "element/color_tests.rs"]
 mod color_tests;
+mod reading;
 
 #[path = "element/app_colors.rs"]
 mod app_colors;
@@ -370,6 +371,9 @@ impl Element for TerminalElement {
                 view.math.bind_resources(cx);
                 let size_info =
                     super::math_overlay::grid_size_info(layout.cols, layout.rows, cell_w, line_h);
+                if view.reading.panel.is_some() {
+                    return view.math.clear_frame(&size_info, math_pixels_per_point);
+                }
                 // CLI identity must not disable grid math. The answer reader
                 // replaces TerminalElement in TerminalView::render only while
                 // actually open; merely detecting Codex/Claude is not a handoff.
@@ -528,6 +532,7 @@ impl Element for TerminalElement {
                 ));
             }
         }
+        self.paint_reading_highlight(bounds, layout, viewport_top_abs, window, cx);
         let selection_foreground = theme.selection_foreground;
         let selected_foreground = |row: u16, col: u16| -> Option<Rgba> {
             let foreground = selection_foreground?;
