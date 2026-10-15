@@ -345,6 +345,8 @@ impl TextFileView {
             .pt(px(reader_presentation::TOP_MARGIN))
             .debug_selector(|| "markdown-preview-viewport".to_owned())
             .on_scroll_wheel(cx.listener(|view, event: &gpui::ScrollWheelEvent, _, cx| {
+                view.link_hover = None;
+                view.link_hide_task = None;
                 // 列表只接收正文列内的滚轮；两侧和顶部留白也使用同一个滚动位置。
                 // 正文列内的事件交给列表，避免一次滚轮被处理两次。
                 if !view.scroll.viewport_bounds().contains(&event.position) {
@@ -421,6 +423,8 @@ impl TextFileView {
                         .clone();
                     let edit_owner = owner.clone();
                     let link_owner = owner.clone();
+                    let hover_owner = owner.clone();
+                    let hover_source = block.downgrade();
                     block_frame(index, heading)
                         .when(live_mode, |block| {
                             block.cursor_text().on_click(move |event, window, cx| {
@@ -437,6 +441,17 @@ impl TextFileView {
                                 .selectable(true)
                                 .scrollable(false)
                                 .style(style.clone())
+                                .on_link_hover(move |hover, _, cx| {
+                                    let Some(source) = hover_source
+                                        .upgrade()
+                                        .map(|source| source.read(cx).source())
+                                    else {
+                                        return;
+                                    };
+                                    let _ = hover_owner.update(cx, |file, cx| {
+                                        file.update_link_hover(index, None, &source, hover, cx)
+                                    });
+                                })
                                 .when(live_mode, |text| {
                                     text.on_link_click(move |url, event, window, cx| {
                                         if event.modifiers().control || event.modifiers().platform {

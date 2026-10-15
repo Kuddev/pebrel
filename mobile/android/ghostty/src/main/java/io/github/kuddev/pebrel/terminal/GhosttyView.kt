@@ -304,6 +304,8 @@ class GhosttyView(context: Context) : View(context) {
             return true
         }
         override fun onScroll(first: MotionEvent?, current: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+            wheelColumn = (current.x / cellWidth).toInt().coerceAtLeast(0)
+            wheelRow = (current.y / cellHeight).toInt().coerceAtLeast(0)
             scrollPixels(distanceY)
             return true
         }
@@ -355,12 +357,14 @@ class GhosttyView(context: Context) : View(context) {
         }
     })
     private var scrollRemainder = 0f
+    private var wheelColumn = 0
+    private var wheelRow = 0
 
     private fun scrollPixels(distance: Float) {
-        scrollRemainder += distance
+        scrollRemainder = (scrollRemainder + distance).coerceIn(-32 * cellHeight, 32 * cellHeight)
         val lines = (scrollRemainder / cellHeight).toInt()
         if (lines != 0) {
-            session?.scroll(lines)
+            session?.wheel(lines, wheelColumn, wheelRow)
             scrollRemainder -= lines * cellHeight
         }
     }
@@ -386,6 +390,8 @@ class GhosttyView(context: Context) : View(context) {
             event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) {
             if (selection.frame != null) selection.clear()
             stopScrolling()
+            wheelColumn = (event.x / cellWidth).toInt().coerceAtLeast(0)
+            wheelRow = (event.y / cellHeight).toInt().coerceAtLeast(0)
             scrollPixels(-event.getAxisValue(MotionEvent.AXIS_VSCROLL) * cellHeight * 3)
             return true
         }

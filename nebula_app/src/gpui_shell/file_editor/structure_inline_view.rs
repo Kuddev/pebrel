@@ -137,6 +137,8 @@ impl TextFileView {
                 );
                 state.update(cx, |state, cx| state.set_text(&text, cx));
                 self.inline_views.borrow_mut().insert((block, part), state.downgrade());
+                let hover_owner = owner.clone();
+                let hover_source = state.downgrade();
                 // A fragment's Markdown parser owns only its content. Spaces
                 // between a text run and an object still belong to the outer
                 // paragraph, including when a run contains only whitespace.
@@ -160,6 +162,16 @@ impl TextFileView {
                         .max_w_full()
                         .selectable(true)
                         .scrollable(false)
+                        .on_link_hover(move |hover, _, cx| {
+                            let Some(source) =
+                                hover_source.upgrade().map(|source| source.read(cx).source())
+                            else {
+                                return;
+                            };
+                            let _ = hover_owner.update(cx, |view, cx| {
+                                view.update_link_hover(block, Some(part), &source, hover, cx)
+                            });
+                        })
                         .style(TextViewStyle {
                             paragraph_gap: gpui::rems(0.0),
                             image_base: self.path.parent().map(std::sync::Arc::from),
