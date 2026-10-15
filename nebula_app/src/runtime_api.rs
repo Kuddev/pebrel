@@ -842,6 +842,7 @@ pub enum RuntimeCommand {
         lines: i16,
         column: u16,
         row: u16,
+        application_only: bool,
     },
     Procs {
         window_id: Option<u64>,

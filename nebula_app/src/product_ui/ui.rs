@@ -16,5 +16,3 @@ pub(crate) mod text_field;
 pub mod theme;
 #[path = "../display/ui/tokens.rs"]
 pub mod tokens;
-#[path = "../display/ui/scrollbar.rs"]
-pub mod widgets;

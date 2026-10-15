@@ -124,6 +124,85 @@ fn missing_capability_fails_before_native_dispatch() {
 }
 
 #[test]
+fn manifest_cannot_grant_itself_core_control_or_unreviewed_capabilities() {
+    // 覆盖真实控制路径与未来未知方法，避免黑名单漏掉别名或新 Runtime 接口。
+    for method in [
+        "window.close",
+        "window.focus",
+        "tab.close",
+        "tab.move",
+        "pane.close",
+        "pane.prompt",
+        "pane.paste",
+        "pane.send_key",
+        "pane.run",
+        "pane.exec",
+        "pane.resize",
+        "pane.split",
+        "agent.start",
+        "conversation.send",
+        "runtime.snapshot",
+        "pane.read",
+        "runtime.future_action",
+        "runtime.describe.extra",
+    ] {
+        for lua in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let manifest = if lua { lua_manifest() } else { NATIVE.to_owned() };
+            let manifest = manifest.replace("runtime.describe", method);
+            fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+            // 故意不写 Lua 入口：能力越界应比源码加载更早失败。
+            let error = Package::open(dir.path()).unwrap_err();
+            assert_eq!(error.code, "unsupported_plugin_capability", "{method}");
+            assert_eq!(error.details.as_ref().unwrap()["method"], method);
+        }
+    }
+}
+
+#[test]
+fn unused_permissions_do_not_expand_the_host_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = NATIVE.replace(
+        "permissions = [\"runtime.describe\"]",
+        "permissions = [\"runtime.describe\", \"window.close\"]",
+    );
+    fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+    assert_eq!(Package::open(dir.path()).unwrap_err().code, "unsupported_plugin_capability");
+}
+
+#[test]
+fn host_boundary_is_checked_again_at_native_and_lua_dispatch() {
+    for lua_command in [false, true] {
+        let source =
+            b"return {describe=function(ctx) return ctx.runtime.call('window.close', {}) end}";
+        let manifest = if lua_command { lua_manifest() } else { NATIVE.to_owned() };
+        let (_dir, mut package) = package(&manifest, lua_command.then_some(source.as_slice()));
+        // 模拟验证后的错误改写，证明执行边界不只依赖安装时检查或插件自报权限。
+        package.manifest.permissions.push("window.close".to_owned());
+        if !lua_command {
+            package.manifest.commands[0].method = Some("window.close".to_owned());
+        }
+        let error =
+            execute(&package, "describe", json!({}), Duration::from_secs(1), &mut |_, _, _| {
+                panic!("core control reached the Runtime transport")
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "unsupported_plugin_capability");
+    }
+}
+
+#[test]
+fn denied_lua_call_inside_pcall_never_reaches_runtime() {
+    let error = run_lua(
+        "return {describe=function(ctx) pcall(function() ctx.runtime.call('window.' .. 'close', {}) end); return true end}",
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "permission_denied");
+    // 前一次违规不污染独立调用，更不需要重置宿主终端状态。
+    assert_eq!(run_lua("return {describe=function() return 'ok' end}").unwrap().result, "ok");
+}
+
+#[test]
 fn native_error_receipts_survive_the_lua_boundary() {
     let (_dir, first_package) = package(
         &lua_manifest(),

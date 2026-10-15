@@ -3362,6 +3362,11 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 199
+        },
+        "application_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deliver only to the active alternate-screen application; never scroll retained desktop history. Mobile bridge requests always enable this."
         }
       },
       "additionalProperties": false

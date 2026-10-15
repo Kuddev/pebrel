@@ -4,6 +4,9 @@
 
 Implemented for review.
 
+Superseded by [bounded PR-size exceptions](2026-10-14-cohesive-pr-size-exceptions.md)
+for the exception ceiling. The fork-token ownership decision remains applicable.
+
 ## Context
 
 Fork pull requests have a read-only token. The required size check counted files,
