@@ -20,6 +20,8 @@ impl TextFileView {
         }
         self.render_active = active;
         if !active {
+            self.link_hover = None;
+            self.link_hide_task = None;
             if let Some(edit) = &mut self.object_edit {
                 edit.task = None;
             }
