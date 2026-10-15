@@ -26,7 +26,14 @@ pub(crate) fn code_block_background(cx: &App) -> Hsla {
     let base =
         cx.try_global::<DocumentColors>().map_or(cx.theme().background, |colors| colors.background);
     // Code keeps the document palette, with a distinct surface in either mode.
-    base.blend(cx.theme().foreground.opacity(if cx.theme().is_dark() { 0.08 } else { 0.045 }))
+    base.blend(cx.theme().foreground.opacity(if cx.theme().is_dark() { 0.075 } else { 0.055 }))
+}
+
+pub(crate) fn inline_code_background(cx: &App) -> Hsla {
+    let base =
+        cx.try_global::<DocumentColors>().map_or(cx.theme().background, |colors| colors.background);
+    // 行内标记比大代码块略实，但继续使用文档色系，避免白纸上的生硬方块。
+    base.blend(cx.theme().foreground.opacity(if cx.theme().is_dark() { 0.12 } else { 0.075 }))
 }
 
 pub(crate) fn code_block_foreground(cx: &App) -> Hsla {
