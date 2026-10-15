@@ -14,6 +14,9 @@ struct Terminal {
     GhosttyRenderStateRowCells cells = nullptr;
     GhosttyKeyEncoder encoder = nullptr;
     GhosttyKeyEvent event = nullptr;
+    GhosttyMouseEncoder mouse_encoder = nullptr;
+    GhosttyMouseEvent mouse_event = nullptr;
+    uint32_t columns = 80, height = 24, cell_width = 1, cell_height = 1;
     std::vector<uint8_t> replies;
     bool overflow = false;
     bool force = true;

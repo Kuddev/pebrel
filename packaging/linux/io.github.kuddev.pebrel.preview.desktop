@@ -10,4 +10,4 @@ Terminal=false
 Categories=System;TerminalEmulator;
 Keywords=terminal;shell;prompt;ssh;
 StartupNotify=true
-StartupWMClass=Pebrel
+StartupWMClass=io.github.kuddev.pebrel.preview
