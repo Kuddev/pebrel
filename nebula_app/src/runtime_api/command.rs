@@ -124,6 +124,8 @@ struct ScrollParams {
     lines: i16,
     column: u16,
     row: u16,
+    #[serde(default)]
+    application_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -412,6 +414,7 @@ impl RuntimeCommand {
                     lines: params.lines,
                     column: params.column,
                     row: params.row,
+                    application_only: params.application_only,
                 })
             },
             "pane.procs" => {

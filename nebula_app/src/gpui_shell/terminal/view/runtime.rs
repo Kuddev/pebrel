@@ -422,6 +422,7 @@ impl TerminalView {
         lines: i16,
         column: u16,
         row: u16,
+        application_only: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), crate::runtime_api::ApiError> {
@@ -446,7 +447,7 @@ impl TerminalView {
             self.origin.x + self.cell_width * (f32::from(column) + 0.5),
             self.origin.y + self.line_height * (f32::from(row) + 0.5),
         );
-        self.on_scroll(
+        self.on_scroll_target(
             &gpui::ScrollWheelEvent {
                 position,
                 delta: gpui::ScrollDelta::Pixels(gpui::point(
@@ -456,6 +457,7 @@ impl TerminalView {
                 modifiers: Default::default(),
                 touch_phase: gpui::TouchPhase::Moved,
             },
+            application_only,
             window,
             cx,
         );

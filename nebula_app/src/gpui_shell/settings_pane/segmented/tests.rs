@@ -149,7 +149,7 @@ fn rapid_retarget_keeps_the_visible_thumb_position(cx: &mut gpui::TestAppContext
             .render(window, cx)
             .into_any_element();
             self.motion = Some(window.use_keyed_state(
-                "settings-indicator-motion-probe",
+                "settings-indicator-probe-motion",
                 cx,
                 |_, _| unreachable!(),
             ));
