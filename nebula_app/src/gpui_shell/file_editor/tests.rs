@@ -275,13 +275,9 @@ fn code_actions_copy_raw_source_and_search_languages(cx: &mut TestAppContext) {
     let surface = cx.debug_bounds("pebrel-code-block").unwrap();
     let text = cx.debug_bounds("pebrel-code-text").unwrap();
     let language = cx.debug_bounds("markdown-language-picker").unwrap();
-    assert_eq!(
-        surface.size.height,
-        text.size.height + px(28.0),
-        "copy must not reserve a layout row"
-    );
-    assert!(language.origin.y >= text.bottom(), "language belongs below the code");
-    assert!(f32::from(surface.right() - language.right()).abs() < 1.0, "language aligns right");
+    assert_eq!(surface.size.height, text.size.height, "copy must not reserve a layout row");
+    assert!(language.top() >= surface.top() && language.bottom() <= surface.top() + px(40.0));
+    assert!((language.left() - surface.left() - px(10.0)).abs() < px(1.0));
     cx.simulate_mouse_move(block.center(), None, gpui::Modifiers::default());
     cx.update(|window, cx| {
         let _ = window.draw(cx);
@@ -375,4 +371,78 @@ fn markdown_preview_and_outline_keep_visible_scrollbar_hosts(cx: &mut TestAppCon
 
     assert_eq!(cx.debug_bounds("markdown-preview-scrollbar").unwrap().size.width, px(16.0));
     assert_eq!(cx.debug_bounds("markdown-outline-scrollbar").unwrap().size.width, px(16.0));
+}
+
+#[gpui::test]
+fn reader_scrolls_over_both_margins_and_top_whitespace(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("margins.md");
+    std::fs::write(&path, "Paragraph\n\n".repeat(80)).unwrap();
+    let (file, mut cx) = open(path, cx);
+    file.update(&mut cx, |view, cx| {
+        view.show_details = false;
+        cx.notify();
+    });
+    cx.simulate_resize(gpui::size(px(1100.0), px(600.0)));
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let viewport = cx.debug_bounds("markdown-preview-viewport").unwrap();
+    let positions = [
+        gpui::point(viewport.left() + px(4.0), viewport.center().y),
+        gpui::point(viewport.right() - px(20.0), viewport.center().y),
+        gpui::point(viewport.center().x, viewport.top() + px(4.0)),
+    ];
+    for position in positions {
+        file.update(&mut cx, |view, cx| {
+            view.scroll.scroll_to(gpui::ListOffset { item_ix: 0, offset_in_item: px(0.0) });
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert!(!file.read_with(&cx, |view, _| view.scroll.viewport_bounds().contains(&position)));
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-60.0))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        cx.run_until_parked();
+        let offset = file.read_with(&cx, |view, _| view.scroll.logical_scroll_top());
+        assert!(offset.item_ix > 0 || offset.offset_in_item > px(0.0), "margin {position:?}");
+    }
+}
+
+#[gpui::test]
+fn long_display_formula_scrolls_horizontally_without_widening_the_page(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("long-formula.md");
+    std::fs::write(&path, format!("$$\n{}x\n$$", "x + ".repeat(160))).unwrap();
+    let (file, mut cx) = open(path, cx);
+    file.update(&mut cx, |view, cx| {
+        view.show_details = false;
+        cx.notify();
+    });
+    cx.simulate_resize(gpui::size(px(600.0), px(600.0)));
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let viewport = cx.debug_bounds("markdown-preview-viewport").unwrap();
+    let scroll = cx.debug_bounds("markdown-math-scroll").unwrap();
+    let formula = cx.debug_bounds("markdown-math-formula").unwrap();
+    assert!(scroll.left() >= viewport.left() && scroll.right() <= viewport.right());
+    assert!(formula.size.width > scroll.size.width, "long formula keeps its natural size");
+    assert!((formula.left() - scroll.left()).abs() < px(1.0), "the start remains reachable");
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: scroll.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(-120.0), px(0.0))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(cx.debug_bounds("markdown-math-formula").unwrap().left() < formula.left());
 }
