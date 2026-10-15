@@ -33,6 +33,20 @@ impl TextFileView {
         if !self.preview_editable() {
             return;
         }
+        self.commit_source_edit(range, replacement, cursor, window, cx);
+    }
+
+    pub(super) fn commit_source_edit(
+        &mut self,
+        range: Range<usize>,
+        replacement: &str,
+        cursor: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.object_editable() {
+            return;
+        }
         self.update_live_edit(window, cx);
         let mut source = self.input.read(cx).value().to_string();
         if source.get(range.clone()).is_none() {
