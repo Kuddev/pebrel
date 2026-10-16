@@ -16,6 +16,9 @@ use nebula_terminal::term::{Term, TermMode};
 use crate::config::UiConfig;
 use crate::config::ui_config::{Hint, HintAction};
 
+#[path = "hint/table.rs"]
+mod table;
+
 /// Maximum number of linewraps followed outside of the viewport during search highlighting.
 pub const MAX_SEARCH_LINES: usize = 100;
 
@@ -163,7 +166,7 @@ impl HintState {
 
             // Hyperlinks take precedence over regex matches.
             let hyperlink = term.grid()[*bounds.start()].hyperlink();
-            Some(HintMatch { bounds, hyperlink, hint })
+            Some(HintMatch { bounds, hyperlink, table_link: None, hint })
         } else {
             // Store character to preserve the selection.
             self.keys.push(c);
@@ -200,6 +203,8 @@ pub struct HintMatch {
     /// OSC 8 hyperlink.
     hyperlink: Option<Hyperlink>,
 
+    table_link: Option<table::TableLink>,
+
     /// Hint which triggered this match.
     hint: Arc<Hint>,
 }
@@ -208,7 +213,11 @@ impl HintMatch {
     #[inline]
     pub fn should_highlight(&self, point: Point, pointed_hyperlink: Option<&Hyperlink>) -> bool {
         self.hyperlink.as_ref() == pointed_hyperlink
-            && (self.hyperlink.is_some() || self.bounds.contains(&point))
+            && (self.hyperlink.is_some()
+                || self.table_link.as_ref().map_or_else(
+                    || self.bounds.contains(&point),
+                    |link| link.fragments.iter().any(|range| range.contains(&point)),
+                ))
     }
 
     #[inline]
@@ -241,6 +250,17 @@ impl HintMatch {
 
         // Revalidate regex match.
         let regex = self.hint.content.regex.as_ref()?;
+        if let Some(link) = &self.table_link {
+            let current = table::at(term, *link.fragments.first()?.start())?;
+            if !current.complete || current.fragments != link.fragments {
+                return None;
+            }
+            let first = current.fragments.first()?;
+            let validated = regex.with_compiled(|regex| {
+                regex_match_at(term, *first.start(), regex, self.hint.post_processing)
+            })??;
+            return (validated == *first).then(|| current.target.into());
+        }
         let bounds = regex.with_compiled(|regex| {
             regex_match_at(term, *self.bounds.start(), regex, self.hint.post_processing)
         })??;
@@ -323,12 +343,17 @@ pub fn visible_regex_match_iter<'a, T>(
     let viewport_end = viewport_start + term.bottommost_line();
     let mut start = term.line_search_left(Point::new(viewport_start, Column(0)));
     let mut end = term.line_search_right(Point::new(viewport_end, Column(0)));
+    let logical_start = start;
+    let logical_end = end;
     start.line = start.line.max(viewport_start - MAX_SEARCH_LINES);
     end.line = end.line.min(viewport_end + MAX_SEARCH_LINES);
 
     RegexIter::new(start, end, Direction::Right, term, regex)
         .skip_while(move |rm| rm.end().line < viewport_start)
         .take_while(move |rm| rm.start().line <= viewport_end)
+        // 人工搜索限额不是 URL 的真实终点，不接受碰到限额的残缺匹配。
+        .filter(move |rm| !(start > logical_start && *rm.start() == start
+            || end < logical_end && *rm.end() == end))
 }
 
 /// Iterate over all visible hyperlinks, yanking only unique ones.
@@ -390,10 +415,26 @@ pub fn visible_clickable_matches<T>(term: &Term<T>, config: &UiConfig) -> Vec<Ma
                 let regex_matches = visible_regex_match_iter(term, regex).collect::<Vec<_>>();
                 if hint.post_processing {
                     for bounds in regex_matches {
-                        matches.extend(HintPostProcessor::new(term, regex, bounds));
+                        for bounds in HintPostProcessor::new(term, regex, bounds) {
+                            if let Some(link) = table::at(term, *bounds.start())
+                                .filter(|link| link.fragments.first() == Some(&bounds))
+                            {
+                                matches.extend(link.fragments);
+                            } else {
+                                matches.push(bounds);
+                            }
+                        }
                     }
                 } else {
-                    matches.extend(regex_matches);
+                    for bounds in regex_matches {
+                        if let Some(link) = table::at(term, *bounds.start())
+                            .filter(|link| link.fragments.first() == Some(&bounds))
+                        {
+                            matches.extend(link.fragments);
+                        } else {
+                            matches.push(bounds);
+                        }
+                    }
                 }
             });
         }
@@ -500,14 +541,30 @@ pub fn highlighted_at_with_mouse_override<T>(
         if let Some((hyperlink, bounds)) =
             hint.content.hyperlinks.then(|| hyperlink_at(term, point)).flatten()
         {
-            return Some(HintMatch { bounds, hyperlink: Some(hyperlink), hint: hint.clone() });
+            return Some(HintMatch {
+                bounds,
+                hyperlink: Some(hyperlink),
+                table_link: None,
+                hint: hint.clone(),
+            });
         }
 
         let bounds = hint.content.regex.as_ref().and_then(|regex| {
-            regex.with_compiled(|regex| regex_match_at(term, point, regex, hint.post_processing))
+            regex.with_compiled(|regex| {
+                if let Some(link) = table::at(term, point) {
+                    let first = link.fragments.first()?;
+                    if regex_match_at(term, *first.start(), regex, hint.post_processing).as_ref()
+                        == Some(first)
+                    {
+                        return Some((*first.start()..=*link.fragments.last()?.end(), Some(link)));
+                    }
+                }
+                regex_match_at(term, point, regex, hint.post_processing)
+                    .map(|bounds| (bounds, None))
+            })
         });
-        if let Some(bounds) = bounds.flatten() {
-            return Some(HintMatch { bounds, hint: hint.clone(), hyperlink: None });
+        if let Some((bounds, table_link)) = bounds.flatten() {
+            return Some(HintMatch { bounds, table_link, hint: hint.clone(), hyperlink: None });
         }
 
         None
@@ -787,6 +844,120 @@ mod tests {
     use nebula_terminal::vte::ansi::Handler;
 
     use super::*;
+
+    #[test]
+    fn complete_link_targets_survive_softwrap_and_explicit_osc8_labels() {
+        let config = UiConfig::default();
+        let term = mock_term("https://example.com/123456\n7");
+        for point in [Point::new(Line(0), Column(5)), Point::new(Line(1), Column(0))] {
+            let hit = highlighted_at(&term, &config, point, ModifiersState::CONTROL).unwrap();
+            assert_eq!(hit.text(&term).unwrap(), "https://example.com/1234567");
+        }
+        let term = mock_term("https://example.com/123456\r\n7");
+        let hit =
+            highlighted_at(&term, &config, Point::new(Line(0), Column(5)), ModifiersState::CONTROL)
+                .unwrap();
+        assert_eq!(
+            hit.text(&term).unwrap(),
+            "https://example.com/123456",
+            "ordinary hard newlines are separate text"
+        );
+        let mut term = mock_term("https://example.com/123456");
+        term.goto(0, 0);
+        term.set_hyperlink(Some(
+            Hyperlink::new(None::<&str>, "https://example.com/1234567".into()).into(),
+        ));
+        for c in "https://example.com/123456".chars() {
+            term.input(c);
+        }
+        let hit =
+            highlighted_at(&term, &config, Point::new(Line(0), Column(5)), ModifiersState::CONTROL)
+                .unwrap();
+        assert_eq!(hit.text(&term).unwrap(), "https://example.com/1234567");
+    }
+
+    #[test]
+    fn bordered_table_links_resolve_the_same_full_target_from_either_fragment() {
+        let first = "https://github.com/Kuddev/pebrel/blob/main/nebula_ap";
+        let suffix = "p/src/config/ui_config.rs";
+        let source = format!(
+            "│ {:10} │ {first} │ {:20} │\r\n│ {:10} │ {suffix:width$} │ {:20} │\r\n├{}┼{}┼{}┤",
+            "long URL",
+            "source page",
+            "",
+            "",
+            "─".repeat(12),
+            "─".repeat(first.len() + 2),
+            "─".repeat(22),
+            width = first.len()
+        );
+        let mut term = mock_term(&source);
+        let config = UiConfig::default();
+        for line in [0, 1] {
+            let hit = highlighted_at(
+                &term,
+                &config,
+                Point::new(Line(line), Column(16)),
+                ModifiersState::CONTROL,
+            )
+            .unwrap();
+            assert_eq!(hit.text(&term).unwrap(), format!("{first}{suffix}"));
+            assert!(
+                !hit.should_highlight(Point::new(Line(1), Column(3)), None),
+                "table shell is not part of the link"
+            );
+        }
+        let ranges = visible_clickable_matches(&term, &config);
+        assert!(ranges.iter().any(|range| range.contains(&Point::new(Line(1), Column(16)))));
+        let hit = highlighted_at(
+            &term,
+            &config,
+            Point::new(Line(0), Column(16)),
+            ModifiersState::CONTROL,
+        )
+        .unwrap();
+        term.grid_mut()[Point::new(Line(1), Column(13))].c = '┼';
+        assert!(hit.text(&term).is_none(), "click must revalidate the table after redraw");
+    }
+
+    #[test]
+    fn table_record_boundaries_and_new_urls_are_not_joined() {
+        let first = "https://example.com/123456";
+        for (label, suffix) in [("next", "7"), ("", "https://example.org/67890")] {
+            let source = format!(
+                "│ {:6} │ {first} │\r\n│ {label:6} │ {suffix:width$} │",
+                "entry",
+                width = first.len()
+            );
+            let term = mock_term(&source);
+            let hit = highlighted_at(
+                &term,
+                &UiConfig::default(),
+                Point::new(Line(0), Column(11)),
+                ModifiersState::CONTROL,
+            )
+            .unwrap();
+            assert_eq!(hit.text(&term).unwrap(), first);
+        }
+    }
+
+    #[test]
+    fn search_limit_never_opens_a_truncated_softwrapped_url_prefix() {
+        use nebula_terminal::event::VoidListener;
+        use nebula_terminal::grid::Scroll;
+        use nebula_terminal::term::{Config, test::TermSize};
+        use nebula_terminal::vte::ansi::{Processor, StdSyncHandler};
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 4), VoidListener);
+        let target = format!("https://example.com/{}7 ", "a".repeat(20 * 140));
+        Processor::<StdSyncHandler>::default().advance(&mut term, target.as_bytes());
+        term.scroll_display(Scroll::Delta(i32::MAX));
+        let start = Point::new(Line(-(term.grid().display_offset() as i32)), Column(0));
+        let end = term.line_search_right(start);
+        assert!(end.line > start.line + MAX_SEARCH_LINES);
+        assert!(term.bounds_to_string(start, end).contains("7"), "full target is still retained");
+        let mut regex = RegexSearch::new("https://[^ ]+").unwrap();
+        assert_eq!(visible_regex_match_iter(&term, &mut regex).count(), 0);
+    }
 
     #[test]
     fn shell_prompt_symbols_are_not_part_of_clickable_home_paths() {
