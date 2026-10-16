@@ -71,7 +71,8 @@ impl SettingsPane {
                     || *flat != keymap::QUICK_TERMINAL_ROW
             })
             .any(|flat| matches(self.keymap_row_haystack(flat)))
-            || keymap::READONLY_ROWS
+            || keymap::GPUI
+                .readonly_rows()
                 .iter()
                 .any(|(zh, en, combo)| matches(format!("{zh} {en} {combo}").to_lowercase()))
             || matches(Self::confirmation_shortcuts_search_text())
@@ -88,7 +89,7 @@ impl SettingsPane {
         } else {
             keymap::EDITABLE_ACTIONS
                 .get(flat - 1)
-                .and_then(|(action, ..)| keymap::effective_combo(action, &custom))
+                .and_then(|(action, ..)| keymap::GPUI.effective_combo(action, &custom))
                 .map(|(combo, _)| combo)
                 .unwrap_or_default()
         };
@@ -127,7 +128,7 @@ impl SettingsPane {
             } else {
                 keymap::EDITABLE_ACTIONS
                     .get(flat - 1)
-                    .and_then(|(action, ..)| keymap::effective_combo(action, &custom))
+                    .and_then(|(action, ..)| keymap::GPUI.effective_combo(action, &custom))
                     .map(|(combo, _)| combo)
             };
             combos.push(combo.filter(|combo| !combo.is_empty()));
@@ -241,7 +242,7 @@ impl SettingsPane {
             return;
         }
         let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(row - 1) else { return };
-        keymap::rebind_action(&mut self.keymap_binds, action, combo);
+        keymap::GPUI.rebind_action(&mut self.keymap_binds, action, combo);
         self.persist_keybinds(cx);
     }
 
@@ -255,7 +256,7 @@ impl SettingsPane {
             return;
         }
         let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(row - 1) else { return };
-        keymap::clear_action(&mut self.keymap_binds, action);
+        keymap::GPUI.clear_action(&mut self.keymap_binds, action);
         self.persist_keybinds(cx);
     }
 
@@ -271,7 +272,7 @@ impl SettingsPane {
             return;
         }
         let Some((action, ..)) = keymap::EDITABLE_ACTIONS.get(row - 1) else { return };
-        keymap::reset_action(&mut self.keymap_binds, action);
+        keymap::GPUI.reset_action(&mut self.keymap_binds, action);
         self.persist_keybinds(cx);
     }
 
@@ -358,7 +359,7 @@ impl SettingsPane {
         } else {
             keymap::EDITABLE_ACTIONS
                 .get(flat - 1)
-                .and_then(|(action, ..)| keymap::effective_combo(action, &custom))
+                .and_then(|(action, ..)| keymap::GPUI.effective_combo(action, &custom))
                 .map(|(combo, custom)| (combo, custom))
                 .unwrap_or_else(|| (String::new(), false))
         };
@@ -460,7 +461,8 @@ impl SettingsPane {
 
         // 只读键位和确认对话框快捷键（不可编辑），随搜索过滤。
         let query = self.keymap_query(cx);
-        let mut readonly: Vec<(&str, &str)> = keymap::READONLY_ROWS
+        let mut readonly: Vec<(&str, &str)> = keymap::GPUI
+            .readonly_rows()
             .iter()
             .filter(|(zh, en, combo)| {
                 query
