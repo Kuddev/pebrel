@@ -133,7 +133,9 @@ impl Render for NebulaWorkspace {
                 // pane 拖拽先结算：它和 tab 拖拽互斥（起手位置不同），但待命态
                 // 必须在这里清掉，否则下一次点标题条会带着上一次的按点。
                 let pane_dragged = this.release_pane_drag(window, cx);
-                if this.release_tab_drag_at(event.position, window, cx) || pane_dragged {
+                if this.release_tab_drag_at(event.position, event.modifiers.alt, window, cx)
+                    || pane_dragged
+                {
                     // 真拖拽已经完成，不能再让源 tab 的 click 或终端选择收到释放。
                     cx.stop_propagation();
                 }
@@ -380,8 +382,20 @@ impl Render for NebulaWorkspace {
                         }))
                         .on_mouse_up(
                             MouseButton::Left,
-                            cx.listener(|this, _, window, cx| {
-                                this.finish_tab_drag(window, cx);
+                            cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
+                                // 罩层自身的 occlude 会把根节点 hitbox 挡出 hover 链，
+                                // GPUI 的 capture_any_mouse_up 以 `hitbox.is_hovered`
+                                // 门控，因此罩层存在期间根节点根本收不到释放事件。
+                                // 这里必须走与根节点完全相同的释放语义：Alt/锁存撕出、
+                                // 跨窗目标、移出 viewport 判定与 dock/重排回退都在
+                                // release_tab_drag_at 内统一处理。只用 finish_tab_drag
+                                // 会吞掉撕出分支（Issue #572 真机根因）。
+                                this.release_tab_drag_at(
+                                    event.position,
+                                    event.modifiers.alt,
+                                    window,
+                                    cx,
+                                );
                             }),
                         ),
                 )
@@ -393,6 +407,13 @@ impl Render for NebulaWorkspace {
             .children(self.pane_drag_overlay(cx))
             .children(self.split_drag_visual(cx))
             .children(self.render_left_sidebar_resize_overlay(cx))
+            .when(self.tab_drag.is_some(), |root| {
+                // 拖拽期间挂窗口级裸监听（canvas 在 paint 期注册）：指针移出
+                // 本窗口后的事件坐标在 viewport 之外，hover 门控的监听器全部
+                // 不触发——跨窗合并与「拖出窗口外撕出」都在那里松手，靠它
+                // 兜底。详见 render_tab_drag_global_capture 的注释。
+                root.child(self.render_tab_drag_global_capture(cx))
+            })
             .when_some(
                 self.split_drag.as_ref().map(|drag| drag.direction),
                 |root, direction| {
