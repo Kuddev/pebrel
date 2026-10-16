@@ -79,6 +79,8 @@ pub struct Settings {
     pub cursor_motion: nebula_settings::CursorMotion,
     /// 选区完成即复制（旧壳 `copy_on_select` 设置）。
     pub copy_on_select: bool,
+    /// 提示符输入内单击即移动 shell 光标。
+    pub click_to_move_cursor: bool,
     pub scrollback_lines: usize,
     pub scroll_speed: f32,
     pub scrollbar_visibility: nebula_settings::ScrollbarVisibility,
@@ -295,6 +297,7 @@ impl Settings {
             cursor_blink: runtime.cursor_blink,
             cursor_motion: runtime.cursor_motion,
             copy_on_select: runtime.copy_on_select,
+            click_to_move_cursor: runtime.click_to_move_cursor,
             scrollback_lines: runtime.scrollback_lines,
             scroll_speed: runtime.scroll_speed,
             scrollbar_visibility: runtime.scrollbar_visibility,

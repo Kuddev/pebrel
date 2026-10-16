@@ -335,6 +335,45 @@ fn ai_toast_setting_is_searchable_and_has_a_visible_switch(cx: &mut gpui::TestAp
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
+fn click_to_move_cursor_setting_is_searchable_and_has_a_visible_switch(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, _| {
+            pane.runtime = RuntimeSettings::from_raw(&nebula_settings::RawSettings::default());
+        });
+        pane_out = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    cx.simulate_resize(gpui::size(px(1280.0), px(1600.0)));
+    cx.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("点击", window, cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert_eq!(pane.read_with(cx, |pane, _| pane.active_section), 6);
+    assert_eq!(
+        pane.read_with(cx, |pane, _| pane.setting_override("click_to_move_cursor")),
+        Some((false, "1".to_owned()))
+    );
+    let bounds = cx.debug_bounds("nebula-switch-click_to_move_cursor").expect("switch rendered");
+    assert!(bounds.size.width > px(0.0) && bounds.bottom() <= px(1600.0));
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
 fn ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch(
     cx: &mut gpui::TestAppContext,
 ) {

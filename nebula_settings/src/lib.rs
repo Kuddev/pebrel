@@ -1006,6 +1006,8 @@ pub struct RuntimeSettings {
     pub cursor_blink: Option<bool>,
     pub cursor_motion: CursorMotion,
     pub copy_on_select: bool,
+    /// A plain click inside an idle prompt's input moves the shell cursor there.
+    pub click_to_move_cursor: bool,
     /// Maximum retained history for new terminals, without altering open sessions.
     pub scrollback_lines: usize,
     /// Wheel multiplier; pixel-precise trackpad input is independent.
@@ -1206,6 +1208,7 @@ impl RuntimeSettings {
                 .and_then(CursorMotion::from_settings)
                 .unwrap_or_default(),
             copy_on_select: raw.bool_on("copy_on_select").unwrap_or(false),
+            click_to_move_cursor: raw.bool_on("click_to_move_cursor").unwrap_or(true),
             scrollback_lines: scrolling::scrollback_lines(raw),
             scroll_speed: normalize_scroll_speed(
                 raw.f32("scroll_speed").unwrap_or(DEFAULT_SCROLL_SPEED),
@@ -1678,6 +1681,13 @@ mod tests {
         let enabled = apply_updates(&disabled, &[("ai_toasts", "1".to_owned())]);
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&enabled)).ai_toasts);
         assert_eq!(enabled.matches("ai_toasts=").count(), 1);
+    }
+
+    #[test]
+    fn click_to_move_cursor_defaults_on_and_can_be_disabled() {
+        assert!(RuntimeSettings::from_raw(&RawSettings::default()).click_to_move_cursor);
+        let raw = RawSettings::from_text("click_to_move_cursor=0\n");
+        assert!(!RuntimeSettings::from_raw(&raw).click_to_move_cursor);
     }
 
     #[test]
