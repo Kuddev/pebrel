@@ -8,7 +8,7 @@ use super::*;
 const USER_KEY_BINDING_SOURCE: gpui::KeyBindingMetaIndex = gpui::KeyBindingMetaIndex(1);
 const WORKSPACE_DEFAULT_SOURCE: gpui::KeyBindingMetaIndex = gpui::KeyBindingMetaIndex(2);
 
-/// 工作区静态默认绑定的 combo 集（[`init`] 的测试镜像）。
+/// 工作区静态默认绑定的候选 combo 集；注册前还会应用平台默认策略。
 #[cfg(test)]
 pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
     "ctrl-shift-t",
@@ -129,7 +129,7 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-o", OpenQuickJump, None),
     ];
     // Tab selection and rename use the same defaults displayed by Settings.
-    bindings.extend(crate::display::keymap::default_shortcuts().into_iter().filter_map(
+    bindings.extend(crate::display::keymap::GPUI.default_shortcuts().into_iter().filter_map(
         |(combo, action)| {
             if action == crate::config::Action::RenameTab {
                 return custom_workspace_binding(&combo, &action);
@@ -138,7 +138,19 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
             Some(KeyBinding::new(&gpui_binding_combo(&combo), action, None))
         },
     ));
-    bindings.into_iter().map(default_binding_source).collect()
+    bindings
+        .into_iter()
+        .filter(|binding| {
+            binding.keystrokes().iter().all(|stroke| {
+                let stroke = stroke.inner();
+                stroke.key.chars().count() != 1
+                    || crate::display::keymap::gui_character_shortcut_enabled(
+                        crate::display::keymap::gpui_modifiers(&stroke.modifiers),
+                    )
+            })
+        })
+        .map(default_binding_source)
+        .collect()
 }
 
 fn default_binding_source(binding: KeyBinding) -> KeyBinding {
@@ -150,11 +162,9 @@ fn default_binding_source(binding: KeyBinding) -> KeyBinding {
     }
 }
 
-/// macOS 的原生修饰键是 ⌘：在 Ctrl 绑定之外追加一套 ⌘ 绑定。⌘W 关闭窗口，
-/// 活动终端改用 ⌘⇧W，避免与系统关闭窗口命令冲突。
-/// 追加而非替换有两个原因：Ctrl+Shift 组合在 Mac 终端里没有别的含义，留着
-/// 不碍事；而 ⌘C/⌘V 必须存在，否则 Mac 用户第一反应就是「复制粘贴坏了」。
-/// 终端里的 Ctrl+C 仍然是 SIGINT——这里只绑 ⌘，不碰 Ctrl 的语义。
+/// macOS 使用 ⌘ 承载字符类 GUI 默认键；仅 Control 的字符组合交给终端。
+/// 保留现有 Ctrl+Tab、Ctrl+Shift 和 Ctrl+Alt 导航组合及显式用户覆盖。
+/// ⌘W 关闭窗口，活动终端改用 ⌘⇧W，避免与系统关闭窗口命令冲突。
 ///
 /// 键位来自 `display::keymap::MACOS_COMMAND_ALIASES`：设置页的反查、解绑与
 /// 恢复读的是同一张表，两处不会再各自漂移。注册必须留在这里、且早于用户

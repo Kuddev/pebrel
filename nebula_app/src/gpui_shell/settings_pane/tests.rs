@@ -238,11 +238,9 @@ fn rename_keymap_row_is_searchable_and_enters_capture(cx: &mut gpui::TestAppCont
         let saved = nebula_settings::keybind_pairs();
         assert_eq!(pane.read_with(cx, |pane, _| pane.keymap_binds.clone()), saved);
         if dismissal == "confirm" {
-            let (combo, custom) = keymap::effective_combo(
-                &crate::config::Action::RenameTab,
-                &keymap::build_bindings(&saved),
-            )
-            .unwrap();
+            let (combo, custom) = keymap::GPUI
+                .effective_combo(&crate::config::Action::RenameTab, &keymap::build_bindings(&saved))
+                .unwrap();
             assert!(custom);
             assert_eq!(keymap::parse_combo(&combo), keymap::parse_combo("enter"));
         } else {

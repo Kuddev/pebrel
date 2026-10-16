@@ -96,6 +96,32 @@ pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
     ("贴入 AI 修复建议", "Paste AI fix suggestion", "Ctrl+."),
 ];
 
+/// A caller-selected keyboard model; no process-global frontend state is needed.
+#[derive(Clone, Copy)]
+pub(crate) struct ShortcutPolicy {
+    gpui: bool,
+}
+
+const LEGACY: ShortcutPolicy = ShortcutPolicy { gpui: false };
+pub(crate) const GPUI: ShortcutPolicy = ShortcutPolicy { gpui: true };
+
+const GPUI_READONLY_ROWS: &[(&str, &str, &str)] = &[
+    ("切换到第 N 个标签页", "Select tab N", "Option+1..9 / Command+1..9"),
+    READONLY_ROWS[1],
+    READONLY_ROWS[2],
+];
+
+/// Apply only to GPUI GUI defaults, never user bindings or terminal modes.
+pub(crate) fn gui_character_shortcut_enabled(mods: ModifiersState) -> bool {
+    !cfg!(target_os = "macos") || mods != ModifiersState::CONTROL
+}
+
+impl ShortcutPolicy {
+    pub(crate) fn readonly_rows(self) -> &'static [(&'static str, &'static str, &'static str)] {
+        if self.gpui && cfg!(target_os = "macos") { GPUI_READONLY_ROWS } else { READONLY_ROWS }
+    }
+}
+
 /// macOS 的 ⌘ 命令键别名：`(存储写法, 动作)`。
 ///
 /// GPUI 壳在配置表之外**追加**一整套 ⌘ 绑定：配置表的 macOS 段只覆盖其中
@@ -108,8 +134,7 @@ pub(crate) const READONLY_ROWS: &[(&str, &str, &str)] = &[
 /// 录制结果仍可使用 `win` / `super`；GPUI 适配层按解析后的按键规范化，
 /// 覆盖与恢复默认不依赖这些别名或修饰键顺序的逐字相等。
 ///
-/// 这张表只进 [`default_shortcuts`]（解绑/恢复口径），不进 `effective_combo`
-/// 的键帽反查：设置页仍按配置表的 Ctrl 键显示。
+/// GPUI 默认缓存统一合并这张表：注册、展示、解绑和恢复使用同一套 ⌘ 键。
 ///
 /// 别名表是共享数据；实际注册由平台层入口限定为 macOS，便于跨平台核验分派。
 pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
@@ -129,6 +154,15 @@ pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
     ("alt+cmd+down", Action::FocusPaneDown),
     ("shift+cmd+]", Action::SelectNextTab),
     ("shift+cmd+[", Action::SelectPreviousTab),
+    ("cmd+1", Action::SelectTab1),
+    ("cmd+2", Action::SelectTab2),
+    ("cmd+3", Action::SelectTab3),
+    ("cmd+4", Action::SelectTab4),
+    ("cmd+5", Action::SelectTab5),
+    ("cmd+6", Action::SelectTab6),
+    ("cmd+7", Action::SelectTab7),
+    ("cmd+8", Action::SelectTab8),
+    ("cmd+9", Action::SelectLastTab),
     ("shift+cmd+g", Action::ToggleGitPanel),
     ("cmd+plus", Action::IncreaseFontSize),
     ("cmd+=", Action::IncreaseFontSize),
@@ -164,94 +198,188 @@ mod group_tests {
     }
 }
 
-/// 内置默认表的进程级缓存：设置页每帧反查 25+ 个动作，重建整表太贵。
+/// The original free functions retain the legacy model for legacy callers.
+#[cfg(test)]
 fn cached_defaults() -> &'static [KeyBinding] {
-    static DEFAULTS: OnceLock<Vec<KeyBinding>> = OnceLock::new();
-    DEFAULTS.get_or_init(default_key_bindings)
+    LEGACY.cached_defaults()
 }
 
 pub(crate) fn default_shortcuts() -> Vec<(String, Action)> {
-    let mut shortcuts: Vec<(String, Action)> = cached_defaults()
-        .iter()
-        .filter_map(|binding| {
-            canonical_combo(binding.mods, &binding.trigger)
-                .map(|combo| (combo, binding.action.clone()))
-        })
-        .collect();
-    // macOS 的 ⌘ 键也算默认键：`clear_action` / `reset_action` 按这份表决定要
-    // 解掉、要还回哪些键，不带上它就会漏掉 ⌘ 那一半（#238）。
-    #[cfg(target_os = "macos")]
-    {
-        // 原生关窗没有持久化 Action；恢复 Quit 不得把旧壳的 ⌘W 注入为退出应用。
-        if cfg!(feature = "gpui-shell") {
-            shortcuts.retain(|(combo, _)| parse_combo(combo) != parse_combo("cmd+w"));
-        }
-        let mut extra: Vec<(String, Action)> = Vec::new();
-        for (combo, action) in MACOS_COMMAND_ALIASES {
-            let parsed = parse_combo(combo);
-            // 配置表已经给了同一动作的同一个键（⌘T、⌘C、⌘Q…）就不重复追加：
-            // 解绑会把每条 combo 都写进设置文件，重复条目只会多留一行废话。
-            let covered = shortcuts
-                .iter()
-                .chain(extra.iter())
-                .any(|(known, candidate)| candidate == action && parse_combo(known) == parsed);
-            if !covered {
-                extra.push(((*combo).to_owned(), action.clone()));
-            }
-        }
-        shortcuts.extend(extra);
-    }
-    shortcuts
+    LEGACY.default_shortcuts()
 }
 
-/// Editing one action moves its shortcut: old keys pass through to the terminal.
-/// Keep explicit bindings for other actions so the editor can report conflicts.
 pub(crate) fn rebind_action(raw: &mut Vec<(String, String)>, action: &Action, combo: String) {
-    clear_action(raw, action);
-    raw.push((combo, action_storage_name(action)));
+    LEGACY.rebind_action(raw, action, combo);
 }
 
-/// Preserve the existing keybind format: ReceiveChar explicitly passes a key
-/// to the terminal. Clearing an action disables its defaults and its custom key.
 pub(crate) fn clear_action(raw: &mut Vec<(String, String)>, action: &Action) {
-    let mut combos: Vec<String> = default_shortcuts()
-        .into_iter()
-        .filter(|(_, candidate)| candidate == action)
-        .map(|(combo, _)| combo)
-        .collect();
-    combos.extend(
-        raw.iter()
-            .filter(|(_, name)| parse_action(name).as_ref() == Some(action))
-            .map(|(combo, _)| combo.clone()),
-    );
-    raw.retain(|(_, name)| parse_action(name).as_ref() != Some(action));
-    for combo in combos {
-        let key = parse_combo(&combo);
-        if raw
-            .iter()
-            .rev()
-            .find(|(candidate, _)| parse_combo(candidate) == key)
-            .is_some_and(|(_, name)| parse_action(name) != Some(Action::ReceiveChar))
-        {
-            continue;
-        }
-        raw.retain(|(candidate, name)| {
-            parse_combo(candidate) != key || parse_action(name) != Some(Action::ReceiveChar)
-        });
-        raw.push((combo, "ReceiveChar".into()));
-    }
+    LEGACY.clear_action(raw, action);
 }
 
 pub(crate) fn reset_action(raw: &mut Vec<(String, String)>, action: &Action) {
-    let defaults = default_shortcuts();
-    raw.retain(|(combo, name)| {
-        let parsed = parse_action(name);
-        parsed.as_ref() != Some(action)
-            && !(parsed == Some(Action::ReceiveChar)
-                && defaults.iter().any(|(default, candidate)| {
-                    candidate == action && parse_combo(combo) == parse_combo(default)
-                }))
-    });
+    LEGACY.reset_action(raw, action);
+}
+
+fn is_numbered_tab_action(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::SelectTab1
+            | Action::SelectTab2
+            | Action::SelectTab3
+            | Action::SelectTab4
+            | Action::SelectTab5
+            | Action::SelectTab6
+            | Action::SelectTab7
+            | Action::SelectTab8
+            | Action::SelectTab9
+            | Action::SelectLastTab
+    )
+}
+
+impl ShortcutPolicy {
+    /// Both caches are immutable derived data, selected by the caller each time.
+    fn cached_defaults(self) -> &'static [KeyBinding] {
+        static LEGACY_DEFAULTS: OnceLock<Vec<KeyBinding>> = OnceLock::new();
+        static GPUI_DEFAULTS: OnceLock<Vec<KeyBinding>> = OnceLock::new();
+        if !self.gpui {
+            return LEGACY_DEFAULTS.get_or_init(default_key_bindings);
+        }
+        GPUI_DEFAULTS.get_or_init(|| {
+            let mut defaults = default_key_bindings();
+            if cfg!(target_os = "macos") {
+                // Only these actions belong to the GUI default source. Native
+                // Ctrl+L and mode-specific vi/search actions stay in the model.
+                defaults.retain(|binding| {
+                    let gui_action = is_numbered_tab_action(&binding.action)
+                        || MACOS_COMMAND_ALIASES
+                            .iter()
+                            .any(|(_, action)| action == &binding.action);
+                    !gui_action
+                        || !matches!(
+                            &binding.trigger,
+                            BindingKey::Keycode { key: Key::Character(_), .. }
+                        )
+                        || gui_character_shortcut_enabled(binding.mods)
+                });
+                for (combo, action) in MACOS_COMMAND_ALIASES {
+                    let (mods, trigger) =
+                        parse_combo(combo).expect("valid built-in Command shortcut");
+                    // GPUI aliases own their runtime chords, including Cmd+W.
+                    defaults.retain(|binding| {
+                        binding.mods != mods || !self.same_binding_key(&binding.trigger, &trigger)
+                    });
+                    defaults.push(KeyBinding {
+                        trigger,
+                        mods,
+                        mode: BindingMode::empty(),
+                        notmode: BindingMode::empty(),
+                        action: action.clone(),
+                    });
+                }
+            }
+            defaults
+        })
+    }
+
+    pub(crate) fn default_shortcuts(self) -> Vec<(String, Action)> {
+        let mut shortcuts: Vec<(String, Action)> = self
+            .cached_defaults()
+            .iter()
+            .filter_map(|binding| {
+                if self.gpui && cfg!(target_os = "macos") {
+                    for (combo, action) in MACOS_COMMAND_ALIASES {
+                        if action == &binding.action
+                            && parse_combo(combo).is_some_and(|(mods, trigger)| {
+                                mods == binding.mods
+                                    && self.same_binding_key(&trigger, &binding.trigger)
+                            })
+                        {
+                            return Some(((*combo).to_owned(), binding.action.clone()));
+                        }
+                    }
+                }
+                canonical_combo(binding.mods, &binding.trigger)
+                    .map(|combo| (combo, binding.action.clone()))
+            })
+            .collect();
+        if !self.gpui && cfg!(target_os = "macos") {
+            // Preserve the old clear/reset vocabulary without feeding GPUI
+            // winners into the legacy runtime/default-keycap model. Numbered
+            // Command aliases were added for GPUI, not to this legacy extra set.
+            let mut extra: Vec<(String, Action)> = Vec::new();
+            for (combo, action) in MACOS_COMMAND_ALIASES {
+                if is_numbered_tab_action(action) {
+                    continue;
+                }
+                let covered = shortcuts
+                    .iter()
+                    .chain(extra.iter())
+                    .any(|(known, candidate)| candidate == action && self.same_combo(known, combo));
+                if !covered {
+                    extra.push(((*combo).to_owned(), action.clone()));
+                }
+            }
+            shortcuts.extend(extra);
+        }
+        if self.gpui && cfg!(target_os = "macos") {
+            // 原生关窗没有持久化 Action；恢复 Quit 不得把旧壳的 ⌘W 注入为退出应用。
+            shortcuts.retain(|(combo, _)| !self.same_combo(combo, "cmd+w"));
+        }
+        shortcuts
+    }
+
+    /// Editing one action moves its shortcut; explicit other actions survive.
+    pub(crate) fn rebind_action(
+        self,
+        raw: &mut Vec<(String, String)>,
+        action: &Action,
+        combo: String,
+    ) {
+        self.clear_action(raw, action);
+        raw.push((combo, action_storage_name(action)));
+    }
+
+    pub(crate) fn clear_action(self, raw: &mut Vec<(String, String)>, action: &Action) {
+        let mut combos: Vec<String> = self
+            .default_shortcuts()
+            .into_iter()
+            .filter(|(_, candidate)| candidate == action)
+            .map(|(combo, _)| combo)
+            .collect();
+        combos.extend(
+            raw.iter()
+                .filter(|(_, name)| parse_action(name).as_ref() == Some(action))
+                .map(|(combo, _)| combo.clone()),
+        );
+        raw.retain(|(_, name)| parse_action(name).as_ref() != Some(action));
+        for combo in combos {
+            if raw
+                .iter()
+                .rev()
+                .find(|(candidate, _)| self.same_combo(candidate, &combo))
+                .is_some_and(|(_, name)| parse_action(name) != Some(Action::ReceiveChar))
+            {
+                continue;
+            }
+            raw.retain(|(candidate, name)| {
+                !self.same_combo(candidate, &combo)
+                    || parse_action(name) != Some(Action::ReceiveChar)
+            });
+            raw.push((combo, "ReceiveChar".into()));
+        }
+    }
+
+    pub(crate) fn reset_action(self, raw: &mut Vec<(String, String)>, action: &Action) {
+        let defaults = self.default_shortcuts();
+        raw.retain(|(combo, name)| {
+            let parsed = parse_action(name);
+            parsed.as_ref() != Some(action)
+                && !(parsed == Some(Action::ReceiveChar)
+                    && defaults.iter().any(|(default, candidate)| {
+                        candidate == action && self.same_combo(combo, default)
+                    }))
+        });
+    }
 }
 
 // ---- combo 文本 ↔ 结构 ----
@@ -312,6 +440,46 @@ const DIGIT_CODES: [(&str, KeyCode); 10] = [
     ("digit9", KeyCode::Digit9),
     ("digit0", KeyCode::Digit0),
 ];
+
+impl ShortcutPolicy {
+    fn same_binding_key(self, left: &BindingKey, right: &BindingKey) -> bool {
+        if left == right {
+            return true;
+        }
+        // The GPUI adapter folds stored digitN scancodes into N (including captured
+        // Command digits). Match that runtime identity without changing stored rows
+        // or the legacy shell's distinct physical/logical keyboard semantics.
+        if self.gpui {
+            let pair = match (left, right) {
+                (
+                    BindingKey::Scancode(PhysicalKey::Code(code)),
+                    BindingKey::Keycode { key: Key::Character(text), .. },
+                )
+                | (
+                    BindingKey::Keycode { key: Key::Character(text), .. },
+                    BindingKey::Scancode(PhysicalKey::Code(code)),
+                ) => Some((code, text.as_str())),
+                _ => None,
+            };
+            if let Some((code, text)) = pair {
+                return DIGIT_CODES.iter().any(|(name, candidate)| {
+                    code == candidate && name.strip_prefix("digit") == Some(text)
+                });
+            }
+        }
+        false
+    }
+
+    fn same_combo(self, left: &str, right: &str) -> bool {
+        match (parse_combo(left), parse_combo(right)) {
+            (Some((left_mods, left_key)), Some((right_mods, right_key))) => {
+                left_mods == right_mods && self.same_binding_key(&left_key, &right_key)
+            },
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
 
 /// `ctrl+shift+t` → (mods, key)。`plus` 是 `+` 键的别名（`+` 是分隔符）。
 pub(crate) fn parse_combo(combo: &str) -> Option<(ModifiersState, BindingKey)> {
@@ -496,37 +664,50 @@ pub(crate) fn build_bindings(raw: &[(String, String)]) -> Vec<KeyBinding> {
 /// 一个动作当前的有效键（设置页展示用）。
 /// 返回 (展示文本, 是否来自用户自定义)；None = 未绑定。
 pub(crate) fn effective_combo(action: &Action, custom: &[KeyBinding]) -> Option<(String, bool)> {
-    // custom 已是倒序（最新在前）。该动作的候选行必须没被更新的同键行
-    // 遮蔽（手编文件可能给同一个键堆多行，运行时只有最前面那条生效——
-    // 展示必须与匹配层口径一致，否则显示的键按下去没反应）。
-    for (index, binding) in custom.iter().enumerate() {
-        if binding.action != *action {
-            continue;
+    LEGACY.effective_combo(action, custom)
+}
+
+impl ShortcutPolicy {
+    pub(crate) fn effective_combo(
+        self,
+        action: &Action,
+        custom: &[KeyBinding],
+    ) -> Option<(String, bool)> {
+        // custom 已是倒序（最新在前）。该动作的候选行必须没被更新的同键行
+        // 遮蔽（手编文件可能给同一个键堆多行，运行时只有最前面那条生效——
+        // 展示必须与匹配层口径一致，否则显示的键按下去没反应）。
+        for (index, binding) in custom.iter().enumerate() {
+            if binding.action != *action {
+                continue;
+            }
+            let shadowed_by_newer = custom[..index].iter().any(|b| {
+                self.same_binding_key(&b.trigger, &binding.trigger) && b.mods == binding.mods
+            });
+            if !shadowed_by_newer {
+                return display_combo(binding.mods, &binding.trigger).map(|text| (text, true));
+            }
         }
-        let shadowed_by_newer =
-            custom[..index].iter().any(|b| b.trigger == binding.trigger && b.mods == binding.mods);
-        if !shadowed_by_newer {
-            return display_combo(binding.mods, &binding.trigger).map(|text| (text, true));
-        }
+        // 默认表：倒序扫描让 platform/nebula 键（靠后 extend）压过 vi/legacy
+        // 键；跳过 Numpad 专属与 Copy/Paste 媒体键这类不适合展示的触发器。
+        let shadowed = |candidate: &KeyBinding| {
+            custom.iter().any(|b| {
+                self.same_binding_key(&b.trigger, &candidate.trigger) && b.mods == candidate.mods
+            })
+        };
+        self.cached_defaults()
+            .iter()
+            .rev()
+            .filter(|b| b.action == *action)
+            .filter(|b| {
+                !matches!(
+                    &b.trigger,
+                    BindingKey::Keycode { key: Key::Named(NamedKey::Copy | NamedKey::Paste), .. }
+                        | BindingKey::Keycode { location: KeyLocation::Numpad, .. }
+                )
+            })
+            .find(|b| !shadowed(b))
+            .and_then(|b| display_combo(b.mods, &b.trigger).map(|text| (text, false)))
     }
-    // 默认表：倒序扫描让 platform/nebula 键（靠后 extend）压过 vi/legacy
-    // 键；跳过 Numpad 专属与 Copy/Paste 媒体键这类不适合展示的触发器。
-    let shadowed = |candidate: &KeyBinding| {
-        custom.iter().any(|b| b.trigger == candidate.trigger && b.mods == candidate.mods)
-    };
-    cached_defaults()
-        .iter()
-        .rev()
-        .filter(|b| b.action == *action)
-        .filter(|b| {
-            !matches!(
-                &b.trigger,
-                BindingKey::Keycode { key: Key::Named(NamedKey::Copy | NamedKey::Paste), .. }
-                    | BindingKey::Keycode { location: KeyLocation::Numpad, .. }
-            )
-        })
-        .find(|b| !shadowed(b))
-        .and_then(|b| display_combo(b.mods, &b.trigger).map(|text| (text, false)))
 }
 
 // ---- 捕获 ----
@@ -674,6 +855,108 @@ pub(crate) fn gpui_mods_prefix(modifiers: &::gpui::Modifiers) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(all(target_os = "macos", feature = "gpui-shell"))]
+    fn command_digit_aliases_preserve_ownership_clear_and_reset() {
+        use super::*;
+        for (logical, physical, action) in [
+            ("cmd+0", "cmd+digit0", Action::ResetFontSize),
+            ("cmd+1", "cmd+digit1", Action::SelectTab1),
+            ("cmd+9", "cmd+digit9", Action::SelectLastTab),
+        ] {
+            for combo in [logical, physical] {
+                let mut raw = vec![(combo.into(), "ReceiveChar".into())];
+                let fallback = (action == Action::SelectTab1).then(|| ("Option+1".into(), false));
+                assert_eq!(
+                    GPUI.effective_combo(&action, &build_bindings(&raw)),
+                    fallback,
+                    "{combo}"
+                );
+                GPUI.reset_action(&mut raw, &action);
+                assert!(raw.is_empty(), "reset must release either spelling: {combo}");
+                assert!(GPUI.effective_combo(&action, &[]).is_some());
+
+                let mut raw = vec![(combo.into(), "ToggleShellPicker".into())];
+                GPUI.clear_action(&mut raw, &action);
+                assert!(raw.contains(&(combo.into(), "ToggleShellPicker".into())));
+                assert!(
+                    !raw.iter().any(|(candidate, name)| GPUI.same_combo(candidate, combo)
+                        && parse_action(name) == Some(Action::ReceiveChar)),
+                    "clearing another action must preserve the explicit owner of {combo}"
+                );
+                assert_eq!(GPUI.effective_combo(&action, &build_bindings(&raw)), None);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn control_character_defaults_and_reset_use_command_on_macos() {
+        use super::*;
+        let defaults = GPUI.default_shortcuts();
+        for combo in ["ctrl+k", "ctrl+digit1", "ctrl+1"] {
+            assert!(
+                !defaults.iter().any(|(candidate, _)| parse_combo(candidate) == parse_combo(combo)),
+                "{combo} must not be a GUI default"
+            );
+        }
+        let action = Action::ToggleShellPicker;
+        assert_eq!(GPUI.effective_combo(&action, &[]), Some(("Command+K".into(), false)));
+        let mut raw = vec![("ctrl+k".into(), "ReceiveChar".into())];
+        GPUI.rebind_action(&mut raw, &action, "ctrl+k".into());
+        assert_eq!(
+            GPUI.effective_combo(&action, &build_bindings(&raw)),
+            Some(("Ctrl+K".into(), true))
+        );
+        GPUI.reset_action(&mut raw, &action);
+        assert_eq!(
+            GPUI.effective_combo(&action, &build_bindings(&raw)),
+            Some(("Command+K".into(), false))
+        );
+        let mut old_rows = vec![("ctrl+k".into(), "ReceiveChar".into())];
+        GPUI.reset_action(&mut old_rows, &action);
+        assert_eq!(old_rows, [("ctrl+k".into(), "ReceiveChar".into())]);
+        assert_eq!(
+            GPUI.effective_combo(&action, &build_bindings(&old_rows)),
+            Some(("Command+K".into(), false))
+        );
+    }
+
+    #[test]
+    fn frontend_policies_do_not_share_defaults_or_digit_identity() {
+        use super::*;
+        let legacy_defaults = default_shortcuts();
+        let gpui_defaults = GPUI.default_shortcuts();
+        let legacy_picker = effective_combo(&Action::ToggleShellPicker, &[]);
+        let gpui_picker = GPUI.effective_combo(&Action::ToggleShellPicker, &[]);
+        let (_, logical) = parse_combo("ctrl+1").unwrap();
+        let (_, physical) = parse_combo("ctrl+digit1").unwrap();
+        let custom = build_bindings(&[
+            ("ctrl+1".into(), "ToggleShellPicker".into()),
+            ("ctrl+digit1".into(), "ReceiveChar".into()),
+        ]);
+        for _ in 0..3 {
+            assert!(GPUI.same_binding_key(&logical, &physical));
+            assert!(!LEGACY.same_binding_key(&logical, &physical));
+            assert_eq!(GPUI.default_shortcuts(), gpui_defaults);
+            assert_eq!(default_shortcuts(), legacy_defaults);
+            assert_eq!(GPUI.effective_combo(&Action::ToggleShellPicker, &[]), gpui_picker);
+            assert_eq!(effective_combo(&Action::ToggleShellPicker, &[]), legacy_picker);
+            assert_eq!(
+                effective_combo(&Action::ToggleShellPicker, &custom),
+                Some(("Ctrl+1".into(), true))
+            );
+            assert_eq!(GPUI.effective_combo(&Action::ToggleShellPicker, &custom), gpui_picker);
+        }
+        if cfg!(target_os = "macos") {
+            assert_eq!(legacy_picker, Some(("Ctrl+K".into(), false)));
+            assert_eq!(gpui_picker, Some(("Command+K".into(), false)));
+            assert!(READONLY_ROWS[0].2.contains("Ctrl+1"));
+            assert!(!GPUI.readonly_rows()[0].2.contains("Ctrl+1"));
+            assert_eq!(GPUI.effective_combo(&Action::Quit, &[]), Some(("Command+Q".into(), false)));
+        }
+    }
+
     #[test]
     fn rename_binding_moves_persists_clears_and_restores() {
         use super::*;
