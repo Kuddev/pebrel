@@ -126,6 +126,8 @@ serde_yaml = "0.9.25"
 sha2 = "0.11"
 zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 signal-hook = { version = "0.4.3", default-features = false }
+# Native resource snapshots share the sysinfo version already used by GPUI.
+sysinfo = { version = "=0.31.4", optional = true }
 tempfile = "3.12.0"
 toml.workspace = true
 toml_edit.workspace = true
@@ -310,6 +312,7 @@ nightly = []
 # GPUI UI 层（产品代码在 src/gpui_shell/），也是默认与正式发布 UI。
 # `--gpui` 作为兼容参数保留；旧壳只存在于显式 `legacy-shell` 构建。
 gpui-shell = [
+    "dep:sysinfo",
     "dep:gpui",
     "dep:gpui_platform",
     "dep:gpui-component",
