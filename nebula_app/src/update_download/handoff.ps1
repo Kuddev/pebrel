@@ -10,6 +10,138 @@ $guard = $null
 $installerGuard = $null
 $committed = $false
 $originalDigest = $null
+$payloadGuards = @()
+$replaced = @()
+$portable = $false
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class PebrelUpdateProcessImage {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder image, ref uint size);
+}
+'@
+
+function Process-Image($Process) {
+    $image = [Text.StringBuilder]::new(32768)
+    $size = [uint32]32768
+    if (-not [PebrelUpdateProcessImage]::QueryFullProcessImageName($Process.Handle, 0, $image, [ref]$size)) {
+        throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    }
+    return $image.ToString()
+}
+
+function Read-Digest([string]$Path) {
+    # Get-FileHash is supplied by a module script, which may not be discoverable
+    # when the GUI inherited PSModulePath from a different PowerShell edition.
+    $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') }
+    finally { $sha.Dispose(); $stream.Dispose() }
+}
+
+function Payload-Path([string]$Base, [string]$Relative) {
+    if ($Relative.Length -gt 240 -or $Relative -match '[\\:<>"|?*\x00-\x1f]' -or
+        $Relative -match '(^|/)(\.|\.\.|[^/]*[. ])(/|$)' -or
+        $Relative -match '(^|/)(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9]|LPT[1-9])(\.|/|$)' -or
+        $Relative -match '^\.pebrel-update' -or $Relative -in @('unins000.exe', 'pebrel-distribution')) {
+        throw 'Unsafe portable payload path'
+    }
+    # Spaces within names are valid; traversal, ADS and reparse points are not.
+    $parts = $Relative.Split('/')
+    $path = $Base
+    if (((Get-Item -LiteralPath $Base -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Portable directory is a reparse point'
+    }
+    foreach ($part in $parts) {
+        if (-not $part) { throw 'Empty portable path component' }
+        $path = Join-Path $path $part
+        if (Test-Path -LiteralPath $path) {
+            $item = Get-Item -LiteralPath $path -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Portable path contains a reparse point'
+            }
+        }
+    }
+    $full = [IO.Path]::GetFullPath($path)
+    if (-not $full.StartsWith(([IO.Path]::GetFullPath($Base).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Portable path escaped its directory'
+    }
+    return $full
+}
+
+function Prepare-Portable {
+    if (-not (Same-Path $plan.portable.directory (Join-Path $transaction 'portable'))) {
+        throw 'Portable staging directory changed'
+    }
+    $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $expanded = [long]0
+    if ($plan.portable.files.Count -lt 1 -or $plan.portable.files.Count -gt 256) {
+        throw 'Invalid portable file count'
+    }
+    foreach ($entry in $plan.portable.files) {
+        if (-not $names.Add($entry.path) -or $entry.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or
+            $entry.bytes -lt 0 -or $entry.bytes -gt 536870912) { throw 'Invalid portable file identity' }
+        $expanded += [long]$entry.bytes
+        if ($expanded -gt 1073741824) { throw 'Portable expanded size exceeds limit' }
+        $source = Payload-Path $plan.portable.directory $entry.path
+        $null = Payload-Path $installation $entry.path
+        $stream = [IO.FileStream]::new($source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $script:payloadGuards += $stream
+        if ($stream.Length -ne $entry.bytes) { throw 'Portable file size changed' }
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try { $hash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') }
+        finally { $sha.Dispose() }
+        if ($hash -ne $entry.sha256) { throw 'Portable file checksum changed' }
+    }
+    if (-not $names.Contains('pebrel.exe')) { throw 'Portable executable is missing' }
+}
+
+function Replace-Portable {
+    $backup = Join-Path $installation ('.pebrel-update-' + $plan.transaction)
+    if (Test-Path -LiteralPath $backup) { throw 'Portable backup already exists' }
+    $null = [IO.Directory]::CreateDirectory($backup)
+    # Back up every affected old file before changing any of them. An occupied
+    # file or directory fails with the old package intact.
+    foreach ($entry in $plan.portable.files) {
+        $target = Payload-Path $installation $entry.path
+        if (Test-Path -LiteralPath $target) {
+            $probe = [IO.FileStream]::new($target, [IO.FileMode]::Open,
+                [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+            $probe.Dispose()
+            $saved = Payload-Path $backup $entry.path
+            $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $saved))
+            [IO.File]::Copy($target, $saved, $false)
+        }
+    }
+    foreach ($entry in $plan.portable.files) {
+        $target = Payload-Path $installation $entry.path
+        $source = Payload-Path $plan.portable.directory $entry.path
+        $saved = Payload-Path $backup $entry.path
+        $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $target))
+        # Record before copying, so even a failed or partial copy is restored.
+        $script:replaced += @{ target = $target; backup = $saved; existed = [IO.File]::Exists($saved) }
+        Write-State 'portable-journal.json' $script:replaced
+        [IO.File]::Copy($source, $target, $true)
+        if ((Read-Digest $target) -ne $entry.sha256) {
+            throw 'Replaced portable file checksum differs'
+        }
+    }
+}
+
+function Restore-Portable {
+    $errors = @()
+    for ($index = $replaced.Count - 1; $index -ge 0; $index--) {
+        $entry = $replaced[$index]
+        try {
+            if ($entry.existed) { [IO.File]::Copy($entry.backup, $entry.target, $true) }
+            else { [IO.File]::Delete($entry.target) }
+        } catch { $errors += $_.Exception.Message }
+    }
+    if ($errors.Count) { throw ('Portable rollback incomplete: ' + ($errors -join '; ')) }
+}
 
 function Write-State([string]$Name, $Value) {
     $destination = Join-Path $transaction $Name
@@ -20,7 +152,10 @@ function Write-State([string]$Name, $Value) {
     try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) }
     finally { $stream.Dispose() }
     if (Test-Path -LiteralPath $destination) {
-        [System.IO.File]::Replace($temporary, $destination, $null)
+        # Windows PowerShell 5.1 binds a null string argument as an empty path.
+        $previous = "$destination.previous"
+        [System.IO.File]::Replace($temporary, $destination, $previous)
+        [System.IO.File]::Delete($previous)
     } else { [System.IO.File]::Move($temporary, $destination) }
 }
 
@@ -59,7 +194,16 @@ function Launch-Workspace {
 function Check-UnpreparedProcesses {
     foreach ($other in [System.Diagnostics.Process]::GetProcessesByName([System.IO.Path]::GetFileNameWithoutExtension($exe))) {
         try {
-            if ((Same-Path $other.MainModule.FileName $exe) -and
+            try { $candidate = Process-Image $other }
+            catch {
+                # A CLI from another installation can finish between enumeration
+                # and module lookup. Only confirmed exits may be ignored.
+                if ($other.HasExited) { continue }
+                throw
+            }
+            if ($other.HasExited) { continue }
+            if (-not $candidate) { throw 'Could not identify another running application process' }
+            if ((Same-Path $candidate $exe) -and
                 -not (@($plan.participants | Where-Object { [int]$_.pid -eq $other.Id }).Count)) {
                 throw 'Another process from this installation is not prepared for update'
             }
@@ -76,6 +220,7 @@ function Wait-RuntimeHelperFiles {
         'runtime\nebula-hook.exe', 'nebula-hook.exe')
     while ($true) {
         $busy = $null
+        $busyPath = $null
         foreach ($relative in $helpers) {
             $path = Join-Path $installation $relative
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
@@ -83,10 +228,12 @@ function Wait-RuntimeHelperFiles {
                 $probe = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open,
                     [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
                 $probe.Dispose()
-            } catch { $busy = $_.Exception }
+            } catch { $busy = $_.Exception; $busyPath = $path }
         }
         if (-not $busy) { return }
-        if ([DateTime]::UtcNow -ge $deadline) { throw $busy }
+        if ([DateTime]::UtcNow -ge $deadline) {
+            throw "Update file is still occupied or not writable: $busyPath. Close programs using it or check directory permissions, then retry."
+        }
         Start-Sleep -Milliseconds 100
     }
 }
@@ -102,7 +249,13 @@ try {
     if (-not (Same-Path $installation $plan.installation)) { throw 'Installation path changed' }
     if (Same-Path $transaction $installation) { throw 'Helper cannot run inside installation' }
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Installed application is missing' }
-    if (-not (Test-Path -LiteralPath (Join-Path $installation 'unins000.exe') -PathType Leaf)) {
+    if (Test-Path -LiteralPath (Join-Path $installation 'pebrel-distribution')) {
+        throw 'This copy is managed by an external distribution source'
+    }
+    $portable = $null -ne $plan.portable
+    $managed = Test-Path -LiteralPath (Join-Path $installation 'unins000.exe') -PathType Leaf
+    if ($portable -and $managed) { throw 'Portable update cannot replace an installer-managed copy' }
+    if (-not $portable -and -not $managed) {
         throw 'This directory is not an installer-managed installation'
     }
     if ($plan.version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([+-][a-zA-Z0-9.-]+)?$' -or
@@ -116,7 +269,7 @@ try {
     foreach ($participant in $plan.participants) {
         $process = [System.Diagnostics.Process]::GetProcessById([int]$participant.pid)
         $null = $process.Handle # acquire the exact kernel object before checking identity
-        if (-not (Same-Path $process.MainModule.FileName $exe)) { throw 'Participant executable differs' }
+        if (-not (Same-Path (Process-Image $process) $exe)) { throw 'Participant executable differs' }
         if ($process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() -ne $participant.created) {
             throw 'Participant process identity changed'
         }
@@ -131,7 +284,8 @@ try {
     try { $actual = [BitConverter]::ToString($sha.ComputeHash($installerGuard)).Replace('-', '') }
     finally { $sha.Dispose() }
     if ($actual -ne $plan.sha256) { throw 'Installer checksum changed' }
-    $originalDigest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+    if ($portable) { Prepare-Portable }
+    $originalDigest = Read-Digest $exe
     if ((Read-Version $exe) -notmatch ('^Pebrel ' + [regex]::Escape($plan.original_version) + '(\s|$)')) {
         throw 'Original application version differs'
     }
@@ -158,17 +312,21 @@ try {
     # No Restart Manager process-name shutdown: every participant has already
     # saved and exited. DIR reuses this validated installation without a chooser.
     Wait-RuntimeHelperFiles
-    $setupLog = Join-Path $transaction 'installer.log'
-    $arguments = '/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCLOSEAPPLICATIONS /NORESTARTAPPLICATIONS' +
-        ' /DIR="' + $installation + '" /LOG="' + $setupLog + '"'
-    $setup = Start-Process -FilePath $plan.installer -ArgumentList $arguments -PassThru
-    $setup.WaitForExit()
-    if ($setup.ExitCode -ne 0) { throw "Installer failed with exit code $($setup.ExitCode)" }
+    if ($portable) {
+        Replace-Portable
+    } else {
+        $setupLog = Join-Path $transaction 'installer.log'
+        $arguments = '/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCLOSEAPPLICATIONS /NORESTARTAPPLICATIONS' +
+            ' /DIR="' + $installation + '" /LOG="' + $setupLog + '"'
+        $setup = Start-Process -FilePath $plan.installer -ArgumentList $arguments -PassThru -WindowStyle Hidden
+        $setup.WaitForExit()
+        if ($setup.ExitCode -ne 0) { throw "Installer failed with exit code $($setup.ExitCode)" }
+    }
     $reported = Read-Version $exe
     if ($reported -notmatch ('^Pebrel ' + [regex]::Escape($plan.version) + '(\s|$)')) {
         throw 'Installed application did not report the expected version'
     }
-    $installedDigest = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+    $installedDigest = Read-Digest $exe
     # A repair can replace a previously locked helper while leaving pebrel.exe
     # byte-identical. Setup success plus the expected version is authoritative;
     # a changed main-executable hash is not a same-version success requirement.
@@ -181,14 +339,19 @@ try {
     Launch-Workspace
 } catch {
     $failure = $_.Exception.Message
+    $rollbackComplete = $true
+    if ($portable -and $replaced.Count) {
+        try { Restore-Portable }
+        catch { $failure += '; ' + $_.Exception.Message; $rollbackComplete = $false }
+    }
     # Restart only an unchanged, still executable old binary after all original
     # participants exited. This is recovery, not a claim of installer rollback.
     $recoverOriginal = $false
-    if ($committed -and $originalDigest -and
+    if ($rollbackComplete -and $committed -and $originalDigest -and
         @($handles | Where-Object { -not $_.HasExited }).Count -eq 0) {
         try {
             Check-UnpreparedProcesses
-            $recoverOriginal = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -eq $originalDigest -and
+            $recoverOriginal = (Read-Digest $exe) -eq $originalDigest -and
                 (Read-Version $exe) -match ('^Pebrel ' + [regex]::Escape($plan.original_version) + '(\s|$)')
         } catch { $recoverOriginal = $false }
     }
@@ -206,5 +369,6 @@ try {
 } finally {
     foreach ($process in $handles) { $process.Dispose() }
     if ($installerGuard) { $installerGuard.Dispose() }
+    foreach ($stream in $payloadGuards) { $stream.Dispose() }
     if ($guard) { $guard.Dispose() }
 }

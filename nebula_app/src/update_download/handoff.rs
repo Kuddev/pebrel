@@ -11,6 +11,7 @@ use crate::platform::update_installation::{canonical, current_process_created};
 use crate::session::Session;
 use crate::update_check::UpdateAsset;
 
+mod cleanup;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 
@@ -42,6 +43,8 @@ struct Plan {
     original_version: String,
     guard_path: PathBuf,
     participants: Vec<Participant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    portable: Option<super::portable::Payload>,
 }
 
 pub(crate) struct PreparedUpdate {
@@ -107,6 +110,7 @@ pub(crate) fn installation_in_progress() -> io::Result<bool> {
 /// All verification and process waiting occurs on a background executor.
 pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
     crate::platform::distribution::require_direct_update()?;
+    super::validate_asset(asset)?;
     if crate::platform::elevation::requires_isolation() {
         return Err(
             "Install updates from an ordinary Pebrel window so privileged sessions stay isolated"
@@ -127,6 +131,24 @@ pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
     );
     let directory = nebula_settings::settings_dir().join("updates/handoffs").join(&transaction);
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let portable = if asset.name.ends_with(".zip") {
+        let _archive_guard = super::portable::lock_package(&installer)?;
+        super::verify_file(&installer, asset)?;
+        let (staging, replacement) = super::portable::reservations(&installer, &installation)?;
+        let language = crate::i18n::LanguagePreference::from(
+            nebula_settings::RuntimeSettings::load().language,
+        )
+        .resolved();
+        super::space::check(&[(&directory, staging), (&installation, replacement)])
+            .map_err(|error| super::space_error_text(error, language))?;
+        let payload = super::portable::extract(&installer, &directory)?;
+        // Recheck the remaining replacement reservation after staging consumed space.
+        super::space::check(&[(&installation, replacement)])
+            .map_err(|error| super::space_error_text(error, language))?;
+        Some(payload)
+    } else {
+        None
+    };
     // Detect an unwritable target while all windows are still available.
     let probe_directory =
         if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
@@ -159,6 +181,7 @@ pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
         original_version: env!("CARGO_PKG_VERSION").into(),
         guard_path: base.with_extension("nebula-lock"),
         participants: vec![Participant { pid: std::process::id(), created: created.to_string() }],
+        portable,
     };
     let plan_path = directory.join("plan.json");
     crate::atomic_file::write(
@@ -266,7 +289,13 @@ pub(crate) fn acknowledge_restore(restored_windows: usize) {
         log::warn!("Could not acknowledge update recovery: {error}");
     } else {
         *active = None;
+        drop(active);
+        cleanup::spawn();
     }
+}
+
+pub(super) fn cleanup_completed() {
+    cleanup::run();
 }
 
 pub(super) fn failed_update() -> Option<(UpdateAsset, String)> {

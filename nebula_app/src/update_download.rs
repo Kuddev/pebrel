@@ -13,6 +13,8 @@ use std::sync::{Mutex, MutexGuard};
 
 mod cache;
 pub(crate) mod handoff;
+mod portable;
+mod space;
 use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
@@ -144,6 +146,7 @@ pub(crate) fn hydrate() {
     if crate::platform::distribution::current().externally_managed() {
         return;
     }
+    handoff::cleanup_completed();
     let cached = handoff::failed_update()
         .map(|(asset, error)| (asset, DownloadStatus::InstallFailed(error)))
         .or_else(cache::load);
@@ -266,6 +269,11 @@ fn download_with_job(
     if total.is_some_and(|bytes| bytes > MAX_INSTALLER_BYTES) {
         return Err("安装包超过 512 MiB 安全上限".to_owned());
     }
+    space::check(&[(
+        partial_path.parent().ok_or("Missing download directory")?,
+        total.unwrap_or(MAX_INSTALLER_BYTES),
+    )])
+    .map_err(|error| space_error_text(error, language))?;
 
     let mut output = OpenOptions::new()
         .create(true)
@@ -349,6 +357,23 @@ fn network_error_text(error: ureq::Error, language: UiLanguage) -> String {
     language.text(message).to_owned()
 }
 
+fn space_error_text(error: space::Error, language: UiLanguage) -> String {
+    match error {
+        space::Error::Query { path, source } => language.format(
+            Message::UpdateSpaceQueryFailed,
+            &[("path", &path.display().to_string()), ("error", &source.to_string())],
+        ),
+        space::Error::Shortage { path, required, available } => language.format(
+            Message::UpdateSpaceInsufficient,
+            &[
+                ("path", &path.display().to_string()),
+                ("required", &format!("{:.1}", required as f64 / 1048576.0)),
+                ("available", &format!("{:.1}", available as f64 / 1048576.0)),
+            ],
+        ),
+    }
+}
+
 fn verify_file(path: &Path, asset: &UpdateAsset) -> Result<u64, String> {
     let mut file = File::open(path).map_err(|error| format!("无法读取更新缓存：{error}"))?;
     let metadata = file.metadata().map_err(|error| format!("无法读取更新缓存大小：{error}"))?;
@@ -384,7 +409,11 @@ fn verify_download(
     if bytes == 0 || asset.size.is_some_and(|expected| expected != bytes) {
         return Err(format!("安装包长度校验失败（实际 {bytes} 字节）"));
     }
-    if !asset.name.ends_with(".dmg") && pe_header != b"MZ" {
+    if asset.name.ends_with(".zip") {
+        if pe_header != b"PK" {
+            return Err("Download is not a portable ZIP package".into());
+        }
+    } else if !asset.name.ends_with(".dmg") && pe_header != b"MZ" {
         return Err("下载内容不是 Windows PE 安装包".to_owned());
     }
     let expected = asset.sha256.as_deref().ok_or_else(|| "release 未提供 SHA-256".to_owned())?;
@@ -418,6 +447,9 @@ fn download_paths(asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
 }
 
 fn verify_package_trailer(file: &mut File, asset: &UpdateAsset) -> Result<(), String> {
+    if asset.name.ends_with(".zip") {
+        portable::inspect(file)?;
+    }
     if asset.name.ends_with(".dmg") {
         let mut signature = [0; 4];
         file.seek(SeekFrom::End(-512))
@@ -515,12 +547,53 @@ mod tests {
         assert_eq!(
             super::validate_asset(&asset).is_ok(),
             cfg!(all(windows, target_arch = "x86_64"))
+                && !crate::platform::update_installation::windows_portable().unwrap_or(true)
         );
         if super::validate_asset(&asset).is_err() {
             assert!(super::begin(&asset).is_err());
         }
         asset.download_url = "https://example.invalid/untrusted.exe".into();
         assert!(super::begin(&asset).is_err(), "the session must not bypass asset validation");
+    }
+
+    #[test]
+    fn portable_zip_verification_reuses_the_digest_and_rejects_invalid_structure() {
+        use std::io::Write as _;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("portable.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        zip.start_file("pebrel.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"MZportable").unwrap();
+        zip.finish().unwrap();
+        let data = std::fs::read(&path).unwrap();
+        let names = crate::update_check::assets::windows_portable_names("2.3.0", "x86_64");
+        let mut asset = UpdateAsset {
+            version: "2.3.0".into(),
+            name: names[0].clone(),
+            download_url: format!("{RELEASE_DOWNLOAD_PREFIX}v2.3.0/{}", names[0]),
+            size: Some(data.len() as u64),
+            sha256: Some(Sha256::digest(&data).iter().map(|byte| format!("{byte:02x}")).collect()),
+        };
+        super::validate_asset_contract(&asset, &names).unwrap();
+        super::verify_file(&path, &asset).unwrap();
+        assert!(
+            super::validate_asset_contract(
+                &asset,
+                &crate::update_check::assets::windows_names("2.3.0", "x86_64")
+            )
+            .is_err()
+        );
+        asset.sha256 = Some("0".repeat(64));
+        assert!(super::verify_file(&path, &asset).is_err());
+        let malformed = b"PKnot a zip";
+        std::fs::write(&path, malformed).unwrap();
+        asset.size = Some(malformed.len() as u64);
+        asset.sha256 =
+            Some(Sha256::digest(malformed).iter().map(|byte| format!("{byte:02x}")).collect());
+        assert!(
+            super::verify_file(&path, &asset).is_err(),
+            "PK header and matching hash do not prove ZIP structure"
+        );
     }
 
     #[test]

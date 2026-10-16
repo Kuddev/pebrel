@@ -47,8 +47,12 @@ pub(super) fn save_job(job: &DownloadJob, status: &DownloadStatus) -> std::io::R
 }
 
 pub(super) fn supersedes(result: &Path) -> bool {
+    supersedes_at(&path(), result)
+}
+
+pub(super) fn supersedes_at(cache: &Path, result: &Path) -> bool {
     let modified = |path: &Path| std::fs::metadata(path).and_then(|file| file.modified()).ok();
-    matches!((modified(&path()), modified(result)), (Some(cache), Some(result)) if cache > result)
+    matches!((modified(cache), modified(result)), (Some(cache), Some(result)) if cache > result)
 }
 
 pub(super) fn failure_unseen(prompt_state: &Path) -> bool {
@@ -76,6 +80,11 @@ pub(super) fn load() -> Option<(UpdateAsset, DownloadStatus)> {
         }
     } else {
         let (_, path) = download_paths(&record.asset).ok()?;
+        // Successful update cleanup retires its package; absence is not a failed
+        // download of an already installed version. Rehearsal reinstalls can retry.
+        if !path.exists() && record.asset.version == env!("CARGO_PKG_VERSION") {
+            return None;
+        }
         match verify_file(&path, &record.asset) {
             Ok(bytes) => DownloadStatus::Ready { path, bytes },
             Err(error) => DownloadStatus::Failed(error),

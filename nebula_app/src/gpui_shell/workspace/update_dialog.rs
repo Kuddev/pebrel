@@ -136,22 +136,37 @@ fn show_download_outcome_notification(
         match status {
             DownloadStatus::Ready { bytes, .. } => (
                 language.pick("更新已下载", "Update downloaded").into(),
-                match language {
-                    crate::display::UiLanguage::ZhCn => {
-                        format!(
-                            "v{} 安装包已通过 SHA-256 校验（{}）",
+                if result.asset.as_ref().is_some_and(|asset| asset.name.ends_with(".zip")) {
+                    language.format(
+                        Message::UpdatePortableVerified,
+                        &[("version", &downloaded_version), ("size", &format_bytes(bytes))],
+                    )
+                } else {
+                    match language {
+                        crate::display::UiLanguage::ZhCn => {
+                            format!(
+                                "v{} 安装包已通过 SHA-256 校验（{}）",
+                                downloaded_version,
+                                format_bytes(bytes)
+                            )
+                        },
+                        _ => format!(
+                            "The v{} installer passed SHA-256 verification ({})",
                             downloaded_version,
                             format_bytes(bytes)
-                        )
-                    },
-                    _ => format!(
-                        "The v{} installer passed SHA-256 verification ({})",
-                        downloaded_version,
-                        format_bytes(bytes)
-                    ),
+                        ),
+                    }
                 }
                 .into(),
-                language.text(Message::UpdateRestartInstall).into(),
+                language
+                    .text(
+                        if result.asset.as_ref().is_some_and(|asset| asset.name.ends_with(".zip")) {
+                            Message::UpdateRestartUpdate
+                        } else {
+                            Message::UpdateRestartInstall
+                        },
+                    )
+                    .into(),
                 true,
             ),
             DownloadStatus::Failed(error) => (
@@ -220,6 +235,7 @@ pub(crate) fn open_update_dialog(
             .map(crate::update_download::status)
             .unwrap_or(DownloadStatus::Idle);
         let verified_asset = asset.as_ref().is_some_and(|asset| asset.sha256.is_some());
+        let portable = asset.as_ref().is_some_and(|asset| asset.name.ends_with(".zip"));
         let downloading = matches!(status, DownloadStatus::Downloading { .. });
         // 居中 helper 需要内容高度估值；按实际渲染态区分，避免统一按 330px
         // 计算时让较矮的初始弹窗明显偏上。
@@ -233,7 +249,9 @@ pub(crate) fn open_update_dialog(
 
         let hint: SharedString = match (&status, asset.as_ref()) {
             (DownloadStatus::Downloading { .. }, _) => language.text(Message::UpdateDownloadingHint).into(),
-            (DownloadStatus::Ready { .. }, _) => language.text(Message::UpdateReadyHint).into(),
+            (DownloadStatus::Ready { .. }, _) => language.text(if portable {
+                Message::UpdatePortableReadyHint
+            } else { Message::UpdateReadyHint }).into(),
             (DownloadStatus::InstallFailed(_), _) => language.text(Message::UpdateInstallationFailedHint).into(),
             (DownloadStatus::Failed(_), _) => language
                 .pick(
@@ -241,6 +259,7 @@ pub(crate) fn open_update_dialog(
                     "The download did not complete. Retry it here or use the Releases page.",
                 )
                 .into(),
+            (_, Some(_)) if verified_asset && portable => language.text(Message::UpdatePortableHint).into(),
             (_, Some(_)) if verified_asset => language
                 .pick(
                     "Pebrel 将自动下载并校验安装包；校验完成后由你确认安装。",
@@ -265,7 +284,7 @@ pub(crate) fn open_update_dialog(
                 language.text(Message::UpdateStopDownload).into()
             },
             DownloadStatus::Ready { .. } => {
-                language.text(Message::UpdateRestartInstall).into()
+                language.text(if portable { Message::UpdateRestartUpdate } else { Message::UpdateRestartInstall }).into()
             },
             DownloadStatus::InstallFailed(_) if verified_asset => {
                 language.text(Message::UpdateRecheckPackage).into()
@@ -388,7 +407,7 @@ pub(crate) fn open_update_dialog(
             .child(DialogClose::new().child(Button::new("cancel").label(later_text)));
         if matches!(status, DownloadStatus::Ready { .. }) && let Some(asset) = asset.clone() {
             footer = footer.child(Button::new("install-next-launch")
-                .label(language.text(Message::UpdateInstallNextLaunch))
+                .label(language.text(if portable { Message::UpdateUpdateNextLaunch } else { Message::UpdateInstallNextLaunch }))
                 .on_click(move |_, window, cx| {
                     match crate::update_download::handoff::schedule(&asset) {
                         Ok(()) => window.close_dialog(cx),
