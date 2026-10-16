@@ -456,7 +456,10 @@ fn percent_decode(value: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
+            if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
                 out.push(byte);
                 i += 3;
                 continue;
@@ -1000,6 +1003,17 @@ mod tests {
         assert_eq!(ProxyServer::parse_url("socks5://host").unwrap().port, 1080, "socks5 缺省端口");
         assert!(ProxyServer::parse_url("proxy.lan:1080").is_err(), "缺协议前缀必须报错");
         assert!(ProxyServer::parse_url("ftp://proxy.lan").is_err());
+    }
+
+    #[test]
+    fn malformed_percent_escapes_with_multibyte_characters_do_not_panic() {
+        for password in ["%中", "%😀", "%a中", "trailing%", "trailing%a", "%zz"] {
+            let server = ProxyServer::parse_url(&format!("http://user:{password}@proxy.lan"))
+                .expect("invalid escapes retain their literal bytes");
+            assert_eq!(server.password.as_deref(), Some(password));
+        }
+        let server = ProxyServer::parse_url("http://user:%E4%B8%AD%40%3A@proxy.lan").unwrap();
+        assert_eq!(server.password.as_deref(), Some("中@:"));
     }
 
     #[test]
