@@ -17,6 +17,12 @@ use gpui_component::text::{
 use crate::assistant_answer::AnswerSnapshot;
 use crate::assistant_answer::document::{self, AnswerImage, IMAGE_LANGUAGE, ReaderDocument};
 use crate::gpui_shell::prelude::*;
+use crate::i18n::{Message, UiLanguage};
+
+mod messages;
+use messages::ImageFailure;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod native_tests;
 
 const IMAGE_BUDGET: usize = 64 * 1024 * 1024;
 const LITERAL_BLOCK: &str = "nebula-answer-literal";
@@ -29,7 +35,7 @@ enum ImageStatus {
     Waiting,
     Loading,
     Ready(Arc<RenderImage>),
-    Failed(String),
+    Failed(ImageFailure),
 }
 
 struct ReaderImage {
@@ -49,7 +55,7 @@ pub(super) struct AnswerReader {
     raw_initialized: bool,
     pending_markdown: Option<String>,
     extensions: MarkdownExtensions,
-    notice: Option<String>,
+    images_omitted: usize,
     images: Vec<ReaderImage>,
     image_queue: VecDeque<usize>,
     decoding: bool,
@@ -65,7 +71,6 @@ impl EventEmitter<ReaderEvent> for AnswerReader {}
 impl AnswerReader {
     pub fn new(snapshot: AnswerSnapshot, cx: &mut Context<Self>) -> Self {
         let source = snapshot.content.source().cloned();
-        let notice = snapshot.content.notice();
         let reader = Self {
             focus_handle: cx.focus_handle(),
             snapshot,
@@ -75,7 +80,7 @@ impl AnswerReader {
             raw_initialized: false,
             pending_markdown: None,
             extensions: MarkdownExtensions::default(),
-            notice,
+            images_omitted: 0,
             images: Vec::new(),
             image_queue: VecDeque::new(),
             decoding: false,
@@ -106,8 +111,7 @@ impl AnswerReader {
     }
 
     fn prepared(&mut self, document: ReaderDocument, cx: &mut Context<Self>) {
-        let starts =
-            document.images.iter().map(|image| image.placeholder_start).collect::<Vec<_>>();
+        let starts = document.image_placeholder_starts;
         self.images = document
             .images
             .into_iter()
@@ -119,12 +123,8 @@ impl AnswerReader {
                 bytes: 0,
             })
             .collect();
-        if document.images_omitted > 0 {
-            self.notice = Some(format!(
-                "另有 {} 张图片超过本次阅读上限，原文未删减。",
-                document.images_omitted
-            ));
-        }
+        self.images_omitted = document.images_omitted;
+        let image_marker = super::super::config::ui_language(cx).text(Message::ReaderImageMarker);
         let weak = cx.entity().downgrade();
         self.extensions = MarkdownExtensions::default()
             .block_parser(move |node, context| {
@@ -136,7 +136,7 @@ impl AnswerReader {
                 }
                 let index = image_placeholder_index(node, context.offset(), &starts)?;
                 let source = context.node_source(node)?.to_owned();
-                Some(MarkdownNode::new(IMAGE_LANGUAGE, index).text("[图片]").markdown(source))
+                Some(MarkdownNode::new(IMAGE_LANGUAGE, index).text(image_marker).markdown(source))
             })
             .block_renderer(IMAGE_LANGUAGE, move |node, _, cx| match node.data::<usize>() {
                 Some(index) => render_image(&weak, *index, cx),
@@ -169,11 +169,12 @@ impl AnswerReader {
                         Some(path) => path,
                         None => document::local_image_path(
                             &target,
-                            base.as_deref().ok_or("回答未携带本地目录，请主动选择图片文件。")?,
-                        )?,
+                            base.as_deref().ok_or(ImageFailure::MissingDirectory)?,
+                        )
+                        .map_err(ImageFailure::Read)?,
                     };
-                    let bytes = document::read_image(&path)?;
-                    super::inline_image::decode_bytes(&bytes)
+                    let bytes = document::read_image(&path).map_err(ImageFailure::Read)?;
+                    super::inline_image::decode_bytes(&bytes).map_err(ImageFailure::Decode)
                 })
                 .await;
             let _ = reader.update(cx, |reader, cx| {
@@ -188,9 +189,8 @@ impl AnswerReader {
                             reader.images[index].status = ImageStatus::Ready(image);
                         },
                         Ok(_) => {
-                            reader.images[index].status = ImageStatus::Failed(
-                                "图片超过本次阅读的 64 MiB 总预算，未显示。".into(),
-                            )
+                            reader.images[index].status =
+                                ImageStatus::Failed(ImageFailure::TotalBudget)
                         },
                         Err(error) => reader.images[index].status = ImageStatus::Failed(error),
                     }
@@ -203,11 +203,12 @@ impl AnswerReader {
     }
 
     fn choose_image(&mut self, index: usize, cx: &mut Context<Self>) {
+        let language = super::super::config::ui_language(cx);
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("选择 PNG / JPEG 图片".into()),
+            prompt: Some(language.text(Message::ReaderChooseImagePrompt).into()),
         });
         cx.spawn(async move |reader, cx| {
             let Ok(Ok(Some(paths))) = picked.await else { return };
@@ -247,6 +248,17 @@ impl AnswerReader {
             cx.stop_propagation();
         }
     }
+
+    fn notice(&self, language: UiLanguage) -> Option<String> {
+        if self.images_omitted > 0 {
+            Some(language.format(
+                Message::ReaderImagesOmitted,
+                &[("count", &self.images_omitted.to_string())],
+            ))
+        } else {
+            self.snapshot.content.notice(language)
+        }
+    }
 }
 
 fn contains_uncontrolled_media(node: &markdown_ast::Node) -> bool {
@@ -282,11 +294,23 @@ fn image_placeholder_index(
 }
 
 fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -> AnyElement {
+    let language = super::super::config::ui_language(cx);
     let Some(entity) = reader.upgrade() else { return div().into_any_element() };
     let state = entity.read(cx);
-    let Some(image) = state.images.get(index) else { return div().into_any_element() };
+    let Some(image) = state.images.get(index) else {
+        return div()
+            .py_2()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(language.text(Message::ReaderImagesOmittedInline))
+            .into_any_element();
+    };
     let target: SharedString = image.spec.target.clone().into();
-    let alt: SharedString = image.spec.alt.clone().into();
+    let alt: SharedString = if image.spec.alt.is_empty() {
+        language.format(Message::ReaderImageNumber, &[("number", &(index + 1).to_string())]).into()
+    } else {
+        image.spec.alt.clone().into()
+    };
     let mut block = v_flex().w_full().gap_2().py_2();
     match &image.status {
         ImageStatus::Ready(image) => {
@@ -312,7 +336,7 @@ fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("点击放大 · Esc 返回"),
+                        .child(language.text(Message::ReaderImageEnlarge)),
                 );
         },
         ImageStatus::Waiting | ImageStatus::Loading => {
@@ -320,16 +344,21 @@ fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("正在检查并加载本地图片…"),
+                    .child(language.text(Message::ReaderImageLoading)),
             );
         },
         ImageStatus::Failed(error) => {
             let weak = reader.clone();
             block = block
-                .child(div().text_sm().text_color(cx.theme().muted_foreground).child(error.clone()))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(error.localized(language)),
+                )
                 .child(
                     Button::new(("answer-pick-image", index))
-                        .label("选择本地图片")
+                        .label(language.text(Message::ReaderChooseImage))
                         .ghost()
                         .small()
                         .on_click(move |_, _, cx| {
@@ -346,6 +375,7 @@ fn render_image(reader: &WeakEntity<AnswerReader>, index: usize, cx: &mut App) -
 
 impl Render for AnswerReader {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = super::super::config::ui_language(cx);
         if let Some(markdown) = self.pending_markdown.take() {
             cx.on_next_frame(window, move |reader, _, cx| {
                 reader.text.update(cx, |text, cx| text.push_str(&markdown, cx));
@@ -368,80 +398,95 @@ impl Render for AnswerReader {
         let text = if self.raw_mode { &self.raw_text } else { &self.text };
         let extensions =
             if self.raw_mode { MarkdownExtensions::default() } else { self.extensions.clone() };
-        let mut root = v_flex()
-            .size_full()
-            .min_w_0()
-            .relative()
-            .overflow_hidden()
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::on_key_down))
-            .child(
-                h_flex()
-                    .h(px(32.0))
-                    .flex_shrink_0()
-                    .px_2()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Button::new("reader-return")
-                            .label("终端")
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(ReaderEvent::Close))),
-                    )
-                    .child(div().text_sm().flex_1().child(format!("{provider} · 最近完整回答")))
-                    .child(
-                        Button::new("reader-source")
-                            .label(if self.raw_mode { "阅读" } else { "原文" })
-                            .ghost()
-                            .small()
-                            .disabled(!has_source)
-                            .on_click(cx.listener(|reader, _, _, cx| {
-                                reader.raw_mode = !reader.raw_mode;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("reader-copy")
-                            .label("复制原文")
-                            .ghost()
-                            .small()
-                            .disabled(!has_source)
-                            .on_click(cx.listener(|reader, _, _, cx| {
-                                if let Some(source) = reader.snapshot.content.source() {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        source.to_string(),
-                                    ));
-                                }
-                            })),
-                    ),
-            )
-            .when(self.attention, |root| {
-                root.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_sm()
-                        .text_color(cx.theme().warning)
-                        .child("终端需要你处理输入或审批；点击「终端」返回。"),
+        let mut root =
+            v_flex()
+                .size_full()
+                .min_w_0()
+                .relative()
+                .overflow_hidden()
+                .track_focus(&self.focus_handle)
+                .on_key_down(cx.listener(Self::on_key_down))
+                .child(
+                    h_flex()
+                        .h(px(32.0))
+                        .flex_shrink_0()
+                        .px_2()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Button::new("reader-return")
+                                .label(language.text(Message::ReaderTerminal))
+                                .ghost()
+                                .small()
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(ReaderEvent::Close))),
+                        )
+                        .child(div().text_sm().flex_1().min_w_0().truncate().child(
+                            language.format(Message::ReaderTitle, &[("provider", provider)]),
+                        ))
+                        .child(
+                            Button::new("reader-source")
+                                .debug_selector(|| "reader-source".into())
+                                .label(language.text(if self.raw_mode {
+                                    Message::ReaderRead
+                                } else {
+                                    Message::ReaderSource
+                                }))
+                                .ghost()
+                                .small()
+                                .disabled(!has_source)
+                                .on_click(cx.listener(|reader, _, _, cx| {
+                                    reader.raw_mode = !reader.raw_mode;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("reader-copy")
+                                .debug_selector(|| "reader-copy".into())
+                                .label(language.text(Message::ReaderCopySource))
+                                .ghost()
+                                .small()
+                                .disabled(!has_source)
+                                .on_click(cx.listener(|reader, _, _, cx| {
+                                    if let Some(source) = reader.snapshot.content.source() {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            source.to_string(),
+                                        ));
+                                    }
+                                })),
+                        ),
                 )
-            })
-            .when(self.newer_answer, |root| {
-                root.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_sm()
-                        .text_color(muted)
-                        .child("已收到新回答；本页不跳动，返回终端再点「阅读」查看。"),
-                )
-            })
-            .when_some(self.notice.clone(), |root, notice| {
-                root.child(div().px_3().py_2().text_sm().text_color(muted).child(notice))
-            })
-            .when(self.preparing, |root| {
-                root.child(div().p_3().text_sm().text_color(muted).child("正在整理完整回答…"))
-            });
+                .when(self.attention, |root| {
+                    root.child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .text_sm()
+                            .text_color(cx.theme().warning)
+                            .child(language.text(Message::ReaderAttention)),
+                    )
+                })
+                .when(self.newer_answer, |root| {
+                    root.child(
+                        div()
+                            .px_3()
+                            .py_1()
+                            .text_sm()
+                            .text_color(muted)
+                            .child(language.text(Message::ReaderNewerAnswer)),
+                    )
+                })
+                .when_some(self.notice(language), |root, notice| {
+                    root.child(div().px_3().py_2().text_sm().text_color(muted).child(notice))
+                })
+                .when(self.preparing, |root| {
+                    root.child(
+                        div()
+                            .p_3()
+                            .text_sm()
+                            .text_color(muted)
+                            .child(language.text(Message::ReaderPreparing)),
+                    )
+                });
         let cwd = self.snapshot.cwd.clone();
         let markdown = div().flex_1().min_h_0().min_w_0().px_3().py_2().child(
             TextView::new(text)
@@ -505,16 +550,19 @@ impl Render for AnswerReader {
                     .p_3()
                     .gap_2()
                     .child(
-                        h_flex().justify_between().child("图片预览").child(
-                            Button::new("reader-close-preview")
-                                .label("返回阅读 · Esc")
-                                .ghost()
-                                .small()
-                                .on_click(cx.listener(|reader, _, _, cx| {
-                                    reader.preview = None;
-                                    cx.notify();
-                                })),
-                        ),
+                        h_flex()
+                            .justify_between()
+                            .child(language.text(Message::ReaderImagePreview))
+                            .child(
+                                Button::new("reader-close-preview")
+                                    .label(language.text(Message::ReaderClosePreview))
+                                    .ghost()
+                                    .small()
+                                    .on_click(cx.listener(|reader, _, _, cx| {
+                                        reader.preview = None;
+                                        cx.notify();
+                                    })),
+                            ),
                     )
                     .child(
                         div()
@@ -532,11 +580,88 @@ impl Render for AnswerReader {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn switching_language_and_modes_preserves_the_source_copied_by_the_button(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let source = "# 原文 {error}\n\n$$\nx^2 + y^2\n$$\n";
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::math_view::register(cx);
+            cx.set_reduce_motion(true);
+        });
+        let mut reader = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                AnswerReader::new(
+                    AnswerSnapshot {
+                        provider: "codex".into(),
+                        session_id: "fixture".into(),
+                        received_sequence: 1,
+                        content: crate::assistant_answer::AssistantAnswer::Complete(Arc::from(
+                            source,
+                        )),
+                        cwd: None,
+                    },
+                    cx,
+                )
+            });
+            reader = Some(view.clone());
+            gpui_component::Root::new(view, window, cx)
+        });
+        let reader = reader.unwrap();
+        cx.simulate_resize(gpui::size(px(420.0), px(600.0)));
+        cx.run_until_parked();
+        for language in [UiLanguage::EnUs, UiLanguage::ZhCn, UiLanguage::EnUs] {
+            cx.update(|window, cx| {
+                let mut settings =
+                    crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord);
+                settings.ui_language = language;
+                cx.set_global(settings);
+                reader.update(cx, |_, cx| cx.notify());
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            let copy = cx.debug_bounds("reader-copy").unwrap();
+            assert!(copy.left() >= px(0.0) && copy.right() <= px(420.0));
+            cx.update(|_, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string("before copy".into()))
+            });
+            cx.simulate_click(copy.center(), gpui::Modifiers::default());
+            cx.update(|_, cx| {
+                assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some(source))
+            });
+            let previous_mode = reader.read_with(cx, |reader, _| reader.raw_mode);
+            let toggle = cx.debug_bounds("reader-source").unwrap();
+            cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+            assert_ne!(reader.read_with(cx, |reader, _| reader.raw_mode), previous_mode);
+            cx.update(|window, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string("before copy in new mode".into()));
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            let copy = cx.debug_bounds("reader-copy").unwrap();
+            cx.simulate_click(copy.center(), gpui::Modifiers::default());
+            cx.update(|_, cx| {
+                assert_eq!(cx.read_from_clipboard().unwrap().text().as_deref(), Some(source))
+            });
+            assert_eq!(
+                reader.read_with(cx, |reader, _| reader
+                    .snapshot
+                    .content
+                    .source()
+                    .unwrap()
+                    .to_string()),
+                source
+            );
+        }
+    }
+
     #[test]
     fn only_generated_image_placeholders_can_load_files() {
         let document = document::prepare("```nebula-answer-image\n0\n```\n\n![图](plot.png)");
-        let starts =
-            document.images.iter().map(|image| image.placeholder_start).collect::<Vec<_>>();
+        let starts = document.image_placeholder_starts.clone();
         let root = markdown::to_mdast(&document.markdown, &markdown::ParseOptions::gfm()).unwrap();
         let nodes = root.children().unwrap();
         assert_eq!(image_placeholder_index(&nodes[0], 0, &starts), None);
@@ -554,5 +679,23 @@ mod tests {
             let root = markdown::to_mdast(source, &markdown::ParseOptions::gfm()).unwrap();
             assert!(contains_uncontrolled_media(&root));
         }
+    }
+
+    #[test]
+    fn omitted_image_markers_are_validated_without_expanding_the_load_budget() {
+        let source = format!(
+            "```nebula-answer-image\n8\n```\n\n{}",
+            "![](plot.png)\n\n".repeat(document::MAX_IMAGES + 1)
+        );
+        let document = document::prepare(&source);
+        assert_eq!(document.images.len(), document::MAX_IMAGES);
+        let root = markdown::to_mdast(&document.markdown, &markdown::ParseOptions::gfm()).unwrap();
+        let nodes = root.children().unwrap();
+        assert_eq!(image_placeholder_index(&nodes[0], 0, &document.image_placeholder_starts), None);
+        assert!(nodes.iter().any(|node| image_placeholder_index(
+            node,
+            0,
+            &document.image_placeholder_starts
+        ) == Some(document::MAX_IMAGES)));
     }
 }
