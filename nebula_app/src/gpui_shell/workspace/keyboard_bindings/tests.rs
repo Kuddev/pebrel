@@ -57,7 +57,8 @@ mod macos_command_keys {
         use gpui::{KeyContext, Keymap, Keystroke};
         let mut keymap = Keymap::new(macos_command_bindings());
         keymap.add_bindings(
-            crate::display::keymap::GPUI.default_shortcuts()
+            crate::display::keymap::GPUI
+                .default_shortcuts()
                 .into_iter()
                 .filter(|(_, action)| *action == crate::config::Action::Quit)
                 .filter_map(|(combo, action)| workspace_binding_in_context(&combo, &action, None)),
