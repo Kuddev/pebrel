@@ -73,6 +73,14 @@ fn tab_bounds(selector: &'static str, cx: &mut VisualTestContext) -> gpui::Bound
     cx.debug_bounds(selector).expect("visible tab bounds")
 }
 
+fn numbered_tab_shortcuts() -> [&'static str; 2] {
+    if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
+        ["cmd-1", "cmd-3"]
+    } else {
+        ["ctrl-1", "ctrl-3"]
+    }
+}
+
 #[gpui::test]
 fn switching_top_tabs_keeps_settings_reachable_until_explicit_close(cx: &mut TestAppContext) {
     let (_directory, workspace, mut cx) = open_workspace(2, cx);
@@ -110,10 +118,11 @@ fn switching_top_tabs_keeps_settings_reachable_until_explicit_close(cx: &mut Tes
 #[gpui::test]
 fn keyboard_navigation_can_return_to_background_settings(cx: &mut TestAppContext) {
     let (_directory, workspace, mut cx) = open_workspace(2, cx);
-    for shortcut in ["ctrl-1", "alt-1"] {
+    let [first_tab, third_tab] = numbered_tab_shortcuts();
+    for shortcut in [first_tab, "alt-1"] {
         cx.simulate_keystrokes(shortcut);
         assert!(!workspace.read_with(&cx, |workspace, _| workspace.settings_open));
-        cx.simulate_keystrokes("ctrl-3");
+        cx.simulate_keystrokes(third_tab);
         assert!(workspace.read_with(&cx, |workspace, _| workspace.settings_open));
         cx.simulate_keystrokes("ctrl-tab");
         assert!(!workspace.read_with(&cx, |workspace, _| workspace.settings_open));
@@ -122,7 +131,7 @@ fn keyboard_navigation_can_return_to_background_settings(cx: &mut TestAppContext
     }
     cx.simulate_keystrokes("ctrl-shift-w");
     assert_eq!(workspace.read_with(&cx, |workspace, _| workspace.top_tab_count()), 2);
-    cx.simulate_keystrokes("ctrl-3");
+    cx.simulate_keystrokes(third_tab);
     assert!(!workspace.read_with(&cx, |workspace, _| workspace.settings_open));
 }
 
@@ -130,7 +139,7 @@ fn keyboard_navigation_can_return_to_background_settings(cx: &mut TestAppContext
 fn settings_survives_overflow_and_layout_changes(cx: &mut TestAppContext) {
     let (_directory, workspace, mut cx) = open_workspace(12, cx);
     cx.simulate_resize(gpui::size(px(760.0), px(900.0)));
-    cx.simulate_keystrokes("ctrl-1");
+    cx.simulate_keystrokes(numbered_tab_shortcuts()[0]);
     for position in
         [nebula_settings::TabsPositionName::Sidebar, nebula_settings::TabsPositionName::Top]
     {
