@@ -234,7 +234,7 @@
       "save_failed": "Could not change startup settings: {error}"
     },
     "agents": {
-      "title": "Coding agents",
+      "title": "Agents CLI & TUI",
       "description": "Show agent activity, completion and approval requests in Pebrel. Claude Code and Codex are enabled by default.",
       "refresh": "Refresh",
       "platform_unsupported": "Automatic hook installation is currently available on Windows.",
@@ -435,7 +435,7 @@
   "editor": {
     "bold_selection": "Bold selection (Ctrl+B / ⌘B)",
     "italic_selection": "Italic selection (Ctrl+I / ⌘I)",
-    "release_to_close_sidebar": "Release to close sidebar",
+    "release_to_close_sidebar": "Release to close",
     "document_actions": "Document actions",
     "source": "Source",
     "edit_in_place": "Edit",
@@ -767,7 +767,7 @@
     "not_repository": "The current directory is not in a Git/SVN repository",
     "refresh_status": "Refresh {vcs} status",
     "close_status": "Close {vcs} status",
-    "toggle_git": "Git status (Ctrl+Shift+G)",
+    "toggle_git": "Git (Ctrl+Shift+G)",
     "time_now": "just now",
     "time_minute": "1 minute ago",
     "time_minutes": "{count} minutes ago",
@@ -1132,7 +1132,7 @@
     "scroll_tabs_right": "Scroll tabs right",
     "select_terminal": "Select terminal",
     "command_list": "Command list",
-    "toggle_sidebar": "Show/hide sidebar (Ctrl+Shift+B)",
+    "toggle_sidebar": "Sidebar (Ctrl+Shift+B)",
     "settings_shortcut": "Settings (Ctrl+,)"
   },
   "workspace": {

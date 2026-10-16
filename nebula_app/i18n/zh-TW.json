@@ -177,7 +177,7 @@
       "save_failed": "無法變更啟動設定：{error}"
     },
     "agents": {
-      "title": "程式設計代理程式",
+      "title": "代理程式 CLI & TUI",
       "description": "在 Pebrel 中顯示執行狀態、完成通知和授權請求。Claude Code 與 Codex 預設開啟。",
       "refresh": "重新整理",
       "platform_unsupported": "目前只有 Windows 支援自動安裝 hooks。",
@@ -377,14 +377,14 @@
   "editor": {
     "bold_selection": "將選取文字設為粗體（Ctrl+B / ⌘B）",
     "italic_selection": "將選取文字設為斜體（Ctrl+I / ⌘I）",
-    "release_to_close_sidebar": "放開以收合側邊欄",
+    "release_to_close_sidebar": "放開收合",
     "document_actions": "檔案操作",
     "source": "原始碼",
     "edit_in_place": "編輯",
     "finish_editing": "完成",
     "finish_editing_shortcut": "結束編輯（Ctrl+Enter / ⌘Enter）",
     "edit_block": "編輯此段落",
-    "right_sidebar": "展開或收合右側邊欄",
+    "right_sidebar": "右側邊欄",
     "loading": "正在讀取檔案…",
     "save": "儲存",
     "saving": "正在儲存…",
@@ -662,7 +662,7 @@
     "not_repository": "目前目錄不在 Git 或 SVN 儲存庫中",
     "refresh_status": "重新整理 {vcs} 狀態",
     "close_status": "關閉 {vcs} 狀態",
-    "toggle_git": "Git 狀態 (Ctrl+Shift+G)",
+    "toggle_git": "Git (Ctrl+Shift+G)",
     "time_now": "剛剛",
     "time_minute": "1 分鐘前",
     "time_minutes": "{count} 分鐘前",
@@ -969,7 +969,7 @@
     "scroll_tabs_right": "向右捲動分頁",
     "select_terminal": "選擇終端機",
     "command_list": "命令清單",
-    "toggle_sidebar": "收合或展開側邊欄（Ctrl+Shift+B）",
+    "toggle_sidebar": "側邊欄（Ctrl+Shift+B）",
     "settings_shortcut": "設定（Ctrl+,）"
   },
   "workspace": {
