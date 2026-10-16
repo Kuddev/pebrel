@@ -803,6 +803,7 @@ impl SettingsPane {
             "cell_width_mode" => pick!(cell_width_mode),
             "ligatures" => pick!(ligatures),
             "scrollbar_visibility" => pick!(scrollbar_visibility),
+            "runtime_api_exposure" => pick!(runtime_api_exposure),
             "scrollback_lines" => Some((
                 cur.scrollback_lines != def.scrollback_lines,
                 def.scrollback_lines.to_string(),
@@ -1420,7 +1421,8 @@ impl SettingsPane {
         // 平台没实现的开关整行不画：开着却没效果比没有更糟（见
         // `platform::capabilities` 的说明）。
         let caps = crate::platform::CAPABILITIES;
-        self.group(language.pick("会话生命周期", "Session lifecycle"), cx)
+        let lifecycle = self
+            .group(language.pick("会话生命周期", "Session lifecycle"), cx)
             .when(caps.launch_at_login, |group| {
                 group.child(self.switch_row(
                     "launch_at_login",
@@ -1473,7 +1475,17 @@ impl SettingsPane {
                     self.runtime.tray,
                     cx,
                 ))
-            })
+            });
+        v_flex().w_full().gap(px(GROUP_GAP)).child(lifecycle).child(
+            self.group(language.text(crate::i18n::Message::SettingsRuntimeApiTitle), cx).child(
+                self.select_row(
+                    "runtime_api_exposure",
+                    language.text(crate::i18n::Message::SettingsRuntimeApiExposure),
+                    language.text(crate::i18n::Message::SettingsRuntimeApiDescription),
+                    cx,
+                ),
+            ),
+        )
     }
 
     fn section_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {

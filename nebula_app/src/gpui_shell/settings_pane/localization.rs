@@ -54,6 +54,11 @@ pub(super) fn localized_select_labels(
             language.text(crate::i18n::Message::SettingsScrollingScrollbarHover),
             language.text(crate::i18n::Message::SettingsScrollingScrollbarAlways),
         ],
+        "runtime_api_exposure" => vec![
+            language.text(crate::i18n::Message::SettingsRuntimeApiOff),
+            language.text(crate::i18n::Message::SettingsRuntimeApiLocal),
+            language.text(crate::i18n::Message::SettingsRuntimeApiLan),
+        ],
         "notification_duration" => vec![
             language.text(crate::i18n::Message::SettingsNotificationsDurationDefault),
             language.text(crate::i18n::Message::SettingsNotificationsDurationFive),
