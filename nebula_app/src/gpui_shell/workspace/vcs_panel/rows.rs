@@ -7,6 +7,9 @@ impl NebulaWorkspace {
         let scroll = self.vcs_list.scroll.clone();
         let owner = cx.entity().downgrade();
         v_flex()
+            .id("vcs-virtual-list")
+            .tab_group()
+            .when(self.vcs_list.tree_active(), |list| list.role(gpui::Role::Tree))
             .flex_1()
             .min_h_0()
             .relative()
@@ -34,7 +37,7 @@ impl NebulaWorkspace {
     pub(super) fn render_vcs_row(
         &mut self,
         visible_index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         #[cfg(test)]
@@ -58,7 +61,7 @@ impl NebulaWorkspace {
         let selected = self.side_panel.selected.clone();
         let menu_target = cx.entity().downgrade();
         let element = match row {
-            VcsRow::Heading { message, count } => h_flex()
+            VcsRow::Heading { message, count, .. } => h_flex()
                 .h(px(26.0))
                 .px_2()
                 .items_center()
@@ -136,7 +139,10 @@ impl NebulaWorkspace {
                     )
                     .into_any_element()
             },
-            VcsRow::Change { section_id, index, status, relative_path, ops } => {
+            VcsRow::Directory { section_id, relative_path, depth, count, expanded } => {
+                self.render_vcs_directory(section_id, relative_path, depth, count, expanded, cx)
+            },
+            VcsRow::Change { section_id, index, status, relative_path, ops, depth } => {
                 let is_git = ops != RowOps::Svn;
                 let status = &status;
                 let relative_path = &relative_path;
@@ -170,6 +176,23 @@ impl NebulaWorkspace {
                 let menu_path = relative_path.clone();
                 let merge_button_path = relative_path.clone();
                 let merge_open_path = relative_path.clone();
+                let keyboard_path = relative_path.clone();
+                let keyboard_open_path = open_path.clone();
+                let tree_active = self.vcs_list.tree_active();
+                let row_focus = window
+                    .use_keyed_state(
+                        gpui::ElementId::Name(
+                            format!("vcs-file-focus-{section_id}-{relative_path}").into(),
+                        ),
+                        cx,
+                        |_, cx| cx.focus_handle(),
+                    )
+                    .read(cx)
+                    .clone()
+                    .tab_index(0)
+                    .tab_stop(true);
+                let keyboard_focus = row_focus.clone();
+                let keyboard_active = row_focus.contains_focused(window, cx);
                 let discard_armed = discard_confirm.as_deref() == Some(relative_path.as_str());
                 let git_discard = ops == RowOps::Unstaged && *status != '?';
                 let svn_revert = ops == RowOps::Svn && !matches!(*status, '?' | 'C');
@@ -183,14 +206,21 @@ impl NebulaWorkspace {
                     )))
                     .debug_selector(|| format!("git-tree-row-{section_id}-{index}-{relative_path}"))
                     .group(row_group.clone())
+                    .track_focus(&row_focus)
+                    .role(if tree_active { gpui::Role::TreeItem } else { gpui::Role::Button })
+                    .aria_label(SharedString::from(relative_path.clone()))
+                    .aria_selected(selected_row)
+                    .aria_level(depth + 1)
                     .h(px(30.0))
                     .w_full()
                     .px_2()
+                    .pl(px(8.0 + 14.0 * depth.min(12) as f32))
                     .gap_2()
                     .items_center()
                     .rounded_md()
                     .when(selected_row, |row| row.bg(selected_bg))
                     .hover(|row| row.bg(hover))
+                    .focus_visible(|row| row.bg(selected_bg))
                     .child(
                         div()
                             .w(px(14.0))
@@ -206,8 +236,8 @@ impl NebulaWorkspace {
                             .min_w_0()
                             .gap_1()
                             .items_center()
-                            .child(div().flex_shrink_0().text_sm().child(file_name.clone()))
-                            .when(!parent.is_empty(), |line| {
+                            .child(div().min_w_0().truncate().text_sm().child(file_name.clone()))
+                            .when(!tree_active && !parent.is_empty(), |line| {
                                 line.child(
                                     div()
                                         .min_w_0()
@@ -243,7 +273,7 @@ impl NebulaWorkspace {
                                     )
                                 }
                             })
-                            .when(!discard_armed, |button| {
+                            .when(!discard_armed && !keyboard_active, |button| {
                                 button
                                     .invisible()
                                     .group_hover(row_group.clone(), |button| button.visible())
@@ -272,12 +302,16 @@ impl NebulaWorkspace {
                             Button::new(SharedString::from(format!(
                                 "vcs-stage-{section_id}-{index}"
                             )))
+                            .debug_selector(move || format!("vcs-stage-{section_id}-{index}"))
                             .icon(IconName::Plus)
                             .ghost()
                             .xsmall()
                             .tooltip(language.text(Message::VcsStage))
-                            .invisible()
-                            .group_hover(row_group.clone(), |button| button.visible())
+                            .when(!keyboard_active, |button| {
+                                button
+                                    .invisible()
+                                    .group_hover(row_group.clone(), |button| button.visible())
+                            })
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     this.vcs_discard_confirm = None;
@@ -296,8 +330,11 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .tooltip("添加到 SVN")
-                            .invisible()
-                            .group_hover(row_group.clone(), |button| button.visible())
+                            .when(!keyboard_active, |button| {
+                                button
+                                    .invisible()
+                                    .group_hover(row_group.clone(), |button| button.visible())
+                            })
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     this.vcs_discard_confirm = None;
@@ -316,8 +353,11 @@ impl NebulaWorkspace {
                             .ghost()
                             .xsmall()
                             .tooltip("保留当前内容并标记冲突已解决")
-                            .invisible()
-                            .group_hover(row_group.clone(), |button| button.visible())
+                            .when(!keyboard_active, |button| {
+                                button
+                                    .invisible()
+                                    .group_hover(row_group.clone(), |button| button.visible())
+                            })
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     this.vcs_discard_confirm = None;
@@ -338,12 +378,16 @@ impl NebulaWorkspace {
                             Button::new(SharedString::from(format!(
                                 "vcs-unstage-{section_id}-{index}"
                             )))
+                            .debug_selector(move || format!("vcs-unstage-{section_id}-{index}"))
                             .icon(IconName::Minus)
                             .ghost()
                             .xsmall()
                             .tooltip(language.text(Message::VcsUnstage))
-                            .invisible()
-                            .group_hover(row_group.clone(), |button| button.visible())
+                            .when(!keyboard_active, |button| {
+                                button
+                                    .invisible()
+                                    .group_hover(row_group.clone(), |button| button.visible())
+                            })
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
                                     this.vcs_discard_confirm = None;
@@ -375,6 +419,19 @@ impl NebulaWorkspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.side_panel.selected = Some(path.clone());
                         cx.notify();
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "enter"
+                            && !event.keystroke.modifiers.modified()
+                            && keyboard_focus.is_focused(window)
+                        {
+                            cx.stop_propagation();
+                            if ops == RowOps::Conflict && is_git {
+                                this.open_git_merge_tab(keyboard_path.clone(), window, cx);
+                            } else if !svn_diff || !this.side_panel.svn_diff_path(&keyboard_path) {
+                                this.open_document_path(keyboard_open_path.clone(), window, cx);
+                            }
+                        }
                     }))
                     .on_double_click(cx.listener(move |this, _, window, cx| {
                         if ops == RowOps::Conflict && is_git {

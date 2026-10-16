@@ -740,6 +740,10 @@
     "search_placeholder": "名称、地址、标签"
   },
   "vcs": {
+    "list_view": "列表",
+    "tree_view": "目录树",
+    "expand_folder": "展开目录",
+    "collapse_folder": "收起目录",
     "changes": "变更",
     "staged": "已暂存",
     "merge_conflicts": "合并冲突",

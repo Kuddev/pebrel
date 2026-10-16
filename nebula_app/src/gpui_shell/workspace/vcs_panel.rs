@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 mod commit_input;
 mod list_model;
 mod rows;
+mod tree_view;
 pub(super) use list_model::VcsList;
 mod relative_time;
 pub(super) use commit_input::CommitInput;
@@ -26,7 +27,7 @@ impl NebulaWorkspace {
     ) -> gpui::AnyElement {
         let language = crate::gpui_shell::config::ui_language(cx);
         self.git_commit_input.sync_language(window, cx);
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let symbol: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let root = self.side_panel.vcs_root().map(Path::to_path_buf);
@@ -427,6 +428,7 @@ impl NebulaWorkspace {
             })
             .when_some(summary, |panel, summary| panel.child(summary))
             .when_some(git_nav, |panel, nav| panel.child(nav))
+            .when(self.vcs_list.can_choose_layout(), |panel| panel.child(self.render_vcs_layout_toggle(cx)))
             .when_some(history_head, |panel, head| panel.child(head))
             .when_some(repository_notice, |panel, notice| panel.child(notice))
             .when(tortoise_missing, |panel| {
@@ -997,3 +999,6 @@ mod tests {
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod list_tests;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod tree_tests;

@@ -740,6 +740,10 @@
     "search_placeholder": "Name, address, tags"
   },
   "vcs": {
+    "list_view": "List",
+    "tree_view": "Tree",
+    "expand_folder": "Expand folder",
+    "collapse_folder": "Collapse folder",
     "changes": "Changes",
     "staged": "Staged",
     "merge_conflicts": "Merge conflicts",
