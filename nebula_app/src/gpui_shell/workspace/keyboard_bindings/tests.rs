@@ -1,5 +1,28 @@
 use super::*;
 
+fn is_macos() -> bool {
+    crate::platform::Platform::current() == crate::platform::Platform::MacOS
+}
+
+#[test]
+fn control_character_defaults_follow_the_host_platform() {
+    use gpui::{KeyContext, Keymap, Keystroke};
+    let keymap = Keymap::new(default_workspace_bindings());
+    let contexts = [KeyContext::parse(crate::gpui_shell::terminal::KEY_CONTEXT).unwrap()];
+    for combo in ["ctrl-k", "ctrl-v", "ctrl-,", "ctrl-0", "ctrl-=", "ctrl--", "ctrl-1"] {
+        let (bindings, pending) =
+            keymap.bindings_for_input(&[Keystroke::parse(combo).unwrap()], &contexts);
+        assert!(!pending);
+        assert_eq!(bindings.is_empty(), is_macos(), "{combo}");
+    }
+    // Named keys and the established modified navigation chords retain their defaults.
+    for combo in ["ctrl-tab", "ctrl-shift-t", "ctrl-alt-left"] {
+        let (bindings, pending) =
+            keymap.bindings_for_input(&[Keystroke::parse(combo).unwrap()], &contexts);
+        assert!(!pending && !bindings.is_empty(), "{combo}");
+    }
+}
+
 #[test]
 fn command_aliases_and_modifier_order_share_one_runtime_identity() {
     let expected = gpui_binding_combo("shift+cmd+k");
@@ -174,7 +197,11 @@ fn replacing_overrides_preserves_component_keys_and_foreign_registrations() {
     keymap = Keymap::new(with_user_keybindings(&keymap, Vec::new()));
     assert_eq!(keymap.bindings().len(), expected - 1);
     let (bindings, _) = keymap.bindings_for_input(&key, &terminal_context);
-    assert!(bindings[0].action().as_any().is::<PasteClipboard>());
+    if is_macos() {
+        assert!(bindings.is_empty(), "restoring macOS defaults releases Control+V");
+    } else {
+        assert!(bindings[0].action().as_any().is::<PasteClipboard>());
+    }
     let (bindings, _) = keymap.bindings_for_input(
         &[Keystroke::parse("f12").unwrap()],
         &[KeyContext::parse("OtherControl").unwrap()],
@@ -288,6 +315,79 @@ mod dispatch {
     }
 
     #[gpui::test]
+    fn control_character_dispatch_reaches_the_terminal_receiver(cx: &mut TestAppContext) {
+        use nebula_terminal::event_loop::Msg;
+
+        let (directory, workspace, mut cx) = open_workspace(0, cx);
+        let receiver = cx.update(|window, cx| {
+            crate::gpui_shell::terminal::init(cx);
+            crate::gpui_shell::scientific_render::init(cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace.add_terminal_with(
+                    crate::session::LaunchSession::Shell {
+                        name: "control character fixture".into(),
+                        program: "pebrel-test-missing-shell-executable".into(),
+                        args: Vec::new(),
+                    },
+                    Some(directory.path().to_owned()),
+                    None,
+                    window,
+                    cx,
+                );
+                let terminal = workspace.tabs[workspace.active].focused_view().unwrap().clone();
+                terminal.update(cx, |view, _| view.install_completion_test_session())
+            })
+        });
+        cx.run_until_parked();
+        let drain = || {
+            receiver
+                .try_iter()
+                .filter_map(|message| match message {
+                    Msg::Input(bytes) => Some(bytes.into_owned()),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<u8>>()
+        };
+        for (combo, expected) in [
+            ("ctrl-a", 0x01),
+            ("ctrl-e", 0x05),
+            ("ctrl-w", 0x17),
+            ("ctrl-c", 0x03),
+            ("ctrl-k", 0x0b),
+        ] {
+            press(combo, &mut cx);
+            if is_macos() || combo != "ctrl-k" {
+                assert_eq!(drain(), [expected], "{combo}");
+                assert!(!workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            } else {
+                assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+                assert!(drain().is_empty());
+                press("escape", &mut cx);
+            }
+        }
+        if is_macos() {
+            press("ctrl-v", &mut cx);
+            assert_eq!(drain(), [0x16], "Control+V remains terminal quoted-insert");
+            press("cmd-k", &mut cx);
+            assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            assert!(drain().is_empty(), "Command+K must not leak terminal input");
+            press("escape", &mut cx);
+            workspace.update(&mut cx, |workspace, cx| {
+                workspace.update_keybinds(vec![("ctrl+k".into(), "ToggleShellPicker".into())], cx);
+            });
+            press("ctrl-k", &mut cx);
+            assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+            assert!(drain().is_empty(), "an explicit Control binding must still win");
+            press("escape", &mut cx);
+            workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
+            press("ctrl-k", &mut cx);
+            assert_eq!(drain(), [0x0b], "removing the override restores terminal input");
+            assert!(!workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
+        }
+    }
+
+    #[gpui::test]
     fn command_shortcut_registration_follows_runtime_platform(cx: &mut TestAppContext) {
         let (_directory, workspace, mut cx) = open_workspace(1, cx);
         press("cmd-k", &mut cx);
@@ -296,6 +396,30 @@ mod dispatch {
             crate::platform::Platform::current() == crate::platform::Platform::MacOS,
             "共享别名表只应在 macOS 注册原生命令键"
         );
+    }
+
+    #[gpui::test]
+    fn command_digit_clearing_keeps_an_explicit_workspace_action(cx: &mut TestAppContext) {
+        use crate::config::Action;
+        use crate::display::keymap;
+        let (_directory, workspace, mut cx) = open_workspace(1, cx);
+        for (logical, physical, pressed, action) in [
+            ("cmd+0", "cmd+digit0", "cmd-0", Action::ResetFontSize),
+            ("cmd+1", "cmd+digit1", "cmd-1", Action::SelectTab1),
+            ("cmd+9", "cmd+digit9", "cmd-9", Action::SelectLastTab),
+        ] {
+            for combo in [logical, physical] {
+                let mut raw = vec![(combo.into(), "ToggleShellPicker".into())];
+                keymap::GPUI.clear_action(&mut raw, &action);
+                workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
+                press(pressed, &mut cx);
+                assert!(
+                    workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open),
+                    "clearing {action:?} must not disable the explicit picker on {combo}"
+                );
+                press("escape", &mut cx);
+            }
+        }
     }
 
     fn paste_in_command_dialog(raw: Vec<(String, String)>, restore: bool, cx: &mut TestAppContext) {
@@ -385,15 +509,16 @@ mod dispatch {
         let (_first_dir, first, mut first_cx) = open_workspace(1, cx);
         let (_second_dir, second, mut second_cx) = open_workspace(1, cx);
         let baseline = first_cx.update(|_, cx| cx.key_bindings().borrow().bindings().len());
+        let (stored, pressed) = if is_macos() { ("cmd+k", "cmd-k") } else { ("ctrl+k", "ctrl-k") };
         for _ in 0..5 {
             first.update(&mut first_cx, |workspace, cx| {
-                workspace.update_keybinds(vec![("ctrl+k".into(), "ReceiveChar".into())], cx);
+                workspace.update_keybinds(vec![(stored.into(), "ReceiveChar".into())], cx);
             });
-            press("ctrl-k", &mut second_cx);
+            press(pressed, &mut second_cx);
             assert!(!second.read_with(&second_cx, |workspace, _| workspace.shell_picker_open));
             second
                 .update(&mut second_cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
-            press("ctrl-k", &mut first_cx);
+            press(pressed, &mut first_cx);
             assert!(first.read_with(&first_cx, |workspace, _| workspace.shell_picker_open));
             press("escape", &mut first_cx);
             assert_eq!(
@@ -475,7 +600,7 @@ mod dispatch {
         press("cmd-k", &mut cx);
         assert!(workspace.read_with(&cx, |workspace, _| workspace.shell_picker_open));
         press("escape", &mut cx);
-        keymap::reset_action(&mut raw, &crate::config::Action::ToggleShellPicker);
+        keymap::GPUI.reset_action(&mut raw, &crate::config::Action::ToggleShellPicker);
         workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
         press("cmd-k", &mut cx);
         assert!(
@@ -494,7 +619,7 @@ mod dispatch {
             workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw.clone(), cx));
             press("ctrl-cmd-f", &mut cx);
             assert!(!cx.update(|window, _| window.is_fullscreen()));
-            keymap::reset_action(&mut raw, &crate::config::Action::ToggleFullscreen);
+            keymap::GPUI.reset_action(&mut raw, &crate::config::Action::ToggleFullscreen);
             assert!(raw.is_empty());
             workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(raw, cx));
             press("ctrl-cmd-f", &mut cx);
@@ -665,10 +790,11 @@ mod dispatch {
                 workspace.tab_meta[8].has_bell = true;
                 cx.notify();
             });
-            for modifier in ["ctrl", "alt"] {
+            for modifier in [if is_macos() { "cmd" } else { "ctrl" }, "alt"] {
                 for digit in (1..=9).rev() {
                     press(&format!("{modifier}-{digit}"), &mut cx);
-                    assert_active(&workspace, digit - 1, &mut cx);
+                    let index = if modifier == "cmd" && digit == 9 { 9 } else { digit - 1 };
+                    assert_active(&workspace, index, &mut cx);
                 }
             }
             assert!(!workspace.read_with(&cx, |workspace, _| workspace.tab_meta[8].has_bell));
@@ -684,7 +810,7 @@ mod dispatch {
             workspace.update(cx, |workspace, cx| workspace.open_settings(window, cx));
         });
         press("alt-9", &mut cx);
-        press("ctrl-4", &mut cx);
+        press(if is_macos() { "cmd-4" } else { "ctrl-4" }, &mut cx);
         cx.update(|window, cx| {
             let workspace = workspace.read(cx);
             assert!(workspace.settings_open);
@@ -694,7 +820,7 @@ mod dispatch {
         });
         // The active index was already zero: this still has to leave Settings
         // and return focus to the tab, rather than treating it as a no-op.
-        press("ctrl-1", &mut cx);
+        press(if is_macos() { "cmd-1" } else { "ctrl-1" }, &mut cx);
         assert_active(&workspace, 0, &mut cx);
 
         cx.update(|window, cx| {
@@ -718,7 +844,7 @@ mod dispatch {
         });
         press("ctrl-1", &mut cx);
         assert_active(&workspace, 2, &mut cx);
-        press("ctrl-2", &mut cx);
+        press(if is_macos() { "cmd-2" } else { "ctrl-2" }, &mut cx);
         press("alt-8", &mut cx);
         assert_active(&workspace, 2, &mut cx);
 
@@ -727,10 +853,14 @@ mod dispatch {
         });
         press("ctrl-1", &mut cx);
         assert_active(&workspace, 2, &mut cx);
-        // Removing this override must find the shared display spelling
-        // ("Ctrl+1") and restore it despite the stored spelling ("ctrl+1").
+        // Removing the override restores this host's defaults: Control digits
+        // remain terminal input on macOS, where Command selects a tab.
         workspace.update(&mut cx, |workspace, cx| workspace.update_keybinds(Vec::new(), cx));
         press("ctrl-1", &mut cx);
+        if is_macos() {
+            assert_active(&workspace, 2, &mut cx);
+            press("cmd-1", &mut cx);
+        }
         assert_active(&workspace, 0, &mut cx);
     }
 
@@ -746,7 +876,7 @@ mod dispatch {
                 workspace.tabs_position = position;
                 workspace.update_keybinds(Vec::new(), cx);
             });
-            press("ctrl-3", &mut cx);
+            press(if is_macos() { "cmd-3" } else { "ctrl-3" }, &mut cx);
             press("f2", &mut cx);
             assert_eq!(
                 workspace.read_with(&cx, |w, _| w.tab_rename.as_ref().map(|r| r.ix)),
@@ -756,7 +886,7 @@ mod dispatch {
             cx.run_until_parked();
 
             let mut raw = Vec::new();
-            keymap::rebind_action(&mut raw, &Action::RenameTab, "ctrl+alt+r".into());
+            keymap::GPUI.rebind_action(&mut raw, &Action::RenameTab, "ctrl+alt+r".into());
             let saved = nebula_settings::apply_keybinds("", &raw);
             let mut raw = nebula_settings::keybind_pairs_from_text(&saved);
             workspace.update(&mut cx, |w, cx| w.update_keybinds(raw.clone(), cx));
@@ -785,12 +915,12 @@ mod dispatch {
                 );
             });
 
-            keymap::clear_action(&mut raw, &Action::RenameTab);
+            keymap::GPUI.clear_action(&mut raw, &Action::RenameTab);
             workspace.update(&mut cx, |w, cx| w.update_keybinds(raw.clone(), cx));
             press("ctrl-alt-r", &mut cx);
             press("f2", &mut cx);
             assert!(workspace.read_with(&cx, |w, _| w.tab_rename.is_none()));
-            keymap::reset_action(&mut raw, &Action::RenameTab);
+            keymap::GPUI.reset_action(&mut raw, &Action::RenameTab);
             workspace.update(&mut cx, |w, cx| w.update_keybinds(raw, cx));
             press("f2", &mut cx);
             assert_eq!(
@@ -869,13 +999,26 @@ mod dispatch {
             TermMode::REPORT_ALL_KEYS_AS_ESC,
         ] {
             probe.update(cx, |probe, _| probe.mode = mode);
-            for modifier in ["ctrl", "alt"] {
+            for modifier in [if is_macos() { "cmd" } else { "ctrl" }, "alt"] {
                 for digit in 1..=9 {
                     press(&format!("{modifier}-{digit}"), cx);
                     probe.read_with(cx, |probe, _| {
-                        assert_eq!(probe.selected, Some(digit - 1));
+                        let index = if modifier == "cmd" && digit == 9 { 9 } else { digit - 1 };
+                        assert_eq!(probe.selected, Some(index));
                         assert!(probe.input.is_empty(), "tab shortcuts must not reach PTY input");
                         assert!(probe.encoded.is_empty());
+                    });
+                }
+            }
+            if is_macos() {
+                for digit in 1..=9 {
+                    let combo = format!("ctrl-{digit}");
+                    press(&combo, cx);
+                    probe.update(cx, |probe, _| {
+                        assert_eq!(probe.selected, Some(8));
+                        assert_eq!(probe.input, [Keystroke::parse(&combo).unwrap()]);
+                        probe.input.clear();
+                        probe.encoded.clear();
                     });
                 }
             }
@@ -910,7 +1053,7 @@ mod dispatch {
             gpui_component::init(cx);
             init(cx);
             let mut raw = Vec::new();
-            crate::display::keymap::rebind_action(
+            crate::display::keymap::GPUI.rebind_action(
                 &mut raw,
                 &crate::config::Action::RenameTab,
                 "ctrl+alt+r".into(),

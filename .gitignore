@@ -35,6 +35,7 @@ assets/windows/conhost/
 !/docs/architecture-decisions.md
 !/docs/engineering-evidence.md
 !/docs/internationalization.md
+!/docs/answer-reader-language.md
 !/docs/skills/
 !/docs/skills/pebrel-runtime/
 !/docs/skills/pebrel-runtime/SKILL.md
