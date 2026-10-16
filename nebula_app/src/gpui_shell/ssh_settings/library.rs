@@ -5,6 +5,8 @@ use gpui::AppContext as _;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 
 mod exchange;
+mod grouping;
+use grouping::{LibraryRow, library_rows};
 #[cfg(test)]
 mod tests;
 
@@ -117,6 +119,7 @@ pub(in crate::gpui_shell) struct HostLibraryState {
     pub notes: Entity<InputState>,
     scope: HostScope,
     group_filter: Option<String>,
+    collapsed_groups: std::collections::HashSet<String>,
     scroll: gpui::UniformListScrollHandle,
     pub(super) busy: bool,
     sequence: u64,
@@ -139,6 +142,7 @@ impl HostLibraryState {
             notes: cx.new(|cx| InputState::new(window, cx).multi_line(true).soft_wrap(true)),
             scope: HostScope::All,
             group_filter: None,
+            collapsed_groups: Default::default(),
             scroll: Default::default(),
             busy: false,
             sequence: 0,
@@ -663,6 +667,104 @@ impl SettingsPane {
             .into_any_element()
     }
 
+    fn render_library_group(
+        &self,
+        name: &str,
+        count: usize,
+        collapsed: bool,
+        searching: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let label = if name.is_empty() { language.text(Message::HostsUngrouped) } else { name };
+        let action = language.format(
+            if collapsed { Message::HostsExpandGroup } else { Message::HostsCollapseGroup },
+            &[("group", label)],
+        );
+        let group = name.to_owned();
+        let keyboard_group = group.clone();
+        let selector = format!("ssh-group-{name}");
+        let tooltip_label = format!("{label} ({count})");
+        let theme = cx.theme();
+        let hover = theme.list_hover;
+        let pressed = theme.list_active;
+        let focus = theme.primary;
+        div()
+            .h(px(HOST_ROW_HEIGHT))
+            .w_full()
+            .p_2()
+            .child(
+                h_flex()
+                    .id(SharedString::from(format!("ssh-group-{name}")))
+                    .debug_selector(move || selector.clone())
+                    .w_full()
+                    .h_full()
+                    .px_2()
+                    .gap_2()
+                    .items_center()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border.opacity(0.0))
+                    .role(if searching { gpui::Role::Heading } else { gpui::Role::Button })
+                    .aria_label(tooltip_label.clone())
+                    .aria_description(action)
+                    .aria_expanded(!collapsed)
+                    .when(searching, |header| header.opacity(0.6))
+                    .when(!searching, |header| {
+                        header
+                            .focusable()
+                            .tab_stop(true)
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(hover))
+                            .active(move |style| style.bg(pressed))
+                            .focus_visible(move |style| style.border_color(focus))
+                    })
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tooltip_label.clone())
+                            .build(window, cx)
+                    })
+                    .child(
+                        Icon::new(if collapsed {
+                            IconName::ChevronRight
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .small(),
+                    )
+                    .child(div().min_w_0().truncate().text_sm().child(label.to_owned()))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("({count})")),
+                    )
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if !searching
+                            && event.keystroke.modifiers == gpui::Modifiers::default()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            cx.stop_propagation();
+                            this.toggle_library_group(&keyboard_group, cx);
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !searching {
+                            this.toggle_library_group(&group, cx);
+                        }
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn toggle_library_group(&mut self, group: &str, cx: &mut Context<Self>) {
+        if !self.ssh_library.collapsed_groups.remove(group) {
+            self.ssh_library.collapsed_groups.insert(group.to_owned());
+        }
+        self.ssh_delete_confirm = None;
+        cx.notify();
+    }
+
     pub(in crate::gpui_shell) fn section_ssh(
         &mut self,
         window: &Window,
@@ -680,28 +782,39 @@ impl SettingsPane {
         let icons = self.ssh_hosts.profiles.icons();
         let hidden: Vec<String> = self.ssh_hosts.hidden_hosts().to_vec();
 
-        let row_hosts = hosts.clone();
+        let searching = !self.ssh_library.search.read(cx).value().trim().is_empty();
+        let rows = library_rows(
+            hosts,
+            &self.ssh_hosts.profiles,
+            &self.ssh_library.collapsed_groups,
+            searching,
+        );
+        let row_count = rows.len();
         let host_rows = gpui::uniform_list(
             "ssh-library-hosts",
-            host_count,
+            row_count,
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 range
-                    .map(|index| {
-                        this.render_library_host(
-                            row_hosts[index].clone(),
-                            index,
-                            host_count,
-                            &labels,
-                            &icons,
-                            cx,
-                        )
+                    .map(|index| match &rows[index] {
+                        LibraryRow::Host { destination, index: host_index } => this
+                            .render_library_host(
+                                destination.clone(),
+                                *host_index,
+                                host_count,
+                                &labels,
+                                &icons,
+                                cx,
+                            ),
+                        LibraryRow::Group { name, count, collapsed } => {
+                            this.render_library_group(name, *count, *collapsed, searching, cx)
+                        },
                     })
                     .collect::<Vec<_>>()
             }),
         )
         .track_scroll(&self.ssh_library.scroll)
         .w_full()
-        .h(px(HOST_ROW_HEIGHT * host_count.clamp(1, 8) as f32));
+        .h(px(HOST_ROW_HEIGHT * row_count.clamp(1, 8) as f32));
 
         let hidden_rows = self.ssh_show_hidden.then(|| {
             hidden
