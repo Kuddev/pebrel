@@ -8,6 +8,7 @@ impl NebulaWorkspace {
         index: usize,
         command: crate::saved_commands::SavedCommand,
         list_scrollable: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use crate::display::ui::tokens::{radius, space};
@@ -48,12 +49,21 @@ impl NebulaWorkspace {
         let run_icon = command_run_icon(builtin, command.append_enter);
         let drag = CommandDrag::new(&command);
         let menu_id = command.id.clone();
-        let menu_button_id = command.id.clone();
         let run_command = command.clone();
         let row_command = command.clone();
         let copy_command = command.clone();
         let edit_id = command.id.clone();
         let delete_id = command.id.clone();
+        // 透明而非 hidden，保留按钮的 Tab 顺序；真实键盘聚焦时露出操作区。
+        let actions_focus = window
+            .use_keyed_state(
+                SharedString::from(format!("saved-command-actions-focus-{index}")),
+                cx,
+                |_, cx| cx.focus_handle().tab_stop(false),
+            )
+            .read(cx)
+            .clone();
+        let actions_focused = actions_focus.contains_focused(window, cx);
 
         h_flex()
             .id(SharedString::from(format!("saved-command-row-{index}")))
@@ -159,29 +169,14 @@ impl NebulaWorkspace {
             )
             .child(
                 h_flex()
+                    .id(SharedString::from(format!("saved-command-actions-{index}")))
+                    .debug_selector(move || format!("saved-command-actions-{index}"))
+                    .track_focus(&actions_focus)
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "saved-command-group-menu-{index}"
-                        )))
-                        .icon(IconName::EllipsisVertical)
-                        .ghost()
-                        .xsmall()
-                        .tooltip(language.text(crate::i18n::Message::CommandsMoveToGroup))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.open_command_group_menu(
-                                    menu_button_id.clone(),
-                                    window.mouse_position(),
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
+                    .opacity(if actions_focused { 1.0 } else { 0.0 })
+                    .group_hover(hover_group, |style| style.opacity(1.0))
                     .child(
                         Button::new(SharedString::from(format!("saved-command-copy-{index}")))
                             .icon(IconName::Copy)
