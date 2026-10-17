@@ -32,6 +32,30 @@ if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) =~ ^declare\ -[^[:space:]]*r ]]; 
     return
 fi
 
+# Keep this visual prompt scoped to Pebrel's temporary SSH shell, and only
+# replace Bash's default prompt. User prompt frameworks remain in control.
+__pebrel_default_bash_prompt=0
+case ${PS1-} in
+    '\u@\h:\w\$ '|'${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '|\
+    '\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '|\
+    '${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ ')
+        __pebrel_default_bash_prompt=1 ;;
+esac
+if [[ ${PEBREL_REMOTE_SESSION:-0} == 1 && ${PEBREL_REMOTE_POWERLINE:-1} == 1 \
+    && -z ${STARSHIP_SHELL:-} && -z ${POSH_SHELL:-} \
+    && $__pebrel_default_bash_prompt == 1 ]]; then
+    __pebrel_ssh_prompt_enabled=1
+    __pebrel_ssh_prompt_last_ps1=$PS1
+    if ! declare -F clear >/dev/null && ! alias clear >/dev/null 2>&1; then
+        clear() {
+            command clear "$@"
+            local clear_status=$?
+            __pebrel_ssh_prompt_count=0
+            return "$clear_status"
+        }
+    fi
+fi
+
 __pebrel_shell_token=$(printf '%s' "${WSL_DISTRO_NAME:+wsl|${WSL_DISTRO_NAME}|}bash:${HOSTNAME:-localhost}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n')
 
 _nebula_cwd() {
@@ -72,6 +96,33 @@ _nebula_precmd() {
     _nebula_command_running=0
     _nebula_cwd
     printf '\e]133;A\a'
+    if [[ ${__pebrel_ssh_prompt_enabled:-0} == 1 ]]; then
+        if [[ ${PS1-} != "$__pebrel_ssh_prompt_last_ps1" ]]; then
+            __pebrel_ssh_prompt_enabled=0
+        else
+            local branch='' git_prefix='' git_suffix='' leading_newline='' prompt_icon=''
+            case ${PEBREL_PROMPT_PLATFORM:-} in
+                windows) prompt_icon='' ;;
+                macos) prompt_icon='' ;;
+                linux) prompt_icon='' ;;
+            esac
+            branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
+            if [[ -n $branch ]]; then
+                git_prefix=' '
+                git_suffix='  '
+            fi
+            if [[ ${__pebrel_ssh_prompt_count:-0} -gt 0 ]]; then
+                leading_newline='\n'
+            fi
+            __pebrel_ssh_prompt_count=$(( ${__pebrel_ssh_prompt_count:-0} + 1 ))
+            __pebrel_ssh_prompt_leading_newline=$leading_newline
+            __pebrel_ssh_git_prefix=$git_prefix
+            __pebrel_ssh_git_branch=$branch
+            __pebrel_ssh_git_suffix=$git_suffix
+            PS1="$__pebrel_ssh_prompt_leading_newline\\[\\e[38;5;4m\\]\\[\\e[48;5;4m\\]\\[\\e[38;5;0m\\] $prompt_icon \\[\\e[0m\\]\\[\\e[38;5;4m\\]\\[\\e[0m\\]  \\w  \\[\\e[38;5;6m\\]\${__pebrel_ssh_git_prefix}\${__pebrel_ssh_git_branch}\${__pebrel_ssh_git_suffix}\\[\\e[0m\\]\\[\\e[38;5;6m\\]  \\D{%H:%M:%S}  \\[\\e[0m\\]\\n\\n\\[\\e[35m\\]❯\\[\\e[0m\\] "
+            __pebrel_ssh_prompt_last_ps1=$PS1
+        fi
+    fi
     _nebula_at_prompt=1
     return "$_nebula_last_status"
 }
