@@ -818,6 +818,12 @@ pub enum RuntimeCommand {
         pane_id: u64,
         ratio: f32,
     },
+    Notify {
+        window_id: Option<u64>,
+        pane_id: u64,
+        title: Option<String>,
+        message: String,
+    },
     Prompt {
         window_id: Option<u64>,
         pane_id: u64,

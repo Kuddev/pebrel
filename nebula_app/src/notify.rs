@@ -106,6 +106,9 @@ pub enum Notification {
     /// CLI needs the user NOW (permission prompt / idle reminder) rather
     /// than "turn finished".
     AiTurn { program: String, message: Option<String>, attention: bool },
+    /// Message an agent composed through the runtime `pane.notify` API because
+    /// it needs the user's action; shown even while the pane is in front.
+    Runtime { title: Option<String>, message: String },
     /// The provider stopped without a confirmed successful answer.
     AiTurnIssue { program: String, message: Option<String>, outcome: crate::ai_hook::AiTurnOutcome },
 }
@@ -201,6 +204,7 @@ impl Notification {
     pub(crate) fn is_ai(&self) -> bool {
         let program = match self {
             Self::AiTurn { .. } | Self::AiTurnIssue { .. } => return true,
+            Self::Runtime { .. } => return false,
             Self::Bell { program }
             | Self::CommandDone { program, .. }
             | Self::CommandFailed { program, .. }
@@ -242,6 +246,9 @@ impl Notification {
                     ],
                 ),
             ),
+            Self::Runtime { title, message } => {
+                (title.clone().unwrap_or_else(|| crate::brand::NAME.to_owned()), message.clone())
+            },
             Self::Text { body, program } => match program {
                 Some(p) => (p.clone(), body.clone()),
                 None => (crate::brand::NAME.to_owned(), body.clone()),

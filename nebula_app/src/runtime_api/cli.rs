@@ -449,6 +449,19 @@ fn run_cli_inner(options: ControlOptions) -> Result<(), Box<dyn Error>> {
             )?;
             print_response(&response, options.pretty)
         },
+        CliCommand::NotifyPane { window, pane, title, message } => {
+            let response = request_once(
+                "pane.notify",
+                json!({
+                    "window_id": window,
+                    "pane_id": pane,
+                    "title": title,
+                    "message": message
+                }),
+                timeout,
+            )?;
+            print_response(&response, options.pretty)
+        },
         CliCommand::ZoomPane { window, pane, zoomed } => {
             let response = request_once(
                 "pane.zoom",

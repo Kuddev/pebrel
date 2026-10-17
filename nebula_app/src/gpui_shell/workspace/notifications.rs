@@ -22,7 +22,10 @@ fn delivery_channels(
     ai_toasts: bool,
 ) -> DeliveryChannels {
     DeliveryChannels {
-        in_app: (!visible || notification.is_attention()) && (ai_toasts || !notification.is_ai()),
+        in_app: (!visible
+            || notification.is_attention()
+            || matches!(notification, Notification::Runtime { .. }))
+            && (ai_toasts || !notification.is_ai()),
         // Keep native notification routing independent of the in-app preference.
         system: !visible,
     }
@@ -214,6 +217,19 @@ mod tests {
                 DeliveryChannels { in_app: false, system: true }
             );
         }
+    }
+
+    #[test]
+    fn runtime_notifications_show_in_app_even_when_the_pane_is_visible() {
+        let notification = Notification::Runtime { title: None, message: "touch the key".into() };
+        assert_eq!(
+            delivery_channels(&notification, true, true),
+            DeliveryChannels { in_app: true, system: false }
+        );
+        assert_eq!(
+            delivery_channels(&notification, false, false),
+            DeliveryChannels { in_app: true, system: true }
+        );
     }
 
     #[test]
