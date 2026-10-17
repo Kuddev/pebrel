@@ -144,7 +144,7 @@ impl SettingsPane {
                 .tooltip(|window, cx| {
                     gpui_component::tooltip::Tooltip::new(
                         crate::gpui_shell::config::ui_language(cx)
-                            .pick("还原为默认值", "Restore default"),
+                            .text(crate::i18n::Message::SettingsPaneRestoreDefault),
                     )
                     .build(window, cx)
                 })
@@ -232,9 +232,9 @@ impl SettingsPane {
                     .when(desc.details.is_some(), |heading| {
                         let language = crate::gpui_shell::config::ui_language(cx);
                         let action = if expanded {
-                            language.pick("收起说明", "Hide details")
+                            language.text(crate::i18n::Message::SettingsPaneHideDetails)
                         } else {
-                            language.pick("详细说明", "More details")
+                            language.text(crate::i18n::Message::SettingsPaneMoreDetails)
                         };
                         heading.child(
                             Button::new(SharedString::from(format!("settings-help-{label}")))

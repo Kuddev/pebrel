@@ -62,7 +62,7 @@ impl SettingsPane {
             .hover(move |row| row.bg(hover).text_color(ink))
             .on_click(cx.listener(|this, _, _, cx| this.close_sponsor_page(cx)))
             .child(Icon::new(IconName::ArrowLeft).small())
-            .child(language.pick("返回", "Back"));
+            .child(language.text(crate::i18n::Message::ThemeEditorBack));
 
         let logo =
             div().w(px(LOGO_WIDTH)).flex_shrink_0().when_some(sponsor_logo(), |slot, image| {
@@ -125,7 +125,7 @@ impl SettingsPane {
                     .text_size(px(base_px * 0.85))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(muted)
-                    .child(language.pick("赞助商", "Sponsors")),
+                    .child(language.text(crate::i18n::Message::SettingsAboutSponsors)),
             )
             .child(h_flex().w_full().items_start().gap(px(28.0)).child(logo).child(copy))
     }

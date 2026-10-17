@@ -23,7 +23,7 @@ impl AppearanceSelection {
         match self {
             Self::Theme(theme) => chrome_theme(theme).short_label(),
             Self::Custom(_) => language.text(Message::ThemePickerCustomize),
-            Self::Icon(icon) => language.pick(icon.palette().name_zh, icon.palette().name_en),
+            Self::Icon(icon) => super::app_icon::icon_name(icon, language),
         }
     }
 

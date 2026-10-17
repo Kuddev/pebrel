@@ -22,7 +22,7 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(language.pick("输入字体名称", "Enter a font family"))
+                .placeholder(language.text(crate::i18n::Message::SettingsFontEnterAFontFamily))
                 .default_value(initial)
         })
     }
@@ -432,11 +432,16 @@ impl SettingsPane {
                             })
                             .child(display_name),
                     )
-                    .when(index == 0, |row| row.child(badge(language.pick("主", "Primary"), muted)))
+                    .when(index == 0, |row| {
+                        row.child(badge(
+                            language.text(crate::i18n::Message::SettingsFontPrimary),
+                            muted,
+                        ))
+                    })
                     .child(Self::chain_action(
                         SharedString::from(format!("font-chain-up-{index}")),
                         IconName::ArrowUp,
-                        language.pick("上移", "Move up"),
+                        language.text(crate::i18n::Message::SettingsFontMoveUp),
                         index == 0,
                         move |this, window, cx| {
                             this.move_font_family(index, -1, window, cx);
@@ -446,7 +451,7 @@ impl SettingsPane {
                     .child(Self::chain_action(
                         SharedString::from(format!("font-chain-down-{index}")),
                         IconName::ArrowDown,
-                        language.pick("下移", "Move down"),
+                        language.text(crate::i18n::Message::SettingsFontMoveDown),
                         index + 1 == family_count,
                         move |this, window, cx| {
                             this.move_font_family(index, 1, window, cx);
@@ -456,7 +461,7 @@ impl SettingsPane {
                     .child(Self::chain_action(
                         SharedString::from(format!("font-chain-delete-{index}")),
                         IconName::Delete,
-                        language.pick("移出字体组", "Remove from font group"),
+                        language.text(crate::i18n::Message::SettingsFontRemoveFromFontGroup),
                         family_count == 1,
                         move |this, window, cx| this.remove_font_family(index, window, cx),
                         cx,
@@ -502,19 +507,32 @@ impl SettingsPane {
                             })
                             .child(display_name),
                     )
-                    .when(bundled, |row| row.child(badge(language.pick("内置", "Bundled"), muted)))
+                    .when(bundled, |row| {
+                        row.child(badge(
+                            language.text(crate::i18n::Message::SettingsFontBundled),
+                            muted,
+                        ))
+                    })
                     .when(entry.source == FontSource::Imported, |row| {
-                        row.child(badge(language.pick("导入", "Imported"), muted))
+                        row.child(badge(
+                            language.text(crate::i18n::Message::SettingsFontImported),
+                            muted,
+                        ))
                     })
                     .when(!entry.monospaced, |row| {
-                        row.child(badge(language.pick("比例", "Proportional"), warning))
+                        row.child(badge(
+                            language.text(crate::i18n::Message::SettingsFontProportional),
+                            warning,
+                        ))
                     })
                     .child(
                         Button::new(SharedString::from(format!("font-add-{index}")))
                             .icon(IconName::Plus)
                             .ghost()
                             .xsmall()
-                            .tooltip(language.pick("加入字体组", "Add to font group"))
+                            .tooltip(
+                                language.text(crate::i18n::Message::SettingsFontAddToFontGroup),
+                            )
                             .disabled(already_selected)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -543,7 +561,7 @@ impl SettingsPane {
                 div()
                     .text_sm()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(language.pick("字体组", "Font group")),
+                    .child(language.text(crate::i18n::Message::SettingsFontFontGroup)),
             )
             .child(
                 div()
@@ -579,7 +597,7 @@ impl SettingsPane {
                                 .px_1()
                                 .text_xs()
                                 .text_color(muted)
-                                .child(language.pick("当前顺序", "Current order")),
+                                .child(language.text(crate::i18n::Message::SettingsFontCurrentOrder)),
                         )
                         .children(selected_rows)
                         .child(
@@ -591,7 +609,7 @@ impl SettingsPane {
                                 .px_1()
                                 .text_xs()
                                 .text_color(muted)
-                                .child(language.pick("可用字体", "Available fonts")),
+                                .child(language.text(crate::i18n::Message::SettingsFontAvailableFonts)),
                         )
                         .children(available_rows)
                         .when(available_empty, |list| {
