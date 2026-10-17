@@ -56,7 +56,6 @@ impl SettingsPane {
         v_flex()
             .w_full()
             .flex_shrink_0()
-            .max_w(px(700.0))
             .gap(px(48.0))
             .text_size(px(14.0))
             .child(
