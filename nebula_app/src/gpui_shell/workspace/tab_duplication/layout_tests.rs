@@ -7,6 +7,12 @@ use std::sync::Arc;
 
 #[gpui::test]
 fn duplicate_bare_wsl_keeps_the_panes_frozen_distribution(cx: &mut TestAppContext) {
+    if crate::platform::profile_test_isolation::run_exact_child(
+        "gpui_shell::workspace::tab_duplication::layout_tests::duplicate_bare_wsl_keeps_the_panes_frozen_distribution",
+        None,
+    ) {
+        return;
+    }
     cx.update(|cx| {
         gpui_component::init(cx);
         crate::gpui_shell::math_view::register(cx);
