@@ -145,6 +145,17 @@ fn real_bundled_font_shapes_ligatures_and_preserves_the_cached_natural_layout() 
         let aligned = shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(8.0));
         assert_eq!(glyph_ids(&aligned), glyph_ids(&natural), "keep contextual substitutions");
         assert_eq!(aligned.width, px(32.0));
+        let unit = text_system.shape_line("M".into(), px(15.0), &[run(false)], None).width.as_f32();
+        for delta in [-3.0_f32, 3.0] {
+            let grid = (unit + delta).max(1.0);
+            let spaced =
+                shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(grid));
+            assert_eq!(
+                glyph_ids(&spaced),
+                glyph_ids(&natural),
+                "{sample} must stay joined when the grid is {grid}"
+            );
+        }
         let last = aligned
             .runs
             .iter()
@@ -220,6 +231,7 @@ fn theme_line_height_none_preserves_shaped_metrics() {
     assert_eq!(themed, legacy);
 }
 
+#[test]
 #[test]
 fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
     // 15px * 1.5 = 22.5 logical px; at 150% DPI with a 4px device offset,
