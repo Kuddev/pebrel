@@ -83,6 +83,16 @@ const SELECTION_SCROLL_STEP: f32 = 20.0;
 /// 这个值到 +1s；取 1.2s 是为了让它至少跨过一个复核点，不会一闪就没。
 pub(super) const COMPLETION_FLASH: std::time::Duration = std::time::Duration::from_millis(1200);
 
+/// 远端回合停滞对账的阈值：hook 权威在场的回合静默这么久、且屏幕连续两拍是
+/// agent 自家的同一形态，才允许双向对账（见
+/// `ai_hook::lifecycle::AgentActivity::reconcile_stalled_turn`）：两拍 idle
+/// 提示符把回合收敛为结束；两拍转圈把丢了点火事件（UserPromptSubmit/权限
+/// 答复在远端 bridge 丢失）的回合从 Done/Blocked 拉回 Working。这是远端的
+/// 第二重证据——本地有进程树对账，SSH/WSL 没有进程可见性，hook 一旦在远端
+/// bridge 丢失，回合会钉死在丢失前的状态。权限等待屏是 Blocked 检测、不参与
+/// 对账；真正的防线是「稳定的屏幕形态」而非纯计时。
+pub(super) const REMOTE_TURN_STALL: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// 一次自动回滚该滚几行：指针在网格上方为正（往回滚历史）、下方为负，网格
 /// 内为 0。贴边即 1 行，之后每远离 `SELECTION_SCROLL_STEP` 像素加一档。
 ///

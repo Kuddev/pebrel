@@ -300,3 +300,105 @@ fn shell_command_end_rejects_late_hooks_until_a_new_command_starts() {
     activity.begin_command(true);
     assert!(activity.apply_hook(&event("codex", "new", "notify")));
 }
+
+/// 远端回合停滞对账：只在「hook 权威禁用屏幕（allows_screen false）+ 停滞 +
+/// 连续两拍 idle」同时成立时收敛；任何反证都归零计数。
+#[test]
+fn stalled_turn_reconciliation_needs_two_idle_samples_after_the_stall() {
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&event("claude", "stall", "UserPromptSubmit"));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    assert!(!activity.hook_quiet_for(std::time::Duration::from_secs(20)));
+    activity.backdate_hook_for_test(std::time::Duration::from_secs(21));
+    assert!(activity.hook_quiet_for(std::time::Duration::from_secs(20)));
+    // 未停滞 / 非 idle 检测 / 不足两拍：全部不动。
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), false));
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Working).as_ref(), true));
+    assert!(!activity.reconcile_stalled_turn(None, true));
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    // 第二拍收敛为 Done（PromptSubmit 已观测回合），来源记屏幕与规则。
+    assert!(activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert_eq!(activity.status(), AgentStatus::Done);
+    assert_eq!(activity.source(), AgentStatusSource::Screen);
+    assert_eq!(activity.rule(), Some("test.chrome"));
+}
+
+/// 无 hook 权威（allows_screen 为真）时对账让位给 observe_screen；会话仅
+/// SessionStart（status 已是 Idle）时无事可做，不得伪造一次迁移。
+#[test]
+fn stall_reconciliation_yields_to_screen_authority_and_reads_turn_observed() {
+    let mut activity = AgentActivity::default();
+    // 无 hook：allows_screen() 为真 → 恒 false。
+    activity.begin_command(true);
+    activity.backdate_hook_for_test(std::time::Duration::from_secs(60));
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    // 只有 SessionStart 的会话已经在 Idle 上，没有可完成的回合。
+    let mut idle_only = AgentActivity::default();
+    idle_only.apply_hook(&event("claude", "fresh", "SessionStart"));
+    idle_only.backdate_hook_for_test(std::time::Duration::from_secs(60));
+    assert!(!idle_only.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert!(!idle_only.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert_eq!(idle_only.status(), AgentStatus::Idle);
+    assert_eq!(idle_only.source(), AgentStatusSource::Hook);
+}
+
+/// 刚提交（pending_submit）的回合即使屏幕看起来 idle 也不收边——提交屏障
+/// 与 observe_screen 的 idle 分支同一语义；对点火方向同样成立（屏障期间两向
+/// 计数都归零，屏障解除后证据要重新攒）。
+#[test]
+fn stall_reconciliation_honors_the_pending_submit_barrier() {
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&event("claude", "pending", "UserPromptSubmit"));
+    activity.backdate_hook_for_test(std::time::Duration::from_secs(60));
+    activity.submitted();
+    assert_eq!(activity.status(), AgentStatus::Working);
+    for _ in 0..4 {
+        assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+        assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Working).as_ref(), true));
+    }
+    assert_eq!(activity.status(), AgentStatus::Working);
+}
+
+/// 对账的反方向：UserPromptSubmit 在远端 bridge 丢失（通道锁 busy/超时/超限）
+/// 时，上一回合的 Stop 把回合钉在 Done；hook 静默 + 连续两拍转圈重新点火
+/// Working，并补记 turn_observed（迟到的 Stop 能收敛为 Done 而非 Idle）。
+#[test]
+fn stalled_turn_reconciliation_reignites_a_lost_prompt_submit() {
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&event("claude", "lost", "UserPromptSubmit"));
+    activity.apply_hook(&event("claude", "lost", "Stop"));
+    assert_eq!(activity.status(), AgentStatus::Done);
+    activity.backdate_hook_for_test(std::time::Duration::from_secs(21));
+    // 一拍转圈不点火；中途一拍 idle 归零 working 计数，证据重新攒。
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Working).as_ref(), true));
+    assert_eq!(activity.status(), AgentStatus::Done);
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Working).as_ref(), true));
+    assert!(activity.reconcile_stalled_turn(screen(AgentStatus::Working).as_ref(), true));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    assert_eq!(activity.source(), AgentStatusSource::Screen);
+    assert_eq!(activity.rule(), Some("test.chrome"));
+    // 点火补记了回合：之后两拍 idle 收敛回 Done（双向闭环）。
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert!(activity.reconcile_stalled_turn(screen(AgentStatus::Idle).as_ref(), true));
+    assert_eq!(activity.status(), AgentStatus::Done);
+}
+
+/// 权限答复（PostToolUse/PermissionResult）在远端丢失时回合钉在 Blocked；
+/// 用户已答复、屏幕回到转圈，两拍 working 同样重新点火。权限屏本身
+/// （Blocked 检测）不参与对账——attention 语义归 hook 与 observe_screen 管。
+#[test]
+fn stalled_turn_reconciliation_reignites_a_blocked_turn_after_the_answer() {
+    let mut activity = AgentActivity::default();
+    activity.apply_hook(&event("claude", "blocked", "UserPromptSubmit"));
+    activity.apply_hook(&event("claude", "blocked", "PermissionRequest"));
+    assert_eq!(activity.status(), AgentStatus::Blocked);
+    activity.backdate_hook_for_test(std::time::Duration::from_secs(21));
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Blocked).as_ref(), true));
+    assert!(!activity.reconcile_stalled_turn(screen(AgentStatus::Working).as_ref(), true));
+    assert!(activity.reconcile_stalled_turn(screen(AgentStatus::Working).as_ref(), true));
+    assert_eq!(activity.status(), AgentStatus::Working);
+    assert_eq!(activity.source(), AgentStatusSource::Screen);
+}
