@@ -5,7 +5,7 @@
 //! GitHub outage all degrade to "no banner", never to an error the user sees.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -17,18 +17,35 @@ use crate::event::{Event, EventType};
 #[cfg(feature = "legacy-shell")]
 use crate::message_bar::{Message, MessageType};
 
-const RELEASES_API: &str = "https://api.github.com/repos/Kuddev/pebrel/releases/latest";
 pub const RELEASES_PAGE: &str = "https://github.com/Kuddev/pebrel/releases";
 const UPDATE_STATE_FILE: &str = "update_state.json";
 const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
 
 pub(crate) mod assets;
 mod fallback;
+mod source;
+
+#[cfg(test)]
+pub(crate) use source::validate_official_asset_url;
+pub(crate) use source::{normalize_setting, release_page, validate_asset_url};
 
 #[cfg(feature = "update-test-source")]
 pub(crate) mod test_source;
 
 static UPDATE_STATE_LOCK: Mutex<()> = Mutex::new(());
+static RELEASE_SOURCE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn release_source_generation() -> u64 {
+    RELEASE_SOURCE_GENERATION.load(Ordering::SeqCst)
+}
+
+pub(crate) fn release_source_is_current(generation: u64) -> bool {
+    release_source_generation() == generation
+}
+
+pub(crate) fn invalidate_release_source() {
+    RELEASE_SOURCE_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
 
 /// 自动提示状态独立于通用设置文件，避免后台版本检查改写用户设置正文。
 /// 字段按版本生效，新版本不会继承旧版本的延迟或跳过选择。
@@ -132,6 +149,7 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
     let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
         // 等窗口与首个会话安顿好再查，别和启动抢磁盘/网络。
         std::thread::sleep(Duration::from_secs(12));
+        let source_generation = release_source_generation();
         let release = match fetch_latest_release() {
             Ok(release) => release,
             Err(error) => {
@@ -145,7 +163,10 @@ pub fn spawn_once(proxy: EventLoopProxy<Event>) {
             log::debug!("update-check: v{current} is current (latest v{latest})");
             return;
         }
-        let text = format!("Pebrel v{latest} 已发布（当前 v{current}），下载：{RELEASES_PAGE}");
+        let text = format!("Pebrel v{latest} 已发布（当前 v{current}），下载：{}", release_page());
+        if !release_source_is_current(source_generation) {
+            return;
+        }
         let _ = proxy.send_event(Event::new(
             EventType::Message(Message::new(text, MessageType::Warning)),
             None,
@@ -168,6 +189,7 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
         return;
     }
     let spawned = std::thread::Builder::new().name("update-check-gpui".into()).spawn(move || {
+        let cached_source_generation = release_source_generation();
         crate::update_download::hydrate();
         if let Some(asset) = crate::update_download::cached_asset() {
             let failed = matches!(
@@ -181,14 +203,15 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
                             &update_state_path(),
                         )))
             {
-                let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable(
-                    UpdateCheckResult {
+                let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable {
+                    result: UpdateCheckResult {
                         current: env!("CARGO_PKG_VERSION").into(),
                         latest: asset.version.clone(),
                         update_available: true,
                         asset: Some(asset),
                     },
-                ));
+                    source_generation: cached_source_generation,
+                });
             }
         }
         if !nebula_settings::RuntimeSettings::load().auto_check_updates {
@@ -196,6 +219,7 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
         }
         // 对齐旧壳：首屏和首个终端会话稳定后再联网。
         std::thread::sleep(Duration::from_secs(12));
+        let source_generation = release_source_generation();
         let result = match check_now() {
             Ok(result) => result,
             Err(error) => {
@@ -211,7 +235,11 @@ pub fn spawn_gpui_once(sender: std::sync::mpsc::Sender<crate::gpui_shell::GpuiSh
             log::debug!("update-check: automatic prompt suppressed for v{}", result.latest);
             return;
         }
-        let _ = sender.send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable(result));
+        if !release_source_is_current(source_generation) {
+            return;
+        }
+        let _ = sender
+            .send(crate::gpui_shell::GpuiShellEvent::UpdateAvailable { result, source_generation });
     });
     if let Err(error) = spawned {
         log::debug!("update-check: GPUI thread spawn failed: {error}");
@@ -300,8 +328,14 @@ fn fetch_latest_release() -> Result<LatestRelease, String> {
         let agent = test_source::agent(Duration::from_secs(10));
         return fetch_release_with_agent(&agent, &url);
     }
-    let agent = crate::update_proxy::agent(RELEASES_API, Duration::from_secs(10));
-    fetch_release_with_fallback(&agent, RELEASES_API, fallback::fetch_latest)
+    let source = source::configured()?;
+    let api = source.api_url();
+    let agent = crate::update_proxy::agent(&api, Duration::from_secs(10));
+    if source.is_default() {
+        fetch_release_with_fallback(&agent, &api, fallback::fetch_latest)
+    } else {
+        fetch_release_with_fallback(&agent, &api, |status| Err(format!("GitHub HTTP {status}")))
+    }
 }
 
 #[cfg(any(test, feature = "update-test-source"))]
@@ -336,9 +370,15 @@ fn fetch_release_with_fallback(
 fn parse_latest_release(bytes: &[u8]) -> Result<LatestRelease, String> {
     let release: GitHubRelease =
         serde_json::from_slice(bytes).map_err(|error| format!("GitHub 返回了无效数据：{error}"))?;
-    let version = release.tag_name.trim().trim_start_matches(['v', 'V']);
-    if version.is_empty() {
-        return Err("GitHub release 的版本号为空".to_owned());
+    let tag = release.tag_name.trim();
+    let version = tag.strip_prefix('v').or_else(|| tag.strip_prefix('V')).unwrap_or(tag);
+    if version.is_empty()
+        || !version.as_bytes().first().is_some_and(|byte| byte.is_ascii_digit())
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        return Err("GitHub release 的版本号无效".to_owned());
     }
     let version = version.to_owned();
     let asset = assets::select(
@@ -423,6 +463,13 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn invalidating_the_release_source_rejects_an_in_flight_result() {
+        let generation = super::release_source_generation();
+        super::invalidate_release_source();
+        assert!(!super::release_source_is_current(generation));
+    }
+
+    #[test]
     fn release_check_uses_the_resolved_proxy_for_an_unresolvable_target() {
         use crate::update_proxy::test_support::{Server, response};
         let server = Server::start(vec![response(
@@ -454,6 +501,13 @@ mod tests {
         }
         assert!(!super::version_is_installable("1.8.0", "1.8.0", false));
         assert!(super::version_is_installable("1.8.0", "1.8.0", true));
+    }
+
+    #[test]
+    fn release_parser_accepts_semver_style_prerelease_tags() {
+        let release = parse_latest_release(br#"{"tag_name":"v2.0.0-beta.1","assets":[]}"#).unwrap();
+        assert_eq!(release.version, "2.0.0-beta.1");
+        assert!(parse_latest_release(br#"{"tag_name":"preview-v2.0.0","assets":[]}"#).is_err());
     }
 
     #[test]
