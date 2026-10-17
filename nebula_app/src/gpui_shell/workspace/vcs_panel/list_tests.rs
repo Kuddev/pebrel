@@ -113,6 +113,33 @@ fn git_list_repaints_visible_rows_and_clicks_the_scrolled_path(cx: &mut TestAppC
     });
     let rendered = owner.read_with(cx, |workspace, _| workspace.vcs_list.rendered.clone());
     assert!(!rendered.is_empty() && rendered.len() < 32, "5000 rows: {rendered:?}");
+
+    let history = Arc::new(GitInfo {
+        history: vec![
+            crate::display::side_panel::GitCommit {
+                full_hash: "child".into(),
+                parent_hashes: vec!["parent".into()],
+                author: "Alice".into(),
+                ..Default::default()
+            },
+            crate::display::side_panel::GitCommit {
+                full_hash: "parent".into(),
+                author: "Bob".into(),
+                ..Default::default()
+            },
+        ],
+        ..GitInfo::default()
+    });
+    cx.update(|window, cx| {
+        owner.update(cx, |workspace, _| {
+            workspace.vcs_list.sync(Some(history), GitPanelView::History, Some(root.clone()));
+        });
+        probe.update(cx, |_, cx| cx.notify());
+        let _ = window.draw(cx);
+    });
+    let child = cx.debug_bounds("git-history-0").unwrap();
+    let parent = cx.debug_bounds("git-history-1").unwrap();
+    assert_eq!(child.bottom(), parent.top(), "history graph rows must join without padding");
 }
 
 #[test]

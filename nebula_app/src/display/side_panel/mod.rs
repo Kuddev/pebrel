@@ -71,6 +71,7 @@ pub struct GitCommit {
     pub decorations: String,
     pub subject: String,
     pub author: String,
+    pub author_email: String,
     pub timestamp: i64,
     /// 按 Git 记录顺序保存父提交：第一个是主线，后续父提交是合并进来的线路。
     pub parent_hashes: Vec<String>,
