@@ -31,11 +31,17 @@ priority = 400
 region = "bottom_non_empty_lines(8)"
 contains = ["esc to interrupt"]
 
+# 2026-10-12：CLI 2.x 底部 chrome 长到 5 个非空行（分隔线、⚠ 提示、
+# footer×2、mode 行），❯ 落在自底向上第 6 行——窗口 4 装不下它，
+# prompt_idle 恒不命中，会话启动即 Working 永远等不到 idle 样本（Fleet
+# 分叉实捕 v2.1.286 定位，回归见 real_claude_footer_heavy_idle_screen）。
+# 回合进行中的误判由下面的 not 段与 spinner_working 的更高优先级兜住，
+# 1.x 旧屏幕（❯ 在底部第 3 行）在加宽窗口下判定不变。
 [[rules]]
 id = "prompt_idle"
 state = "idle"
 priority = 100
-region = "bottom_non_empty_lines(4)"
+region = "bottom_non_empty_lines(6)"
 line_regex = ['^\s*❯(?:\s|$)']
 not = [
   { contains = ["esc to cancel"] },

@@ -73,7 +73,7 @@ pub fn is_interactive_shell_command(command: &str) -> bool {
 }
 
 /// 一个可执行文件路径的基名（去掉目录与 `.exe`）是否在交互式 shell 表里。
-fn is_shell_executable(path: &str) -> bool {
+pub(crate) fn is_shell_executable(path: &str) -> bool {
     let name = path.trim_matches(['"', '\'']).rsplit(['/', '\\']).next().unwrap_or(path);
     let name = name.to_ascii_lowercase();
     let stem = name.strip_suffix(".exe").unwrap_or(name.as_str());
@@ -224,11 +224,21 @@ pub(crate) struct ActivityEvidence {
     pub busy: bool,
 }
 
-pub(crate) fn activity_evidence(
+/// 进程树存活证据（看门狗对账用），走 [`with_cached_snapshot`] 的
+/// [`SNAPSHOT_TTL`] 窗口——看门狗多 pane 对账、hook 路由校验与祖先链查询
+/// 在同一窗口内共用一次全机枚举，而不是各查各的。快照失败返回 `Err`
+/// （= 无证据，调用方按无证据处理）。**只应在后台线程调用**：缓存未命中时
+/// 这里会同步 spawn `ps`（阻塞轮询最长 1s），上主线程就是可感知的周期性
+/// 卡顿。
+pub(crate) fn cached_activity_evidence(
     root_pid: u32,
     primary_pid: Option<u32>,
 ) -> Result<ActivityEvidence, String> {
-    Ok(activity_from_snapshot(&descendants(root_pid)?, primary_pid))
+    with_cached_snapshot(|processes| {
+        descendants_from_snapshot(root_pid, processes)
+            .map(|rows| activity_from_snapshot(&rows, primary_pid))
+    })
+    .unwrap_or_else(|| Err("process snapshot unavailable".to_owned()))
 }
 
 fn activity_from_snapshot(rows: &[ProcessEntry], primary_pid: Option<u32>) -> ActivityEvidence {
@@ -485,7 +495,13 @@ mod tests {
         let evidence = super::activity_from_snapshot(&rows(&["pwsh.exe", "openconsole.exe"]), None);
         assert!(!evidence.child_present);
         assert!(!evidence.busy);
-        assert!(super::activity_evidence(0, None).is_err(), "no snapshot is not proof of idle");
+        // 根 pid 选一个任何平台快照里都不存在的值：Windows 的 Toolhelp 快照
+        // 含 pid 0（System Idle），用它当「不存在的 shell」反而能遍历出后代；
+        // Linux /proc 则没有 pid 0。u32::MAX 两边都不存在，判据才与平台无关。
+        assert!(
+            super::cached_activity_evidence(u32::MAX, None).is_err(),
+            "no snapshot is not proof of idle"
+        );
     }
 
     fn row(pid: u32, parent: u32, created: u64, executable: &str) -> ProcessRow {

@@ -757,11 +757,13 @@ pub struct NebulaWorkspace {
     spinner_window_active: bool,
     _spinner_activation_sub: Subscription,
     /// 侧栏「运行中」spinner 的相位（0..1，旧壳 `SPINNER_PERIOD` 800ms 一
-    /// 圈）与上次帧时刻。侧栏和顶栏共用 GPUI 屏幕帧时钟。
+    /// 圈）与上次帧时刻。相位按真实时间推进，与显示刷新解耦（见
+    /// `agents.rs` 的 80ms 定时链）。
     spinner_phase: f32,
     spinner_last: std::time::Instant,
-    /// render 与 next-frame 回调之间的单槽门闩：防止其他 UI 更新重复挂帧。
-    spinner_frame_pending: std::cell::Cell<bool>,
+    /// spinner 定时链门闩与世代（语义见 `agents.rs` 的 `arm_activity_spinner_frame`）。
+    spinner_tick_armed: std::cell::Cell<bool>,
+    spinner_chain_epoch: std::cell::Cell<u64>,
     /// 上一次 render 是否真的画出了运行态徽章；滚出视口后不应继续唤醒窗口。
     spinner_visible: std::cell::Cell<bool>,
     /// 系统关闭按钮可能连续送来多次 should-close；确认框在场时只保留一份。
@@ -988,7 +990,8 @@ impl NebulaWorkspace {
             _spinner_activation_sub: spinner_activation_sub,
             spinner_phase: 0.0,
             spinner_last: std::time::Instant::now(),
-            spinner_frame_pending: std::cell::Cell::new(false),
+            spinner_tick_armed: std::cell::Cell::new(false),
+            spinner_chain_epoch: std::cell::Cell::new(0),
             spinner_visible: std::cell::Cell::new(false),
             window_close_confirm_open: false,
             window_close_pending: false,
