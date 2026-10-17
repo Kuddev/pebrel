@@ -71,7 +71,7 @@ fn release_from_uri(uri: &str) -> Option<LatestRelease> {
     {
         return None;
     }
-    Some(LatestRelease { version: version.to_owned(), asset: None })
+    Some(LatestRelease { version: version.to_owned(), asset: None, body: None })
 }
 
 #[cfg(test)]
