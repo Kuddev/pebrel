@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use nebula_terminal::grid::Dimensions;
 use nebula_terminal::index::{Column, Line, Point, Side};
+use nebula_terminal::inline_image::ImageRun;
 use nebula_terminal::term::cell::Flags;
 use nebula_terminal::term::{self, Term};
 
@@ -175,6 +176,10 @@ impl TerminalMathState {
 
     pub(crate) fn project_cell(&self, point: Point<usize>, columns: usize) -> Option<Point<usize>> {
         self.projection.project_cell(point, columns)
+    }
+
+    pub(crate) fn project_image_runs(&self, runs: &[ImageRun], columns: usize) -> Vec<ImageRun> {
+        self.projection.project_image_runs(runs, columns)
     }
 
     pub(crate) fn project_formula_background(
@@ -833,6 +838,38 @@ pub(crate) struct LineProjection {
 }
 
 impl LineProjection {
+    /// Images use the same row projection as text, while keeping the original
+    /// texture coordinates for erased, reflowed or clipped fragments.
+    pub(crate) fn project_image_runs(&self, runs: &[ImageRun], columns: usize) -> Vec<ImageRun> {
+        let mut projected: Vec<ImageRun> = Vec::new();
+        for run in runs {
+            for offset in 0..usize::from(run.columns) {
+                let source =
+                    Point::new(usize::from(run.row), Column(usize::from(run.column) + offset));
+                let Some(visual) = self.project_cell(source, columns) else { continue };
+                let source_column = run.source_column + offset;
+                if let Some(last) = projected.last_mut() {
+                    if last.id == run.id
+                        && last.row == run.row
+                        && usize::from(last.column) + usize::from(last.columns) == visual.column.0
+                        && last.source_row == run.source_row
+                        && last.source_column + usize::from(last.columns) == source_column
+                    {
+                        last.columns += 1;
+                        continue;
+                    }
+                }
+                projected.push(ImageRun {
+                    column: visual.column.0 as u16,
+                    source_column,
+                    columns: 1,
+                    ..run.clone()
+                });
+            }
+        }
+        projected
+    }
+
     /// 返回与 `overlays` 对齐的存活表。流式输出可能短暂产生重叠公式，调用方
     /// 必须和投影采用同一裁决，否则位图、coverage 与后续文字会落在三套坐标上。
     fn rebuild(

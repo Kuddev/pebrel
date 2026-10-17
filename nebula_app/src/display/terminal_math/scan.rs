@@ -452,6 +452,18 @@ pub(crate) fn scan_visible<T>(
         .filter(|overlay| {
             active_edit_rows.as_ref().is_none_or(|rows| !overlay.intersects_rows(rows))
         })
+        .filter(|overlay| {
+            // Image tiles occupy cells; their placeholder spaces are not TeX
+            // source and must not be replaced by a formula overlay.
+            let origin = terminal.viewport_origin_for(size.screen_lines());
+            !overlay.covered_spans().filter(|(row, _, _)| *row < grid.rows.len()).any(
+                |(row, start, end)| {
+                    (start..end.min(grid.columns)).any(|column| {
+                        terminal.grid()[origin + row][Column(column)].image().is_some()
+                    })
+                },
+            )
+        })
         .filter_map(|mut overlay| {
             overlay.fallback = rendered_cells
                 .iter()
