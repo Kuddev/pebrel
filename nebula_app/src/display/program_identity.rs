@@ -170,6 +170,7 @@ pub(crate) fn program_icon(program: &str) -> &'static str {
         "opencode" | "trae-cli" => "\u{f489}",
         "pi" | "omp" | "oh-my-pi" => "\u{f135}",
         "codebuddy" | "cbc" | "codebuddy-code" | "codebuddy-lowmem" => "\u{f06a9}",
+        "command-code" | "commandcode" | "cmdc" => "\u{f06a9}",
         "kimi" | "kimi-code" => "\u{f186}",
         "git" | "lazygit" => "\u{f418}",
         "vim" | "nvim" | "vi" | "hx" | "nano" => "\u{e62b}",
