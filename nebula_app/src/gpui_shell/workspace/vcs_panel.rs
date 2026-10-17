@@ -10,6 +10,7 @@ use crate::i18n::{Message, UiLanguage};
 use gpui_component::menu::PopupMenuItem;
 use std::path::{Path, PathBuf};
 
+mod avatars;
 mod commit_input;
 mod list_model;
 mod rows;
@@ -17,6 +18,10 @@ pub(super) use list_model::VcsList;
 mod relative_time;
 pub(super) use commit_input::CommitInput;
 use relative_time::git_relative_time_at;
+
+fn compact_line_count(lines: u64) -> String {
+    if lines >= 1_000 { format!("{:.1}k", lines as f64 / 1_000.0) } else { lines.to_string() }
+}
 
 impl NebulaWorkspace {
     pub(super) fn render_git_tree(
@@ -46,13 +51,19 @@ impl NebulaWorkspace {
                 .items_center()
                 .gap_2()
                 .child(div().font_family(symbol).text_sm().text_color(muted).child("\u{ea68}"))
-                .child(div().flex_1().min_w_0().text_sm().truncate().child(
-                    if info.branch.is_empty() {
-                        language.text(Message::VcsNoBranch).to_owned()
-                    } else {
-                        info.branch.clone()
-                    },
-                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_size(theme.font_size - px(2.5))
+                        .truncate()
+                        .child(if info.branch.is_empty() {
+                            language.text(Message::VcsNoBranch).to_owned()
+                        } else {
+                            info.branch.clone()
+                        }),
+                )
                 .when(info.vcs != VcsKind::SvnRepository && info.ahead > 0, |row| {
                     row.child(
                         div().text_xs().text_color(theme.primary).child(format!("↑{}", info.ahead)),
@@ -60,10 +71,16 @@ impl NebulaWorkspace {
                 })
                 .when(info.vcs != VcsKind::SvnRepository, |row| {
                     row.child(
-                        div().text_xs().text_color(theme.success).child(format!("+{}", info.plus)),
+                        div()
+                            .text_xs()
+                            .text_color(theme.success)
+                            .child(format!("+{}", compact_line_count(info.plus))),
                     )
                     .child(
-                        div().text_xs().text_color(theme.danger).child(format!("−{}", info.minus)),
+                        div()
+                            .text_xs()
+                            .text_color(theme.danger)
+                            .child(format!("−{}", compact_line_count(info.minus))),
                     )
                 })
         });
@@ -71,66 +88,76 @@ impl NebulaWorkspace {
         // 三个入口只显示图形，语义由各自图标和 tooltip 共同承担。每个按钮
         // `flex_1`，以后追加第四个入口时仍会自动等分，不引入写死宽度。
         let git_nav = git.as_ref().filter(|info| info.vcs == VcsKind::Git).map(|_| {
-            h_flex()
-                .w_full()
-                .gap_1()
-                .child(
-                    Button::new("git-view-changes")
-                        .icon(
-                            Icon::new(Icon::empty())
-                                .path(crate::gpui_shell::assets::nav::VCS_CHANGES),
-                        )
-                        .flex_1()
-                        .ghost()
-                        .small()
-                        .when(git_view == GitPanelView::Changes, |button| {
-                            button.label(language.text(Message::VcsChanges))
-                        })
-                        .selected(git_view == GitPanelView::Changes)
-                        .tooltip(language.text(Message::VcsCommitChanges))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.side_panel.select_git_view(GitPanelView::Changes);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("git-view-history")
-                        .icon(
-                            Icon::new(Icon::empty())
-                                .path(crate::gpui_shell::assets::nav::VCS_HISTORY),
-                        )
-                        .flex_1()
-                        .ghost()
-                        .small()
-                        .when(git_view == GitPanelView::History, |button| {
-                            button.label(language.text(Message::VcsGraph))
-                        })
-                        .selected(git_view == GitPanelView::History)
-                        .tooltip(language.text(Message::VcsHistoryGraph))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.side_panel.select_git_view(GitPanelView::History);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("git-view-conflicts")
-                        .icon(
-                            Icon::new(Icon::empty())
-                                .path(crate::gpui_shell::assets::nav::VCS_CONFLICT),
-                        )
-                        .flex_1()
-                        .ghost()
-                        .small()
-                        .when(git_view == GitPanelView::Conflicts, |button| {
-                            button.label(language.text(Message::VcsConflicts))
-                        })
-                        .selected(git_view == GitPanelView::Conflicts)
-                        .tooltip(language.text(Message::VcsResolveConflicts))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.side_panel.select_git_view(GitPanelView::Conflicts);
-                            cx.notify();
-                        })),
-                )
+            crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                "git-view-modes",
+                match git_view {
+                    GitPanelView::Changes => 0,
+                    GitPanelView::History => 1,
+                    GitPanelView::Conflicts => 2,
+                },
+                h_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(
+                        Button::new("git-view-changes")
+                            .icon(
+                                Icon::new(Icon::empty())
+                                    .path(crate::gpui_shell::assets::nav::VCS_CHANGES),
+                            )
+                            .flex_1()
+                            .ghost()
+                            .small()
+                            .when(git_view == GitPanelView::Changes, |button| {
+                                button.label(language.text(Message::VcsChanges))
+                            })
+                            .toggled(git_view == GitPanelView::Changes)
+                            .tooltip(language.text(Message::VcsCommitChanges))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.side_panel.select_git_view(GitPanelView::Changes);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("git-view-history")
+                            .icon(
+                                Icon::new(Icon::empty())
+                                    .path(crate::gpui_shell::assets::nav::VCS_HISTORY),
+                            )
+                            .flex_1()
+                            .ghost()
+                            .small()
+                            .when(git_view == GitPanelView::History, |button| {
+                                button.label(language.text(Message::VcsGraph))
+                            })
+                            .toggled(git_view == GitPanelView::History)
+                            .tooltip(language.text(Message::VcsHistoryGraph))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.side_panel.select_git_view(GitPanelView::History);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("git-view-conflicts")
+                            .icon(
+                                Icon::new(Icon::empty())
+                                    .path(crate::gpui_shell::assets::nav::VCS_CONFLICT),
+                            )
+                            .flex_1()
+                            .ghost()
+                            .small()
+                            .when(git_view == GitPanelView::Conflicts, |button| {
+                                button.label(language.text(Message::VcsConflicts))
+                            })
+                            .toggled(git_view == GitPanelView::Conflicts)
+                            .tooltip(language.text(Message::VcsResolveConflicts))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.side_panel.select_git_view(GitPanelView::Conflicts);
+                                cx.notify();
+                            })),
+                    ),
+                div().rounded(cx.theme().radius).bg(cx.theme().tokens.secondary_active),
+            )
+            .w_full()
         });
         let history_head = git
             .as_ref()
@@ -745,11 +772,15 @@ fn paint_git_lane_connection(
         paint_git_lane_line(window, color, from, to);
         return;
     }
-    let middle = ((from.0 + to.0) * 0.5, (from.1 + to.1) * 0.5);
+    let middle_y = (from.1 + to.1) * 0.5;
     let mut path = gpui::PathBuilder::stroke(px(2.0));
     path.move_to(gpui::point(px(from.0), px(from.1)));
-    path.curve_to(gpui::point(px(middle.0), px(middle.1)), gpui::point(px(from.0), px(middle.1)));
-    path.curve_to(gpui::point(px(to.0), px(to.1)), gpui::point(px(to.0), px(middle.1)));
+    // 两端保持竖直切线，跨行连接不在行边界突然折向。
+    path.cubic_bezier_to(
+        gpui::point(px(to.0), px(to.1)),
+        gpui::point(px(from.0), px(middle_y)),
+        gpui::point(px(to.0), px(middle_y)),
+    );
     if let Ok(path) = path.build() {
         window.paint_path(path, color);
     }
@@ -762,7 +793,11 @@ fn git_lane_canvas(
     lane_spacing: f32,
     colors: [gpui::Hsla; 4],
     surface: gpui::Hsla,
+    commit: &crate::display::side_panel::GitCommit,
 ) -> gpui::AnyElement {
+    let node_x = 10.0 + graph.node_lane as f32 * lane_spacing;
+    let node_color = colors[graph.node_color % colors.len()];
+    let avatar = avatars::author_avatar(commit, node_color, surface);
     div()
         .relative()
         .w(px(width))
@@ -835,6 +870,15 @@ fn git_lane_canvas(
             )
             .absolute()
             .inset_0(),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(node_x - 9.0))
+                .top(relative(0.5))
+                .mt(px(-9.0))
+                .size(px(18.0))
+                .child(avatar),
         )
         .into_any_element()
 }
