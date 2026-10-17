@@ -536,6 +536,7 @@
     "reveal": "在文件管理器中显示",
     "open_external": "用默认应用打开",
     "preview_limited": "此文档较大，富文本预览已缩短。切换到编辑可查看已加载的源码。",
+    "save_busy": "另一个编辑器正在保存此文件。你的草稿仍保留，请稍后重试。",
     "cursor_position": "第 {line} 行，第 {column} 列",
     "mode_shortcut": "切换为{mode}（Ctrl+/ 或 ⌘/）",
     "object_latex_source": "LaTeX 源码",

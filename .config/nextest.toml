@@ -25,3 +25,9 @@ threads-required = 'num-test-threads'
 [[profile.default.overrides]]
 filter = 'test(=completion::tests::completion_requests_work_without_a_view_and_keep_repository_invalidation) or test(=completion::tests::editor_cursor_requests_replace_only_the_active_token_and_keep_following_options) or test(=completion::tests::checkout_completion_combines_branches_and_paths_and_scopes_remote_demand) or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute) or test(=completion::tests::network_completion_reads_configured_remotes_and_refspecs_without_network_access)'
 threads-required = 'num-test-threads'
+
+# 此端点/身份夹具会经共享祖先查询启动真实 ps；保留原 2 秒接收期限，
+# 只预留这个完整测试名称的 runner 资源。传输阶段由实例自有的 test-only trace 诊断。
+[[profile.default.overrides]]
+filter = 'test(=ai_hook::unix::tests::local_hook_socket_routes_identity_and_releases_its_private_directory)'
+threads-required = 'num-test-threads'

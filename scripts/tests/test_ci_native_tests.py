@@ -176,7 +176,7 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
-    def test_nextest_reserves_only_shared_settings_and_exact_bounded_git_fixtures(self):
+    def test_nextest_reserves_only_shared_settings_and_exact_bounded_process_fixtures(self):
         root = Path(__file__).resolve().parents[2]
         config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
@@ -213,8 +213,15 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)"
                           " or test(=completion::tests::network_completion_reads_configured_remotes_and_refspecs_without_network_access)",
                 "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=ai_hook::unix::tests::"
+                          "local_hook_socket_routes_identity_and_releases_its_private_directory)",
+                "threads-required": "num-test-threads",
             }],
         })
+
+        unix_hook = (root / "nebula_app/src/ai_hook/unix.rs").read_text(encoding="utf-8")
+        self.assertIn("fn local_hook_socket_routes_identity_and_releases_its_private_directory(", unix_hook)
 
         # 核对真实函数名，避免配置和期望同时保留旧名字却漏掉写设置的测试。
         segmented = (root / "nebula_app/src/gpui_shell/settings_pane/segmented/tests.rs").read_text(encoding="utf-8")

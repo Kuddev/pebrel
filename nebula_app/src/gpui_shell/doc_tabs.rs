@@ -69,13 +69,23 @@ impl ImageTabView {
             let decoded = task.await;
             let _ = this.update(cx, |view, cx| {
                 match decoded {
-                    Ok(image) => view.image = Some(image),
+                    Ok(image) => {
+                        let size = image.size(0);
+                        view.geometry
+                            .set_decoded_dimensions((size.width.into(), size.height.into()));
+                        view.image = Some(image);
+                    },
                     Err(error) => view.error = Some(error),
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn geometry_snapshot_for_test(&self) -> (Option<(u32, u32)>, f32, (f32, f32)) {
+        self.geometry.geometry_snapshot_for_test()
     }
 
     fn area_tuple(&self) -> (f32, f32, f32, f32) {
@@ -213,3 +223,6 @@ impl Render for ImageTabView {
 }
 
 pub use super::file_editor::{TextFileEvent as DocTabViewEvent, TextFileView as DocTabView};
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod image_geometry_tests;

@@ -22,6 +22,7 @@ use std::fmt::{self, Display, Formatter};
 
 #[cfg(target_os = "macos")]
 use {
+    crate::config::window::Decorations,
     objc2::MainThreadMarker,
     objc2_app_kit::{NSColorSpace, NSView},
     winit::platform::macos::{OptionAsAlt, WindowAttributesExtMacOS, WindowExtMacOS},

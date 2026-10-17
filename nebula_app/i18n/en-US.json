@@ -536,6 +536,7 @@
     "reveal": "Reveal in file manager",
     "open_external": "Open with default app",
     "preview_limited": "The rich preview is shortened for this large document. Switch to Edit to read the loaded source.",
+    "save_busy": "Another editor is saving this file. Your draft is still open; try again.",
     "cursor_position": "Ln {line}, Col {column}",
     "mode_shortcut": "Switch to {mode} (Ctrl+/ or ⌘/)",
     "object_latex_source": "LaTeX source",
