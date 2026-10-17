@@ -10,6 +10,11 @@ use super::{
 };
 
 const ID_MAX_CHARS: usize = 512;
+
+/// Agents documenting Claude Code's hook payload; each signs its own source.
+pub(super) fn claude_style(source: &str) -> bool {
+    matches!(source, "claude" | "qoder" | "codebuddy" | "qwen" | "droid")
+}
 const TURN_RESULT_MAX_CHARS: usize = 4_000;
 static RECEIVE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -62,10 +67,11 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     // 写法，把它的 session id 当成 claude 的，就会把一个不存在的会话交给
     // `claude --resume`（见 nebula_hook 的 FOREIGN_HOOK_RUNNERS 注释）。
     let session_id_keys: &[&str] = match source.as_str() {
-        "claude" | "kimi" => &["session_id"],
+        s if claude_style(s) || s == "kimi" => &["session_id"],
         "codex" if native_codex => &["session_id"],
         "codex" => &["thread-id"],
         "cursor" => &["conversation_id", "session_id"],
+        "antigravity" => &["conversationId"],
         "copilot" | "grok" => &["sessionId"],
         // opencode/pi 由我们自己的 bridge 规范化成 snake_case；camelCase 是
         // provider SDK 原样透传时的兼容路径。
@@ -115,8 +121,8 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         // 第二道串台门。第一道在 nebula_hook 里靠环境变量判断调用方是不是别家
         // 的 hook runner；那种门会被上游改名静默失效，所以这里独立再拦一次：
         // 别家 runner 的载荷用 camelCase 字段名，claude 从不这样发。
-        "claude" if payload.get("hookEventName").is_some() => return None,
-        "claude" => match payload.get("hook_event_name").and_then(Value::as_str) {
+        s if claude_style(s) && payload.get("hookEventName").is_some() => return None,
+        s if claude_style(s) => match payload.get("hook_event_name").and_then(Value::as_str) {
             Some("SessionStart") => (AiHookKind::SessionStart, None),
             Some("UserPromptSubmit") => (AiHookKind::PromptSubmit, None),
             Some("PreToolUse")
@@ -205,7 +211,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             _ => return None,
         },
         "cursor" if payload.get("hookEventName").is_some() => return None,
-        "cursor" | "copilot" | "grok" => {
+        "cursor" | "copilot" | "grok" | "antigravity" => {
             super::native_events::parse(&source, native_event?, &payload)?
         },
         _ => return None,
@@ -213,7 +219,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     if source == "codex" && kind == AiHookKind::TurnDone && event_id.is_none() {
         event_id = turn_id.as_ref().map(|id| format!("codex:turn:{id}:done"));
     }
-    let turn_outcome = if matches!(source.as_str(), "claude" | "kimi")
+    let turn_outcome = if (claude_style(&source) || source == "kimi")
         && kind == AiHookKind::TurnDone
     {
         match payload.get("hook_event_name").and_then(Value::as_str) {
@@ -226,7 +232,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         && payload.get("hook_event_name").and_then(Value::as_str) == Some("Interrupt")
     {
         AiTurnOutcome::Cancelled
-    } else if matches!(source.as_str(), "cursor" | "copilot" | "grok")
+    } else if matches!(source.as_str(), "cursor" | "copilot" | "grok" | "antigravity")
         && kind == AiHookKind::TurnDone
     {
         super::native_events::outcome(&source, native_event?, &payload)
@@ -299,7 +305,7 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         turn_id,
         session_compacted: kind == AiHookKind::SessionStart
             && payload.get("source").and_then(Value::as_str) == Some("compact"),
-        legacy_attention: source == "claude"
+        legacy_attention: claude_style(&source)
             && payload.get("hook_event_name").and_then(Value::as_str) == Some("Notification")
             && context_string(&payload, &["notificationType", "notification_type"]).is_none(),
         answer,

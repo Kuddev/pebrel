@@ -53,6 +53,20 @@ pub(super) fn outcome(source: &str, event: &str, payload: &Value) -> AiTurnOutco
             _ => AiTurnOutcome::Unknown,
         },
         "grok" if event == "done" => AiTurnOutcome::Succeeded,
+        "antigravity" => antigravity_outcome(payload),
+        _ => AiTurnOutcome::Unknown,
+    }
+}
+
+/// The reference does not enumerate `terminationReason`; these values come from captures.
+fn antigravity_outcome(payload: &Value) -> AiTurnOutcome {
+    if payload.get("error").and_then(Value::as_str).is_some_and(|error| !error.is_empty()) {
+        return AiTurnOutcome::Failed;
+    }
+    match payload.get("terminationReason").and_then(Value::as_str) {
+        Some("NO_TOOL_CALL" | "model_stop") => AiTurnOutcome::Succeeded,
+        Some("max_steps_exceeded") => AiTurnOutcome::Incomplete,
+        Some("error") => AiTurnOutcome::Failed,
         _ => AiTurnOutcome::Unknown,
     }
 }
@@ -143,5 +157,33 @@ mod tests {
         let failed = b"nebula-hook/1 source=copilot event=error\n{\"recoverable\":false,\"sessionId\":\"failed\"}";
         assert_eq!(parse_envelope(failed).unwrap().turn_outcome, AiTurnOutcome::Failed);
         assert!(parse_envelope(b"nebula-hook/1 source=cursor event=done\n{\"hookEventName\":\"Stop\",\"sessionId\":\"grok\"}").is_none());
+    }
+
+    #[test]
+    fn antigravity_uses_its_conversation_id_and_only_classifies_known_stops() {
+        let parse = |event: &str, body: &str| {
+            let raw = format!("nebula-hook/1 source=antigravity pane=5 event={event}\n{body}");
+            parse_envelope(raw.as_bytes())
+        };
+        for (event, kind) in [
+            ("session-start", AiHookKind::SessionStart),
+            ("tool-complete", AiHookKind::ToolComplete),
+            ("done", AiHookKind::TurnDone),
+        ] {
+            let parsed = parse(event, r#"{"conversationId":"conv-1","workspacePaths":["/w"]}"#);
+            let parsed = parsed.unwrap();
+            assert_eq!((parsed.kind, parsed.session_id.as_deref()), (kind, Some("conv-1")));
+        }
+        let foreign = parse("done", r#"{"sessionId":"x","session_id":"y"}"#).unwrap();
+        assert_eq!(foreign.session_id, None);
+        for (body, outcome) in [
+            (r#"{"terminationReason":"NO_TOOL_CALL","fullyIdle":true}"#, AiTurnOutcome::Succeeded),
+            (r#"{"terminationReason":"model_stop"}"#, AiTurnOutcome::Succeeded),
+            (r#"{"terminationReason":"max_steps_exceeded"}"#, AiTurnOutcome::Incomplete),
+            (r#"{"terminationReason":"model_stop","error":"quota"}"#, AiTurnOutcome::Failed),
+            (r#"{"terminationReason":"user_cancelled"}"#, AiTurnOutcome::Unknown),
+        ] {
+            assert_eq!(parse("done", body).unwrap().turn_outcome, outcome, "{body}");
+        }
     }
 }
