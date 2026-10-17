@@ -1058,6 +1058,10 @@
     "release_notes_empty": "This release has no description.",
     "open_release": "Open release"
   },
+  "files.filter_placeholder": "Filter files...",
+  "files.match_case": "Match case",
+  "files.match_whole_word": "Match whole word",
+  "files.use_regex": "Use regular expression",
   "files.search_failed": "Unable to complete search",
   "files.search_running": "Searching…",
   "files.search_limited": "Showing {count} results · narrow the search for more",
@@ -1154,6 +1158,7 @@
   "notification.command_finished": "Command finished in {seconds}s",
   "notification.command_failed": "Command failed (exit {code}) after {seconds}s",
   "files.path_edit": "Edit directory path",
+  "files.path_ancestors": "Parent directories",
   "files.path_placeholder": "Absolute or relative directory path",
   "files.path_choose": "Choose a directory",
   "files.path_open": "Open directory",

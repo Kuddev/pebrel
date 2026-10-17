@@ -665,30 +665,40 @@ impl SettingsPane {
             .border_b_1()
             .border_color(colors.line)
             .flex_shrink_0()
-            .children(filters.iter().enumerate().map(|(index, message)| {
-                let selected = picker.filter == index;
-                Button::new(("appearance-filter", index))
-                    .debug_selector(move || format!("appearance-filter-{index}"))
-                    .role(Role::RadioButton)
-                    .toggled(selected)
-                    .label(language.text(*message))
-                    .ghost()
-                    .h(px(27.0))
-                    .px(px(if compact { 7.0 } else { 10.0 }))
-                    .text_size(px(11.0))
-                    .rounded_full()
-                    .text_color(if selected { colors.ink } else { colors.secondary })
-                    .when(selected, |button| button.bg(colors.selected).font_semibold())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(picker) = this.appearance_picker.as_mut() {
-                            if picker.apply_busy {
-                                return;
-                            }
-                            picker.filter = index;
-                        }
-                        cx.notify();
-                    }))
-            }))
+            .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                if picker.draft.is_theme() {
+                    "theme-picker-filters"
+                } else {
+                    "icon-picker-filters"
+                },
+                picker.filter,
+                h_flex().gap(px(4.0)).children(filters.iter().enumerate().map(
+                    |(index, message)| {
+                        let selected = picker.filter == index;
+                        Button::new(("appearance-filter", index))
+                            .debug_selector(move || format!("appearance-filter-{index}"))
+                            .role(Role::RadioButton)
+                            .toggled(selected)
+                            .label(language.text(*message))
+                            .ghost()
+                            .h(px(27.0))
+                            .px(px(if compact { 7.0 } else { 10.0 }))
+                            .text_size(px(11.0))
+                            .rounded_full()
+                            .text_color(if selected { colors.ink } else { colors.secondary })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(picker) = this.appearance_picker.as_mut() {
+                                    if picker.apply_busy {
+                                        return;
+                                    }
+                                    picker.filter = index;
+                                }
+                                cx.notify();
+                            }))
+                    },
+                )),
+                div().rounded_full().bg(colors.selected),
+            ))
             .when(!compact, |filters| {
                 filters.child(
                     div().flex_1().text_right().text_size(px(10.5)).text_color(colors.muted).child(

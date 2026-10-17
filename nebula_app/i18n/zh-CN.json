@@ -1058,6 +1058,10 @@
     "release_notes_empty": "此版本未提供更新说明。",
     "open_release": "打开发布页"
   },
+  "files.filter_placeholder": "过滤文件...",
+  "files.match_case": "区分大小写",
+  "files.match_whole_word": "全词匹配",
+  "files.use_regex": "使用正则表达式",
   "files.search_failed": "无法完成搜索",
   "files.search_running": "正在搜索…",
   "files.search_limited": "显示 {count} 项结果 · 缩小范围可查找更多",
@@ -1154,6 +1158,7 @@
   "notification.command_finished": "命令结束，用时 {seconds} 秒",
   "notification.command_failed": "命令失败（退出码 {code}），用时 {seconds} 秒",
   "files.path_edit": "编辑目录路径",
+  "files.path_ancestors": "上级目录",
   "files.path_placeholder": "输入绝对路径或相对路径",
   "files.path_choose": "选择目录",
   "files.path_open": "打开目录",

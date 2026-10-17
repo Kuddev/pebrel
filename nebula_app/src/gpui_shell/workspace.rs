@@ -411,7 +411,7 @@ const PALETTE_METADATA_MAX_WIDTH: f32 = 260.0;
 /// 否则 hover、点击和键盘选中会再次出现三套几何。
 const PALETTE_ROW_HEIGHT: f32 = 42.0;
 const PALETTE_GROUP_HEADER_HEIGHT: f32 = 40.0;
-const PALETTE_FILTER_BAR_HEIGHT: f32 = 40.0;
+const PALETTE_FILTER_BAR_HEIGHT: f32 = 44.0;
 const PALETTE_ROW_GAP: f32 = 4.0;
 const PALETTE_SCROLLBAR_CONTENT_GUTTER: f32 = 16.0;
 
@@ -870,7 +870,7 @@ impl NebulaWorkspace {
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索已保存命令…"));
         let file_tree_search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(
-                workspace_ui_language().pick("搜索文件和文件夹…", "Search files and folders..."),
+                workspace_ui_language().text(crate::i18n::Message::FilesFilterPlaceholder),
             )
         });
         let git_commit_input = vcs_panel::CommitInput::new(window, cx);

@@ -4,6 +4,89 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.2.2 - 2026-10-16
+
+- `Pebrel-v2.2.2-linux-x64-preview.AppImage`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-linux-x64-preview.deb`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-linux-x64-preview.tar.gz`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-macos-arm64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-macos-x64-preview.dmg`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-windows-x64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-windows-x64-setup.exe`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-windows-arm64.zip`: `PENDING FINAL BUILD`
+- `Pebrel-v2.2.2-windows-arm64-setup.exe`: `PENDING FINAL BUILD`
+
+### English
+
+This release updates Windows, macOS and Linux. Android Preview remains at [2.2.1](https://github.com/Kuddev/pebrel/releases/tag/v2.2.1).
+
+#### Added
+
+- Added: The file tree keeps the active ancestor folder visible while scrolling. Its clickable breadcrumb shows the last three path levels and provides a menu for earlier ancestors.
+- Added: Git history shows author avatars when available, with initials while an image is unavailable or cannot load.
+
+#### Improved
+
+- Improved: The interface bundles the compact Geist variable font for English text. Chinese uses installed font fallbacks without adding a bundled Chinese font; terminal font preferences remain independent, and paths and other metadata retain their monospace styling.
+- Improved: File filtering uses a softer search field, a clearer Filter files placeholder and quieter case, whole-word and regular-expression controls. Breadcrumbs and terminal actions provide stronger text or icon color feedback on hover with transparent backgrounds.
+- Improved: Adjacent choices share a smooth sliding indicator across Settings, SSH controls, Shell and Quick Jump filters, Git views, theme previews and import/export choices. The indicator follows actual option sizes, continues from its visible position when reversed and respects reduced-motion preferences.
+- Improved: The Shell and SSH picker uses a shorter search header and more space above its filter choices.
+- Improved: Command Manager shows Copy, Edit and Delete on row hover or keyboard focus. The three-dot button is removed; moving commands between folders remains available from the row context menu.
+- Improved: Git added and deleted line totals of 1,000 or more use one-decimal k units while retaining their signs and colors.
+- Improved: Tab titles, filenames and settings labels use more consistent text weights and spacing. Tab text follows the existing interface-size preference, iconless rows avoid an empty icon gutter, and shell types use plain text labels.
+- Improved: Captured-answer reader controls, notices, image selection and image errors follow the interface language. Switching languages preserves the original answer and author-provided image descriptions, and Copy source retains the exact original content. ([#545](https://github.com/Kuddev/pebrel/pull/545))
+
+#### Fixed
+
+- Fixed: Git history lines join across adjacent rows and use smoother branch curves.
+- Fixed: Git-ignored file and folder names retain their italic styling, and ordinary interface labels avoid unintended bold Chinese text.
+- Fixed: A tab's custom color strip stays separate from its icon at small interface sizes.
+- Fixed: Windows recreates a missing temporary welcome script when opening a new tab or split, and retries failed writes instead of keeping a stale cached path. Addresses [#622](https://github.com/Kuddev/pebrel/issues/622).
+- Fixed: On macOS, default GPUI shortcuts release plain Control character combinations such as Control+K to the terminal while Command shortcuts perform the corresponding interface actions. Explicit user bindings and navigation combinations retain their established behavior. Addresses [#656](https://github.com/Kuddev/pebrel/issues/656). ([#658](https://github.com/Kuddev/pebrel/pull/658))
+- Fixed: Local file links with trailing line-count annotations, including terminal-truncated annotations, resolve to an existing base file. Existing filenames containing parentheses still take precedence; this does not add line-number navigation. Addresses [#619](https://github.com/Kuddev/pebrel/issues/619). ([#663](https://github.com/Kuddev/pebrel/pull/663))
+
+### 中文
+
+本版更新 Windows、macOS 和 Linux；Android Preview 保持为已发布的 [2.2.1](https://github.com/Kuddev/pebrel/releases/tag/v2.2.1)。
+
+#### 新增
+
+- 新增：文件树滚动时将当前祖先目录保持在顶部；可点击的面包屑显示末尾三级路径，更早的祖先目录通过列表菜单访问。
+- 新增：Git 历史在可用时显示作者头像，图片暂不可用或加载失败时显示姓名首字母。
+
+#### 改进
+
+- 改进：内置体积较小的 Geist 可变字体用于英文界面；中文使用本机字体回退，不增加内置中文字库。终端字体偏好保持独立，路径等辅助信息继续使用等宽字体。
+- 改进：文件过滤框采用更柔和的颜色和清晰的“过滤文件...”占位提示，大小写、全词及正则选项的默认颜色更克制；路径和终端操作按钮在悬停时通过更明显的文字或图标颜色反馈，背景保持透明。
+- 改进：设置、SSH、Shell 与 Quick Jump 筛选、Git 视图、主题预览及导入导出的紧邻选项共用平滑滑动指示器；浮块跟随真实选项尺寸，快速反向时从当前位置继续，并遵循减少动态效果设置。
+- 改进：Shell 和 SSH 选择器调矮搜索栏，并增加筛选选项上方的留白。
+- 改进：命令管理器中的复制、编辑、删除操作在整行悬停或键盘聚焦时显示；移除三个点按钮，命令分组移动继续通过行右键菜单访问。
+- 改进：Git 增删行数达到 1,000 时使用保留一位小数的 k 单位，并保留正负号及原有颜色。
+- 改进：统一 Tab 标题、文件名及设置标签的字重和间距；Tab 文字继续读取原有界面字号偏好，无图标行不保留空白图标槽，Shell 类型使用纯文字标签。
+- 改进：完整回答阅读器的控件、提示、图片选择和图片错误跟随界面语言；切换语言保留回答原文及作者提供的图片说明，“复制原文”保留完整原始内容。 ([#545](https://github.com/Kuddev/pebrel/pull/545))
+
+#### 修复
+
+- 修复：Git 历史线路在相邻行之间连续连接，并采用更平滑的分支曲线。
+- 修复：Git 忽略的文件和文件夹名称保留斜体，普通界面标签避免出现意外加粗的中文。
+- 修复：较小界面字号下，Tab 的自定义色条与图标保持间距。
+- 修复：Windows 新建标签或分屏时会重建丢失的临时欢迎脚本，写入失败后可重试，避免持续使用失效的缓存路径。对应 [#622](https://github.com/Kuddev/pebrel/issues/622)。
+- 修复：macOS 的默认 GPUI 快捷键将 Control+K 等纯 Control 字符组合交给终端，使用 Command 快捷键执行对应界面操作；显式用户绑定及导航组合保留原有行为。对应 [#656](https://github.com/Kuddev/pebrel/issues/656)。 ([#658](https://github.com/Kuddev/pebrel/pull/658))
+- 修复：带有尾随行数说明的本地文件链接可回退到实际存在的基础文件，也兼容终端截断后的说明；真实带括号的文件名仍优先匹配，本次不增加行号导航。对应 [#619](https://github.com/Kuddev/pebrel/issues/619)。 ([#663](https://github.com/Kuddev/pebrel/pull/663))
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Aschenbath"><img src="https://avatars.githubusercontent.com/u/184111764?v=4&amp;s=96" width="48" height="48" alt="Aschenbath" title="Aschenbath" /></a>
+  <a href="https://github.com/YinBuLiao"><img src="https://avatars.githubusercontent.com/u/35324248?v=4&amp;s=96" width="48" height="48" alt="YinBuLiao" title="YinBuLiao" /></a>
+  <a href="https://github.com/galact-byte"><img src="https://avatars.githubusercontent.com/u/94279960?v=4&amp;s=96" width="48" height="48" alt="galact-byte" title="galact-byte" /></a>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+</p>
+
+Thanks to Aschenbath ([#545](https://github.com/Kuddev/pebrel/pull/545)), YinBuLiao ([#658](https://github.com/Kuddev/pebrel/pull/658)), galact-byte ([#663](https://github.com/Kuddev/pebrel/pull/663)) and Kuddev for the fixes, interface improvements and release integration.
+
+感谢 Aschenbath（[#545](https://github.com/Kuddev/pebrel/pull/545)）、YinBuLiao（[#658](https://github.com/Kuddev/pebrel/pull/658)）、galact-byte（[#663](https://github.com/Kuddev/pebrel/pull/663)）和 Kuddev 对修复、界面改进及发布整合的贡献。
+
 ## 2.2.1 - 2026-10-15
 
 ### English
