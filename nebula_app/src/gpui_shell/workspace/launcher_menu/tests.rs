@@ -109,6 +109,45 @@ fn ssh_launcher_search_matches_tags_notes_and_multiple_keywords(cx: &mut TestApp
     });
 }
 
+#[gpui::test]
+fn launcher_filters_keep_compact_search_spacing_and_follow_real_slots(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    draw(&mut cx);
+    let search = cx.debug_bounds("workspace-palette-search").unwrap();
+    assert_eq!(search.size.height, px(48.0));
+    let all = cx.debug_bounds("workspace-palette-filter-Launcher(All)").unwrap();
+    assert!(all.top() - search.bottom() >= px(10.0));
+    for (filter, selector) in [
+        (
+            crate::display::command_palette::LauncherFilter::Ssh,
+            "workspace-palette-filter-Launcher(Ssh)",
+        ),
+        (
+            crate::display::command_palette::LauncherFilter::Shell,
+            "workspace-palette-filter-Launcher(Shell)",
+        ),
+        (
+            crate::display::command_palette::LauncherFilter::All,
+            "workspace-palette-filter-Launcher(All)",
+        ),
+    ] {
+        let slot = cx.debug_bounds(selector).unwrap();
+        cx.simulate_click(slot.center(), Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(
+            cx.debug_bounds("launcher-filters-indicator").unwrap(),
+            cx.debug_bounds(selector).unwrap()
+        );
+        workspace.read_with(&cx, |workspace, cx| {
+            assert_eq!(workspace.launcher_filter, filter);
+            assert_eq!(workspace.command_palette_selected, 0);
+            assert!(!workspace.filtered_palette_rows(cx).is_empty());
+            assert!(workspace.tabs.is_empty(), "filtering must not launch a shell or connect SSH");
+        });
+    }
+}
+
 fn right_click(selector: &'static str, cx: &mut VisualTestContext) {
     let bounds = cx.debug_bounds(selector).expect("launcher row");
     cx.simulate_mouse_down(bounds.center(), MouseButton::Right, Modifiers::default());
