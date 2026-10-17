@@ -139,8 +139,12 @@ class AndroidReleaseTests(unittest.TestCase):
         workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         android_workflow = (root / ".github/workflows/android-release.yml").read_text(encoding="utf-8")
         self.assertIn("uses: ./.github/workflows/android-release.yml", workflow)
+        android_job = workflow.split("\n  android:\n", 1)[1].split("\n  aggregate:\n", 1)[0]
+        self.assertIn("needs.prepare.outputs.include_android == 'true'", android_job)
         self.assertIn("needs: [prepare, linux, macos, windows, windows-arm64, android]", workflow)
         self.assertIn("release-dist/*.apk", workflow)
+        self.assertIn("android_assets=()", workflow)
+        self.assertIn('"${android_assets[@]}" release-dist/SHA256SUMS', workflow)
         for required in (":app:testDebugUnitTest", ":app:lintPreview", ":app:assemblePreview",
                          ":app:connectedPreviewAndroidTest", "--commit", "stable-package-android",
                          "stable-evidence-android", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"):
@@ -155,6 +159,15 @@ class AndroidReleaseTests(unittest.TestCase):
         self.assertEqual(android_workflow.count('--commit "$SOURCE_COMMIT"'), 2)
         self.assertNotIn('--commit "$GITHUB_SHA"', android_workflow)
         self.assertIn("GIT_CEILING_DIRECTORIES: ${{ github.workspace }}/mobile/android", android_workflow)
+
+    def test_desktop_only_222_has_no_android_package_or_manual_kit(self):
+        self.assertIsNone(android.manual_asset_name("2.2.2"))
+        with self.assertRaises(ValueError):
+            android.asset_name("2.2.2")
+        for version in ("2.2.1", "2.2.3"):
+            with self.subTest(version=version):
+                self.assertTrue(android.asset_name(version).endswith(".apk"))
+                self.assertTrue(android.manual_asset_name(version).endswith("-relay-manual.tar.gz"))
 
     def test_manual_kit_evidence_is_required_only_after_the_published_211_manifest(self):
         self.assertIsNone(android.manual_asset_name("2.1.1"))
