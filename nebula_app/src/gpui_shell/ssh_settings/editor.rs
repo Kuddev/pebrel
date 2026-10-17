@@ -440,39 +440,50 @@ impl SettingsPane {
                 SshAuthMode::KeyboardInteractive,
             ),
         ];
-        let controls = modes.into_iter().map(|(id, label, mode)| {
-            Button::new(id)
-                .label(label)
-                .ghost()
-                .small()
-                .flex_1()
-                .min_w_0()
-                .h(px(31.0))
-                .rounded(gpui_component::button::ButtonRounded::Size(px(5.0)))
-                .px_1()
-                .toggled(editor.auth == mode)
-                .when(editor.auth == mode, |button| {
-                    button.bg(theme.popover).font_medium().shadow_sm()
-                })
-                .when(editor.auth != mode, |button| button.text_color(theme.muted_foreground))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(editor) = this.ssh_editor.as_mut() {
-                        editor.auth = mode;
-                    }
-                    this.touch_ssh_editor(cx);
-                }))
-        });
+        let selected_auth = modes.iter().position(|(_, _, mode)| *mode == editor.auth).unwrap_or(0);
+        let controls = modes
+            .into_iter()
+            .map(|(id, label, mode)| {
+                Button::new(id)
+                    .label(label)
+                    .custom(
+                        gpui_component::button::ButtonCustomVariant::new(cx)
+                            .hover(theme.foreground.opacity(0.04))
+                            .active(theme.foreground.opacity(0.08)),
+                    )
+                    .small()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(31.0))
+                    .rounded(gpui_component::button::ButtonRounded::Size(px(5.0)))
+                    .px_1()
+                    .toggled(editor.auth == mode)
+                    .text_color(if editor.auth == mode {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(editor) = this.ssh_editor.as_mut() {
+                            editor.auth = mode;
+                        }
+                        this.touch_ssh_editor(cx);
+                    }))
+            })
+            .collect::<Vec<_>>();
         v_flex()
             .w_full()
             .child(div().text_xs().font_medium().child(language.pick("身份验证", "Authentication")))
             .child(
-                h_flex()
-                    .mt_2()
-                    .p(px(3.0))
-                    .gap(px(3.0))
-                    .rounded(px(8.0))
-                    .bg(theme.muted)
-                    .children(controls),
+                h_flex().mt_2().p(px(3.0)).rounded(px(8.0)).bg(theme.muted).child(
+                    crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                        "ssh-auth-modes",
+                        selected_auth,
+                        h_flex().w_full().h(px(31.0)).gap(px(3.0)).children(controls),
+                        div().rounded(px(5.0)).bg(theme.popover).shadow_sm(),
+                    )
+                    .w_full(),
+                ),
             )
             .when(shows_password, |body| {
                 body.child(

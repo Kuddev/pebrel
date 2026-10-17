@@ -77,6 +77,7 @@ impl Render for NebulaWorkspace {
             // 旧壳每个像素只画一次：整窗先透明清屏，再分别画标题栏、侧栏、
             // 卡外壳与卡底。根节点不能再铺一张半透明底。
             .bg(gpui::transparent_black())
+            .font(crate::gpui_shell::typography::ui_font(cx))
             .text_color(cx.theme().foreground)
             .can_drop({
                 let runtime_window_id = self.runtime_window_id;
