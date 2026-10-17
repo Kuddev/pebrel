@@ -139,6 +139,7 @@ impl SettingsPane {
                 cx,
             ))
             .child(self.font_size_row(false, cx))
+            .child(self.terminal_line_height_row(cx))
             .child(self.switch_row(
                 "ctrl_wheel_font_zoom",
                 language.text(crate::i18n::Message::SettingsFontCtrlWheelZoom),

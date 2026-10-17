@@ -39,7 +39,11 @@ impl Render for Probe {
 fn open(cx: &mut TestAppContext) -> (Entity<Probe>, VisualTestContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        let mut settings = Settings::load(nebula_settings::ThemeName::Nord);
+        // Settings UI fixtures write real preferences concurrently under nextest.
+        let runtime = nebula_settings::RuntimeSettings::from_raw(
+            &nebula_settings::RawSettings::from_text("font_size=15\nfollow_system_theme=0\n"),
+        );
+        let mut settings = Settings::load_with_runtime(nebula_settings::ThemeName::Nord, runtime);
         settings.focus_follows_mouse = false;
         cx.set_global(settings);
     });

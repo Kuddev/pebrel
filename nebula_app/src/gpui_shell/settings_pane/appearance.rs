@@ -9,13 +9,19 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) {
         let Some(ui) = self.font_size_editing.take() else { return };
+        let line_height = std::mem::take(&mut self.line_height_editing);
         if apply {
             let value = self.font_size_input.read(cx).value();
             if let Ok(size) = value.trim().parse::<f32>() {
                 if size.is_finite() {
                     let (key, min, max) =
                         if ui { ("ui_font_size", 10.0, 24.0) } else { ("font_size", 4.0, 96.0) };
-                    self.persist(&[(key, format!("{:.2}", size.clamp(min, max)))], cx);
+                    if line_height {
+                        let height = nebula_settings::normalize_terminal_line_height(size);
+                        self.persist(&[("terminal_line_height", format!("{height:.2}"))], cx);
+                    } else {
+                        self.persist(&[(key, format!("{:.2}", size.clamp(min, max)))], cx);
+                    }
                 }
             }
         }
@@ -147,7 +153,7 @@ impl SettingsPane {
                         this.persist(&[(key, format!("{next:.2}"))], cx);
                     })),
             )
-            .child(if self.font_size_editing == Some(ui) {
+            .child(if self.font_size_editing == Some(ui) && !self.line_height_editing {
                 Input::new(&self.font_size_input)
                     .appearance(false)
                     .focus_bordered(false)
@@ -168,6 +174,7 @@ impl SettingsPane {
                     .h(px(34.0))
                     .label(format!("{size} px"))
                     .on_click(cx.listener(move |this, _, window, cx| {
+                        this.line_height_editing = false;
                         this.font_size_editing = Some(ui);
                         this.font_size_input.update(cx, |input, cx| {
                             let value = size.to_string();
@@ -205,6 +212,67 @@ impl SettingsPane {
                 language.pick("只调整终端文字大小。", "Changes only the terminal text size.")
             },
             stepper,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    pub(super) fn terminal_line_height_row(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        use crate::i18n::Message;
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let value = self.runtime.terminal_line_height;
+        let control = h_flex()
+            .gap(px(4.0))
+            .child(if self.line_height_editing {
+                Input::new(&self.font_size_input)
+                    .appearance(false)
+                    .cleanable(false)
+                    .w(px(90.0))
+                    .h(px(34.0))
+                    .aria_label(language.text(Message::TerminalLineHeightLabel))
+                    .into_any_element()
+            } else {
+                Button::new("terminal-line-height-edit")
+                    .debug_selector(|| "terminal-line-height-edit".to_owned())
+                    .ghost()
+                    .w(px(90.0))
+                    .h(px(34.0))
+                    .label(value.map(|value| format!("{value:.2}")).unwrap_or_else(|| {
+                        language.text(Message::TerminalLineHeightAuto).to_owned()
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.font_size_editing = Some(false);
+                        this.line_height_editing = true;
+                        this.font_size_input.update(cx, |input, cx| {
+                            let value = format!(
+                                "{:.2}",
+                                value.unwrap_or(nebula_settings::DEFAULT_TERMINAL_LINE_HEIGHT)
+                            );
+                            input.set_value(value.clone(), window, cx);
+                            input.focus(window, cx);
+                            input.set_selected_range(0..value.len(), cx);
+                        });
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            })
+            .child(
+                Button::new("terminal-line-height-reset")
+                    .debug_selector(|| "terminal-line-height-reset".to_owned())
+                    .ghost()
+                    .label(language.text(Message::TerminalLineHeightAuto))
+                    .disabled(value.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.line_height_editing {
+                            this.finish_font_size_edit(false, window, cx);
+                        }
+                        this.persist(&[("terminal_line_height", String::new())], cx);
+                    })),
+            );
+        self.row(
+            language.text(Message::TerminalLineHeightLabel),
+            language.text(Message::TerminalLineHeightDescription),
+            control,
             cx,
         )
         .into_any_element()
@@ -289,11 +357,20 @@ mod tests {
             ("ui_font_size", "17", "tab", 17.0),
             ("ui_font_size", "18", "shift-tab", 18.0),
             ("ui_font_size", "16", "blur", 16.0),
+            ("terminal_line_height", "1.456", "enter", 1.46),
+            ("terminal_line_height", "2", "escape", 1.46),
+            ("terminal_line_height", "NaN", "enter", 1.46),
+            ("terminal_line_height", "99", "tab", 5.0),
+            ("terminal_line_height", "0", "blur", 0.5),
         ] {
             cx.update(|window, cx| {
                 let _ = window.draw(cx);
             });
-            let selector = if key == "font_size" { "font_size-edit" } else { "ui_font_size-edit" };
+            let selector = match key {
+                "font_size" => "font_size-edit",
+                "terminal_line_height" => "terminal-line-height-edit",
+                _ => "ui_font_size-edit",
+            };
             let bounds = cx.debug_bounds(selector).unwrap();
             // Increasing the interface size can move this row below the fold.
             // Reveal it with the same wheel path a user takes before clicking.
@@ -359,6 +436,8 @@ mod tests {
                 );
                 let actual = if key == "font_size" {
                     pane.terminal_font_size_px(cx)
+                } else if key == "terminal_line_height" {
+                    pane.runtime.terminal_line_height.unwrap()
                 } else {
                     pane.font_size_px(cx)
                 };
@@ -368,10 +447,41 @@ mod tests {
             if key == "font_size" {
                 assert_eq!(saved.font_size_px, Some(expected));
                 assert_eq!(saved.ui_font_size_px, Some(14.0));
+            } else if key == "terminal_line_height" {
+                assert_eq!(saved.terminal_line_height, Some(expected));
+                assert_eq!(saved.font_size_px, Some(4.0));
             } else {
                 assert_eq!(saved.font_size_px, Some(4.0));
                 assert_eq!(saved.ui_font_size_px, Some(expected));
             }
         }
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let edit = cx.debug_bounds("terminal-line-height-edit").unwrap();
+        cx.simulate_click(edit.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_input("2");
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let bounds = cx.debug_bounds("terminal-line-height-reset").unwrap();
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert!(RuntimeSettings::load().terminal_line_height.is_none());
+        cx.simulate_keystrokes("enter");
+        cx.update(|window, cx| {
+            pane.read(cx).settings_search_input.read(cx).focus_handle(cx).focus(window, cx);
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+        assert!(RuntimeSettings::load().terminal_line_height.is_none());
+        pane.read_with(cx, |pane, _| {
+            assert!(pane.font_size_editing.is_none());
+            assert!(!pane.line_height_editing);
+        });
     }
 }
