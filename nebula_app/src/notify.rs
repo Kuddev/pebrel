@@ -16,7 +16,8 @@
 //! registry route for unpackaged apps — no COM, no Start-menu shortcut, no
 //! installer), so banners read "Pebrel" instead of "Windows PowerShell".
 //!
-//! Delivery discipline: the toast RPC runs on a throwaway thread so a slow or
+//! Delivery discipline: GPUI macOS delivery uses its asynchronous native service;
+//! other toast RPCs run on a throwaway thread so a slow or
 //! faulty notification stack can never stall the winit event loop — and a
 //! panic there kills that thread, not the terminal. Notifications are
 //! best-effort by contract: every failure degrades to a log line, never to a
@@ -502,7 +503,7 @@ fn throttled() -> bool {
 
 /// Raise a native system toast. Best-effort: any failure is logged and
 /// swallowed (the taskbar flash already fired, so the user is not left with
-/// nothing). Native delivery runs on a worker thread, never on the event loop.
+/// nothing). Native delivery is queued without blocking the caller.
 pub(crate) fn toast(title: &str, body: &str) {
     spawn_toast(title.to_owned(), body.to_owned(), application_activation(None));
 }
