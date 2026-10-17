@@ -110,8 +110,9 @@ impl SettingsPane {
             .border_color(gpui::rgb(if picker.dark_preview { 0x3d434d } else { 0xdfe3e9 }))
             .bg(gpui::rgb(if picker.dark_preview { 0x1a1d24 } else { 0xf0f2f5 }))
             .child(icon_image(draft, if compact { 76.0 } else { 104.0 }, window));
-        let tabs = h_flex().p(px(3.0)).gap_0().rounded(px(6.0)).bg(colors.subtle).children(
-            [false, true].into_iter().map(|dark| {
+        let preview_buttons = [false, true]
+            .into_iter()
+            .map(|dark| {
                 Button::new(if dark { "icon-preview-dark" } else { "icon-preview-light" })
                     .label(if dark {
                         language.pick("深色背景", "Dark")
@@ -123,9 +124,11 @@ impl SettingsPane {
                     .px(px(9.0))
                     .text_size(px(10.0))
                     .rounded(px(4.0))
-                    .text_color(colors.secondary)
-                    .when(picker.dark_preview == dark, |button| {
-                        button.bg(colors.surface).text_color(colors.ink)
+                    .toggled(picker.dark_preview == dark)
+                    .text_color(if picker.dark_preview == dark {
+                        colors.ink
+                    } else {
+                        colors.secondary
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(picker) = this.appearance_picker.as_mut() {
@@ -133,7 +136,15 @@ impl SettingsPane {
                         }
                         cx.notify();
                     }))
-            }),
+            })
+            .collect::<Vec<_>>();
+        let tabs = h_flex().p(px(3.0)).rounded(px(6.0)).bg(colors.subtle).child(
+            crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                "icon-preview-modes",
+                usize::from(picker.dark_preview),
+                h_flex().h(px(25.0)).children(preview_buttons),
+                div().rounded(px(4.0)).bg(colors.surface),
+            ),
         );
         let title = v_flex()
             .items_center()
