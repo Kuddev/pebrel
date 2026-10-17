@@ -279,36 +279,37 @@ impl SettingsPane {
                         && !state.license.read(cx).value().trim().is_empty()
                 },
             };
+        let mode_buttons = [
+            (Mode::Export, "theme-package-export-mode", Message::ThemePackageExportMode),
+            (Mode::Import, "theme-package-import-mode", Message::ThemePackageImportMode),
+        ]
+        .into_iter()
+        .map(|(tab, id, message)| {
+            Button::new(id)
+                .debug_selector(move || id.to_owned())
+                .label(language.text(message))
+                .ghost()
+                .h(px(32.0))
+                .px(px(12.0))
+                .rounded_full()
+                .disabled(busy)
+                .toggled(mode == tab)
+                .text_color(if mode == tab { colors.ink } else { colors.secondary })
+                .on_click(cx.listener(move |this, _, _, cx| this.switch_theme_package(tab, cx)))
+        })
+        .collect::<Vec<_>>();
         let tabs = h_flex()
             .self_start()
-            .gap(px(2.0))
             .p(px(2.0))
             .rounded_full()
             .border_1()
             .border_color(colors.line)
-            .children(
-                [
-                    (Mode::Export, "theme-package-export-mode", Message::ThemePackageExportMode),
-                    (Mode::Import, "theme-package-import-mode", Message::ThemePackageImportMode),
-                ]
-                .into_iter()
-                .map(|(tab, id, message)| {
-                    Button::new(id)
-                        .debug_selector(move || id.to_owned())
-                        .label(language.text(message))
-                        .ghost()
-                        .h(px(32.0))
-                        .px(px(12.0))
-                        .rounded_full()
-                        .disabled(busy)
-                        .when(mode == tab, |button| {
-                            button.bg(colors.subtle).text_color(colors.ink).font_semibold()
-                        })
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.switch_theme_package(tab, cx)),
-                        )
-                }),
-            );
+            .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                "theme-package-modes",
+                usize::from(mode == Mode::Import),
+                h_flex().gap(px(2.0)).h(px(32.0)).children(mode_buttons),
+                div().rounded_full().bg(colors.subtle),
+            ));
         let dialog = v_flex()
             .id("theme-package-dialog")
             .debug_selector(|| "theme-package-dialog".to_owned())

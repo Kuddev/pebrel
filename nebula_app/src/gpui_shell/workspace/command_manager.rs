@@ -567,12 +567,16 @@ impl NebulaWorkspace {
             let list = gpui::uniform_list(
                 "saved-command-results-scroll",
                 rows.len(),
-                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                     range
                         .map(|index| match rows[index].clone() {
-                            ManagerRow::Command(command) => {
-                                this.render_saved_command_row(index, command, list_scrollable, cx)
-                            },
+                            ManagerRow::Command(command) => this.render_saved_command_row(
+                                index,
+                                command,
+                                list_scrollable,
+                                window,
+                                cx,
+                            ),
                             ManagerRow::Folder { id, name, count } => {
                                 this.render_command_folder(index, id, name, count, cx)
                             },
