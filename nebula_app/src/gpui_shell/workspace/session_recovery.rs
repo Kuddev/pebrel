@@ -3,6 +3,20 @@
 use super::*;
 
 impl NebulaWorkspace {
+    pub(super) fn save_clean_window_session(
+        &mut self,
+        window: &Window,
+        cx: &mut App,
+    ) -> std::io::Result<()> {
+        windowing::save_current_window_session(
+            self.runtime_window_id,
+            self.snapshot_session(cx),
+            session_persistence::SaveReason::WindowClose,
+            window,
+            cx,
+        )
+    }
+
     /// 冷启动回退（没有恢复出任何标签）时首个终端的 cwd：与 `add_terminal`
     /// 同一合同，设置页「启动目录」优先，未设置或失效时才继承进程启动目录。
     pub(super) fn cold_start_cwd() -> Option<std::path::PathBuf> {

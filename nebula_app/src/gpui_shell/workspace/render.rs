@@ -6,7 +6,7 @@ impl Render for NebulaWorkspace {
         let theme_transition = self.theme_transition.render(window, cx);
         crate::gpui_shell::theme::sync_component_focus_ring(window, cx);
         if window.is_window_active() {
-            windowing::mark_active(self.runtime_window_id, cx);
+            windowing::mark_active(self.runtime_window_id, window, cx);
         }
         if !cx.has_active_drag() {
             self.cross_window_dock = None;

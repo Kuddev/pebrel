@@ -1,6 +1,6 @@
 //! Native X11/Wayland lifecycle regression, run only with an isolated CI desktop.
 use super::*;
-use gpui::{MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput};
+use gpui::{MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, WindowOptions, point};
 
 struct ActivationFixture;
 impl Render for ActivationFixture {

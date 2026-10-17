@@ -24,6 +24,7 @@ impl NebulaWorkspace {
                     self.runtime_window_id,
                     self.snapshot_session(cx),
                     session_persistence::SaveReason::Checkpoint,
+                    window,
                     cx,
                 ) {
                     log::warn!("Could not checkpoint native recovery identity: {error}");
