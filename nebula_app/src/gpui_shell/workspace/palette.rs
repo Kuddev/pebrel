@@ -1,5 +1,7 @@
 use super::*;
 
+const PALETTE_SEARCH_HEIGHT: f32 = 48.0;
+
 /// 命令面板 / Shell 选择弹窗里图标轨的逻辑边长。品牌贴图、Nerd Font 字形
 /// 与组件库线性图标都排进同一个槽，行与行之间才不会有的缩进有的不缩进。
 const PALETTE_ICON_PX: f32 = 22.0;
@@ -297,7 +299,7 @@ impl NebulaWorkspace {
         // 搜索框一起上下跳。Command Palette 没有筛选条，结果视口自然多占一行。
         let results_height = f32::from(window.viewport_size().height).min(PALETTE_PANEL_HEIGHT)
             - 2.0
-            - 56.0
+            - PALETTE_SEARCH_HEIGHT
             - if has_filter_bar { PALETTE_FILTER_BAR_HEIGHT } else { 0.0 };
         let results_scrollable = content_height > results_height;
         // 同一份 picker 只要有一行带图标，就为全部行保留固定 icon rail；常规
@@ -527,7 +529,7 @@ impl NebulaWorkspace {
             .debug_selector(|| "workspace-palette-search".to_owned())
             .relative()
             .w_full()
-            .h(px(56.0))
+            .h(px(PALETTE_SEARCH_HEIGHT))
             .flex_shrink_0()
             .px(px(16.0))
             .gap(px(10.0))
@@ -561,12 +563,15 @@ impl NebulaWorkspace {
             .child(underline);
 
         let filter_bar = palette_filters.map(|(selected_filter, counts)| {
+            let selected_index =
+                counts.iter().position(|(filter, _)| *filter == selected_filter).unwrap_or(0);
             let chips = counts
                 .into_iter()
                 .map(|(filter, count)| {
                     let selected = selected_filter == filter;
                     h_flex()
                         .id(SharedString::from(format!("workspace-palette-filter-{filter:?}")))
+                        .debug_selector(move || format!("workspace-palette-filter-{filter:?}"))
                         .h(px(26.0))
                         .px_2()
                         .gap(px(space::XXS))
@@ -575,9 +580,6 @@ impl NebulaWorkspace {
                         .rounded_full()
                         .border_1()
                         .border_color(gpui::transparent_black())
-                        .when(selected, |chip| {
-                            chip.bg(accent.opacity(0.08)).border_color(accent.opacity(0.3))
-                        })
                         .when(!selected, |chip| chip.hover(|chip| chip.bg(hover_bg)))
                         .child(
                             div()
@@ -603,9 +605,18 @@ impl NebulaWorkspace {
                 .flex_shrink_0()
                 .w_full()
                 .px(px(12.0))
-                .gap_1()
+                .pt(px(8.0))
                 .items_center()
-                .children(chips)
+                .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                    if self.shell_picker_open { "launcher-filters" } else { "quick-jump-filters" },
+                    selected_index,
+                    h_flex().gap_1().children(chips),
+                    div()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(accent.opacity(0.3))
+                        .bg(accent.opacity(0.08)),
+                ))
                 .into_any_element()
         });
 
