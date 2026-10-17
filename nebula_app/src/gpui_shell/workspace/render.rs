@@ -149,6 +149,20 @@ impl Render for NebulaWorkspace {
                     }
                 });
             }))
+            .on_action(cx.listener(|this, _: &OpenAbout, window, cx| {
+                this.open_settings(window, cx);
+                if let Some((view, _)) = &this.settings_surface {
+                    view.update(cx, |pane, cx| pane.show_application_home(window, cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
+                if this.should_close_window(window, cx) {
+                    window.remove_window();
+                }
+            }))
+            .on_action(cx.listener(|_, _: &HideApplication, _, cx| cx.hide()))
+            .on_action(cx.listener(|_, _: &HideOtherApplications, _, cx| cx.hide_other_apps()))
+            .on_action(cx.listener(|_, _: &MinimizeWindow, window, _| window.minimize_window()))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
                 this.close_active(window, cx);
             }))
@@ -240,6 +254,12 @@ impl Render for NebulaWorkspace {
                     // 让 Ctrl+C 等自定义组合键按终端原义进入 PTY。
                     cx.propagate();
                 }
+            }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Copy, window, cx| {
+                this.copy_focused_terminal(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Paste, window, cx| {
+                this.paste_focused_terminal(window, cx);
             }))
             .on_action(cx.listener(|this, _: &PasteClipboard, window, cx| {
                 this.paste_focused_terminal(window, cx);

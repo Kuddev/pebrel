@@ -140,9 +140,8 @@ impl ShortcutPolicy {
 pub(crate) const MACOS_COMMAND_ALIASES: &[(&str, Action)] = &[
     ("cmd+t", Action::CreateNewTab),
     ("cmd+n", Action::CreateNewWindow),
-    // ⌘W 关标签页是 GPUI 壳的实际行为；配置表的 macOS 段把 ⌘W 记作 Quit，
-    // 这里必须压过它，否则解绑恢复会把 ⌘W 还给退出。
-    ("cmd+w", Action::CloseTab),
+    // ⌘W 留给原生关窗；终端标签关闭的注册与设置恢复共用这个别名。
+    ("shift+cmd+w", Action::CloseTab),
     ("shift+cmd+p", Action::ToggleCommandPalette),
     ("cmd+k", Action::ToggleShellPicker),
     ("shift+cmd+f", Action::ToggleFilesPanel),
@@ -321,6 +320,10 @@ impl ShortcutPolicy {
                 }
             }
             shortcuts.extend(extra);
+        }
+        if self.gpui && cfg!(target_os = "macos") {
+            // 原生关窗没有持久化 Action；恢复 Quit 不得把旧壳的 ⌘W 注入为退出应用。
+            shortcuts.retain(|(combo, _)| !self.same_combo(combo, "cmd+w"));
         }
         shortcuts
     }
