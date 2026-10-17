@@ -335,35 +335,44 @@ impl SettingsPane {
                         .child(language.text(message)),
                 )
             })
-            .child(h_flex().w_full().gap(px(12.0)).border_b_1().border_color(colors.line).children(
-                tabs.into_iter().map(|(index, selector, label)| {
-                    Button::new(selector)
-                        .debug_selector(move || selector.to_owned())
-                        .label(label)
-                        .ghost()
-                        .small()
-                        .rounded_none()
-                        .border_0()
-                        .border_b_2()
-                        .border_color(if preview_mode == index {
-                            colors.primary
-                        } else {
-                            gpui::transparent_black()
-                        })
-                        .text_color(if preview_mode == index {
-                            colors.ink
-                        } else {
-                            colors.secondary
-                        })
-                        .when(preview_mode == index, |button| button.font_semibold())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(editor) = this.theme_editor.as_mut() {
-                                editor.preview = index;
-                            }
-                            cx.notify();
-                        }))
-                }),
-            ))
+            .child(
+                div().w_full().border_b_1().border_color(colors.line).child(
+                    crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                        "theme-editor-preview-modes",
+                        preview_mode,
+                        h_flex().w_full().gap(px(12.0)).children(tabs.into_iter().map(
+                            |(index, selector, label)| {
+                                Button::new(selector)
+                                    .debug_selector(move || selector.to_owned())
+                                    .label(label)
+                                    .ghost()
+                                    .small()
+                                    .rounded_none()
+                                    .border_0()
+                                    .border_b_2()
+                                    .border_color(gpui::transparent_black())
+                                    .toggled(preview_mode == index)
+                                    .text_color(if preview_mode == index {
+                                        colors.ink
+                                    } else {
+                                        colors.secondary
+                                    })
+                                    .when(preview_mode == index, |button| button.font_semibold())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(editor) = this.theme_editor.as_mut() {
+                                            editor.preview = index;
+                                        }
+                                        cx.notify();
+                                    }))
+                            },
+                        )),
+                        div().child(
+                            div().absolute().bottom_0().w_full().h(px(2.0)).bg(colors.primary),
+                        ),
+                    )
+                    .w_full(),
+                ),
+            )
     }
 
     pub(in crate::gpui_shell::settings_pane) fn theme_editor_modal(

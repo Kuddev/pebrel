@@ -151,6 +151,7 @@ impl NebulaWorkspace {
     ) -> Button {
         let visible = self.side_panel.open && !self.reader_focus_active(cx);
         toolbar_button("toggle-right-sidebar", IconName::PanelRight)
+            .debug_selector(|| "toggle-right-sidebar".to_owned())
             .disabled(disabled)
             .selected(visible)
             .when(visible, |button| button.bg(cx.theme().secondary))
@@ -223,11 +224,9 @@ impl NebulaWorkspace {
             IconName::FolderClosed,
         ));
         tabs.push((3, "side-panel-git", vcs_name, IconName::Github));
-        let label_limit = (width
-            - 16.0
-            - (tabs.len() + 1) as f32 * HEADER_CONTROL_SIZE
-            - tabs.len() as f32 * 2.0)
-            .max(0.0);
+        let label_limit =
+            (width - 16.0 - tabs.len() as f32 * HEADER_CONTROL_SIZE - tabs.len() as f32 * 2.0)
+                .max(0.0);
         let selected = self.details_tab(cx);
         let previous = self.details_panel.previous_tab;
         let serial = self.details_panel.transition;
@@ -319,21 +318,7 @@ impl NebulaWorkspace {
                 );
             header = header.child(button);
         }
-        header
-            .child(div().flex_1())
-            .child(
-                Button::new("workspace-details-close")
-                    .debug_selector(|| "workspace-details-close".to_owned())
-                    .ghost()
-                    .size(px(HEADER_CONTROL_SIZE))
-                    .flex_shrink_0()
-                    .icon(Icon::new(IconName::PanelRightClose).size(px(16.0)))
-                    .tooltip(language.text(Message::EditorDetailsClose))
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.toggle_side_panel(view.side_panel.view, cx)
-                    })),
-            )
-            .into_any_element()
+        header.child(div().flex_1()).into_any_element()
     }
 
     pub(super) fn render_side_panel_slot(

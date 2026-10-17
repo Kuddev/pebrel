@@ -228,7 +228,42 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         let busy = self.mobile.operation;
         let mode = self.mobile.mode;
-        let mut modes = h_flex()
+        let choices = [(Mode::Lan, Message::MobileLan), (Mode::Relay, Message::MobileRelay)];
+        let buttons = choices
+            .into_iter()
+            .map(|(route, label)| {
+                let selected = mode == route;
+                Button::new(if route == Mode::Lan {
+                    "mobile-mode-lan"
+                } else {
+                    "mobile-mode-relay"
+                })
+                .small()
+                .h(px(28.0))
+                .rounded(px(6.0))
+                .custom(
+                    gpui_component::button::ButtonCustomVariant::new(cx)
+                        .foreground(if selected {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .hover(if selected {
+                            cx.theme().transparent
+                        } else {
+                            cx.theme().foreground.opacity(0.04)
+                        })
+                        .active(cx.theme().foreground.opacity(0.08)),
+                )
+                .toggled(selected)
+                .label(language.text(label))
+                .disabled(busy)
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.mobile_mode(route, window, cx)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let modes = h_flex()
             .id("mobile-pairing-modes")
             .debug_selector(|| "mobile-pairing-modes".into())
             .mt(px(18.0))
@@ -236,30 +271,13 @@ impl SettingsPane {
             .rounded(px(8.0))
             .border_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().secondary);
-        for (route, label) in [(Mode::Lan, Message::MobileLan), (Mode::Relay, Message::MobileRelay)]
-        {
-            modes = modes.child(
-                Button::new(if route == Mode::Lan {
-                    "mobile-mode-lan"
-                } else {
-                    "mobile-mode-relay"
-                })
-                .ghost()
-                .small()
-                .h(px(28.0))
-                .rounded(px(6.0))
-                .selected(mode == route)
-                .when(mode == route, |button| {
-                    button.bg(crate::gpui_shell::theme::settings_panel_bg(cx))
-                })
-                .label(language.text(label))
-                .disabled(busy)
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.mobile_mode(route, window, cx)),
-                ),
-            );
-        }
+            .bg(cx.theme().secondary)
+            .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                "mobile-connection-mode",
+                usize::from(mode == Mode::Relay),
+                h_flex().h(px(28.0)).children(buttons),
+                div().rounded(px(6.0)).bg(crate::gpui_shell::theme::settings_panel_bg(cx)),
+            ));
         let mut steps = v_flex()
             .id("mobile-pairing-steps")
             .debug_selector(|| "mobile-pairing-steps".into())
