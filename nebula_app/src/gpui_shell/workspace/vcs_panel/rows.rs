@@ -42,12 +42,12 @@ impl NebulaWorkspace {
         let Some(row) = self.vcs_list.row(visible_index).cloned() else {
             return div().into_any_element();
         };
+        let history = matches!(&row, VcsRow::History { .. });
         let language = crate::gpui_shell::config::ui_language(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let hover = theme.list_hover;
         let selected_bg = theme.list_active;
-        let symbol: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let lane_purple = gpui::Hsla {
             h: (theme.primary.h + 0.20) % 1.0,
             s: theme.primary.s.max(0.42),
@@ -82,6 +82,7 @@ impl NebulaWorkspace {
                     lane_spacing,
                     [theme.primary, theme.success, lane_purple, theme.warning],
                     theme.popover,
+                    &commit,
                 );
                 let refs = git_ref_labels(&commit.decorations)
                     .into_iter()
@@ -102,7 +103,8 @@ impl NebulaWorkspace {
                             .border_color(color.opacity(0.38))
                             .bg(color.opacity(0.12))
                             .truncate()
-                            .text_size(px(9.5))
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(theme.font_size - px(3.0))
                             .text_color(color)
                             .child(git_ref.label)
                             .into_any_element()
@@ -116,6 +118,7 @@ impl NebulaWorkspace {
                 );
                 h_flex()
                     .id(SharedString::from(format!("git-history-{index}")))
+                    .debug_selector(move || format!("git-history-{index}"))
                     .w_full()
                     .h(px(46.0))
                     .px_2()
@@ -132,7 +135,14 @@ impl NebulaWorkspace {
                             .child(h_flex().min_w_0().gap(px(4.0)).children(refs).child(
                                 div().min_w_0().truncate().text_sm().child(commit.subject.clone()),
                             ))
-                            .child(div().truncate().text_xs().text_color(muted).child(meta)),
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_size(theme.font_size - px(2.5))
+                                    .text_color(muted)
+                                    .child(meta),
+                            ),
                     )
                     .into_any_element()
             },
@@ -195,8 +205,10 @@ impl NebulaWorkspace {
                         div()
                             .w(px(14.0))
                             .flex_shrink_0()
-                            .font_family(symbol.clone())
-                            .text_sm()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(theme.font_size - px(2.0))
+                            .text_center()
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(status_color)
                             .child(status.to_string()),
                     )
@@ -206,13 +218,21 @@ impl NebulaWorkspace {
                             .min_w_0()
                             .gap_1()
                             .items_center()
-                            .child(div().flex_shrink_0().text_sm().child(file_name.clone()))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::NORMAL)
+                                    .text_size(theme.font_size - px(0.5))
+                                    .child(file_name.clone()),
+                            )
                             .when(!parent.is_empty(), |line| {
                                 line.child(
                                     div()
                                         .min_w_0()
                                         .truncate()
-                                        .text_xs()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_size(theme.font_size - px(2.5))
                                         .text_color(muted)
                                         .child(parent.clone()),
                                 )
@@ -387,6 +407,7 @@ impl NebulaWorkspace {
                     .into_any_element()
             },
         };
-        div().w_full().pb_1().child(element).into_any_element()
+        // 历史行必须首尾相接；通用的 4px 行底留白会把线路切成一段段。
+        div().w_full().when(!history, |row| row.pb_1()).child(element).into_any_element()
     }
 }

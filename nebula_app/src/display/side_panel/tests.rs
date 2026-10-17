@@ -991,8 +991,8 @@ mod tests {
 #[test]
 fn git_history_parser_keeps_commit_identity_parents_and_fields() {
     let output = concat!(
-        "\u{1e}aaaaaaaa\u{1f}a1b2c3d\u{1f}HEAD -> refs/heads/main, tag: refs/tags/v1\u{1f}ship it\u{1f}Alice\u{1f}1700000000\u{1f}1111111 2222222\n",
-        "\u{1e}dddddddd\u{1f}d4e5f6a\u{1f}refs/heads/topic\u{1f}side work\u{1f}Bob\u{1f}1699999000\u{1f}3333333\n",
+        "\u{1e}aaaaaaaa\u{1f}a1b2c3d\u{1f}HEAD -> refs/heads/main, tag: refs/tags/v1\u{1f}ship it\u{1f}Alice\u{1f}alice@example.test\u{1f}1700000000\u{1f}1111111 2222222\n",
+        "\u{1e}dddddddd\u{1f}d4e5f6a\u{1f}refs/heads/topic\u{1f}side work\u{1f}Bob\u{1f}bob@example.test\u{1f}1699999000\u{1f}3333333\n",
     );
     let commits = parse_git_history(output);
     assert_eq!(commits.len(), 2);
@@ -1002,6 +1002,7 @@ fn git_history_parser_keeps_commit_identity_parents_and_fields() {
     assert_eq!(first.decorations, "HEAD -> refs/heads/main, tag: refs/tags/v1");
     assert_eq!(first.subject, "ship it");
     assert_eq!(first.author, "Alice");
+    assert_eq!(first.author_email, "alice@example.test");
     assert_eq!(first.timestamp, 1_700_000_000);
     assert_eq!(first.parent_hashes, ["1111111", "2222222"]);
     assert_eq!(commits[1].subject, "side work");
