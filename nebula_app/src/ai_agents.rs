@@ -51,10 +51,14 @@ pub enum AgentKind {
     Maki,
     Trae,
     CodeBuddy,
+    Junie,
+    OpenHands,
+    OpenClaw,
+    Crush,
 }
 
 impl AgentKind {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 31] = [
         Self::Claude,
         Self::Codex,
         Self::Gemini,
@@ -82,6 +86,10 @@ impl AgentKind {
         Self::Maki,
         Self::Trae,
         Self::CodeBuddy,
+        Self::Junie,
+        Self::OpenHands,
+        Self::OpenClaw,
+        Self::Crush,
     ];
 
     pub fn slug(self) -> &'static str {
@@ -113,6 +121,10 @@ impl AgentKind {
             Self::Maki => "maki",
             Self::Trae => "trae-cli",
             Self::CodeBuddy => "codebuddy",
+            Self::Junie => "junie",
+            Self::OpenHands => "openhands",
+            Self::OpenClaw => "openclaw",
+            Self::Crush => "crush",
         }
     }
 
@@ -145,6 +157,10 @@ impl AgentKind {
             Self::Maki => "Maki",
             Self::Trae => "Trae CLI",
             Self::CodeBuddy => "CodeBuddy Code",
+            Self::Junie => "Junie",
+            Self::OpenHands => "OpenHands",
+            Self::OpenClaw => "OpenClaw",
+            Self::Crush => "Crush",
         }
     }
 
@@ -186,6 +202,10 @@ impl AgentKind {
             Self::Trae => &["trae-cli"],
             // @tencent-ai/codebuddy-code 2.150.0's interactive bin entries.
             Self::CodeBuddy => &["codebuddy", "cbc", "codebuddy-code", "codebuddy-lowmem"],
+            Self::Junie => &["junie"],
+            Self::OpenHands => &["openhands"],
+            Self::OpenClaw => &["openclaw"],
+            Self::Crush => &["crush"],
         }
     }
 
@@ -269,6 +289,10 @@ impl AgentKind {
             | Self::Kilo
             | Self::Qoder
             | Self::Maki
+            | Self::Junie
+            | Self::OpenHands
+            | Self::OpenClaw
+            | Self::Crush
             | Self::Trae
             | Self::CodeBuddy => return None,
             Self::Kimi => format!("kimi --session {session_id}"),
