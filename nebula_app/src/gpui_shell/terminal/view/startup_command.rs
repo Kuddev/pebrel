@@ -95,13 +95,17 @@ impl TerminalView {
     }
 
     pub(super) fn choose_codex_recovery_session(&mut self, cx: &mut Context<Self>) {
+        let Some(command) = self.configured_recovery_command("codex resume".into(), "codex", cx)
+        else {
+            return;
+        };
         // Keep the old target until the user's choice receives a native
         // acknowledgement. Directory similarity cannot recover a missing ID.
         self.recovery.choosing_session = true;
         self.recovery.submitted = false;
         self.recovery.failed = false;
         self.last_command_failed = false;
-        self.run_command("codex resume".into(), cx);
+        self.run_command(command, cx);
         cx.emit(TerminalViewEvent::Notification(crate::notify::Notification::Text {
             body: ui_language().text(crate::i18n::Message::SessionRestoreChooseCodex).to_owned(),
             program: Some("codex".into()),
@@ -178,6 +182,20 @@ impl TerminalView {
         }
     }
 
+    fn configured_recovery_command(
+        &self,
+        command: String,
+        source: &str,
+        cx: &App,
+    ) -> Option<String> {
+        // 没有全局设置（启动早期、无设置的测试窗口）等同于未配置，保持默认命令。
+        let value = cx
+            .try_global::<Settings>()
+            .map_or("", |settings| settings.agent_resume_args.get(source));
+        let program = self.exec_context.as_ref().and_then(|context| context.shell_program());
+        crate::agent_resume::append(command, value, self.path_quote(), program)
+    }
+
     pub(crate) fn restore_agent(
         &mut self,
         mut agent: crate::session::AgentSession,
@@ -190,7 +208,10 @@ impl TerminalView {
             ..SessionRecovery::default()
         };
         if agent.source != "pi" || self.ssh_destination.is_some() {
-            if let Some(command) = agent.resume_command() {
+            if let Some(command) = agent
+                .resume_command()
+                .and_then(|command| self.configured_recovery_command(command, &agent.source, cx))
+            {
                 self.run_command(command, cx);
             } else {
                 self.recovery.failed = true;
@@ -232,6 +253,9 @@ impl TerminalView {
                                 view.path_quote(),
                             )
                             .map(|quoted| format!("pi --session {}", quoted.trim_end()))
+                        });
+                        let command = command.and_then(|command| {
+                            view.configured_recovery_command(command, &target.source, cx)
                         });
                         view.recovery.target = Some(target);
                         if let Some(command) = command {
