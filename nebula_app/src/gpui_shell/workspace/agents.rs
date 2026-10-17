@@ -108,39 +108,69 @@ fn window_minimized(_window: &Window) -> bool {
     false
 }
 
+/// 相位按真实时间推进（0.8s 一圈）：定时链的节奏与显示刷新解耦后，动画
+/// 速度不变——步进慢了只是采样点变稀。
+fn advance_spinner_phase(phase: f32, delta: std::time::Duration) -> f32 {
+    const PERIOD_SECS: f32 = 0.8;
+    (phase + delta.as_secs_f32() / PERIOD_SECS).rem_euclid(1.0)
+}
+
 impl NebulaWorkspace {
-    /// 只为当前可见的运行态徽章挂一帧。下一帧必须由随后的实际 render 续期，
-    /// 因此任务结束、窗口不可见或徽章滚出视口时会自然断链，不留下常驻
-    /// animation loop；由 GPUI 的帧源调度，才能跟随显示器刷新节奏。
+    /// spinner 定时链的步进上限：80ms（12.5Hz）。相位按真实时间推进，一圈
+    /// 0.8s 足够 10 步，视觉上仍是连续转动；而 agent 回合（常达分钟级）不再
+    /// 以显示器刷新率整窗重绘——Fleet（GPUI 壳分叉）2026-10-12 实测，这是
+    /// agent 挂机期 CPU 的最大单项（vsync 级 → 12.5fps）。
+    pub(super) const SPINNER_TICK: Duration = Duration::from_millis(80);
+
+    /// 只为当前可见的运行态徽章维持一条 80ms 定时链；每步按真实时间推进
+    /// 相位并 `notify`。任务结束（render 置 `spinner_visible` = false）或窗口
+    /// 隐藏后，链在下一 tick 自行退出；render 每帧都会重新调用这里，门闩
+    /// 保证同一时刻至多一条链。
     ///
     /// 断链判据是「像素到不了屏幕」而不是「窗口没聚焦」：一边看 Agent 跑、
     /// 一边在浏览器或编辑器里干活，正是这个转圈唯一的用武之地；失焦即冻结
-    /// 会让它在最需要的场景里失效，而窗口就在旁边亮着不动，用户只能读成
-    /// 「Agent 卡死了」。非活跃窗口的开销由 GPUI 帧循环自己压到 30fps
-    /// （`next_frame_callbacks` 非空 + 窗口非活跃即节流），不必在这里再停
-    /// 一次。
+    /// 会让它在最需要的场景里失效。定时回调拿不到 `Window`，托盘隐藏由
+    /// tick 自己查（`window_hidden` 是字段），最小化探测只能在 render 侧做：
+    /// 这里发现 offscreen 就抬世代号掀掉在途链。
     pub(super) fn arm_activity_spinner_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
-        const PERIOD_SECS: f32 = 0.8;
-
-        if self.spinner_frame_pending.get()
-            || !self.spinner_visible.get()
-            || self.spinner_offscreen(window)
-        {
+        if self.spinner_tick_armed.get() || !self.spinner_visible.get() {
             return;
         }
-        self.spinner_frame_pending.set(true);
-        cx.on_next_frame(window, |workspace, window, cx| {
-            workspace.spinner_frame_pending.set(false);
-            if !workspace.spinner_visible.get() || workspace.spinner_offscreen(window) {
-                return;
+        if self.spinner_offscreen(window) {
+            self.spinner_chain_epoch.set(self.spinner_chain_epoch.get() + 1);
+            self.spinner_tick_armed.set(false);
+            return;
+        }
+        self.spinner_tick_armed.set(true);
+        let epoch = self.spinner_chain_epoch.get();
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Self::SPINNER_TICK).await;
+                let keep = this
+                    .update(cx, |workspace, cx| {
+                        if workspace.spinner_chain_epoch.get() != epoch
+                            || !workspace.spinner_visible.get()
+                            || workspace.window_hidden
+                        {
+                            workspace.spinner_tick_armed.set(false);
+                            return false;
+                        }
+                        let now = std::time::Instant::now();
+                        let delta = now.saturating_duration_since(workspace.spinner_last);
+                        workspace.spinner_last = now;
+                        workspace.spinner_phase =
+                            advance_spinner_phase(workspace.spinner_phase, delta);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
             }
-            let now = std::time::Instant::now();
-            let delta = now.saturating_duration_since(workspace.spinner_last);
-            workspace.spinner_last = now;
-            workspace.spinner_phase =
-                (workspace.spinner_phase + delta.as_secs_f32() / PERIOD_SECS).rem_euclid(1.0);
-            cx.notify();
-        });
+        })
+        .detach();
     }
 
     /// 转圈没有观众只有两种情况：托盘隐藏（Nebula 自己记账）和最小化。
@@ -382,11 +412,29 @@ impl NebulaWorkspace {
                 shell_tag,
                 launch: Some(launch_session),
                 has_bell: false,
+                ..Default::default()
             },
         );
         self.active = at;
         self.reveal_active_tab();
         self.focus_active(window, cx);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod spinner_tests {
+    use super::advance_spinner_phase;
+
+    /// 相位按真实时间推进：80ms 步进 = 每步 0.1（0.8s 一圈 10 步），整圈
+    /// 回到原相位，跨圈取模不丢步——限频改变的是采样密度，不是动画速度。
+    #[test]
+    fn phase_advances_by_real_time_not_by_frame_count() {
+        let step = advance_spinner_phase(0.0, std::time::Duration::from_millis(80));
+        assert!((step - 0.1).abs() < 1e-6, "80ms 步进应为 0.1 相位");
+        let round = advance_spinner_phase(0.37, std::time::Duration::from_millis(800));
+        assert!((round - 0.37).abs() < 1e-6, "整圈回到原相位");
+        let wrap = advance_spinner_phase(0.95, std::time::Duration::from_millis(200));
+        assert!((wrap - 0.2).abs() < 1e-6, "0.95 + 0.25 跨圈取模为 0.2");
     }
 }

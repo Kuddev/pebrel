@@ -118,6 +118,39 @@ fn restart_cursor_blink_phase(cursor_visible: &mut bool, cursor_blink_epoch: &mu
     *cursor_blink_epoch
 }
 
+/// 空闲停闪的静默阈值：输入与 PTY 输出连续静默这么久后，750ms 翻转链
+/// 停止翻转、保持常亮并断链（Windows Terminal 的空闲停闪惯例）。静止终端
+/// 由此不再产生任何渲染帧；任何输入/输出/IME/模式事件走
+/// `restart_cursor_blink` 立即重启。输出只刷新静默计时，不停链重启。
+const CURSOR_BLINK_IDLE_PAUSE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// 纯判定：静默时长是否已到停闪阈值。
+fn cursor_blink_silence_pauses(silence: std::time::Duration) -> bool {
+    silence >= CURSOR_BLINK_IDLE_PAUSE
+}
+
+/// 输出驱动帧的最小间隔（WezTerm 同款合并）：PTY 每读到一批就发一次
+/// Wakeup，TUI 动画高频输出时逐批 `cx.notify()` 逐帧渲染；8ms 下限把风暴
+/// 收敛到 ≤125fps，视觉上无差别（远高于显示器刷新率的渲染本就丢帧）。
+const OUTPUT_FRAME_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// 输出帧的合并决策（纯函数）：距上一帧不足最小间隔就并入一次尾帧
+/// （等待剩余时长补渲染），否则立即渲染。
+#[derive(Debug, PartialEq, Eq)]
+enum OutputFrameTiming {
+    Now,
+    Trail(std::time::Duration),
+}
+
+fn output_frame_timing(since_last_frame: Option<std::time::Duration>) -> OutputFrameTiming {
+    match since_last_frame {
+        Some(elapsed) if elapsed < OUTPUT_FRAME_MIN_INTERVAL => {
+            OutputFrameTiming::Trail(OUTPUT_FRAME_MIN_INTERVAL - elapsed)
+        },
+        _ => OutputFrameTiming::Now,
+    }
+}
+
 /// 粘贴体量按「落到终端算几行」数，不用 `str::lines`。
 ///
 /// `str::lines` 只认 `\n`，纯 `\r` 的剪贴板内容（老式 Mac 换行、部分 Windows
@@ -322,6 +355,9 @@ pub struct TerminalView {
     command_started: Option<std::time::Instant>,
     /// 上次跑进程树探测的时刻，用于节流。
     last_process_probe: Option<std::time::Instant>,
+    /// 看门狗的进程树探测在后台线程在途：缓存未命中时 `ps` 全机枚举可阻塞
+    /// 秒级，主线程只收结果；同一时刻至多一条在途。
+    activity_probe_pending: bool,
     prompt_process_probe: Option<gpui::Task<()>>,
     prompt_input_epoch: u64,
     native_prompt_seen: bool,
@@ -429,12 +465,23 @@ pub struct TerminalView {
     cursor_visible: bool,
     cursor_animation: cursor::CursorAnimation,
     cursor_blink_epoch: u64,
+    /// 最近一次「用户可感知的活动」时刻（输入 / PTY 输出 / IME / 模式变化
+    /// 都刷新）。翻转链每 tick 对照 [`CURSOR_BLINK_IDLE_PAUSE`]：静默满阈值
+    /// 即停闪断链，把静止终端的渲染帧归零。
+    cursor_blink_last_activity: std::time::Instant,
+    /// 停闪断链后为 true：PTY 输出到来时据此（且仅据此）重启闪烁——输出
+    /// 期间只刷新静默计时，不逐批重启相位。
+    cursor_blink_paused: bool,
     /// OS 窗口前台状态与 pane 内焦点是两层独立条件。缓存它们是因为 blink
     /// timer 回调没有 `Window`，状态变化由 GPUI observer 立即重启相位。
     cursor_window_active: bool,
     cursor_pane_focused: bool,
     /// Workspace presentation is independent of keyboard/window focus.
     output_visible: bool,
+    /// 上一次输出驱动帧的时刻（[`Self::schedule_output_frame`] 的合并基准）。
+    last_output_frame: Option<std::time::Instant>,
+    /// 在途的输出尾帧定时器（间隔内批次的补帧）。
+    output_trailing_frame: Option<gpui::Task<()>>,
     _cursor_blink_subscriptions: [gpui::Subscription; 3],
     /// 最近一次由设置页下发的默认样式。只在它真正变化时清理 shell 的
     /// DECSCUSR/DEC mode 12 覆盖，避免无关设置变更打断 vim 等程序光标。
@@ -538,6 +585,12 @@ impl TerminalView {
         }
         if self.output_visible != visible {
             self.cursor_animation.reset();
+            if !visible {
+                // 隐藏即输出帧时间线的终结：恢复可见后的第一批输出按「无上一
+                // 帧」立即渲染。不清的话，快速翻转（隐藏不足 8ms）会让恢复后
+                // 的首批输出并入隐藏前遗留的合并窗口，白等一个尾帧才上屏。
+                self.last_output_frame = None;
+            }
 
             super::effects::visibility_changed(self, cx);
         }
@@ -575,9 +628,14 @@ impl TerminalView {
                 self.observe_reading_output(cx);
                 self.flush_pending_runtime_submit(cx);
                 self.flush_pending_shell_command(cx);
-                if self.output_visible {
-                    cx.notify();
+                // PTY 输出也是「活动」：只刷新停闪静默计时，链活着就不动；
+                // 已停闪断链才重启闪烁（逐批重启相位会让输出风暴期光标
+                // 常亮并额外加帧）。
+                self.cursor_blink_last_activity = std::time::Instant::now();
+                if self.cursor_blink_paused {
+                    self.restart_cursor_blink(cx);
                 }
+                self.schedule_output_frame(cx);
             },
             TermEvent::MouseCursorDirty => {
                 cx.notify();
@@ -820,6 +878,8 @@ impl TerminalView {
     }
 
     fn restart_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.cursor_blink_last_activity = std::time::Instant::now();
+        self.cursor_blink_paused = false;
         let epoch =
             restart_cursor_blink_phase(&mut self.cursor_visible, &mut self.cursor_blink_epoch);
         self.schedule_cursor_blink_tick(epoch, cx);
@@ -841,6 +901,17 @@ impl TerminalView {
                     }
                     return;
                 }
+                // 空闲停闪：静默满阈值后保持常亮并断链。链死了就没有下一
+                // tick，静止终端的渲染帧归零；恢复由 restart_cursor_blink
+                // （输入/IME/模式）与 PTY 输出（Wakeup 里按 paused 重启）负责。
+                if cursor_blink_silence_pauses(view.cursor_blink_last_activity.elapsed()) {
+                    view.cursor_blink_paused = true;
+                    if !view.cursor_visible {
+                        view.cursor_visible = true;
+                        cx.notify();
+                    }
+                    return;
+                }
                 view.cursor_visible = !view.cursor_visible;
                 view.schedule_cursor_blink_tick(epoch, cx);
                 cx.notify();
@@ -851,6 +922,39 @@ impl TerminalView {
 
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible
+    }
+
+    /// 输出驱动的渲染帧按 [`OUTPUT_FRAME_MIN_INTERVAL`] 合并：间隔内的批次
+    /// 只挂一次尾帧定时器（在途则不重挂，最早的补点生效），间隔外立即渲染
+    /// 并取消等待中的尾帧。邮箱侧的 Wakeup 原子去重只塌缩「已有一条在排队」
+    /// 的并发，持续输出流仍近似逐帧——这里的下限才是风暴期的节流阀。
+    fn schedule_output_frame(&mut self, cx: &mut Context<Self>) {
+        if !self.output_visible {
+            return;
+        }
+        match output_frame_timing(self.last_output_frame.map(|at| at.elapsed())) {
+            OutputFrameTiming::Now => {
+                self.output_trailing_frame = None;
+                self.last_output_frame = Some(std::time::Instant::now());
+                cx.notify();
+            },
+            OutputFrameTiming::Trail(wait) => {
+                if self.output_trailing_frame.is_some() {
+                    return;
+                }
+                let executor = cx.background_executor().clone();
+                self.output_trailing_frame = Some(cx.spawn(async move |this, cx| {
+                    executor.timer(wait).await;
+                    let _ = this.update(cx, |view, cx| {
+                        view.output_trailing_frame = None;
+                        if view.output_visible {
+                            view.last_output_frame = Some(std::time::Instant::now());
+                            cx.notify();
+                        }
+                    });
+                }));
+            },
+        }
     }
 
     fn on_bell(&mut self, cx: &mut Context<Self>) {
