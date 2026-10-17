@@ -86,6 +86,8 @@
     }
   },
   "settings": {
+    "show_tab_status": "显示标签活动状态",
+    "show_tab_status_description": "显示运行、等待、完成状态与 Shell 短标。更改会立即应用到已打开的标签。",
     "quick_terminal_unavailable": "全局快捷键注册失败：{error}。请启用桌面的 GlobalShortcuts portal，或从托盘打开 Pebrel。",
     "completion": {
       "mode": "补齐模式",
