@@ -199,14 +199,14 @@ impl NebulaWorkspace {
         let active_fg = theme.sidebar_accent_foreground;
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
-        // 路径标签沿用稳定的等宽字体；程序图标是 Nerd Font 字位，固定走随
-        // 安装包提供的 Maple。字号由独立的界面字号设置控制。
+        // 标题走 UI sans，路径/状态短标才用 Normal 等宽；有图标时才占图标槽。
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let tab_close_visible = settings.map(|settings| settings.tab_close_visible).unwrap_or(true);
         let tab_reveal = settings
             .map(|settings| settings.tab_reveal)
             .unwrap_or(nebula_settings::TabRevealName::Slide);
-        let chrome_family = theme.mono_font_family.clone();
+        let chrome_family = theme.font_family.clone();
+        let metadata_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         // 界面字号独立于终端缩放。
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
@@ -248,15 +248,19 @@ impl NebulaWorkspace {
                 let status_width = Self::shell_status_width(
                     window,
                     shell_tag.as_ref(),
-                    &chrome_family,
+                    &metadata_family,
                     label_px * SIDEBAR_TAG_SCALE,
                     TAB_STATUS_SLOT_W,
                     row_w * 0.45,
                 );
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
-                // 用户明确设置过的标签色：行左侧一条竖光条（旧壳 strip，位置与
-                // 尺寸同源：左内缩 4、上下各留 7、宽 2.5）。默认标签不占这层
-                // 视觉层级。
+                // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7、宽 2.5，
+                // 与旧壳 strip 同源）。默认标签不占这层视觉层级。
+                //
+                // 光条贴住行左缘，不沿用旧壳的左内缩 4：旧壳内容起点是 14px，这里
+                // 是 `px_2` = 0.5rem，rem 跟随界面字号（默认 14 → 7px，最小 10 →
+                // 5px）。内缩会让光条贴上图标；贴边时间隙就是内边距减光条宽，随
+                // 字号一起缩放。
                 let strip = tab_color.map(|color| gpui::Rgba {
                     r: color.r as f32 / 255.0,
                     g: color.g as f32 / 255.0,
@@ -321,7 +325,7 @@ impl NebulaWorkspace {
                     SidebarActivity::Idle => shell_tag.map(|tag| {
                         Self::shell_status_label(
                             tag,
-                            chrome_family.clone(),
+                            metadata_family.clone(),
                             label_px * SIDEBAR_TAG_SCALE,
                             status_color,
                         )
@@ -416,7 +420,7 @@ impl NebulaWorkspace {
                     row.child(
                         div()
                             .absolute()
-                            .left(px(4.0))
+                            .left_0()
                             .top(px(7.0))
                             .w(px(2.5))
                             .h(px(row_height - 14.0))
@@ -448,10 +452,9 @@ impl NebulaWorkspace {
                 })
                 .when_some(logo_image.clone(), |row, image| {
                     row.child(
-                        img(image)
-                            .size(px(TAB_LABEL_ICON_SIZE))
-                            .flex_shrink_0()
-                            .object_fit(ObjectFit::Contain),
+                        div().w(px(TAB_LABEL_ICON_W)).flex_shrink_0().flex().items_center().justify_center().child(
+                            img(image).size(px(TAB_LABEL_ICON_SIZE)).object_fit(ObjectFit::Contain),
+                        ),
                     )
                 })
                 .when_some(program_glyph, |row, glyph| {
@@ -510,9 +513,7 @@ impl NebulaWorkspace {
                         .min_w_0()
                         .font_family(chrome_family.clone())
                         .text_size(px(label_px))
-                        // 标签标题本身使用 Light；活动态只换前景/背景色，
-                        // 不再靠更粗字重强调，避免选中行看起来突然加粗。
-                        .font_weight(FontWeight::LIGHT)
+                        .font_weight(FontWeight::NORMAL)
                         .truncate()
                         .child(title)
                         .into_any_element(),
@@ -973,7 +974,7 @@ impl NebulaWorkspace {
         let (ink, dim, badge_fill) = (theme.foreground, theme.muted_foreground, theme.muted);
         let dark = theme.is_dark();
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
-        let chrome_family = theme.mono_font_family.clone();
+        let chrome_family = theme.font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let TabPresentation {
