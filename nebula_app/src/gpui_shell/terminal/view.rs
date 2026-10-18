@@ -308,6 +308,10 @@ pub struct TerminalView {
     pub cwd: String,
     /// 同上标题协议的 git 分支字段（当前仅存备用）。
     pub branch: String,
+    /// 远端 shell 集成经 `SetUserVar=pebrel_git_root` 上报的仓库根（空 = 不在
+    /// 仓库内，离开仓库即清空）。本地与远端 pane 都会收到——rc 是同一份——
+    /// 但只有 SSH pane 的侧栏项目分组消费它。
+    pub git_root: String,
     /// 标题协议第 4 字段：远端 `nebula ssh` 上报的运行中程序，本地为空。
     pub running_program: Option<String>,
     /// OSC 133;C 起、133;D 止：命令正在执行。自带 PowerShell prompt 靠
@@ -374,7 +378,6 @@ pub struct TerminalView {
     /// 反算 `display_offset`，拇指不会在按下那一刻跳到指针中心。
     scrollbar_drag: Option<f32>,
     scrollbar_hovered: bool,
-    scrollbar_visibility: nebula_settings::ScrollbarVisibility,
     origin: Point<Pixels>,
     cell_width: Pixels,
     line_height: Pixels,
@@ -716,6 +719,16 @@ impl TerminalView {
                 {
                     self.on_native_cmd_prompt(cx);
                 }
+                // 远端仓库根（进出仓库的变化沿才发）：侧栏 SSH 项目分组键的
+                // 输入，值变化走 TitleChanged → resolve_project_group 的现成
+                // 打点链。本地 pane 只存不用。
+                if name == "pebrel_git_root" {
+                    let root = value.trim().to_owned();
+                    if self.git_root != root {
+                        self.git_root = root;
+                        cx.emit(TerminalViewEvent::TitleChanged);
+                    }
+                }
                 self.suggest.completion_shell_report(&name, &value);
                 self.handle_completion_editor_report(&name, &value, cx);
                 cx.notify();
@@ -971,7 +984,6 @@ impl TerminalView {
         }
         self.palette = palette;
         self.copy_on_select = copy_on_select;
-        self.scrollbar_visibility = settings.scrollbar_visibility;
         self.default_cursor_style = default_cursor_style;
         if let Some(session) = &self.session {
             let mut term = session.term.lock();

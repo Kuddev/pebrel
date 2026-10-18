@@ -40,6 +40,7 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "backup-check",
     "pin",
     "pencil",
+    "git-branch",
     "clipboard-paste",
     "shield",
     "trash-2",
@@ -113,6 +114,9 @@ pub mod nav {
     pub const SHIELD: &str = "icons/nebula-shield.svg";
     /// Lucide trash-2；删除保存命令不能借用表示 Backspace 的 `IconName::Delete`。
     pub const TRASH: &str = "icons/nebula-trash-2.svg";
+    /// Lucide git-branch；组件资产集没有 Git 系图标，侧栏分组头的分支
+    /// chip 需要与分支名同色的线性图标（Nerd Font 字位无法保证跟随前景色）。
+    pub const GIT_BRANCH: &str = "icons/nebula-git-branch.svg";
     pub const REFRESH: &str = "icons/nebula-refresh.svg";
     pub const PHONE: &str = "icons/nebula-phone.svg";
     /// IDEA Commit 工具窗口同语义的“基线 + 提交节点”：工作区变更入口。

@@ -1006,7 +1006,7 @@ impl Element for TerminalElement {
         // `draw_scrollbar` / `scrollbar_grab` 共用 `scrollbar_geometry` 同构）。
         let (dragging, thumb) = {
             let view = self.view.read(cx);
-            (view.scrollbar_highlighted(), view.scrollbar_thumb(snap.display_offset, history))
+            (view.scrollbar_dragging(), view.scrollbar_thumb(snap.display_offset, history))
         };
         if let Some(thumb) = thumb {
             let color = if dragging {

@@ -296,6 +296,7 @@ impl TerminalView {
             title: initial_title,
             cwd: initial_cwd,
             branch: String::new(),
+            git_root: String::new(),
             running_program: None,
             command_running: false,
             command_running_disproved: false,
@@ -334,10 +335,6 @@ impl TerminalView {
             exited: None,
             scrollbar_drag: None,
             scrollbar_hovered: false,
-            scrollbar_visibility: cx
-                .try_global::<Settings>()
-                .map(|settings| settings.scrollbar_visibility)
-                .unwrap_or_default(),
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,
             line_height: line_h,

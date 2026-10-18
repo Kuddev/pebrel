@@ -81,7 +81,6 @@ pub struct Settings {
     pub copy_on_select: bool,
     pub scrollback_lines: usize,
     pub scroll_speed: f32,
-    pub scrollbar_visibility: nebula_settings::ScrollbarVisibility,
     /// Pointer handlers and split rendering only read these cached preferences.
     pub focus_follows_mouse: bool,
     pub dim_inactive_panes: bool,
@@ -91,6 +90,9 @@ pub struct Settings {
     pub notification_duration: nebula_settings::NotificationDuration,
     /// 标签关闭按钮与标签插入动画都在渲染热路径读取，必须随全局设置驻留内存。
     pub tab_close_visible: bool,
+    /// AI Agent 侧边栏（任务分组/最近任务/仅 AI 会话状态）。侧栏与顶栏的
+    /// 渲染分派每帧读取；关 = 经典扁平标签列表（main 行为）。
+    pub ai_agent_sidebar: bool,
     pub tab_reveal: nebula_settings::TabRevealName,
     /// 命令补全设置（settings.txt 的 `ghost`/`completion_style`），
     /// 类型直接用旧壳 display 的语义枚举：接受键判定与样式分支两壳同源。
@@ -133,6 +135,12 @@ pub(crate) fn tab_reveal_instant(cx: &App) -> bool {
 
 pub(crate) fn ctrl_wheel_font_zoom(cx: &App) -> bool {
     cx.try_global::<Settings>().is_none_or(|settings| settings.ctrl_wheel_font_zoom)
+}
+
+/// agent 侧栏模式判定。无全局（初始化前/测试）时回落 false = 经典列表，
+/// 与出厂默认一致，也保证旧渲染路径在设置装载前可用。
+pub(crate) fn ai_agent_sidebar(cx: &App) -> bool {
+    cx.try_global::<Settings>().is_some_and(|settings| settings.ai_agent_sidebar)
 }
 
 pub(crate) fn ai_toasts_enabled(cx: &App) -> bool {
@@ -297,7 +305,6 @@ impl Settings {
             copy_on_select: runtime.copy_on_select,
             scrollback_lines: runtime.scrollback_lines,
             scroll_speed: runtime.scroll_speed,
-            scrollbar_visibility: runtime.scrollbar_visibility,
             focus_follows_mouse: runtime
                 .focus_follows_mouse
                 .unwrap_or(raw.mouse.focus_follows_mouse),
@@ -305,6 +312,7 @@ impl Settings {
             ai_toasts: runtime.ai_toasts,
             notification_duration: runtime.notification_duration,
             tab_close_visible: runtime.tab_close_visible,
+            ai_agent_sidebar: runtime.ai_agent_sidebar,
             tab_reveal: runtime.tab_reveal,
             ghost: runtime.ghost,
             completion_style: runtime.completion_style,
@@ -973,6 +981,21 @@ mod tests {
                 runtime.ctrl_wheel_font_zoom = zoom_enabled;
                 cx.set_global(Settings::load_with_runtime(ThemeName::Nebula, runtime));
                 assert_eq!(super::ctrl_wheel_font_zoom(cx), zoom_enabled);
+            }
+        });
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn ai_agent_sidebar_reads_current_settings(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            // 无全局 = 经典列表（与出厂默认一致），不回落新样式。
+            assert!(!super::ai_agent_sidebar(cx));
+            for enabled in [false, true] {
+                let mut runtime = RuntimeSettings::from_raw(&RawSettings::default());
+                runtime.ai_agent_sidebar = enabled;
+                cx.set_global(Settings::load_with_runtime(ThemeName::Nebula, runtime));
+                assert_eq!(super::ai_agent_sidebar(cx), enabled);
             }
         });
     }

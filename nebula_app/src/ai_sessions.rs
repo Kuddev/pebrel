@@ -49,6 +49,25 @@ impl AiSession {
         }
     }
 
+    /// 带项目串与时间戳的测试构造器（侧栏最近任务的分组/排序单测用）。
+    #[cfg(test)]
+    pub(crate) fn test_session_at(
+        source: AiSessionSource,
+        id: &str,
+        title: &str,
+        project: &str,
+        modified: SystemTime,
+    ) -> Self {
+        Self {
+            source,
+            id: id.to_owned(),
+            title: title.to_owned(),
+            project: project.to_owned(),
+            modified,
+            path: None,
+        }
+    }
+
     /// 在终端里敲下去就能恢复这个会话的命令行。
     pub fn resume_command(&self) -> Option<String> {
         self.source.resume_command(&self.id)
@@ -59,22 +78,27 @@ impl AiSession {
         self.source.fork_command(&self.id)
     }
 
-    /// hint 里的位置词。codex 有真实 cwd，取末段目录名；claude 只有编码过的
-    /// 项目目录名（`D--temp-build-nebula`，分隔符和 `_` 都压成了 `-`，不可逆），
-    /// 取最后一个 `-` 后的尾段——不完整但足够认出"是哪个项目"。
+    /// hint 里的位置词。codex 与回填过 cwd 的 claude 都是真实路径，取末段
+    /// 目录名；cwd 解析失败的 claude 只剩编码目录名（`D--temp-build-nebula`，
+    /// 分隔符和 `_` 都压成了 `-`，不可逆），取最后一个 `-` 后的尾段——不
+    /// 完整但足够认出"是哪个项目"。
     pub fn place_label(&self) -> String {
-        match self.source {
-            crate::ai_agents::AgentKind::Codex => Path::new(&self.project)
+        let file_name = || {
+            Path::new(&self.project)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+                .unwrap_or_default()
+        };
+        match self.source {
+            crate::ai_agents::AgentKind::Codex => file_name(),
             crate::ai_agents::AgentKind::Claude => {
-                self.project.rsplit('-').next().unwrap_or("").to_owned()
+                if self.project.contains('/') || self.project.contains('\\') {
+                    file_name()
+                } else {
+                    self.project.rsplit('-').next().unwrap_or("").to_owned()
+                }
             },
-            _ => Path::new(&self.project)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| self.project.clone()),
+            _ => file_name().is_empty().then(|| self.project.clone()).unwrap_or_else(file_name),
         }
     }
 
@@ -89,8 +113,14 @@ impl AiSession {
         };
         match self.source {
             crate::ai_agents::AgentKind::Claude => {
-                if let Some(title) = claude_title(&head) {
+                // cwd 回填真实路径：点击恢复用它跳目录（编码目录名不可逆，
+                // 恢复不了）。
+                let (title, cwd) = claude_details(&head);
+                if let Some(title) = title {
                     self.title = title;
+                }
+                if let Some(cwd) = cwd {
+                    self.project = cwd;
                 }
             },
             crate::ai_agents::AgentKind::Codex => {
@@ -283,13 +313,30 @@ pub fn scan(limit: usize) -> Vec<AiSession> {
 
 /// 「3 分钟前 / 2 小时前 / 5 天前」式的相对时间，面板右侧的 hint 用。
 pub fn relative_label(modified: SystemTime) -> String {
-    let elapsed = SystemTime::now().duration_since(modified).unwrap_or(Duration::ZERO);
-    let minutes = elapsed.as_secs() / 60;
+    relative_minutes(minutes_since(modified), crate::display::UiLanguage::ZhCn)
+}
+
+/// 双语相对时间（侧栏最近任务用）。格式化属于冷路径，按语言分支构造。
+pub fn relative_label_for(language: crate::display::UiLanguage, modified: SystemTime) -> String {
+    relative_minutes(minutes_since(modified), language)
+}
+
+fn minutes_since(modified: SystemTime) -> u64 {
+    SystemTime::now().duration_since(modified).unwrap_or(Duration::ZERO).as_secs() / 60
+}
+
+fn relative_minutes(minutes: u64, language: crate::display::UiLanguage) -> String {
     match minutes {
-        0 => "刚刚".to_owned(),
-        1..=59 => format!("{minutes} 分钟前"),
-        60..=1439 => format!("{} 小时前", minutes / 60),
-        _ => format!("{} 天前", minutes / 1440),
+        0 => language.pick("刚刚", "Just now").to_owned(),
+        1..=59 => {
+            language.pick(&format!("{minutes} 分钟前"), &format!("{minutes} min ago")).to_owned()
+        },
+        60..=1439 => language
+            .pick(&format!("{} 小时前", minutes / 60), &format!("{} h ago", minutes / 60))
+            .to_owned(),
+        _ => language
+            .pick(&format!("{} 天前", minutes / 1440), &format!("{} d ago", minutes / 1440))
+            .to_owned(),
     }
 }
 
@@ -420,16 +467,29 @@ fn looks_injected(text: &str) -> bool {
         || text.starts_with("[Request interrupted")
 }
 
-/// claude 会话的标题：优先 `summary` 行（压缩过的会话第一行就是），否则
-/// 首条 user 消息的文本。头部截断出的半行 JSON 解析失败即跳过，天然安全。
-fn claude_title(head: &str) -> Option<String> {
+/// claude 会话的 (标题, cwd)：cwd 是每行事件都带的顶层字段（真实绝对路径，
+/// 不同于档案目录名那种不可逆编码），点击恢复时终端要跳到这里；标题优先
+/// `summary` 行（压缩过的会话第一行就是），否则首条 user 消息的文本。头部
+/// 截断出的半行 JSON 解析失败即跳过，天然安全。
+fn claude_details(head: &str) -> (Option<String>, Option<String>) {
+    let mut title = None;
+    let mut cwd = None;
     for line in head.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if cwd.is_none()
+            && let Some(dir) = value.get("cwd").and_then(|c| c.as_str())
+            && !dir.trim().is_empty()
+        {
+            cwd = Some(dir.to_owned());
+        }
+        if title.is_some() {
+            continue;
+        }
         match value.get("type").and_then(|t| t.as_str()) {
             Some("summary") => {
                 if let Some(summary) = value.get("summary").and_then(|s| s.as_str()) {
                     if !summary.trim().is_empty() {
-                        return Some(truncate_title(summary));
+                        title = Some(truncate_title(summary));
                     }
                 }
             },
@@ -451,14 +511,14 @@ fn claude_title(head: &str) -> Option<String> {
                     // 一遍 `looks_injected` 的形态筛。
                     let meta = value.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false);
                     if !meta && !text.is_empty() && !looks_injected(text) {
-                        return Some(truncate_title(text));
+                        title = Some(truncate_title(text));
                     }
                 }
             },
             _ => {},
         }
     }
-    None
+    (title, cwd)
 }
 
 /// codex rollout 的 (标题, cwd)：session_meta 行给 cwd，首条 user 输入给标题。
@@ -504,14 +564,26 @@ mod tests {
     fn a_compacted_claude_session_titles_from_its_summary_line() {
         let head = r#"{"type":"summary","summary":"修复 SSH 编辑器身份条","leafUuid":"x"}
 {"type":"user","message":{"content":"继续"}}"#;
-        assert_eq!(claude_title(head), Some("修复 SSH 编辑器身份条".to_owned()));
+        assert_eq!(claude_details(head).0, Some("修复 SSH 编辑器身份条".to_owned()));
+    }
+
+    #[test]
+    fn claude_sessions_carry_their_real_cwd_for_resume() {
+        // 每行事件都带顶层 cwd（真实路径）；点击恢复要跳到这个目录，不能
+        // 用档案目录名那种不可逆编码。
+        let head = r#"{"parentUuid":null,"cwd":"D:\\gopath\\src\\pebrel","sessionId":"s1","type":"user","message":{"content":"继续"}}"#;
+        let (title, cwd) = claude_details(head);
+        assert_eq!(cwd, Some(r"D:\gopath\src\pebrel".to_owned()));
+        assert_eq!(title, Some("继续".to_owned()));
+        // cwd 缺失时回落 None（fill_details 保留原 project 串）。
+        assert_eq!(claude_details(r#"{"type":"user","message":{"content":"问题"}}"#).1, None);
     }
 
     #[test]
     fn a_fresh_claude_session_titles_from_the_first_user_message() {
         let head = r#"{"type":"file-history-snapshot","messageId":"m1"}
 {"type":"user","message":{"role":"user","content":[{"type":"text","text":"帮我查一下这个 panic 的根因"}]}}"#;
-        assert_eq!(claude_title(head), Some("帮我查一下这个 panic 的根因".to_owned()));
+        assert_eq!(claude_details(head).0, Some("帮我查一下这个 panic 的根因".to_owned()));
     }
 
     #[test]
@@ -519,7 +591,7 @@ mod tests {
         // 首条 user 是 <system-reminder> 注入时要跳过它取下一条真人消息。
         let head = r#"{"type":"user","message":{"content":"<system-reminder>ctx</system-reminder>"}}
 {"type":"user","message":{"content":"真正的问题"}}"#;
-        assert_eq!(claude_title(head), Some("真正的问题".to_owned()));
+        assert_eq!(claude_details(head).0, Some("真正的问题".to_owned()));
     }
 
     #[test]
@@ -531,7 +603,7 @@ mod tests {
 {"type":"user","isMeta":true,"message":{"content":"看着像人话的注入行"}}
 {"type":"user","message":{"content":"Caveat: The messages below were generated..."}}
 {"type":"user","message":{"content":"真正的第一句"}}"##;
-        assert_eq!(claude_title(head), Some("真正的第一句".to_owned()));
+        assert_eq!(claude_details(head).0, Some("真正的第一句".to_owned()));
     }
 
     #[test]
@@ -566,7 +638,7 @@ mod tests {
     #[test]
     fn a_truncated_trailing_line_is_ignored_not_fatal() {
         let head = "{\"type\":\"summary\",\"summary\":\"标题\"}\n{\"type\":\"user\",\"mess";
-        assert_eq!(claude_title(head), Some("标题".to_owned()));
+        assert_eq!(claude_details(head).0, Some("标题".to_owned()));
     }
 
     #[test]
@@ -586,6 +658,23 @@ mod tests {
         assert_eq!(codex_session_id(path), Some("0199a213-c2a4-7cf5-8f6b-d746fbb6e86c".to_owned()));
         // 名字不带 uuid 的不是会话文件。
         assert_eq!(codex_session_id(Path::new("rollout-notes.jsonl")), None);
+    }
+
+    #[test]
+    fn relative_labels_are_bilingual_and_bucketed() {
+        use crate::display::UiLanguage;
+        let modified = SystemTime::now() - Duration::from_secs(3 * 60);
+        assert_eq!(relative_label_for(UiLanguage::ZhCn, modified), "3 分钟前");
+        assert_eq!(relative_label_for(UiLanguage::EnUs, modified), "3 min ago");
+        // 旧签名（面板 hint）保持中文合同。
+        assert_eq!(relative_label(modified), "3 分钟前");
+        let hours_ago = SystemTime::now() - Duration::from_secs(3 * 3600);
+        assert_eq!(relative_label_for(UiLanguage::EnUs, hours_ago), "3 h ago");
+        let days_ago = SystemTime::now() - Duration::from_secs(3 * 86400);
+        assert_eq!(relative_label_for(UiLanguage::ZhCn, days_ago), "3 天前");
+        // 未来时间（时钟回拨）不 panic，按「刚刚」处理。
+        let ahead = SystemTime::now() + Duration::from_secs(60);
+        assert_eq!(relative_label_for(UiLanguage::EnUs, ahead), "Just now");
     }
 
     #[test]
