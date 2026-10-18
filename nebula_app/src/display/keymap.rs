@@ -40,6 +40,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
     (Action::ToggleCommandPalette, "命令面板", "Command palette"),
     (Action::OpenQuickJump, "快速跳转", "Quick jump"),
     (Action::ToggleShellPicker, "Shell 选择器", "Shell picker"),
+    (Action::ToggleSshPicker, "SSH 主机…", "SSH hosts..."),
     (Action::CreateNewWindow, "新建窗口", "New window"),
     (Action::ToggleFullscreen, "全屏", "Fullscreen"),
     // -- 标签页 --
@@ -74,7 +75,7 @@ pub(crate) const EDITABLE_ACTIONS: &[(Action, &str, &str)] = &[
 /// 设置页分组（无框裁定 2026-08-09：只用段标题+间距分组，不画容器）。
 /// `usize` 是本组行数；区间连续覆盖全部可编辑行（含第 0 行快速终端）。
 pub(crate) const GROUPS: &[(&str, &str, usize)] = &[
-    ("全局", "Global", 6),
+    ("全局", "Global", 7),
     ("标签页", "Tabs", 5),
     ("窗格", "Panes", 7),
     ("侧栏面板", "Side panels", 2),
@@ -148,6 +149,8 @@ pub(crate) fn action_label(
 ) -> &'static str {
     if row.0 == Action::RenameTab {
         language.text(crate::i18n::Message::CommonRenameTab)
+    } else if row.0 == Action::ToggleSshPicker {
+        language.text(crate::i18n::Message::LauncherSshPicker)
     } else {
         language.pick(row.1, row.2)
     }
@@ -725,6 +728,26 @@ mod tests {
             assert!(!action_label(row, *language).is_empty());
         }
         assert_eq!(action_label(row, super::super::UiLanguage::ZhCn), "重命名标签页");
+    }
+
+    #[test]
+    fn ssh_picker_is_editable_localized_and_unbound_until_configured() {
+        use super::*;
+        let action = Action::ToggleSshPicker;
+        let row = EDITABLE_ACTIONS.iter().find(|(candidate, ..)| *candidate == action).unwrap();
+        for language in super::super::UiLanguage::ALL {
+            assert_eq!(
+                action_label(row, *language),
+                language.text(crate::i18n::Message::LauncherSshPicker)
+            );
+        }
+        assert_eq!(parse_action("ToggleSshPicker"), Some(action.clone()));
+        assert!(!default_shortcuts().iter().any(|(_, candidate)| *candidate == action));
+        let mut raw = Vec::new();
+        rebind_action(&mut raw, &action, "ctrl+alt+j".into());
+        assert_eq!(raw, vec![("ctrl+alt+j".into(), "ToggleSshPicker".into())]);
+        reset_action(&mut raw, &action);
+        assert!(raw.is_empty());
     }
 
     #[test]

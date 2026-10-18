@@ -108,6 +108,7 @@ impl NebulaWorkspace {
                 | PaletteAction::CycleCompletionStyle
                 | PaletteAction::ToggleFilesPanel
                 | PaletteAction::OpenAiSessionPicker
+                | PaletteAction::OpenSshPicker
                 | PaletteAction::SelectTheme(_)
                 | PaletteAction::SplitRight
                 | PaletteAction::SplitDown
@@ -156,7 +157,14 @@ impl NebulaWorkspace {
                     WorkspacePaletteRow {
                         group_order,
                         group,
-                        label: item.label.to_owned(),
+                        label: if item.action
+                            == crate::display::command_palette::PaletteAction::OpenSshPicker
+                        {
+                            language.text(crate::i18n::Message::LauncherSshPicker)
+                        } else {
+                            item.label
+                        }
+                        .to_owned(),
                         hint: item.hint.to_owned(),
                         hint_style: WorkspacePaletteHintStyle::Shortcut,
                         search: item.search.to_owned(),
@@ -191,7 +199,7 @@ impl NebulaWorkspace {
             // 启动器混排（旧壳 ⌘K 裁定）：SSH 主机与命令同列，置顶/隐藏
             // 次序由共享 merge 权威裁定。
             rows.extend(shell_picker::ssh_palette_rows(
-                &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
+                &self.load_launcher_hosts(),
                 usize::MAX,
                 language.pick("SSH 主机", "SSH HOSTS"),
             ));

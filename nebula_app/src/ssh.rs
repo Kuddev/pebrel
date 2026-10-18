@@ -444,7 +444,7 @@ fn already_has_tty(args: &[String]) -> bool {
 /// you can click to connect to. Missing/unreadable config → empty list
 /// (the section simply doesn't render).
 pub(crate) fn ssh_config_path() -> Option<std::path::PathBuf> {
-    let home = crate::platform::dirs::home_dir()?;
+    let home = ssh_config_home()?;
     let path = home.join(".ssh").join("config");
     path.is_file().then_some(path)
 }
@@ -541,8 +541,16 @@ fn parse_ssh_config_hosts(text: &str) -> Vec<String> {
     hosts
 }
 
+fn ssh_config_home() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = std::env::var_os("PEBREL_TEST_SSH_HOME") {
+        return Some(home.into());
+    }
+    crate::platform::dirs::home_dir()
+}
+
 pub fn ssh_config_hosts() -> Vec<String> {
-    let Some(home) = crate::platform::dirs::home_dir() else { return Vec::new() };
+    let Some(home) = ssh_config_home() else { return Vec::new() };
     hosts::discover(&home.join(".ssh/config"), &home.join(".ssh"), &home, &|| false)
 }
 

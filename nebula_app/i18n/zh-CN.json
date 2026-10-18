@@ -786,6 +786,7 @@
     "task_start_failed": "无法启动版本控制任务: {error}"
   },
   "launcher": {
+    "ssh_picker": "SSH 主机…",
     "open_admin": "以管理员身份打开",
     "set_default": "设为默认 Shell",
     "current_default": "当前默认 Shell",

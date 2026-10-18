@@ -393,6 +393,11 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.display().toggle_shell_menu(&profiles);
                 ctx.mark_dirty();
             },
+            Action::ToggleSshPicker => {
+                let profiles = ctx.config().profiles.clone();
+                ctx.display().toggle_ssh_menu(&profiles);
+                ctx.mark_dirty();
+            },
             Action::ToggleFilesPanel => {
                 if let Some(destination) = ctx.nebula_ssh_destination().map(str::to_owned) {
                     ctx.nebula_open_sftp(destination);

@@ -1,6 +1,13 @@
 use super::*;
 
 #[test]
+fn ssh_picker_custom_binding_maps_the_shared_config_action() {
+    let binding =
+        custom_workspace_binding("ctrl+alt+j", &crate::config::Action::ToggleSshPicker).unwrap();
+    assert!(binding.action().as_any().is::<ToggleSshPicker>());
+}
+
+#[test]
 fn command_aliases_and_modifier_order_share_one_runtime_identity() {
     let expected = gpui_binding_combo("shift+cmd+k");
     for combo in ["Shift+Win+K", "cmd+shift+k", "super+shift+k"] {
