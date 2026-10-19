@@ -79,6 +79,11 @@ fn continuation<T>(term: &Term<T>, line: Line, left: usize) -> bool {
 }
 
 pub(super) fn at<T>(term: &Term<T>, point: Point) -> Option<TableLink> {
+    // Like `hyperlink_at`: a hover point can lead the grid by a column/row during a resize.
+    let grid = term.grid();
+    if point.column.0 >= grid.columns() || point.line.0 >= grid.screen_lines() as i32 {
+        return None;
+    }
     let left = (0..point.column.0)
         .rfind(|&col| border(term.grid()[Point::new(point.line, Column(col))].c))?;
     let right = (point.column.0 + 1..term.columns())
