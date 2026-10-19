@@ -46,8 +46,7 @@ established macOS ⌘K clear convention had no path to that behavior.
   gains a terminal-group row backed by `Action::ClearHistory` (a unit variant that
   already round-trips through `parse_action` / `action_storage_name`).
 - Semantics branch on the pane's foreground state after an instant app-side wipe
-  of the viewport and scrollback (`ClearMode::All` + `Saved`, zero-latency
-  feedback):
+  of the viewport and scrollback (`ClearMode::All` + `Saved`):
   - Shell at a prompt (OSC 133 `nebula_prompt_active`): write `\x0c` to that
     pane's PTY so the shell moves the cursor home and repaints the prompt on the
     fresh screen, keeping its line state in sync.
@@ -96,18 +95,11 @@ established macOS ⌘K clear convention had no path to that behavior.
 
 ## Consequences
 
-- On a fresh macOS install the Clear screen row displays `Command+K`, because
-  `effective_combo` reads the config table and `mods_prefix` renders `super`
-  natively — while runtime ⌘K actually opens the Shell picker. This is the same
-  config-table display convention recorded in the 2026-09-21 note ("the keymap
-  page still shows Ctrl keys for actions whose macOS binding set includes ⌘"),
-  not a new runtime claim. Capturing any key on the row writes a user row that
-  wins immediately.
-- Resetting the Clear screen row also removes `cmd+k:ReceiveChar` lines
-  (`reset_action`'s vocabulary includes config-table defaults), which hands ⌘K
-  back to the Shell picker. Clearing the row writes `keybind=cmd+k:ReceiveChar`,
-  which shadows the picker's ⌘K — ordinary combo-level shadowing, identical to
-  every other row.
+- The current GPUI shortcut policy assigns Command+K to the Shell picker and
+  removes competing legacy defaults. Clear screen therefore starts unbound on
+  macOS as well. Clearing or resetting an unbound Clear screen row does not
+  consume or release the picker's chord. An explicit user binding still wins
+  through the existing keymap ownership rules.
 - Windows/Linux gain an unbound row and no behavior change; existing default
   keybindings are untouched on every platform.
 - Files written by earlier builds hold no `ClearHistory` line — the old shell
@@ -142,6 +134,5 @@ its alias-table authority and unbind vocabulary are reused unchanged.
 
 ## Revisit when
 
-The keymap page renders platform-native or runtime-truth keycaps (removing the
-Command+K display quirk), or the product decides clear screen deserves a default
-key of its own.
+The product decides clear screen deserves a default key of its own, or native
+shell feedback shows that prompt redraw needs a different integration contract.

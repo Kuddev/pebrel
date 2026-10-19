@@ -923,6 +923,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn clear_screen_does_not_claim_the_shell_picker_default() {
+        assert_eq!(GPUI.effective_combo(&Action::ClearHistory, &[]), None);
+        assert_eq!(
+            GPUI.effective_combo(&Action::ToggleShellPicker, &[]),
+            Some(("Command+K".into(), false))
+        );
+        assert!(LEGACY.effective_combo(&Action::ClearHistory, &[]).is_some());
+        let mut raw = Vec::new();
+        GPUI.clear_action(&mut raw, &Action::ClearHistory);
+        GPUI.reset_action(&mut raw, &Action::ClearHistory);
+        assert!(raw.is_empty());
+        assert_eq!(
+            GPUI.effective_combo(&Action::ToggleShellPicker, &build_bindings(&raw)),
+            Some(("Command+K".into(), false))
+        );
+    }
+
+    #[test]
     fn frontend_policies_do_not_share_defaults_or_digit_identity() {
         use super::*;
         let legacy_defaults = default_shortcuts();
