@@ -1064,6 +1064,7 @@ mod ssh_sidebar_group_tests {
         });
         let workspace = output.unwrap();
         window.update(|window, cx| {
+            cx.global_mut::<crate::gpui_shell::config::Settings>().ai_agent_sidebar = true;
             workspace.update(cx, |workspace, cx| {
                 let view = workspace.tabs[0].focused_view().unwrap().clone();
                 workspace.on_terminal_event(&view, &TerminalViewEvent::TitleChanged, window, cx);
