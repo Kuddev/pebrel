@@ -54,6 +54,8 @@ pub mod startup;
 pub(crate) mod tray_native;
 pub(crate) mod update_installation;
 #[cfg(feature = "gpui-shell")]
+pub(crate) mod video_underlay;
+#[cfg(feature = "gpui-shell")]
 pub(crate) mod window_capture;
 #[cfg(feature = "gpui-shell")]
 pub(crate) mod window_chrome;
