@@ -37,16 +37,7 @@ pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<Stri
             .await?;
             applied(&raw)?;
         }
-        let report =
-            if nebula_settings::RawSettings::load().bool_on("ai_agent_sidebar") == Some(true) {
-                "1"
-            } else {
-                "0"
-            };
-        Ok::<_, SessionError>(Some(format!(
-            "export PEBREL_PROJECT_REPORT={report}; {}",
-            snapshot.bootstrap(token)?
-        )))
+        Ok::<_, SessionError>(Some(snapshot.bootstrap(token)?))
     })
     .await;
     match result {
