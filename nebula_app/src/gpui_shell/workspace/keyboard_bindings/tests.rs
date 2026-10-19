@@ -135,6 +135,15 @@ fn clear_history_maps_to_the_clear_terminal_action() {
     // `command_shortcut_registration_follows_runtime_platform` 单独守住。
     let mut statics = default_workspace_bindings();
     statics.push(custom_workspace_binding("cmd+k", &Action::ToggleShellPicker).unwrap());
+    // macOS 上纯 Ctrl 字符默认键已被 #656 的平台策略释放（对照组表里可能
+    // 没有它），所以 Ctrl+K 的期望形状以对照组自身为准，不写平台分支。
+    let picker_owns_ctrl_k = statics.iter().any(|binding| {
+        binding.action().as_any().is::<ToggleShellPicker>()
+            && binding.keystrokes().iter().any(|stroke| {
+                let stroke = stroke.inner();
+                stroke.key == "k" && stroke.modifiers.control
+            })
+    });
     let keymap = Keymap::new(with_user_keybindings(&Keymap::new(statics), user));
 
     let contexts = [
@@ -148,15 +157,19 @@ fn clear_history_maps_to_the_clear_terminal_action() {
         bindings[0].action().as_any().is::<ClearTerminal>(),
         "用户绑定的清屏必须压过静态默认键"
     );
-    // Shell 选择器自身的默认键不受影响：Ctrl+K 在所有平台都是它的
-    // 工作区默认键，用户给 ⌘K 绑清屏不改变这一点。
+    // Shell 选择器的 Ctrl+K 默认键不受用户清屏绑定影响（期望形状已在
+    // 构造 keymap 前从对照组读取）。
     let (bindings, pending) =
         keymap.bindings_for_input(&[Keystroke::parse("ctrl-k").unwrap()], &contexts);
-    assert!(!pending);
-    assert!(
-        bindings[0].action().as_any().is::<ToggleShellPicker>(),
-        "清屏绑定不得挤占 Shell 选择器的默认键"
-    );
+    assert_eq!(picker_owns_ctrl_k, !pending && !bindings.is_empty());
+    if picker_owns_ctrl_k {
+        assert!(
+            bindings[0].action().as_any().is::<ToggleShellPicker>(),
+            "清屏绑定不得挤占 Shell 选择器的 Ctrl+K 默认键"
+        );
+    } else {
+        assert!(bindings.is_empty() && !pending, "被平台策略释放的 Ctrl+K 不得被清屏绑定重新占用");
+    }
 }
 
 #[test]
