@@ -254,9 +254,13 @@ impl NebulaWorkspace {
                     row_w * 0.45,
                 );
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
-                // 用户明确设置过的标签色：行左侧一条竖光条（旧壳 strip，位置与
-                // 尺寸同源：左内缩 4、上下各留 7、宽 2.5）。默认标签不占这层
-                // 视觉层级。
+                // 用户明确设置过的标签色：行左侧一条竖光条（上下各留 7、宽 2.5，
+                // 与旧壳 strip 同源）。默认标签不占这层视觉层级。
+                //
+                // 光条贴住行左缘，不沿用旧壳的左内缩 4：旧壳内容起点是 14px，这里
+                // 是 `px_2` = 0.5rem，rem 跟随界面字号（默认 14 → 7px，最小 10 →
+                // 5px）。内缩会让光条贴上图标；贴边时间隙就是内边距减光条宽，随
+                // 字号一起缩放。
                 let strip = tab_color.map(|color| gpui::Rgba {
                     r: color.r as f32 / 255.0,
                     g: color.g as f32 / 255.0,
@@ -416,7 +420,7 @@ impl NebulaWorkspace {
                     row.child(
                         div()
                             .absolute()
-                            .left(px(4.0))
+                            .left_0()
                             .top(px(7.0))
                             .w(px(2.5))
                             .h(px(row_height - 14.0))
@@ -926,12 +930,14 @@ impl NebulaWorkspace {
             .child(
                 title_bar_panel_controls()
                     .gap(px(8.0))
+                    .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
                         toolbar_button(
                             "toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
                         )
+                        .debug_selector(|| "command-manager-toggle".into())
                         .selected(self.command_manager_open)
                         .tooltip(language.text(Message::ChromeCommandList))
                         .on_click(cx.listener(|this, _, window, cx| {

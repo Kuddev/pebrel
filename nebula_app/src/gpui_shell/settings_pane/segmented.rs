@@ -1,20 +1,13 @@
 //! Short fixed choices stay visible and share the existing preference authority.
 
 use super::*;
-use gpui::{Animation, AnimationExt as _, ElementId, FontWeight, Pixels, RenderOnce, relative};
+#[cfg(all(test, feature = "gpui-test-support"))]
+use crate::gpui_shell::widgets::segmented::IndicatorMotion;
+use crate::gpui_shell::widgets::segmented::animate_segment_indicator;
+use gpui::{FontWeight, Pixels, RenderOnce, relative};
 use gpui_component::button::ButtonCustomVariant;
-use std::{cell::Cell, rc::Rc};
 
 const TRACK_INSET: f32 = 2.0;
-const SLIDE_DURATION: Duration = Duration::from_millis(280);
-
-/// Keep the last displayed position, so a second click starts where the thumb is.
-struct IndicatorMotion {
-    position: Rc<Cell<f32>>,
-    from: f32,
-    target: f32,
-    epoch: u64,
-}
 
 #[derive(IntoElement)]
 struct SettingsSegments {
@@ -65,24 +58,6 @@ impl RenderOnce for SettingsSegments {
         } else {
             (cx.theme().secondary, panel)
         };
-        let motion = window.use_keyed_state(
-            SharedString::from(format!("settings-indicator-motion-{key}")),
-            cx,
-            |_, _| IndicatorMotion {
-                position: Rc::new(Cell::new(target)),
-                from: target,
-                target,
-                epoch: 0,
-            },
-        );
-        let (from, epoch, position) = motion.update(cx, |motion, _| {
-            if motion.target != target {
-                motion.from = motion.position.get();
-                motion.target = target;
-                motion.epoch += 1;
-            }
-            (motion.from, motion.epoch, motion.position.clone())
-        });
         let indicator = div()
             .id(SharedString::from(format!("settings-indicator-{key}")))
             .debug_selector(move || format!("settings-indicator-{key}"))
@@ -100,24 +75,13 @@ impl RenderOnce for SettingsSegments {
                 blur_radius: px(3.0),
                 ..crate::gpui_shell::theme::card_shadow(cx)
             }]);
-        let indicator = if from == target || cx.reduce_motion() {
-            position.set(target);
-            indicator.into_any_element()
-        } else {
-            indicator
-                .with_animation(
-                    ElementId::NamedInteger(format!("settings-slide-{key}").into(), epoch),
-                    Animation::new(SLIDE_DURATION).with_easing(|progress| {
-                        crate::motion::Easing::CssStandard.sample(progress)
-                    }),
-                    move |indicator, progress| {
-                        let current = from + (target - from) * progress;
-                        position.set(current);
-                        indicator.left(relative(current))
-                    },
-                )
-                .into_any_element()
-        };
+        let indicator = animate_segment_indicator(
+            format!("settings-indicator-{key}").into(),
+            indicator,
+            target,
+            window,
+            cx,
+        );
         div()
             .id(SharedString::from(format!("settings-choices-{key}")))
             .debug_selector(move || format!("settings-choices-{key}"))

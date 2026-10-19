@@ -2,8 +2,13 @@
 
 use super::*;
 
-/// 工作区静态默认绑定的 combo 集([`init`] 的镜像)。撤销已失效的自定义
-/// 注入时用它决定走「恢复默认」还是「Unbind(动作名)」精确收回。
+// App-owned keybinding sources. GPUI gives untagged component bindings source
+// priority 0; a workspace null must suppress workspace defaults, not native
+// input editing. These identifiers are reserved here, not persisted settings.
+const USER_KEY_BINDING_SOURCE: gpui::KeyBindingMetaIndex = gpui::KeyBindingMetaIndex(1);
+const WORKSPACE_DEFAULT_SOURCE: gpui::KeyBindingMetaIndex = gpui::KeyBindingMetaIndex(2);
+
+/// 工作区静态默认绑定的候选 combo 集；注册前还会应用平台默认策略。
 #[cfg(test)]
 pub(super) const STATIC_DEFAULT_COMBOS: &[&str] = &[
     "ctrl-shift-t",
@@ -124,7 +129,7 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-o", OpenQuickJump, None),
     ];
     // Tab selection and rename use the same defaults displayed by Settings.
-    bindings.extend(crate::display::keymap::default_shortcuts().into_iter().filter_map(
+    bindings.extend(crate::display::keymap::GPUI.default_shortcuts().into_iter().filter_map(
         |(combo, action)| {
             if action == crate::config::Action::RenameTab {
                 return custom_workspace_binding(&combo, &action);
@@ -134,12 +139,31 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         },
     ));
     bindings
+        .into_iter()
+        .filter(|binding| {
+            binding.keystrokes().iter().all(|stroke| {
+                let stroke = stroke.inner();
+                stroke.key.chars().count() != 1
+                    || crate::display::keymap::gui_character_shortcut_enabled(
+                        crate::display::keymap::gpui_modifiers(&stroke.modifiers),
+                    )
+            })
+        })
+        .map(default_binding_source)
+        .collect()
 }
 
-/// macOS 的原生修饰键是 ⌘：在 Ctrl 绑定之外**追加**一套 ⌘ 绑定，不替换。
-/// 追加而非替换有两个原因：Ctrl+Shift 组合在 Mac 终端里没有别的含义，留着
-/// 不碍事；而 ⌘C/⌘V 必须存在，否则 Mac 用户第一反应就是「复制粘贴坏了」。
-/// 终端里的 Ctrl+C 仍然是 SIGINT——这里只绑 ⌘，不碰 Ctrl 的语义。
+fn default_binding_source(binding: KeyBinding) -> KeyBinding {
+    // Ctrl+Shift+V / Cmd+V aliases below are input editing, not workspace actions.
+    if binding.action().as_any().is::<gpui_component::input::Paste>() {
+        binding
+    } else {
+        binding.with_meta(WORKSPACE_DEFAULT_SOURCE)
+    }
+}
+
+/// macOS 使用 ⌘ 承载字符类 GUI 默认键；仅 Control 的字符组合交给终端。
+/// 保留现有 Ctrl+Tab、Ctrl+Shift 和 Ctrl+Alt 导航组合及显式用户覆盖。
 ///
 /// 键位来自 `display::keymap::MACOS_COMMAND_ALIASES`：设置页的反查、解绑与
 /// 恢复读的是同一张表，两处不会再各自漂移。注册必须留在这里、且早于用户
@@ -156,7 +180,7 @@ fn bind_macos_command_keys(cx: &mut App) {
         // 设置页与对话框的输入框自带 ⌘V，作用域必须和终端分开。
         KeyBinding::new("cmd-v", gpui_component::input::Paste, Some("Input")),
     ]);
-    cx.bind_keys(bindings);
+    cx.bind_keys(bindings.into_iter().map(default_binding_source));
 }
 
 /// Typed GPUI adapter for the shared numbered/last-tab actions. The existing
@@ -261,12 +285,16 @@ fn workspace_binding_in_context(
     }
 }
 
-/// Undo a custom binding that is no longer configured: `gpui::Unbind(action)`
-/// drops exactly that action's binding for this key, so the key falls back to
-/// plain input. `NoAction` in its place would keep intercepting the key, which is
-/// why a bare `enter` stayed dead after its action was removed.
-pub(super) fn stale_removal_bindings(combo: &str, action_name: &str) -> Vec<KeyBinding> {
-    vec![KeyBinding::new(combo, gpui::Unbind(action_name.into()), None)]
+/// Replace this application's user-override source while preserving all other
+/// registrations, including component bindings added since the last update.
+/// GPUI processes NoAction before Unbind, so Unbind cannot revoke a prior null.
+fn with_user_keybindings(keymap: &gpui::Keymap, current: Vec<KeyBinding>) -> Vec<KeyBinding> {
+    keymap
+        .bindings()
+        .filter(|binding| binding.meta() != Some(USER_KEY_BINDING_SOURCE))
+        .cloned()
+        .chain(current.into_iter().map(|binding| binding.with_meta(USER_KEY_BINDING_SOURCE)))
+        .collect()
 }
 
 impl NebulaWorkspace {
@@ -275,10 +303,6 @@ impl NebulaWorkspace {
     }
 
     fn update_keybinds(&mut self, raw: Vec<(String, String)>, cx: &mut Context<Self>) {
-        // Every record keeps its action name: undoing the binding needs
-        // `Unbind(name)` for exactly this key, while `NoAction` would swallow
-        // the key itself (a bare Enter stayed dead after removal).
-        let mut applied: Vec<(String, String)> = Vec::new();
         let mut current_bindings = Vec::new();
         for (combo, action) in raw {
             let Some(action) = crate::display::keymap::parse_action(&action) else { continue };
@@ -289,32 +313,15 @@ impl NebulaWorkspace {
             // cannot continue to intercept input through a more specific context.
             for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
                 if let Some(binding) = workspace_binding_in_context(&combo, &action, scope) {
-                    if scope.is_none() {
-                        applied.push((gpui_binding_combo(&combo), binding.action().name().into()));
-                    }
                     current_bindings.push(binding);
                 }
             }
         }
-        let defaults = crate::display::keymap::default_shortcuts();
-        let mut bindings = Vec::new();
-        // GPUI 追加绑定；同一个键从 A 改成 B 时也必须收回 A，避免删除 B 后旧 A 复活。
-        for (stale, stale_action) in
-            self.custom_keybinds_applied.iter().filter(|previous| !applied.contains(previous))
-        {
-            bindings.extend(stale_removal_bindings(stale, stale_action));
-            let restored =
-                defaults.iter().rev().find(|(combo, _)| gpui_binding_combo(combo) == *stale);
-            if let Some((combo, action)) = restored {
-                for scope in [None, Some(crate::gpui_shell::terminal::KEY_CONTEXT)] {
-                    if let Some(binding) = workspace_binding_in_context(combo, action, scope) {
-                        bindings.push(binding);
-                    }
-                }
-            }
-        }
-        bindings.extend(current_bindings);
-        self.custom_keybinds_applied = applied;
+        // The keymap belongs to App, not to an individual window. Replace the
+        // current source in one UI-thread update instead of accumulating stale
+        // controls and relying on each window's incomplete registration history.
+        let bindings = with_user_keybindings(&cx.key_bindings().borrow(), current_bindings);
+        cx.clear_key_bindings();
         cx.bind_keys(bindings);
     }
 }

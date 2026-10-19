@@ -411,13 +411,16 @@ const PALETTE_METADATA_MAX_WIDTH: f32 = 260.0;
 /// 与 Shell 选择器的 launcher row 共用同一命中高度；不能只放大文字或底色，
 /// 否则 hover、点击和键盘选中会再次出现三套几何。
 const PALETTE_ROW_HEIGHT: f32 = 42.0;
-const PALETTE_GROUP_HEADER_HEIGHT: f32 = 26.0;
-const PALETTE_FILTER_BAR_HEIGHT: f32 = 26.0;
+const PALETTE_GROUP_HEADER_HEIGHT: f32 = 40.0;
+const PALETTE_FILTER_BAR_HEIGHT: f32 = 40.0;
 const PALETTE_ROW_GAP: f32 = 4.0;
 const PALETTE_SCROLLBAR_CONTENT_GUTTER: f32 = 16.0;
 
 #[derive(Clone)]
 enum WorkspacePaletteAction {
+    TerminalReading {
+        commands: bool,
+    },
     Shared(crate::display::command_palette::PaletteAction),
     /// 聚焦已经存在的工作区标签，不创建副本。
     FocusTab(usize),
@@ -687,7 +690,7 @@ pub struct NebulaWorkspace {
     command_manager_group: Option<String>,
     command_group_menu: Option<command_manager::GroupMenu>,
     command_manager_input: Entity<InputState>,
-    command_manager_selected: usize,
+    command_manager_selection: command_manager::CommandSelection,
     command_manager_scroll: gpui::UniformListScrollHandle,
     saved_commands: crate::saved_commands::SavedCommands,
     _command_manager_subscription: Subscription,
@@ -755,9 +758,6 @@ pub struct NebulaWorkspace {
     /// spinner 在窗口失焦时冻结为静态状态；重新聚焦后由一次 render 恢复按需帧循环。
     spinner_window_active: bool,
     _spinner_activation_sub: Subscription,
-    /// 本会话已注入的自定义键位 (gpui 绑定串, 动作名)。键位表没有删除
-    /// API,撤销靠后注 `Unbind(动作名)` 精确收回该键;这份清单就是撤销的依据。
-    custom_keybinds_applied: Vec<(String, String)>,
     /// 侧栏「运行中」spinner 的相位（0..1，旧壳 `SPINNER_PERIOD` 800ms 一
     /// 圈）与上次帧时刻。侧栏和顶栏共用 GPUI 屏幕帧时钟。
     spinner_phase: f32,
@@ -954,7 +954,7 @@ impl NebulaWorkspace {
             command_manager_group: None,
             command_group_menu: None,
             command_manager_input,
-            command_manager_selected: 0,
+            command_manager_selection: Default::default(),
             command_manager_scroll: gpui::UniformListScrollHandle::new(),
             saved_commands: crate::saved_commands::SavedCommands::load().unwrap_or_default(),
             _command_manager_subscription: command_manager_subscription,
@@ -989,7 +989,6 @@ impl NebulaWorkspace {
             _appearance_sub: appearance_sub,
             spinner_window_active,
             _spinner_activation_sub: spinner_activation_sub,
-            custom_keybinds_applied: Vec::new(),
             spinner_phase: 0.0,
             spinner_last: std::time::Instant::now(),
             spinner_frame_pending: std::cell::Cell::new(false),
@@ -1734,16 +1733,15 @@ impl NebulaWorkspace {
         if !self.side_panel.open {
             return false;
         }
-        // 远端 pane 的位置不在本机文件系统里。不早退的话，`side_panel_follow`
-        // 会拿远端路径去问宿主 `is_dir`（必然为假），于是本地树保留上一个有效
-        // 根——用户在 SSH tab 上看到的是**上一个本地目录**的内容，而且没有任何
-        // 提示。这正是"远端浏览器识别不到"的观感来源。
+        // SSH cwd reports drive SFTP browsing; remote paths must stay out of the
+        // local filesystem model. Bind first so pane switches use the new owner.
+        let remote_changed = self.sync_remote_browser_to_active(cx);
         if self.remote_browser.active() {
-            return false;
+            return remote_changed;
         }
         let (cwd, wsl) = self.side_panel_follow(cx);
         let cleared = reset_browse_root && self.side_panel.clear_custom_root();
-        self.side_panel.sync_at(cwd, wsl) || cleared
+        self.side_panel.sync_at(cwd, wsl) || cleared || remote_changed
     }
 
     fn toggle_file_tree(&mut self, cx: &mut Context<Self>) {
@@ -1857,51 +1855,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    fn run_selected_palette_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let action = self
-            .filtered_palette_rows(cx)
-            .get(self.command_palette_selected)
-            .map(|item| item.action.clone());
-        let Some(action) = action else { return };
-        match action {
-            WorkspacePaletteAction::Shared(action) => self.run_palette_action(action, window, cx),
-            WorkspacePaletteAction::LayoutRecipes => {
-                self.dismiss_palette_state();
-                self.open_layout_recipes(window, cx);
-            },
-            WorkspacePaletteAction::FocusTab(tab) => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::FocusPane { tab, pane } => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_pane(tab, pane, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::OpenDirectory(path) => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(Some(path), None, window, cx);
-            },
-            WorkspacePaletteAction::RunAiSession { command, cwd } => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(cwd, Some(command), window, cx);
-            },
-            WorkspacePaletteAction::LaunchSshHost(host) => {
-                self.launch_palette_ssh(host, window, cx);
-            },
-            WorkspacePaletteAction::LaunchShell(detected) => {
-                self.launch_palette_shell(detected, window, cx);
-            },
-            WorkspacePaletteAction::LaunchProfile(profile) => {
-                self.launch_palette_profile(profile, window, cx);
-            },
-        }
-    }
-
     fn open_quick_jump_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_split = None;
         self.command_manager_open = false;
@@ -1933,7 +1886,7 @@ impl NebulaWorkspace {
             crate::terminal_profiles::TerminalProfiles::load()
                 .map(|store| store.as_config_profiles())
                 .unwrap_or_default(),
-            crate::gpui_shell::ssh_hosts::SshHostLists::load().merged_with_labels(),
+            &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
             &default_shell_id,
             language,
             window.scale_factor().max(0.5),

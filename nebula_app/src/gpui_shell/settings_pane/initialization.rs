@@ -186,6 +186,13 @@ impl SettingsPane {
             window,
             cx,
         );
+        add_select(
+            "scrollbar_visibility",
+            nebula_settings::ScrollbarVisibility::VALUES,
+            runtime.scrollbar_visibility.settings_value(),
+            window,
+            cx,
+        );
         // 文案照抄旧壳 `accept_label` / `completion_style_label`。
         add_select(
             "bell",
@@ -563,7 +570,7 @@ impl SettingsPane {
         let keymap_interceptor = cx.listener(|this, event: &gpui::KeystrokeEvent, window, cx| {
             if this.keymap_capture.is_some() && this.focus_handle.contains_focused(window, cx) {
                 cx.stop_propagation();
-                this.handle_keymap_capture(&event.keystroke, cx);
+                this.handle_keymap_capture(&event.keystroke, window, cx);
             }
         });
         subscriptions.push(cx.intercept_keystrokes(keymap_interceptor));

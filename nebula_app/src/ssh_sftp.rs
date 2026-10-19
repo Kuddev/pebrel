@@ -440,6 +440,14 @@ impl SftpController {
 }
 
 impl SftpBrowseSession {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn from_test_session(destination: String, session: SftpSession) -> Self {
+        Self {
+            destination: Arc::from(destination),
+            session: Arc::new(tokio::sync::Mutex::new(Some(session))),
+        }
+    }
+
     pub(crate) fn new(destination: impl Into<String>) -> Self {
         Self {
             destination: Arc::from(destination.into()),
@@ -458,23 +466,20 @@ impl SftpBrowseSession {
     pub(crate) async fn list_dir(&self, path: &str) -> Result<Vec<SftpEntry>, String> {
         let path = normalize_remote_path("/", path);
         let mut slot = self.session.lock().await;
-        if slot.is_none() {
-            *slot = Some(
-                crate::ssh_session::open_sftp(&self.destination)
-                    .await
-                    .map_err(|err| format!("无法连接 {}：{err}", self.destination))?,
-            );
-        }
-
-        let result =
-            read_remote_dir(slot.as_ref().expect("SFTP browser session initialized"), &path)
+        // russh-sftp 的 read_dir 只在正常结束时关闭目录句柄。将会话暂时移出
+        // 缓存，使导航取消也能关闭子通道；否则句柄和未完成请求会留在复用会话里。
+        let session = match slot.take() {
+            Some(session) => session,
+            None => crate::ssh_session::open_sftp(&self.destination)
                 .await
-                .map_err(|err| format!("无法读取目录 {path}：{err}"));
-        if result.is_err() {
-            // A dead subsystem must not poison every later click. Permission
-            // and missing-path errors also clear the channel; the next user
-            // action reopens it through the already pooled SSH transport.
-            *slot = None;
+                .map_err(|err| format!("无法连接 {}：{err}", self.destination))?,
+        };
+        let result = read_remote_dir(&session, &path)
+            .await
+            .map_err(|err| format!("无法读取目录 {path}：{err}"));
+        if result.is_ok() {
+            // 正常读取仍复用 SFTP 子通道；取消或失败仅回收它，不关闭共享 SSH 连接。
+            *slot = Some(session);
         }
         result
     }
@@ -1411,6 +1416,91 @@ mod tests {
         SftpEntry, SftpEntryKind, TransferProgress, normalize_remote_path, sort_entries,
         temporary_upload_path, validate_name,
     };
+
+    #[test]
+    fn cancelled_browser_listing_retires_the_subsystem() {
+        use super::SftpBrowseSession;
+        use russh_sftp::protocol::{Handle, Name, Status, StatusCode};
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::sync::oneshot;
+
+        struct Peer {
+            entered: Option<oneshot::Sender<()>>,
+            release: Option<oneshot::Receiver<()>>,
+            closed: Option<oneshot::Sender<()>>,
+        }
+
+        impl Drop for Peer {
+            fn drop(&mut self) {
+                let _ = self.closed.take().unwrap().send(());
+            }
+        }
+
+        impl russh_sftp::server::Handler for Peer {
+            type Error = StatusCode;
+
+            fn unimplemented(&self) -> Self::Error {
+                StatusCode::OpUnsupported
+            }
+
+            async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, StatusCode> {
+                Ok(Handle { id, handle: path })
+            }
+
+            async fn readdir(&mut self, _: u32, handle: String) -> Result<Name, StatusCode> {
+                if handle == "/blocked" {
+                    self.entered.take().unwrap().send(()).unwrap();
+                    let _ = self.release.take().unwrap().await;
+                }
+                Err(StatusCode::Eof)
+            }
+
+            async fn close(&mut self, id: u32, _: String) -> Result<Status, StatusCode> {
+                Ok(Status {
+                    id,
+                    status_code: StatusCode::Ok,
+                    error_message: String::new(),
+                    language_tag: String::new(),
+                })
+            }
+        }
+
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
+            async {
+                let (client, server) = tokio::io::duplex(16 * 1024);
+                let (entered, waiting) = oneshot::channel();
+                let (release, gate) = oneshot::channel();
+                let (closed, released) = oneshot::channel();
+                russh_sftp::server::run(
+                    server,
+                    Peer { entered: Some(entered), release: Some(gate), closed: Some(closed) },
+                )
+                .await;
+                let session = russh_sftp::client::SftpSession::new(client).await.unwrap();
+                let browser = SftpBrowseSession {
+                    destination: Arc::from("fixture@unused.invalid"),
+                    session: Arc::new(tokio::sync::Mutex::new(Some(session))),
+                };
+                browser.list_dir("/ready").await.unwrap();
+                assert!(
+                    browser.session.lock().await.is_some(),
+                    "successful reads reuse the channel"
+                );
+                let reader = browser.clone();
+                let listing = tokio::spawn(async move { reader.list_dir("/blocked").await });
+                tokio::time::timeout(Duration::from_secs(2), waiting).await.unwrap().unwrap();
+                listing.abort();
+                assert!(listing.await.unwrap_err().is_cancelled());
+                let retired = browser.session.lock().await.is_none();
+                // 先释放协议夹具，再断言负例，避免失败测试留下仍在等待的服务端任务。
+                release.send(()).unwrap();
+                drop(browser);
+                tokio::time::timeout(Duration::from_secs(2), released).await.unwrap().unwrap();
+                assert!(retired, "cancelled readdir must not retain its open remote handle");
+            },
+        );
+    }
 
     #[test]
     fn remote_paths_are_posix_and_cannot_escape_root() {

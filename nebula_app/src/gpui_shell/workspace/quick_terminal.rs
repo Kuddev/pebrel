@@ -42,7 +42,7 @@ struct QuickTerminalHotkey {
 impl Global for QuickTerminalHotkey {}
 
 #[cfg(target_os = "linux")]
-struct PortalHotkey(crate::platform::global_shortcut::Portal);
+struct PortalHotkey(crate::platform::global_shortcut::Portal, Option<String>);
 #[cfg(target_os = "linux")]
 impl Global for PortalHotkey {}
 
@@ -106,7 +106,7 @@ impl NebulaWorkspace {
                 return;
             },
         };
-        cx.set_global(PortalHotkey(portal));
+        cx.set_global(PortalHotkey(portal, None));
         cx.spawn(async move |_, cx| {
             let mut ticks = 0u32;
             loop {
@@ -117,8 +117,20 @@ impl NebulaWorkspace {
                     if ticks % RESYNC_EVERY == 0 {
                         portal.set_combo(current_combo());
                     }
-                    if portal.take_pressed() {
-                        super::windowing::toggle_quick_terminal_window(cx);
+                    let failure = portal.take_failure();
+                    let pressed = portal.take_pressed();
+                    let failure = failure.or(cx.global_mut::<PortalHotkey>().1.take());
+                    if let Some(error) = failure
+                        && !super::windowing::report_quick_terminal_failure(&error, cx)
+                    {
+                        // 静默启动时保留错误，直到可见窗口接收，避免提示在后台过期。
+                        cx.global_mut::<PortalHotkey>().1 = Some(error);
+                    }
+                    if let Some(token) = pressed {
+                        super::windowing::toggle_quick_terminal_window_with_token(
+                            cx,
+                            token.as_deref(),
+                        );
                     }
                 });
             }

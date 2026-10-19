@@ -3,6 +3,9 @@ use super::{Boundary, Column, Dimensions, EventListener, Line, Term, TermMode, a
 
 impl<T: EventListener> Term<T> {
     pub(super) fn clear_screen_contents(&mut self, mode: ansi::ClearMode) {
+        if matches!(mode, ansi::ClearMode::Saved) {
+            self.reading.invalidate();
+        }
         self.observe_redraw_clear(&mode);
         log::trace!("Clearing screen: {mode:?}");
         let bg = self.grid.cursor.template.bg;
