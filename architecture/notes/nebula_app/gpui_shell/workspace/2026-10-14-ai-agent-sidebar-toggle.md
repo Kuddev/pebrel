@@ -2,8 +2,8 @@
 
 ## Status
 
-Decided 2026-10-14 while packaging the grouped sidebar rewrite; the
-file split described here is the shipped shape (2026-10-17).
+Proposed implementation; maintainer corrections applied on 2026-10-19.
+Visual acceptance and native verification remain pending.
 
 ## Context
 
@@ -91,6 +91,16 @@ conflict and the OFF path tracks upstream for free.
   byte-identical: `render_sidebar_slot` and the title bar call the
   renderer internally, so tree mode would lose the fold slot chrome
   unless those call sites route through the dispatch anyway.
+
+- Restore scrollbar visibility preferences and their existing behavior tests;
+  grouping does not change terminal scrollbar geometry or hover behavior.
+- Local cwd/HEAD discovery is connected to TitleChanged and setting refresh.
+  A window owns one background probe, coalescing pending cwd requests and
+  retaining results only for currently focused pane directories. Switching off
+  clears pending work and results; rendering never reads the filesystem.
+- Shell Git reporting is opt-in at session creation. Existing shells retain
+  their environment until reopened/reconnected; the sidebar renderer changes
+  immediately. SSH-specific new-tab inheritance is also gated by this mode.
 
 ## Consequences
 

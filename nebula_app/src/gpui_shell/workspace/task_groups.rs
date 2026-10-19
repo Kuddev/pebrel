@@ -601,60 +601,97 @@ impl NebulaWorkspace {
         RowMetrics::new(self.density, label_px)
     }
 
-    /// 组键解析：cwd 首次出现时向上找一次 git 仓库根（纯 stat 链，与右键
-    /// 菜单 `git_repository_root` 同一判据），此后每个提示符重读一次
-    /// `.git/HEAD` 刷新分支（checkout 会换支）。根与分支都进缓存，render
-    /// 只查内存。只允许在事件路径调用——render 需要时只查
-    /// [`Self::project_group_cache`]。
+    pub(super) fn refresh_project_groups(&mut self, cx: &mut Context<Self>) {
+        let views: Vec<_> =
+            self.tabs.iter().filter_map(|tab| tab.focused_view()).cloned().collect();
+        for view in views {
+            self.resolve_project_group(&view, cx);
+        }
+        self.start_project_probe(cx);
+    }
+
+    /// 合并同一窗口的项目探测，最多一个后台任务；视图只消费已完成的快照。
     pub(super) fn resolve_project_group(
         &mut self,
         view: &gpui::Entity<crate::gpui_shell::terminal::view::TerminalView>,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) {
+        if !crate::gpui_shell::config::ai_agent_sidebar(cx) {
+            return;
+        }
         let view = view.read(cx);
-        if let Some(destination) = view.ssh_destination.as_deref() {
-            // SSH 主机分组：主机键与项目子键都打首开点（排序输入）；子键派生
-            // 与 render 共用 `ssh_group_info`，防两处漂移。远端组键不进
-            // `project_group_cache`——远端路径与本地路径是两个键空间；远端
-            // 仓库根由集成上报，集成哑掉（fish 等嵌套 shell）时由按 pane 的
-            // `rev-parse` 探测补位，不碰本地缓存。
-            // 远端项目身份探测（`remote_git.rs` 的按 pane rev-parse）由后续
-            // 变更提供；探测缺席时 `ssh_group_info` 回落远端 cwd 键——与
-            // 探测未命中的行为一致，不是降级路径。
+        let destination = view.ssh_destination.clone();
+        let cwd = view.cwd.clone();
+        if let Some(destination) = destination.as_deref() {
             let info = super::task_groups_ssh::ssh_group_info(destination, &view, None);
             self.note_project_group_open(&super::task_groups_ssh::host_key(destination));
             self.note_project_group_open(&info.key);
             return;
         }
-        let cwd = view.cwd.as_str();
-        if !groupable_cwd(cwd) {
+        if groupable_cwd(&cwd) {
+            self.project_probe_pending.insert(cwd);
+        }
+        self.start_project_probe(cx);
+    }
+
+    pub(super) fn start_project_probe(&mut self, cx: &mut Context<Self>) {
+        if !crate::gpui_shell::config::ai_agent_sidebar(cx) {
+            self.project_probe_task = None;
+            self.project_probe_pending.clear();
+            self.project_group_cache.clear();
+            self.project_group_open_order.clear();
             return;
         }
-        // 已有条目：根的向上探测只在首见时做一次（深目录无仓库时那条 stat 链
-        // 不便宜），分支却可能被 checkout 换掉——逐次重读一次 `.git/HEAD`，
-        // 一次文件读的量级，换来 fish 等无集成嵌套 shell 里 chip 不停在旧支。
-        if let Some(entry) = self.project_group_cache.get_mut(cwd) {
-            let root = std::path::PathBuf::from(entry.root.as_ref());
-            entry.branch = crate::display::side_panel::git_head_branch(&root)
-                .map(|branch| SharedString::from(branch));
+        let live: std::collections::HashSet<String> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.focused_view())
+            .filter_map(|view| {
+                let view = view.read(cx);
+                view.ssh_destination.is_none().then(|| view.cwd.clone())
+            })
+            .collect();
+        self.project_probe_pending.retain(|cwd| live.contains(cwd));
+        self.project_group_cache.retain(|cwd, _| live.contains(cwd));
+        if self.project_probe_task.is_some() {
             return;
         }
-        // WSL automount（`/mnt/<盘>/…`）与宿主盘是同一工作树：折回
-        // `X:\…` 再探测，让 WSL 里的 tab 与本地 tab 归同一组。
-        let normalized = host_group_path(cwd);
-        let key = if Path::new(&normalized).is_absolute() {
-            crate::display::side_panel::git_repository_root(Path::new(&normalized))
-                .map(|root| root.to_string_lossy().into_owned())
-                .unwrap_or(normalized)
-        } else {
-            // 来宾自有路径（`/home/…`）：宿主读不到，不探测 git 根，以自身成组。
-            normalized
-        };
-        let branch = crate::display::side_panel::git_head_branch(Path::new(&key));
-        let entry =
-            LocalProject { root: SharedString::from(key), branch: branch.map(SharedString::from) };
-        self.note_project_group_open(&entry.root);
-        self.project_group_cache.insert(cwd.to_owned(), entry);
+        let Some(cwd) = self.project_probe_pending.iter().next().cloned() else { return };
+        self.project_probe_pending.remove(&cwd);
+        let previous = self.project_group_cache.get(&cwd).map(|entry| entry.root.to_string());
+        let request = cwd.clone();
+        let work = cx.background_executor().spawn(async move {
+            let normalized = host_group_path(&request);
+            let root = previous.unwrap_or_else(|| {
+                if Path::new(&normalized).is_absolute() {
+                    crate::display::side_panel::git_repository_root(Path::new(&normalized))
+                        .map(|root| root.to_string_lossy().into_owned())
+                        .unwrap_or(normalized)
+                } else {
+                    normalized
+                }
+            });
+            let branch = crate::display::side_panel::git_head_branch(Path::new(&root));
+            LocalProject { root: root.into(), branch: branch.map(SharedString::from) }
+        });
+        self.project_probe_task = Some(cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.project_probe_task = None;
+                if crate::gpui_shell::config::ai_agent_sidebar(cx)
+                    && this
+                        .tabs
+                        .iter()
+                        .filter_map(|tab| tab.focused_view())
+                        .any(|view| view.read(cx).cwd == cwd)
+                {
+                    this.note_project_group_open(&result.root);
+                    this.project_group_cache.insert(cwd, result);
+                }
+                this.start_project_probe(cx);
+                cx.notify();
+            });
+        }));
     }
 
     /// 记录组键首次被观测的序号（项目首开序）。事件路径专用；render 只读

@@ -83,6 +83,22 @@ pub(super) fn tree_resting_activity(
 }
 
 impl NebulaWorkspace {
+    /// 分组模式的新终端继承 SSH 项目；经典模式保留原本的本地启动策略。
+    pub(super) fn add_grouped_ssh_terminal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if crate::gpui_shell::config::ai_agent_sidebar(cx)
+            && let Some((destination, cwd)) = self.focused_ssh_origin(cx)
+        {
+            self.add_ssh_terminal_at(destination, cwd, window, cx);
+            true
+        } else {
+            false
+        }
+    }
+
     /// SSH 聚焦任务的「新建终端」来源（用户 10-13 裁定）：同主机 + 当前
     /// 远端任务目录。非 SSH 聚焦任务返回 `None` 走本地路径；远端 cwd 尚
     /// 未上报时仍继承主机（`None` 目录落远端默认目录），与

@@ -149,7 +149,12 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(spawn_shell, pane_id, cwd);
+                let options = session::local_options(
+                    spawn_shell,
+                    pane_id,
+                    cwd,
+                    crate::gpui_shell::config::ai_agent_sidebar(cx),
+                );
                 if let Some(cwd) = &options.working_directory {
                     initial_cwd = cwd.to_string_lossy().into_owned();
                 }
@@ -335,6 +340,10 @@ impl TerminalView {
             exited: None,
             scrollbar_drag: None,
             scrollbar_hovered: false,
+            scrollbar_visibility: cx
+                .try_global::<Settings>()
+                .map(|settings| settings.scrollbar_visibility)
+                .unwrap_or_default(),
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,
             line_height: line_h,

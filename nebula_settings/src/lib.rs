@@ -42,7 +42,7 @@ mod quick_terminal;
 mod scrolling;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
-    SCROLL_SPEED_STEP, SCROLLBACK_VALUES, normalize_scroll_speed,
+    SCROLL_SPEED_STEP, SCROLLBACK_VALUES, ScrollbarVisibility, normalize_scroll_speed,
 };
 mod themes;
 pub use language::{LanguageInfo, LanguagePref};
@@ -1010,6 +1010,7 @@ pub struct RuntimeSettings {
     pub scrollback_lines: usize,
     /// Wheel multiplier; pixel-precise trackpad input is independent.
     pub scroll_speed: f32,
+    pub scrollbar_visibility: ScrollbarVisibility,
     /// GUI override for mouse.focus_follows_mouse in TOML; absent there too means false.
     pub focus_follows_mouse: Option<bool>,
     /// Preserve the existing dimming of inactive split panes unless explicitly disabled.
@@ -1020,7 +1021,7 @@ pub struct RuntimeSettings {
     pub tab_close_visible: bool,
     /// AI Agent 侧边栏：开 = 侧栏按项目分组并附最近 AI 任务，状态徽章仅
     /// AI 会话显示；关 = 经典扁平标签列表（含折叠动画与拖拽重排）。默认关。
-    /// 已开会话即时生效。
+    /// 侧栏即时切换；shell 的项目上报开关在新建会话时取样。
     pub ai_agent_sidebar: bool,
     /// 新建本地终端是否把 Windows 系统代理写入代理环境变量。自定义代理地址
     /// 不看这个开关：网络页填了地址就会写入新终端。默认关。已打开的会话不改。
@@ -1193,6 +1194,10 @@ impl RuntimeSettings {
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
+            scrollbar_visibility: raw
+                .value("scrollbar_visibility")
+                .and_then(ScrollbarVisibility::from_settings)
+                .unwrap_or_default(),
             ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
             ligatures: raw
                 .value("ligatures")

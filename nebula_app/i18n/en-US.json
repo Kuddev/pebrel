@@ -214,7 +214,7 @@
     },
     "appearance": {
       "ai_agent_sidebar": "AI Agent sidebar",
-      "ai_agent_sidebar_description": "Group sidebar tasks by project with SSH host groups and a recent AI sessions section, and show status badges for AI sessions only. Turned off, the sidebar keeps the classic flat tab list.",
+      "ai_agent_sidebar_description": "Group sidebar tasks by project with SSH host groups and a recent AI sessions section, and show status badges for AI sessions only. Turned off, the sidebar keeps the classic flat tab list. Project reporting starts in newly opened terminals or reconnected SSH sessions.",
       "background_color_description": "Overrides the terminal background supplied by the theme. This also changes the color reported to applications by OSC 11, which TUIs use to choose light or dark mode.",
       "background_cover_title": "Extend the background image beneath window controls?",
       "background_cover_description": "The image will extend beneath the title bar, window buttons, tabs, and SSH sidebar. Low-contrast images may make controls harder to see; the interface retains a minimum-opacity safeguard."

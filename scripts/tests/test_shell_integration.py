@@ -121,6 +121,23 @@ class ShellIntegrationTests(unittest.TestCase):
             shutil.copyfile(SCRIPTS / source, wrapper / target)
         return wrapper
 
+    def check_project_reporting(self, shell: str):
+        session = self.start(shell, rc='git() { printf git-called >> "$HOME/git-calls"; printf "main\\n/tmp/project\\n"; }\n')
+        session.command("true", b"\x1b]133;A\x07")
+        self.assertFalse((self.home / "git-calls").exists())
+        session.command("export PEBREL_PROJECT_REPORT=1", b"\x1b]2;NEBULA|")
+        self.assertTrue((self.home / "git-calls").exists())
+        (self.home / "git-calls").unlink()
+        session.command("export PEBREL_PROJECT_REPORT=0", b"\x1b]133;A\x07")
+        session.command("true", b"\x1b]133;A\x07")
+        self.assertFalse((self.home / "git-calls").exists())
+
+    def test_bash_project_reporting_is_explicit(self):
+        self.check_project_reporting("bash")
+
+    def test_zsh_project_reporting_is_explicit(self):
+        self.check_project_reporting("zsh")
+
     def run_bootstrapped_zsh(self, *args: str, companions: bool = True, **extra: str) -> str:
         # How a WSL guest starts zsh: the bootstrap as ZDOTDIR, with or without its companions.
         program = shutil.which("zsh")

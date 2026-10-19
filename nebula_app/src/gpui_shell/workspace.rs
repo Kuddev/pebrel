@@ -641,6 +641,8 @@ pub struct NebulaWorkspace {
     /// 根探测只在事件路径（`resolve_project_group`），render 永远只查内存。
     sidebar_group_collapsed: HashMap<SharedString, bool>,
     project_group_cache: HashMap<String, task_groups::LocalProject>,
+    project_probe_pending: std::collections::HashSet<String>,
+    project_probe_task: Option<gpui::Task<()>>,
     /// 组键 → 项目首开序（首次被观测的次序），侧栏分组排序用；同样只在
     /// 事件路径打点（`note_project_group_open`），不持久化。
     project_group_open_order: HashMap<SharedString, u32>,
@@ -914,6 +916,8 @@ impl NebulaWorkspace {
             tabs_scroll_pending_reveal: false,
             sidebar_group_collapsed: HashMap::new(),
             project_group_cache: HashMap::new(),
+            project_probe_pending: Default::default(),
+            project_probe_task: None,
             project_group_open_order: HashMap::new(),
             tabs_viewport_h: 0.0,
             tabs_list_width: 0.0,
@@ -1122,16 +1126,13 @@ impl NebulaWorkspace {
         self.reveal_active_tab();
         self.sync_settings_layout(tab_reveal_instant(cx));
         self.sidebar_resizing = None;
+        self.refresh_project_groups(cx);
         self.reveal_if_tray_disabled(cx);
         cx.notify();
     }
 
     fn add_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // SSH 聚焦任务（用户 10-13 裁定）：新终端继承同一 SSH 主机与当前
-        // 任务目录（远端 cwd）。设置页「启动目录」是本地路径，对 SSH 任务
-        // 不适用，SSH 分支优先于它。
-        if let Some((destination, remote_cwd)) = self.focused_ssh_origin(cx) {
-            self.add_ssh_terminal_at(destination, remote_cwd, window, cx);
+        if self.add_grouped_ssh_terminal(window, cx) {
             return;
         }
         // 旧壳合同（window_context `spawn_tab` 一族）：新 tab 的 cwd 先取

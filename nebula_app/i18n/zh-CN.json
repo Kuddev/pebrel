@@ -214,7 +214,7 @@
     },
     "appearance": {
       "ai_agent_sidebar": "AI Agent 侧边栏",
-      "ai_agent_sidebar_description": "侧栏任务按项目分组，附 SSH 主机分组与最近 AI 任务分区，状态徽章仅 AI 会话显示。关闭后恢复经典扁平标签列表。",
+      "ai_agent_sidebar_description": "侧栏任务按项目分组，附 SSH 主机分组与最近 AI 任务分区，状态徽章仅 AI 会话显示。关闭后恢复经典扁平标签列表。 项目上报在新建终端或重新连接 SSH 后生效。",
       "background_color_description": "覆盖主题自带的终端底色。改了它，OSC 11 上报给程序的背景色也跟着变——TUI 判断明暗模式靠的就是这个值。",
       "background_cover_title": "让背景图覆盖窗口控件区域？",
       "background_cover_description": "背景图会延伸到标题栏、窗口按钮、Tab 与 SSH 侧栏下方，低对比度图片可能影响操作可见性；界面仍会保留最低不透明度保护。"

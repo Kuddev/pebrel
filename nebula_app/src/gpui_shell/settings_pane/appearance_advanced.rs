@@ -166,6 +166,19 @@ impl SettingsPane {
             ))
             .child(self.scroll_speed_row(cx))
             .child(self.switch_row(
+                "ai_agent_sidebar",
+                language.text(crate::i18n::Message::SettingsAppearanceAiAgentSidebar),
+                language.text(crate::i18n::Message::SettingsAppearanceAiAgentSidebarDescription),
+                self.runtime.ai_agent_sidebar,
+                cx,
+            ))
+            .child(self.select_row(
+                "scrollbar_visibility",
+                language.text(crate::i18n::Message::SettingsScrollingScrollbar),
+                language.text(crate::i18n::Message::SettingsScrollingScrollbarDescription),
+                cx,
+            ))
+            .child(self.switch_row(
                 "fetch",
                 language.pick("启动欢迎信息", "Startup system information"),
                 help("fetch", language),
@@ -177,13 +190,6 @@ impl SettingsPane {
                 language.pick("Powerline 提示符", "Powerline prompt"),
                 help("powerline", language),
                 self.runtime.powerline,
-                cx,
-            ))
-            .child(self.switch_row(
-                "ai_agent_sidebar",
-                language.text(crate::i18n::Message::SettingsAppearanceAiAgentSidebar),
-                language.text(crate::i18n::Message::SettingsAppearanceAiAgentSidebarDescription),
-                self.runtime.ai_agent_sidebar,
                 cx,
             ));
 

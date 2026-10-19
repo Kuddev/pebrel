@@ -32,6 +32,7 @@ impl NebulaWorkspace {
             // OSC 7 cwd 与标题共用这条事件。只有当前聚焦 pane 能驱动共享文件树；
             // 后台 pane 的提示符更新不能把前台目录覆盖掉。
             TerminalViewEvent::TitleChanged => {
+                self.resolve_project_group(view, cx);
                 let is_active_pane = self
                     .tabs
                     .get(self.active)
