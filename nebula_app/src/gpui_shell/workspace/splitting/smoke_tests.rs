@@ -276,13 +276,13 @@ fn profile_save_and_restore_uses_the_saved_pane_directory(cx: &mut TestAppContex
     });
 }
 
-#[cfg(unix)]
 #[gpui::test]
-fn focused_split_keeps_the_original_unix_default_after_preference_changes(cx: &mut TestAppContext) {
+fn focused_split_keeps_the_original_default_after_preference_changes(cx: &mut TestAppContext) {
     let (directory, workspace, mut cx) = fixture(cx);
-    let program = nebula_terminal::tty::default_shell_program().unwrap();
+    let shell = crate::platform::shell::snapshot_shell(None).unwrap();
+    let program = shell.program().to_owned();
+    let args = shell.args().to_vec();
     let id = std::path::Path::new(&program).file_name().unwrap().to_str().unwrap();
-    let args = crate::platform::shell::interactive_args(id);
     cx.update(|window, cx| {
         workspace.update(cx, |w, cx| {
             w.add_terminal_with(
@@ -300,7 +300,16 @@ fn focused_split_keeps_the_original_unix_default_after_preference_changes(cx: &m
             assert_eq!(saved_program, &program);
             assert_eq!(saved_args, &args);
             let settings = cx.global_mut::<crate::gpui_shell::config::Settings>();
-            settings.shell_id = Some(if id == "zsh" { "bash" } else { "zsh" }.into());
+            settings.shell_id = Some(
+                if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+                    "cmd"
+                } else if id == "zsh" {
+                    "bash"
+                } else {
+                    "zsh"
+                }
+                .into(),
+            );
             settings.split_shell_source = SplitShellSource::Focused;
             w.request_split(SplitDirection::LeftRight, window, cx);
             assert_eq!(w.tabs[w.active].focused_view().unwrap().read(cx).session_launch, original);
