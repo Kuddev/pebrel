@@ -215,6 +215,37 @@ fn refresh_surface_opacity(cx: &mut App) {
     {
         crate::gpui_shell::theme::reapply_prepared_surface_opacity(cx);
     }
+    sync_root_background(cx);
+}
+
+/// Whether a native wallpaper layer is composited below the GPUI scene.
+pub fn native_underlay_active(cx: &App) -> bool {
+    animated::underlay_ready(cx)
+}
+
+/// `gpui_component::Root` fills the whole window with the shell color. Content
+/// painted above it is unaffected, but a native layer below GPUI would be hidden,
+/// so the root fill is cleared while one is shown. Shell regions around the card
+/// are painted separately and keep their color.
+fn sync_root_background(cx: &mut App) {
+    let underlay = animated::underlay_ready(cx);
+    cx.defer(move |cx| {
+        for handle in cx.windows() {
+            if let Err(error) = handle.update(cx, |_, window, cx| {
+                let Some(Some(root)) = window.root::<gpui_component::Root>() else { return };
+                root.update(cx, |root, cx| {
+                    let background = underlay.then(|| gpui::Fill::from(gpui::transparent_black()));
+                    let style = gpui::Styled::style(root);
+                    if style.background != background {
+                        style.background = background;
+                        cx.notify();
+                    }
+                });
+            }) {
+                log::warn!("failed to update window root background: {error}");
+            }
+        }
+    });
 }
 
 fn retire_image(image: Option<Arc<RenderImage>>, cx: &mut App) {
@@ -273,10 +304,49 @@ pub fn chrome_surface_opacity(cx: &App) -> f32 {
     let Some(effects) = cx.try_global::<VisualEffects>() else {
         return 1.0;
     };
+    let opacity = base_surface_opacity(effects, cx);
+    if effects.layout.cover_chrome && animated::underlay_ready(cx) {
+        return underlay_composition(opacity, effects.layout.opacity).0;
+    }
+    opacity
+}
+
+/// Card surface alpha. Equal to [`chrome_surface_opacity`] unless a native
+/// video sits below only the card.
+pub fn card_surface_opacity(cx: &App) -> f32 {
+    let Some(effects) = cx.try_global::<VisualEffects>() else {
+        return 1.0;
+    };
+    if !effects.layout.cover_chrome && animated::underlay_ready(cx) {
+        return underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).0;
+    }
+    chrome_surface_opacity(cx)
+}
+
+fn base_surface_opacity(effects: &VisualEffects, cx: &App) -> f32 {
     if effects.layout.cover_chrome && background_ready(effects, cx) {
         return effects.opacity.clamp(0.0, 1.0).min(0.78);
     }
     effects.opacity.clamp(0.0, 1.0)
+}
+
+fn underlay_layer_opacity(cx: &App) -> f32 {
+    let Some(effects) = cx.try_global::<VisualEffects>() else {
+        return 1.0;
+    };
+    underlay_composition(base_surface_opacity(effects, cx), effects.layout.opacity).1
+}
+
+/// A wallpaper painted above a surface of alpha `a` with opacity `w` shows
+/// `w·V + a·(1-w)·B`. A layer *below* that surface matches it exactly when the
+/// surface alpha becomes `a·(1-w)` and the layer opacity `w / (1 - a·(1-w))`.
+/// Returns `(surface alpha, layer opacity)`.
+fn underlay_composition(surface: f32, wallpaper: f32) -> (f32, f32) {
+    let surface = surface.clamp(0.0, 1.0);
+    let wallpaper = wallpaper.clamp(0.0, 1.0);
+    let surface_alpha = surface * (1.0 - wallpaper);
+    let layer = if surface_alpha >= 1.0 { 0.0 } else { wallpaper / (1.0 - surface_alpha) };
+    (surface_alpha, layer.min(1.0))
 }
 
 /// 开窗参数用。GPUI 通用层在窗口创建时就会把这个值下发到平台层
