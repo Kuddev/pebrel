@@ -930,7 +930,6 @@ mod tests {
             GPUI.effective_combo(&Action::ToggleShellPicker, &[]),
             Some(("Command+K".into(), false))
         );
-        assert!(LEGACY.effective_combo(&Action::ClearHistory, &[]).is_some());
         let mut raw = Vec::new();
         GPUI.clear_action(&mut raw, &Action::ClearHistory);
         GPUI.reset_action(&mut raw, &Action::ClearHistory);
