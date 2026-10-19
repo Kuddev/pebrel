@@ -140,12 +140,6 @@ fn switching_top_tabs_keeps_settings_reachable_until_explicit_close(cx: &mut Tes
 
 #[gpui::test]
 fn keyboard_navigation_can_return_to_background_settings(cx: &mut TestAppContext) {
-    // Windows 测试宿主上 ctrl-shift-w 到不了工作区动作（Linux CI 持有本回
-    // 归）；用运行时早退而非 cfg_attr 门控，避免在 platform/ 之外新增平台
-    // cfg 预算占用。
-    if std::env::consts::OS == "windows" {
-        return;
-    }
     let (_directory, workspace, mut cx) = open_workspace(2, cx);
     let [first_tab, third_tab] = numbered_tab_shortcuts();
     for shortcut in [first_tab, "alt-1"] {
@@ -217,10 +211,6 @@ fn instant_slide_animation_keeps_the_side_panel_static(cx: &mut TestAppContext) 
 
 #[gpui::test]
 fn closing_last_regular_tab_keeps_settings_until_it_is_closed(cx: &mut TestAppContext) {
-    // 同上：Windows 测试宿主不持本回归。
-    if std::env::consts::OS == "windows" {
-        return;
-    }
     let (_directory, workspace, mut cx) = open_workspace(1, cx);
     click_tab("top-tab-0", &mut cx);
     cx.simulate_keystrokes("ctrl-shift-w");
@@ -445,11 +435,6 @@ fn sidebar_groups_tabs_under_a_collapsible_header(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn ai_agent_sidebar_toggle_switches_renderers(cx: &mut TestAppContext) {
-    // Windows 测试宿主字体度量使分组段 hairline 探针失真（Linux CI 持有本
-    // 回归）；运行时早退说明见上。
-    if std::env::consts::OS == "windows" {
-        return;
-    }
     let (_directory, workspace, mut cx) = open_workspace(2, cx);
     click_tab("top-tab-0", &mut cx);
     workspace.update(&mut cx, |workspace, cx| {

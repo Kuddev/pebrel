@@ -950,10 +950,15 @@ mod tests {
         assert!(!groupable_cwd("relative/junk"));
         // automount 折回宿主路径：盘符大写、分隔符反转，与本地 tab 的
         // cwd（`D:\…`）产生同一个组键。Cygwin 的 /cygdrive 挂载同规则。
-        assert_eq!(host_group_path("/mnt/d/src/pebrel"), r"D:\src\pebrel");
-        assert_eq!(host_group_path("/mnt/C/"), r"C:\");
-        assert_eq!(host_group_path("/cygdrive/d/gopath/src/pebrel"), r"D:\gopath\src\pebrel");
-        assert_eq!(host_group_path("/cygdrive/c"), r"C:\");
+        if crate::platform::Platform::current() == crate::platform::Platform::Windows {
+            assert_eq!(host_group_path("/mnt/d/src/pebrel"), r"D:\src\pebrel");
+            assert_eq!(host_group_path("/mnt/C/"), r"C:\");
+            assert_eq!(host_group_path("/cygdrive/d/gopath/src/pebrel"), r"D:\gopath\src\pebrel");
+            assert_eq!(host_group_path("/cygdrive/c"), r"C:\");
+        } else {
+            assert_eq!(host_group_path("/mnt/d/src/pebrel"), "/mnt/d/src/pebrel");
+            assert_eq!(host_group_path("/cygdrive/c"), "/cygdrive/c");
+        }
         // 非「单盘符首段」不是 automount，原样保留。
         assert_eq!(host_group_path("/mnt/share/file"), "/mnt/share/file");
         assert_eq!(host_group_path("/home/user/proj"), "/home/user/proj");

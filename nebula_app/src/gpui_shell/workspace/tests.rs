@@ -1010,6 +1010,84 @@ mod ssh_sidebar_group_tests {
     }
 
     #[gpui::test]
+    fn project_discovery_uses_background_results_and_stops_when_disabled(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/test-branch\n").unwrap();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::gpui_shell::init(cx, None);
+            windowing::initialize(cx, crate::runtime_api::RuntimeHub::new());
+            let mut settings =
+                crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord);
+            settings.ai_agent_sidebar = true;
+            cx.set_global(settings);
+        });
+        let mut output = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let entity = cx.new(|cx| {
+                let mut workspace = NebulaWorkspace::new(
+                    window,
+                    None,
+                    None,
+                    1,
+                    crate::runtime_api::RuntimeHub::new(),
+                    windowing::WorkspaceStartup::Empty,
+                    windowing::WindowRole::Regular,
+                    cx,
+                );
+                let pane = workspace.new_pane(
+                    (80, 24),
+                    TerminalLaunch::Local {
+                        cwd: None,
+                        shell: Some(nebula_terminal::tty::Shell::new(
+                            "pebrel-test-missing-shell".into(),
+                            vec![],
+                        )),
+                        shell_name: None,
+                    },
+                    None,
+                    window,
+                    cx,
+                );
+                pane.view.update(cx, |view, _| {
+                    view.install_completion_test_session();
+                    view.cwd = root.join("src").to_string_lossy().into_owned();
+                });
+                push_terminal_tab(&mut workspace, vec![pane]);
+                workspace
+            });
+            output = Some(entity.clone());
+            gpui_component::Root::new(entity, window, cx)
+        });
+        let workspace = output.unwrap();
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let view = workspace.tabs[0].focused_view().unwrap().clone();
+                workspace.on_terminal_event(&view, &TerminalViewEvent::TitleChanged, window, cx);
+                assert!(workspace.project_group_cache.is_empty());
+            })
+        });
+        window.run_until_parked();
+        workspace.read_with(window, |workspace, _| {
+            let project = workspace.project_group_cache.values().next().expect("background result");
+            assert_eq!(std::path::Path::new(project.root.as_ref()), root);
+            assert_eq!(project.branch.as_deref(), Some("test-branch"));
+        });
+        window.update(|_, cx| {
+            cx.global_mut::<crate::gpui_shell::config::Settings>().ai_agent_sidebar = false;
+            workspace.update(cx, |workspace, cx| {
+                workspace.refresh_project_groups(cx);
+                assert!(workspace.project_probe_task.is_none());
+                assert!(workspace.project_group_cache.is_empty());
+                assert!(workspace.project_probe_pending.is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
     fn ssh_panes_nest_under_the_host_with_project_subgroups(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);

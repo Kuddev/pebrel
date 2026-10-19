@@ -939,11 +939,11 @@ pub(crate) fn wslenv_name(entry: &str) -> &str {
 /// （fish 等）经 OSC 7 按 `$PWD` 原样上报这些形态；折回宿主盘后本地文件树、
 /// Git 视图与左侧分组读的是同一份身份。非挂载形态返回 `None`。
 pub fn mounted_host_path(cwd: &str) -> Option<std::path::PathBuf> {
-    // MSYS/Git Bash 的 `$PWD`（`/d/…`）：单字母根目录仅在 Windows 宿主上才是
-    // 盘符挂载，其他平台是真实目录，不折。
-    // 单字母根仅在 Windows 宿主上是盘符挂载；用 OS 常量而非 cfg 属性——
-    // 编译器同样折叠，而平台 cfg 预算不为这里在 platform/ 之外加账。
-    let msys = (std::env::consts::OS == "windows").then(|| cwd.strip_prefix('/')).flatten();
+    // 这些挂载只在 Windows 宿主映射为盘符，Unix 的 /mnt/c 仍是真实路径。
+    if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+        return None;
+    }
+    let msys = cwd.strip_prefix('/');
     let suffix = cwd.strip_prefix("/mnt/").or_else(|| cwd.strip_prefix("/cygdrive/")).or(msys)?;
     let bytes = suffix.as_bytes();
     if let Some(&drive) = bytes.first()
@@ -1065,6 +1065,12 @@ mod tests {
     #[test]
     fn mounted_cwds_fold_to_host_drive_paths() {
         use super::mounted_host_path;
+        if crate::platform::Platform::current() != crate::platform::Platform::Windows {
+            for path in ["/mnt/d/repo", "/cygdrive/c/repo", "/d/repo"] {
+                assert_eq!(mounted_host_path(path), None);
+            }
+            return;
+        }
         assert_eq!(
             mounted_host_path("/mnt/d/gopath/src/pebrel"),
             Some(std::path::PathBuf::from(r"D:\gopath\src\pebrel"))
