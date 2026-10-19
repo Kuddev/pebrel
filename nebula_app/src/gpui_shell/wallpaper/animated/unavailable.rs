@@ -29,6 +29,10 @@ pub(in crate::gpui_shell::wallpaper) fn shader_ready(_: &App) -> bool {
 pub(in crate::gpui_shell::wallpaper) fn media_ready(_: &App) -> bool {
     false
 }
+/// Backends that paint into the GPUI scene never sit below translucent surfaces.
+pub(in crate::gpui_shell::wallpaper) fn underlay_ready(_: &App) -> bool {
+    false
+}
 pub(in crate::gpui_shell::wallpaper) fn video_available() -> bool {
     false
 }
