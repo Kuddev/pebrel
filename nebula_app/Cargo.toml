@@ -188,7 +188,7 @@ png = { version = "0.17.5", default-features = false, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "=3.7.0"
 objc2 = "0.6.1"
-objc2-core-foundation = { version = "0.3.1", default-features = false, features = ["std", "CFString", "CFUserNotification"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFString", "CFUserNotification"] }
 objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "std",
     "NSString",
@@ -205,6 +205,23 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
     "NSToolbar",
     "NSView",
     "NSWindow",
+] }
+# 视频背景：系统 AVPlayer 解码到 GPUI 视图下方的原生图层，仅随 video-background 启用。
+objc2-av-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "AVAnimation",
+    "AVPlayer",
+    "AVPlayerItem",
+    "AVPlayerLayer",
+    "AVPlayerLooper",
+    "objc2-core-foundation",
+    "objc2-quartz-core",
+] }
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
 ] }
 
 [target.'cfg(windows)'.dependencies]
@@ -320,7 +337,20 @@ gpui-shell = [
 ]
 # 真实 GPUI hitbox / 鼠标路由测试显式启用；不能放进 dev-dependencies，
 # 否则不带 gpui-shell 的默认 `cargo test -p nebula` 也会编译整棵 GPUI。
-video-background = ["gpui-shell", "dep:anyhow", "dep:raw-window-handle", "windows/Win32_Media_MediaFoundation"]
+video-background = [
+    "gpui-shell",
+    "dep:anyhow",
+    "dep:raw-window-handle",
+    "windows/Win32_Media_MediaFoundation",
+    "dep:objc2-av-foundation",
+    "dep:objc2-quartz-core",
+    "objc2-core-foundation/CFCGTypes",
+    "objc2-app-kit/NSGraphics",
+    "objc2-app-kit/objc2-quartz-core",
+    "objc2-foundation/NSGeometry",
+    "objc2-foundation/NSURL",
+    "objc2-foundation/NSArray",
+]
 gif-background = ["video-background", "dep:gif"]
 shader-background = ["gif-background", "dep:naga", "gpui/wgsl-postprocess", "windows/Win32_Graphics_Direct3D_Fxc"]
 gpui-test-support = ["gpui-shell", "gpui/test-support", "gpui-component/test-support"]
