@@ -287,7 +287,7 @@ fn ssh_zsh_prompt_styles_the_stock_prompt_and_preserves_custom_prompts() {
             "HOME=/dev/null\nNEBULA_ZDOTDIR_WAS_SET=0\nPEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPEBREL_PROMPT_PLATFORM={platform}\nsetopt PROMPT_SUBST\nPROMPT='"
         );
         script.push_str(prompt);
-        script.push_str("'\n");
+        script.push_str("'\npsvar=(user-first user-second)\ngit() { print -r -- initial; }\n");
         script.push_str(zshrc);
         if git_branch {
             script.push_str(&format!(
@@ -295,6 +295,27 @@ fn ssh_zsh_prompt_styles_the_stock_prompt_and_preserves_custom_prompts() {
             ));
             script.push_str(
                 "git() { print -r -- '$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'; }\n_nebula_precmd\nrendered=$(print -P -- \"$PROMPT\")\n[[ $rendered == *'$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'* ]] || exit 92\n",
+            );
+            script.push_str(
+                r#"
+[[ ${#psvar} == 3 && $psvar[1] == user-first && $psvar[2] == user-second ]] || exit 94
+owned_index=$__pebrel_ssh_psvar_index
+psvar+=(user-later)
+for ((i=0; i<1000; i++)); do _nebula_precmd >/dev/null; done
+[[ ${#psvar} == 4 && $__pebrel_ssh_psvar_index == $owned_index && $psvar[4] == user-later ]] || exit 95
+git() { return 1; }
+_nebula_precmd >/dev/null
+[[ ${#psvar} == 4 && -z $psvar[$owned_index] && $PROMPT != *''* ]] || exit 96
+git() { print -r -- next-branch; }
+_nebula_precmd >/dev/null
+[[ ${#psvar} == 4 && $psvar[$owned_index] == next-branch ]] || exit 97
+PROMPT='user theme %1v %2v %4v'
+_nebula_precmd >/dev/null
+[[ $__pebrel_ssh_prompt_enabled == 0 && -z $psvar[$owned_index] ]] || exit 98
+[[ $(print -P -- "$PROMPT") == 'user theme user-first user-second user-later' ]] || exit 99
+_nebula_precmd >/dev/null
+[[ ${#psvar} == 4 && $PROMPT == 'user theme %1v %2v %4v' ]] || exit 100
+"#,
             );
         } else {
             script.push_str(

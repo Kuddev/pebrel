@@ -84,8 +84,11 @@ _nebula_precmd() {
     if [[ ${__pebrel_ssh_prompt_enabled:-0} == 1 ]]; then
         if [[ ${PROMPT-} != "$__pebrel_ssh_prompt_last" ]]; then
             __pebrel_ssh_prompt_enabled=0
+            if [[ -n ${__pebrel_ssh_psvar_index:-} ]]; then
+                psvar[$__pebrel_ssh_psvar_index]=''
+            fi
         else
-            local branch='' git_segment='' leading_newline='' newlines=$'\n\n' psvar_index prompt_icon=''
+            local branch='' git_segment='' leading_newline='' newlines=$'\n\n' prompt_icon=''
             case ${PEBREL_PROMPT_PLATFORM:-} in
                 windows) prompt_icon='' ;;
                 macos) prompt_icon='' ;;
@@ -95,9 +98,16 @@ _nebula_precmd() {
             if [[ -n $branch ]]; then
                 # `%v` inserts the branch after prompt substitution, so branch
                 # text cannot become prompt escapes or command substitutions.
-                psvar_index=$((${#psvar} + 1))
-                psvar[$psvar_index]=$branch
-                git_segment=" %F{6} %${psvar_index}v  %f"
+                # Reserve at most one slot after the user's existing entries.
+                # Reuse it across refreshes; removing an element would shift
+                # indices owned by themes or other hooks.
+                if [[ -z ${__pebrel_ssh_psvar_index:-} ]]; then
+                    __pebrel_ssh_psvar_index=$((${#psvar} + 1))
+                fi
+                psvar[$__pebrel_ssh_psvar_index]=$branch
+                git_segment=" %F{6} %${__pebrel_ssh_psvar_index}v  %f"
+            elif [[ -n ${__pebrel_ssh_psvar_index:-} ]]; then
+                psvar[$__pebrel_ssh_psvar_index]=''
             fi
             if (( ${__pebrel_ssh_prompt_count:-0} > 0 )); then
                 leading_newline=$'\n'
