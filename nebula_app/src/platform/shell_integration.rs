@@ -46,8 +46,13 @@ fn prepare_unix(options: &mut tty::Options) -> std::io::Result<()> {
         "bash" => {
             std::fs::create_dir_all(&root)?;
             let init = root.join("bashrc");
-            let content =
-                format!("{}\n{}", include_str!("../../res/shell/bashrc"), tty::connection_shell());
+            let content = format!(
+                "{}\n{}\n{}",
+                include_str!("../../res/shell/prompt_git.sh"),
+                include_str!("../../res/shell/bashrc"),
+                tty::connection_shell()
+            );
+            let content = tty::shell_line_endings(&content);
             crate::atomic_file::write(&init, content.as_bytes())?;
             options.shell = Some(tty::Shell::new(
                 program,
@@ -71,7 +76,11 @@ fn write_zsh_files(directory: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(directory)?;
     for (name, content) in ZSH_FILES {
         let content = if name == ".zshrc" {
-            format!("{content}\n{}", tty::connection_shell())
+            format!(
+                "{}\n{content}\n{}",
+                include_str!("../../res/shell/prompt_git.sh"),
+                tty::connection_shell()
+            )
         } else {
             content.to_owned()
         };

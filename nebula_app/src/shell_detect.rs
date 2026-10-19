@@ -834,7 +834,7 @@ pub fn wsl_cwd_report_env(
         return Vec::new();
     }
     // `$PWD` 而不是 `$(pwd)` 生成 cwd；shell token 只在第一个提示符编码一次。
-    // Powerline 开关只在识别到精确默认提示符时读取；Git 分支每次提示符刷新，
+    // Powerline 开关只在识别到精确默认提示符时读取；Git 分支从缓存位置的 HEAD 刷新，
     // 与 Windows 一样放在路径和时钟之间。
     // 初始提示符多发的 D 无害：Runtime submit barrier 会拒绝错配尚未提交的命令。
     // 首个提示符撤掉只给 zsh 的接管（验证后来宾又 `chsh` 的兜底），规则同
@@ -842,6 +842,7 @@ pub fn wsl_cwd_report_env(
     const REPORT: &str = r#"__nebula_status=$?; if [ -z "${__pebrel_shell_token:-}" ]; then __pebrel_shell_token=$(printf '%s' "wsl|${WSL_DISTRO_NAME:-}|bash:${HOSTNAME:-wsl}:${BASHPID:-$$}:$RANDOM" | base64 | tr -d '\r\n');
 if [ -n "${NEBULA_ZSH_INTEGRATION:-}" ]; then [ "${ZDOTDIR-}" = "$NEBULA_ZSH_INTEGRATION" ] && unset ZDOTDIR; unset NEBULA_ZSH_INTEGRATION; __nebula_keep=; for __nebula_entry in ${WSLENV//:/ }; do case ${__nebula_entry%%/*} in ZDOTDIR|NEBULA_ZSH_INTEGRATION) ;; *) __nebula_keep=${__nebula_keep:+$__nebula_keep:}$__nebula_entry ;; esac; done; WSLENV=$__nebula_keep; unset __nebula_keep __nebula_entry; fi
 __PEBREL_CONNECTION_HOOK__
+__PEBREL_PROMPT_GIT_HOOK__
 fi; __pebrel_wsl_default_prompt=0; case ${PS1-} in '\u@\h:\w\$ '| '${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '|'\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '| '${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ ') __pebrel_wsl_default_prompt=1 ;; esac; if [[ -z ${__pebrel_wsl_prompt_installed:-} && -z ${STARSHIP_SHELL:-} && -z ${POSH_SHELL:-} && $__pebrel_wsl_default_prompt == 1 ]]; then
     __pebrel_settings_root=${PEBREL_CONFIG_DIR:-${APPDATA:+$APPDATA/Pebrel}}
     __pebrel_settings_file=${__pebrel_settings_root:+$__pebrel_settings_root/pebrel_settings.txt}
@@ -870,7 +871,8 @@ fi; __pebrel_wsl_default_prompt=0; case ${PS1-} in '\u@\h:\w\$ '| '${debian_chro
     __pebrel_wsl_prompt_installed=1
 fi; if [[ ${__pebrel_wsl_prompt_managed:-} == 1 ]]; then
     if [[ $PS1 == "$__pebrel_wsl_prompt_last_ps1" ]]; then
-        __pebrel_git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || __pebrel_git_branch=
+        __pebrel_prompt_git
+        __pebrel_git_branch=$__pebrel_prompt_branch
         __pebrel_git_prefix=
         __pebrel_git_suffix=
         __pebrel_wsl_leading_newline=
@@ -918,8 +920,12 @@ fi; printf '\033]1337;SetUserVar=pebrel_shell=%s\007' "$__pebrel_shell_token"; i
         }
     }
     wslenv = entries.join(":");
-    let report =
-        REPORT.replace("__PEBREL_CONNECTION_HOOK__", nebula_terminal::tty::connection_shell());
+    let report = REPORT
+        .replace("__PEBREL_CONNECTION_HOOK__", nebula_terminal::tty::connection_shell())
+        .replace(
+            "__PEBREL_PROMPT_GIT_HOOK__",
+            &nebula_terminal::tty::shell_line_endings(include_str!("../res/shell/prompt_git.sh")),
+        );
     let mut additions = vec![("PROMPT_COMMAND".to_owned(), report)];
     append_wslenv(&mut wslenv, "PROMPT_COMMAND");
     if let Some(directory) = zsh_integration {
@@ -1680,7 +1686,7 @@ eval "$PROMPT_COMMAND" || exit 95
         let literal_branch = run(
             r"\u@\h:\w\$ ",
             false,
-            r#"git() { printf '%s\n' '$(printf${IFS}PEBREL_REVIEW_MARKER)'; }
+            r#"__pebrel_prompt_git() { __pebrel_prompt_branch='$(printf${IFS}PEBREL_REVIEW_MARKER)'; }
 PS1='\u@\h:\w\$ '
 __pebrel_wsl_prompt_installed=1
 __pebrel_wsl_prompt_managed=1

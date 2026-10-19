@@ -94,7 +94,8 @@ _nebula_precmd() {
                 macos) prompt_icon='' ;;
                 linux) prompt_icon='' ;;
             esac
-            branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || branch=
+            __pebrel_prompt_git
+            branch=$__pebrel_prompt_branch
             if [[ -n $branch ]]; then
                 # `%v` inserts the branch after prompt substitution, so branch
                 # text cannot become prompt escapes or command substitutions.

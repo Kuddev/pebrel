@@ -64,6 +64,7 @@ fn installed_shell_assets_include_the_native_editor_adapter() {
             "{name} must install the native query"
         );
         assert!(content.contains("SetUserVar=pebrel_editor="), "{name} must report actual buffers");
+        assert!(content.contains("__pebrel_prompt_git()"), "{name} must install the prompt cache");
     }
 }
 
@@ -165,6 +166,11 @@ fn terminal_action_installs_shell_prompt_only_and_is_idempotent() {
     for name in ["shell.py", "bashrc", ".zshenv", ".zprofile", ".zshrc", "manifest"] {
         assert!(names.contains(&name), "missing terminal asset {name}");
     }
+    for name in ["bashrc", ".zshrc"] {
+        let content =
+            edits.iter().find(|edit| edit.name == name).unwrap().content.as_ref().unwrap();
+        assert!(content.contains("__pebrel_prompt_git()"), "missing prompt cache in {name}");
+    }
     for name in ["claude", "codex", "opencode", "pi", "codex_config", "disabled"] {
         assert!(!names.contains(&name), "terminal-only action changed agent config {name}");
     }
@@ -227,7 +233,7 @@ fn ssh_bash_prompt_preserves_custom_prompts_and_renders_git_branch_as_literal_te
             "PEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPEBREL_PROMPT_PLATFORM={platform}\nPS1='{ps1}'\n"
         );
         if git_branch {
-            script.push_str("git() { printf '%s\\n' '$(printf${IFS}PEBREL_REVIEW_MARKER)'; }\n");
+            script.push_str("__pebrel_prompt_git() { __pebrel_prompt_branch='$(printf${IFS}PEBREL_REVIEW_MARKER)'; }\n");
         }
         script.push_str(bashrc);
         script.push_str("eval \"$PROMPT_COMMAND\" || exit 90\n");
@@ -287,14 +293,14 @@ fn ssh_zsh_prompt_styles_the_stock_prompt_and_preserves_custom_prompts() {
             "HOME=/dev/null\nNEBULA_ZDOTDIR_WAS_SET=0\nPEBREL_REMOTE_SESSION=1\nPEBREL_REMOTE_POWERLINE=1\nPEBREL_PROMPT_PLATFORM={platform}\nsetopt PROMPT_SUBST\nPROMPT='"
         );
         script.push_str(prompt);
-        script.push_str("'\npsvar=(user-first user-second)\ngit() { print -r -- initial; }\n");
+        script.push_str("'\npsvar=(user-first user-second)\n__pebrel_prompt_git() { __pebrel_prompt_branch=initial; }\n");
         script.push_str(zshrc);
         if git_branch {
             script.push_str(&format!(
                 "\n_nebula_precmd\n[[ $PROMPT == *'{expected_icon}'* ]] || exit 91\n"
             ));
             script.push_str(
-                "git() { print -r -- '$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'; }\n_nebula_precmd\nrendered=$(print -P -- \"$PROMPT\")\n[[ $rendered == *'$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'* ]] || exit 92\n",
+                "__pebrel_prompt_git() { __pebrel_prompt_branch='$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'; }\n_nebula_precmd\nrendered=$(print -P -- \"$PROMPT\")\n[[ $rendered == *'$(printf${IFS}PEBREL_REVIEW_MARKER)%F{red}'* ]] || exit 92\n",
             );
             script.push_str(
                 r#"
@@ -303,10 +309,10 @@ owned_index=$__pebrel_ssh_psvar_index
 psvar+=(user-later)
 for ((i=0; i<1000; i++)); do _nebula_precmd >/dev/null; done
 [[ ${#psvar} == 4 && $__pebrel_ssh_psvar_index == $owned_index && $psvar[4] == user-later ]] || exit 95
-git() { return 1; }
+__pebrel_prompt_git() { __pebrel_prompt_branch=; }
 _nebula_precmd >/dev/null
 [[ ${#psvar} == 4 && -z $psvar[$owned_index] && $PROMPT != *''* ]] || exit 96
-git() { print -r -- next-branch; }
+__pebrel_prompt_git() { __pebrel_prompt_branch=next-branch; }
 _nebula_precmd >/dev/null
 [[ ${#psvar} == 4 && $psvar[$owned_index] == next-branch ]] || exit 97
 PROMPT='user theme %1v %2v %4v'
@@ -340,6 +346,48 @@ _nebula_precmd >/dev/null
         "custom SSH Zsh prompt failed: {}",
         String::from_utf8_lossy(&custom.stderr)
     );
+}
+
+#[test]
+fn prompt_git_discovery_is_cached_and_head_changes_remain_visible() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    for shell in ["bash", "zsh"] {
+        let program = if shell == "bash" {
+            std::env::var_os("NEBULA_BASH").unwrap_or_else(|| shell.into())
+        } else {
+            shell.into()
+        };
+        if Command::new(&program).arg("--version").output().is_err() {
+            eprintln!("skipping {shell} prompt cache check because it is not installed");
+            continue;
+        }
+        let args: &[&str] =
+            if shell == "bash" { &["--noprofile", "--norc", "-s"] } else { &["-f", "-s"] };
+        let mut child = Command::new(&program)
+            .args(args)
+            .env("BASH_ENV", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let script = format!(
+            "{}\n{}",
+            include_str!("../../../res/shell/prompt_git.sh"),
+            include_str!("../../../tests/shell/prompt_git.sh")
+        );
+        let script = nebula_terminal::tty::shell_line_endings(&script);
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{shell} prompt cache failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 /// Cross-language acceptance driver: the supplied snapshot must come from an

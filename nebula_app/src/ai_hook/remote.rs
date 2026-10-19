@@ -198,12 +198,22 @@ impl Snapshot {
         manifest: &mut Manifest,
         edits: &mut Vec<Edit>,
     ) -> Result<(), String> {
+        let bashrc = format!(
+            "{}\n{}",
+            include_str!("../../res/shell/prompt_git.sh"),
+            include_str!("../../res/shell/bashrc")
+        );
+        let zshrc = format!(
+            "{}\n{}",
+            include_str!("../../res/shell/prompt_git.sh"),
+            include_str!("../../res/shell/zshrc")
+        );
         let assets = [
             ("shell.py", SHELL),
-            ("bashrc", include_str!("../../res/shell/bashrc")),
+            ("bashrc", bashrc.as_str()),
             (".zshenv", include_str!("../../res/shell/zshenv")),
             (".zprofile", include_str!("../../res/shell/zprofile")),
-            (".zshrc", include_str!("../../res/shell/zshrc")),
+            (".zshrc", zshrc.as_str()),
         ];
         for (name, content) in assets {
             let file = self.file(name)?;
@@ -253,12 +263,14 @@ impl Snapshot {
             quote(&self.file("bridge.py")?.path)
         );
         let bashrc = format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
+            include_str!("../../res/shell/prompt_git.sh"),
             include_str!("../../res/shell/bashrc"),
             nebula_terminal::tty::connection_shell()
         );
         let zshrc = format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
+            include_str!("../../res/shell/prompt_git.sh"),
             include_str!("../../res/shell/zshrc"),
             nebula_terminal::tty::connection_shell()
         );
