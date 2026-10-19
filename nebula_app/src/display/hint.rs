@@ -942,6 +942,16 @@ mod tests {
     }
 
     #[test]
+    fn table_lookup_past_the_grid_edge_is_not_a_hit() {
+        let term = mock_term("│ entry │ https://example.com/123456 │");
+        let past_edge = Point::new(Line(0), Column(term.columns() + 2));
+        assert!(
+            highlighted_at(&term, &UiConfig::default(), past_edge, ModifiersState::CONTROL)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn search_limit_never_opens_a_truncated_softwrapped_url_prefix() {
         use nebula_terminal::event::VoidListener;
         use nebula_terminal::grid::Scroll;
