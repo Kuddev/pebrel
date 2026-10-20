@@ -1,6 +1,6 @@
 [package]
 name = "nebula"
-version = "2.2.1"
+version = "2.2.2"
 license = "GPL-3.0-or-later"
 description = "Pebrel — a GPU-accelerated terminal emulator"
 readme = "README.md"
@@ -15,15 +15,15 @@ path = "src/main.rs"
 
 [dependencies.nebula_terminal]
 path = "../nebula_terminal"
-version = "2.2.1"
+version = "2.2.2"
 
 [dependencies.nebula_config_derive]
 path = "../nebula_config_derive"
-version = "2.2.1"
+version = "2.2.2"
 
 [dependencies.nebula_config]
 path = "../nebula_config"
-version = "2.2.1"
+version = "2.2.2"
 
 # 可选：GPUI UI 层（feature = "gpui-shell"，模块 src/gpui_shell/）。
 # GPUI/component 的版本和 Git 来源由根 Cargo.toml 统一精确固定。
@@ -72,7 +72,7 @@ optional = true
 
 [dependencies.pebrel-completions]
 path = "../nebula-completions"
-version = "2.2.1"
+version = "2.2.2"
 
 [dependencies]
 anyhow = { version = "=1.0.104", optional = true }
@@ -156,7 +156,7 @@ naga = { version = "=29.0.4", optional = true, features = ["wgsl-in", "hlsl-out"
 gif = { version = "=0.14.2", optional = true }
 
 [build-dependencies]
-nebula-settings = { path = "../nebula_settings", version = "2.2.1" }
+nebula-settings = { path = "../nebula_settings", version = "2.2.2" }
 gl_generator = { version = "0.14.0", optional = true }
 serde = "1"
 serde_json = "1"
@@ -204,6 +204,27 @@ objc2-app-kit = { version = "0.3.1", default-features = false, features = [
     "NSToolbar",
     "NSView",
     "NSWindow",
+] }
+# 视频背景：系统 AVPlayer 解码到 GPUI 视图下方的原生图层，仅随 video-background 启用。
+objc2-av-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "AVAnimation",
+    "AVPlayer",
+    "AVPlayerItem",
+    "AVPlayerLayer",
+    "AVPlayerLooper",
+    "objc2-core-foundation",
+    "objc2-quartz-core",
+] }
+objc2-quartz-core = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CFCGTypes",
 ] }
 
 [target.'cfg(windows)'.dependencies]
@@ -319,7 +340,20 @@ gpui-shell = [
 ]
 # 真实 GPUI hitbox / 鼠标路由测试显式启用；不能放进 dev-dependencies，
 # 否则不带 gpui-shell 的默认 `cargo test -p nebula` 也会编译整棵 GPUI。
-video-background = ["gpui-shell", "dep:anyhow", "dep:raw-window-handle", "windows/Win32_Media_MediaFoundation"]
+video-background = [
+    "gpui-shell",
+    "dep:anyhow",
+    "dep:raw-window-handle",
+    "windows/Win32_Media_MediaFoundation",
+    "dep:objc2-av-foundation",
+    "dep:objc2-quartz-core",
+    "dep:objc2-core-foundation",
+    "objc2-app-kit/NSGraphics",
+    "objc2-app-kit/objc2-quartz-core",
+    "objc2-foundation/NSGeometry",
+    "objc2-foundation/NSURL",
+    "objc2-foundation/NSArray",
+]
 gif-background = ["video-background", "dep:gif"]
 shader-background = ["gif-background", "dep:naga", "gpui/wgsl-postprocess", "windows/Win32_Graphics_Direct3D_Fxc"]
 gpui-test-support = ["gpui-shell", "gpui/test-support", "gpui-component/test-support"]

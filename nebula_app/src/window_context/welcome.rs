@@ -1,16 +1,22 @@
 //! Nebula 新 tab 欢迎页。
 //!
 //! Windows 上渲染彩色字符 logo + fastfetch 风格的信息卡（通过一个缓存的
-//! PowerShell 脚本秒出）；非 Windows 上回退到 `fastfetch`/`uname`。全部是
-//! 无状态纯函数，与 [`WindowContext`](super::WindowContext) 完全解耦——
-//! 唯一对外入口是 [`nebula_fastfetch_intro_command`]。
+//! PowerShell 脚本秒出）；非 Windows 上回退到 `fastfetch`/`uname`。
+//! 欢迎内容与 [`WindowContext`](super::WindowContext) 的状态解耦；缓存只保留
+//! 脚本字节，临时文件按需重建。入口是 [`nebula_fastfetch_intro_command`]。
 
 #[cfg(windows)]
 use crate::display::NebulaShell;
-#[cfg(windows)]
-use std::sync::OnceLock;
+#[cfg(any(windows, test))]
+use std::sync::Mutex;
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
+struct CachedIntroScript {
+    bytes: Vec<u8>,
+    needs_write: bool,
+}
+
+#[cfg(any(windows, test))]
 fn nebula_fastfetch_text(narrow: bool) -> String {
     let cyan = "\x1b[38;2;0;229;255m";
     let green = "\x1b[38;2;0;205;64m";
@@ -109,33 +115,66 @@ fn nebula_fastfetch_text(narrow: bool) -> String {
     text
 }
 
+#[cfg(any(windows, test))]
+fn nebula_fastfetch_script_bytes(narrow: bool) -> Vec<u8> {
+    let text = nebula_fastfetch_text(narrow).replace("\r\n", "\n").replace('\r', "\n");
+    let script = format!(
+        "$OutputEncoding = [System.Text.Encoding]::UTF8\r\n\
+                 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n\
+                 [Console]::Write(@'\r\n{text}\r\n'@)\r\n"
+    );
+
+    // Windows PowerShell 5.1 会把无 BOM UTF-8 当作本地 ANSI；这里写 BOM，
+    // 保证字符 logo 与 ANSI 序列在脚本文件中稳定解析。
+    let mut bytes = Vec::with_capacity(3 + script.len());
+    bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    bytes.extend_from_slice(script.as_bytes());
+    bytes
+}
+
+#[cfg(any(windows, test))]
+fn cached_fastfetch_script_path(
+    cell: &Mutex<Option<CachedIntroScript>>,
+    path: std::path::PathBuf,
+    narrow: bool,
+) -> Option<std::path::PathBuf> {
+    cached_fastfetch_script_path_with(cell, path, narrow, |path, bytes| std::fs::write(path, bytes))
+}
+
+#[cfg(any(windows, test))]
+fn cached_fastfetch_script_path_with(
+    cell: &Mutex<Option<CachedIntroScript>>,
+    path: std::path::PathBuf,
+    narrow: bool,
+    write_script: impl FnOnce(&std::path::Path, &[u8]) -> std::io::Result<()>,
+) -> Option<std::path::PathBuf> {
+    // Keep the bytes, not the lifetime of a file in the system temp directory.
+    // Serialize recreation so callers in this process cannot read a partial write.
+    let mut cached = cell.lock().ok()?;
+    let script = cached.get_or_insert_with(|| CachedIntroScript {
+        bytes: nebula_fastfetch_script_bytes(narrow),
+        needs_write: true,
+    });
+    if script.needs_write || !path.is_file() {
+        // Initial requests replace files left by older processes. Keep this flag
+        // set after an error, including a failed write that leaves a partial file.
+        script.needs_write = true;
+        write_script(&path, &script.bytes).ok()?;
+        script.needs_write = false;
+    }
+    Some(path)
+}
+
 #[cfg(windows)]
 fn nebula_fastfetch_script_path(narrow: bool) -> Option<std::path::PathBuf> {
-    static WIDE: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
-    static NARROW: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    static WIDE: Mutex<Option<CachedIntroScript>> = Mutex::new(None);
+    static NARROW: Mutex<Option<CachedIntroScript>> = Mutex::new(None);
     let (cell, file) = if narrow {
         (&NARROW, "nebula_fastfetch_intro_narrow.ps1")
     } else {
         (&WIDE, "nebula_fastfetch_intro.ps1")
     };
-    cell.get_or_init(|| {
-        let path = std::env::temp_dir().join(file);
-        let text = nebula_fastfetch_text(narrow).replace("\r\n", "\n").replace('\r', "\n");
-        let script = format!(
-            "$OutputEncoding = [System.Text.Encoding]::UTF8\r\n\
-                 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n\
-                 [Console]::Write(@'\r\n{text}\r\n'@)\r\n"
-        );
-
-        // Windows PowerShell 5.1 会把无 BOM UTF-8 当作本地 ANSI；这里写 BOM，
-        // 保证字符 logo 与 ANSI 序列在脚本文件中稳定解析。
-        let mut bytes = Vec::with_capacity(3 + script.len());
-        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-        bytes.extend_from_slice(script.as_bytes());
-        std::fs::write(&path, bytes).ok()?;
-        Some(path)
-    })
-    .clone()
+    cached_fastfetch_script_path(cell, std::env::temp_dir().join(file), narrow)
 }
 
 #[cfg(windows)]
@@ -184,4 +223,141 @@ pub(crate) fn nebula_fastfetch_intro_command_for(
     _shell: crate::display::NebulaShell,
 ) -> Vec<u8> {
     nebula_fastfetch_intro_command()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    use super::*;
+
+    #[test]
+    fn deleted_scripts_are_recreated_for_both_layouts() {
+        let root = tempfile::tempdir().unwrap();
+        let mut layouts = Vec::new();
+        for narrow in [false, true] {
+            let cache = Default::default();
+            let path = root.path().join(format!("intro-{narrow}.ps1"));
+            assert_eq!(
+                cached_fastfetch_script_path(&cache, path.clone(), narrow),
+                Some(path.clone())
+            );
+            let original = fs::read(&path).unwrap();
+            assert!(original.starts_with(&[0xEF, 0xBB, 0xBF]));
+            let text = std::str::from_utf8(&original[3..]).unwrap();
+            assert!(text.starts_with("$OutputEncoding = [System.Text.Encoding]::UTF8\r\n"));
+            assert!(text.contains("[Console]::Write(@'\r\n"));
+            assert!(text.ends_with("\r\n'@)\r\n"));
+            fs::remove_file(&path).unwrap();
+            assert_eq!(
+                cached_fastfetch_script_path(&cache, path.clone(), narrow),
+                Some(path.clone())
+            );
+            assert_eq!(fs::read(&path).unwrap(), original);
+            layouts.push(original);
+        }
+        assert_ne!(layouts[0], layouts[1]);
+    }
+
+    #[test]
+    fn failed_first_write_can_be_retried() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("scripts");
+        fs::write(&parent, b"not a directory").unwrap();
+        let path = parent.join("intro.ps1");
+        let cache = Default::default();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), None);
+        fs::remove_file(&parent).unwrap();
+        fs::create_dir(&parent).unwrap();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        assert!(fs::read(path).unwrap().starts_with(&[0xEF, 0xBB, 0xBF]));
+    }
+
+    #[test]
+    fn first_request_replaces_a_previous_process_script() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("intro.ps1");
+        fs::write(&path, b"old application script").unwrap();
+        let cache = Default::default();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        assert!(fs::read(path).unwrap().starts_with(&[0xEF, 0xBB, 0xBF]));
+    }
+
+    #[test]
+    fn cached_request_keeps_an_existing_script() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("intro.ps1");
+        let cache = Default::default();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        let marker = b"existing cached script";
+        fs::write(&path, marker).unwrap();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        assert_eq!(fs::read(path).unwrap(), marker);
+    }
+
+    #[test]
+    fn concurrent_requests_recreate_a_complete_cached_script() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("intro.ps1");
+        let cache = Arc::new(Mutex::new(None));
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), true), Some(path.clone()));
+        let expected = Arc::new(fs::read(&path).unwrap());
+        fs::remove_file(&path).unwrap();
+        let barrier = Arc::new(Barrier::new(8));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let path = path.clone();
+                let expected = Arc::clone(&expected);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    assert_eq!(
+                        cached_fastfetch_script_path(&cache, path.clone(), true),
+                        Some(path.clone())
+                    );
+                    assert_eq!(fs::read(path).unwrap(), *expected);
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_recreation_can_be_retried_without_losing_cached_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("intro.ps1");
+        let cache = Default::default();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        let expected = fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), None);
+        fs::remove_dir(&path).unwrap();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        assert_eq!(fs::read(path).unwrap(), expected);
+    }
+
+    #[test]
+    fn partial_write_failure_does_not_become_a_successful_cache_hit() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("intro.ps1");
+        let cache = Default::default();
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        let expected = fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let result =
+            cached_fastfetch_script_path_with(&cache, path.clone(), false, |path, bytes| {
+                fs::write(path, &bytes[..7])?;
+                Err(std::io::Error::other("synthetic partial write"))
+            });
+        assert_eq!(result, None);
+        assert_eq!(fs::read(&path).unwrap(), &expected[..7]);
+        assert_eq!(cached_fastfetch_script_path(&cache, path.clone(), false), Some(path.clone()));
+        assert_eq!(fs::read(path).unwrap(), expected);
+    }
 }

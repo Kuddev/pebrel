@@ -335,7 +335,7 @@ pub fn card_content_bg(cx: &App) -> Hsla {
         .try_global::<crate::gpui_shell::config::Settings>()
         .map(|s| s.palette.background.into())
         .unwrap_or_else(|| cx.theme().background);
-    bg.a *= crate::gpui_shell::wallpaper::chrome_surface_opacity(cx);
+    bg.a *= crate::gpui_shell::wallpaper::card_surface_opacity(cx);
     bg
 }
 
@@ -798,16 +798,9 @@ fn apply_skin_tokens(chrome: &ResolvedTheme, cx: &mut App) {
     // 我们是终端，所以等宽在这里是**语义标记**而不是全局字体：路径、键帽、
     // 命令、数值这类"机器读、要逐字符对齐、要能整段复制"的东西显式走 mono；
     // 标题和说明是给人读的，走 sans。
-    let default_ui_font =
-        if crate::platform::Platform::current() == crate::platform::Platform::Windows {
-            // UI 中的等宽语义也必须稳定。终端字体由 TerminalView 单独读取；
-            // 若把用户字体组写进全局 theme，tab、标题和代码字面量的字宽都会
-            // 随终端主字体变化，进而破坏 chrome 的既定间距。
-            theme.mono_font_family = crate::font_install::REQUIRED_FONT_FAMILY.into();
-            "Microsoft YaHei UI"
-        } else {
-            ".SystemUIFont"
-        };
+    // UI 等宽元数据使用随应用提供的 Normal 字体，终端仍读取自己的字体组。
+    theme.mono_font_family = crate::font_install::REQUIRED_FONT_FAMILY.into();
+    let default_ui_font = super::typography::UI_FONT_FAMILY;
     theme.font_family = ui_font_family.unwrap_or_else(|| default_ui_font.to_owned()).into();
     theme.radius = px(6.0);
     theme.radius_lg = px(12.0);
