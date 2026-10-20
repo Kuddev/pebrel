@@ -201,7 +201,7 @@ fn prompt_test_bash() -> Option<std::path::PathBuf> {
     let mut candidates = Vec::new();
     if let Some(program) = std::env::var_os("NEBULA_BASH") {
         candidates.push(PathBuf::from(program));
-    } else if cfg!(windows) {
+    } else if crate::platform::Platform::current() == crate::platform::Platform::Windows {
         // A bare bash.exe can resolve to Windows' WSL launcher. Select the
         // native Git Bash used by Windows CI, including portable installations.
         for name in ["ProgramFiles", "ProgramFiles(x86)"] {
