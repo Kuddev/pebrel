@@ -195,26 +195,57 @@ fn terminal_action_respects_opt_out_and_rejects_edited_owned_assets() {
     assert!(edited.raw(".zshrc").unwrap().is_none(), "planning must not partially mutate files");
 }
 
+fn prompt_test_bash() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    let mut candidates = Vec::new();
+    if let Some(program) = std::env::var_os("NEBULA_BASH") {
+        candidates.push(PathBuf::from(program));
+    } else if cfg!(windows) {
+        // A bare bash.exe can resolve to Windows' WSL launcher. Select the
+        // native Git Bash used by Windows CI, including portable installations.
+        for name in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = std::env::var_os(name) {
+                candidates.push(PathBuf::from(root).join("Git/bin/bash.exe"));
+            }
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for directory in std::env::split_paths(&path) {
+                if directory.join("git.exe").is_file() {
+                    for root in directory.ancestors().take(3) {
+                        candidates.push(root.join("bin/bash.exe"));
+                    }
+                }
+            }
+        }
+        candidates.retain(|program| program.is_file());
+    } else {
+        candidates.push(PathBuf::from("bash"));
+    }
+    for program in candidates {
+        let output = match std::process::Command::new(&program).arg("--version").output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("could not probe Bash {}: {error}", program.display()),
+        };
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("GNU bash"),
+            "{} is not a working native Bash ({}): {}",
+            program.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Some(program);
+    }
+    None
+}
+
 #[test]
 fn ssh_bash_prompt_preserves_custom_prompts_and_renders_git_branch_as_literal_text() {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let bash = std::env::var_os("NEBULA_BASH")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
-                .into_iter()
-                .find(|path| std::path::Path::new(path).is_file())
-                .map(Into::into)
-        })
-        .or_else(|| {
-            let candidate: std::path::PathBuf = "bash".into();
-            let output = Command::new(&candidate).arg("--version").output().ok()?;
-            let version = String::from_utf8_lossy(&output.stdout);
-            (output.status.success() && version.contains("GNU bash")).then_some(candidate)
-        });
-    let Some(bash) = bash else {
+    let Some(bash) = prompt_test_bash() else {
         eprintln!("skipping Bash runtime check because no native Bash is installed");
         return;
     };
@@ -355,11 +386,15 @@ fn prompt_git_discovery_is_cached_and_head_changes_remain_visible() {
 
     for shell in ["bash", "zsh"] {
         let program = if shell == "bash" {
-            std::env::var_os("NEBULA_BASH").unwrap_or_else(|| shell.into())
+            let Some(program) = prompt_test_bash() else {
+                eprintln!("skipping Bash prompt cache check because no native Bash is installed");
+                continue;
+            };
+            program
         } else {
-            shell.into()
+            std::path::PathBuf::from(shell)
         };
-        if Command::new(&program).arg("--version").output().is_err() {
+        if shell == "zsh" && Command::new(&program).arg("--version").output().is_err() {
             eprintln!("skipping {shell} prompt cache check because it is not installed");
             continue;
         }
@@ -383,7 +418,8 @@ fn prompt_git_discovery_is_cached_and_head_changes_remain_visible() {
         let output = child.wait_with_output().unwrap();
         assert!(
             output.status.success(),
-            "{shell} prompt cache failed ({}): {}",
+            "{shell} prompt cache failed via {} ({}): {}",
+            program.display(),
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
