@@ -60,6 +60,19 @@ pub(crate) fn complete_available(
     context: &Context,
     cancelled: &dyn Fn() -> bool,
 ) -> Option<Vec<Suggestion>> {
+    complete_with_repository(cache, execution, cwd, context, cancelled, || {
+        query(execution, cwd, context, cancelled)
+    })
+}
+
+fn complete_with_repository(
+    cache: &Cache,
+    execution: &Execution,
+    cwd: &str,
+    context: &Context,
+    cancelled: &dyn Fn() -> bool,
+    load: impl FnOnce() -> Option<Repository>,
+) -> Option<Vec<Suggestion>> {
     let (branches_only, include_busy) = match context.source {
         Source::Branches { include_busy } => (true, include_busy),
         Source::Tracking { .. }
@@ -96,7 +109,7 @@ pub(crate) fn complete_available(
     let repository = if let Some(cached) = cached {
         cached
     } else {
-        let repository = Arc::new(query(execution, cwd, context, cancelled)?);
+        let repository = Arc::new(load()?);
         let mut state = cache.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // 提交命令可能已使快照失效，较早请求不能把旧仓库状态重新放回缓存。
         if !cancelled() && state.0 == generation {
@@ -250,9 +263,17 @@ fn query(
         remaining -= bytes.len();
         String::from_utf8(bytes).ok()
     };
+    read_repository(context, &stopped, &mut read)
+}
+
+fn read_repository(
+    context: &Context,
+    cancelled: &dyn Fn() -> bool,
+    read: &mut impl FnMut(&[&str]) -> Option<String>,
+) -> Option<Repository> {
     if matches!(context.source, Source::Remotes) {
         let remotes = read(&["remote"])?;
-        return (!stopped()).then_some(Repository {
+        return (!cancelled()).then_some(Repository {
             remotes: remotes
                 .lines()
                 .filter(|name| {
@@ -305,17 +326,17 @@ fn query(
                 current: head == "*",
                 commit: object_type == "commit" || peeled_type == "commit",
                 symbolic: !symref.is_empty(),
-                direct_tracking: config.can_track(full_name, &stopped),
+                direct_tracking: config.can_track(full_name, cancelled),
             })
         })
         .collect();
-    let guesses = config.guesses(&references, &stopped);
-    let remote_branches = config.remote_branches(&references, &stopped);
+    let guesses = config.guesses(&references, cancelled);
+    let remote_branches = config.remote_branches(&references, cancelled);
     let local_branches = references
         .iter()
         .filter_map(|r| r.full_name.strip_prefix("refs/heads/").map(str::to_owned))
         .collect();
-    (!stopped()).then_some(Repository {
+    (!cancelled()).then_some(Repository {
         references,
         guesses,
         guess_enabled: config.guess,
@@ -373,6 +394,65 @@ pub(crate) mod tests {
         git(directory.path(), &["branch", "feature/中文"]);
         git(directory.path(), &["branch", "feature/alpha"]);
         directory
+    }
+
+    #[test]
+    fn unavailable_repository_reads_are_not_cached_as_empty_success() {
+        let context = Context::parse("git switch ma", 13, ShellSyntax::Posix).unwrap();
+        let execution = Execution::Process {
+            context: PaneExecContext::from_pty_options(&Default::default()),
+            scope: crate::display::SuggestEnv::Local,
+        };
+        for failed_stage in ["config", "for-each-ref"] {
+            let cache = Cache::default();
+            let mut stages = Vec::new();
+            let result =
+                complete_with_repository(&cache, &execution, ".", &context, &|| false, || {
+                    read_repository(&context, &|| false, &mut |args| {
+                        stages.push(args[0].to_owned());
+                        (args[0] != failed_stage).then(String::new)
+                    })
+                });
+            assert!(result.is_none(), "{failed_stage}");
+            assert_eq!(stages.last().unwrap(), failed_stage);
+            assert!(cache.0.lock().unwrap().1.is_none());
+            let empty =
+                complete_with_repository(&cache, &execution, ".", &context, &|| false, || {
+                    Some(Repository::default())
+                });
+            assert!(empty.unwrap().is_empty(), "a successful empty snapshot is distinct");
+            assert!(cache.0.lock().unwrap().1.is_some());
+            retain_snapshot_for_test(&cache);
+            let cached =
+                complete_with_repository(&cache, &execution, ".", &context, &|| false, || {
+                    panic!("reuse the snapshot")
+                });
+            assert!(cached.unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn cancellation_after_repository_read_discards_the_snapshot() {
+        let context = Context::parse("git switch ma", 13, ShellSyntax::Posix).unwrap();
+        let execution = Execution::Process {
+            context: PaneExecContext::from_pty_options(&Default::default()),
+            scope: crate::display::SuggestEnv::Local,
+        };
+        let cache = Cache::default();
+        let cancelled = std::cell::Cell::new(false);
+        let result = complete_with_repository(
+            &cache,
+            &execution,
+            ".",
+            &context,
+            &|| cancelled.get(),
+            || {
+                cancelled.set(true);
+                Some(Repository::default())
+            },
+        );
+        assert!(result.is_none());
+        assert!(cache.0.lock().unwrap().1.is_none());
     }
 
     #[test]
@@ -478,7 +558,8 @@ pub(crate) mod tests {
         let cache = Cache::default();
         let values = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
-            complete_available(
+            // 语义夹具读取真实 Git，但不把共享 runner 的墙钟速度当成候选正确性。
+            complete_with_repository(
                 &cache,
                 &Execution::Process {
                     context: execution.clone(),
@@ -487,6 +568,23 @@ pub(crate) mod tests {
                 cwd,
                 &context,
                 &|| false,
+                || {
+                    read_repository(&context, &|| false, &mut |args| {
+                        Some(git_output(
+                            repository.path(),
+                            &[
+                                &[
+                                    "-c",
+                                    "core.warnAmbiguousRefs=true",
+                                    "-c",
+                                    "completion.snapshot=true",
+                                ][..],
+                                args,
+                            ]
+                            .concat(),
+                        ))
+                    })
+                },
             )
             .unwrap_or_else(|| panic!("valid Git fixture metadata must become available: {line:?}"))
             .into_iter()
