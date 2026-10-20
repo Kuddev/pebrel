@@ -15,6 +15,7 @@ const RESET_KEYS: &[&str] = &[
     "font_family",
     "font_family_cjk",
     "ui_font_family",
+    "tab_font_family",
     "ui_font_size",
     "font_size",
     "ctrl_wheel_font_zoom",
@@ -305,6 +306,13 @@ mod tests {
                 assert!(RESET_KEYS.contains(&key), "missing reset key: {key}");
             }
         }
+    }
+
+    #[test]
+    fn reset_clears_tab_font_family() {
+        let reset =
+            default_settings_text("tab_font_family=Maple Mono Normal NF CN\nfuture_key=keep\n");
+        assert_eq!(reset, "future_key=keep\n");
     }
 
     #[test]

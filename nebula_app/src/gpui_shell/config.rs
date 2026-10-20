@@ -58,6 +58,8 @@ pub struct Settings {
     pub ctrl_wheel_font_zoom: bool,
     pub ui_font_size_px: f32,
     pub(crate) ui_font_family: Option<String>,
+    /// 侧栏/顶栏标签文字专用字体；None 回落 `theme.font_family`（Geist）。
+    pub(crate) tab_font_family: Option<String>,
     pub(crate) ui_font_size_override: Option<f32>,
     /// 字体 cell 的物理像素偏移；旧壳 Windows 默认 y=4，必须在设备像素
     /// 域参与取整，才能在 125%/150% DPI 下保持同一行数。
@@ -278,6 +280,7 @@ impl Settings {
             ctrl_wheel_font_zoom: runtime.ctrl_wheel_font_zoom,
             ui_font_size_px: runtime.ui_font_size_px.unwrap_or(base_font_size_px),
             ui_font_family: runtime.ui_font_family.clone(),
+            tab_font_family: runtime.tab_font_family.clone(),
             ui_font_size_override: runtime.ui_font_size_px,
             font_offset_x: f32::from(offset.x),
             font_offset_y: f32::from(offset.y),

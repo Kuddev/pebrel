@@ -193,13 +193,17 @@ impl NebulaWorkspace {
         let active_fg = theme.sidebar_accent_foreground;
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
-        // 标题走 UI sans，路径/状态短标才用 Normal 等宽；有图标时才占图标槽。
+        // 标题默认走 UI sans（Geist），`tab_font_family` 可单独改回等宽；
+        // 路径/状态短标仍固定 Normal 等宽；有图标时才占图标槽。
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
         let tab_close_visible = settings.map(|settings| settings.tab_close_visible).unwrap_or(true);
         let tab_reveal = settings
             .map(|settings| settings.tab_reveal)
             .unwrap_or(nebula_settings::TabRevealName::Slide);
-        let chrome_family = theme.font_family.clone();
+        let chrome_family: SharedString = settings
+            .and_then(|settings| settings.tab_font_family.clone())
+            .map(SharedString::from)
+            .unwrap_or_else(|| theme.font_family.clone());
         let metadata_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         // 界面字号独立于终端缩放。
@@ -963,7 +967,10 @@ impl NebulaWorkspace {
         let (ink, dim, badge_fill) = (theme.foreground, theme.muted_foreground, theme.muted);
         let dark = theme.is_dark();
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
-        let chrome_family = theme.font_family.clone();
+        let chrome_family: SharedString = settings
+            .and_then(|settings| settings.tab_font_family.clone())
+            .map(SharedString::from)
+            .unwrap_or_else(|| theme.font_family.clone());
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let TabPresentation {
