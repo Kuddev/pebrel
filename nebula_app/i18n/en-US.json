@@ -270,6 +270,8 @@
       "ligatures_theme": "Follow theme",
       "ui_family": "Interface font",
       "ui_family_description": "Enter an installed font family; leave empty for the default. Applies on Enter or leaving the field.",
+      "tab_family": "Tab label font",
+      "tab_family_description": "Enter an installed font family for sidebar and top-bar tab titles; leave empty for the interface default. Applies on Enter or leaving the field.",
       "ui_size": "Interface font size",
       "ui_size_description": "Changes interface text and component sizing independently of terminal text.",
       "english": "English terminal font",

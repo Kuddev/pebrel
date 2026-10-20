@@ -9,6 +9,7 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         let font_picker = self.font_picker_dropdown(window, cx);
         let cjk_font_picker = self.cjk_font_picker_dropdown(window, cx);
+        let tab_font_picker = self.tab_font_picker_dropdown(window, cx);
         let opacity: SharedString = format!("{:.0}%", self.runtime.opacity * 100.0).into();
         let wallpaper_opacity: SharedString =
             format!("{:.0}%", self.runtime.background_image_opacity * 100.0).into();
@@ -85,6 +86,12 @@ impl SettingsPane {
         let interface = self
             .group(language.pick("界面", "Interface"), cx)
             .child(self.font_size_row(true, cx))
+            .child(self.row(
+                language.text(crate::i18n::Message::SettingsFontTabFamily),
+                language.text(crate::i18n::Message::SettingsFontTabFamilyDescription),
+                tab_font_picker,
+                cx,
+            ))
             .child(self.switch_row(
                 "dim_inactive_panes",
                 language.text(crate::i18n::Message::SettingsPanesDimInactive),

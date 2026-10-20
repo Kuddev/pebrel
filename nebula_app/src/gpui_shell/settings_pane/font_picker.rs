@@ -2,6 +2,14 @@ use super::*;
 
 use crate::font_install::{FontSource, REQUIRED_FONT_FAMILY};
 
+/// 字体选择面板服务的三行设置字段：终端字体、中文回退字体、标签字体。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FontPickerTarget {
+    Terminal,
+    Cjk,
+    Tab,
+}
+
 const FONT_PICKER_LIST_PREFERRED_HEIGHT: f32 = 220.0;
 const FONT_PICKER_PANEL_WIDTH: f32 = 360.0;
 const FONT_PICKER_PANEL_CHROME_HEIGHT: f32 = 74.0;
@@ -35,22 +43,30 @@ impl SettingsPane {
     }
 
     fn picker_input(&self) -> Entity<InputState> {
-        if self.font_picker_cjk {
-            self.font_family_cjk_input.clone()
-        } else {
-            self.font_family_input.clone()
+        match self.font_picker_target {
+            FontPickerTarget::Terminal => self.font_family_input.clone(),
+            FontPickerTarget::Cjk => self.font_family_cjk_input.clone(),
+            FontPickerTarget::Tab => self.tab_font_family_input.clone(),
         }
     }
 
     fn picker_key(&self) -> &'static str {
-        if self.font_picker_cjk { "font_family_cjk" } else { "font_family" }
+        match self.font_picker_target {
+            FontPickerTarget::Terminal => "font_family",
+            FontPickerTarget::Cjk => "font_family_cjk",
+            FontPickerTarget::Tab => "tab_font_family",
+        }
     }
 
     fn picker_font_chain(&self, cx: &App) -> String {
-        if self.font_picker_cjk {
-            self.runtime.font_family_cjk.clone().unwrap_or_else(|| REQUIRED_FONT_FAMILY.to_owned())
-        } else {
-            self.current_font_chain(cx)
+        match self.font_picker_target {
+            FontPickerTarget::Terminal => self.current_font_chain(cx),
+            FontPickerTarget::Cjk => self
+                .runtime
+                .font_family_cjk
+                .clone()
+                .unwrap_or_else(|| REQUIRED_FONT_FAMILY.to_owned()),
+            FontPickerTarget::Tab => self.effective_tab_font_chain(),
         }
     }
 
@@ -78,7 +94,7 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.on_picker_input_event(false, event, window, cx);
+        self.on_picker_input_event(FontPickerTarget::Terminal, event, window, cx);
     }
 
     pub(super) fn on_cjk_font_family_input_event(
@@ -87,26 +103,35 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.on_picker_input_event(true, event, window, cx);
+        self.on_picker_input_event(FontPickerTarget::Cjk, event, window, cx);
+    }
+
+    pub(super) fn on_tab_font_family_input_event(
+        &mut self,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.on_picker_input_event(FontPickerTarget::Tab, event, window, cx);
     }
 
     fn on_picker_input_event(
         &mut self,
-        cjk: bool,
+        target: FontPickerTarget,
         event: &InputEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if matches!(event, InputEvent::Focus) {
-            if self.font_picker_open && self.font_picker_cjk != cjk {
+            if self.font_picker_open && self.font_picker_target != target {
                 self.close_font_picker(window, false, cx);
             }
-            self.font_picker_cjk = cjk;
+            self.font_picker_target = target;
             self.open_font_picker(cx);
             return;
         }
         // A delayed blur from the other field must not commit the active field.
-        if self.font_picker_cjk != cjk {
+        if self.font_picker_target != target {
             return;
         }
         match event {
@@ -175,13 +200,48 @@ impl SettingsPane {
         }
     }
 
+    /// 标签字体未设置时真正生效的链：跟随 `ui_font_family`，再落 Geist。
+    /// 渲染侧三处落点同样只回落 `theme.font_family`，这里必须与它一致。
+    fn effective_tab_font_chain(&self) -> String {
+        self.runtime.tab_font_family.clone().unwrap_or_else(|| {
+            self.runtime
+                .ui_font_family
+                .clone()
+                .unwrap_or_else(|| crate::gpui_shell::typography::UI_FONT_FAMILY.to_owned())
+        })
+    }
+
+    pub(super) fn new_tab_font_family_input(
+        runtime: &RuntimeSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        let initial = runtime.tab_font_family.clone().unwrap_or_else(|| {
+            runtime
+                .ui_font_family
+                .clone()
+                .unwrap_or_else(|| crate::gpui_shell::typography::UI_FONT_FAMILY.to_owned())
+        });
+        let language = crate::gpui_shell::config::ui_language(cx);
+        cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(language.pick("输入字体名称", "Enter a font family"))
+                .default_value(initial)
+        })
+    }
+
     fn commit_font_family_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let current = self.picker_font_chain(cx);
         let raw = self.picker_input().read(cx).value().to_string();
         let normalized = crate::font_install::normalize_font_family_chain(&raw);
         // 空链无法提供主字体；恢复当前生效值，而不是写入一个随后被忽略的空项。
         let next = if normalized.is_empty() {
-            if self.font_picker_cjk { REQUIRED_FONT_FAMILY.to_owned() } else { current.clone() }
+            match self.font_picker_target {
+                FontPickerTarget::Cjk => REQUIRED_FONT_FAMILY.to_owned(),
+                // 清空标签字体 = 跟随界面字体链（含 ui_font_family 覆盖）。
+                FontPickerTarget::Tab => self.effective_tab_font_chain(),
+                FontPickerTarget::Terminal => current.clone(),
+            }
         } else {
             normalized
         };
@@ -248,20 +308,37 @@ impl SettingsPane {
     /// 逗号链再长也只能在字段内部移动，不能反向撑开设置行。
     fn font_picker_row(
         &self,
-        cjk: bool,
+        target: FontPickerTarget,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let language = crate::gpui_shell::config::ui_language(cx);
         let picker = cx.entity().downgrade();
-        let input = if cjk { &self.font_family_cjk_input } else { &self.font_family_input };
+        let (input, field_id, chevron_id, shell_id) = match target {
+            FontPickerTarget::Terminal => (
+                &self.font_family_input,
+                "font-family-input",
+                "font-picker-chevron",
+                "font-family-input-shell",
+            ),
+            FontPickerTarget::Cjk => (
+                &self.font_family_cjk_input,
+                "font-family-cjk-input",
+                "font-picker-cjk-chevron",
+                "font-family-cjk-input-shell",
+            ),
+            FontPickerTarget::Tab => (
+                &self.tab_font_family_input,
+                "font-family-tab-input",
+                "font-picker-tab-chevron",
+                "font-family-tab-input-shell",
+            ),
+        };
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
-        let field_id = if cjk { "font-family-cjk-input" } else { "font-family-input" };
-        let chevron_id = if cjk { "font-picker-cjk-chevron" } else { "font-picker-chevron" };
         let hover = cx.theme().foreground.opacity(if cx.theme().is_dark() { 0.08 } else { 0.06 });
         let edge = cx.theme().muted_foreground.opacity(0.65);
         let control = div()
-            .id(if cjk { "font-family-cjk-input-shell" } else { "font-family-input-shell" })
+            .id(shell_id)
             .rounded(px(6.0))
             .border_1()
             .border_color(if focused { cx.theme().ring } else { cx.theme().border })
@@ -286,31 +363,39 @@ impl SettingsPane {
                     .cleanable(false)
                     .suffix(Button::new(chevron_id)
                             .debug_selector(move || chevron_id.to_owned()).ghost().xsmall()
-                        .icon(if self.font_picker_open && self.font_picker_cjk == cjk { IconName::ChevronUp } else { IconName::ChevronDown })
-                        .tooltip(language.text(if self.font_picker_open && self.font_picker_cjk == cjk { crate::i18n::Message::SettingsFontCollapse } else { crate::i18n::Message::SettingsFontExpand }))
+                        .icon(if self.font_picker_open && self.font_picker_target == target { IconName::ChevronUp } else { IconName::ChevronDown })
+                        .tooltip(language.text(if self.font_picker_open && self.font_picker_target == target { crate::i18n::Message::SettingsFontCollapse } else { crate::i18n::Message::SettingsFontExpand }))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| { cx.stop_propagation(); })
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            let was_open = this.font_picker_open && this.font_picker_cjk == cjk;
+                            let was_open = this.font_picker_open && this.font_picker_target == target;
                             if this.font_picker_open && !was_open { this.close_font_picker(window, false, cx); }
-                            this.font_picker_cjk = cjk;
+                            this.font_picker_target = target;
                             this.picker_input().update(cx, |input, cx| input.focus(window, cx));
                             if was_open { this.close_font_picker(window, false, cx); } else { this.open_font_picker(cx); }
                             cx.stop_propagation();
                             cx.notify();
                         })))
-                    .aria_label(language.text(if cjk { crate::i18n::Message::SettingsFontChinese } else { crate::i18n::Message::SettingsFontEnglish })),
+                    .aria_label(language.text(match target {
+                        FontPickerTarget::Terminal => crate::i18n::Message::SettingsFontEnglish,
+                        FontPickerTarget::Cjk => crate::i18n::Message::SettingsFontChinese,
+                        FontPickerTarget::Tab => crate::i18n::Message::SettingsFontTabFamily,
+                    })),
             )
             // 弹层仍须取输入框的真实窗口坐标，才能正确处理滚动、缩放与 DPI。
             .child(
                 gpui::canvas(
                     move |bounds, _, cx| {
                         let _ = picker.update(cx, |picker, cx| {
-                            let slot = if cjk { &mut picker.font_picker_cjk_bounds } else { &mut picker.font_picker_trigger_bounds };
+                            let slot = match target {
+                                FontPickerTarget::Terminal => &mut picker.font_picker_trigger_bounds,
+                                FontPickerTarget::Cjk => &mut picker.font_picker_cjk_bounds,
+                                FontPickerTarget::Tab => &mut picker.font_picker_tab_bounds,
+                            };
                             if *slot == Some(bounds) { return; }
                             *slot = Some(bounds);
                             // anchored() 消费的是上一轮 render 拿到的窗口坐标；
                             // 聚焦自动滚动后补一帧，弹层才会继续贴住输入框。
-                            if picker.font_picker_open && picker.font_picker_cjk == cjk {
+                            if picker.font_picker_open && picker.font_picker_target == target {
                                 cx.notify();
                             }
                         });
@@ -324,13 +409,21 @@ impl SettingsPane {
         if self.active_section == 1 {
             return control.into_any_element();
         }
-        self.row(
-            language.text(crate::i18n::Message::SettingsFontEnglish),
-            help("font_family", language),
-            control,
-            cx,
-        )
-        .into_any_element()
+        let (label, help_text): (&'static str, SettingHelp) = match target {
+            FontPickerTarget::Terminal => (
+                language.text(crate::i18n::Message::SettingsFontEnglish),
+                help("font_family", language),
+            ),
+            FontPickerTarget::Cjk => (
+                language.text(crate::i18n::Message::SettingsFontChinese),
+                language.text(crate::i18n::Message::SettingsFontChineseDescription).into(),
+            ),
+            FontPickerTarget::Tab => (
+                language.text(crate::i18n::Message::SettingsFontTabFamily),
+                language.text(crate::i18n::Message::SettingsFontTabFamilyDescription).into(),
+            ),
+        };
+        self.row(label, help_text, control, cx).into_any_element()
     }
 
     fn chain_action(
@@ -614,7 +707,7 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        self.font_picker_dropdown_for(false, window, cx)
+        self.font_picker_dropdown_for(FontPickerTarget::Terminal, window, cx)
     }
 
     pub(super) fn cjk_font_picker_dropdown(
@@ -622,18 +715,29 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        self.font_picker_dropdown_for(true, window, cx)
+        self.font_picker_dropdown_for(FontPickerTarget::Cjk, window, cx)
+    }
+
+    pub(super) fn tab_font_picker_dropdown(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        self.font_picker_dropdown_for(FontPickerTarget::Tab, window, cx)
     }
 
     fn font_picker_dropdown_for(
         &mut self,
-        cjk: bool,
+        target: FontPickerTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let row = self.font_picker_row(cjk, window, cx);
-        let trigger_bounds =
-            if cjk { self.font_picker_cjk_bounds } else { self.font_picker_trigger_bounds };
+        let row = self.font_picker_row(target, window, cx);
+        let trigger_bounds = match target {
+            FontPickerTarget::Terminal => self.font_picker_trigger_bounds,
+            FontPickerTarget::Cjk => self.font_picker_cjk_bounds,
+            FontPickerTarget::Tab => self.font_picker_tab_bounds,
+        };
         let viewport = window.viewport_size();
         let panel_width = px(FONT_PICKER_PANEL_WIDTH
             .min((f32::from(viewport.width) - 2.0 * FONT_PICKER_WINDOW_MARGIN).max(0.0)));
@@ -657,7 +761,7 @@ impl SettingsPane {
                 )
             })
             .unwrap_or((false, px(FONT_PICKER_LIST_PREFERRED_HEIGHT)));
-        let panel = (self.font_picker_open && self.font_picker_cjk == cjk)
+        let panel = (self.font_picker_open && self.font_picker_target == target)
             .then(|| self.font_picker_panel(panel_width, list_height, cx));
 
         div().relative().w(px(SETTINGS_SELECT_WIDTH)).flex_shrink_0().child(row).when_some(
@@ -736,7 +840,8 @@ mod interaction_tests {
         window.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        assert!(pane.read_with(window, |pane, _| pane.font_picker_open && pane.font_picker_cjk));
+        assert!(pane.read_with(window, |pane, _| pane.font_picker_open
+            && pane.font_picker_target == FontPickerTarget::Cjk));
         let expected = crate::font_install::font_catalog(&[], &[], true, "", "")[0].name.clone();
         let candidate = window.debug_bounds("font-available-0").unwrap();
         window.simulate_click(
@@ -754,6 +859,64 @@ mod interaction_tests {
             pane.read_with(window, |pane, cx| pane.font_family_input.read(cx).value().to_string()),
             REQUIRED_FONT_FAMILY
         );
+    }
+
+    #[gpui::test]
+    fn tab_dropdown_selection_persists_tab_font_family(cx: &mut TestAppContext) {
+        use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+        let _lock = lock_theme_studio();
+        let _settings = SettingsBytesGuard::capture();
+        // 未设置标签字体时，输入框显示生效链（ui_font_family 覆盖 Geist）。
+        nebula_settings::persist_keys(&[("ui_font_family", "Inter".into())]).unwrap();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_reduce_motion(true);
+            cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+        });
+        let mut pane = None;
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| SettingsPane::new(window, cx));
+            view.update(cx, |pane, _| {
+                pane.active_section = 1;
+                pane.font_system = Some(Vec::new());
+            });
+            pane = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let pane = pane.unwrap();
+        // 界面组在设置页靠后；加高窗口让标签字体行落在视口内。
+        window.simulate_resize(gpui::size(px(1280.0), px(2400.0)));
+        window.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(
+            pane.read_with(window, |pane, cx| pane
+                .tab_font_family_input
+                .read(cx)
+                .value()
+                .to_string()),
+            "Inter"
+        );
+        let arrow = window.debug_bounds("font-picker-tab-chevron").unwrap();
+        window.simulate_click(arrow.center(), gpui::Modifiers::default());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(pane.read_with(window, |pane, _| pane.font_picker_open
+            && pane.font_picker_target == FontPickerTarget::Tab));
+        let expected = crate::font_install::font_catalog(&[], &[], true, "", "")[0].name.clone();
+        let candidate = window.debug_bounds("font-available-0").unwrap();
+        window.simulate_click(
+            point(candidate.left() + px(40.0), candidate.center().y),
+            gpui::Modifiers::default(),
+        );
+        window.run_until_parked();
+        let saved = RuntimeSettings::load();
+        assert_eq!(saved.tab_font_family.as_deref(), Some(expected.as_str()));
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!pane.read_with(window, |pane, _| pane.font_picker_open));
     }
 
     #[gpui::test]

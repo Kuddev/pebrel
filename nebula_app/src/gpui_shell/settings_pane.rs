@@ -218,7 +218,7 @@ pub struct SettingsPane {
     pub(super) ssh_undo_seq: u64,
     /// 可直接编辑的字体链及其建议弹层；逗号分隔主字体与 fallback 字体。
     pub(super) font_picker_open: bool,
-    font_picker_cjk: bool,
+    font_picker_target: font_picker::FontPickerTarget,
     font_loading: bool,
     /// None = 尚未枚举；首次展开时在后台线程装配（几百字体的机器上
     /// `IsMonospacedFont` 逐族探询是实打实的开销，不挡 UI 帧）。
@@ -226,6 +226,7 @@ pub struct SettingsPane {
     /// GPUI text system 已注册的导入族名（启动扫描 + 本次导入累计）。
     font_imported: Vec<String>,
     font_family_input: Entity<InputState>,
+    tab_font_family_input: Entity<InputState>,
     font_family_cjk_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     font_size_editing: Option<bool>,
@@ -233,6 +234,7 @@ pub struct SettingsPane {
     /// 锚点；否则输入框在右侧、菜单却会从正文左缘展开。
     font_picker_trigger_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     font_picker_cjk_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    font_picker_tab_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     /// 备份类别选择（本地 UI 态；出厂默认 = 共享 `BackupSelection::default`）。
     backup_selection: crate::encrypted_backup::BackupSelection,
     backup_ui: backup::BackupUiState,
@@ -343,6 +345,7 @@ impl SettingsPane {
             (&self.ssh_jump_host_input, "ssh_jump_host"),
             (&self.ssh_icon_filter_input, "ssh_icon_filter"),
             (&self.font_family_input, "font_family"),
+            (&self.tab_font_family_input, "font_family"),
             (&self.font_family_cjk_input, "font_family"),
             (&self.backup_pass_input, "backup_password"),
             (&self.backup_secret_input, "backup_secret"),

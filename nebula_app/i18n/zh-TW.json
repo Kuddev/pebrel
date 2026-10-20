@@ -120,6 +120,8 @@
       "ligatures_theme": "跟隨主題",
       "ui_family": "介面字型",
       "ui_family_description": "輸入已安裝的字型名稱；留空則使用預設字型。按 Enter 或離開輸入欄位後生效。",
+      "tab_family": "標籤字體",
+      "tab_family_description": "輸入用於側欄和頂欄標籤標題的字體名稱；留空使用介面預設字體。按 Enter 或離開輸入框後生效。",
       "ui_size": "介面字型大小",
       "ui_size_description": "獨立調整介面文字和控制項字型大小，不影響終端機文字。",
       "english": "英文終端機字型",
