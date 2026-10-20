@@ -152,7 +152,7 @@ mod tests {
     use crate::{RawSettings, RuntimeSettings};
 
     #[test]
-    fn split_sources_round_trip_and_reset_to_default_shell() {
+    fn split_sources_round_trip_and_reset_to_focused() {
         for source in crate::SplitShellSource::ALL {
             let text = crate::apply_updates(
                 "custom=keep\n",
@@ -166,7 +166,7 @@ mod tests {
             assert_eq!(reset, "custom=keep\n");
             assert_eq!(
                 RuntimeSettings::from_raw(&RawSettings::from_text(&reset)).split_shell_source,
-                crate::SplitShellSource::Default
+                crate::SplitShellSource::Focused
             );
         }
     }

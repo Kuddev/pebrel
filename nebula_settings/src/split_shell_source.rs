@@ -1,9 +1,9 @@
 /// Launch source for interactive terminal splits. Missing or invalid values
-/// preserve the default-shell choice.
+/// follow the focused pane's launch identity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SplitShellSource {
-    #[default]
     Default,
+    #[default]
     Focused,
     Ask,
 }
@@ -71,11 +71,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_and_invalid_settings_use_default_shell() {
+    fn missing_and_invalid_settings_follow_the_focused_pane() {
+        assert_eq!(SplitShellSource::default(), SplitShellSource::Focused);
         for text in ["", "split_shell_source=invalid", "split_shell_source="] {
             assert_eq!(
                 RuntimeSettings::from_raw(&RawSettings::from_text(text)).split_shell_source,
-                SplitShellSource::Default
+                SplitShellSource::Focused
             );
         }
     }
