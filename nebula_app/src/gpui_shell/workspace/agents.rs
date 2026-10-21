@@ -120,7 +120,7 @@ impl NebulaWorkspace {
     /// （`next_frame_callbacks` 非空 + 窗口非活跃即节流），不必在这里再停
     /// 一次。
     pub(super) fn arm_activity_spinner_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
-        const PERIOD_SECS: f32 = 0.8;
+        const PERIOD_SECS: f32 = 1.0;
 
         if self.spinner_frame_pending.get()
             || !self.spinner_visible.get()
@@ -129,17 +129,20 @@ impl NebulaWorkspace {
             return;
         }
         self.spinner_frame_pending.set(true);
-        cx.on_next_frame(window, |workspace, window, cx| {
-            workspace.spinner_frame_pending.set(false);
-            if !workspace.spinner_visible.get() || workspace.spinner_offscreen(window) {
-                return;
-            }
-            let now = std::time::Instant::now();
-            let delta = now.saturating_duration_since(workspace.spinner_last);
-            workspace.spinner_last = now;
-            workspace.spinner_phase =
-                (workspace.spinner_phase + delta.as_secs_f32() / PERIOD_SECS).rem_euclid(1.0);
-            cx.notify();
+        let workspace = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            let _ = workspace.update(cx, |workspace, cx| {
+                workspace.spinner_frame_pending.set(false);
+                if !workspace.spinner_visible.get() || workspace.spinner_offscreen(window) {
+                    return;
+                }
+                let now = cx.background_executor().now();
+                let delta = now.saturating_duration_since(workspace.spinner_last);
+                workspace.spinner_last = now;
+                workspace.spinner_phase =
+                    (workspace.spinner_phase + delta.as_secs_f32() / PERIOD_SECS).rem_euclid(1.0);
+                cx.notify();
+            });
         });
     }
 

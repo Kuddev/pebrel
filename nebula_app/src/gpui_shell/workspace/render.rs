@@ -3,6 +3,7 @@ use super::*;
 
 impl Render for NebulaWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.spinner_visible.set(false);
         let theme_transition = self.theme_transition.render(window, cx);
         crate::gpui_shell::theme::sync_component_focus_ring(window, cx);
         if window.is_window_active() {

@@ -144,10 +144,8 @@ pub(crate) fn faint_ink(cx: &App) -> Hsla {
     ink(resolved_skin(cx).ink_faint)
 }
 
-/// 侧栏运行 spinner 的两端颜色，逐字复用旧壳 `draw_chrome` 的底色裁定：
-/// hairline / ink_dim 先与该 Tab 行的真实不透明底色合成。环由大量相交小圆
-/// 铺成；若直接交给 GPUI 用半透明 hairline 叠画，交叠处会变深，看起来像
-/// 一圈模糊珠子而不是连续圆环。
+/// 运行态圆环的轨道和旋转弧共用语义色；先与 Tab 行底色合成，
+/// 轨道与弧重叠时不会重复积累透明度，深浅主题都保持中性对比。
 pub(crate) fn sidebar_spinner_colors(cx: &App, active: bool) -> (GpuiRgba, GpuiRgba) {
     let palette = resolved_palette(cx);
     let sk = resolved_skin(cx);
