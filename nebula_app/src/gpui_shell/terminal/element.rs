@@ -32,6 +32,8 @@ mod cell_fit;
 #[path = "element/color_tests.rs"]
 mod color_tests;
 mod reading;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(in crate::gpui_shell) mod snapshot_probe;
 
 #[path = "element/app_colors.rs"]
 mod app_colors;
@@ -332,6 +334,8 @@ impl Element for TerminalElement {
         else {
             return;
         };
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        snapshot_probe::record(&self.view, &snap, bounds, layout, cx);
         let suggest_anchor =
             snap.cursor.as_ref().map(|cursor| (cursor.row as usize, cursor.col as usize));
         self.view.update(cx, |view, cx| {
