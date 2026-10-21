@@ -5,7 +5,7 @@
 //! a stable identity and must never be serialized beside ordinary settings.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,16 @@ use zeroize::Zeroizing;
 #[cfg(feature = "legacy-shell")]
 use crate::event::{Event, EventType};
 use crate::provider_test::ProviderTestOutcome;
+
+mod agent_config;
+mod editor;
+pub mod install;
+pub use editor::{
+    apply_config_draft, config_text, load_auth_document, parse_auth_draft, save_provider_draft,
+};
+mod models;
+pub use agent_config::apply_claude_provider;
+pub use models::{configured_models, fetch_models, parse_model_list};
 
 const STORE_FILE: &str = "pebrel_providers.json";
 
@@ -126,11 +136,26 @@ pub struct AiProvider {
     pub kind: ProviderKind,
     pub base_url: String,
     pub model: String,
+    /// 旧配置没有这几个字段时继续使用原默认模型；密钥仍只属于供应商。
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub reasoning_effort: String,
+    #[serde(default)]
+    pub subagent_model: Option<String>,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub wire_api: String,
+    #[serde(default)]
+    pub config_toml: String,
     #[serde(default)]
     pub enabled: bool,
     /// A credential reference only. The actual key is held by the OS store.
     #[serde(default)]
     pub api_key_set: bool,
+    #[serde(default)]
+    pub auth_document_set: bool,
     #[serde(default)]
     pub api_key_hint: String,
     #[serde(default)]
@@ -153,13 +178,29 @@ impl AiProvider {
             kind,
             base_url: kind.default_base_url().to_owned(),
             model: kind.default_model().to_owned(),
+            models: Vec::new(),
+            reasoning_effort: String::new(),
+            subagent_model: None,
+            agent: String::new(),
+            wire_api: String::new(),
+            config_toml: String::new(),
             enabled: true,
             api_key_set: false,
+            auth_document_set: false,
             api_key_hint: String::new(),
             full_url: false,
             codex_goals: false,
             codex_remote_compaction: false,
         }
+    }
+
+    pub fn agent_kind(&self) -> crate::ai_agents::AgentKind {
+        use crate::ai_agents::AgentKind;
+        AgentKind::parse(&self.agent).unwrap_or(match self.kind {
+            ProviderKind::Anthropic => AgentKind::Claude,
+            ProviderKind::Google => AgentKind::Gemini,
+            _ => AgentKind::Codex,
+        })
     }
 }
 
@@ -169,6 +210,9 @@ pub struct ProviderStore {
     pub active_id: String,
     #[serde(default)]
     pub providers: Vec<AiProvider>,
+    /// CLI 的已应用状态独立于内置助手选中项，也独立于其他 CLI。
+    #[serde(default)]
+    pub cli_active: std::collections::BTreeMap<String, String>,
 }
 
 /// Editable non-secret provider fields shared by both presentations.
@@ -240,29 +284,14 @@ pub fn load() -> ProviderStore {
     store
 }
 
-/// Older builds only materialized a preset after it was clicked. Keep those
-/// records intact, but fill the missing presets so the visible list can be a
-/// real, index-addressable collection and multiple custom entries remain
-/// independently editable.
+/// 首次使用提供预设；已有目录保持用户的添加、删除和线路顺序。
 fn normalize(store: &mut ProviderStore) {
-    let mut existing = std::mem::take(&mut store.providers);
-    let mut ordered = Vec::with_capacity(ProviderKind::PRESETS.len().max(existing.len()));
-    for kind in ProviderKind::PRESETS {
-        if kind == ProviderKind::Custom {
-            continue;
-        }
-        if let Some(index) = existing.iter().position(|provider| provider.kind == kind) {
-            ordered.push(existing.remove(index));
-        } else {
-            ordered.push(AiProvider::preset(kind, preset_id(kind)));
-        }
+    if store.providers.is_empty() {
+        store.providers = ProviderKind::PRESETS
+            .into_iter()
+            .map(|kind| AiProvider::preset(kind, preset_id(kind)))
+            .collect();
     }
-    let had_custom = existing.iter().any(|provider| provider.kind == ProviderKind::Custom);
-    ordered.extend(existing.into_iter().filter(|provider| provider.kind == ProviderKind::Custom));
-    if !had_custom {
-        ordered.push(AiProvider::preset(ProviderKind::Custom, preset_id(ProviderKind::Custom)));
-    }
-    store.providers = ordered;
     if !store.providers.iter().any(|provider| provider.id == store.active_id) {
         store.active_id =
             store.providers.first().map(|provider| provider.id.clone()).unwrap_or_default();
@@ -289,13 +318,25 @@ pub fn active_enabled(store: &ProviderStore) -> Option<&AiProvider> {
 }
 
 pub fn save(store: &ProviderStore) -> io::Result<()> {
-    let path = store_path();
+    save_to_path(store, &store_path())
+}
+
+fn save_to_path(store: &ProviderStore, path: &Path) -> io::Result<()> {
+    // 旧目录也可能含未经编辑器校验的 TOML；所有写入入口共用同一凭据边界。
+    for provider in &store.providers {
+        editor::parse_config_draft(&provider.config_toml).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Provider {:?} config.toml: {error}", provider.id),
+            )
+        })?;
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let text = serde_json::to_string_pretty(store)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    std::fs::write(path, text)
+    crate::atomic_file::write(path, text.as_bytes())
 }
 
 pub fn credential_target(id: &str) -> String {
@@ -340,11 +381,13 @@ pub fn delete_api_key(id: &str) -> io::Result<()> {
 /// transition. Metadata is mutated only after credential deletion succeeds,
 /// avoiding an unreachable orphaned secret.
 pub fn remove_provider(store: &mut ProviderStore, id: &str) -> io::Result<()> {
+    editor::delete_auth_document(id)?;
     delete_api_key(id)?;
     let Some(index) = store.providers.iter().position(|provider| provider.id == id) else {
         return Err(io::Error::new(io::ErrorKind::NotFound, "provider not found"));
     };
     store.providers.remove(index);
+    store.cli_active.retain(|_, active| active != id);
     if store.active_id == id {
         store.active_id =
             store.providers.first().map(|provider| provider.id.clone()).unwrap_or_default();
@@ -418,8 +461,20 @@ pub fn test_provider(provider: &AiProvider) -> ProviderTestResult {
     };
     let config = ureq::config::Config::builder()
         .timeout_global(Some(Duration::from_secs(12)))
-        .http_status_as_error(false)
-        .build();
+        .max_redirects(0)
+        .http_status_as_error(false);
+    let loopback = url
+        .parse::<ureq::http::Uri>()
+        .ok()
+        .and_then(|uri| uri.host().map(str::to_owned))
+        .is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+    let config = if loopback { config.proxy(None) } else { config }.build();
     let agent: ureq::Agent = config.new_agent();
     let mut request = agent.get(&url);
     request = match provider.kind {
@@ -526,6 +581,7 @@ mod tests {
     #[test]
     fn normalization_preserves_multiple_custom_entries() {
         let mut store = ProviderStore {
+            cli_active: Default::default(),
             active_id: "custom-2".to_owned(),
             providers: vec![
                 AiProvider::preset(ProviderKind::Custom, "custom-1"),
@@ -539,6 +595,58 @@ mod tests {
         );
         assert_eq!(store.active_id, "custom-2");
         assert_eq!(next_custom_id(&store), "custom-3");
+    }
+
+    #[test]
+    fn legacy_metadata_and_duplicate_protocol_routes_survive_reload() {
+        let original = AiProvider::preset(ProviderKind::Anthropic, "one");
+        let mut json = serde_json::to_value(&original).unwrap();
+        for field in ["models", "reasoning_effort", "subagent_model", "agent"] {
+            json.as_object_mut().unwrap().remove(field);
+        }
+        let restored: AiProvider = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, original);
+        let mut store = ProviderStore {
+            cli_active: Default::default(),
+            active_id: "two".into(),
+            providers: vec![original, AiProvider::preset(ProviderKind::Anthropic, "two")],
+        };
+        normalize(&mut store);
+        assert_eq!(store.providers.len(), 2);
+        assert_eq!(store.active_id, "two");
+        store.providers.remove(0);
+        normalize(&mut store);
+        assert_eq!(store.providers.len(), 1);
+    }
+
+    #[test]
+    fn saving_reloaded_literal_headers_preserves_the_existing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(STORE_FILE);
+        let mut provider = AiProvider::preset(ProviderKind::Custom, "legacy-provider");
+        provider.config_toml =
+            "[model_providers.custom.http_headers]\nX-Tenant-Credential = 'test-secret'\n".into();
+        let store = ProviderStore { providers: vec![provider], ..Default::default() };
+        let original = serde_json::to_vec(&store).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let mut reloaded: ProviderStore = serde_json::from_slice(&original).unwrap();
+        normalize(&mut reloaded);
+        reloaded.providers[0].name = "Renamed".into();
+        let error = save_to_path(&reloaded, &path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("legacy-provider"));
+        assert!(error.to_string().contains("env_http_headers"));
+        assert!(!error.to_string().contains("test-secret"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(reloaded.providers[0].config_toml, store.providers[0].config_toml);
+
+        reloaded.providers[0].config_toml =
+            "[model_providers.custom.env_http_headers]\nX-Tenant-Credential = 'TENANT_TOKEN'\n"
+                .into();
+        save_to_path(&reloaded, &path).unwrap();
+        let persisted: ProviderStore =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(persisted, reloaded);
     }
 
     #[test]
