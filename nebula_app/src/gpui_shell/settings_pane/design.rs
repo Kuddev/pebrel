@@ -216,6 +216,11 @@ impl SettingsPane {
         let base_px = self.font_size_px(cx);
         let expanded = self.expanded_setting_help.contains(label);
         let pad_y = self.row_padding_y();
+        let hover_group = Self::row_hover_group(label);
+        let mut title_hover = theme.foreground;
+        title_hover.l =
+            (title_hover.l + if theme.is_dark() { 0.035 } else { -0.035 }).clamp(0.0, 1.0);
+        let detail_hover = theme.muted_foreground.blend(theme.foreground.opacity(0.18));
         let text = v_flex()
             .child(
                 h_flex()
@@ -227,6 +232,9 @@ impl SettingsPane {
                             .text_size(px(base_px))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(theme.foreground)
+                            .group_hover(hover_group.clone(), move |text| {
+                                text.text_color(title_hover)
+                            })
                             .child(label),
                     )
                     .when(desc.details.is_some(), |heading| {
@@ -264,6 +272,7 @@ impl SettingsPane {
                         .text_size(px(base_px * DESC_SCALE))
                         .font_weight(FontWeight::NORMAL)
                         .text_color(theme.muted_foreground)
+                        .group_hover(hover_group.clone(), move |text| text.text_color(detail_hover))
                         .child(Self::desc_text(desc.summary, cx)),
                 )
             })

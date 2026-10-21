@@ -232,6 +232,7 @@ fn finish<H: SshEventHost>(
     match result {
         Ok(()) => terminal.lock().exit(),
         Err(error) => {
+            terminal.lock().end_program_status_activity();
             log::info!("SSH session stopped: {error}");
             super::report_stage(Some(event_proxy), SshStage::Failed(error.to_string()));
             super::render_error(terminal, event_proxy, &format!("SSH connection stopped: {error}"));

@@ -36,6 +36,7 @@ pub(crate) mod keyboard;
 pub(crate) mod local_paths;
 pub mod notifications;
 pub(crate) mod pi_session;
+pub(crate) mod private_file;
 pub(crate) mod process;
 pub(crate) mod process_output;
 pub(crate) mod process_snapshot;

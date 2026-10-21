@@ -90,6 +90,9 @@ fn executable_directories() -> Vec<PathBuf> {
             home.join(".cargo/bin"),
             home.join(".bun/bin"),
             home.join(".grok/bin"),
+            home.join(".opencode/bin"),
+            home.join(".kimi-code/bin"),
+            home.join(".pi/agent/bin"),
         ]);
     }
     if cfg!(target_os = "macos") {
@@ -99,7 +102,12 @@ fn executable_directories() -> Vec<PathBuf> {
         paths.push(PathBuf::from(appdata).join("npm"));
     }
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        paths.push(PathBuf::from(local).join("cursor-agent"));
+        let local = PathBuf::from(local);
+        paths.extend([
+            local.join("cursor-agent"),
+            local.join("hermes/bin"),
+            local.join("Programs/OpenAI/Codex/bin"),
+        ]);
     }
     paths
 }
