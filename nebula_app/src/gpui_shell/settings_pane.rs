@@ -97,6 +97,7 @@ pub enum SettingsPaneEvent {
     TerminalProfilesChanged,
     /// 设置页"连接"按钮：宿主开 SSH tab（连接语义在业务层）。
     LaunchSsh(String),
+    InstallAgent(crate::ai_agents::AgentKind),
 }
 
 pub(super) type SharedSelect = Entity<SelectState<Vec<SharedString>>>;
@@ -168,8 +169,9 @@ pub struct SettingsPane {
     pub(super) proxy_test_seq: u64,
     pub(super) proxy_test_status: crate::display::ProxyTestStatus,
     provider_store: crate::ai_providers::ProviderStore,
-    /// Name / note / website / endpoint / model. API keys deliberately do not
-    /// use a GPUI text widget; the native credential dialog is write-only.
+    provider_ui: providers::ProviderUi,
+    /// Name / note / website / endpoint / model. Auth JSON is an ephemeral
+    /// editor draft owned by ProviderUi; secrets never enter ProviderStore.
     provider_inputs: Vec<Entity<InputState>>,
     provider_status: Option<ProviderStatus>,
     provider_test_seq: u64,
@@ -1495,7 +1497,7 @@ impl SettingsPane {
             0 => self.section_home(window, cx),
             1 => self.section_appearance(window, cx),
             2 => self.section_profiles(window, cx),
-            3 => self.section_providers(cx),
+            3 => self.section_providers(window, cx),
             4 => self.section_ssh(cx),
             5 => self.section_network(cx),
             6 => self.section_interaction(cx),
@@ -1637,6 +1639,7 @@ impl Render for SettingsPane {
         let theme_package_modal = self.theme_package_modal(window, cx);
         let backup_drawer = self.backup_drawer(window, cx);
         let mobile_relay_modal = self.mobile_relay_modal(cx);
+        let provider_drawer = self.provider_drawer(window, cx);
         let application_page = self.active_section == 0;
 
         div()
@@ -1705,6 +1708,7 @@ impl Render for SettingsPane {
                             .pt(px(20.0))
                             .pb(px(22.0))
                             .when(!application_page, |content| content.pt(px(28.0)).pb(px(30.0)))
+                            .when(self.active_section == 3, |content| content.p_0())
                             // 注意这层包装 `v_flex` 的 `w_full` 不能删（2026-08-23
                             // 又栽了一次）：`overflow_y_scrollbar` 把内容层清成
                             // `Display::Block`，而 flex 容器在 block 父里
@@ -1749,6 +1753,7 @@ impl Render for SettingsPane {
                     ),
             )
             .when_some(backup_drawer, |root, drawer| root.child(drawer))
+            .when_some(provider_drawer, |root, drawer| root.child(drawer))
             .when_some(ssh_editor_modal, |root, modal| root.child(modal))
             .when_some(appearance_picker_modal, |root, modal| root.child(modal))
             .when_some(theme_editor_modal, |root, modal| root.child(modal))
