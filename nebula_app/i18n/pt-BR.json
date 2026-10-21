@@ -6,6 +6,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "Estilo de intermitência do cursor",
+      "blink": "Piscar",
+      "smooth": "Suave",
+      "phase": "Pulsação",
+      "expand": "Expansão",
+      "solid": "Fixo"
+    },
     "sidebar": {
       "application": "Aplicativo",
       "appearance": "Aparência",

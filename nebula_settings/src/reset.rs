@@ -38,6 +38,7 @@ const RESET_KEYS: &[&str] = &[
     "completion_style",
     "cjk_bold_regular",
     "tabs_position",
+    "cursor_blink_style",
     "tab_reveal",
     "density",
     "new_tab_position",
@@ -149,6 +150,15 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_restores_cursor_blink_style_and_preserves_unrelated_keys() {
+        let text = default_settings_text("cursor_blink_style=solid\ncursor_blink=0\ncustom=keep\n");
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&text));
+        assert_eq!(runtime.cursor_blink_style, crate::CursorBlinkStyle::Blink);
+        assert_eq!(runtime.cursor_blink, None);
+        assert!(text.contains("custom=keep"));
+    }
 
     #[test]
     fn reset_restores_auto_scrollbar_visibility() {

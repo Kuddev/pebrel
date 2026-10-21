@@ -17,6 +17,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "カーソルの点滅スタイル",
+      "blink": "点滅",
+      "smooth": "フェード",
+      "phase": "呼吸",
+      "expand": "伸縮",
+      "solid": "常時表示"
+    },
     "completion": {
       "mode": "補完モード",
       "cycle": "補完モードを切り替え",

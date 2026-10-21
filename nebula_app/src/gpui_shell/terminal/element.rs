@@ -463,6 +463,7 @@ impl Element for TerminalElement {
                 shape: cursor.shape,
                 focused,
                 visible: cursor_visible,
+                blink: self.view.read(cx).cursor_blink_frame(),
                 block_color: if host_cursor_follows_theme {
                     rgba_rgb(theme_anchor, block_alpha)
                 } else {

@@ -6,6 +6,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "Style de clignotement du curseur",
+      "blink": "Clignotement",
+      "smooth": "Fondu",
+      "phase": "Pulsation",
+      "expand": "Expansion",
+      "solid": "Fixe"
+    },
     "sidebar": {
       "application": "Application",
       "appearance": "Apparence",

@@ -6,6 +6,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "커서 깜박임 스타일",
+      "blink": "깜박임",
+      "smooth": "페이드",
+      "phase": "호흡",
+      "expand": "확장",
+      "solid": "항상 표시"
+    },
     "sidebar": {
       "application": "애플리케이션",
       "appearance": "모양",

@@ -6,6 +6,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "Cursor-Blinkstil",
+      "blink": "Blinken",
+      "smooth": "Sanft",
+      "phase": "Pulsieren",
+      "expand": "Ausdehnen",
+      "solid": "Statisch"
+    },
     "sidebar": {
       "application": "Anwendung",
       "appearance": "Darstellung",

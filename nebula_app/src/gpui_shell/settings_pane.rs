@@ -31,7 +31,7 @@ use setting_help::{SettingHelp, help};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::gpui_shell::config::{DEFAULT_CURSOR_BLINK, effective_cursor_blink};
+use crate::gpui_shell::config::effective_cursor_blink;
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::widgets::{NebulaButton, settings_control_height};
 
@@ -798,6 +798,7 @@ impl SettingsPane {
             "accept" => pick!(accept),
             "completion_style" => pick!(completion_style),
             "tabs_position" => pick!(tabs_position),
+            "cursor_blink_style" => pick!(cursor_blink_style),
             "tab_reveal" => pick!(tab_reveal),
             "density" => pick!(density),
             "new_tab_position" => pick!(new_tab_position),

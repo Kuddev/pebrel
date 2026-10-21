@@ -6,6 +6,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "Stile di lampeggio del cursore",
+      "blink": "Lampeggio",
+      "smooth": "Dissolvenza",
+      "phase": "Pulsazione",
+      "expand": "Espansione",
+      "solid": "Fisso"
+    },
     "sidebar": {
       "application": "Applicazione",
       "appearance": "Aspetto",

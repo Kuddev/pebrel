@@ -7,6 +7,7 @@ mod answer_reader;
 pub mod colors;
 mod completion_viewport;
 pub(super) mod confirmation;
+mod cursor_blink;
 mod cursor_motion;
 mod cursor_painter;
 #[cfg(feature = "shader-background")]

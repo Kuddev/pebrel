@@ -160,6 +160,14 @@
       "refresh": "Refresh system environment for new terminals",
       "refresh_description": "Read current Windows environment settings when opening a terminal. Turn off to inherit the environment used to launch Pebrel, including temporary PATH entries. Open terminals are unchanged."
     },
+    "cursor_blink": {
+      "title": "Cursor blinking style",
+      "blink": "Blink",
+      "smooth": "Smooth",
+      "phase": "Phase",
+      "expand": "Expand",
+      "solid": "Solid"
+    },
     "cursor_motion": {
       "title": "Smooth cursor",
       "description": "Animate terminal cursor movement; large jumps remain instant.",

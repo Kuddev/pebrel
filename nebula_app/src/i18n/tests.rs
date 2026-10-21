@@ -67,6 +67,27 @@ fn tab_context_menu_has_translations_for_every_supported_language() {
 }
 
 #[test]
+fn cursor_blink_choices_are_single_language_in_every_supported_locale() {
+    let choices = [
+        Message::SettingsCursorBlinkBlink,
+        Message::SettingsCursorBlinkSmooth,
+        Message::SettingsCursorBlinkPhase,
+        Message::SettingsCursorBlinkExpand,
+        Message::SettingsCursorBlinkSolid,
+    ];
+    for language in UiLanguage::ALL {
+        for choice in choices {
+            let label = language.text(choice);
+            assert!(!label.is_empty() && !label.contains('·'), "{}: {label}", language.code());
+            if *language != UiLanguage::EnUs {
+                assert_ne!(label, UiLanguage::EnUs.text(choice), "{}: {choice:?}", language.code());
+            }
+        }
+    }
+    assert!(super::message_id("settings.cursor_blink.description").is_none());
+}
+
+#[test]
 fn inline_migration_preserves_bilingual_text_and_english_fallback() {
     assert_eq!(UiLanguage::ZhCn.pick("网络", "Network"), "网络");
     assert_eq!(UiLanguage::EnUs.pick("网络", "Network"), "Network");

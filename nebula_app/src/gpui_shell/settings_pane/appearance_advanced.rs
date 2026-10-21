@@ -75,11 +75,10 @@ impl SettingsPane {
                 help("cursor_shape", language),
                 cx,
             ))
-            .child(self.switch_row(
-                "cursor_blink",
-                language.pick("光标闪烁", "Blink cursor"),
-                help("cursor_blink", language),
-                self.runtime.cursor_blink.unwrap_or(DEFAULT_CURSOR_BLINK),
+            .child(self.select_row(
+                "cursor_blink_style",
+                language.text(crate::i18n::Message::SettingsCursorBlinkTitle),
+                "",
                 cx,
             ));
         let interface = self
