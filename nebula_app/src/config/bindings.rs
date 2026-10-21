@@ -235,6 +235,9 @@ pub enum Action {
     /// Toggle a top/bottom split in the focused tab.
     SplitDown,
 
+    /// Cycle the shell source for interactive splits.
+    CycleSplitShellSource,
+
     /// Zoom the focused pane to fill the window (toggle).
     ToggleZoom,
 

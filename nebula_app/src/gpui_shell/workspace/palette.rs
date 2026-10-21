@@ -75,8 +75,7 @@ impl NebulaWorkspace {
                 self.add_terminal_at(cwd, Some(command), window, cx);
             },
             WorkspacePaletteAction::LaunchSshHost(host) => {
-                self.dismiss_palette_state();
-                self.add_ssh_terminal(host, window, cx);
+                self.launch_palette_ssh(host, window, cx);
             },
             WorkspacePaletteAction::LaunchShell(detected) => {
                 self.launch_palette_shell(detected, window, cx);
