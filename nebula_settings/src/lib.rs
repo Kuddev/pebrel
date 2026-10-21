@@ -40,6 +40,7 @@ mod notifications;
 pub use notifications::NotificationDuration;
 mod quick_terminal;
 mod scrolling;
+mod window;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
     SCROLL_SPEED_STEP, SCROLLBACK_VALUES, ScrollbarVisibility, normalize_scroll_speed,
@@ -48,6 +49,7 @@ mod themes;
 pub use language::{LanguageInfo, LanguagePref};
 pub use quick_terminal::{QuickTerminalMode, QuickTerminalSize};
 pub use themes::{FreshPalette, ReviewedPalette};
+pub use window::WindowGeometry;
 mod reset;
 pub use reset::restore_default_settings;
 mod paths;
@@ -1104,6 +1106,8 @@ pub struct RuntimeSettings {
     pub quick_terminal_mode: QuickTerminalMode,
     /// Remembered logical size; independent of monitor DPI.
     pub quick_terminal_size: Option<QuickTerminalSize>,
+    /// 普通工作区窗口的上次几何；None = 首启居中默认。
+    pub window_geometry: Option<WindowGeometry>,
     /// 终端卡圆角（逻辑像素）。`None` = 跟随主题自带的几何
     /// （见 [`ThemeName::card_geometry`]）。两壳同径：旧壳的
     /// `UI_SHELL_RADIUS_LOGICAL` 直接引用 [`DEFAULT_PANE_CARD_RADIUS`]，
@@ -1312,6 +1316,20 @@ impl RuntimeSettings {
                 .f32("quick_terminal_width")
                 .zip(raw.f32("quick_terminal_height"))
                 .and_then(|(w, h)| QuickTerminalSize::new(w, h)),
+            window_geometry: raw
+                .f32("window_x")
+                .zip(raw.f32("window_y"))
+                .zip(raw.f32("window_width"))
+                .zip(raw.f32("window_height"))
+                .and_then(|(((x, y), width), height)| {
+                    WindowGeometry::new(
+                        x,
+                        y,
+                        width,
+                        height,
+                        raw.bool_on("window_maximized").unwrap_or(false),
+                    )
+                }),
             quick_terminal_hotkey: raw
                 .values
                 .get("quick_terminal_hotkey")
@@ -1542,6 +1560,11 @@ mod tests {
              ssh_proxy_mode=custom\n\
              ssh_proxy_url=socks5://127.0.0.1:7890\n\
              quick_terminal_hotkey=alt+`\n\
+             window_x=120.5\n\
+             window_y=64\n\
+             window_width=1280\n\
+             window_height=800\n\
+             window_maximized=1\n\
              startup_directory=\n",
         );
         let settings = RuntimeSettings::from_raw(&raw);
@@ -1585,6 +1608,16 @@ mod tests {
         assert_eq!(settings.ssh_proxy_mode, ProxyModeName::Custom);
         assert_eq!(settings.ssh_proxy_url, "socks5://127.0.0.1:7890");
         assert_eq!(settings.quick_terminal_hotkey, "alt+`");
+        assert_eq!(
+            settings.window_geometry,
+            Some(WindowGeometry {
+                x: 120.5,
+                y: 64.0,
+                width: 1280.0,
+                height: 800.0,
+                maximized: true
+            })
+        );
         // 空值 = 未设置。
         assert_eq!(raw.value("startup_directory"), None);
     }
@@ -1598,6 +1631,7 @@ mod tests {
         assert_eq!(settings.font_family, None);
         assert_eq!(settings.font_family_cjk, None);
         assert_eq!(settings.ui_font_family, None);
+        assert_eq!(settings.window_geometry, None);
         assert_eq!(settings.ui_font_size_px, None);
         assert!(!settings.copy_on_select);
         assert!(settings.multiline_paste_confirm, "多行粘贴确认默认开（上游兼容）");
