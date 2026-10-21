@@ -9,6 +9,7 @@ pub mod event_loop;
 pub mod grid;
 pub mod index;
 pub mod osc_cwd;
+pub mod program_status;
 pub mod render;
 pub mod selection;
 pub mod sync;
