@@ -1,6 +1,6 @@
 //! Edit real Git Bash input through the product PTY and VT parser.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,7 +9,7 @@ use std::{env, fs, thread};
 use crate::Term;
 use crate::event::{Event, EventListener, WindowSize};
 use crate::index::{Column, Line};
-use crate::term::{Config, test::TermSize};
+use crate::term::{Config, TermMode, test::TermSize};
 use crate::tty::{self, EventedReadWrite};
 use vte::ansi;
 
@@ -29,11 +29,86 @@ struct BashSession {
     term: Term<Replies>,
     parser: ansi::Processor,
     replies: Replies,
+    locale: &'static str,
+    last_input: Vec<u8>,
+    last_reply: Option<String>,
+    output_tail: VecDeque<u8>,
 }
 
 impl BashSession {
     fn send(&mut self, bytes: &[u8]) {
+        self.last_input = bytes.to_vec();
         write_pty(&mut self.pty, bytes);
+    }
+
+    fn edit(&mut self, key: EditKey, count: usize) {
+        let (virtual_key, character, modifiers, legacy) = match key {
+            EditKey::Backspace => (0x08, 0x08, 0, 0x7f),
+            EditKey::Home => (0x41, 0x01, 0x08, 0x01), // Ctrl+A
+            EditKey::End => (0x45, 0x05, 0x08, 0x05),  // Ctrl+E
+            EditKey::KillLine => (0x55, 0x15, 0x08, 0x15), // Ctrl+U
+            EditKey::Redraw => (0x4c, 0x0c, 0x08, 0x0c), // Ctrl+L
+        };
+        if self.term.mode().contains(TermMode::WIN32_INPUT_MODE) {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                MAPVK_VK_TO_VSC, MapVirtualKeyW,
+            };
+
+            // Match the product's negotiated special-key path, including key-up.
+            // The GPUI and runtime encoders obtain the scan code from Windows.
+            // Keep repeated presses in one write to retain burst coverage.
+            let scan_code = unsafe { MapVirtualKeyW(virtual_key, MAPVK_VK_TO_VSC) };
+            let press = format!(
+                "\x1b[{virtual_key};{scan_code};{character};1;{modifiers};1_\x1b[{virtual_key};{scan_code};{character};0;{modifiers};1_"
+            );
+            self.send(press.repeat(count).as_bytes());
+        } else {
+            self.send(&vec![legacy; count]);
+        }
+    }
+
+    fn receive(&mut self, bytes: &[u8]) {
+        self.output_tail.extend(bytes);
+        while self.output_tail.len() > 1024 {
+            self.output_tail.pop_front();
+        }
+        self.parser.advance(&mut self.term, bytes);
+        for reply in self.replies.0.lock().unwrap().drain(..) {
+            self.last_reply = Some(reply.clone());
+            write_pty(&mut self.pty, reply.as_bytes());
+        }
+    }
+
+    fn diagnostic_snapshot(&self) -> String {
+        format!(
+            "cursor {:?}, rows {:?} / {:?}; last input {:?}, last reply {:?}, output tail {:?}",
+            self.term.grid().cursor.point,
+            row(&self.term, 0),
+            row(&self.term, 1),
+            String::from_utf8_lossy(&self.last_input),
+            self.last_reply,
+            String::from_utf8_lossy(&self.output_tail.iter().copied().collect::<Vec<_>>()),
+        )
+    }
+
+    fn redraw_after_failure(&mut self) -> std::io::Result<()> {
+        self.output_tail.clear();
+        self.last_reply = None;
+        // A single redraw distinguishes stale display from retained Readline
+        // input without deleting any more characters or retrying the assertion.
+        self.edit(EditKey::Redraw, 1);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut buffer = [0; 8192];
+        while Instant::now() < deadline {
+            match self.pty.reader().read(&mut buffer) {
+                Ok(count) if count > 0 => self.receive(&buffer[..count]),
+                Ok(_) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
+                Err(error) => return Err(error),
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
     }
 
     fn wait_for(&mut self, label: &str, expected: impl Fn(&Term<Replies>) -> bool) {
@@ -42,10 +117,7 @@ impl BashSession {
         loop {
             match self.pty.reader().read(&mut buffer) {
                 Ok(count) if count > 0 => {
-                    self.parser.advance(&mut self.term, &buffer[..count]);
-                    for reply in self.replies.0.lock().unwrap().drain(..) {
-                        write_pty(&mut self.pty, reply.as_bytes());
-                    }
+                    self.receive(&buffer[..count]);
                     if expected(&self.term) {
                         return;
                     }
@@ -54,16 +126,38 @@ impl BashSession {
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
                 Err(error) => panic!("{label}: PTY read failed: {error}"),
             }
-            assert!(
-                Instant::now() < deadline,
-                "{label}: cursor {:?}, rows {:?} / {:?}",
-                self.term.grid().cursor.point,
-                row(&self.term, 0),
-                row(&self.term, 1)
-            );
+            let before_deadline = Instant::now() < deadline;
+            if !before_deadline {
+                let original = self.diagnostic_snapshot();
+                // Even a diagnostic I/O failure must retain the original
+                // assertion and its screen/input/output evidence.
+                let redraw = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.redraw_after_failure()
+                }));
+                let redraw_result = match redraw {
+                    Ok(Ok(())) => "captured for 2 seconds".to_owned(),
+                    Ok(Err(error)) => format!("PTY read failed: {error}"),
+                    Err(_) => "diagnostic panicked".to_owned(),
+                };
+                assert!(
+                    before_deadline,
+                    "{} / {label}: original failure: {original}; Ctrl-L redraw ({redraw_result}): {}",
+                    self.locale,
+                    self.diagnostic_snapshot(),
+                );
+            }
             thread::sleep(Duration::from_millis(5));
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum EditKey {
+    Backspace,
+    Home,
+    End,
+    KillLine,
+    Redraw,
 }
 
 fn write_pty(pty: &mut tty::Pty, mut bytes: &[u8]) {
@@ -139,6 +233,10 @@ fn git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales() {
                 term: Term::new(config, &TermSize::new(40, 24), replies.clone()),
                 parser: ansi::Processor::new(),
                 replies,
+                locale,
+                last_input: Vec::new(),
+                last_reply: None,
+                output_tail: VecDeque::new(),
             };
             session.wait_for(locale, |term| blank_input(term, mark));
             session.send(b"relay/package.json");
@@ -146,28 +244,41 @@ fn git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales() {
                 row(term, 0).trim_end() == format!("{mark} relay/package.json")
                     && term.grid().cursor.point.column == Column(20)
             });
-            session.send(&[127; 18]);
+            session.edit(EditKey::Backspace, 18);
             session.wait_for("short backspace", |term| blank_input(term, mark));
 
             let long = b"relay/package.jsonrelay/package.jsonrelay/package.jsonrelay/package.json";
-            for erase in [vec![127; long.len()], vec![21]] {
+            let text = std::str::from_utf8(long).unwrap();
+            let content_matches = |term: &Term<Replies>| {
+                row(term, 0) == format!("{mark} {}", &text[..38])
+                    && row(term, 1).trim_end() == &text[38..]
+            };
+            for (erase_name, erase, count) in
+                [("backspace", EditKey::Backspace, long.len()), ("Ctrl-U", EditKey::KillLine, 1)]
+            {
                 session.send(long);
-                session.wait_for("wrapped input", |term| {
-                    term.grid().cursor.point.line == Line(1)
+                // 光标位置可能先于一次重绘的全部字符到达；等文本也完整后再发送下一项编辑。
+                session.wait_for(&format!("{erase_name}: wrapped input"), |term| {
+                    content_matches(term)
+                        && term.grid().cursor.point.line == Line(1)
                         && term.grid().cursor.point.column == Column(34)
                 });
-                session.send(&[1]);
-                session.wait_for("wrapped Home", |term| {
-                    term.grid().cursor.point.line == Line(0)
+                session.edit(EditKey::Home, 1);
+                session.wait_for(&format!("{erase_name}: wrapped Home"), |term| {
+                    content_matches(term)
+                        && term.grid().cursor.point.line == Line(0)
                         && term.grid().cursor.point.column == Column(2)
                 });
-                session.send(&[5]);
-                session.wait_for("wrapped End", |term| {
-                    term.grid().cursor.point.line == Line(1)
+                session.edit(EditKey::End, 1);
+                session.wait_for(&format!("{erase_name}: wrapped End"), |term| {
+                    content_matches(term)
+                        && term.grid().cursor.point.line == Line(1)
                         && term.grid().cursor.point.column == Column(34)
                 });
-                session.send(&erase);
-                session.wait_for("erase wrapped input", |term| blank_input(term, mark));
+                session.edit(erase, count);
+                session.wait_for(&format!("{erase_name}: erase wrapped input"), |term| {
+                    blank_input(term, mark)
+                });
             }
             // No probe command or user history is executed; dropping owns this PTY.
             session.send(b"exit\r");

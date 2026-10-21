@@ -310,7 +310,8 @@ SSH Pane 返回 `remote_exec_unsupported`。stdout/stderr 始终并行排水，�
 误列为 Agent。Agent 对象包含规范化 `kind`、显示名、hook 上报的可选 `session_id`，以及
 `state_source`：
 
-- `hook`：CLI hook 的生命周期边沿，是最高置信度事实。
+- `osc7501`：GPUI 产品优先读取程序通过 OSC 7501 显式上报的有效状态；`app` 只能识别客户端种类，不能生成会话 ID。Pane/传输故障仍优先显示。
+- `hook`：没有有效 OSC 7501 状态时采用 CLI hook 的生命周期边沿；会话身份、回答和权限请求仍由 hook 管理。
 - `screen`：声明式屏幕规则补偿漏失 hook；`state_rule` 给出命中的规则 id。
 - `process`：只确认进程身份，不能把它提升成“已完成”或“需要批准”的强结论。
 

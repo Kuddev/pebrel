@@ -263,7 +263,8 @@ mod tests {
         assert_eq!(matching_sections("透度", zh).first(), Some(&1));
         assert!(matching_sections("no such setting", en).is_empty());
         assert_eq!(matching_sections("", en), visible_nav_sections().collect::<Vec<_>>());
-        assert!(!matching_sections("AI", en).contains(&3));
+        assert!(matching_sections("AI", en).contains(&3));
+        assert_eq!(matching_sections("API Providers", en), vec![3]);
     }
 
     #[test]
