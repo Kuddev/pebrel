@@ -33,6 +33,7 @@ mod input;
 mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
+mod program_status;
 mod prompt;
 pub mod reading;
 mod redraw_anchor;
@@ -232,6 +233,7 @@ pub struct Term<T> {
 
     /// Shell markers and bounded reading share the grid lifecycle.
     reading: reading::ReadingState,
+    program_statuses: crate::program_status::Records,
 
     /// One-shot suppression of the next primary-DA answer: the side-loaded
     /// ConPTY host's bring-up DA1 query was already answered by the response
@@ -398,6 +400,7 @@ impl<T> Term<T> {
             inactive_keyboard_mode_stack: Default::default(),
             keyboard_mode_stack: Default::default(),
             reading: Default::default(),
+            program_statuses: Default::default(),
             active_charset: Default::default(),
             vi_mode_cursor: Default::default(),
             cursor_style: Default::default(),
@@ -960,14 +963,6 @@ impl<T> Term<T> {
         // Clear grid.
         self.grid.reset_region(..);
         self.mark_fully_damaged();
-    }
-
-    #[inline]
-    pub fn exit(&mut self)
-    where
-        T: EventListener,
-    {
-        self.event_proxy.send_event(Event::Exit);
     }
 
     /// Toggle the vi mode.
@@ -1886,6 +1881,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Reset all important fields in the term struct.
     #[inline]
     fn reset_state(&mut self) {
+        self.reset_program_status();
         self.reset_input_cluster();
         self.cancel_redraw_anchor();
         if self.mode.contains(TermMode::ALT_SCREEN) {
