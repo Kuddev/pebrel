@@ -46,7 +46,6 @@ impl SettingsPane {
         let muted = theme.muted_foreground;
         let ink = theme.foreground;
         let link = theme.primary;
-        let hover = theme.list_hover;
         let base_px = self.font_size_px(cx);
 
         let back = h_flex()
@@ -59,7 +58,7 @@ impl SettingsPane {
             .rounded_md()
             .cursor_pointer()
             .text_color(muted)
-            .hover(move |row| row.bg(hover).text_color(ink))
+            .hover(move |row| row.text_color(ink))
             .on_click(cx.listener(|this, _, _, cx| this.close_sponsor_page(cx)))
             .child(Icon::new(IconName::ArrowLeft).small())
             .child(language.pick("返回", "Back"));

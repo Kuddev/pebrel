@@ -237,6 +237,7 @@ pub enum RuntimeTaskState {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAgentStateSource {
     Hook,
+    Osc7501,
     Screen,
     Process,
 }

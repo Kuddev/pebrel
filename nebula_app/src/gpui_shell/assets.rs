@@ -48,18 +48,44 @@ const NEBULA_ICONS: &[(&str, &[u8])] = icons![
     "vcs-changes",
     "vcs-history",
     "vcs-conflict",
+    "brain",
+    "waypoints",
+    "wallet",
+    "credit-card",
+    "clock",
+    "download",
+];
+
+macro_rules! compressed_icons {
+    ($($name:literal),* $(,)?) => {
+        &[$((concat!("icons/nebula-", $name, ".svg"),
+            include_bytes!(concat!("../../assets/icons/nebula-", $name, ".svgz")).as_slice(),
+        )),*]
+    };
+}
+const COMPRESSED_ICONS: &[(&str, &[u8])] = compressed_icons![
     "agent-cursor",
     "agent-copilot",
     "agent-openai",
     "agent-opencode",
     "agent-pi",
     "agent-grok",
+    "provider-gemini",
+    "provider-anthropic",
+    "provider-ollama",
+    "provider-openrouter",
+    "provider-qwen",
+    "provider-deepseek",
+    "provider-zhipu",
+    "provider-doubao",
+    "provider-xiaomimimo",
+    "provider-azure",
 ];
 
 const AGENT_ICONS: &[(&str, &[u8])] = &[
-    ("icons/agent-claude.svg", include_bytes!("../../../extra/logo/ai_claude.svg")),
-    ("icons/agent-kimi.svg", include_bytes!("../../../extra/logo/ai_kimi.svg")),
-    ("icons/agent-omp.svg", include_bytes!("../../../extra/logo/ai_omp.svg")),
+    ("icons/agent-claude.svg", include_bytes!("../../../extra/logo/ai_claude.svgz")),
+    ("icons/agent-kimi.svg", include_bytes!("../../../extra/logo/ai_kimi.svgz")),
+    ("icons/agent-omp.svg", include_bytes!("../../../extra/logo/ai_omp.svgz")),
 ];
 
 /// 先查本仓库，未命中再交给组件库。
@@ -67,10 +93,17 @@ pub struct NebulaAssets;
 
 impl AssetSource for NebulaAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some((_, bytes)) =
-            NEBULA_ICONS.iter().chain(AGENT_ICONS).find(|(name, _)| *name == path)
+        if let Some((_, bytes)) = NEBULA_ICONS
+            .iter()
+            .chain(AGENT_ICONS)
+            .chain(COMPRESSED_ICONS)
+            .find(|(name, _)| *name == path)
         {
-            return Ok(Some(Cow::Borrowed(bytes)));
+            return if bytes.starts_with(&[0x1f, 0x8b]) {
+                Ok(Some(Cow::Owned(resvg::usvg::decompress_svgz(bytes)?)))
+            } else {
+                Ok(Some(Cow::Borrowed(bytes)))
+            };
         }
         gpui_component_assets::Assets.load(path)
     }
@@ -81,6 +114,7 @@ impl AssetSource for NebulaAssets {
             NEBULA_ICONS
                 .iter()
                 .chain(AGENT_ICONS)
+                .chain(COMPRESSED_ICONS)
                 .filter(|(name, _)| name.starts_with(path))
                 .map(|(name, _)| SharedString::from(*name)),
         );
