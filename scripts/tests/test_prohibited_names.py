@@ -305,7 +305,7 @@ class ProhibitedNamesTests(unittest.TestCase):
     def test_range_uses_merge_base_and_keeps_added_then_deleted_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
-            run_git(repository, "init", "-q")
+            run_git(repository, "init", "-q", "-b", "fixture-base")
             run_git(repository, "config", "user.name", "CI test")
             run_git(repository, "config", "user.email", "ci@example.invalid")
             (repository / "README.md").write_text("Historical Ghostty attribution\n", encoding="utf-8")
@@ -366,7 +366,7 @@ class ProhibitedNamesTests(unittest.TestCase):
     def test_range_scans_merge_resolution_without_replaying_second_parent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
-            run_git(repository, "init", "-q")
+            run_git(repository, "init", "-q", "-b", "fixture-base")
             run_git(repository, "config", "user.name", "CI test")
             run_git(repository, "config", "user.email", "ci@example.invalid")
             (repository / "shared.md").write_text("base\n", encoding="utf-8")
