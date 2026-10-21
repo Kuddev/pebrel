@@ -53,3 +53,6 @@ windows-sys = { version = "0.59.0", features = [
 
 [dev-dependencies]
 serde_json = "1.0.0"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.59.0", features = ["Win32_UI_Input_KeyboardAndMouse"] }

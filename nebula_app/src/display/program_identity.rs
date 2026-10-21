@@ -30,7 +30,38 @@ impl AiLogo {
         Self::Kimi,
     ];
 
-    /// One source catalog for both shells. Official color assets are embedded unchanged.
+    /// 每种标志只嵌入一个无损压缩的矢量源，两个壳按当前 DPI 共用它。
+    pub(crate) fn svg(self) -> &'static [u8] {
+        match self {
+            Self::Claude => include_bytes!("../../../extra/logo/ai_claude.svgz"),
+            Self::OpenAi => include_bytes!("../../assets/icons/nebula-agent-openai.svgz"),
+            Self::OpenCode => include_bytes!("../../assets/icons/nebula-agent-opencode.svgz"),
+            Self::Pi => include_bytes!("../../assets/icons/nebula-agent-pi.svgz"),
+            Self::Grok => include_bytes!("../../assets/icons/nebula-agent-grok.svgz"),
+            Self::Antigravity => include_bytes!("../../../extra/logo/ai_antigravity.svgz"),
+            Self::Trae => include_bytes!("../../../extra/logo/ai_trae.svgz"),
+            Self::OhMyPi => include_bytes!("../../../extra/logo/ai_omp.svgz"),
+            Self::CodeBuddy => include_bytes!("../../../extra/logo/ai_codebuddy.svgz"),
+            Self::Kimi => include_bytes!("../../../extra/logo/ai_kimi.svgz"),
+        }
+    }
+
+    pub(crate) fn render(self, ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let size = size.clamp(1, 512);
+        let source_ink = if matches!(self, Self::OpenCode) { [255; 3] } else { ink };
+        let mut pixels = rasterize_svg(self.svg(), source_ink, size * 4)?;
+        self.tint_pixels(&mut pixels, ink);
+        Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
+    }
+
+    pub(crate) fn render_brand(svg: &[u8], ink: [u8; 3], size: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let size = size.clamp(1, 512);
+        let pixels = rasterize_svg(svg, ink, size * 4)?;
+        Some(prepare_ai_logo_texture(&pixels, size * 4, size * 4, size))
+    }
+
+    /// 历史原图只留在测试中核对来源，产品不再嵌入 PNG。
+    #[cfg(test)]
     pub(crate) fn png(self, light_ink: bool) -> &'static [u8] {
         match self {
             Self::Claude => include_bytes!("../../../extra/logo/ai_claude.png"),
@@ -66,7 +97,10 @@ impl AiLogo {
 
     /// Reuse a prepared texture only when neither its source nor tint depends on theme.
     pub(crate) fn shares_theme_texture(self) -> bool {
-        self.tint_preserves_luma().is_none() && std::ptr::eq(self.png(false), self.png(true))
+        matches!(
+            self,
+            Self::Claude | Self::Antigravity | Self::Trae | Self::OhMyPi | Self::CodeBuddy
+        )
     }
 
     pub(crate) fn tint_pixels(self, pixels: &mut [u8], ink: [u8; 3]) {
@@ -78,6 +112,34 @@ impl AiLogo {
             }
         }
     }
+}
+
+/// 保留 SVG 的原色，currentColor 则由使用位置的主题文字色提供。
+fn rasterize_svg(svg: &[u8], ink: [u8; 3], size: u32) -> Option<Vec<u8>> {
+    let options = resvg::usvg::Options {
+        default_size: resvg::usvg::Size::from_wh(24.0, 24.0)?,
+        style_sheet: Some(format!("svg {{ color: rgb({}, {}, {}); }}", ink[0], ink[1], ink[2])),
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(svg, &options).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)?;
+    let scale = size as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let mut pixels = pixmap.data().to_vec();
+    // tiny-skia 使用预乘 alpha，纹理接口要求 straight RGBA。
+    for pixel in pixels.chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    Some(pixels)
 }
 
 pub(crate) fn prepare_ai_logo_texture(
@@ -186,6 +248,28 @@ pub(crate) fn program_icon(program: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compressed_vectors_render_at_physical_sizes_on_both_themes() {
+        for logo in AiLogo::ALL {
+            let svg = resvg::usvg::decompress_svgz(logo.svg()).unwrap();
+            assert!(std::str::from_utf8(&svg).unwrap().contains("<svg"));
+            for ink in [[236, 239, 245], [35, 40, 50]] {
+                for size in [16, 18, 24, 27, 36, 48] {
+                    let (pixels, width, height) = logo.render(ink, size).unwrap();
+                    assert_eq!(
+                        (width, height, pixels.len()),
+                        (size, size, (size * size * 4) as usize)
+                    );
+                    assert!(pixels.chunks_exact(4).any(|p| p[3] > 128), "{logo:?} {size}");
+                    assert!(
+                        pixels.chunks_exact(4).any(|p| p[3] > 0 && p[3] < 255),
+                        "{logo:?} {size}"
+                    );
+                }
+            }
+        }
+    }
 
     fn decode_png(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
         let image = image::load_from_memory(bytes).unwrap().into_rgba8();
