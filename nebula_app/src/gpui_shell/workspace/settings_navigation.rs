@@ -45,6 +45,18 @@ impl NebulaWorkspace {
             SettingsPaneEvent::LaunchSsh(host) => {
                 self.add_ssh_terminal(host.clone(), window, cx);
             },
+            SettingsPaneEvent::InstallAgent(agent) => {
+                if let Some((launch, command)) = crate::ai_providers::install::launch(*agent) {
+                    // 显式本机 shell，绝不沿用焦点 pane 的 SSH/WSL 身份执行安装。
+                    self.add_terminal_with(
+                        launch,
+                        crate::platform::dirs::home_dir(),
+                        Some(command),
+                        window,
+                        cx,
+                    );
+                }
+            },
         }
     }
 
@@ -78,6 +90,7 @@ impl NebulaWorkspace {
         }
 
         if let Some((view, _)) = self.settings_surface.as_ref() {
+            view.update(cx, |view, cx| view.refresh_provider_installations(cx));
             let focus = view.read(cx).focus_handle(cx);
             window.defer(cx, move |window, cx| window.focus(&focus, cx));
         }
