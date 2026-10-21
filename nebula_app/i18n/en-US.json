@@ -920,6 +920,8 @@
     "writing": "Writing file…"
   },
   "theme_editor": {
+    "edit_title": "Edit theme",
+    "edit_hint": "Saving updates this saved theme. Apply to use the changes in your terminal.",
     "title": "Customize theme",
     "description": "Adjust colors and typography; preview the result on the right.",
     "template": "Template",
@@ -997,6 +999,11 @@
     "window_blur": "Window blur / material"
   },
   "theme_picker": {
+    "delete_title": "Delete theme?",
+    "delete_body": "Delete “{name}”? This cannot be undone. If this theme is in use, Pebrel will switch to the default theme.",
+    "delete_error": "Could not delete the theme: {error}",
+    "delete_partial_error": "Switched to the default theme, but could not delete the theme: {error}",
+    "deleting": "Deleting…",
     "title": "Choose a theme",
     "all": "All",
     "light": "Light",
