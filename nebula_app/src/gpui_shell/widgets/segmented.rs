@@ -290,16 +290,28 @@ mod tests {
         );
         assert!(middle.size.width > first.size.width && middle.size.width < second.size.width);
 
-        window.update(|_, cx| {
+        // 在同一次更新中采样、反向并读取首帧，避免调度器在多个 update 之间
+        // 绘制额外动画帧，使连续性断言拿新位置与过期快照比较。
+        let (before_reverse, reversed) = window.update(|window, cx| {
+            let before_reverse =
+                window.debug_bounds_for_selector("natural-segments-indicator").unwrap();
             host.update(cx, |this, cx| {
                 this.selected = 0;
                 cx.notify();
-            })
+            });
+            window.refresh();
+            draw(window, cx);
+            let reversed = window.debug_bounds_for_selector("natural-segments-indicator").unwrap();
+            (before_reverse, reversed)
         });
-        window.update(draw);
-        let reversed = window.debug_bounds("natural-segments-indicator").unwrap();
-        assert!((f32::from(reversed.left() - middle.left())).abs() < 0.1);
-        assert!((f32::from(reversed.size.width - middle.size.width)).abs() < 0.1);
+        assert!(
+            (f32::from(reversed.left() - before_reverse.left())).abs() < 0.1,
+            "before_reverse={before_reverse:?}, reversed={reversed:?}"
+        );
+        assert!(
+            (f32::from(reversed.size.width - before_reverse.size.width)).abs() < 0.1,
+            "before_reverse={before_reverse:?}, reversed={reversed:?}"
+        );
         std::thread::sleep(Duration::from_millis(400));
         window.update(draw);
         assert_eq!(window.debug_bounds("natural-segments-indicator").unwrap(), first);

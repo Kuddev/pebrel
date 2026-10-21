@@ -10,9 +10,11 @@ const BUDGET: Duration = Duration::from_secs(6);
 const PYTHON: &str = "python3 -";
 
 pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<String> {
-    if nebula_settings::RawSettings::load().bool_on("ai_hooks") == Some(false) {
-        return None;
-    }
+    let action = if nebula_settings::RawSettings::load().bool_on("ai_hooks") == Some(false) {
+        Action::Terminal
+    } else {
+        Action::Automatic
+    };
     let result = tokio::time::timeout(BUDGET, async {
         let channel = session.channel_open_session().await?;
         let raw = exec::capture(
@@ -24,7 +26,7 @@ pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<Stri
         )
         .await?;
         let snapshot: Snapshot = serde_json::from_value(remote::response(&raw)?)?;
-        let Some(files) = snapshot.plan(Action::Automatic)? else { return Ok(None) };
+        let Some(files) = snapshot.plan(action)? else { return Ok(None) };
         if !files.is_empty() {
             let channel = session.channel_open_session().await?;
             let raw = exec::capture(
@@ -37,7 +39,9 @@ pub(super) async fn prepare(session: &SharedSession, token: &str) -> Option<Stri
             .await?;
             applied(&raw)?;
         }
-        Ok::<_, SessionError>(Some(snapshot.bootstrap(token)?))
+        let bootstrap = snapshot.bootstrap(token)?;
+        let powerline = if nebula_settings::RuntimeSettings::load().powerline { 1 } else { 0 };
+        Ok::<_, SessionError>(Some(format!("PEBREL_REMOTE_POWERLINE={powerline} {bootstrap}")))
     })
     .await;
     match result {
