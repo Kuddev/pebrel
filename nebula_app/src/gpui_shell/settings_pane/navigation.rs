@@ -41,8 +41,7 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 12] = [
     "mobile phone android ios remote pairing qr lan relay 手机 远程 配对 二维码 局域网 中转 网卡 只看 手机通知",
 ];
 
-// 暂时隐藏供应商入口，保留路由编号，避免其他设置入口发生偏移。
-pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
+pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[];
 
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
 /// 下标，不复制设置状态或路由。
