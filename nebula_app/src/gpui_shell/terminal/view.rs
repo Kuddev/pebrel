@@ -503,6 +503,7 @@ impl TerminalView {
     const RESIZE_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
     /// 与 legacy `config::cursor::Cursor::default().blink_interval` 保持一致。
     const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
+    const CONTENT_PADDING_TOP: f32 = 4.0;
 
     /// 首帧前的当前单元格度量（与 element prepaint 同一公式：shape "M" 的
     /// advance / ascent / descent + 配置 offset）。让 spawn 网格与首帧布局一致，避免启动
@@ -1460,10 +1461,10 @@ impl Render for TerminalView {
             // 不画自己的背景：卡容器统一负责"卡底色（带窗口透明度）→
             // 壁纸"两层，这里再铺一层不透明 bg 会把它们全部盖死。圆角也
             // 只属于整个终端卡外壳；分屏 pane 自己带圆角会露出四个独立卡片。
-            // 卡内呼吸边距，对齐旧壳网格 reserve 的换算值：上下 8（chrome
-            // 64/底 16 各减 8px 卡缝），左右 12（CONTENT_PAD_X 20 − 卡缝 8）。
+            // 卡内边距：顶部 4px 收紧 chrome 下方留白，底部 8px，左右 12px。
             // 网格因此不贴圆角；padding 区点击由 grid_point 的钳制兜底。
-            .py(px(8.0))
+            .pt(px(Self::CONTENT_PADDING_TOP))
+            .pb(px(8.0))
             .px(px(12.0))
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_terminal_tab))

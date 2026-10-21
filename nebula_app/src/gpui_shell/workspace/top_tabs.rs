@@ -3,14 +3,19 @@
 //! 这里只负责同一组 workspace tab 的第二种呈现；激活、关闭、重命名、排序
 //! 与 dock 都调用 `NebulaWorkspace` 既有动作，不维护平行状态。
 
+mod label;
+pub(super) mod layout;
+mod style;
+
+use layout::{MAX_WIDTH as TOP_TAB_MAX_W, MIN_WIDTH as TOP_TAB_MIN_W, TabStripLayout};
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, App, ClickEvent, Context, FontWeight, InteractiveElement as _,
     IntoElement as _, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, ParentElement as _,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
-    Window, div, ease_out_quint, img, px,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, div,
+    ease_out_quint, img, px,
 };
 use gpui_component::menu::PopupMenuItem;
 
@@ -26,37 +31,12 @@ use super::{
 
 /// 与顶部模式正文卡片的 `px_2` 左边距同源，让首个 tab 和终端左缘对齐。
 pub(super) const TOP_TAB_LEFT_INSET: f32 = 8.0;
-/// 单个 tab 的最小宽。WT 的 TabView 同一条取舍：标签**不压到读不出来**，
-/// 宁可溢出让用户翻页。120 曾经是下限，但分屏 tab 的行首 2×2 图标 + 尾部
-/// 数量胶囊各要 20 多像素，120 里标题只剩两三个字符（实测挤成 `te`）。
-/// 翻页按钮到位之后，早一点溢出比早一点读不出来划算。
-const TOP_TAB_MIN_W: f32 = 160.0;
-const TOP_TAB_MAX_W: f32 = 220.0;
-const TOP_TAB_GAP: f32 = 4.0;
 const TOP_TAB_STATUS_W: f32 = 28.0;
 /// 标题栏中不属于 tab 视口的固定预算：左内边距、五枚 32px 操作按钮、
 /// 三枚 34px 窗口按钮，以及至少 72px 的可拖拽空白。
 const TOP_TAB_RESERVED_W: f32 = TOP_TAB_LEFT_INSET + 32.0 * 5.0 + 34.0 * 3.0 + 72.0;
-/// 溢出翻页按钮（WT 的 TabView 在 tab 溢出时于两端给 `‹ ›`）单枚占的宽。
-const TOP_TAB_NUDGE_W: f32 = 22.0;
 /// 拖拽越界自动滚的触发带宽：指针进到视口左/右这么近就开始滚。
 const TOP_TAB_EDGE_BAND: f32 = 24.0;
-
-fn tab_width(viewport_w: f32, count: usize) -> f32 {
-    if count == 0 || viewport_w <= 1.0 {
-        return TOP_TAB_MAX_W;
-    }
-    (viewport_w / count as f32).clamp(TOP_TAB_MIN_W, TOP_TAB_MAX_W)
-}
-
-fn tab_strip_width(tab_w: f32, count: usize) -> f32 {
-    tab_w * count as f32 + TOP_TAB_GAP * count.saturating_sub(1) as f32
-}
-
-/// tab 条是否装不下。装不下才画翻页按钮，也才允许自动滚。
-fn strip_overflows(strip_w: f32, capacity_w: f32) -> bool {
-    strip_w > capacity_w + 0.5
-}
 
 /// GPUI 横向滚动偏移是 ≤ 0（内容向左移）。
 /// 可滚范围因此是 `[-(strip - viewport), 0]`。
@@ -130,10 +110,20 @@ impl NebulaWorkspace {
         let row_height = super::tab_scroll::tab_row_height(self.density);
         let language = crate::gpui_shell::config::ui_language(cx);
         let port_forward_button = self.render_port_forward_button(cx);
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
-        let active_fg = theme.sidebar_accent_foreground;
+        let tab_style = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .map(|s| s.tab_style)
+            .unwrap_or_default();
+        // Chrome's 12px flared feet need another 8px inside the visible body.
+        let tab_padding = if tab_style == nebula_settings::TabStyle::Chrome { 20.0 } else { 12.0 };
+        let active_fg = if tab_style == nebula_settings::TabStyle::Chrome {
+            theme.sidebar_accent_foreground
+        } else {
+            theme.foreground
+        };
         let hover_bg = theme.list_hover;
         let dark = theme.is_dark();
         let settings = cx.try_global::<crate::gpui_shell::config::Settings>();
@@ -149,26 +139,89 @@ impl NebulaWorkspace {
         let tab_capacity_w =
             (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W - port_forward_w)
                 .max(TOP_TAB_MIN_W);
-        let tab_w = tab_width(tab_capacity_w, self.top_tab_count());
-        let strip_w = tab_strip_width(tab_w, self.top_tab_count());
-        // 溢出时两端各让出一枚翻页按钮。这个反馈是单调的：`tab_w` 已被
-        // `TOP_TAB_MIN_W` 钳死，扣掉按钮宽只会让溢出更成立，不会在"画了按钮
-        // → 不溢出了 → 撤掉按钮"之间抖。
-        let overflow = strip_overflows(strip_w, tab_capacity_w);
-        let tab_viewport_w = if overflow {
-            (tab_capacity_w - TOP_TAB_NUDGE_W * 2.0).max(TOP_TAB_MIN_W)
-        } else {
-            strip_w.min(tab_capacity_w)
-        };
+        let presentations: Vec<_> =
+            (0..self.top_tab_count()).map(|ix| self.top_tab_presentation(ix, cx, dark)).collect();
+        let top_tab_count = presentations.len();
+        let status_widths: Vec<_> = presentations
+            .iter()
+            .map(|tab| {
+                Self::shell_status_width(
+                    window,
+                    tab.shell_tag.as_ref(),
+                    &metadata_family,
+                    label_px * 0.8,
+                    TOP_TAB_STATUS_W,
+                    TOP_TAB_MAX_W * 0.4,
+                )
+            })
+            .collect();
+        let text_widths: Vec<_> = presentations
+            .iter()
+            .map(|tab| {
+                layout::text_width(tab.title.clone(), chrome_family.clone(), label_px, window)
+            })
+            .collect();
+        let widths: Vec<_> = presentations
+            .iter()
+            .enumerate()
+            .map(|(ix, tab)| {
+                if tab.renaming.is_some() {
+                    return TOP_TAB_MAX_W;
+                }
+                let icon = if tab.is_settings
+                    || tab.logo_image.is_some()
+                    || tab.program_glyph.is_some()
+                    || tab.pane_count > 1
+                {
+                    TAB_LABEL_ICON_SIZE.max(TAB_LABEL_ICON_W) + 8.0
+                } else {
+                    0.0
+                };
+                let admin = if tab.local_administrator { TAB_LABEL_ICON_SIZE + 8.0 } else { 0.0 };
+                let badge = if tab.pane_count > 1 {
+                    pane_header::split_badge_slot_w(label_px) + 8.0
+                } else {
+                    0.0
+                };
+                text_widths[ix]
+                    + if tab_style == nebula_settings::TabStyle::Tag { 2.0 } else { 0.0 }
+                    + tab_padding * 2.0
+                    + icon
+                    + admin
+                    + badge
+                    + 8.0
+                    + status_widths[ix]
+            })
+            .collect();
+        let inset = crate::platform::window_chrome::layout(window)
+            .map_or(TOP_TAB_LEFT_INSET, |(_, inset)| inset);
+        let layout = self
+            .tab_drag
+            .as_ref()
+            .and_then(|drag| drag.horizontal.as_ref())
+            .filter(|(layout, _)| layout.tab_count() == top_tab_count)
+            .map(|(layout, _)| layout.clone())
+            .unwrap_or_else(|| {
+                TabStripLayout::new(
+                    widths.iter().copied(),
+                    tab_capacity_w,
+                    inset,
+                    layout::gap(tab_style),
+                )
+            });
+        let strip_w = layout.width;
+        let overflow = layout.overflow;
+        let tab_viewport_w = layout.viewport;
         let scroll_x = f32::from(self.top_tabs_scroll.offset().x);
-        let pitch = tab_w + TOP_TAB_GAP;
         let drag = self
             .tab_drag
             .as_ref()
             .filter(|drag| drag.active && drag.axis == TabDragAxis::Horizontal)
             .map(|drag| (drag.source, Self::drag_slot(drag, self.tabs.len()), drag.offset));
-        let items = (0..self.top_tab_count())
-            .map(|ix| {
+        let items = presentations.into_iter().enumerate()
+            .map(|(ix, presentation)| {
+                let tab_w = layout.tab_width(ix);
+                let drag_layout = layout.clone();
                 let settings_navigation = self.settings_tab_open && ix == self.tabs.len();
                 let active = if settings_navigation {
                     self.settings_open
@@ -188,18 +241,11 @@ impl NebulaWorkspace {
                     renaming,
                     pane_count,
                     local_administrator,
-                } = self.top_tab_presentation(ix, cx, dark);
+                } = presentation;
+                let tooltip = Some(tooltip.unwrap_or_else(|| title.clone()));
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
-                let status_color = if active { active_fg } else { muted };
-                let status_width = Self::shell_status_width(
-                    window,
-                    shell_tag.as_ref(),
-                    &metadata_family,
-                    label_px * 0.8,
-                    TOP_TAB_STATUS_W,
-                    tab_w * 0.4,
-                );
+                let status_width = status_widths[ix];
                 let resting_status: Option<gpui::AnyElement> = match activity {
                     SidebarActivity::Running => {
                         let (track, head) =
@@ -242,13 +288,8 @@ impl NebulaWorkspace {
                             .into_any_element(),
                     ),
                     SidebarActivity::Idle => shell_tag.map(|tag| {
-                        Self::shell_status_label(
-                            tag,
-                            metadata_family.clone(),
-                            label_px * 0.8,
-                            status_color,
-                        )
-                        .into_any_element()
+                        Self::shell_status_label(tag, metadata_family.clone(), label_px * 0.8, muted)
+                            .into_any_element()
                     }),
                 };
                 let strip = color.map(|color| gpui::Rgba {
@@ -260,10 +301,10 @@ impl NebulaWorkspace {
                 let (dragged, shift) = match drag {
                     Some((source, _, _)) if ix == source => (true, 0.0),
                     Some((source, target, _)) if source < target && ix > source && ix <= target => {
-                        (false, -pitch)
+                        (false, layout.shift(ix, source, target))
                     },
                     Some((source, target, _)) if source > target && ix >= target && ix < source => {
-                        (false, pitch)
+                        (false, layout.shift(ix, source, target))
                     },
                     _ => (false, 0.0),
                 };
@@ -283,22 +324,30 @@ impl NebulaWorkspace {
                     .overflow_hidden()
                     .items_center()
                     .gap_2()
-                    .px_2()
+                    .px(px(tab_padding))
                     .font_family(chrome_family.clone())
-                    // 顶部 tab 的底边直接接正文，只保留上侧圆角；四角全圆
-                    // 会把它重新画成悬浮在标题栏里的药丸。
-                    .rounded_tl(px(crate::display::UI_CORNER_RADIUS_LOGICAL))
-                    .rounded_tr(px(crate::display::UI_CORNER_RADIUS_LOGICAL))
+                    .map(|row| style::apply(row, tab_style, active, dragged, hover_group.clone(), cx))
                     .font_weight(FontWeight::NORMAL)
                     .cursor_pointer()
                     // TitleBar 的父层是 WindowControlArea::Drag；tab 必须自己
                     // 占住普通鼠标命中区，滚轮仍交给外层标签滚动容器。
                     .block_mouse_except_scroll()
-                    .when(active, |item| item.bg(active_bg).text_color(active_fg))
+                    .when(active, |item| item.text_color(active_fg))
                     .when(!active && !dragged, |item| {
-                        item.text_color(muted).hover(|style| style.bg(hover_bg))
+                        item.text_color(muted).when(tab_style != nebula_settings::TabStyle::Tag, |item| {
+                            item.hover(|style| style.bg(hover_bg))
+                        })
                     })
-                    .when(!active && dragged, |item| item.text_color(muted).bg(hover_bg))
+                    .when(!active && dragged, |item| {
+                        item.text_color(muted).when(tab_style != nebula_settings::TabStyle::Tag, |item| item.bg(hover_bg))
+                    })
+                    .on_mouse_move(cx.listener(|this, event, window, cx| {
+                        // Occluding tabs own hover; their ancestors may not receive this move.
+                        if this.tab_drag.is_some() {
+                            this.update_tab_drag(event, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.activate_top_tab(ix, window, cx);
@@ -317,7 +366,8 @@ impl NebulaWorkspace {
                                 press_x: f32::from(event.position.x),
                                 press_y: f32::from(event.position.y),
                                 axis: TabDragAxis::Horizontal,
-                                pitch,
+                                pitch: tab_w + drag_layout.gap,
+                                horizontal: Some((drag_layout.clone(), scroll_x)),
                                 offset: 0.0,
                                 active: false,
                                 dock: None,
@@ -443,15 +493,14 @@ impl NebulaWorkspace {
                                     .font_family(chrome_family.clone()),
                             )
                             .into_any_element(),
-                        None => div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(chrome_family.clone())
-                            .text_size(px(label_px))
-                            .font_weight(FontWeight::NORMAL)
-                            .child(title)
-                            .into_any_element(),
+                        None => label::render(
+                            ix,
+                            title,
+                            chrome_family.clone(),
+                            label_px,
+                            text_widths[ix],
+                            (widths[ix] - tab_w).max(0.0),
+                        ),
                     })
                     .when(pane_count > 1, |row| {
                         row.child(
@@ -473,9 +522,10 @@ impl NebulaWorkspace {
                     })
                     .child(
                         Self::tab_status_slot(status_width)
-                            .when_some(resting_status, |slot, status| {
+                            .when_some(resting_status.filter(|_| active), |slot, status| {
                                 slot.child(
                                     h_flex()
+                                        .debug_selector(move || format!("top-tab-resting-status-{ix}"))
                                         .absolute()
                                         .inset_0()
                                         .justify_end()
@@ -495,6 +545,7 @@ impl NebulaWorkspace {
                                     .when(tab_close_visible || settings_navigation, |slot| {
                                             slot.child(
                                                 Button::new(("top-close-tab", ix))
+                                                    .debug_selector(move || format!("top-close-tab-{ix}"))
                                                     .icon(IconName::Close)
                                                     .ghost()
                                                     .xsmall()
@@ -514,10 +565,11 @@ impl NebulaWorkspace {
                         })
                     });
 
-                if dragged {
+                let row = if dragged {
                     gpui::deferred(
                         row.left(px(drag.map(|(_, _, offset)| offset).unwrap_or(0.0))).shadow_md(),
                     )
+                    .with_priority(1)
                     .into_any_element()
                 } else if shift != 0.0 {
                     if tab_reveal == nebula_settings::TabRevealName::Instant {
@@ -533,6 +585,11 @@ impl NebulaWorkspace {
                     }
                 } else {
                     row.into_any_element()
+                };
+                if active && !dragged {
+                    gpui::deferred(row).into_any_element()
+                } else {
+                    row
                 }
             })
             .collect::<Vec<_>>();
@@ -551,11 +608,13 @@ impl NebulaWorkspace {
                     .flex_shrink(1.0)
                     .min_w_0()
                     .items_end()
+                    .when(tab_style == nebula_settings::TabStyle::Tag, |bar| bar.items_center())
                     // 溢出翻页：只在装不下时出现。滚轮已经能滚，但滚轮是个
                     // 看不见的入口——tab 一多，用户根本不知道右边还有东西。
                     .when(overflow, |bar| {
+                        let nudge_layout = layout.clone();
                         bar.child(
-                            div().h(px(row_height)).flex().items_center().child(
+                            div().w(px(layout::NUDGE_WIDTH)).h(px(row_height)).flex_shrink_0().flex().items_center().justify_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-prev")
                                         .icon(IconName::ChevronLeft)
@@ -564,13 +623,7 @@ impl NebulaWorkspace {
                                         .disabled(at_strip_start(scroll_x))
                                         .tooltip(language.text(Message::ChromeScrollTabsLeft))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.nudge_top_tabs(
-                                                -1.0,
-                                                pitch,
-                                                strip_w,
-                                                tab_viewport_w,
-                                                cx,
-                                            );
+                                            this.nudge_top_tabs(-1.0, &nudge_layout, cx);
                                         })),
                                 ),
                             ),
@@ -579,6 +632,7 @@ impl NebulaWorkspace {
                     .child(
                         div()
                             .id("top-tabs-viewport")
+                            .debug_selector(|| "top-tabs-viewport".to_owned())
                             .relative()
                             .w(px(tab_viewport_w))
                             .flex_shrink(1.0)
@@ -598,15 +652,16 @@ impl NebulaWorkspace {
                                     .id("top-tabs-scroll")
                                     .size_full()
                                     .items_center()
-                                    .gap(px(TOP_TAB_GAP))
+                                    .gap(px(layout.gap))
                                     .overflow_x_scroll()
                                     .track_scroll(&self.top_tabs_scroll)
                                     .children(items),
                             ),
                     )
                     .when(overflow, |bar| {
+                        let nudge_layout = layout.clone();
                         bar.child(
-                            div().h(px(row_height)).flex().items_center().child(
+                            div().w(px(layout::NUDGE_WIDTH)).h(px(row_height)).flex_shrink_0().flex().items_center().justify_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-next")
                                         .icon(IconName::ChevronRight)
@@ -615,13 +670,7 @@ impl NebulaWorkspace {
                                         .disabled(at_strip_end(scroll_x, strip_w, tab_viewport_w))
                                         .tooltip(language.text(Message::ChromeScrollTabsRight))
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.nudge_top_tabs(
-                                                1.0,
-                                                pitch,
-                                                strip_w,
-                                                tab_viewport_w,
-                                                cx,
-                                            );
+                                            this.nudge_top_tabs(1.0, &nudge_layout, cx);
                                         })),
                                 ),
                             ),
@@ -714,59 +763,38 @@ impl NebulaWorkspace {
             .into_any_element()
     }
 
-    /// 翻页按钮的落点：一次一个 tab 步距，钳在可滚范围内。
-    fn nudge_top_tabs(
-        &mut self,
-        dir: f32,
-        step: f32,
-        strip_w: f32,
-        viewport_w: f32,
-        cx: &mut Context<Self>,
-    ) {
+    fn nudge_top_tabs(&mut self, dir: f32, layout: &TabStripLayout, cx: &mut Context<Self>) {
         let mut offset = self.top_tabs_scroll.offset();
-        let next = nudge_offset(f32::from(offset.x), step, dir, strip_w, viewport_w);
-        if (next - f32::from(offset.x)).abs() < 0.5 {
-            return;
-        }
-        offset.x = px(next);
+        offset.x = px(layout.nudge(f32::from(offset.x), dir));
         self.top_tabs_scroll.set_offset(offset);
         cx.notify();
     }
 
-    /// 横向拖拽越界自动滚：指针进到视口左/右边缘 [`TOP_TAB_EDGE_BAND`] 内就
-    /// 按半个步距推一次。翻页按钮解决的是"看不见后面还有 tab"，这条解决的是
-    /// "拖着 tab 推不过滚动边界"——两者少一个，tab 一多都还是废的。
-    ///
-    /// 视口几何这里现算：`update_tab_drag` 拿不到 render 时的那份局部量，而
-    /// 两处的减法必须同源，否则边缘带会和真实视口错开。
+    /// Use the same frozen geometry as the drag gesture, including optional toolbar controls.
     pub(super) fn autoscroll_top_tabs_for_drag(
         &mut self,
         pointer_x: f32,
-        window: &Window,
+        _window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tabs_position != nebula_settings::TabsPositionName::Top {
+        let Some((layout, _)) = self.tab_drag.as_ref().and_then(|drag| drag.horizontal.as_ref())
+        else {
+            return;
+        };
+        if !layout.overflow {
             return;
         }
-        let capacity_w =
-            (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W).max(TOP_TAB_MIN_W);
-        let tab_w = tab_width(capacity_w, self.top_tab_count());
-        let strip_w = tab_strip_width(tab_w, self.top_tab_count());
-        if !strip_overflows(strip_w, capacity_w) {
-            return;
-        }
-        let viewport_w = (capacity_w - TOP_TAB_NUDGE_W * 2.0).max(TOP_TAB_MIN_W);
-        // 视口左缘 = 左内边距 + 左侧翻页按钮。
-        let left = TOP_TAB_LEFT_INSET + TOP_TAB_NUDGE_W;
-        let right = left + viewport_w;
-        let dir = if pointer_x <= left + TOP_TAB_EDGE_BAND {
+        let dir = if pointer_x <= layout.left + TOP_TAB_EDGE_BAND {
             -1.0
-        } else if pointer_x >= right - TOP_TAB_EDGE_BAND {
+        } else if pointer_x >= layout.left + layout.viewport - TOP_TAB_EDGE_BAND {
             1.0
         } else {
             return;
         };
-        self.nudge_top_tabs(dir, (tab_w + TOP_TAB_GAP) * 0.5, strip_w, viewport_w, cx);
+        let mut offset = self.top_tabs_scroll.offset();
+        offset.x = px(nudge_offset(f32::from(offset.x), 48.0, dir, layout.width, layout.viewport));
+        self.top_tabs_scroll.set_offset(offset);
+        cx.notify();
     }
 }
 
@@ -775,19 +803,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tab_width_fills_then_clamps_to_single_row_bounds() {
-        assert_eq!(tab_width(600.0, 3), 200.0);
-        assert_eq!(tab_width(1200.0, 3), TOP_TAB_MAX_W);
-        assert_eq!(tab_width(500.0, 10), TOP_TAB_MIN_W);
-        assert_eq!(tab_width(0.0, 3), TOP_TAB_MAX_W);
-        assert_eq!(tab_strip_width(200.0, 3), 608.0);
-    }
-
-    #[test]
     fn nudge_buttons_only_exist_once_the_strip_overflows() {
-        assert!(!strip_overflows(600.0, 800.0));
-        assert!(!strip_overflows(800.0, 800.0));
-        assert!(strip_overflows(801.0, 800.0));
+        assert!(!TabStripLayout::new([200.0; 3], 800.0, 0.0, layout::GAP).overflow);
+        assert!(!TabStripLayout::new([200.0; 3], 608.0, 0.0, layout::GAP).overflow);
+        assert!(TabStripLayout::new([200.0; 3], 607.0, 0.0, layout::GAP).overflow);
     }
 
     #[test]

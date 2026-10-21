@@ -29,12 +29,29 @@ pub(super) struct TabDrag {
     pub(super) press_y: f32,
     pub(super) axis: TabDragAxis,
     pub(super) pitch: f32,
+    pub(super) horizontal: Option<(super::top_tabs::layout::TabStripLayout, f32)>,
     pub(super) offset: f32,
     pub(super) active: bool,
     pub(super) dock: Option<DockTarget>,
 }
 
 impl NebulaWorkspace {
+    /// Tab creation/closing can race a pending pointer gesture or Runtime API request.
+    /// Discard a snapshot whose tab count no longer matches before rendering any rows.
+    pub(super) fn reconcile_tab_drag(&mut self, cx: &mut Context<'_, Self>) {
+        let invalid = self.tab_drag.as_ref().is_some_and(|drag| {
+            drag.source >= self.tabs.len()
+                || drag
+                    .horizontal
+                    .as_ref()
+                    .is_some_and(|(layout, _)| layout.tab_count() != self.top_tab_count())
+        });
+        if invalid {
+            let drag = self.tab_drag.take().expect("invalid gesture checked above");
+            windowing::clear_cross_window_drag_target(drag.cross_window_target, cx);
+        }
+    }
+
     /// 根节点只负责把移出 tab hitbox 的待命拖拽继续交给状态机。
     /// GPUI 的元素监听离开 hover 后不再派发 move，因此这里不能只挂在 tab 行。
     pub(super) fn continue_pending_tab_drag(
@@ -113,6 +130,9 @@ impl NebulaWorkspace {
 
     /// 源下标加单轴位移换算出的整槽数；越过半格即换位。
     pub(super) fn drag_slot(drag: &TabDrag, len: usize) -> usize {
+        if let Some((layout, _)) = &drag.horizontal {
+            return layout.drag_target(drag.source, drag.offset, len);
+        }
         let slots = (drag.offset / drag.pitch.max(1.0)).round() as isize;
         (drag.source as isize + slots).clamp(0, len.saturating_sub(1) as isize) as usize
     }
@@ -160,6 +180,7 @@ impl NebulaWorkspace {
     }
 
     fn update_tab_drag_position(&mut self, x: f32, y: f32, cx: &mut Context<Self>) {
+        self.reconcile_tab_drag(cx);
         let len = self.tabs.len();
         // dock 必须在可变借用 drag 前计算；只有两个 Terminal tab 之间允许。
         let source = self.tab_drag.as_ref().map(|drag| drag.source);
@@ -174,10 +195,21 @@ impl NebulaWorkspace {
         if drag.active {
             let delta = match drag.axis {
                 TabDragAxis::Vertical => dy,
-                TabDragAxis::Horizontal => dx,
+                TabDragAxis::Horizontal => {
+                    dx + drag.horizontal.as_ref().map_or(0.0, |(_, start)| {
+                        start - f32::from(self.top_tabs_scroll.offset().x)
+                    })
+                },
             };
-            let before = -(drag.source as f32) * drag.pitch;
-            let after = (len.saturating_sub(1) as f32 - drag.source as f32) * drag.pitch;
+            let (before, after) = drag.horizontal.as_ref().map_or_else(
+                || {
+                    (
+                        -(drag.source as f32) * drag.pitch,
+                        (len.saturating_sub(1) as f32 - drag.source as f32) * drag.pitch,
+                    )
+                },
+                |(layout, _)| layout.drag_limits(drag.source, len),
+            );
             drag.offset = delta.clamp(before, after.max(before));
             drag.dock = dock;
             cx.notify();

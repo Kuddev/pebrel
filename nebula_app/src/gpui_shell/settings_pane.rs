@@ -798,6 +798,7 @@ impl SettingsPane {
             "accept" => pick!(accept),
             "completion_style" => pick!(completion_style),
             "tabs_position" => pick!(tabs_position),
+            "tab_style" => pick!(tab_style),
             "tab_reveal" => pick!(tab_reveal),
             "density" => pick!(density),
             "new_tab_position" => pick!(new_tab_position),

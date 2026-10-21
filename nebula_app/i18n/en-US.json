@@ -160,6 +160,13 @@
       "refresh": "Refresh system environment for new terminals",
       "refresh_description": "Read current Windows environment settings when opening a terminal. Turn off to inherit the environment used to launch Pebrel, including temporary PATH entries. Open terminals are unchanged."
     },
+    "tabs": {
+      "title": "Top tab style",
+      "description": "Chrome, a thin top line, or outlined tags. Tab widths follow their titles; long names fade out at the end.",
+      "chrome": "Chrome",
+      "minimal": "Minimal",
+      "tag": "Tag"
+    },
     "cursor_motion": {
       "title": "Smooth cursor",
       "description": "Animate terminal cursor movement; large jumps remain instant.",

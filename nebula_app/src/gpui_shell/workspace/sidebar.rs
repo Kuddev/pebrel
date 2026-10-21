@@ -383,6 +383,7 @@ impl NebulaWorkspace {
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                         this.tab_drag = Some(TabDrag {
+                            horizontal: None,
                             source: ix,
                             cross_window: this.cross_window_drag_payload(ix, cx),
                             cross_window_target: None,

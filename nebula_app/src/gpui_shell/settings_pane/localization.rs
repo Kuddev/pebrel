@@ -72,6 +72,11 @@ pub(super) fn localized_select_labels(
             language.text(crate::i18n::Message::SettingsCursorMotionOff),
             language.text(crate::i18n::Message::SettingsCursorMotionSmooth),
         ],
+        "tab_style" => vec![
+            language.text(crate::i18n::Message::SettingsTabsChrome),
+            language.text(crate::i18n::Message::SettingsTabsMinimal),
+            language.text(crate::i18n::Message::SettingsTabsTag),
+        ],
         "tabs_position" => {
             vec![language.pick("左侧边栏", "Left sidebar"), language.pick("顶部", "Top")]
         },
