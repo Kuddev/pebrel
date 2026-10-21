@@ -45,6 +45,14 @@ file has already reached the target shape. Eleven oversized legacy files remain
 under [ratcheted budgets](project-constraints.md). Move their independent rules
 when working on the relevant capability; do not mix a whole-app rewrite into a fix.
 
+OSC 7501 program records belong to each `Term`, with bounded validation and
+prompt/process/reset lifetime shared by local PTYs and SSH. The GPUI product
+projects those records into existing status badges, progress and Runtime API
+states, before Hooks and screen/process inference. Pane/transport failure still
+takes precedence. Reports do not create Hook ownership, session ids or additional
+desktop notifications. See
+the [protocol boundary](../architecture/notes/nebula_terminal/program_status/2026-10-21-osc7501-record-lifecycle.md).
+
 ## Rust module names are not file locations
 
 `main.rs` selects `product_ui/mod.rs` as the `display` module when the legacy shell

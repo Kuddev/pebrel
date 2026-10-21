@@ -7,3 +7,4 @@
 - 不为 UI 需求在终端核心增加产品概念。确需新接口时，公开最小命令/结果并保持状态私有。
 - 重大协议、缓冲、线程、所有权或兼容性决策写入 `architecture/notes/nebula_terminal/<capability>/`；普通回归修复只需测试和变更说明。
 - 快照中的 DIM 与反色颜色归属见 [`render`](../architecture/notes/nebula_terminal/render/)；颜色保持未解析，前端统一处理调色板和 OSC 覆盖。
+- OSC 7501 记录、PTY 生命周期和 GPUI 投影的边界见 [`program_status`](../architecture/notes/nebula_terminal/program_status/)。

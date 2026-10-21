@@ -1,5 +1,5 @@
 //! Sniffer for OSC sequences the vte parser drops: OSC 7 / OSC 9;9 (working
-//! directory) and OSC 133;A (semantic prompt mark).
+//! directory), OSC 133 (shell markers), and OSC 7501 (program status).
 //!
 //! The vte parser Nebula uses (crates.io `vte` 0.15) does not decode OSC 7
 //! (`file://` URI), OSC 9;9 (working directory) or OSC 133 (semantic prompt zones) —
@@ -36,7 +36,7 @@ const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
 /// 远端 Hook JSON 使用 Base64 传输；上限阻止伪造 OSC 长时间占用内存。
 const MAX_HOOK_PAYLOAD: usize = 96 * 1024;
 
-/// An OSC event recognized by the sniffer.
+/// An OSC or lifecycle event recognized by the sniffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscEvent {
     /// OSC 7 / 9;9 — the shell reported its working directory (native path).
@@ -65,6 +65,11 @@ pub enum OscEvent {
     /// 把未知码当成非法而丢掉，等于让进度条卡在最后一个状态上
     /// 永远不消失。映射交给消费端。
     Progress { state: u8, value: Option<u8> },
+    /// OSC 7501 program status, fully validated before publication.
+    ProgramStatus(crate::program_status::Report),
+    /// RIS clears program records at its byte-stream position, even while VT
+    /// rendering is held in a synchronized-update buffer.
+    ProgramStatusReset,
     /// Nebula 远端 Hook 私有 OSC：随机通道令牌 + 原始 Hook 信封。
     RemoteHook { token: String, envelope: Vec<u8> },
     /// OSC 1337 `File=...inline=1:<base64>` — an inline image.
@@ -87,7 +92,7 @@ enum Phase {
     OscEsc,
 }
 
-/// Streaming OSC 7 / 9;9 / 133;A sniffer. Feed it every PTY byte; it returns
+/// Streaming sniffer for additional terminal controls. Feed it every PTY byte; it returns
 /// the recognized events, each tagged with the offset just past its
 /// terminator (the `parser.advance` split point).
 #[derive(Default)]
@@ -103,6 +108,11 @@ impl CwdSniffer {
     /// Feed a chunk of raw PTY output. Returns all complete events within the
     /// chunk in order, tagged with the byte offset just past each terminator.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<(usize, OscEvent)> {
+        // Plain output cannot start a report. Preserve partial escape/OSC state
+        // across chunks, but let the common ground-state scan use slice search.
+        if matches!(self.phase, Phase::Ground) && !bytes.contains(&0x1b) {
+            return Vec::new();
+        }
         let mut events = Vec::new();
         for (i, &b) in bytes.iter().enumerate() {
             match self.phase {
@@ -111,34 +121,43 @@ impl CwdSniffer {
                         self.phase = Phase::Esc;
                     }
                 },
-                Phase::Esc => match b {
-                    b']' => {
-                        self.phase = Phase::Osc;
-                        self.payload.clear();
-                        self.interested = true;
-                    },
-                    0x1b => {}, // another ESC: stay armed
-                    _ => self.phase = Phase::Ground,
-                },
+                Phase::Esc => self.step_escape(b, i, &mut events),
                 Phase::Osc => self.step_osc(b, i, &mut events),
                 Phase::OscEsc => {
                     if b == b'\\' {
                         // ST terminator (ESC \).
-                        if let Some(event) = self.parse() {
+                        if let Some(event) = self.parse(2) {
                             events.push((i + 1, event));
                         }
                         self.reset_to_ground();
                     } else {
-                        // The ESC belonged to the payload after all; keep it and
-                        // reprocess this byte in the normal OSC state.
-                        self.push(0x1b);
-                        self.phase = Phase::Osc;
-                        self.step_osc(b, i, &mut events);
+                        // ESC starts a new escape, not OSC payload. Retaining
+                        // it could publish an aborted report after a later RIS.
+                        self.reset_to_ground();
+                        self.step_escape(b, i, &mut events);
                     }
                 },
             }
         }
         events
+    }
+
+    fn step_escape(&mut self, b: u8, i: usize, events: &mut Vec<(usize, OscEvent)>) {
+        match b {
+            b']' => {
+                self.phase = Phase::Osc;
+                self.payload.clear();
+                self.interested = true;
+            },
+            b'c' => {
+                self.reset_to_ground();
+                events.push((i + 1, OscEvent::ProgramStatusReset));
+            },
+            // Executed/ignored controls and another ESC leave VTE in Escape.
+            // CAN/SUB are excluded: they cancel that escape as well.
+            0x00..=0x17 | 0x19 | 0x1b..=0x1f | 0x7f => self.phase = Phase::Esc,
+            _ => self.phase = Phase::Ground,
+        }
     }
 
     /// Handle one byte while inside an OSC payload. `i` is the byte's offset
@@ -147,11 +166,12 @@ impl CwdSniffer {
         match b {
             0x07 => {
                 // BEL terminator.
-                if let Some(event) = self.parse() {
+                if let Some(event) = self.parse(1) {
                     events.push((i + 1, event));
                 }
                 self.reset_to_ground();
             },
+            0x18 | 0x1a => self.reset_to_ground(), // CAN / SUB cancel the OSC.
             0x1b => self.phase = Phase::OscEsc,
             _ => self.push(b),
         }
@@ -189,7 +209,13 @@ impl CwdSniffer {
     }
 
     /// Parse a completed payload into an event.
-    fn parse(&self) -> Option<OscEvent> {
+    fn parse(&self, terminator_len: usize) -> Option<OscEvent> {
+        if let Some(body) = self.payload.strip_prefix(b"7501;") {
+            if !self.interested || self.payload.len() + 2 + terminator_len > 4096 {
+                return None;
+            }
+            return crate::program_status::parse(body).map(OscEvent::ProgramStatus);
+        }
         if let Some(rest) = self.payload.strip_prefix(b"7;") {
             return parse_osc7_uri(rest).map(OscEvent::Cwd);
         }
@@ -263,7 +289,7 @@ fn prefix_could_match(payload: &[u8]) -> bool {
     const D: &[u8] = b"1337;";
     const E: &[u8] = b"777;";
     let matches = |target: &[u8]| target.starts_with(payload) || payload.starts_with(target);
-    matches(A) || matches(B) || matches(C) || matches(D) || matches(E)
+    matches(A) || matches(B) || matches(C) || matches(D) || matches(E) || matches(b"7501;")
 }
 
 /// Parse a `SetUserVar=<name>=<base64>` body. Names are restricted to the
