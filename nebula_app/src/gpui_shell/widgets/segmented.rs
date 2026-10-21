@@ -2,15 +2,17 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Animation, AnimationExt as _, App, Div, ElementId, InteractiveElement as _, IntoElement as _,
-    ParentElement as _, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Window, div, px, relative,
+    App, Div, InteractiveElement as _, IntoElement as _, ParentElement as _, RenderOnce,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    relative,
 };
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+const SLIDE_DURATION: Duration = Duration::from_millis(280);
 
 pub(in crate::gpui_shell) struct IndicatorMotion {
     pub(in crate::gpui_shell) position: Rc<Cell<f32>>,
@@ -20,7 +22,60 @@ pub(in crate::gpui_shell) struct IndicatorMotion {
     dimensions: [Rc<Cell<f32>>; 3],
     from_dimensions: [f32; 3],
     target_dimensions: Option<[f32; 3]>,
-    epoch: u64,
+    started_at: Instant,
+}
+
+impl IndicatorMotion {
+    fn sample(
+        &mut self,
+        now: Instant,
+        target: f32,
+        target_dimensions: Option<[f32; 3]>,
+        reduced: bool,
+    ) -> bool {
+        if self.target != target || self.target_dimensions != target_dimensions {
+            // 快速反向时从当前显示位置接续，不能跳回上一次选项的起点。
+            self.from = self.position.get();
+            self.from_dimensions = std::array::from_fn(|index| self.dimensions[index].get());
+            self.target = target;
+            self.target_dimensions = target_dimensions;
+            self.started_at = now;
+        }
+        if reduced {
+            // 恢复系统动效后也应停在已选项，不能重播减弱动效期间的旧过渡。
+            self.from = target;
+            if let Some(values) = target_dimensions {
+                self.from_dimensions = values;
+            }
+        }
+        let elapsed = now.saturating_duration_since(self.started_at);
+        let finished = (self.from == target
+            && target_dimensions.is_none_or(|values| self.from_dimensions == values))
+            || elapsed >= SLIDE_DURATION
+            || reduced;
+        let progress = if finished {
+            1.0
+        } else {
+            crate::motion::Easing::CssStandard
+                .sample(elapsed.as_secs_f32() / SLIDE_DURATION.as_secs_f32())
+        };
+        self.position.set(if finished {
+            target
+        } else {
+            self.from + (target - self.from) * progress
+        });
+        if let Some(targets) = target_dimensions {
+            for (index, cell) in self.dimensions.iter().enumerate() {
+                cell.set(if finished {
+                    targets[index]
+                } else {
+                    self.from_dimensions[index]
+                        + (targets[index] - self.from_dimensions[index]) * progress
+                });
+            }
+        }
+        !finished
+    }
 }
 
 pub(in crate::gpui_shell) fn animate_segment_indicator(
@@ -42,6 +97,8 @@ fn animate_indicator(
     cx: &mut App,
 ) -> gpui::AnyElement {
     let reduced = cx.reduce_motion();
+    // 同一帧只取一次单调时间：反向首帧保持当前位置，测试也能控制真实插值路径。
+    let now = cx.background_executor().now();
     let motion = window.use_keyed_state(SharedString::from(format!("{id}-motion")), cx, |_, _| {
         IndicatorMotion {
             position: Rc::new(Cell::new(target)),
@@ -52,78 +109,28 @@ fn animate_indicator(
                 .map(|value| Rc::new(Cell::new(value))),
             from_dimensions: target_dimensions.unwrap_or_default(),
             target_dimensions,
-            epoch: 0,
+            started_at: now,
         }
     });
-    let (from, from_dimensions, epoch, position, dimensions) = motion.update(cx, |motion, _| {
-        if motion.target != target || motion.target_dimensions != target_dimensions {
-            // 快速反向时从当前显示位置接续，不能跳回上一次选项的起点。
-            motion.from = motion.position.get();
-            motion.from_dimensions = std::array::from_fn(|index| motion.dimensions[index].get());
-            motion.target = target;
-            motion.target_dimensions = target_dimensions;
-            motion.epoch += 1;
-        }
-        if reduced {
-            // 恢复系统动效后也应停在已选项，不能重播减弱动效期间的旧过渡。
-            motion.position.set(target);
-            motion.from = target;
-            if let Some(values) = target_dimensions {
-                for (cell, value) in motion.dimensions.iter().zip(values) {
-                    cell.set(value);
-                }
-                motion.from_dimensions = values;
-            }
-        }
+    let (position, dimensions, animating) = motion.update(cx, |motion, _| {
+        let animating = motion.sample(now, target, target_dimensions, reduced);
         (
-            motion.from,
-            motion.from_dimensions,
-            motion.epoch,
-            motion.position.clone(),
-            motion.dimensions.clone(),
+            motion.position.get(),
+            std::array::from_fn::<_, 3, _>(|index| motion.dimensions[index].get()),
+            animating,
         )
     });
-    if (from == target && target_dimensions.is_none_or(|values| from_dimensions == values))
-        || reduced
-    {
-        position.set(target);
-        indicator
-            .left(relative(target))
-            .when_some(target_dimensions, |indicator, values| {
-                for (cell, value) in dimensions.iter().zip(values) {
-                    cell.set(value);
-                }
-                let [width, top, height] = values;
-                indicator.w(relative(width)).top(relative(top)).h(relative(height))
-            })
-            .into_any_element()
-    } else {
-        indicator
-            .with_animation(
-                ElementId::NamedInteger(format!("{id}-slide").into(), epoch),
-                Animation::new(Duration::from_millis(280))
-                    .with_easing(|progress| crate::motion::Easing::CssStandard.sample(progress)),
-                move |indicator, progress| {
-                    let current = from + (target - from) * progress;
-                    position.set(current);
-                    indicator.left(relative(current)).when_some(
-                        target_dimensions,
-                        |indicator, targets| {
-                            let values: [f32; 3] = std::array::from_fn(|index| {
-                                from_dimensions[index]
-                                    + (targets[index] - from_dimensions[index]) * progress
-                            });
-                            for (cell, value) in dimensions.iter().zip(values) {
-                                cell.set(value);
-                            }
-                            let [width, top, height] = values;
-                            indicator.w(relative(width)).top(relative(top)).h(relative(height))
-                        },
-                    )
-                },
-            )
-            .into_any_element()
+    if animating {
+        // GPUI 的该接口在下一帧 notify 当前 view，确保重新取时并计算滑块布局。
+        window.request_animation_frame();
     }
+    indicator
+        .left(relative(position))
+        .when(target_dimensions.is_some(), |indicator| {
+            let [width, top, height] = dimensions;
+            indicator.w(relative(width)).top(relative(top)).h(relative(height))
+        })
+        .into_any_element()
 }
 
 /// 读取实际按钮布局，兼容等分、自然宽度和带等宽计数的混排选项。
@@ -268,6 +275,7 @@ mod tests {
         });
         let host = host.unwrap();
         let draw = |window: &mut Window, cx: &mut App| {
+            window.simulate_next_frame(cx);
             let _ = window.draw(cx);
         };
         // 首次真实布局确定槽位，下一帧即在选中按钮上绘制浮块。
@@ -280,8 +288,7 @@ mod tests {
         window.simulate_click(second.center(), gpui::Modifiers::default());
         host.read_with(window, |host, _| assert_eq!(host.selected, 1));
         window.update(draw);
-        // GPUI 的一次性 Animation 使用真实 Instant，executor 的假时钟只推进任务计时器。
-        std::thread::sleep(Duration::from_millis(70));
+        window.executor().advance_clock(Duration::from_millis(70));
         window.update(draw);
         let middle = window.debug_bounds("natural-segments-indicator").unwrap();
         assert!(
@@ -300,9 +307,10 @@ mod tests {
         let reversed = window.debug_bounds("natural-segments-indicator").unwrap();
         assert!((f32::from(reversed.left() - middle.left())).abs() < 0.1);
         assert!((f32::from(reversed.size.width - middle.size.width)).abs() < 0.1);
-        std::thread::sleep(Duration::from_millis(400));
+        window.executor().advance_clock(Duration::from_millis(400));
         window.update(draw);
         assert_eq!(window.debug_bounds("natural-segments-indicator").unwrap(), first);
+        window.update(|window, cx| assert_eq!(window.simulate_next_frame(cx), 0));
 
         window.update(|_, cx| {
             cx.set_reduce_motion(true);
@@ -314,6 +322,7 @@ mod tests {
         window.update(draw);
         let third = window.debug_bounds("segment-slot-2").unwrap();
         assert_eq!(window.debug_bounds("natural-segments-indicator").unwrap(), third);
+        window.update(|window, cx| assert_eq!(window.simulate_next_frame(cx), 0));
         window.update(|_, cx| cx.set_reduce_motion(false));
         window.update(draw);
         assert_eq!(window.debug_bounds("natural-segments-indicator").unwrap(), third);
@@ -338,12 +347,13 @@ mod tests {
             });
         });
         window.update(draw);
-        std::thread::sleep(Duration::from_millis(70));
+        window.executor().advance_clock(Duration::from_millis(70));
         window.update(draw);
         let middle = window.debug_bounds("natural-segments-indicator").unwrap();
         assert!(middle.top() > first.top() && middle.top() < third.top());
-        std::thread::sleep(Duration::from_millis(400));
+        window.executor().advance_clock(Duration::from_millis(400));
         window.update(draw);
         assert_eq!(window.debug_bounds("natural-segments-indicator").unwrap(), third);
+        window.update(|window, cx| assert_eq!(window.simulate_next_frame(cx), 0));
     }
 }
