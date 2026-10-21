@@ -92,6 +92,36 @@ by Git and are not required by the asset tests.
 
 ## Third-Party Logo Assets
 
+### Runtime vectors and lossless compression (2026-10-19)
+
+AI logos now embed SVGZ instead of large PNG originals. The SVGZ payload is
+byte-for-byte gzip compression of its adjacent SVG source (`compresslevel=9`,
+`mtime=0`); geometry, colors and numeric precision are unchanged. Runtime SVG
+rasterization uses the existing resvg 0.46.0 dependency at the requested physical
+size, followed by the shared optical centering and theme tint policy. Rasterized
+textures retain the existing per-size/theme cache ownership. PNG originals below
+are retained only as historical test references, not product binary resources.
+
+New provider marks reuse CC Switch revision
+`adc223af322adaeca878e82bf78323865b0db768`, `src/icons/extracted/` (MIT;
+`licenses/cc-switch-MIT.txt`). Existing OpenAI, Claude, Kimi and Agent vectors
+keep their original sources. Antigravity now uses the official full-color SVG:
+https://antigravity.google/assets/image/brand/antigravity-icon__full-color.svg
+
+Regenerate each adjacent SVGZ with Python's standard library:
+
+```python
+import gzip
+from pathlib import Path
+sources = list(Path("extra/logo").glob("ai_*.svg"))
+sources += list(Path("nebula_app/assets/icons").glob("nebula-agent-*.svg"))
+sources += list(Path("nebula_app/assets/icons").glob("nebula-provider-*.svg"))
+for source in sources:
+    source.with_suffix(".svgz").write_bytes(
+        gzip.compress(source.read_bytes(), compresslevel=9, mtime=0)
+    )
+```
+
 ### Agents settings vectors
 
 The Agents settings page renders 24 logical pixel SVG marks rather than enlarging

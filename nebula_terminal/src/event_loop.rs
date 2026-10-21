@@ -186,18 +186,20 @@ impl StreamProcessor {
 
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
         terminal.cancel_redraw_anchor();
-        self.parser.stop_sync(terminal);
+        terminal.with_program_status_preserved(|terminal| self.parser.stop_sync(terminal));
     }
 
     fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
         // VTE 0.15 在约 2 MiB 时强制提交同步缓冲；提前取消兼容锚点，
         // 但不强制结束/截断输出。分块保证单次大输入也不会绕过检查。
-        for chunk in bytes.chunks(4096) {
-            if self.parser.sync_bytes_count() >= 1024 * 1024 {
-                terminal.cancel_redraw_anchor();
+        terminal.with_program_status_preserved(|terminal| {
+            for chunk in bytes.chunks(4096) {
+                if self.parser.sync_bytes_count() >= 1024 * 1024 {
+                    terminal.cancel_redraw_anchor();
+                }
+                self.parser.advance(terminal, chunk);
             }
-            self.parser.advance(terminal, chunk);
-        }
+        });
     }
 
     pub fn feed<U: EventListener>(
@@ -217,6 +219,7 @@ impl StreamProcessor {
             match event {
                 OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
                 OscEvent::CommandStart => {
+                    terminal.acknowledge_program_status_results();
                     terminal.reading_shell_marker(b'C', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_end_prompt();
                     event_proxy.send_event(Event::CommandStart);
@@ -235,14 +238,19 @@ impl StreamProcessor {
                 },
                 OscEvent::Notify(text) => event_proxy.send_event(Event::Notify(text)),
                 OscEvent::Progress { state, value } => {
-                    event_proxy.send_event(Event::Progress { state, value })
+                    if !terminal.program_statuses().seen() {
+                        event_proxy.send_event(Event::Progress { state, value });
+                    }
                 },
+                OscEvent::ProgramStatus(report) => terminal.report_program_status(report),
+                OscEvent::ProgramStatusReset => terminal.reset_program_status(),
                 OscEvent::RemoteHook { token, envelope } => {
                     if self.remote_hook_token.as_deref() == Some(token.as_str()) {
                         event_proxy.send_event(Event::AiHookEnvelope(envelope));
                     }
                 },
                 OscEvent::PromptMark => {
+                    terminal.end_program_status_activity();
                     terminal.reading_shell_marker(b'A', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_add_prompt_mark();
                 },
