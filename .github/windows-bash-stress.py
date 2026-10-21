@@ -47,25 +47,37 @@ def inspect_evidence(output, runtime, arm, passed):
     if selected_hosts != [runtime]:
         errors.append(f"host selection mismatch: {selected_hosts}")
     edits = []
+    modes = set()
     for match in re.finditer(r"\[bash-edit\] (\{[^\r\n]*\})", output):
         event = json.loads(match[1])
         wire = bytes(event.pop("bytes"))
         event["sha256"] = hashlib.sha256(wire).hexdigest()
-        if event.get("arm") != arm or not event.get("win32"):
-            errors.append("edit did not use the requested negotiated Win32 arm")
-        else:
+        vk = event["vk"]
+        if event.get("arm") != arm:
+            errors.append("edit did not record the requested diagnostic arm")
+        if event.get("win32") is True:
+            modes.add("win32")
             mapped = event["mapped_scan"]
             expected_scan = {"native": str(mapped), "zero": "0", "zero-padded": "00"}[arm]
-            vk = event["vk"]
             character, modifiers = {8: (8, 0), 65: (1, 8), 69: (5, 8), 85: (21, 8), 76: (12, 8)}[vk]
             pair = (f"\x1b[{vk};{expected_scan};{character};1;{modifiers};1_"
                     f"\x1b[{vk};{expected_scan};{character};0;{modifiers};1_").encode()
             if (mapped == 0 or event["scan_field"] != expected_scan
                     or wire != pair * event["count"] or len(wire) != event["byte_count"]):
                 errors.append("recorded bytes do not match the arm and original burst count")
+        elif event.get("win32") is False:
+            modes.add("legacy")
+            legacy = {8: 127, 65: 1, 69: 5, 85: 21, 76: 12}[vk]
+            if (runtime != "in-box" or wire != bytes([legacy]) * event["count"]
+                    or len(wire) != event["byte_count"]):
+                errors.append("legacy bytes or host do not match the fallback contract")
+        else:
+            errors.append("missing explicit negotiated-input mode")
         edits.append(event)
     if not edits:
         errors.append("no edit trace captured")
+    if len(modes) > 1:
+        errors.append("input mode changed within the scan-code comparison")
     if passed:
         if "test result: ok. 1 passed; 0 failed;" not in output:
             errors.append("the exact regression did not report one passing test")
@@ -73,7 +85,11 @@ def inspect_evidence(output, runtime, arm, passed):
             bursts = [e for e in edits if e["locale"] == locale and e["vk"] == 8 and e["count"] == 72]
             if len(bursts) != 1:
                 errors.append(f"missing unique original 72-key burst for {locale}")
-    return {"hosts": selected_hosts, "edits": edits, "errors": errors}
+    comparison = "invalid"
+    if not errors:
+        comparison = "not_applicable" if modes == {"legacy"} else "applied"
+    return {"hosts": selected_hosts, "edits": edits, "errors": errors,
+            "scan_comparison": comparison}
 
 
 def run_one(binary, runtime, arm, iteration, timeout):
@@ -109,7 +125,8 @@ def run_one(binary, runtime, arm, iteration, timeout):
         result["errors"].append(f"{type(error).__name__}: {error}")
     result["elapsed_seconds"] = round(time.monotonic() - started, 3)
     result["log_sha256"] = sha256(log_path) if log_path.exists() else None
-    result["passed"] = result["returncode"] == 0 and not result["timed_out"] and not result["errors"]
+    result["functional_passed"] = result["returncode"] == 0 and not result["timed_out"]
+    result["passed"] = result["functional_passed"] and not result["errors"]
     write_json(directory / f"attempt-{iteration:03}.json", result)
     return result
 
@@ -142,10 +159,13 @@ def main():
                 lambda iteration: run_one(binary, arguments.runtime, arm, iteration, arguments.timeout),
                 range(1, arguments.repetitions + 1),
             ))
+        comparisons = {r.get("scan_comparison", "invalid") for r in results}
         summary = {"branch": metadata["branch"], "head": metadata["head"],
                    "runtime": arguments.runtime, "msys": metadata["msys"], "arm": arm,
                    "attempts": len(results), "workers": arguments.workers,
                    "passed": sum(r["passed"] for r in results),
+                   "functional_passed": sum(r["functional_passed"] for r in results),
+                   "scan_comparison": comparisons.pop() if len(comparisons) == 1 else "mixed",
                    "test_failures": sum(r["returncode"] != 0 for r in results),
                    "invalid_evidence": sum(bool(r["errors"]) for r in results),
                    "timeouts": sum(r["timed_out"] for r in results),
