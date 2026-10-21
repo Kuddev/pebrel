@@ -383,3 +383,21 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+CC Switch provider SVG assets
+-----------------------------
+Source: https://github.com/farion1231/cc-switch/tree/adc223af322adaeca878e82bf78323865b0db768/src/icons/extracted
+Copyright (c) 2025 Jason Young. MIT License; see licenses/cc-switch-MIT.txt.
+Brand marks remain the property of their respective owners. Existing Pebrel
+marks are reused; added provider marks use SVG and lossless SVGZ.
+
+Lucide provider controls
+------------------------
+Source: https://github.com/lucide-icons/lucide/tree/main/icons
+The brain, waypoints, download, wallet, credit-card and clock SVGs use the
+upstream paths without geometric modification. See licenses/lucide-ISC.txt.
+
+Hermes Agent SVG mark
+---------------------
+Source: https://github.com/NousResearch/hermes-agent/blob/ddabd3837862022a6053331fe3ba97cf9716b9e3/assets/icon-master.svg
+See licenses/hermes-agent-MIT.txt. Geometry is preserved; SVGZ is lossless gzip.

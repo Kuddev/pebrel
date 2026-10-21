@@ -21,6 +21,7 @@ mod notifications;
 mod output_tests;
 mod path_drop;
 mod pointer;
+mod program_status;
 mod reading;
 mod runtime;
 mod startup;
@@ -331,6 +332,9 @@ pub struct TerminalView {
     last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// Shared lifecycle owns hook authority, session scope and fallback evidence.
     agent_activity: crate::ai_hook::lifecycle::AgentActivity,
+    program_status: Option<program_status::ProgramStatus>,
+    program_status_seen: bool,
+    pty_failed: bool,
     /// 程序上报的任务进度（OSC 9;4）。存在 pane 上、由宿主投到任务栏：一个
     /// 窗口只有一个任务栏按钮，谁被看着只有宿主知道。
     pub progress: crate::taskbar::TaskProgress,
@@ -612,7 +616,11 @@ impl TerminalView {
             // OSC 9;4：程序自报任务进度。只在真的变了的时候上报——任务栏那条
             // 路要过 COM，`cargo build` 每秒发好几次进度更新，逐条投过去纯属
             // 浪费。
+            TermEvent::ProgramStatusChanged => self.refresh_program_status(cx),
             TermEvent::Progress { state, value } => {
+                if self.program_status_seen {
+                    return;
+                }
                 let progress = crate::taskbar::TaskProgress::from_osc(state, value);
                 if progress != self.progress {
                     self.progress = progress;
@@ -644,6 +652,7 @@ impl TerminalView {
                 self.mark_exited(format!("进程已退出（{code:?}）"), cx);
             },
             TermEvent::PtyFailure(reason) => {
+                self.pty_failed = true;
                 self.mark_exited(format!("PTY 故障：{reason}"), cx);
             },
             TermEvent::Exit => {
@@ -759,6 +768,7 @@ impl TerminalView {
             self.exited = Some(message);
             cx.emit(TerminalViewEvent::Exited);
         }
+        self.sync_program_progress(cx);
         cx.notify();
     }
 
@@ -785,9 +795,13 @@ impl TerminalView {
         self.image_paste.observe_input(&bytes);
         self.confirmation.observe_input(&bytes);
         self.awaiting_input = false;
+        let mut status_acknowledged = false;
         if let Some(session) = &self.session {
             {
                 let mut term = session.term.lock();
+                if !bytes.is_empty() {
+                    status_acknowledged = term.acknowledge_program_status_results();
+                }
                 // Match the parser's Term-lock order before attributing queued prompts.
                 let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);
                 session.native_prompt.observe_input(self.prompt_input_epoch, preserves_prompt);
@@ -798,6 +812,9 @@ impl TerminalView {
                 term.selection = None;
             }
             session.notifier.notify(bytes);
+        }
+        if status_acknowledged {
+            self.refresh_program_status(cx);
         }
         self.sync_native_prompt();
         self.restart_cursor_blink(cx);

@@ -79,6 +79,8 @@ anyhow = { version = "=1.0.104", optional = true }
 ahash = { version = "0.8.6", features = ["no-rng"] }
 ab_glyph_rasterizer = "=0.1.10"
 base64 = "0.22.0"
+# 复用 GPUI 已锁定的 SVG 渲染器；AI 标志嵌入 SVGZ，按实际 DPI 栅格化。
+resvg = { version = "=0.46.0", default-features = false }
 # WebDAV 同步的内容加密（spec 003）。用户裁定（2026-07-28）：同步集含
 # SSH 地址簿与命令历史，属高危隐私必须加密；Argon2 只在同步动作的后台
 # 线程跑（~0.1s/19MiB 瞬时，终端热路径零涉及）——可以上，但克制：参数
