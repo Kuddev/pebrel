@@ -17,7 +17,8 @@ open class TerminalCallbacks {
 }
 
 private data class Geometry(val columns: Int = 80, val rows: Int = 24, val width: Int = 8, val height: Int = 16)
-private class Input(val budget: Int, val encode: (GhosttyCore) -> ByteArray)
+private class Input(val budget: Int, val encode: (GhosttyCore) -> ByteArray,
+                    val prepareInput: Boolean, val historyLines: Int?, val generation: Int)
 
 /** Application-owned. I/O is bounded; parser/render state never runs on the main thread. */
 class TerminalSession(private val transport: SessionTransport, private val callbacks: TerminalCallbacks,
@@ -32,6 +33,8 @@ class TerminalSession(private val transport: SessionTransport, private val callb
     private val queuedBytes = AtomicInteger()
     private val acceptedInput = AtomicInteger()
     val inputGeneration: Int get() = acceptedInput.get()
+    @Volatile var readingHistory: Boolean = false
+        private set
     private val outgoing = Channel<Input>(64)
     private val sizes = Channel<Geometry>(Channel.CONFLATED)
     private val frames = Channel<Unit>(Channel.CONFLATED)
@@ -128,7 +131,21 @@ class TerminalSession(private val transport: SessionTransport, private val callb
             for (input in outgoing) {
                 try {
                     if (closed.get()) break
-                    val bytes = withContext(stateDispatcher) { input.encode(checkNotNull(core)) }
+                    val history = transport as? TerminalHistoryTransport
+                    if (input.historyLines != null && input.generation != inputGeneration) continue
+                    val consumed = try {
+                        if (input.prepareInput) {
+                            history?.returnToLiveInput()
+                            readingHistory = false
+                            requestFrame()
+                        }
+                        input.historyLines?.let { history?.scrollHistory(it) } == true
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        reportRejected() // Do not send input into copy mode or close SSH on a history error.
+                        continue
+                    }
+                    val bytes = if (consumed) byteArrayOf() else withContext(stateDispatcher) { input.encode(checkNotNull(core)) }
                     if (bytes.isNotEmpty()) { transport.output().write(bytes); transport.output().flush() }
                 } finally { queuedBytes.addAndGet(-input.budget) }
             }
@@ -155,10 +172,11 @@ class TerminalSession(private val transport: SessionTransport, private val callb
     }
     private fun notify(action: () -> Unit) { main.post { if (!closed.get()) action() } }
 
-    private fun offer(budget: Int, encode: (GhosttyCore) -> ByteArray): Boolean {
+    private fun offer(budget: Int, prepareInput: Boolean = false, historyLines: Int? = null,
+                      encode: (GhosttyCore) -> ByteArray): Boolean {
         if (!ready || closed.get() || budget > 128 * 1024) return false
         val total = queuedBytes.addAndGet(budget)
-        if (total > 128 * 1024 || !outgoing.trySend(Input(budget, encode)).isSuccess) {
+        if (total > 128 * 1024 || !outgoing.trySend(Input(budget, encode, prepareInput, historyLines, inputGeneration)).isSuccess) {
             queuedBytes.addAndGet(-budget)
             return false
         }
@@ -168,14 +186,19 @@ class TerminalSession(private val transport: SessionTransport, private val callb
         require(offset >= 0 && count >= 0 && offset <= bytes.size - count)
         if (count > 128 * 1024) return false
         val copy = bytes.copyOfRange(offset, offset + count)
-        return offer(copy.size) { copy }.also { if (it) returnToInput() }
+        return offer(copy.size, prepareInput = true) { copy }.also { if (it) returnToInput() }
     }
     fun sendText(text: String): Boolean = text.toByteArray().let { tryWrite(it, 0, it.size) }
     fun key(code: Int, mods: Int = 0, action: Int = 1, text: String = "", unshifted: Int = 0): Boolean =
-        offer(1024) { it.key(code, mods, action, text, unshifted) }.also { if (it && action != 0) returnToInput() }
+        offer(1024, prepareInput = true) { it.key(code, mods, action, text, unshifted) }.also { if (it && action != 0) returnToInput() }
     fun paste(text: String): Boolean {
         if (text.length > 32768) return false
-        return offer(text.length * 4 + 12) { it.paste(text) }.also { if (it) returnToInput() }
+        return offer(text.length * 4 + 12, prepareInput = true) { it.paste(text) }.also { if (it) returnToInput() }
+    }
+    /** Focusing the IME restores live input even before the first composed character is committed. */
+    fun prepareForInput() {
+        returnToInput()
+        if (isReady && !offer(0, prepareInput = true) { byteArrayOf() }) reportRejected()
     }
     private fun returnToInput() {
         acceptedInput.incrementAndGet()
@@ -206,8 +229,10 @@ class TerminalSession(private val transport: SessionTransport, private val callb
     }
     fun wheel(lines: Int, column: Int, row: Int) {
         if (frame?.alternateScreen != true) { scroll(lines); return }
-        // 与文字/按键共用有界写队列，在实际发送时再次按当前 VT 模式编码。
-        if (!offer(4096) { engine -> engine.wheel(lines, column, row, applicationOnly = true).also { requestFrame() } })
+        readingHistory = true
+        requestFrame()
+        // 与文字/按键共用有界写队列，远程历史操作和恢复输入保持顺序。
+        if (!offer(4096, historyLines = lines) { engine -> engine.wheel(lines, column, row, applicationOnly = true).also { requestFrame() } })
             reportRejected()
     }
     fun previewText(): String {

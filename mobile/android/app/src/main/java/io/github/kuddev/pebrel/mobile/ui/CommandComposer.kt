@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kuddev.pebrel.mobile.R
 import io.github.kuddev.pebrel.mobile.session.SessionRepository
+import io.github.kuddev.pebrel.terminal.TerminalShortcut
 import io.github.kuddev.pebrel.mobile.voice.appendVoiceDraft
 import kotlinx.coroutines.launch
 
@@ -52,10 +53,13 @@ fun CommandComposer(
     attachmentBusy: Boolean = false,
     shortcutsEnabled: Boolean = enabled,
     extraShortcuts: List<String> = emptyList(),
+    customKeys: Boolean = onDirect != null,
     send: suspend (String) -> Boolean,
 ) {
     val drafts by repository.drafts.collectAsStateWithLifecycle()
     val preferences by repository.display.state.collectAsStateWithLifecycle()
+    val customShortcuts by repository.shortcuts.state.collectAsStateWithLifecycle()
+    var editShortcuts by remember(id) { mutableStateOf(false) }
     val historyBySession by repository.commandHistory.collectAsStateWithLifecycle()
     val draft = drafts[id].orEmpty()
     val history = historyBySession[id].orEmpty()
@@ -135,7 +139,8 @@ fun CommandComposer(
         }
     }
     val showHistory = historyItems.isNotEmpty() && draft.isNotBlank() && editorFocused && !historyDismissed && historyRoom >= 52.dp
-    val shortcuts = (extraShortcuts + listOf("Ctrl+C", "Esc", "Tab", "Shift+Tab", "←", "→", "↑", "↓")).distinct()
+    val shortcuts = (extraShortcuts + (if (customKeys) customShortcuts else emptyList()) + TerminalShortcut.defaults).distinct()
+    if (editShortcuts) ShortcutEditor(repository.shortcuts) { editShortcuts = false }
     // One mutually exclusive slot. Animating two independently visible surfaces
     // left an empty toolbar under the editor and retained two input targets.
     Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)
@@ -143,6 +148,7 @@ fun CommandComposer(
         if (direct) {
             ComposerToolbar(
                 onEdit = onDirect?.let { toggle -> { toggle(false) } },
+                onEditShortcuts = if (customKeys) ({ editShortcuts = true }) else null,
                 keyboardVisible = keyboardVisible,
                 keyboardEnabled = onKeyboard != null,
                 enabled = enabled,
@@ -222,6 +228,10 @@ fun CommandComposer(
                                             onClick = { toolsOpen = false; attach() },
                                         )
                                     }
+                                    if (customKeys && onKey != null) DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.custom_shortcuts)) },
+                                        onClick = { toolsOpen = false; editShortcuts = true },
+                                    )
                                     if (onKey != null) DropdownMenuItem(
                                         text = { Text(stringResource(if (keys) R.string.composer_hide_aux_keys else R.string.composer_aux_keys)) },
                                         onClick = { toolsOpen = false; keys = !keys },
