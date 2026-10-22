@@ -3,7 +3,7 @@ package io.github.kuddev.pebrel.mobile.connection
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class RemoteWindow(val id: String, val label: String, val workspace: String = "", val state: String = "")
+data class RemoteWindow(val id: String, val label: String, val workspace: String = "", val state: String = "", val pane: String = "")
 data class RemoteSession(
     val kind: String, val id: String, val name: String, val identity: String = "",
     val attached: Boolean = false, val windows: List<RemoteWindow> = emptyList(),
@@ -18,14 +18,15 @@ data class RemoteAttachment(val session: RemoteSession, val window: RemoteWindow
 object RemoteSessions {
     private const val path = "PATH=\"${'$'}PATH:/opt/homebrew/bin:/usr/local/bin:${'$'}HOME/.local/bin:${'$'}HOME/.cargo/bin\"; export PATH; "
     private fun posix(script: String) = "sh -c '${script.replace("'", "'\"'\"'")}'"
+    internal fun posixWithPath(script: String) = posix(path + script)
     internal val discoveryCommand = posix(path + """
         printf '\036os\n'; uname -s 2>/dev/null
         printf '\036distro\n'; cat /etc/os-release 2>/dev/null
         printf '\036tmux\n'
         if command -v tmux >/dev/null 2>&1; then
-          tmux list-sessions -F '#{session_id}\t#{session_name}\t#{session_attached}\t#{session_created}:#{pid}' 2>/dev/null
+          tmux -u list-sessions -F '#{session_id}\t#{session_name}\t#{session_attached}\t#{session_created}:#{pid}' 2>/dev/null
           printf '\036windows\n'
-          tmux list-windows -a -F '#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}' 2>/dev/null
+          tmux -u list-windows -a -F '#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}' 2>/dev/null
         fi
         printf '\036herdr\n'
         if command -v herdr >/dev/null 2>&1; then herdr session list --json 2>/dev/null; fi
@@ -71,8 +72,10 @@ object RemoteSessions {
             else desktopOsIcon(system)
         val windows = data["windows"].orEmpty().lineSequence().mapNotNull { line ->
             val fields = line.split('\t')
-            if (fields.size != 4 || !fields[0].matches(Regex("\\$[0-9]+")) || !fields[1].matches(Regex("@[0-9]+")) || !valid(fields[3])) null
-            else fields[0] to RemoteWindow(fields[1], "${fields[2]} · ${fields[3]}")
+            if (fields.size !in setOf(4, 6) || !fields[0].matches(Regex("\\$[0-9]+")) || !fields[1].matches(Regex("@[0-9]+")) || !valid(fields[3])) null
+            else fields[0] to RemoteWindow(fields[1], "${fields[2]} · ${fields[3]}",
+                state = if (fields.getOrNull(4) == "1") "active" else "",
+                pane = fields.getOrNull(5)?.takeIf { it.matches(Regex("%[0-9]+")) }.orEmpty())
         }.take(256).toList().groupBy({ it.first }, { it.second })
         val sessions = data["tmux"].orEmpty().lineSequence().mapNotNull { line ->
             val fields = line.split('\t')
@@ -93,6 +96,17 @@ object RemoteSessions {
             }.onFailure { warnings += "herdr" }
         }
         return RemoteInventory(os, sessions.distinctBy { it.kind to it.id }, warnings)
+    }
+
+    internal fun configuredAttachment(host: HostProfile, inventory: RemoteInventory): RemoteAttachment? {
+        val kind = when (host.sessionMode) {
+            SshSessionMode.TMUX -> "tmux"
+            SshSessionMode.HERDR -> "herdr"
+            else -> return null
+        }
+        val name = if (host.sessionMode == SshSessionMode.TMUX) host.sessionName.ifEmpty { "pebrel" } else host.sessionName
+        val session = inventory.sessions.singleOrNull { it.kind == kind && it.name == name } ?: return null
+        return RemoteAttachment(session, session.windows.firstOrNull { it.state == "active" })
     }
 
     fun windows(connection: SshConnection, session: RemoteSession): List<RemoteWindow> {
@@ -145,7 +159,11 @@ object RemoteSessions {
                 require(session.id.matches(Regex("\\$[0-9]+")) && session.identity.matches(Regex("[0-9]+:[0-9]+")))
                 val selected = window?.let {
                     require(it.id.matches(Regex("@[0-9]+")))
-                    "tmux select-window -t ${quote("${session.id}:${it.id}")} && "
+                    val pane = it.pane.takeIf { pane -> pane.isNotEmpty() }?.let { pane ->
+                        require(pane.matches(Regex("%[0-9]+")))
+                        "tmux select-pane -t ${quote("${session.id}:${it.id}.$pane")} && "
+                    }.orEmpty()
+                    "tmux select-window -t ${quote("${session.id}:${it.id}")} && " + pane
                 }.orEmpty()
                 // 不按可重命名的标题匹配；服务器重启后不能误接到复用的 session ID。
                 "[ \"${'$'}(tmux display-message -p -t ${quote(session.id)} '#{session_created}:#{pid}')\" = ${quote(session.identity)} ] && " +
