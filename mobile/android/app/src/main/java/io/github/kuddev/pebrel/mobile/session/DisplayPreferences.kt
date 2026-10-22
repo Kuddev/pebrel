@@ -25,6 +25,8 @@ data class TerminalPreferences(
     val suggestions: Boolean = true,
     val directInput: Boolean = true,
     val scrollbackLines: Int = 1000,
+    val desktopZoom: Float = 1f,
+    val desktopWrapLines: Boolean = false,
 ) {
     /** Preserve the persisted contract when callers pass a stale or unknown value. */
     fun normalized(): TerminalPreferences = copy(
@@ -35,6 +37,7 @@ data class TerminalPreferences(
         },
         fontSize = fontSize.coerceIn(TerminalPreferenceValues.MIN_FONT_SIZE, TerminalPreferenceValues.MAX_FONT_SIZE),
         scrollbackLines = scrollbackLines.coerceIn(500, 5000),
+        desktopZoom = if (desktopZoom.isFinite()) desktopZoom.coerceIn(.5f, 5f) else 1f,
         cursorStyle = when (cursorStyle) {
             TerminalPreferenceValues.BAR_CURSOR -> TerminalPreferenceValues.BAR_CURSOR
             TerminalPreferenceValues.UNDERLINE_CURSOR -> TerminalPreferenceValues.UNDERLINE_CURSOR
@@ -73,6 +76,8 @@ class DisplayPreferences(context: Context) {
             suggestions = stored.getBoolean("suggestions", true),
             directInput = stored.getBoolean("direct_input", true),
             scrollbackLines = stored.getInt("scrollback_lines", 1000),
+            desktopZoom = stored.getFloat("desktop_zoom", 1f),
+            desktopWrapLines = stored.getBoolean("desktop_wrap_lines", false),
         ).normalized().let { it.copy(scrollbackLines = it.scrollbackLines.coerceAtMost(maxScrollbackLines)) },
     )
     val state = current.asStateFlow()
@@ -94,7 +99,9 @@ class DisplayPreferences(context: Context) {
             .putBoolean("pinch_zoom", current.value.pinchZoom)
             .putBoolean("suggestions", current.value.suggestions)
             .putBoolean("direct_input", current.value.directInput)
-            .putInt("scrollback_lines", current.value.scrollbackLines).apply()
+            .putInt("scrollback_lines", current.value.scrollbackLines)
+            .putFloat("desktop_zoom", current.value.desktopZoom)
+            .putBoolean("desktop_wrap_lines", current.value.desktopWrapLines).apply()
     }
 
     fun update(transform: (TerminalPreferences) -> TerminalPreferences) {
