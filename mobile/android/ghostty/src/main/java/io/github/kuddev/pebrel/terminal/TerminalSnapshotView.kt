@@ -78,6 +78,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
     }
     private var fontPixels = 14f * resources.displayMetrics.scaledDensity
     private var zoom = 1f
+    private var pinchInProgress = false
+    val zoomScale: Float get() = zoom
+    var onZoomScaleChanged: ((Float) -> Unit)? = null
     private var offsetX = 0f
     private var offsetY = 0f
     private var cellWidth = 1f
@@ -157,6 +160,17 @@ class TerminalSnapshotView(context: Context) : View(context) {
         selection.clear()
         paint.typeface = typeface
         fontPixels = pixels
+        metrics()
+        reproject()
+        constrainOffsets()
+        invalidate()
+    }
+
+    fun setZoomScale(value: Float) {
+        val bounded = if (value.isFinite()) value.coerceIn(.5f, 5f) else 1f
+        if (pinchInProgress || zoom == bounded) return
+        zoom = bounded
+        stopScrolling()
         metrics()
         reproject()
         constrainOffsets()
@@ -278,6 +292,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
     private val scaling = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
             if (!pinchZoom) return false
+            pinchInProgress = true
             stopScrolling()
             reportZoom(true)
             return true
@@ -296,7 +311,11 @@ class TerminalSnapshotView(context: Context) : View(context) {
             reportZoom(true)
             return true
         }
-        override fun onScaleEnd(detector: ScaleGestureDetector) { reportZoom(false) }
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            pinchInProgress = false
+            onZoomScaleChanged?.invoke(zoom)
+            reportZoom(false)
+        }
     })
 
     private fun reportZoom(gesturing: Boolean) {
@@ -510,6 +529,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
     private fun resetZoom() {
         stopScrolling()
         zoom = 1f
+        onZoomScaleChanged?.invoke(zoom)
         metrics(); reproject()
         offsetX = 0f; offsetY = 0f
         followOutput = true

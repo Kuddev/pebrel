@@ -79,6 +79,7 @@ fun GroupHeading(title: String, count: Int? = null, action: String? = null, onAc
 fun statusLabel(status: String): String = stringResource(when (status) {
     "ready" -> R.string.state_ready
     "connecting" -> R.string.state_connecting
+    "reconnecting" -> R.string.desktop_reconnecting
     "approval" -> R.string.pair_awaiting_approval
     "ended" -> R.string.state_ended
     "failed" -> R.string.state_failed
