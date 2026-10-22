@@ -148,6 +148,12 @@ impl SshProfiles {
         Ok(())
     }
 
+    /// 只读投影：`pebrel cli` 要列出用户添加的服务器（地址、名称、图标、认证
+    /// 方式和私钥路径），这些字段都在 profile 里，不需要另一套数据结构。
+    pub(crate) fn entries(&self) -> &[SshProfileAuth] {
+        &self.profiles
+    }
+
     pub fn for_destination(&self, destination: &str) -> SshProfileAuth {
         self.profiles
             .iter()

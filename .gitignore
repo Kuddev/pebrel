@@ -41,6 +41,10 @@ assets/windows/conhost/
 !/docs/skills/pebrel-runtime/SKILL.md
 !/docs/skills/pebrel-runtime/agents/
 !/docs/skills/pebrel-runtime/agents/openai.yaml
+!/docs/skills/pebrel-ssh/
+!/docs/skills/pebrel-ssh/SKILL.md
+!/docs/skills/pebrel-ssh/agents/
+!/docs/skills/pebrel-ssh/agents/openai.yaml
 !/docs/release-notes/
 !/docs/release-notes/AGENTS.md
 !/docs/release-notes/v[0-9]*.md

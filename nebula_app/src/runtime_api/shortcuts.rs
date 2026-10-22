@@ -447,6 +447,35 @@ fn command_catalog() -> Value {
             "example": "pebrel agent wait codex --after-seq 41",
         },
         {
+            "command": "pebrel cli assets list",
+            "purpose": "List the servers saved in Pebrel with their asset_id, label, and auth mode. \
+                        Resolve a target here first — never guess an id.",
+            "example": "pebrel cli assets list --pretty",
+        },
+        {
+            "command": "pebrel cli exec <asset> <command>",
+            "purpose": "Run one command on a saved server over a temporary SSH connection. \
+                        Requires the \"Allow AI to control servers\" switch.",
+            "example": "pebrel cli exec root@box \"uname -a\" --pretty",
+        },
+        {
+            "command": "pebrel cli shell <asset>",
+            "purpose": "Open an interactive SSH tab in the Pebrel window for a saved server.",
+            "example": "pebrel cli shell root@box",
+        },
+        {
+            "command": "pebrel cli upload|download|sync <asset> <local> <remote>",
+            "purpose": "Copy a file or directory between this machine and a saved server. \
+                        sync mirrors a directory and supports --delete with a guard.",
+            "example": "pebrel cli upload root@box ./dist /tmp/dist",
+        },
+        {
+            "command": "pebrel cli credentials list [<asset>]",
+            "purpose": "Report whether saved servers have stored credentials. Booleans and \
+                        paths only — never secrets.",
+            "example": "pebrel cli credentials list",
+        },
+        {
             "command": "pebrel ctl --help",
             "purpose": "The full protocol: split panes, start or fork agents into isolated Git \
                         worktrees, run commands for a real exit code, subscribe to state events, \

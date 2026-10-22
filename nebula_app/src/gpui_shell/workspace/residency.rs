@@ -151,7 +151,8 @@ impl NebulaWorkspace {
             | RuntimeCommand::Run { .. }
             | RuntimeCommand::AgentStart { .. }
             | RuntimeCommand::AgentPrompt { .. }
-            | RuntimeCommand::AgentPaste { .. } => {
+            | RuntimeCommand::AgentPaste { .. }
+            | RuntimeCommand::SshShell { .. } => {
                 self.reveal_session(cx);
                 self.runtime_pending.push(dispatch);
             },
@@ -277,6 +278,20 @@ impl NebulaWorkspace {
                 };
                 self.runtime_result(
                     json!({ "window_id": self.runtime_window_id, "pane_id": pane_id }),
+                    window,
+                    cx,
+                )
+            },
+            RuntimeCommand::SshShell { window_id, asset_id } => {
+                self.runtime_window_requested(*window_id)?;
+                // 走和侧栏点击完全同一条路径：新 tab 的 SSH 连接由 pane 自己建立。
+                self.add_ssh_terminal(asset_id.clone(), window, cx);
+                self.runtime_result(
+                    json!({
+                        "window_id": self.runtime_window_id,
+                        "tab_index": self.active,
+                        "asset_id": asset_id,
+                    }),
                     window,
                     cx,
                 )

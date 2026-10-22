@@ -176,6 +176,22 @@ impl SettingsPane {
             })
             .child(list)
             .child(
+                Button::new("install-skills")
+                    .label(language.pick(
+                        "一键安装 Skill 到 Claude / Codex",
+                        "Install skills to Claude Code / Codex",
+                    ))
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        let summary = crate::ai_hook::install_ai_skills();
+                        crate::gpui_shell::toast::toast(
+                            window,
+                            cx,
+                            crate::display::ToastKind::Info,
+                            summary,
+                        );
+                    })),
+            )
+            .child(
                 div()
                     .text_sm()
                     .text_color(muted)

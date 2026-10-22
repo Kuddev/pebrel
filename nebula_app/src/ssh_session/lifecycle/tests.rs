@@ -68,6 +68,7 @@ enum Mode {
     HangFirstConnection,
     ExecEof,
     ExecHang,
+    ExecOutcome,
     CompletionMetadata,
     Integration,
     RejectIntegration,
@@ -95,6 +96,15 @@ impl server::Handler for Loopback {
         command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.mode == Mode::ExecOutcome {
+            session.channel_success(channel)?;
+            if command == b"hang" {
+                session.data(channel, &b"partial"[..])?;
+            } else {
+                self.scripts.insert(channel, command.to_vec());
+            }
+            return Ok(());
+        }
         if self.mode == Mode::CompletionMetadata {
             if command == b"python3 -I -S -" {
                 self.scripts.insert(channel, Vec::new());
@@ -268,6 +278,17 @@ impl server::Handler for Loopback {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let Some(script) = self.scripts.remove(&channel) else { return Ok(()) };
+        if self.mode == Mode::ExecOutcome {
+            session.data(channel, &b"stdout"[..])?;
+            session.extended_data(channel, 1, &b"stderr"[..])?;
+            session.eof(channel)?;
+            if script != b"missing" {
+                session.exit_status_request(channel, if script == b"zero" { 0 } else { 7 })?;
+            }
+            session.close(channel)?;
+            let _ = self.data.send(script);
+            return Ok(());
+        }
         if self.mode == Mode::CompletionMetadata {
             use base64::Engine as _;
             let script = std::str::from_utf8(&script).unwrap();
@@ -340,6 +361,50 @@ impl server::Handler for Loopback {
         session.eof(channel)?;
         Ok(())
     }
+}
+
+#[test]
+fn ssh_exec_outcome_reads_status_after_eof_and_sends_empty_stdin_eof() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::ExecOutcome).await;
+        let acquired = fixture.connect().await;
+        for (command, input, expected) in [
+            ("zero", &b""[..], Some(0)),
+            ("nonzero", &b"script"[..], Some(7)),
+            ("missing", &b""[..], None),
+        ] {
+            let channel = acquired.session.channel_open_session().await.unwrap();
+            let outcome = super::super::exec::capture_outcome(
+                channel,
+                command,
+                input,
+                Duration::from_secs(1),
+                4,
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome.exit_code, expected);
+            assert!(!outcome.timed_out);
+            assert_eq!(outcome.stdout, b"stdo");
+            assert_eq!(outcome.stderr, b"stde");
+            assert!(outcome.stdout_truncated && outcome.stderr_truncated);
+            assert_eq!(fixture.data.recv().await.unwrap(), [command.as_bytes(), input].concat());
+        }
+        let channel = acquired.session.channel_open_session().await.unwrap();
+        let outcome = super::super::exec::capture_outcome(
+            channel,
+            "hang",
+            b"",
+            Duration::from_millis(100),
+            128,
+        )
+        .await
+        .unwrap();
+        assert!(outcome.timed_out);
+        assert_eq!(outcome.exit_code, None);
+        assert_eq!(outcome.stdout, b"partial");
+        fixture.forget(&acquired.session).await;
+    });
 }
 
 #[test]

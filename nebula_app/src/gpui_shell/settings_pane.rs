@@ -833,7 +833,7 @@ impl SettingsPane {
         desc: impl Into<SettingHelp>,
         checked: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
         let control = crate::gpui_shell::widgets::NebulaSwitch::new(key).checked(checked).on_click(
             cx.listener(move |this, checked: &bool, window, cx| {
                 this.toggle(key, *checked, window, cx);
@@ -1748,6 +1748,7 @@ impl Render for SettingsPane {
                                     .child(
                                         v_flex()
                                             .w_full()
+                                            .min_w_0()
                                             .when(matches!(self.active_section, 4 | 9 | 10 | MOBILE_SECTION), |content| {
                                                 content.items_center()
                                             })

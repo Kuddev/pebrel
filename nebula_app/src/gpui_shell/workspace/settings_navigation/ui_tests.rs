@@ -82,6 +82,43 @@ fn numbered_tab_shortcuts() -> [&'static str; 2] {
 }
 
 #[gpui::test]
+fn sidebar_title_button_returns_from_settings_and_still_toggles_sidebar(cx: &mut TestAppContext) {
+    let (_directory, workspace, mut cx) = open_workspace(2, cx);
+    workspace.update(&mut cx, |workspace, cx| {
+        workspace.tabs_position = nebula_settings::TabsPositionName::Sidebar;
+        workspace.sync_settings_layout(true);
+        cx.notify();
+    });
+    click_tab("toggle-sidebar", &mut cx);
+    workspace.read_with(&cx, |workspace, _| {
+        assert!(!workspace.settings_open);
+        assert!(!workspace.settings_tab_open);
+        assert!(!workspace.sidebar_collapsed);
+        assert_eq!(workspace.active, 0);
+    });
+    click_tab("toggle-sidebar", &mut cx);
+    assert!(workspace.read_with(&cx, |workspace, _| workspace.sidebar_collapsed));
+}
+
+#[gpui::test]
+fn sidebar_ssh_plus_opens_ssh_settings(cx: &mut TestAppContext) {
+    let (_directory, workspace, mut cx) = open_workspace(2, cx);
+    workspace.update(&mut cx, |workspace, cx| {
+        workspace.tabs_position = nebula_settings::TabsPositionName::Sidebar;
+        workspace.sync_settings_layout(true);
+        cx.notify();
+    });
+    click_tab("toggle-sidebar", &mut cx);
+    workspace.update(&mut cx, |workspace, cx| {
+        workspace.sidebar_fold_armed = false;
+        cx.notify();
+    });
+    click_tab("sidebar-ssh-manage", &mut cx);
+    assert!(workspace.read_with(&cx, |workspace, _| workspace.settings_open));
+    assert!(tab_bounds("ssh-add-host", &mut cx).size.width > px(0.0));
+}
+
+#[gpui::test]
 fn switching_top_tabs_keeps_settings_reachable_until_explicit_close(cx: &mut TestAppContext) {
     let (_directory, workspace, mut cx) = open_workspace(2, cx);
     let settings_id = workspace.read_with(&cx, |workspace, _| {

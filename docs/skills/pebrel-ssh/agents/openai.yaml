@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pebrel SSH"
+  short_description: "Run commands and move files on servers saved in Pebrel"
+  default_prompt: "Use $pebrel-ssh to list my saved servers, run commands on them, and move files — without ever asking for a password or SSH key."

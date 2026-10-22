@@ -1,5 +1,5 @@
 //! Install/repair scheduling. Provider file edits remain in their installers.
-use super::{ManagedSkillInstall, ensure_runtime_skills, settings};
+use super::{ManagedSkillInstall, ensure_runtime_skills, ensure_ssh_skills, settings};
 use nebula_settings::{AgentHook, RawSettings};
 use std::collections::HashSet;
 use std::sync::{
@@ -68,6 +68,22 @@ fn heal_all() {
             ),
             Err(error) => log::warn!(
                 "ai_hook: failed to install {agent} runtime skill at {}: {error}",
+                path.display()
+            ),
+        }
+    }
+    for (agent, path, result) in ensure_ssh_skills() {
+        match result {
+            Ok(ManagedSkillInstall::Installed) => {
+                log::info!("ai_hook: installed {agent} ssh skill at {}", path.display())
+            },
+            Ok(ManagedSkillInstall::Current) => {},
+            Ok(ManagedSkillInstall::Conflict) => log::warn!(
+                "ai_hook: preserving unmanaged or edited {agent} ssh skill at {}",
+                path.display()
+            ),
+            Err(error) => log::warn!(
+                "ai_hook: failed to install {agent} ssh skill at {}: {error}",
                 path.display()
             ),
         }

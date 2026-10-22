@@ -1,5 +1,72 @@
 use super::*;
 
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
+fn ssh_skill_copy_button_copies_the_complete_skill_and_resets_feedback(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_global(crate::gpui_shell::config::Settings::load(nebula_settings::ThemeName::Nord));
+    });
+    let mut pane = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| SettingsPane::new(window, cx));
+        view.update(cx, |pane, cx| {
+            pane.manage_launcher_ssh(String::new(), false, window, cx);
+            pane.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists {
+                saved: vec!["review@example.invalid".into()],
+                ..Default::default()
+            };
+        });
+        pane = Some(view.clone());
+        gpui_component::Root::new(view, window, cx)
+    });
+    let pane = pane.unwrap();
+    for (width, height) in [(1920.0, 1030.0), (1280.0, 720.0), (800.0, 720.0)] {
+        cx.simulate_resize(gpui::size(px(width), px(height)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        for selector in [
+            "ssh-settings-content",
+            "ssh-add-host",
+            "nebula-switch-ssh_ai_control",
+            "ssh-copy-skill",
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            assert!(bounds.right() <= px(width), "{selector} overflows at {width}: {bounds:?}");
+        }
+        let row = cx.debug_bounds("ssh-host-row-0").unwrap();
+        let detail = cx.debug_bounds("ssh-host-detail-0").unwrap();
+        let footer = cx.debug_bounds("ssh-config-banner").unwrap();
+        assert_eq!(row.size.height, px(HOST_ROW_HEIGHT));
+        assert!(detail.bottom() <= row.bottom());
+        assert!(footer.top() >= row.bottom());
+        assert!(
+            cx.debug_bounds("ssh-copy-skill").unwrap().top()
+                >= cx.debug_bounds("nebula-switch-ssh_ai_control").unwrap().bottom()
+        );
+    }
+    cx.simulate_resize(gpui::size(px(1100.0), px(1000.0)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    let button = cx.debug_bounds("ssh-copy-skill").unwrap();
+    assert!(cx.debug_bounds("ssh-install-skill").is_some());
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), crate::ai_hook::SSH_SKILL_MD);
+    assert!(pane.read_with(cx, |pane, cx| pane.ssh_library.skill_copy.read(cx).is_copied()));
+    cx.run_until_parked();
+    cx.executor().advance_clock(crate::gpui_shell::copy_feedback::COPY_FEEDBACK_TTL);
+    cx.run_until_parked();
+    assert!(!pane.read_with(cx, |pane, cx| pane.ssh_library.skill_copy.read(cx).is_copied()));
+}
+
 #[test]
 fn pairing_design_ssh_auth_description_uses_metadata_not_a_saved_password_claim() {
     let profiles = crate::ssh_profiles::SshProfiles::default();

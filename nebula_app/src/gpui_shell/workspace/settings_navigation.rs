@@ -35,6 +35,8 @@ impl NebulaWorkspace {
             SettingsPaneEvent::Close => self.close_settings(window, cx),
             SettingsPaneEvent::Changed | SettingsPaneEvent::BackupRestored => {
                 self.apply_runtime_settings(cx);
+                // 侧栏 SSH 分区跟着主机库走：保存/删除/导入/备份还原都落在这里。
+                self.sidebar_ssh = Self::load_sidebar_ssh_hosts();
                 // 键位编辑器可能改了 keybind= 表：注入/撤销随之热更新。
                 self.apply_custom_keybinds(cx);
                 if matches!(event, SettingsPaneEvent::BackupRestored) && self.command_manager_open {
