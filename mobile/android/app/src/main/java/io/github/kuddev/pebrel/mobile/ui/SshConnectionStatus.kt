@@ -74,8 +74,10 @@ fun SshConnectionStatus(session: LocalSession, onCancel: () -> Unit, onRetry: ()
 fun TerminalDisconnected(session: LocalSession, onRetry: (() -> Unit)?) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
-            HelperText(stringResource(if (session.status == "ended") R.string.session_ended_hint else failureText(session.failure)))
-            onRetry?.let { retry -> TextButton(retry) { Text(stringResource(R.string.retry)) } }
+            val connecting = session.status in setOf("connecting", "reconnecting")
+            HelperText(stringResource(if (connecting) R.string.desktop_reconnecting
+                else if (session.status == "ended") R.string.session_ended_hint else failureText(session.failure)))
+            onRetry?.let { retry -> TextButton(retry, enabled = session.status != "connecting") { Text(stringResource(R.string.retry)) } }
         }
     }
 }
