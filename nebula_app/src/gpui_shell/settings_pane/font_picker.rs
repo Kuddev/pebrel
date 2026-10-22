@@ -867,7 +867,12 @@ mod interaction_tests {
         let _lock = lock_theme_studio();
         let _settings = SettingsBytesGuard::capture();
         // 未设置标签字体时，输入框显示生效链（ui_font_family 覆盖 Geist）。
-        nebula_settings::persist_keys(&[("ui_font_family", "Inter".into())]).unwrap();
+        // 本机 settings 可能已有 tab_font_family 残留；显式清空保证初始值确定。
+        nebula_settings::persist_keys(&[
+            ("ui_font_family", "Inter".into()),
+            ("tab_font_family", String::new()),
+        ])
+        .unwrap();
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_reduce_motion(true);

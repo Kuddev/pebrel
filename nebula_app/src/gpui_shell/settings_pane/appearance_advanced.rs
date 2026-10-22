@@ -86,12 +86,6 @@ impl SettingsPane {
         let interface = self
             .group(language.pick("界面", "Interface"), cx)
             .child(self.font_size_row(true, cx))
-            .child(self.row(
-                language.text(crate::i18n::Message::SettingsFontTabFamily),
-                language.text(crate::i18n::Message::SettingsFontTabFamilyDescription),
-                tab_font_picker,
-                cx,
-            ))
             .child(self.switch_row(
                 "dim_inactive_panes",
                 language.text(crate::i18n::Message::SettingsPanesDimInactive),
@@ -143,6 +137,12 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::SettingsFontChinese),
                 language.text(crate::i18n::Message::SettingsFontChineseDescription),
                 cjk_font_picker,
+                cx,
+            ))
+            .child(self.row(
+                language.text(crate::i18n::Message::SettingsFontTabFamily),
+                language.text(crate::i18n::Message::SettingsFontTabFamilyDescription),
+                tab_font_picker,
                 cx,
             ))
             .child(self.font_size_row(false, cx))
