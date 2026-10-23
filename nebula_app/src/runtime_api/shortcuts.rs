@@ -464,10 +464,19 @@ fn command_catalog() -> Value {
             "example": "pebrel cli shell root@box",
         },
         {
-            "command": "pebrel cli upload|download|sync <asset> <local> <remote>",
-            "purpose": "Copy a file or directory between this machine and a saved server. \
-                        sync mirrors a directory and supports --delete with a guard.",
+            "command": "pebrel cli upload <asset> <local> <remote>",
+            "purpose": "Upload a local file or directory to a saved server.",
             "example": "pebrel cli upload root@box ./dist /tmp/dist",
+        },
+        {
+            "command": "pebrel cli download <asset> <remote> <local>",
+            "purpose": "Download a remote file or directory from a saved server.",
+            "example": "pebrel cli download root@box /tmp/dist ./dist",
+        },
+        {
+            "command": "pebrel cli sync <asset> <local> <remote>",
+            "purpose": "Copy directory contents to a fixed remote root; --delete removes stale entries with path guards.",
+            "example": "pebrel cli sync root@box ./dist /tmp/dist --delete",
         },
         {
             "command": "pebrel cli credentials list [<asset>]",

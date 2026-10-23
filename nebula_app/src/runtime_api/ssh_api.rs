@@ -14,7 +14,7 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
@@ -354,6 +354,7 @@ fn shell(params: &Value, sink: &EventSink, hub: &RuntimeHub) -> Result<Value, Ap
 // ---- CLI ----
 
 #[derive(Args, Debug)]
+#[clap(disable_help_subcommand = true)]
 pub struct CliOptions {
     #[clap(subcommand)]
     pub command: CliCommand,
@@ -536,6 +537,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_cli_keeps_help_for_every_operation() {
+        use clap::Parser as _;
+        for command in [
+            "",
+            "assets",
+            "assets list",
+            "assets show",
+            "exec",
+            "shell",
+            "upload",
+            "download",
+            "sync",
+            "credentials list",
+        ] {
+            let mut arguments = vec!["pebrel", "cli"];
+            arguments.extend(command.split_whitespace());
+            arguments.push("--help");
+            let error = crate::cli::Options::try_parse_from(arguments).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp, "{command}");
+        }
+        let error =
+            crate::cli::Options::try_parse_from(["pebrel", "help", "cli", "exec"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
 
     #[test]
     fn ssh_headless_fallback_only_runs_before_submission() {

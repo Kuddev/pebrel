@@ -94,23 +94,15 @@ async fn put_file(
     local: &Path,
     remote: &str,
 ) -> Result<u64, crate::ssh_session::SessionError> {
-    let mut source = tokio::fs::File::open(local).await?;
+    let source = tokio::fs::File::open(local).await?;
     let mut target = sftp
         .open_with_flags(
             remote.to_owned(),
             OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
         )
         .await?;
-    let mut buffer = vec![0u8; TRANSFER_CHUNK];
-    let mut total = 0u64;
-    loop {
-        let count = source.read(&mut buffer).await?;
-        if count == 0 {
-            break;
-        }
-        target.write_all(&buffer[..count]).await?;
-        total += count as u64;
-    }
+    let mut source = tokio::io::BufReader::with_capacity(TRANSFER_CHUNK, source);
+    let total = tokio::io::copy_buf(&mut source, &mut target).await?;
     // 先排空在途 WRITE 应答再关句柄，否则最后一窗可能没被服务端确认。
     target.shutdown().await?;
     Ok(total)
@@ -121,21 +113,13 @@ async fn get_file(
     remote: &str,
     local: &Path,
 ) -> Result<u64, crate::ssh_session::SessionError> {
-    let mut source = sftp.open(remote.to_owned()).await?;
+    let source = sftp.open(remote.to_owned()).await?;
     if let Some(parent) = local.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     let mut target = tokio::fs::File::create(local).await?;
-    let mut buffer = vec![0u8; TRANSFER_CHUNK];
-    let mut total = 0u64;
-    loop {
-        let count = source.read(&mut buffer).await?;
-        if count == 0 {
-            break;
-        }
-        target.write_all(&buffer[..count]).await?;
-        total += count as u64;
-    }
+    let mut source = tokio::io::BufReader::with_capacity(TRANSFER_CHUNK, source);
+    let total = tokio::io::copy_buf(&mut source, &mut target).await?;
     target.sync_all().await?;
     Ok(total)
 }

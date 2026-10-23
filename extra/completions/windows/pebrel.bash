@@ -115,9 +115,6 @@ _pebrel() {
             pebrel__cli,exec)
                 cmd="pebrel__cli__exec"
                 ;;
-            pebrel__cli,help)
-                cmd="pebrel__cli__help"
-                ;;
             pebrel__cli,shell)
                 cmd="pebrel__cli__shell"
                 ;;
@@ -127,68 +124,14 @@ _pebrel() {
             pebrel__cli,upload)
                 cmd="pebrel__cli__upload"
                 ;;
-            pebrel__cli__assets,help)
-                cmd="pebrel__cli__assets__help"
-                ;;
             pebrel__cli__assets,list)
                 cmd="pebrel__cli__assets__list"
                 ;;
             pebrel__cli__assets,show)
                 cmd="pebrel__cli__assets__show"
                 ;;
-            pebrel__cli__assets__help,help)
-                cmd="pebrel__cli__assets__help__help"
-                ;;
-            pebrel__cli__assets__help,list)
-                cmd="pebrel__cli__assets__help__list"
-                ;;
-            pebrel__cli__assets__help,show)
-                cmd="pebrel__cli__assets__help__show"
-                ;;
-            pebrel__cli__credentials,help)
-                cmd="pebrel__cli__credentials__help"
-                ;;
             pebrel__cli__credentials,list)
                 cmd="pebrel__cli__credentials__list"
-                ;;
-            pebrel__cli__credentials__help,help)
-                cmd="pebrel__cli__credentials__help__help"
-                ;;
-            pebrel__cli__credentials__help,list)
-                cmd="pebrel__cli__credentials__help__list"
-                ;;
-            pebrel__cli__help,assets)
-                cmd="pebrel__cli__help__assets"
-                ;;
-            pebrel__cli__help,credentials)
-                cmd="pebrel__cli__help__credentials"
-                ;;
-            pebrel__cli__help,download)
-                cmd="pebrel__cli__help__download"
-                ;;
-            pebrel__cli__help,exec)
-                cmd="pebrel__cli__help__exec"
-                ;;
-            pebrel__cli__help,help)
-                cmd="pebrel__cli__help__help"
-                ;;
-            pebrel__cli__help,shell)
-                cmd="pebrel__cli__help__shell"
-                ;;
-            pebrel__cli__help,sync)
-                cmd="pebrel__cli__help__sync"
-                ;;
-            pebrel__cli__help,upload)
-                cmd="pebrel__cli__help__upload"
-                ;;
-            pebrel__cli__help__assets,list)
-                cmd="pebrel__cli__help__assets__list"
-                ;;
-            pebrel__cli__help__assets,show)
-                cmd="pebrel__cli__help__assets__show"
-                ;;
-            pebrel__cli__help__credentials,list)
-                cmd="pebrel__cli__help__credentials__list"
                 ;;
             pebrel__config,check)
                 cmd="pebrel__config__check"
@@ -1173,7 +1116,7 @@ _pebrel() {
             return 0
             ;;
         pebrel__cli)
-            opts="-h --help assets exec shell upload download sync credentials help"
+            opts="-h --help assets exec shell upload download sync credentials"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1187,64 +1130,8 @@ _pebrel() {
             return 0
             ;;
         pebrel__cli__assets)
-            opts="-h --help list show help"
+            opts="-h --help list show"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__assets__help)
-            opts="list show help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__assets__help__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__assets__help__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__assets__help__show)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1285,50 +1172,8 @@ _pebrel() {
             return 0
             ;;
         pebrel__cli__credentials)
-            opts="-h --help list help"
+            opts="-h --help list"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__credentials__help)
-            opts="list help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__credentials__help__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__credentials__help__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1383,174 +1228,6 @@ _pebrel() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help)
-            opts="assets exec shell upload download sync credentials help"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__assets)
-            opts="list show"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__assets__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__assets__show)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__credentials)
-            opts="list"
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__credentials__list)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 5 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__download)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__exec)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__help)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__shell)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__sync)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
-                *)
-                    COMPREPLY=()
-                    ;;
-            esac
-            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-            return 0
-            ;;
-        pebrel__cli__help__upload)
-            opts=""
-            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
-                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
-                return 0
-            fi
-            case "${prev}" in
                 *)
                     COMPREPLY=()
                     ;;

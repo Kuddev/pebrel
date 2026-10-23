@@ -8,6 +8,7 @@ description: Work with the servers saved in Pebrel from a coding agent. Load thi
 Operate on the servers you've already saved in Pebrel. Every command is `pebrel cli ...`; it uses the resident app when available or runs through Pebrel's SSH implementation when the app is absent. Credentials remain in the OS keychain and are never returned to the agent.
 
 All responses are JSON; add `--pretty` for a formatted view.
+Use `--help` at any command level, for example `pebrel cli download --help`.
 
 ## Find your server first
 

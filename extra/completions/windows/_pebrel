@@ -1341,34 +1341,6 @@ _arguments "${_arguments_options[@]}" : \
 ':asset_id -- Asset id from `pebrel cli assets list`:_default' \
 && ret=0
 ;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_pebrel__cli__assets__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:pebrel-cli-assets-help-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(show)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
         esac
     ;;
 esac
@@ -1445,114 +1417,6 @@ _arguments "${_arguments_options[@]}" : \
 '-h[Print help]' \
 '--help[Print help]' \
 '::asset_id:_default' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_pebrel__cli__credentials__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:pebrel-cli-credentials-help-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_pebrel__cli__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:pebrel-cli-help-command-$line[1]:"
-        case $line[1] in
-            (assets)
-_arguments "${_arguments_options[@]}" : \
-":: :_pebrel__cli__help__assets_commands" \
-"*::: :->assets" \
-&& ret=0
-
-    case $state in
-    (assets)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:pebrel-cli-help-assets-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(show)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(exec)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(shell)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(upload)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(download)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(sync)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(credentials)
-_arguments "${_arguments_options[@]}" : \
-":: :_pebrel__cli__help__credentials_commands" \
-"*::: :->credentials" \
-&& ret=0
-
-    case $state in
-    (credentials)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:pebrel-cli-help-credentials-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
         esac
@@ -2170,7 +2034,6 @@ _pebrel__cli_commands() {
 'download:Copy a remote file or directory to this machine' \
 'sync:Mirror a local directory to a server directory' \
 'credentials:Report whether a server has saved credentials. Never prints secrets' \
-'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel cli commands' commands "$@"
 }
@@ -2179,33 +2042,8 @@ _pebrel__cli__assets_commands() {
     local commands; commands=(
 'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
 'show:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel cli assets commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__assets__help_commands] )) ||
-_pebrel__cli__assets__help_commands() {
-    local commands; commands=(
-'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-'show:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'pebrel cli assets help commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__assets__help__help_commands] )) ||
-_pebrel__cli__assets__help__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli assets help help commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__assets__help__list_commands] )) ||
-_pebrel__cli__assets__help__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli assets help list commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__assets__help__show_commands] )) ||
-_pebrel__cli__assets__help__show_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli assets help show commands' commands "$@"
 }
 (( $+functions[_pebrel__cli__assets__list_commands] )) ||
 _pebrel__cli__assets__list_commands() {
@@ -2221,27 +2059,8 @@ _pebrel__cli__assets__show_commands() {
 _pebrel__cli__credentials_commands() {
     local commands; commands=(
 'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'pebrel cli credentials commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__credentials__help_commands] )) ||
-_pebrel__cli__credentials__help_commands() {
-    local commands; commands=(
-'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'pebrel cli credentials help commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__credentials__help__help_commands] )) ||
-_pebrel__cli__credentials__help__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli credentials help help commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__credentials__help__list_commands] )) ||
-_pebrel__cli__credentials__help__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli credentials help list commands' commands "$@"
 }
 (( $+functions[_pebrel__cli__credentials__list_commands] )) ||
 _pebrel__cli__credentials__list_commands() {
@@ -2257,80 +2076,6 @@ _pebrel__cli__download_commands() {
 _pebrel__cli__exec_commands() {
     local commands; commands=()
     _describe -t commands 'pebrel cli exec commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help_commands] )) ||
-_pebrel__cli__help_commands() {
-    local commands; commands=(
-'assets:List saved servers. Alias\: hosts' \
-'exec:Run one command on a saved server over a temporary connection' \
-'shell:Open an interactive SSH tab in the Pebrel window' \
-'upload:Copy a local file or directory to a server' \
-'download:Copy a remote file or directory to this machine' \
-'sync:Mirror a local directory to a server directory' \
-'credentials:Report whether a server has saved credentials. Never prints secrets' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'pebrel cli help commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__assets_commands] )) ||
-_pebrel__cli__help__assets_commands() {
-    local commands; commands=(
-'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-'show:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-    )
-    _describe -t commands 'pebrel cli help assets commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__assets__list_commands] )) ||
-_pebrel__cli__help__assets__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help assets list commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__assets__show_commands] )) ||
-_pebrel__cli__help__assets__show_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help assets show commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__credentials_commands] )) ||
-_pebrel__cli__help__credentials_commands() {
-    local commands; commands=(
-'list:Flags every short command accepts. Kept tiny on purpose\: this surface exists so an agent can act without first learning a flag vocabulary' \
-    )
-    _describe -t commands 'pebrel cli help credentials commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__credentials__list_commands] )) ||
-_pebrel__cli__help__credentials__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help credentials list commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__download_commands] )) ||
-_pebrel__cli__help__download_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help download commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__exec_commands] )) ||
-_pebrel__cli__help__exec_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help exec commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__help_commands] )) ||
-_pebrel__cli__help__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help help commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__shell_commands] )) ||
-_pebrel__cli__help__shell_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help shell commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__sync_commands] )) ||
-_pebrel__cli__help__sync_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help sync commands' commands "$@"
-}
-(( $+functions[_pebrel__cli__help__upload_commands] )) ||
-_pebrel__cli__help__upload_commands() {
-    local commands; commands=()
-    _describe -t commands 'pebrel cli help upload commands' commands "$@"
 }
 (( $+functions[_pebrel__cli__shell_commands] )) ||
 _pebrel__cli__shell_commands() {

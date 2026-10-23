@@ -34,6 +34,10 @@ walks preserve empty directories and do not traverse descendant symbolic links.
 The CLI resolves local paths before sending them to another process, whose
 working directory may differ. File I/O remains owned by the SSH API's file module;
 workspace SSH pane creation and retry remain UI orchestration.
+SSH pane creation reuses the existing terminal-tab creation path, including remote
+working-directory propagation. The new CLI uses `--help` at every level rather
+than a second recursively generated help-subcommand tree; execution commands and
+the root help command remain available.
 
 ## Rejected alternatives
 
