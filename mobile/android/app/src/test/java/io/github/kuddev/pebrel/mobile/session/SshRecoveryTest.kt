@@ -55,6 +55,7 @@ class SshRecoveryTest {
             val a = repository.ssh(host, charArrayOf(), target)
             val old = Terminal.started.last()
             old.callbacks.onTransportReady(old.real)
+            val files = repository.sessions.value.first().files
             val b = repository.ssh(host, charArrayOf())
             val other = Terminal.started.last()
             other.callbacks.onTransportReady(other.real)
@@ -67,6 +68,7 @@ class SshRecoveryTest {
             assertFalse(other.closed)
             assertEquals(listOf(a, b), repository.sessions.value.map { it.id })
             assertEquals(target, repository.sessions.value.first().attachment)
+            assertSame("file transfers survive replacement of the SSH transport", files, repository.sessions.value.first().files)
             assertEquals("unfinished", repository.drafts.value[a])
             old.callbacks.onSessionFinished(old.real)
             old.callbacks.onTransportReady(old.real)

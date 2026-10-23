@@ -4,6 +4,7 @@ use std::io;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use nebula_terminal::event::{Event as TerminalEvent, WindowSize};
@@ -271,6 +272,25 @@ pub(super) fn own_channel(channel: Channel<client::Msg>) -> ShellChannel {
 }
 
 impl ShellChannel {
+    async fn next_message(&mut self) -> Option<ChannelMsg> {
+        match self.pending.pop_front() {
+            Some(message) => Some(message),
+            None => self.wait().await,
+        }
+    }
+
+    /// Poll only what is already available; never wait while the grid is locked.
+    fn ready_message(&mut self) -> Option<ChannelMsg> {
+        if let Some(message) = self.pending.pop_front() {
+            return Some(message);
+        }
+        let mut future = std::pin::pin!(self.wait());
+        match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(message) => message,
+            Poll::Pending => None,
+        }
+    }
+
     pub(super) async fn finish(&mut self) -> Result<(), SessionError> {
         if let Some(channel) = &self.channel {
             // Retain ownership across await: cancellation still runs close-on-drop.
@@ -441,11 +461,29 @@ async fn pump<H: SshEventHost>(
     let mut stream = StreamProcessor::default();
     stream.resize(initial_size);
     stream.set_remote_hook_token(hook_token);
-    while let Some(message) = channel.pending.pop_front() {
-        if let ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } = message {
-            stream.feed(&mut *terminal.lock(), event_proxy, data.as_ref());
-            event_proxy.send_event(TerminalEvent::Wakeup);
-        }
+    let result = pump_stream(channel, &mut stream, terminal, event_proxy, input).await;
+    // An exit or network error can arrive before the synchronized frame ends.
+    // Publish bytes already received before the pane reports its final state.
+    if stream.next_sync_timeout().is_some() {
+        stream.stop_sync(&mut *terminal.lock());
+        event_proxy.send_event(TerminalEvent::Wakeup);
+    }
+    result
+}
+
+async fn pump_stream<H: SshEventHost>(
+    channel: &mut ShellChannel,
+    stream: &mut StreamProcessor,
+    terminal: &FairMutex<Term<H>>,
+    event_proxy: &H,
+    input: &mut mpsc::UnboundedReceiver<Msg>,
+) -> Result<(), SessionError> {
+    while matches!(
+        channel.pending.front(),
+        Some(ChannelMsg::Data { .. } | ChannelMsg::ExtendedData { .. })
+    ) {
+        let message = channel.pending.pop_front().unwrap();
+        feed_ready_output(channel, message, stream, terminal, event_proxy);
     }
     let mut eof_deadline = None;
     loop {
@@ -472,10 +510,9 @@ async fn pump<H: SshEventHost>(
                 },
                 Some(Msg::Shutdown) | None => return Ok(()),
             },
-            message = channel.wait() => match message {
-                Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
-                    stream.feed(&mut *terminal.lock(), event_proxy, data.as_ref());
-                    event_proxy.send_event(TerminalEvent::Wakeup);
+            message = channel.next_message() => match message {
+                Some(message @ (ChannelMsg::Data { .. } | ChannelMsg::ExtendedData { .. })) => {
+                    feed_ready_output(channel, message, stream, terminal, event_proxy);
                 },
                 Some(ChannelMsg::ExitStatus { .. }) => return Ok(()),
                 Some(ChannelMsg::Eof) => eof_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(1)),
@@ -493,6 +530,44 @@ async fn pump<H: SshEventHost>(
             },
         }
     }
+}
+
+/// Match the local PTY's bounded reads: consume queued output under one grid
+/// lock and publish once. A packet boundary is not a terminal frame boundary.
+fn feed_ready_output<H: SshEventHost>(
+    channel: &mut ShellChannel,
+    mut message: ChannelMsg,
+    stream: &mut StreamProcessor,
+    terminal: &FairMutex<Term<H>>,
+    event_proxy: &H,
+) {
+    const MAX_BYTES: usize = 64 * 1024;
+    const MAX_MESSAGES: usize = 128;
+    let mut bytes = 0;
+    let mut messages = 0;
+    {
+        let mut terminal = terminal.lock();
+        loop {
+            match message {
+                ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                    bytes += data.len();
+                    messages += 1;
+                    stream.feed(&mut terminal, event_proxy, data.as_ref());
+                },
+                // Preserve EOF, exit status and other control messages in order.
+                control => {
+                    channel.pending.push_front(control);
+                    break;
+                },
+            }
+            if bytes >= MAX_BYTES || messages >= MAX_MESSAGES {
+                break;
+            }
+            let Some(next) = channel.ready_message() else { break };
+            message = next;
+        }
+    }
+    event_proxy.send_event(TerminalEvent::Wakeup);
 }
 
 async fn wait_for_sync(deadline: Option<std::time::Instant>) {
