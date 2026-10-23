@@ -17,7 +17,7 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
-/// A short-lived native probe must finish before GUI, hooks or CLI setup.
+/// Native probe helpers run before GUI, hooks or CLI setup.
 pub(crate) fn run_helper_if_requested() -> Option<i32> {
     #[cfg(windows)]
     return windows::run_helper_if_requested();
@@ -94,7 +94,8 @@ pub(crate) struct CodexSession {
 /// WSL panes are inspected inside the guest because Windows Toolhelp cannot
 /// see Linux processes or their open session files. Linux hosts use the same
 /// process metadata directly. Windows inspects only the pane shell's verified
-/// descendants in a disposable helper, bounding potentially blocking file APIs.
+/// descendants in one reusable, process-owned helper. Each request remains bounded;
+/// a stalled helper is terminated before a later request can replace it.
 pub(crate) fn probe_codex_session(
     pane_id: u64,
     exec_context: Option<&crate::runtime_exec::PaneExecContext>,

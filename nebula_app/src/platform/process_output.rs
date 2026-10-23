@@ -41,6 +41,8 @@ pub(crate) fn read_cancellable_with_stdin(
     limit: usize,
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<Vec<u8>> {
+    #[cfg(test)]
+    let started = Instant::now();
     if cancelled() {
         return Err(io::ErrorKind::Interrupted.into());
     }
@@ -48,7 +50,11 @@ pub(crate) fn read_cancellable_with_stdin(
     let mut output = tempfile::tempfile()?;
     command.stdout(output.try_clone()?).stderr(Stdio::null());
     super::process::configure_process_group(&mut command);
+    #[cfg(test)]
+    eprintln!("probe timing: prepared at {}us", started.elapsed().as_micros());
     let mut child = command.spawn()?;
+    #[cfg(test)]
+    eprintln!("probe timing: spawned at {}us", started.elapsed().as_micros());
     let group = match super::process::ProcessGroup::attach(&child) {
         Ok(group) => group,
         Err(error) => {
@@ -57,6 +63,8 @@ pub(crate) fn read_cancellable_with_stdin(
             return Err(error);
         },
     };
+    #[cfg(test)]
+    eprintln!("probe timing: attached at {}us", started.elapsed().as_micros());
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
@@ -69,6 +77,8 @@ pub(crate) fn read_cancellable_with_stdin(
                 std::thread::sleep(Duration::from_millis(10));
             },
             result => {
+                #[cfg(test)]
+                eprintln!("probe timing: stopped at {}us", started.elapsed().as_micros());
                 group.terminate(&mut child);
                 let _ = child.wait();
                 if cancelled() {
@@ -81,6 +91,8 @@ pub(crate) fn read_cancellable_with_stdin(
         }
     };
     group.finish();
+    #[cfg(test)]
+    eprintln!("probe timing: finished at {}us", started.elapsed().as_micros());
     if cancelled() {
         return Err(io::ErrorKind::Interrupted.into());
     }
