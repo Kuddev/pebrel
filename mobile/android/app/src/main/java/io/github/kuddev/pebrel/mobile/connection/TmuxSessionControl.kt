@@ -14,6 +14,10 @@ internal class TmuxSessionControl(
     private val token = UUID.randomUUID().toString().replace("-", "")
     @Volatile private var tty: String? = null
     @Volatile private var reading = false
+    @Volatile private var nativeScroll = false
+
+    // No query or monitor acquisition on the per-gesture path.
+    fun applicationScrolled() { nativeScroll = true }
 
     fun command(command: String): String = RemoteSessions.posixWithPath(
         "printf '\\036PEBREL_TTY_$token=%s\\037' \"${'$'}(tty)\"; exec ${command.removePrefix("exec ")}")
@@ -57,22 +61,23 @@ internal class TmuxSessionControl(
         val target = target(attachment)
         val enter = if (mode == "copy-mode") "" else "tmux copy-mode -t '$target' && "
         val action = if (lines < 0) "scroll-up" else "scroll-down"
-        execute(attachment, enter + "tmux send-keys -X -N ${kotlin.math.abs(lines.coerceIn(-32, 32))} -t '$target' $action")
+        execute(attachment, enter + "tmux send-keys -X -N ${kotlin.math.abs(lines.coerceIn(-256, 256))} -t '$target' $action")
         reading = true
         return true
     }
 
     @Synchronized
     fun returnToInput() {
-        if (!reading) return
+        if (!reading && !nativeScroll) return
         val client = current()
         if (client == null) {
-            if (!reading) return // The automatic shell controller observed an intentional detach.
+            if (!reading) { nativeScroll = false; return }
             throw IOException("tmux_client_unavailable")
         }
         val (attachment, mode) = client
         if (mode == "copy-mode") execute(attachment, "tmux send-keys -X -t '${target(attachment)}' cancel")
         reading = false
+        nativeScroll = false
     }
 
     private fun execute(attachment: RemoteAttachment, command: String) {
