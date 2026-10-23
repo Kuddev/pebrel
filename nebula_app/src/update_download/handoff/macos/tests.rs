@@ -108,6 +108,7 @@ impl Fixture {
         let created = native::process_created(old.id()).unwrap().unwrap();
         let plan = Plan {
             schema: 1,
+            elevated: false,
             asset: UpdateAsset {
                 version: version.into(),
                 name: name.clone(),

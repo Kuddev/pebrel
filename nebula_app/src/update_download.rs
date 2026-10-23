@@ -409,12 +409,16 @@ fn set_progress(job: Option<&DownloadJob>, downloaded: u64, total: Option<u64>) 
 }
 
 fn download_paths(asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
-    let directory = nebula_settings::settings_dir().join("updates");
+    let directory = state_directory("").map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("无法创建更新下载目录：{error}"))?;
     let final_path = directory.join(&asset.name);
     let partial_path = directory.join(format!("{}.part", asset.name));
     Ok((partial_path, final_path))
+}
+
+fn state_directory(relative: &str) -> std::io::Result<PathBuf> {
+    crate::platform::update_installation::state_directory(Path::new(relative))
 }
 
 fn verify_package_trailer(file: &mut File, asset: &UpdateAsset) -> Result<(), String> {
