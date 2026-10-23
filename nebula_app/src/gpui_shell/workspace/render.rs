@@ -4,6 +4,7 @@ use super::*;
 impl Render for NebulaWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.spinner_visible.set(false);
+        self.reconcile_tab_drag(cx);
         let theme_transition = self.theme_transition.render(window, cx);
         crate::gpui_shell::theme::sync_component_focus_ring(window, cx);
         if window.is_window_active() {
@@ -137,6 +138,15 @@ impl Render for NebulaWorkspace {
                 let pane_dragged = this.release_pane_drag(window, cx);
                 if this.release_tab_drag_at(event.position, window, cx) || pane_dragged {
                     // 真拖拽已经完成，不能再让源 tab 的 click 或终端选择收到释放。
+                    cx.stop_propagation();
+                }
+            }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
+                // Occluding tabs hide the root hitbox, including during a fast release
+                // before the drag overlay has painted its first frame.
+                if this.tab_drag.as_ref().is_some_and(|drag| drag.axis == TabDragAxis::Horizontal)
+                    && this.release_tab_drag_at(event.position, window, cx)
+                {
                     cx.stop_propagation();
                 }
             }))

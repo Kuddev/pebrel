@@ -77,8 +77,8 @@ impl TerminalView {
                 ),
                 gpui::size((self.cell_width * self.cols as f32).min(px(180.0)), px(32.0)),
             ),
-            // 此偏移相对终端 root 的8px内边距，不参与网格或PTY尺寸计算。
-            top: px(8.0) + offset,
+            // 相对终端 root 的顶部内边距，不参与网格或PTY尺寸计算。
+            top: px(Self::CONTENT_PADDING_TOP) + offset,
         })
     }
     pub(in crate::gpui_shell::terminal) fn clear_output_hover(&mut self, cx: &mut Context<Self>) {

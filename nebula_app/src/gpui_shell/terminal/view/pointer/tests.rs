@@ -203,6 +203,20 @@ fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
 }
 
 #[gpui::test]
+fn terminal_grid_keeps_inset_coordinates_after_tightening_top_padding(cx: &mut TestAppContext) {
+    let (terminal, mut cx, _receiver) = link_fixture(cx, b"prompt> ");
+    let bounds = cx.debug_bounds("mouse-terminal").unwrap();
+    terminal.read_with(&cx, |view, _| {
+        assert_eq!(view.origin, bounds.origin + point(px(12.0), px(4.0)));
+    });
+    let first_row = cell(&terminal, &cx, 2);
+    terminal.read_with(&cx, |view, _| {
+        let (grid, _) = view.grid_point(first_row);
+        assert_eq!(grid, TermPoint::new(Line(0), Column(2)));
+    });
+}
+
+#[gpui::test]
 fn right_click_menu_does_not_paste_and_quick_mode_remains_explicit(cx: &mut TestAppContext) {
     let (terminal, mut cx, receiver) = link_fixture(cx, b"prompt> ");
     let requests = Rc::new(Cell::new(0));

@@ -38,6 +38,7 @@ const RESET_KEYS: &[&str] = &[
     "completion_style",
     "cjk_bold_regular",
     "tabs_position",
+    "tab_style",
     "tab_reveal",
     "density",
     "new_tab_position",
@@ -149,6 +150,14 @@ fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
 mod tests {
     use super::*;
     use crate::{RawSettings, RuntimeSettings};
+
+    #[test]
+    fn reset_restores_tab_style_and_preserves_unrelated_keys() {
+        let text = default_settings_text("tab_style=tag\ncustom=keep\n");
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&text));
+        assert_eq!(runtime.tab_style, crate::TabStyle::Chrome);
+        assert!(text.contains("custom=keep"));
+    }
 
     #[test]
     fn reset_restores_auto_scrollbar_visibility() {

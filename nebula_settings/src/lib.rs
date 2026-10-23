@@ -26,6 +26,8 @@ pub use background_effects::{BackgroundEffectRequest, BackgroundEffects};
 mod terminal_effects;
 pub use terminal_effects::{EffectAnimation, TerminalEffects};
 mod cursor_motion;
+mod tab_style;
+pub use tab_style::TabStyle;
 mod custom_theme;
 pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
@@ -1037,6 +1039,7 @@ pub struct RuntimeSettings {
     /// 全宽字形（CJK 等）bold run 用 Regular 字形（粗体提亮不加粗）。
     pub cjk_bold_regular: bool,
     pub tabs_position: TabsPositionName,
+    pub tab_style: TabStyle,
     pub tab_reveal: TabRevealName,
     pub density: DensityName,
     pub new_tab_position: NewTabPositionName,
@@ -1230,6 +1233,7 @@ impl RuntimeSettings {
                 .value("tabs_position")
                 .and_then(TabsPositionName::from_settings)
                 .unwrap_or_default(),
+            tab_style: raw.value("tab_style").and_then(TabStyle::from_settings).unwrap_or_default(),
             tab_reveal: raw
                 .value("tab_reveal")
                 .and_then(TabRevealName::from_settings)
