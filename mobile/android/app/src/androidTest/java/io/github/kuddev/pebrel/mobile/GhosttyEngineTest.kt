@@ -20,6 +20,23 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Exercises the actual JNI library in the optimized APK, not a mocked parser. */
 @RunWith(AndroidJUnit4::class)
 class GhosttyEngineTest {
+    @Test fun synchronizedOutputFollowsSplitMarkersAndReleasesOnTimeoutOrResize() = GhosttyCore(80, 24, 1000).use { core ->
+        assertFalse(core.synchronizedOutput())
+        for (part in listOf("\u001b[?20", "26h\u001b[2J\u001b[H", "old history")) core.feed(part.toByteArray())
+        assertTrue(core.synchronizedOutput())
+        core.feed("\u001b[24;1Hlatest\u001b[?2026".toByteArray())
+        assertTrue(core.synchronizedOutput())
+        core.feed("l".toByteArray())
+        assertFalse(core.synchronizedOutput())
+        assertEquals(23, core.snapshot().cursorY)
+        core.feed("\u001b[?2026hpartial".toByteArray())
+        core.endSynchronizedOutput()
+        assertFalse(core.synchronizedOutput())
+        core.feed("\u001b[?2026h".toByteArray())
+        core.resize(80, 30, 8, 16)
+        assertFalse(core.synchronizedOutput())
+    }
+
     @Test fun scrollbackLimitAndAbsolutePositionUseNativeHistory() = GhosttyCore(40, 6, 1000).use { core ->
         repeat(1200) { core.feed("HISTORY-${it.toString().padStart(4, '0')}\r\n".toByteArray()) }
         val bottom = core.snapshot()
@@ -145,6 +162,7 @@ class GhosttyEngineTest {
     }
 
     @Test fun wheelKeepsPrimaryHistoryLocalAndRoutesAlternateScreenInput() = GhosttyCore(20, 4).use { core ->
+        assertEquals(0, core.applicationScrollMode())
         core.resize(20, 4, 10, 20)
         core.feed((0..30).joinToString("\r\n") { "line-$it" }.toByteArray())
         core.feed("\u001b[?1000h\u001b[?1006h".toByteArray())
@@ -154,15 +172,18 @@ class GhosttyEngineTest {
         core.scroll(Int.MAX_VALUE)
         core.feed("\u001b[?1049h".toByteArray())
         assertTrue(core.snapshot().alternateScreen)
+        assertEquals(2, core.applicationScrollMode())
         assertEquals("\u001b[<64;4;3M\u001b[<64;4;3M", core.wheel(-2, 3, 2).toString(Charsets.UTF_8))
         assertEquals("\u001b[<65;4;3M", core.wheel(1, 3, 2).toString(Charsets.UTF_8))
         core.feed("\u001b[?1000l\u001b[?1007h\u001b[?1h".toByteArray())
+        assertEquals(1, core.applicationScrollMode())
         assertEquals("\u001bOA", core.wheel(-1, 3, 2).toString(Charsets.UTF_8))
         core.feed("\u001b[?1l".toByteArray())
         assertEquals("\u001b[B", core.wheel(1, 3, 2).toString(Charsets.UTF_8))
         core.feed("\u001b[?1007l".toByteArray())
         assertTrue(core.wheel(1, 3, 2).isEmpty())
         core.feed("\u001b[?1049l".toByteArray())
+        assertEquals(0, core.applicationScrollMode())
         assertFalse(core.snapshot().alternateScreen)
         assertTrue(core.snapshot().text().contains("line-30"))
         val offset = core.snapshot().scrollOffset
