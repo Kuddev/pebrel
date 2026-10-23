@@ -904,6 +904,24 @@ fn ordinary_shell_output_stays_literal() {
     assert!(sources(&[r"grep '\(foo\|bar\)' log.txt"]).is_empty());
 }
 
+#[test]
+fn issue686_directory_listing_never_borrows_the_next_shell_prompt() {
+    for command in ["ls", "ls -l", "pwd"] {
+        let prompt = format!("(base) [user@host gmx_run_1000]$ {command}");
+        assert!(
+            sources(&[
+                &prompt,
+                "compact  files  gmx_run_1000  log.lammps  shake_1",
+                "(base) [user@host gmx_run_1000]$ ls",
+            ])
+            .is_empty(),
+            "shell command and filenames must stay literal: {command}"
+        );
+    }
+    assert_eq!(sources(&["formula $x^2", "+ y^2$ tail"]).len(), 1);
+    assert_eq!(sources(&[r"formula $ \frac{1}{2} $ ends"]).len(), 1);
+}
+
 /// 终端软折行和 AI 的硬折行都可接数学片段，但硬折行不能穿过普通正文。
 #[test]
 fn inline_formula_crosses_soft_wrap_and_math_only_hard_rows() {

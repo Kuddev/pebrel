@@ -18,6 +18,7 @@ pub(in crate::gpui_shell) struct PaintedSnapshot {
     pub selection: Vec<(u16, u16, u16)>,
     pub origin: Point<Pixels>,
     pub cell_size: Size<Pixels>,
+    pub reading_highlights: Vec<Bounds<Pixels>>,
 }
 
 #[derive(Default)]
@@ -62,6 +63,14 @@ pub(super) fn record(
                 .collect(),
             origin: bounds.origin,
             cell_size: size(layout.cell_width, layout.line_height),
+            reading_highlights: Vec::new(),
         },
     );
+}
+
+pub(super) fn record_reading_highlight(entity: EntityId, bounds: Bounds<Pixels>, cx: &App) {
+    let Some(probe) = cx.try_global::<CaptureProbe>() else { return };
+    if let Some(snapshot) = probe.0.borrow_mut().get_mut(&entity) {
+        snapshot.reading_highlights.push(bounds);
+    }
 }
