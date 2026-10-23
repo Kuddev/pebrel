@@ -102,11 +102,6 @@ pub fn run_shell(
             Ok(false) => {},
         }
     }
-    if crate::platform::CAPABILITIES.self_update_install
-        && crate::update_download::handoff::apply_scheduled()
-    {
-        return;
-    }
     let (shell_tx, shell_rx) = std::sync::mpsc::channel();
     let _elevated_handover = if crate::platform::elevation::is_elevated().is_ok_and(|value| value) {
         use crate::platform::elevation::handover::{Request, Startup, start_or_forward};
@@ -118,6 +113,9 @@ pub fn run_shell(
             ),
             command: initial_command.clone(),
             shell_id: shell_id.clone(),
+            update_restore: (initial_command.is_none() && shell_id.is_none())
+                .then(crate::update_download::handoff::pending_restore_path)
+                .flatten(),
         };
         let sender = shell_tx.clone();
         // 在托盘、Hook 和 Runtime 创建前决定唯一管理员拥有者，不复用普通实例的端口。
@@ -135,6 +133,12 @@ pub fn run_shell(
     } else {
         None
     };
+    // 管理员重复启动先交给已有拥有者；不能提前消耗“下次启动安装”的预约。
+    if crate::platform::CAPABILITIES.self_update_install
+        && crate::update_download::handoff::apply_scheduled()
+    {
+        return;
+    }
     let open_urls_tx = shell_tx.clone();
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::ssh_prompt::install({

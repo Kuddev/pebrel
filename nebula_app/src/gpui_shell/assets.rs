@@ -25,6 +25,7 @@ macro_rules! icons {
 }
 
 const NEBULA_ICONS: &[(&str, &[u8])] = icons![
+    "terminal",
     "command-manager",
     "keymap",
     "layout-grid",
@@ -95,6 +96,7 @@ pub struct NebulaAssets;
 
 impl AssetSource for NebulaAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        let path = if path == "icons/square-terminal.svg" { nav::TERMINAL } else { path };
         if let Some((_, bytes)) = NEBULA_ICONS
             .iter()
             .chain(AGENT_ICONS)
@@ -126,6 +128,7 @@ impl AssetSource for NebulaAssets {
 
 /// 自带图标的路径。走路径而不是 `IconName`：扩展那个枚举等于改 fork。
 pub mod nav {
+    pub const TERMINAL: &str = "icons/nebula-terminal.svg";
     pub const AGENT_CLAUDE: &str = "icons/agent-claude.svg";
     pub const AGENT_KIMI: &str = "icons/agent-kimi.svg";
     pub const AGENT_OMP: &str = "icons/agent-omp.svg";

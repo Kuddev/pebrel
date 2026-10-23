@@ -1,7 +1,8 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::task::{Context, Poll, Waker};
@@ -11,7 +12,7 @@ use nebula_terminal::event::{Event as TerminalEvent, WindowSize};
 use nebula_terminal::event_loop::{Msg, StreamProcessor};
 use nebula_terminal::sync::FairMutex;
 use nebula_terminal::term::Term;
-use russh::{Channel, ChannelMsg, client};
+use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, client};
 use tokio::sync::{mpsc, watch};
 
 use super::{SessionError, SharedSession, SshDestination, SshEventHost, SshStage};
@@ -261,17 +262,28 @@ impl Drop for Opening {
 }
 
 pub(super) struct ShellChannel {
-    channel: Option<Channel<client::Msg>>,
+    channel: Option<Arc<ChannelWriteHalf<client::Msg>>>,
+    reader: ChannelReadHalf,
     pending: VecDeque<ChannelMsg>,
     pending_bytes: usize,
 }
 
 /// The same close-on-drop ownership applies to shell and short-lived exec channels.
 pub(super) fn own_channel(channel: Channel<client::Msg>) -> ShellChannel {
-    ShellChannel { channel: Some(channel), pending: VecDeque::new(), pending_bytes: 0 }
+    let (reader, writer) = channel.split();
+    ShellChannel {
+        channel: Some(Arc::new(writer)),
+        reader,
+        pending: VecDeque::new(),
+        pending_bytes: 0,
+    }
 }
 
 impl ShellChannel {
+    pub(super) async fn wait(&mut self) -> Option<ChannelMsg> {
+        self.reader.wait().await
+    }
+
     async fn next_message(&mut self) -> Option<ChannelMsg> {
         match self.pending.pop_front() {
             Some(message) => Some(message),
@@ -302,15 +314,9 @@ impl ShellChannel {
 }
 
 impl Deref for ShellChannel {
-    type Target = Channel<client::Msg>;
+    type Target = ChannelWriteHalf<client::Msg>;
     fn deref(&self) -> &Self::Target {
         self.channel.as_ref().expect("SSH channel exists until drop")
-    }
-}
-
-impl DerefMut for ShellChannel {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.channel.as_mut().expect("SSH channel exists until drop")
     }
 }
 
@@ -362,11 +368,7 @@ async fn open_shell_channel(
 ) -> Result<(ShellChannel, String), SessionError> {
     let hook_token = super::remote_hook_token()?;
     let bootstrap = super::integration::prepare(session, &hook_token).await;
-    let mut channel = ShellChannel {
-        channel: Some(session.channel_open_session().await?),
-        pending: VecDeque::new(),
-        pending_bytes: 0,
-    };
+    let mut channel = own_channel(session.channel_open_session().await?);
     channel
         .request_pty(
             true,
@@ -486,11 +488,24 @@ async fn pump_stream<H: SshEventHost>(
         feed_ready_output(channel, message, stream, terminal, event_proxy);
     }
     let mut eof_deadline = None;
+    // A blocked SSH send must not stop draining output. The peer may need that
+    // receive space before it can consume input and return window credit.
+    let writer = channel.channel.as_ref().expect("open shell writer").clone();
+    let mut writing: Option<Pin<Box<dyn Future<Output = Result<(), SessionError>> + Send>>> = None;
     loop {
         let sync_deadline = stream.next_sync_timeout();
         tokio::select! {
-            message = input.recv() => match message {
-                Some(Msg::Input(bytes)) => network("channel write", channel.data(bytes.as_ref())).await?,
+            result = async { writing.as_mut().expect("pending write").await }, if writing.is_some() => {
+                result?;
+                writing = None;
+            },
+            message = input.recv(), if writing.is_none() => match message {
+                Some(Msg::Input(bytes)) => {
+                    let writer = writer.clone();
+                    writing = Some(Box::pin(async move {
+                        network("channel write", writer.data_bytes(bytes.into_owned())).await
+                    }));
+                },
                 Some(Msg::Resize(size)) => {
                     // SSH has no local EventLoop to apply the grid half of a
                     // resize. Keep the terminal model in lockstep with the
@@ -499,9 +514,14 @@ async fn pump_stream<H: SshEventHost>(
                     terminal.lock().resize(size);
                     stream.resize(size);
                     event_proxy.send_event(TerminalEvent::Wakeup);
-                    network("channel resize", channel.window_change(u32::from(size.num_cols), u32::from(size.num_lines),
-                        u32::from(size.cell_width) * u32::from(size.num_cols),
-                        u32::from(size.cell_height) * u32::from(size.num_lines))).await?;
+                    let writer = writer.clone();
+                    writing = Some(Box::pin(async move {
+                        network("channel resize", writer.window_change(
+                            u32::from(size.num_cols), u32::from(size.num_lines),
+                            u32::from(size.cell_width) * u32::from(size.num_cols),
+                            u32::from(size.cell_height) * u32::from(size.num_lines),
+                        )).await
+                    }));
                 },
                 Some(Msg::ResizeGrid(size)) => {
                     terminal.lock().resize(size);

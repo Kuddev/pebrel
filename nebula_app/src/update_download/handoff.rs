@@ -3,6 +3,7 @@
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ struct ActiveRestore {
 }
 
 static ACTIVE_RESTORE: std::sync::Mutex<Option<ActiveRestore>> = std::sync::Mutex::new(None);
+static SCHEDULED_IN_THIS_PROCESS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Deserialize)]
 struct Participant {
@@ -30,6 +32,8 @@ struct Participant {
 #[derive(Serialize, Deserialize)]
 struct Plan {
     schema: u32,
+    #[serde(default)]
+    elevated: bool,
     asset: UpdateAsset,
     transaction: String,
     executable: PathBuf,
@@ -107,12 +111,7 @@ pub(crate) fn installation_in_progress() -> io::Result<bool> {
 /// All verification and process waiting occurs on a background executor.
 pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
     crate::platform::distribution::require_direct_update()?;
-    if crate::platform::elevation::requires_isolation() {
-        return Err(
-            "Install updates from an ordinary Pebrel window so privileged sessions stay isolated"
-                .into(),
-        );
-    }
+    let elevated = crate::platform::elevation::is_elevated().map_err(|error| error.to_string())?;
     if !crate::platform::CAPABILITIES.self_update_install {
         return Err("In-app installation is unavailable on this platform".into());
     }
@@ -125,7 +124,8 @@ pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
         std::process::id(),
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
     );
-    let directory = nebula_settings::settings_dir().join("updates/handoffs").join(&transaction);
+    let directory = super::state_directory(&format!("handoffs/{transaction}"))
+        .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     // Detect an unwritable target while all windows are still available.
     let probe_directory =
@@ -146,6 +146,7 @@ pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
     let base = guard_base(&executable);
     let plan = Plan {
         schema: 1,
+        elevated,
         asset: asset.clone(),
         transaction: transaction.clone(),
         installation,
@@ -168,7 +169,7 @@ pub(crate) fn prepare(asset: &UpdateAsset) -> Result<PreparedUpdate, String> {
     )
     .map_err(|error| error.to_string())?;
     crate::atomic_file::write(
-        &nebula_settings::settings_dir().join("updates/last-handoff.json"),
+        &super::state_directory("").map_err(|error| error.to_string())?.join("last-handoff.json"),
         &serde_json::to_vec(&plan_path).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
@@ -212,21 +213,36 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 /// A ticket restores windows once, independently of the ordinary startup setting.
 /// Keep its original snapshots on disk even after acknowledgement.
 pub(crate) fn restore_ticket() -> Option<Vec<Session>> {
-    let path = std::env::var_os("PEBREL_UPDATE_RESTORE").map(PathBuf::from).or_else(|| {
-        read_json(&nebula_settings::settings_dir().join("updates/last-handoff.json"))
-    })?;
+    restore_ticket_from(&pending_restore_path()?)
+}
+
+/// A validated path can travel through the authenticated elevated launch handover.
+/// Discovery does not consume the ticket or increment its recovery attempt count.
+pub(crate) fn pending_restore_path() -> Option<PathBuf> {
+    let root = super::state_directory("").ok()?;
+    let path = std::env::var_os("PEBREL_UPDATE_RESTORE")
+        .map(PathBuf::from)
+        .or_else(|| read_json(&root.join("last-handoff.json")))?;
+    restore_candidate(&path).map(|(path, _)| path)
+}
+
+fn restore_candidate(path: &Path) -> Option<(PathBuf, Vec<Session>)> {
     let path = canonical(&path).ok()?;
-    let root = canonical(&nebula_settings::settings_dir().join("updates/handoffs")).ok()?;
-    if !path.starts_with(root) || path.file_name()? != "plan.json" {
+    let root = canonical(&super::state_directory("handoffs").ok()?).ok()?;
+    let directory = path.parent()?;
+    if directory.parent()? != root || path.file_name()? != "plan.json" {
         return None;
     }
     let plan: Plan = read_json(&path)?;
     if plan.schema != 1
+        || plan.elevated != crate::platform::elevation::is_elevated().ok()?
+        || directory.file_name()?.to_str()? != plan.transaction
+        || canonical(&plan.config_directory).ok()?
+            != canonical(&nebula_settings::settings_dir()).ok()?
         || canonical(&plan.executable).ok()? != canonical(&std::env::current_exe().ok()?).ok()?
     {
         return None;
     }
-    let directory = path.parent()?;
     let result: serde_json::Value = read_json(&directory.join("result.json"))?;
     let current_version = env!("CARGO_PKG_VERSION");
     let succeeded = result["success"] == true && plan.version == current_version;
@@ -245,28 +261,42 @@ pub(crate) fn restore_ticket() -> Option<Vec<Session>> {
     if count >= 3 || directory.join("restored.json").exists() {
         return None;
     }
+    Some((path, windows))
+}
+
+pub(crate) fn restore_ticket_from(path: &Path) -> Option<Vec<Session>> {
+    let mut active = ACTIVE_RESTORE.lock().unwrap_or_else(|error| error.into_inner());
+    let (path, windows) = restore_candidate(path)?;
+    let directory = path.parent()?;
+    // 同一票据可以重试尚未创建的窗口；UI 按快照索引记住已创建窗口，避免重复恢复。
+    if active.as_ref().is_some_and(|ticket| ticket.directory != directory) {
+        return None;
+    }
+    let count: u32 = read_json(&directory.join("restore-attempts.json")).unwrap_or(0);
     crate::atomic_file::write(
         &directory.join("restore-attempts.json"),
         (count + 1).to_string().as_bytes(),
     )
     .ok()?;
-    *ACTIVE_RESTORE.lock().unwrap_or_else(|error| error.into_inner()) =
+    *active =
         Some(ActiveRestore { directory: directory.to_owned(), expected_windows: windows.len() });
     Some(windows)
 }
 
-pub(crate) fn acknowledge_restore(restored_windows: usize) {
+pub(crate) fn acknowledge_restore(restored_windows: usize) -> bool {
     let mut active = ACTIVE_RESTORE.lock().unwrap_or_else(|error| error.into_inner());
     let Some(ticket) = active.as_ref() else {
-        return;
+        return false;
     };
     if restored_windows != ticket.expected_windows {
-        return;
+        return false;
     }
     if let Err(error) = crate::atomic_file::write(&ticket.directory.join("restored.json"), b"{}") {
         log::warn!("Could not acknowledge update recovery: {error}");
+        false
     } else {
         *active = None;
+        true
     }
 }
 
@@ -293,15 +323,16 @@ pub(crate) fn completed_update_directory() -> Option<PathBuf> {
 }
 
 pub(super) fn failed_update() -> Option<(UpdateAsset, String)> {
-    let path: PathBuf =
-        read_json(&nebula_settings::settings_dir().join("updates/last-handoff.json"))?;
-    let root = canonical(&nebula_settings::settings_dir().join("updates/handoffs")).ok()?;
+    let path: PathBuf = read_json(&super::state_directory("").ok()?.join("last-handoff.json"))?;
+    let root = canonical(&super::state_directory("handoffs").ok()?).ok()?;
     let path = canonical(&path).ok()?;
     if !path.starts_with(root) {
         return None;
     }
     let plan: Plan = read_json(&path)?;
-    if canonical(&plan.executable).ok()? != canonical(&std::env::current_exe().ok()?).ok()? {
+    if plan.elevated != crate::platform::elevation::is_elevated().ok()?
+        || canonical(&plan.executable).ok()? != canonical(&std::env::current_exe().ok()?).ok()?
+    {
         return None;
     }
     let result_path = path.parent()?.join("result.json");
@@ -320,8 +351,9 @@ pub(super) fn failure_unseen(prompt_state: &Path) -> bool {
     if failed_update().is_none() {
         return false;
     }
-    let Some(path) =
-        read_json::<PathBuf>(&nebula_settings::settings_dir().join("updates/last-handoff.json"))
+    let Some(path) = super::state_directory("")
+        .ok()
+        .and_then(|root| read_json::<PathBuf>(&root.join("last-handoff.json")))
     else {
         return false;
     };
@@ -336,21 +368,64 @@ pub(super) fn failure_unseen(prompt_state: &Path) -> bool {
     }
 }
 
-pub(crate) fn schedule(asset: &UpdateAsset) -> Result<(), String> {
+pub(crate) fn schedule(asset: &UpdateAsset, windows: &[Session]) -> Result<(), String> {
     crate::platform::distribution::require_direct_update()?;
-    if crate::platform::elevation::requires_isolation() {
-        return Err("Schedule updates from an ordinary Pebrel window".into());
-    }
+    let elevated = crate::platform::elevation::is_elevated().map_err(|error| error.to_string())?;
     super::validate_asset(asset)?;
     if !matches!(super::status(asset), super::DownloadStatus::Ready { .. }) {
         return Err("The package is not ready to schedule".into());
     }
+    let root = super::state_directory("").map_err(|error| error.to_string())?;
+    if elevated {
+        validate_windows(windows)?;
+        crate::atomic_file::write(
+            &root.join("scheduled-workspace.json"),
+            &serde_json::to_vec(windows).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
     let data = serde_json::to_vec(asset).map_err(|error| error.to_string())?;
+    crate::atomic_file::write(&root.join("install-next.json"), &data)
+        .map_err(|error| error.to_string())?;
+    SCHEDULED_IN_THIS_PROCESS.store(elevated, Ordering::Release);
+    Ok(())
+}
+
+fn validate_windows(windows: &[Session]) -> Result<(), String> {
+    if windows.is_empty() || windows.len() > 32 || windows.iter().any(|session| session.version > 4)
+    {
+        return Err("Invalid update workspace snapshot".into());
+    }
+    Ok(())
+}
+
+/// Only an explicitly armed administrator update persists privileged session state.
+pub(crate) fn checkpoint_scheduled(session: &Session) -> io::Result<bool> {
+    if !SCHEDULED_IN_THIS_PROCESS.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    let windows = session.clone().into_update_windows()?;
+    validate_windows(&windows).map_err(io::Error::other)?;
     crate::atomic_file::write(
-        &nebula_settings::settings_dir().join("updates/install-next.json"),
-        &data,
-    )
-    .map_err(|error| error.to_string())
+        &super::state_directory("")?.join("scheduled-workspace.json"),
+        &serde_json::to_vec(&windows)?,
+    )?;
+    Ok(true)
+}
+
+fn scheduled_windows() -> Result<Vec<Session>, String> {
+    let windows = if crate::platform::elevation::is_elevated().map_err(|error| error.to_string())? {
+        read_json::<Vec<Session>>(
+            &super::state_directory("")
+                .map_err(|error| error.to_string())?
+                .join("scheduled-workspace.json"),
+        )
+        .ok_or("No administrator update workspace snapshot")?
+    } else {
+        crate::session::load_update_windows().map_err(|error| error.to_string())?
+    };
+    validate_windows(&windows)?;
+    Ok(windows)
 }
 
 /// Before resident resources/windows exist, apply an explicitly armed update.
@@ -359,7 +434,8 @@ pub(crate) fn apply_scheduled() -> bool {
     if crate::platform::distribution::current().externally_managed() {
         return false;
     }
-    let path = nebula_settings::settings_dir().join("updates/install-next.json");
+    let Ok(root) = super::state_directory("") else { return false };
+    let path = root.join("install-next.json");
     let Some(asset) = read_json::<UpdateAsset>(&path) else {
         return false;
     };
@@ -370,10 +446,11 @@ pub(crate) fn apply_scheduled() -> bool {
         return false;
     }
     super::hydrate();
-    let result = prepare(&asset).and_then(|mut prepared| {
-        let windows = crate::session::load_update_windows().map_err(|error| error.to_string())?;
+    let result = (|| {
+        let windows = scheduled_windows()?;
+        let mut prepared = prepare(&asset)?;
         prepared.commit(&windows)
-    });
+    })();
     match result {
         Ok(()) => true,
         Err(error) => {

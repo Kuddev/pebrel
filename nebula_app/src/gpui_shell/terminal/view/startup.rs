@@ -264,6 +264,7 @@ impl TerminalView {
         ];
 
         let mut view = Self {
+            native_results: Default::default(),
             pane_id,
             session,
             focus_handle,
@@ -326,6 +327,7 @@ impl TerminalView {
             ssh_label: None,
             exec_context,
             ssh_stage: None,
+            ssh_retry_pending: false,
             ssh_connect: None,
             ssh_connect_last_step: std::time::Instant::now(),
             ai_session: None,

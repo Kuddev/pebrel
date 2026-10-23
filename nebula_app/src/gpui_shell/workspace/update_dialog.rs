@@ -436,7 +436,7 @@ pub(crate) fn open_update_dialog(
             footer = footer.child(Button::new("install-next-launch")
                 .label(language.text(Message::UpdateInstallNextLaunch))
                 .on_click(move |_, window, cx| {
-                    match crate::update_download::handoff::schedule(&asset) {
+                    match windowing::schedule_update(&asset, cx) {
                         Ok(()) => window.close_dialog(cx),
                         Err(error) => crate::gpui_shell::toast::toast(window, cx,
                             crate::display::ToastKind::Warning, error),
