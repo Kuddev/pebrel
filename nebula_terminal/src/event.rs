@@ -179,6 +179,15 @@ pub trait OnResize {
 /// Event Loop for notifying the renderer about terminal events.
 pub trait EventListener {
     fn send_event(&self, _event: Event) {}
+
+    /// The host chooses a renderer for a literal shell command. Core only owns its source range.
+    fn command_view(
+        &self,
+        _shell: &str,
+        _command: &str,
+    ) -> Option<crate::inline_content::CommandView> {
+        None
+    }
 }
 
 /// Null sink for events.

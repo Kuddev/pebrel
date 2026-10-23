@@ -16,6 +16,7 @@ fn geometry(shape: CursorShape) -> CursorGeometry {
         grid: (80, 24),
         metrics: (9.0, 20.0, 1.0),
         projection_shift: 0,
+        row_projection_shift: 0.0,
         shape,
     }
 }

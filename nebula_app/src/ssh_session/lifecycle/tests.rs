@@ -67,6 +67,7 @@ fn check(future: impl Future<Output = ()>) {
 enum Mode {
     Open,
     EchoOutput,
+    BackpressuredEcho,
     TerminalQuery,
     RejectPty,
     RejectShell,
@@ -183,7 +184,17 @@ impl server::Handler for Loopback {
             std::future::pending::<()>().await;
         }
         reply.accept().await;
-        self.channels.push(channel);
+        if self.mode == Mode::BackpressuredEcho {
+            // Consume the fixture's channel queue as a real shell would. The
+            // backpressure under test belongs to the client's receive queue.
+            let (mut reader, writer) = channel.split();
+            tokio::spawn(async move {
+                while reader.wait().await.is_some() {}
+                drop(writer);
+            });
+        } else {
+            self.channels.push(channel);
+        }
         Ok(())
     }
 
@@ -266,7 +277,7 @@ impl server::Handler for Loopback {
             return Ok(());
         }
         let _ = self.data.send(data.to_vec());
-        if self.mode == Mode::EchoOutput {
+        if matches!(self.mode, Mode::EchoOutput | Mode::BackpressuredEcho) {
             match data {
                 b"\x04" => {
                     session.eof(channel)?;
@@ -544,6 +555,8 @@ impl Fixture {
         .unwrap();
         let config = Arc::new(server::Config {
             keys: vec![key],
+            window_size: if mode == Mode::BackpressuredEcho { 4096 } else { 2097152 },
+            maximum_packet_size: if mode == Mode::BackpressuredEcho { 512 } else { 32768 },
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
             ..Default::default()
@@ -1222,5 +1235,33 @@ fn completion_real_ssh_git_and_project_scripts_end_to_end() {
         .await
         .unwrap();
         super::super::evict_pooled_session(&route.pool_key(), &acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_echo_keeps_draining_while_a_large_input_waits_for_window_space() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::BackpressuredEcho).await;
+        let acquired = fixture.connect().await;
+        let (sender, mut input) = mpsc::unbounded_channel();
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let bytes = b"echo remains responsive\r\n".repeat(20_000);
+        sender.send(Msg::Input(bytes.clone().into())).unwrap();
+        let exchange = async {
+            let mut received = Vec::with_capacity(bytes.len());
+            while received.len() < bytes.len() {
+                received.extend(fixture.data.recv().await.unwrap());
+            }
+            assert_eq!(received, bytes);
+            sender.send(Msg::Input(vec![4].into())).unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            pump(&mut channel, token, size(), &terminal, &events, &mut input),
+            exchange,
+        );
+        result.unwrap();
+        fixture.forget(&acquired.session).await;
     });
 }

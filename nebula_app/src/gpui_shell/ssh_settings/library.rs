@@ -56,7 +56,14 @@ impl gpui::RenderOnce for HostMoreTrigger {
 }
 
 /// Center the glyph's ink, not its monospace advance or the surrounding text line.
-fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> impl IntoElement {
+fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> gpui::AnyElement {
+    if glyph == '\u{f489}' {
+        return Icon::new(Icon::empty())
+            .path(crate::gpui_shell::assets::nav::TERMINAL)
+            .size(px(22.0))
+            .text_color(color)
+            .into_any_element();
+    }
     gpui::canvas(
         move |bounds, window, _| {
             let font = gpui::font(family);
@@ -101,6 +108,7 @@ fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> impl IntoE
         },
     )
     .size(px(22.0))
+    .into_any_element()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

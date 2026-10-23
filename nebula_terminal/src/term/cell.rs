@@ -126,6 +126,8 @@ pub struct CellExtra {
     zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    inline_marker: Option<crate::inline_content::Marker>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -153,6 +155,15 @@ impl Default for Cell {
 }
 
 impl Cell {
+    pub fn inline_marker(&self) -> Option<&crate::inline_content::Marker> {
+        self.extra.as_ref()?.inline_marker.as_ref()
+    }
+
+    pub(crate) fn set_inline_marker(&mut self, marker: crate::inline_content::Marker) {
+        let extra = self.extra.get_or_insert(Default::default());
+        Arc::make_mut(extra).inline_marker = Some(marker);
+    }
+
     /// Additional codepoints sharing this cell, including emoji continuations.
     #[inline]
     pub fn zerowidth(&self) -> Option<&[char]> {
@@ -180,10 +191,11 @@ impl Cell {
     pub fn set_underline_color(&mut self, color: Option<Color>) {
         // If we reset color and we don't have zerowidth we should drop extra storage.
         if color.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.hyperlink.is_none())
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.hyperlink.is_none()
+                    && extra.inline_marker.is_none()
+            })
         {
             self.extra = None;
         } else {
@@ -201,10 +213,11 @@ impl Cell {
     /// Set hyperlink.
     pub fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         let should_drop = hyperlink.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.underline_color.is_none());
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.underline_color.is_none()
+                    && extra.inline_marker.is_none()
+            });
 
         if should_drop {
             self.extra = None;
@@ -225,6 +238,7 @@ impl GridCell for Cell {
     #[inline]
     fn is_empty(&self) -> bool {
         (self.c == ' ' || self.c == '\t')
+            && self.inline_marker().is_none()
             && self.bg == Color::Named(NamedColor::Background)
             && self.fg == Color::Named(NamedColor::Foreground)
             && !self.flags.intersects(
@@ -277,6 +291,7 @@ impl LineLength for grid::Row<Cell> {
 
         for (index, cell) in self[..].iter().rev().enumerate() {
             if cell.c != ' '
+                || cell.inline_marker().is_some_and(|marker| !marker.surface.has_grid_source())
                 || cell.extra.as_ref().map(|extra| extra.zerowidth.is_empty()) == Some(false)
             {
                 length = Column(self.len() - index);
