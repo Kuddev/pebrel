@@ -20,6 +20,19 @@ fn open(request: &Request, cx: &mut App) -> Result<(u64, u64), ApiError> {
     if cx.global::<WindowRegistry>().quit_pending {
         return Err(ApiError::new("shutting_down", "the elevated window owner is closing"));
     }
+    if let Some(path) = &request.update_restore {
+        if !crate::platform::elevation::is_elevated().is_ok_and(|value| value) {
+            return Err(ApiError::new(
+                "invalid_update_ticket",
+                "Administrator recovery requires an elevated owner",
+            ));
+        }
+        let sessions =
+            crate::update_download::handoff::restore_ticket_from(path).ok_or_else(|| {
+                ApiError::new("invalid_update_ticket", "Administrator update ticket is unavailable")
+            })?;
+        return open_update_windows(sessions, None, None, cx);
+    }
     let startup = startup(request)?;
     let behavior = nebula_settings::RuntimeSettings::load().windowing_behavior;
     let target = (behavior != nebula_settings::WindowingBehaviorName::UseNew)
@@ -73,6 +86,7 @@ mod tests {
                 args: vec![argument.into()],
             }),
             shell_id: None,
+            update_restore: None,
         }
     }
 
@@ -80,6 +94,80 @@ mod tests {
         let (request, reply) = Dispatch::new(request);
         dispatch_shell_events(vec![GpuiShellEvent::ElevatedLaunch(request)], cx);
         reply.try_recv().unwrap()
+    }
+
+    #[gpui::test]
+    fn update_recovery_tracks_its_windows_and_retries_only_missing_slots(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _lock = lock_theme_studio();
+        let _settings = SettingsBytesGuard::capture();
+        configure("use_any_existing");
+        initialize_test(cx);
+        cx.update(|cx| {
+            let (existing, _) = open_test_window(cx, 0);
+            let (restored, _) = open_test_window(cx, 0);
+            cx.global_mut::<WindowRegistry>().update_restore_windows = Some(vec![Some(restored)]);
+            assert_eq!(ready_update_windows(cx), Some(1));
+            open_test_window(cx, 0);
+            assert_eq!(
+                ready_update_windows(cx),
+                Some(1),
+                "new unrelated windows are not recovery targets"
+            );
+            entry_by_id(existing, cx)
+                .unwrap()
+                .handle
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+            prune_entries(cx);
+            assert_eq!(
+                ready_update_windows(cx),
+                Some(1),
+                "closing an old window cannot block recovery"
+            );
+
+            cx.global_mut::<WindowRegistry>().update_restore_windows =
+                Some(vec![Some(restored), None]);
+            assert_eq!(
+                ready_update_windows(cx),
+                None,
+                "unrelated windows cannot replace a missing target"
+            );
+            let mut tab = crate::session::TabSession::single(String::new(), None, None);
+            tab.launch = Some(LaunchSession::Shell {
+                name: "Recovery fixture".into(),
+                program: "pebrel-test-missing-shell-executable".into(),
+                args: Vec::new(),
+            });
+            let sessions = vec![
+                crate::session::Session::new(0, Vec::new()),
+                crate::session::Session::new(0, vec![tab]),
+            ];
+            let before = cx.global::<WindowRegistry>().entries.len();
+            open_update_windows(sessions.clone(), None, None, cx).unwrap();
+            assert_eq!(cx.global::<WindowRegistry>().entries.len(), before + 1);
+            open_update_windows(sessions, None, None, cx).unwrap();
+            assert_eq!(
+                cx.global::<WindowRegistry>().entries.len(),
+                before + 1,
+                "retrying a partially created workspace must not duplicate existing windows"
+            );
+            let recovered =
+                cx.global::<WindowRegistry>().update_restore_windows.as_ref().unwrap()[1].unwrap();
+            assert_eq!(ready_update_windows(cx), None, "a failed PTY is not a successful recovery");
+            entry_by_id(recovered, cx)
+                .unwrap()
+                .handle
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+            prune_entries(cx);
+            assert_eq!(
+                ready_update_windows(cx),
+                Some(2),
+                "explicitly dismissed recovery windows do not reappear later"
+            );
+        });
     }
 
     #[gpui::test]

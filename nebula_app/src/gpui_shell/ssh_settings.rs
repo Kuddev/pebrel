@@ -1064,7 +1064,9 @@ impl SettingsPane {
                     .w(px(target_ink_width))
                     .font_family(crate::font_install::REQUIRED_FONT_FAMILY)
                     .text_size(px(icon_size))
-                    .child(icon.glyph.to_string()),
+                    .child(crate::gpui_shell::widgets::terminal_glyph(
+                        icon.glyph.to_string(), target_ink_width,
+                    )),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_ssh_icon_picker(window, cx);
@@ -1226,7 +1228,10 @@ impl SettingsPane {
                                         .w(px(PICKER_ICON_INK_W))
                                         .font_family(font_chain.clone())
                                         .text_size(px(icon_size))
-                                        .child(icon.glyph.to_string()),
+                                        .child(crate::gpui_shell::widgets::terminal_glyph(
+                                            icon.glyph.to_string(),
+                                            PICKER_ICON_INK_W,
+                                        )),
                                 ),
                         )
                         .child(div().flex_1().min_w_0().truncate().text_sm().child(name))

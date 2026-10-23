@@ -19,6 +19,9 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+/** The desktop grid scale is independent of the user's base font size. */
+fun normalizedSnapshotZoom(value: Float): Float = value.takeIf { it.isFinite() }?.coerceIn(.5f, 5f) ?: 1f
+
 /** A grid mirror with optional authorized input. Gestures never resize the PC PTY. */
 class TerminalSnapshotView(context: Context) : View(context) {
     private var inputGeneration = 0
@@ -167,8 +170,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
     }
 
     fun setZoomScale(value: Float) {
-        val bounded = if (value.isFinite()) value.coerceIn(.5f, 5f) else 1f
+        val bounded = normalizedSnapshotZoom(value)
         if (pinchInProgress || zoom == bounded) return
+        selection.clear()
         zoom = bounded
         stopScrolling()
         metrics()
@@ -301,7 +305,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
             if (!pinchZoom) return false
             val oldWidth = cellWidth
             val oldHeight = cellHeight
-            zoom = (zoom * detector.scaleFactor).coerceIn(.5f, 5f)
+            zoom = normalizedSnapshotZoom(zoom * detector.scaleFactor)
             metrics()
             reproject()
             offsetX = (offsetX + detector.focusX) * cellWidth / oldWidth - detector.focusX
