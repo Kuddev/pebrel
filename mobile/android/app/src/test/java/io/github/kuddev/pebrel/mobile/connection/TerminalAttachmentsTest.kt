@@ -41,7 +41,7 @@ class TerminalAttachmentsTest {
                 }
                 "mkdir" -> { assertTrue(directories.add(path)); JSONObject() }
                 "begin_upload" -> { target = path; JSONObject().put("transfer", 7L) }
-                "write" -> {
+                "write_batch" -> {
                     if (failWrite) throw NativeSshException("SFTP_PERMISSION")
                     assertEquals(bytes.size().toLong(), request.getLong("offset"))
                     bytes.write(Base64.decode(request.getString("data"), Base64.NO_WRAP))
