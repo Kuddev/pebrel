@@ -8,6 +8,7 @@ const RESET_KEYS: &[&str] = &[
     "scrollback_lines",
     "scroll_speed",
     "scrollbar_visibility",
+    "runtime_api_exposure",
     "language",
     "theme",
     "app_icon",

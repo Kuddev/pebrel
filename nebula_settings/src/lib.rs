@@ -39,6 +39,8 @@ pub use ligatures::Ligatures;
 mod notifications;
 pub use notifications::NotificationDuration;
 mod quick_terminal;
+mod runtime_api;
+pub use runtime_api::RuntimeApiExposure;
 mod scrolling;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
@@ -1011,6 +1013,8 @@ pub struct RuntimeSettings {
     /// Wheel multiplier; pixel-precise trackpad input is independent.
     pub scroll_speed: f32,
     pub scrollbar_visibility: ScrollbarVisibility,
+    /// Read once at startup: the remote listener is bound by the resident instance.
+    pub runtime_api_exposure: RuntimeApiExposure,
     /// GUI override for mouse.focus_follows_mouse in TOML; absent there too means false.
     pub focus_follows_mouse: Option<bool>,
     /// Preserve the existing dimming of inactive split panes unless explicitly disabled.
@@ -1193,6 +1197,10 @@ impl RuntimeSettings {
             scrollbar_visibility: raw
                 .value("scrollbar_visibility")
                 .and_then(ScrollbarVisibility::from_settings)
+                .unwrap_or_default(),
+            runtime_api_exposure: raw
+                .value("runtime_api_exposure")
+                .and_then(RuntimeApiExposure::from_settings)
                 .unwrap_or_default(),
             ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
             ligatures: raw

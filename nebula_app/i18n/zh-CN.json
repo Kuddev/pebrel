@@ -178,6 +178,14 @@
       "speed": "滚动速度",
       "speed_description": "鼠标滚轮滚动的倍率。即时生效，不影响触控板滚动。"
     },
+    "runtime_api": {
+      "title": "面板接口",
+      "exposure": "远程访问",
+      "off": "关闭",
+      "local": "仅本机",
+      "lan": "局域网",
+      "description": "允许其他应用通过 47600 端口的面板接口控制 Pebrel。重启后生效。客户端使用 Pebrel 数据目录中 runtime-remote.token 里的令牌认证。通信未加密，仅在可信网络中选择“局域网”。"
+    },
     "sidebar": {
       "application": "应用",
       "appearance": "外观",

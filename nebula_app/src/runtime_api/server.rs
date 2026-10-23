@@ -62,7 +62,7 @@ pub(super) fn endpoint_addr(endpoint: &Endpoint) -> SocketAddr {
     SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port))
 }
 
-fn fresh_token() -> String {
+pub(super) fn fresh_token() -> String {
     use std::hash::{BuildHasher, Hasher, RandomState};
     let mut a = RandomState::new().build_hasher();
     let mut b = RandomState::new().build_hasher();
@@ -190,11 +190,12 @@ impl RuntimeServer {
     }
 
     fn spawn_with_sink(sink: EventSink, hub: RuntimeHub) -> Option<Self> {
-        Self::spawn_at(
-            sink,
-            hub,
-            (!crate::platform::elevation::requires_isolation()).then(port_file),
-        )
+        let isolated = crate::platform::elevation::requires_isolation();
+        let server = Self::spawn_at(sink.clone(), hub.clone(), (!isolated).then(port_file))?;
+        if !isolated {
+            remote::spawn(nebula_settings::RuntimeSettings::load().runtime_api_exposure, sink, hub);
+        }
+        Some(server)
     }
 
     fn spawn_at(sink: EventSink, hub: RuntimeHub, path: Option<PathBuf>) -> Option<Self> {

@@ -182,6 +182,13 @@ impl SettingsPane {
             window,
             cx,
         );
+        add_select(
+            "runtime_api_exposure",
+            nebula_settings::RuntimeApiExposure::VALUES,
+            runtime.runtime_api_exposure.settings_value(),
+            window,
+            cx,
+        );
         // 文案照抄旧壳 `accept_label` / `completion_style_label`。
         add_select(
             "bell",
