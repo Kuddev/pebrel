@@ -1053,13 +1053,13 @@ impl NebulaWorkspace {
                     name: name.clone(),
                     command: command.clone(),
                     args: args.clone(),
-                    cwd: profile_cwd.as_deref().and_then(crate::session::valid_dir),
+                    cwd: shell_launch::profile_directory(command, profile_cwd.as_deref()),
                     shell_id: shell_id.clone(),
                     terminal_profile_id: None,
                 };
                 TerminalLaunch::Local {
                     cwd: profile.cwd.clone().or(cwd),
-                    shell: Some(profile.shell()),
+                    shell: Some(shell_launch::profile_shell(&profile)),
                     shell_name: profile.shell_id.clone().or_else(|| Some(profile.name.clone())),
                 }
             },
@@ -1124,9 +1124,9 @@ impl NebulaWorkspace {
         self.add_terminal_with(launch, cwd, None, window, cx);
     }
 
-    /// 设置页「启动目录」：非空且确实存在的目录才生效（旧壳同判定）。
+    /// 设置页「启动目录」：宿主验证本机路径，WSL 验证来宾路径。
     fn startup_directory() -> Option<std::path::PathBuf> {
-        nebula_settings::RuntimeSettings::load().startup_directory_path()
+        shell_launch::configured_directory()
     }
 
     /// 创建一个 pane 实体（分配 id、spawn 会话、挂宿主订阅）；调用方决定
@@ -1179,7 +1179,7 @@ impl NebulaWorkspace {
         // 默认 shell 只在“创建新 Tab”的这一刻取样，并把实际 program/args
         // 一起冻结进 Tab launch。设置页随后改默认值只影响下一次创建；冷
         // 恢复也按本 Tab 的 launch 重建，不会把混合工作区抹成同一种 shell。
-        let launch_session = shell_launch::configured_local_launch(cx);
+        let launch_session = shell_launch::configured_at(cx, cwd.as_deref());
         self.add_terminal_with(launch_session, cwd, command, window, cx)
     }
 
