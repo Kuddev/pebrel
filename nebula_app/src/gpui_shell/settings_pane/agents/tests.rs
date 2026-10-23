@@ -167,6 +167,47 @@ fn configuration_without_an_executable_is_not_an_installed_agent(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn hermes_detection_row_does_not_offer_or_submit_a_hook_toggle(cx: &mut TestAppContext) {
+    let (pane, window, reply, calls) = fixture(cx);
+    drop(reply);
+    for installed in [false, true] {
+        pane.update(window, |pane, cx| {
+            let row = AgentIntegration {
+                agent: AgentKind::Hermes,
+                executable: installed.then(|| "C:/test/hermes/bin/hermes.exe".into()),
+                hook: None,
+                inspection: HookInspection::default(),
+            };
+            assert!(!can_toggle(&row));
+            assert_eq!(
+                agent_status(&row, false),
+                if installed {
+                    Message::SettingsAgentsProcessDetection
+                } else {
+                    Message::SettingsAgentsNotDetected
+                }
+            );
+            pane.agents.rows = Some(vec![row]);
+            cx.notify();
+        });
+        window.run_until_parked();
+        let row = window.debug_bounds("agent-hook-row-0").unwrap();
+        let path = window.debug_bounds("agent-cli-path-0").unwrap();
+        let status = window.debug_bounds("agent-hook-status-0").unwrap();
+        assert!(path.right() <= status.left());
+        assert!(status.right() <= row.right());
+        window.simulate_click(row.center(), Modifiers::default());
+        window.run_until_parked();
+        pane.update(window, |pane, cx| {
+            pane.toggle_agent_hook(AgentKind::Hermes, true, cx);
+            assert!(pane.agents.busy.is_none());
+            assert!(pane.agents.feedback.is_none());
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[gpui::test]
 fn repeated_switches_follow_completed_state_and_ignore_inflight_clicks(cx: &mut TestAppContext) {
     if !crate::platform::CAPABILITIES.ai_hook_server {
         return;

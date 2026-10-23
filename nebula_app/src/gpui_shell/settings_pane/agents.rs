@@ -221,6 +221,11 @@ impl SettingsPane {
             .or_else(|| {
                 (!state.available && row.executable.is_some() && row.hook.is_some())
                     .then(|| language.text(Message::SettingsAgentsInitialize).to_owned())
+            })
+            .or_else(|| {
+                row.hook
+                    .is_none()
+                    .then(|| language.text(Message::SettingsAgentsUnsupported).to_owned())
             });
         let muted = cx.theme().muted_foreground;
         let hover = crate::gpui_shell::theme::settings_hover_bg(cx, false);
@@ -267,6 +272,7 @@ impl SettingsPane {
             AgentKind::OhMyPi => Some(nav::AGENT_OMP),
             AgentKind::Copilot => Some(nav::AGENT_COPILOT),
             AgentKind::Grok => Some(nav::AGENT_GROK),
+            AgentKind::Hermes => Some(nav::AGENT_HERMES),
             _ => None,
         } {
             Icon::default()
@@ -300,9 +306,14 @@ impl SettingsPane {
                 gpui::transparent_black()
             })
             .track_focus(&focus.clone().tab_stop(!disabled))
-            .role(gpui::Role::Switch)
-            .aria_label(format!("{} hooks — {}", agent.display_name(), language.text(status)))
-            .aria_toggled(if checked { gpui::Toggled::True } else { gpui::Toggled::False })
+            .aria_label(format!("{} — {}", agent.display_name(), language.text(status)))
+            .when(row.hook.is_some(), |view| {
+                view.role(gpui::Role::Switch).aria_toggled(if checked {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+            })
             .when(!disabled, |view| {
                 view.cursor_pointer()
                     .hover(move |style| style.bg(hover))
@@ -345,26 +356,30 @@ impl SettingsPane {
                     .text_color(muted)
                     .child(language.text(status)),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .min_w(px(40.0))
-                    .min_h(px(32.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        crate::gpui_shell::widgets::NebulaSwitch::new(format!(
-                            "agent-{}",
-                            agent.slug()
-                        ))
-                        .checked(checked)
-                        .disabled(disabled)
-                        .on_click(cx.listener(
-                            move |this, enabled, _, cx| this.toggle_agent_hook(agent, *enabled, cx),
-                        )),
-                    ),
-            )
+            .when(row.hook.is_some(), |view| {
+                view.child(
+                    div()
+                        .flex_shrink_0()
+                        .min_w(px(40.0))
+                        .min_h(px(32.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            crate::gpui_shell::widgets::NebulaSwitch::new(format!(
+                                "agent-{}",
+                                agent.slug()
+                            ))
+                            .checked(checked)
+                            .disabled(disabled)
+                            .on_click(cx.listener(
+                                move |this, enabled, _, cx| {
+                                    this.toggle_agent_hook(agent, *enabled, cx)
+                                },
+                            )),
+                        ),
+                )
+            })
     }
 }
 
@@ -388,7 +403,11 @@ fn agent_status(row: &AgentIntegration, busy: bool) -> Message {
     } else if state.error.is_some() {
         Message::SettingsAgentsNeedsAttention
     } else if row.hook.is_none() {
-        Message::SettingsAgentsUnsupported
+        if row.executable.is_some() {
+            Message::SettingsAgentsProcessDetection
+        } else {
+            Message::SettingsAgentsNotDetected
+        }
     } else if !crate::platform::CAPABILITIES.ai_hook_server {
         Message::SettingsAgentsUnavailable
     } else {
