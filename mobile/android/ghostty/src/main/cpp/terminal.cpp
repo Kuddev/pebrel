@@ -113,6 +113,16 @@ extern "C" JNIEXPORT jbyteArray JNICALL JNI_METHOD(title)(JNIEnv* env, jobject, 
     return bytes(env, title.ptr, std::min(title.len, size_t{512}));
 }
 
+extern "C" JNIEXPORT jboolean JNICALL JNI_METHOD(synchronizedOutput)(JNIEnv* env, jobject, jlong handle) {
+    bool enabled = false;
+    checked(env, ghostty_terminal_mode_get(terminal(handle)->vt, GHOSTTY_MODE_SYNC_OUTPUT, &enabled));
+    return enabled;
+}
+
+extern "C" JNIEXPORT void JNICALL JNI_METHOD(endSynchronizedOutput)(JNIEnv* env, jobject, jlong handle) {
+    checked(env, ghostty_terminal_mode_set(terminal(handle)->vt, GHOSTTY_MODE_SYNC_OUTPUT, false));
+}
+
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(resize)(JNIEnv* env, jobject, jlong handle, jint cols, jint rows, jint cw, jint ch) {
     auto* state = terminal(handle);
     checked(env, ghostty_terminal_resize(state->vt, cols, rows, cw, ch));
@@ -136,6 +146,16 @@ extern "C" JNIEXPORT void JNICALL JNI_METHOD(scroll)(JNIEnv*, jobject, jlong han
 extern "C" JNIEXPORT void JNICALL JNI_METHOD(scrollTo)(JNIEnv*, jobject, jlong handle, jint offset) {
     auto* state = terminal(handle);
     state->seek_history(static_cast<uint64_t>(std::max(offset, 0)));
+}
+
+extern "C" JNIEXPORT jint JNICALL JNI_METHOD(applicationScrollMode)(JNIEnv* env, jobject, jlong handle) {
+    auto* state = terminal(handle);
+    GhosttyTerminalScreen screen{};
+    if (!checked(env, ghostty_terminal_get(state->vt, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen))) return 0;
+    if (screen == GHOSTTY_TERMINAL_SCREEN_PRIMARY) return 0;
+    bool tracking = false;
+    if (!checked(env, ghostty_terminal_get(state->vt, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking))) return 0;
+    return tracking ? 2 : 1;
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL JNI_METHOD(wheel)(JNIEnv* env, jobject object,
