@@ -176,7 +176,7 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
-    def test_nextest_reserves_only_shared_settings_and_exact_bounded_git_fixtures(self):
+    def test_nextest_reserves_only_shared_settings_and_exact_bounded_process_fixtures(self):
         root = Path(__file__).resolve().parents[2]
         config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
@@ -216,6 +216,10 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)"
                           " or test(=completion::tests::network_completion_reads_configured_remotes_and_refspecs_without_network_access)",
                 "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=tty::windows::test::bash_input::"
+                          "git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales)",
+                "threads-required": "num-test-threads",
             }],
         })
 
@@ -235,6 +239,12 @@ class NativeSuiteTests(unittest.TestCase):
             "update_recovery_tracks_its_windows_and_retries_only_missing_slots",
         ):
             self.assertIn(f"fn {name}(", elevated)
+
+        bash_input = (root / "nebula_terminal/src/tty/windows/test/bash_input.rs").read_text(encoding="utf-8")
+        self.assertIn(
+            "fn git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales()",
+            bash_input,
+        )
 
     def test_native_caches_are_default_branch_snapshots_not_per_pr_uploads(self):
         root = Path(__file__).resolve().parents[2]

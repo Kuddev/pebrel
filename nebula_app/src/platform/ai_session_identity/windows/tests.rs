@@ -158,7 +158,15 @@ fn native_shells_bind_only_their_own_open_rollout_and_keep_the_id_and_file_curso
         let output = collect_records(fixture.child.id(), creation_time(shell.0).unwrap()).unwrap();
         assert!(!output.contains("do not"));
         assert_eq!(collect_records(fixture.child.id(), 1), None, "reject recycled shell identity");
+        let updated = serde_json::json!({"type":"session_meta", "payload": {
+            "id": ID, "cwd": root.path(), "source": "cli", "thread_source": "user",
+        }});
+        std::fs::write(&file, format!("{updated}\n")).unwrap();
+        let refreshed = probe(fixture.child.id()).expect("a reused worker reads current metadata");
+        assert_eq!(refreshed.session_id, ID);
+        assert_eq!(refreshed.cwd.as_deref(), root.path().to_str());
         fixture.finish();
+        rollout(temp.path(), ID, ID, "cli");
     }
     unrelated.finish();
 }

@@ -25,3 +25,9 @@ threads-required = 'num-test-threads'
 [[profile.default.overrides]]
 filter = 'test(=completion::tests::completion_requests_work_without_a_view_and_keep_repository_invalidation) or test(=completion::tests::editor_cursor_requests_replace_only_the_active_token_and_keep_following_options) or test(=completion::tests::checkout_completion_combines_branches_and_paths_and_scopes_remote_demand) or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute) or test(=completion::tests::network_completion_reads_configured_remotes_and_refspecs_without_network_access)'
 threads-required = 'num-test-threads'
+
+# 此夹具通过真实 ConPTY/Git Bash 连续发送 72 次退格；Windows ARM 上与其他
+# shell 夹具并发时曾超过原有期限。只隔离这个完整名称，保留输入突发和所有断言。
+[[profile.default.overrides]]
+filter = 'test(=tty::windows::test::bash_input::git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales)'
+threads-required = 'num-test-threads'

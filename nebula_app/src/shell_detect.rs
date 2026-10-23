@@ -649,6 +649,19 @@ pub fn wsl_args_at(program: &str, args: &[String], cwd: &str) -> Option<Vec<Stri
     wsl_args_with_directory(program, args, Some(&wsl_raw_arg(cwd)?))
 }
 
+/// An explicit startup directory may be a guest path, guest home or an already
+/// validated absolute host path. Keep WSL's raw argument quoting in one place.
+pub(crate) fn wsl_args_in_directory(
+    program: &str,
+    args: &[String],
+    cwd: &str,
+) -> Option<Vec<String>> {
+    if cwd.is_empty() || cwd.chars().any(char::is_control) {
+        return None;
+    }
+    wsl_args_with_directory(program, args, Some(&wsl_raw_arg(cwd)?))
+}
+
 /// A value as one raw argument of the command line `wsl.exe` splits itself: a
 /// value with whitespace is quoted whole (see [`wsl_accepts_startup_arg`]).
 fn wsl_raw_arg(value: &str) -> Option<String> {

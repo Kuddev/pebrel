@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const HISTORY_MAX: usize = 5_000;
 pub(crate) const LOCAL_HISTORY_FILE: &str = "pebrel_history.jsonl";
@@ -140,9 +140,13 @@ pub struct NebulaHistory {
 impl NebulaHistory {
     pub fn load() -> Self {
         let mut history = Self::default();
-        history.load_file(&HistoryScope::Local);
-        history.load_file(&HistoryScope::Wsl(String::new()));
-        history.load_file(&HistoryScope::Ssh(String::new()));
+        for scope in [
+            HistoryScope::Local,
+            HistoryScope::Wsl(String::new()),
+            HistoryScope::Ssh(String::new()),
+        ] {
+            history.load_file(&scope, &history_path(scope.file_name()));
+        }
         history_debug_log(format!(
             "history_load scopes={} entries={}",
             history.pools.len(),
@@ -228,8 +232,23 @@ impl NebulaHistory {
             .map_or_else(Vec::new, |pool| pool.hints(prefix, limit))
     }
 
-    fn load_file(&mut self, category: &HistoryScope) {
-        let path = history_path(category.file_name());
+    /// The caller serializes this with recording. Failed categories retain their
+    /// in-memory entries, while successfully removed files cannot reappear on exit.
+    pub(crate) fn clear_at(&mut self, directory: &Path) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for file in history_file_names() {
+            match std::fs::remove_file(directory.join(file)) {
+                Ok(()) => self.pools.retain(|scope, _| scope.file_name() != file),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.pools.retain(|scope, _| scope.file_name() != file);
+                },
+                Err(error) => errors.push(format!("{file}: {error}")),
+            }
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    }
+
+    fn load_file(&mut self, category: &HistoryScope, path: &Path) {
         let Ok(data) = std::fs::read_to_string(path) else { return };
         for line in data.lines() {
             let Some((scope, cmd)) = parse_record(category, line) else { continue };
@@ -237,6 +256,9 @@ impl NebulaHistory {
         }
     }
 }
+
+#[cfg(test)]
+mod deletion_tests;
 
 pub(crate) fn history_file_names() -> [&'static str; 3] {
     [LOCAL_HISTORY_FILE, WSL_HISTORY_FILE, SSH_HISTORY_FILE]

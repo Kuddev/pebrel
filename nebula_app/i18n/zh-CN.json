@@ -180,6 +180,15 @@
   "settings": {
     "quick_terminal_unavailable": "全局快捷键注册失败：{error}。请启用桌面的 GlobalShortcuts portal，或从托盘打开 Pebrel。",
     "completion": {
+      "history": {
+        "title": "Pebrel 命令历史",
+        "description": "管理 Pebrel 记录并用于补全的命令。",
+        "clear": "清除历史",
+        "clearing": "正在清除…",
+        "confirm": "清除 Pebrel 为本地、WSL 和 SSH 终端记录的全部命令历史？此操作无法撤销。已保存的常用命令和 shell 自身的历史会保留。",
+        "cleared": "已清除 Pebrel 命令历史。",
+        "failed": "部分历史未能清除：{error}"
+      },
       "mode": "补齐模式",
       "cycle": "切换补齐模式",
       "inline": "行内补齐",
@@ -379,6 +388,7 @@
       "not_detected": "未安装",
       "config_detected": "已检测到工具配置",
       "unsupported": "尚未提供 hook 接入",
+      "process_detection": "进程识别",
       "unavailable": "不可用",
       "needs_attention": "需要检查",
       "restart": "更改将在重启 Agent 后生效。这里管理安装在本机的 Agent。",
