@@ -23,9 +23,10 @@ pub use self::windows::*;
 pub fn connection_shell() -> &'static str {
     static SCRIPT: LazyLock<Cow<'static, str>> = LazyLock::new(|| {
         Cow::Owned(format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
             shell_line_endings(include_str!("connection.sh")),
-            shell_line_endings(include_str!("completion.sh"))
+            shell_line_endings(include_str!("completion.sh")),
+            shell_line_endings(include_str!("command.sh"))
         ))
     });
     &SCRIPT
@@ -213,5 +214,56 @@ mod tests {
         }
         // Only line endings change; embedded/escaped carriage returns are data.
         assert_eq!(shell_line_endings("printf '\\r\\n'\r\n# a\rb\n"), "printf '\\r\\n'\n# a\rb\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn command_report_never_reuses_ignored_history_or_evaluates_a_pipeline() {
+        use base64::Engine as _;
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("bash")
+            .args(["--noprofile", "--norc", "-i"])
+            .env("HISTFILE", "/dev/null")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start isolated Bash");
+        let script = format!(
+            "HISTCONTROL=ignoreboth\nPS1=''\nprintf '%s %s\\n' \"${{BASH_VERSINFO[0]}}\" \"${{BASH_VERSINFO[1]}}\"\n__pebrel_shell_token=YmFzaDox\n{}\nprintf 'alpha\\n'\nprintf 'alpha\\n'\n printf 'ignored\\n'\nprintf 'omega\\n' | cat\nexit\n",
+            shell_line_endings(include_str!("command.sh"))
+        );
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let (version, body) = stdout.split_once('\n').expect("Bash version preamble");
+        let (major, minor) = version.split_once(' ').expect("Bash major/minor version");
+        let supports_ps0 = (major.parse::<u32>().unwrap(), minor.parse::<u32>().unwrap()) >= (4, 4);
+        assert_eq!(body, "alpha\nalpha\nignored\nomega\n");
+        let wire = String::from_utf8(output.stderr).unwrap();
+        let reports = wire
+            .split("\x1b]1337;SetUserVar=pebrel_command=")
+            .skip(1)
+            .map(|part| {
+                String::from_utf8(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(part.split('\x07').next().unwrap())
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        // PS0 自 Bash 4.4 才提供；旧 Bash 必须保留普通输出，不能为了测试接管其输入钩子。
+        if supports_ps0 {
+            assert_eq!(
+                reports,
+                ["bash:1\nprintf 'alpha\\n'", "bash:1\nprintf 'omega\\n' | cat", "bash:1\nexit"],
+                "Bash {version} must report eligible commands"
+            );
+        } else {
+            assert!(reports.is_empty(), "Bash {version} must leave capture disabled");
+        }
     }
 }
