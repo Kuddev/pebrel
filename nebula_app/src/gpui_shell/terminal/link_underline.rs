@@ -50,7 +50,7 @@ mod tests {
 
     use super::*;
     use crate::config::UiConfig;
-    use crate::gpui_shell::terminal::osc_links::dashed_cells;
+    use crate::gpui_shell::terminal::osc_links::{dashed_cells, dashed_cells_where};
     use nebula_terminal::event::VoidListener;
     use nebula_terminal::term::test::TermSize;
     use nebula_terminal::term::{Config, Term};
@@ -125,6 +125,45 @@ mod tests {
                 let expected: BTreeSet<_> = pixels(anchor, anchor + 11.0 * width).collect();
                 assert_eq!(actual, expected, "scale={scale}, width={width}");
             }
+        }
+    }
+
+    #[test]
+    fn hidden_source_rows_preserve_link_context_without_per_cell_filtering() {
+        let mut term = Term::new(Config::default(), &TermSize::new(120, 40), VoidListener);
+        let mut parser: ansi::Processor = ansi::Processor::new();
+        let mut wire = String::new();
+        for row in 0..35 {
+            let suffix = if row == 9 { "x".repeat(300) } else { row.to_string() };
+            wire.push_str(&format!(
+                "\x1b[32m\x1b]8;;file:///fixture/{row}\x1b\\A开始 菜单Z\x1b]8;;\x1b\\\x1b[0m https://example.com/{suffix}\r\n"
+            ));
+        }
+        parser.advance(&mut term, wire.as_bytes());
+        let config = UiConfig::default();
+        let all = dashed_cells(&term, &config, 40, 120);
+        let checks = std::cell::Cell::new(0);
+        let visible = dashed_cells_where(&term, &config, 40, 120, |row| {
+            checks.set(checks.get() + 1);
+            !(10..30).contains(&row)
+        });
+        assert_eq!(checks.get(), 40, "visibility is a row operation, not a cell operation");
+        let expected: BTreeSet<_> =
+            all.keys().filter(|(row, _)| !(10..30).contains(row)).copied().collect();
+        assert_eq!(visible.keys().copied().collect::<BTreeSet<_>>(), expected);
+        assert!(visible.contains_key(&(0, 0)) && visible.contains_key(&(34, 0)));
+        assert!(
+            visible.contains_key(&(9, 119)),
+            "a visible URL fragment keeps its hidden continuation context"
+        );
+        for (point, value) in &visible {
+            let original = &all[point];
+            assert_eq!(value.fg, original.fg);
+            assert_eq!(value.bg, original.bg);
+            assert_eq!(
+                (value.bold, value.dim, value.bg_dim),
+                (original.bold, original.dim, original.bg_dim)
+            );
         }
     }
 }

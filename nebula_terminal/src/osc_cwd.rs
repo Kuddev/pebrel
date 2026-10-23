@@ -39,6 +39,8 @@ const MAX_HOOK_PAYLOAD: usize = 96 * 1024;
 /// An OSC or lifecycle event recognized by the sniffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscEvent {
+    /// Pebrel 有界 MIME 内容扩展，呈现类型由前端解释。
+    InlineContent(crate::inline_content::Packet),
     /// OSC 7 / 9;9 — the shell reported its working directory (native path).
     Cwd(String),
     /// OSC 133;A — the shell is about to draw a prompt (semantic zone start).
@@ -191,6 +193,8 @@ impl CwdSniffer {
         // Inline images are the one legitimately huge OSC we buffer.
         let cap = if self.payload.starts_with(b"1337;") {
             MAX_IMAGE_PAYLOAD
+        } else if self.payload.starts_with(b"777;pebrel-view;") {
+            crate::inline_content::MAX_FRAME_BYTES
         } else if self.payload.starts_with(b"777;nebula-hook;") {
             MAX_HOOK_PAYLOAD
         } else {
@@ -210,6 +214,13 @@ impl CwdSniffer {
 
     /// Parse a completed payload into an event.
     fn parse(&self, terminator_len: usize) -> Option<OscEvent> {
+        if self.payload.starts_with(b"777;pebrel-view;") {
+            return self
+                .interested
+                .then(|| crate::inline_content::Packet::parse(&self.payload))
+                .flatten()
+                .map(OscEvent::InlineContent);
+        }
         if let Some(body) = self.payload.strip_prefix(b"7501;") {
             if !self.interested || self.payload.len() + 2 + terminator_len > 4096 {
                 return None;

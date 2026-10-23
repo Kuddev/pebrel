@@ -747,7 +747,7 @@ pub(super) fn find_dollar_formula(
     }
     if close.row > source_start.row
         && !grid.wrapped[close.row - 1]
-        && !inline_math_fragment(grid, close.row, 0, close.column)
+        && !inline_math_fragment(grid, close.row, 0, close.column, false)
     {
         return None;
     }
@@ -786,25 +786,38 @@ pub(super) fn find_inline_dollar_closing(
         if position.row != previous_row && !grid.wrapped[previous_row] {
             hard_rows += 1;
             let column = if previous_row == start.row { start.column } else { 0 };
-            if hard_rows > 8 || !inline_math_fragment(grid, previous_row, column, grid.columns) {
+            if hard_rows > 8
+                || !inline_math_fragment(grid, previous_row, column, grid.columns, hard_rows == 1)
+            {
                 return None;
             }
         }
     }
 }
 
-fn inline_math_fragment(grid: &TextGrid, row: usize, start: usize, end: usize) -> bool {
+fn inline_math_fragment(
+    grid: &TextGrid,
+    row: usize,
+    start: usize,
+    end: usize,
+    initial: bool,
+) -> bool {
     let source: String =
         grid.rows[row][start.min(grid.columns)..end.min(grid.columns)].iter().flatten().collect();
     let source = source.trim();
     if source.is_empty() || obviously_non_math(source) {
         return false;
     }
+    // 提示符后的 ls/pwd 等短词也能被解释为隐式乘积；只有已经出现数学结构，
+    // 才允许跨硬换行继续，避免借下一条提示符把目录输出整段吞成公式。
+    if initial && source.chars().count() > 1 && source.chars().all(char::is_alphabetic) {
+        return false;
+    }
     // TUI 的硬折行不带 WRAPLINE；只接数学片段，绝不跨空段或普通说明文字。
     let operand = source.trim_start_matches(['=', '+', '-', '*']).trim();
-    standard_formula_source(source, true)
+    standard_formula_source(source, !initial)
         || explicit_operand(operand)
-        || implicit_product_operand(operand)
+        || implicit_product_operand(operand) && (!initial || operand.contains(['^', '_']))
         || source.chars().all(|character| matches!(character, '{' | '}'))
 }
 

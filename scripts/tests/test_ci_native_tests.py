@@ -195,6 +195,7 @@ class NativeSuiteTests(unittest.TestCase):
                           " or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)"
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_reuses_window_and_preserves_each_program_and_directory)"
                           " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)"
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::update_recovery_tracks_its_windows_and_retries_only_missing_slots)"
                           " or test(=gpui_shell::settings_pane::tests::rename_keymap_row_is_searchable_and_enters_capture)"
                           " or test(=gpui_shell::settings_pane::providers::interaction_tests::api_key_and_json_edits_stay_in_sync_without_recursive_updates)",
                 "test-group": "theme-studio",
@@ -225,11 +226,12 @@ class NativeSuiteTests(unittest.TestCase):
         ):
             self.assertIn(f"fn {name}(", segmented)
 
-        # 新夹具同样会写共享设置；只加入这两个真实函数，不放宽其它测试的调度。
+        # 这些夹具同样会写共享设置；只加入真实函数，不放宽其它测试的调度。
         elevated = (root / "nebula_app/src/gpui_shell/workspace/windowing/elevated_launch.rs").read_text(encoding="utf-8")
         for name in (
             "elevated_launch_reuses_window_and_preserves_each_program_and_directory",
             "elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs",
+            "update_recovery_tracks_its_windows_and_retries_only_missing_slots",
         ):
             self.assertIn(f"fn {name}(", elevated)
 
