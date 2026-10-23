@@ -12,6 +12,30 @@ import java.io.ByteArrayInputStream
 @Config(sdk = [28], application = android.app.Application::class)
 @ConscryptMode(ConscryptMode.Mode.OFF)
 class TmuxSessionControlTest {
+    @Test fun nativeWheelBurstsNeverQueryTmuxAndTheNextInputLeavesCopyModeOnce() {
+        val commands = mutableListOf<String>()
+        val controller = TmuxSessionControl({ command ->
+            commands += command
+            JSONObject().put("status", 0).put("stdout", if (command.contains("list-clients"))
+                "/dev/pts/7\t\$3\tWork\t10:20\t@4\tEditor\t%5\tcopy-mode\n" else "")
+        }, {})
+        val token = Regex("PEBREL_TTY_([a-f0-9]+)=").find(controller.command("true"))!!.groupValues[1]
+        controller.input(ByteArrayInputStream("\u001ePEBREL_TTY_$token=/dev/pts/7\u001f".toByteArray())).readBytes()
+        repeat(500) { controller.applicationScrolled() }
+        assertTrue(commands.isEmpty())
+        controller.returnToInput()
+        assertEquals(2, commands.size)
+        assertTrue(commands.last().contains("cancel"))
+        controller.returnToInput()
+        assertEquals(2, commands.size)
+    }
+
+    @Test fun anotherMouseApplicationDoesNotRequireATmuxClientBeforeTyping() {
+        val controller = TmuxSessionControl({ error("no known remote tty") }, {}, detectShell = true)
+        controller.applicationScrolled()
+        controller.returnToInput()
+    }
+
     @Test fun touchScrollUsesTheCurrentClientsCopyModeAndInputCancelsItWithoutSendingShellKeys() {
         val commands = mutableListOf<String>()
         val targets = mutableListOf<RemoteAttachment?>()

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sftp_resuming">等待连接恢复 · 已传输 %1$s</string>
+</resources>
