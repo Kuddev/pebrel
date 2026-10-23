@@ -14,6 +14,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
+import io.github.kuddev.pebrel.ssh.NativeSshException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -485,9 +487,17 @@ class SessionRepository(private val context: Context,
                 if (it.status == "connecting") it.copy(stage = stage) else it
             } }
         }, keySource = sshKeySource(context, host))
-        val files = SftpClient(connection::sftp) {
-            live.value.any { it.id == id && it.status == "ready" } && sshConnections[id] === connection
-        }
+        // Keep the transfer owner and its confirmed offsets across transport generations.
+        val files = previous?.files ?: SftpClient({ request ->
+            (sshConnections[id] ?: throw NativeSshException("SFTP_CLOSED")).sftp(request)
+        }, recover = {
+            val current = live.first { sessions ->
+                val session = sessions.find { it.id == id }
+                session == null || session.status == "ready" ||
+                    (session.status in setOf("failed", "ended") && !SshReconnect.retryable(session.failure))
+            }.find { it.id == id }
+            if (current?.status != "ready") throw NativeSshException("SFTP_CLOSED")
+        }, active = { live.value.any { it.id == id && it.status == "ready" } && sshConnections.containsKey(id) })
         discoveryJobs.remove(id)?.cancel()
         tmuxCheckpoints.remove(id)?.cancel()
         tmuxControls.remove(id)
