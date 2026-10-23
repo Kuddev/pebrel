@@ -17,6 +17,7 @@
 - 旧壳逐步退役时，保留共享规则的单一实现；首个滚动条边界切片见 [`scrollbar`](../architecture/notes/nebula_app/scrollbar/)。
 - 新终端代理保持选定协议，不把 SOCKS 改写成 HTTP。见 [`terminal proxy scheme`](../architecture/notes/nebula_app/ssh_proxy/2026-09-29-terminal-proxy-scheme.md)。
 - WSL pane 的发行版快照与分屏/新标签继承见 [`shell_detect`](../architecture/notes/nebula_app/shell_detect/)；WSL zsh 启动注入见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-28-wsl-zsh-startup-integration.md)。
+- Windows Codex 身份探测复用进程级辅助进程；光标提示、私有管道、请求期限和退出回收见 [`探测进程生命周期`](../architecture/notes/nebula_app/platform/ai_session_identity/windows/2026-10-23-reusable-probe-process.md)。
 - SSH Files 的 pane cwd 跟随、手动浏览快照与取消归属见 [`remote_files`](../architecture/notes/nebula_app/gpui_shell/workspace/remote_files/)。
 - 管理员更新的受保护目录与会话恢复分别见 [`update_installation`](../architecture/notes/nebula_app/platform/update_installation/) 和 [`update_download`](../architecture/notes/nebula_app/update_download/)，普通会话与管理员更新状态保持独立。
 - Windows Acrylic 的运行库回退与窗口生命周期见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-controller.md)。
