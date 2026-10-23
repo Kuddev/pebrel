@@ -444,6 +444,7 @@ pub struct TerminalView {
     /// Workspace presentation is independent of keyboard/window focus.
     output_visible: bool,
     _cursor_blink_subscriptions: [gpui::Subscription; 3],
+    _history_subscription: gpui::Subscription,
     /// 最近一次由设置页下发的默认样式。只在它真正变化时清理 shell 的
     /// DECSCUSR/DEC mode 12 覆盖，避免无关设置变更打断 vim 等程序光标。
     default_cursor_style: CursorStyle,
