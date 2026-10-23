@@ -275,7 +275,7 @@ async fn connect(
     }
     let socket = TcpStream::from_std(socket).map_err(|_| Failure("NETWORK"))?;
     let config = Arc::new(client::Config {
-        window_size: 256 * 1024,
+        window_size: 4 * 1024 * 1024,
         maximum_packet_size: 32 * 1024,
         channel_buffer_size: 16,
         keepalive_interval: Some(Duration::from_secs(30)),
