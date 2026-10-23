@@ -23,6 +23,7 @@ mod link_underline;
 pub mod math_overlay;
 mod molecule_overlay;
 pub mod mouse_protocol;
+mod native_results;
 mod osc_links;
 mod reading;
 pub mod session;

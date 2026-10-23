@@ -31,7 +31,7 @@ function New-PebrelMsixLayout {
     $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "Missing MSIX layout: $Root" }
     . (Join-Path $PSScriptRoot 'windows-package-architecture.ps1')
-    Assert-WindowsPackageArchitecture -Root $Root -RuntimeDirectory (Join-Path $Root 'runtime') -Architecture $Architecture
+    Assert-WindowsPackageArchitecture -Root $Root -RuntimeDirectory (Join-Path $Root 'runtime') -Architecture $Architecture -CliExecutable 'pebrel.com'
     $template = [IO.File]::ReadAllText((Join-Path $repo 'packaging/windows/AppxManifest.xml'), [Text.Encoding]::UTF8)
     $values = @{
         IDENTITY_NAME = $IdentityName
