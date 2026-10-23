@@ -23,7 +23,7 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertIn('version = env!("VERSION")', cli)
         self.assertEqual(
             [target["name"] for target in self.manifest("nebula_app/Cargo.toml")["bin"]],
-            ["pebrel"],
+            ["pebrel", "pebrel-cli"],
         )
         self.assertEqual(
             [target["name"] for target in self.manifest("nebula_hook/Cargo.toml")["bin"]],

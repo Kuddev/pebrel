@@ -24,6 +24,7 @@ mod pointer;
 mod program_status;
 mod reading;
 mod runtime;
+mod ssh_reconnect;
 mod startup;
 mod startup_command;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -268,6 +269,7 @@ pub enum SidebarActivity {
 }
 
 pub struct TerminalView {
+    pub(super) native_results: super::native_results::Views,
     pub(super) answers: crate::assistant_answer::AnswerInbox,
     confirmation: super::confirmation::ConfirmationState,
     pub(super) answer_reader: Option<gpui::Entity<super::answer_reader::AnswerReader>>,
@@ -357,6 +359,7 @@ pub struct TerminalView {
     pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
     /// SSH 连接阶段（业务层上报）：Ready 前画连接横幅，Failed 驻留错误。
     ssh_stage: Option<crate::ssh_session::SshStage>,
+    ssh_retry_pending: bool,
     /// SSH 连接卡片状态（旧壳 `display::ssh_connect::SshConnectState` 的
     /// 直接复用：阶段日志、粒子相位、进度插值、350ms 显示门槛都在里面）。
     pub(super) ssh_connect: Option<crate::display::ssh_connect::SshConnectState>,
@@ -381,7 +384,7 @@ pub struct TerminalView {
     scrollbar_visibility: nebula_settings::ScrollbarVisibility,
     origin: Point<Pixels>,
     cell_width: Pixels,
-    line_height: Pixels,
+    pub(super) line_height: Pixels,
     cols: usize,
     rows: usize,
     /// 子进程已被告知的几何。`cols`/`rows`
@@ -780,6 +783,9 @@ impl TerminalView {
     }
 
     fn write_bytes(&self, bytes: Vec<u8>) {
+        if self.ssh_failed() {
+            return;
+        }
         if let Some(session) = &self.session {
             session.notifier.notify(bytes);
         }
@@ -787,6 +793,9 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if self.ssh_failed() {
+            return;
+        }
         self.completion_editor.invalidate();
         self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
@@ -1161,6 +1170,11 @@ impl TerminalView {
         let ks = &event.keystroke;
         let mods = &ks.modifiers;
 
+        if self.handle_ssh_reconnect_key(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
+
         if self.reading.panel.is_some() && ks.key.as_str() == "escape" {
             self.close_reading(window, cx);
             cx.stop_propagation();
@@ -1242,9 +1256,17 @@ impl TerminalView {
                 _ => None,
             };
             if let Some(scroll) = scroll {
-                if let Some(session) = &self.session {
-                    session.term.lock().scroll_display(scroll);
-                }
+                let (offset, history) = self.scroll_state();
+                let target = match scroll {
+                    Scroll::PageUp => offset.saturating_add(self.rows).min(history),
+                    Scroll::PageDown => offset.saturating_sub(self.rows),
+                    Scroll::Top => history,
+                    Scroll::Bottom => 0,
+                    Scroll::Delta(delta) => {
+                        (offset as i64 + i64::from(delta)).clamp(0, history as i64) as usize
+                    },
+                };
+                self.scroll_to_offset(target, offset);
                 cx.notify();
                 cx.stop_propagation();
                 return;
@@ -1384,7 +1406,7 @@ impl gpui::EntityInputHandler for TerminalView {
             return;
         }
         let had_marked_text = self.marked_text.take().is_some();
-        if !text.is_empty() && self.exited.is_none() {
+        if !text.is_empty() && self.exited.is_none() && !self.ssh_failed() {
             // 行镜像吃 IME 管道的字符（含中文提交与普通击键文本）。
             if !self.term_mode().contains(TermMode::ALT_SCREEN) {
                 crate::display::nebula_input_text(&mut self.suggest, text);
@@ -1516,6 +1538,10 @@ impl Render for TerminalView {
             root = root.child(div().p_4().text_color(gpui::red()).child(error.clone()));
         } else {
             root = root.child(TerminalElement::new(cx.entity()));
+            root = root.children(self.native_result_elements(window, cx));
+            if self.ssh_disconnected() {
+                root = root.child(self.ssh_disconnect_banner(cx));
+            }
             // SSH 连接卡片（旧壳 `display::ssh_connect` 的 GPUI 形态）：
             // 状态机/文案/常量直接复用，卡片遮罩盖住空 grid。350ms 显示
             // 门槛由 `visible()` 决定；动画帧驱动粒子与进度插值。

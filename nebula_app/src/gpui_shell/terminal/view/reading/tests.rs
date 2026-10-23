@@ -1,4 +1,5 @@
 use super::*;
+use crate::gpui_shell::terminal::element::snapshot_probe;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
 use gpui_component::Root;
 use nebula_terminal::event_loop::StreamProcessor;
@@ -6,13 +7,951 @@ use std::sync::mpsc::Receiver;
 
 mod output_hover;
 
+#[gpui::test]
+fn ordinary_cat_uses_native_layout_and_keeps_following_prompt(cx: &mut TestAppContext) {
+    use nebula_terminal::grid::Dimensions as _;
+    let (view, mut cx, _, proxy) = open(cx);
+    let source = (0..80)
+        .map(|i| format!("## 第 {i} 段\r\n\r\n中文与 English 正文。\r\n\r\n"))
+        .collect::<String>();
+    let wire = format!(
+        "\x1b]1337;SetUserVar=pebrel_shell=cHdzaDox\x07\x1b]1337;SetUserVar=pebrel_command=cHdzaDoxCmNhdCBsb25nLm1k\x07\x1b]133;C\x07{source}\x1b]133;D;0\x07prompt>"
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..5 {
+        draw(&mut cx);
+    }
+    view.read_with(&cx, |view, cx| {
+        assert_eq!(view.native_results.len(), 1);
+        let result = view.native_results.entities.values().next().unwrap().read(cx);
+        assert!(result.height() > px(600.0));
+        let term = view.session.as_ref().unwrap().term.lock();
+        let p = view.native_results.projection.borrow();
+        let rows = p.source_rows(view.grid_rows());
+        let snap = nebula_terminal::render::RenderSnapshot::capture_rows(
+            &term,
+            &nebula_terminal::render::SnapshotConfig {
+                rows: rows as u16,
+                cols: term.columns() as u16,
+            },
+            |row| !p.covers(row),
+        );
+        let cursor =
+            snap.cursor.as_ref().expect("prompt must be included beyond the replaced source rows");
+        assert!(
+            p.row(cursor.row as f32) >= 0.0 && p.row(cursor.row as f32) < view.grid_rows() as f32
+        );
+        let painted = snap
+            .segments
+            .iter()
+            .flat_map(|seg| seg.cells.iter().map(|cell| cell.text.as_str()))
+            .collect::<String>();
+        assert!(painted.contains("prompt>"), "{painted:?}");
+        assert!(!painted.contains("第"), "native source must not be painted twice");
+    });
+}
+
+#[gpui::test]
+fn native_result_compact_hover_tools_and_copy_feedback(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let source = "fatal: missing repository\n";
+    let wire = format!(
+        "{}\r\n{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 90,
+            rows: 16,
+            mime: "text/x-git-progress".into(),
+            title: "git status".into()
+        }
+        .encode(),
+        Packet::Place { wire_id: 90, row: 1 }.encode(),
+        Packet::AppendStderr { wire_id: 90, text: source.into() }.encode(),
+        Packet::End { wire_id: 90, code: 128 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    draw(&mut cx);
+    let bounds = cx.debug_bounds("native-result").unwrap();
+    assert_eq!(bounds.size.height, view.read_with(&cx, |view, _| view.line_height * 2.0));
+    assert!(cx.debug_bounds("native-result-tools").is_none());
+    let hover = bounds.origin + point(px(10.0), px(5.0));
+    cx.simulate_mouse_move(hover, None, Modifiers::default());
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result-tools").is_some());
+    assert!(cx.debug_bounds("native-result-hover-line").is_some());
+    assert_eq!(cx.debug_bounds("native-result").unwrap(), bounds);
+    let copy = cx.debug_bounds("native-result-copy").unwrap();
+    assert!(copy.size.width > px(0.0) && copy.size.height > px(0.0), "{copy:?}");
+    assert!(bounds.contains(&copy.center()), "button {copy:?} outside {bounds:?}");
+    cx.simulate_mouse_move(copy.center(), None, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        cx.debug_bounds("native-result-copy"),
+        Some(copy),
+        "button moved or disappeared before click"
+    );
+    cx.simulate_click(copy.center(), Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(point(px(0.0), px(0.0)), None, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(clipboard(&mut cx).as_deref(), Some(source));
+    assert!(cx.debug_bounds("native-result-tools").is_some());
+    cx.executor().advance_clock(std::time::Duration::from_millis(1600));
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result-tools").is_none());
+    cx.simulate_mouse_move(hover, None, Modifiers::default());
+    draw(&mut cx);
+    let raw_button = cx.debug_bounds("native-result-raw").unwrap().center();
+    cx.simulate_click(raw_button, Modifiers::default());
+    draw(&mut cx);
+    assert!(
+        cx.debug_bounds("native-result-raw-content").unwrap().size.height >= bounds.size.height
+    );
+    let view_button = cx.debug_bounds("native-result-view").unwrap().center();
+    cx.simulate_mouse_move(view_button, None, Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_click(view_button, Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(point(px(0.0), px(0.0)), None, Modifiers::default());
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result-tools").is_none(), "mouse focus must not pin tools");
+    cx.simulate_keystrokes("right");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result-tools").is_some(), "keyboard focus reveals tools");
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result-tools").is_none());
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn native_result_mount_preserves_grid_and_isolates_pointer(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let packets = [
+        Packet::Begin {
+            wire_id: 89,
+            rows: 12,
+            mime: "text/markdown".into(),
+            title: "Native Markdown".into(),
+        },
+        Packet::Append { wire_id: 89, text: "# Heading\n\n**Native** result".into() },
+        Packet::End { wire_id: 89, code: 0 },
+    ];
+    let mut wire = packets[0].encode();
+    for row in 1..12 {
+        wire.push_str("\r\n");
+        wire.push_str(&Packet::Place { wire_id: 89, row }.encode());
+    }
+    wire.push_str("\r\n");
+    wire.extend(packets[1..].iter().map(Packet::encode));
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    draw(&mut cx);
+    assert_eq!(view.read_with(&cx, |view, _| view.native_results.len()), 1);
+    let bounds = cx.debug_bounds("native-result").unwrap();
+    for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
+        cx.simulate_mouse_down(bounds.center(), button, Modifiers::default());
+        cx.simulate_mouse_up(bounds.center(), button, Modifiers::default());
+    }
+    draw(&mut cx);
+    assert!(input(&receiver).is_empty());
+    assert!(!view.read_with(&cx, |view, _| view.selecting));
+    cx.simulate_resize(gpui::size(px(550.0), px(600.0)));
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result").is_some());
+    feed(&view, &mut cx, &proxy, b"\x1b[1;2HX");
+    draw(&mut cx);
+    assert!(view.read_with(&cx, |view, _| view.native_results.is_empty()));
+    feed(&view, &mut cx, &proxy, b"\x1bc");
+    draw(&mut cx);
+    assert!(view.read_with(&cx, |view, _| view.native_results.is_empty()));
+}
+
+#[gpui::test]
+fn native_result_long_document_uses_terminal_scroll_and_retains_identity(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let body = (0..80).map(|i| format!("paragraph {i}\n\n")).collect::<String>();
+    let wire = format!(
+        "{}\r\n{}{}prompt>",
+        Packet::Begin { wire_id: 200, rows: 2, mime: "text/markdown".into(), title: "long".into() }
+            .encode(),
+        Packet::Append { wire_id: 200, text: body.clone() }.encode(),
+        Packet::End { wire_id: 200, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..4 {
+        draw(&mut cx);
+    }
+    let (id, entity, height) = view.read_with(&cx, |view, cx| {
+        let (&id, entity) = view.native_results.entities.iter().next().unwrap();
+        (id, entity.entity_id(), entity.read(cx).height())
+    });
+    assert!(height > px(600.0), "document must expand past the viewport: {height:?}");
+    let (_, history) = view.read_with(&cx, |view, _| view.scroll_state());
+    assert!(history > 80, "expanded output contributes to terminal scrollback");
+    view.update(&mut cx, |view, cx| {
+        view.scroll_to_offset(history, 0);
+        cx.notify();
+    });
+    draw(&mut cx);
+    let before = view.read_with(&cx, |view, _| view.scroll_state().0);
+    let at = point(px(80.0), px(120.0));
+    cx.simulate_mouse_move(at, None, Modifiers::default());
+    cx.simulate_event(ScrollWheelEvent {
+        position: at,
+        delta: gpui::ScrollDelta::Lines(point(0.0, -3.0)),
+        modifiers: Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    draw(&mut cx);
+    assert!(view.read_with(&cx, |view, _| view.scroll_state().0) < before);
+    view.update(&mut cx, |view, cx| {
+        view.scroll_to_offset(history / 2, before);
+        cx.notify();
+    });
+    draw(&mut cx);
+    let anchor_y = cx.debug_bounds("native-result").unwrap().origin.y;
+    // 滚动条可能按用户的 Hover 偏好隐藏；先走真实命中区，才能验收拖动。
+    let edge = view.read_with(&cx, |view, _| {
+        view.origin + point(view.cell_width * view.cols as f32 - px(2.0), px(100.0))
+    });
+    cx.simulate_mouse_move(edge, None, Modifiers::default());
+    draw(&mut cx);
+    let thumb = view.read_with(&cx, |view, _| {
+        let (offset, history) = view.scroll_state();
+        view.scrollbar_thumb(offset, history).unwrap()
+    });
+    assert!(cx.debug_bounds("native-result").unwrap().right() <= thumb.origin.x);
+    cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::default());
+    assert!(
+        view.read_with(&cx, |view, _| view.scrollbar_drag.is_some()),
+        "main scrollbar remains reachable beside native output"
+    );
+    cx.simulate_mouse_up(thumb.center(), MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_resize(gpui::size(px(700.0), px(600.0)));
+    for _ in 0..4 {
+        draw(&mut cx);
+    }
+    assert!(
+        (cx.debug_bounds("native-result").unwrap().origin.y - anchor_y).abs() <= px(1.0),
+        "resize must preserve the offset inside the same document"
+    );
+    feed(&view, &mut cx, &proxy, b"\x1b[?1049h");
+    draw(&mut cx);
+    view.update(&mut cx, |view, _| {
+        view.session.as_ref().unwrap().term.lock().scroll_display(Scroll::Delta(1));
+    });
+    feed(&view, &mut cx, &proxy, b"\x1b[?1049l");
+    for _ in 0..3 {
+        draw(&mut cx);
+    }
+    assert!(
+        (cx.debug_bounds("native-result").unwrap().origin.y - anchor_y).abs() <= px(1.0),
+        "alternate-screen scrolling must preserve the primary document anchor"
+    );
+    view.update(&mut cx, |view, cx| {
+        view.scroll_to_offset(0, before);
+        cx.notify();
+    });
+    draw(&mut cx);
+    assert_eq!(
+        view.read_with(&cx, |view, _| view.native_results.entities[&id].entity_id()),
+        entity
+    );
+    let prompt = view.read_with(&cx, |view, _| {
+        let term = view.session.as_ref().unwrap().term.lock();
+        let origin = term.viewport_origin_for(view.rows);
+        let row = (term.grid().cursor.point.line - origin).0;
+        view.origin
+            + point(
+                view.cell_width * 3.5,
+                view.line_height * (view.native_results.projection.borrow().row(row as f32) + 0.5),
+            )
+    });
+    let mapped = view.read_with(&cx, |view, _| view.grid_point(prompt).0);
+    assert_eq!(mapped.line.0, 1, "prompt hit must resolve to the original VT row");
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            use nebula_terminal::render::{RenderSnapshot, SnapshotConfig};
+            let snapshot = RenderSnapshot::capture(
+                &*view.session.as_ref().unwrap().term.lock(),
+                &SnapshotConfig { rows: view.rows as u16, cols: view.cols as u16 },
+            );
+            let cursor = snapshot.cursor.as_ref().unwrap();
+            let row = view.native_results.projection.borrow().row(cursor.row as f32);
+            let geometry = super::super::cursor::CursorGeometry {
+                screen: (1, false, 0),
+                grid: (view.cols, view.rows),
+                metrics: (view.cell_width.as_f32(), view.line_height.as_f32(), 1.0),
+                projection_shift: 0,
+                row_projection_shift: row - cursor.row as f32,
+                shape: cursor.shape,
+            };
+            view.cursor_animation.reset();
+            let visual = view
+                .visual_cursor(Some(cursor), cursor.col as usize, geometry, true, window, cx)
+                .unwrap();
+            assert!(
+                (visual.row - f64::from(row)).abs() < 0.001,
+                "2.2.2 smooth cursor must share the native result's vertical projection"
+            );
+        })
+    });
+    assert!(input(&receiver).is_empty());
+    let mut costs = Vec::new();
+    for step in 0..40 {
+        let started = std::time::Instant::now();
+        view.update(&mut cx, |view, cx| {
+            let (current, total) = view.scroll_state();
+            view.scroll_to_offset(total * (step % 20) / 20, current);
+            cx.notify();
+        });
+        draw(&mut cx);
+        costs.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    costs.sort_by(f64::total_cmp);
+    crate::gpui_shell::try_write_stderr(format_args!(
+        "native-result synthetic-window scroll: 40 frames, median={:.3} ms, max={:.3} ms\n",
+        costs[costs.len() / 2],
+        costs.last().unwrap()
+    ));
+}
+
+#[gpui::test]
+fn ordinary_directory_folds_only_middle_and_keeps_original_links(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    use nebula_terminal::grid::Dimensions as _;
+    let (view, mut cx, receiver, proxy) = open_with_cache(cx, true);
+    cx.simulate_resize(gpui::size(px(900.0), px(480.0)));
+    draw(&mut cx);
+    view.update(&mut cx, |view, _| {
+        let mut config = crate::config::UiConfig::default();
+        Arc::make_mut(&mut config.hints.enabled[0]).action =
+            crate::config::ui_config::HintAction::Action(
+                crate::config::ui_config::HintInternalAction::Copy,
+            );
+        view.hint_config = Arc::new(config);
+    });
+    let count: usize = 31;
+    let source = (0..count)
+        .map(|i| {
+            format!("\x1b[32m\x1b]8;;file:///fold/{i}\x1b\\file-{i:02}\x1b]8;;\x1b\\\x1b[0m\r\n")
+        })
+        .collect::<String>();
+    let owner = base64::engine::general_purpose::STANDARD.encode("bash:1");
+    let command = base64::engine::general_purpose::STANDARD.encode("bash:1\nls -l");
+    let wire = format!(
+        "\x1b]1337;SetUserVar=pebrel_shell={owner}\x07\x1b]1337;SetUserVar=pebrel_command={command}\x07\x1b]133;C\x07{source}\x1b]133;D;0\x07prompt>"
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..4 {
+        draw(&mut cx);
+    }
+    assert!(
+        view.read_with(&cx, |view, _| view.native_results.entities.is_empty()),
+        "directory output must not become a native table"
+    );
+    assert!(cx.debug_bounds("native-result").is_none());
+    view.read_with(&cx, |view, _| {
+        let term = view.session.as_ref().unwrap().term.lock();
+        let p = view.native_results.projection.borrow();
+        let first = term.grid().cursor.point.line - count;
+        let origin = term.viewport_origin_for(view.rows);
+        for i in 0..count {
+            let row = (first + i - origin).0 as usize;
+            assert_eq!(p.covers(row), (10..count - 10).contains(&i), "source row {i}");
+            let cell = &term.grid()[TermPoint::new(first + i, Column(0))];
+            assert_eq!(cell.hyperlink().unwrap().uri(), format!("file:///fold/{i}"));
+            assert_eq!(
+                cell.fg,
+                nebula_terminal::vte::ansi::Color::Named(
+                    nebula_terminal::vte::ansi::NamedColor::Green
+                )
+            );
+        }
+        assert_eq!(p.row((first + (count - 1) - origin).0 as f32), 20.0);
+        let cells = super::super::super::osc_links::dashed_cells_where(
+            &term,
+            &view.hint_config,
+            p.source_rows(view.rows),
+            view.cols,
+            |row| !p.covers(row),
+        );
+        assert!(
+            cells.contains_key(&(((first + (count - 1) - origin).0 as u16), 0)),
+            "tail hyperlinks remain decorated"
+        );
+    });
+    let position = |view: &Entity<TerminalView>, cx: &VisualTestContext, row: usize, col: f32| {
+        view.read_with(cx, |view, _| {
+            let term = view.session.as_ref().unwrap().term.lock();
+            let line = term.grid().cursor.point.line - count + row;
+            let source = (line - term.viewport_origin_for(view.rows)).0 as f32;
+            point(
+                view.origin.x + view.cell_width * col,
+                view.origin.y
+                    + view.line_height
+                        * (view.native_results.projection.borrow().row(source) + 0.5),
+            )
+        })
+    };
+    cx.update(|window, cx| view.update(cx, |view, cx| view.open_reading(false, window, cx)));
+    for row in [0, 15, 30] {
+        view.update(&mut cx, |view, cx| {
+            let term = view.session.as_ref().unwrap().term.lock();
+            let line = (term.grid().scrolled_out() + term.history_size()) as i64
+                + i64::from(term.grid().cursor.point.line.0)
+                - count as i64
+                + row as i64;
+            view.reading.panel.as_mut().unwrap().highlight = Some(ReadingSpan {
+                epoch: term.reading_epoch(),
+                start: ReadingPoint { line: line as usize, column: 0 },
+                end: ReadingPoint { line: line as usize, column: 7 },
+            });
+            cx.notify();
+        });
+        draw(&mut cx);
+        let painted = cx.update(|_, cx| snapshot_probe::last(view.entity_id(), cx));
+        if row == 15 {
+            assert!(
+                painted.reading_highlights.is_empty(),
+                "hidden text must not highlight the fold control"
+            );
+        } else {
+            assert_eq!(painted.reading_highlights.len(), 1, "visible source row {row}");
+            let highlight = painted.reading_highlights[0];
+            let expected = position(&view, &cx, row, 0.0);
+            assert_eq!(highlight.origin.x, expected.x);
+            assert_eq!(highlight.origin.y + highlight.size.height * 0.5, expected.y);
+            assert_eq!(highlight.size.width, painted.cell_size.width * 7.0);
+        }
+    }
+    cx.update(|window, cx| view.update(cx, |view, cx| view.close_reading(window, cx)));
+    draw(&mut cx);
+    let modifiers = if crate::platform::Platform::current() == crate::platform::Platform::MacOS {
+        Modifiers { platform: true, ..Modifiers::default() }
+    } else {
+        Modifiers { control: true, ..Modifiers::default() }
+    };
+    for row in [0, 21, 30] {
+        let point = position(&view, &cx, row, 0.25);
+        cx.simulate_mouse_move(point, None, modifiers);
+        draw(&mut cx);
+        assert_eq!(
+            view.read_with(&cx, |view, _| view
+                .link_hover
+                .as_ref()
+                .unwrap()
+                .hint
+                .hyperlink()
+                .unwrap()
+                .uri()
+                .to_owned()),
+            format!("file:///fold/{row}")
+        );
+        cx.simulate_mouse_down(point, MouseButton::Left, modifiers);
+        cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(clipboard(&mut cx).unwrap(), format!("file:///fold/{row}"));
+    }
+    // 跨折叠区拖选仍复制完整原文，隐藏中段不是被删除的数据。
+    let start = position(&view, &cx, 0, 0.25);
+    let end = position(&view, &cx, count - 1, 6.75);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| assert!(view.copy_selection(true, window, cx)))
+    });
+    assert_eq!(
+        clipboard(&mut cx).unwrap(),
+        (0..count).map(|i| format!("file-{i:02}")).collect::<Vec<_>>().join("\n")
+    );
+    // 控制行紧接前十行；用真实终端布局定位，避免查询缓存帧不会重放的 debug selector。
+    let toggle = position(&view, &cx, 10, 4.0);
+    let folded = cx.update(|_, cx| snapshot_probe::last(view.entity_id(), cx));
+    assert!(!folded.text.contains("file-15"));
+    cx.simulate_click(toggle, Modifiers::default());
+    draw(&mut cx);
+    let expanded = cx.update(|_, cx| snapshot_probe::last(view.entity_id(), cx));
+    assert!(expanded.count > folded.count);
+    assert!(expanded.text.contains("file-15"));
+    let middle = position(&view, &cx, 15, 0.25);
+    cx.simulate_mouse_move(middle, None, modifiers);
+    draw(&mut cx);
+    cx.simulate_mouse_down(middle, MouseButton::Left, modifiers);
+    cx.simulate_mouse_up(middle, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(clipboard(&mut cx).unwrap(), "file:///fold/15");
+    cx.simulate_click(toggle, Modifiers::default());
+    draw(&mut cx);
+    let collapsed = cx.update(|_, cx| snapshot_probe::last(view.entity_id(), cx));
+    assert!(collapsed.count > expanded.count);
+    assert!(!collapsed.text.contains("file-15"));
+    let prompt = position(&view, &cx, count, 0.25);
+    view.read_with(&cx, |view, _| {
+        assert_eq!(
+            view.grid_point(prompt).0.line,
+            view.session.as_ref().unwrap().term.lock().grid().cursor.point.line
+        )
+    });
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn ordinary_short_directory_keeps_every_line_without_controls(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    let (view, mut cx, _, proxy) = open(cx);
+    let owner = base64::engine::general_purpose::STANDARD.encode("pwsh:1");
+    let command = base64::engine::general_purpose::STANDARD.encode("pwsh:1\nls");
+    let source = (0..20).map(|i| format!("file-{i:02}\r\n")).collect::<String>();
+    let wire = format!(
+        "\x1b]1337;SetUserVar=pebrel_shell={owner}\x07\x1b]1337;SetUserVar=pebrel_command={command}\x07\x1b]133;C\x07{source}\x1b]133;D;0\x07prompt>"
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..3 {
+        draw(&mut cx);
+    }
+    assert!(cx.debug_bounds("terminal-output-fold-toggle").is_none());
+    assert!(cx.debug_bounds("native-result").is_none());
+    view.read_with(&cx, |view, _| {
+        let p = view.native_results.projection.borrow();
+        for row in 0..20 {
+            assert!(!p.covers(row));
+        }
+    });
+}
+
+#[gpui::test]
+fn native_result_revalidates_live_rows_that_scroll_into_history(cx: &mut TestAppContext) {
+    use base64::Engine as _;
+    use nebula_terminal::grid::Dimensions as _;
+    let (view, mut cx, _, proxy) = open(cx);
+    for column in [1, 2] {
+        feed(&view, &mut cx, &proxy, b"\x1bc");
+        let owner = base64::engine::general_purpose::STANDARD.encode("bash:1");
+        let command = base64::engine::general_purpose::STANDARD.encode("bash:1\ncat sample.md");
+        let wire = format!(
+            "\x1b]1337;SetUserVar=pebrel_shell={owner}\x07\x1b]1337;SetUserVar=pebrel_command={command}\x07\x1b]133;C\x07one\r\ntwo\r\nthree\r\n\x1b]133;D;0\x07prompt>"
+        );
+        feed(&view, &mut cx, &proxy, wire.as_bytes());
+        for _ in 0..4 {
+            draw(&mut cx);
+        }
+        assert_eq!(view.read_with(&cx, |view, _| view.native_results.len()), 1);
+        let (screen, epoch) = view.read_with(&cx, |view, _| {
+            let term = view.session.as_ref().unwrap().term.lock();
+            (term.screen_lines(), term.reading_epoch())
+        });
+        // 一次输入既覆盖中间行又把它滚入历史；col=2 保留 marker，须校验指纹。
+        let rewrite = format!("\x1b[2;{column}HNEW\x1b[{screen};1H\r\n\r\n\r\n");
+        feed(&view, &mut cx, &proxy, rewrite.as_bytes());
+        for _ in 0..3 {
+            draw(&mut cx);
+        }
+        view.read_with(&cx, |view, _| {
+            let term = view.session.as_ref().unwrap().term.lock();
+            assert_eq!(term.reading_epoch(), epoch);
+            assert!(
+                view.native_results.is_empty(),
+                "stale output must not cover rewritten historical text; column {column}"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn native_result_table_expands_all_rows_and_keeps_body_font(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, _, proxy) = open(cx);
+    let source = format!(
+        "[{}]",
+        (0..100).map(|i| format!("{{\"index\":{i}}}")).collect::<Vec<_>>().join(",")
+    );
+    let wire = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 201,
+            rows: 2,
+            mime: "application/json".into(),
+            title: "table".into()
+        }
+        .encode(),
+        Packet::Append { wire_id: 201, text: source }.encode(),
+        Packet::End { wire_id: 201, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..4 {
+        draw(&mut cx);
+    }
+    view.read_with(&cx, |view, cx| {
+        let result = view.native_results.entities.values().next().unwrap().read(cx);
+        assert!(result.height() >= view.line_height * 100.0);
+        assert_eq!(result.body_font_size(), view.font_size);
+        let (_, _, projected_rows) = view.native_results.placements().into_iter().next().unwrap();
+        assert!(
+            (projected_rows * view.line_height.as_f32() - result.height().as_f32()).abs() < 0.01,
+            "following terminal content must use the table's measured height without row padding"
+        );
+    });
+}
+
+#[gpui::test]
+fn native_result_row_hover_notifies_inside_a_cached_parent(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    use std::{cell::Cell, rc::Rc};
+
+    let (view, mut cx, _, proxy) = open_with_cache(cx, true);
+    let wire = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 203,
+            rows: 2,
+            mime: "application/json".into(),
+            title: "hover".into()
+        }
+        .encode(),
+        Packet::Append { wire_id: 203, text: r#"[{"Name":"alpha"},{"Name":"beta"}]"#.into() }
+            .encode(),
+        Packet::End { wire_id: 203, code: 0 }.encode(),
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    let mut positions = None;
+    for _ in 0..5 {
+        draw(&mut cx);
+        if let (Some(first), Some(second)) =
+            (cx.debug_bounds("native-table-row-0"), cx.debug_bounds("native-table-row-1"))
+        {
+            positions = Some([first.center(), second.center()]);
+        }
+    }
+    let [first, second] = positions.expect("actual table row geometry");
+    let result = view
+        .read_with(&cx, |view, _| view.native_results.entities.values().next().unwrap().clone());
+    let notifications = Rc::new(Cell::new(0));
+    let observed = notifications.clone();
+    let _subscription =
+        cx.update(|_, cx| cx.observe(&result, move |_, _| observed.set(observed.get() + 1)));
+    cx.simulate_mouse_move(first, None, Modifiers::default());
+    draw(&mut cx);
+    for position in [second, first, second] {
+        notifications.set(0);
+        cx.simulate_mouse_move(position, None, Modifiers::default());
+        // 先检查鼠标事件自身产生通知；强制 draw 会让缺失的 hover 失效机制看似正常。
+        assert!(notifications.get() > 0, "crossing rows must notify before another forced draw");
+        draw(&mut cx);
+    }
+}
+
+#[gpui::test]
+fn native_result_table_filter_and_sort_follow_real_controls(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let source = r#"[{"Name":"alpha-long-filename.rs","Size":2},{"Name":"beta.rs","Size":10},{"Name":"gamma.rs","Size":1}]"#;
+    let wire = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 202,
+            rows: 2,
+            mime: "application/json".into(),
+            title: "table".into()
+        }
+        .encode(),
+        Packet::Append { wire_id: 202, text: source.into() }.encode(),
+        Packet::End { wire_id: 202, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..5 {
+        draw(&mut cx);
+    }
+    let rows = |view: &Entity<TerminalView>, cx: &VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.native_results.entities.values().next().unwrap().read(cx).displayed_rows()
+        })
+    };
+    assert!(cx.debug_bounds("native-result-filter-input").is_none());
+    let names = cx.debug_bounds("native-table-column-0").unwrap();
+    let sizes = cx.debug_bounds("native-table-column-1").unwrap();
+    assert!(names.size.width > sizes.size.width, "columns must fit their actual content");
+    cx.simulate_click(
+        sizes.origin + point(px(5.0), sizes.size.height - px(5.0)),
+        Modifiers::default(),
+    );
+    draw(&mut cx);
+    assert_eq!(rows(&view, &cx)[0], ["beta.rs", "10"]);
+    // Button 保留鼠标与键盘焦点的区分；用真实 Tab 导航进入第二列表头。
+    cx.simulate_keystrokes("tab");
+    draw(&mut cx);
+    cx.simulate_keystrokes("tab");
+    draw(&mut cx);
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("enter").unwrap() });
+    draw(&mut cx);
+    assert_eq!(rows(&view, &cx)[0], ["gamma.rs", "1"]);
+    let bounds = cx.debug_bounds("native-result").unwrap();
+    cx.simulate_mouse_move(bounds.origin + point(px(10.0), px(10.0)), None, Modifiers::default());
+    draw(&mut cx);
+    let filter = cx.debug_bounds("native-result-filter-toggle").unwrap().center();
+    cx.simulate_mouse_move(filter, None, Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_click(filter, Modifiers::default());
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result-filter-input").is_some());
+    cx.simulate_input("beta");
+    draw(&mut cx);
+    assert_eq!(rows(&view, &cx), vec![vec!["beta.rs".to_owned(), "10".to_owned()]]);
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-result-filter-input").is_none());
+    assert_eq!(rows(&view, &cx).len(), 3);
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn native_result_markdown_keeps_compact_blocks_and_copies_only_code(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let code = "# a comment\nprintf 'hello'";
+    let source = format!(
+        "# Heading\n\nParagraph with `code`.\n\n```bash\n{code}\n```\n\n| Name | Kind | 操作 |\n| --- | --- | --- |\n| alpha | text | 选择与复制 |\n| bravo | bytes | 排序与筛选 |\n"
+    );
+    let wire = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 203,
+            rows: 2,
+            mime: "text/markdown".into(),
+            title: "document".into()
+        }
+        .encode(),
+        Packet::Append { wire_id: 203, text: source }.encode(),
+        Packet::End { wire_id: 203, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..10 {
+        draw(&mut cx);
+    }
+    let heading = cx.debug_bounds("native-markdown-heading").unwrap();
+    let code_block = cx.debug_bounds("native-code-block").unwrap();
+    let table = cx.debug_bounds("native-markdown-table").unwrap();
+    assert!(heading.top() < code_block.top() && code_block.bottom() <= table.top());
+    assert!(code_block.size.height < px(140.0), "a short code block must fit its content");
+    let one_line_rows = view
+        .read_with(&cx, |view, _| px((view.font_size.as_f32() * 1.65 + 12.0).ceil() * 3.0 + 3.0));
+    assert!(table.size.height <= one_line_rows, "short CJK cells must fit their measured columns");
+    cx.simulate_mouse_move(code_block.center(), None, Modifiers::default());
+    draw(&mut cx);
+    let copy = cx.debug_bounds("native-code-copy").unwrap().center();
+    cx.simulate_click(copy, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        clipboard(&mut cx).as_deref(),
+        Some(code),
+        "no fence, language or line numbers in copied code"
+    );
+    assert_eq!(cx.debug_bounds("native-code-block"), Some(code_block));
+    let identities = |view: &Entity<TerminalView>, cx: &VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.native_results.entities.values().next().unwrap().read(cx).code_identities()
+        })
+    };
+    let retained = identities(&view, &cx);
+    assert_eq!(retained.len(), 1);
+    feed(&view, &mut cx, &proxy, b"\x1b[?1049h");
+    draw(&mut cx);
+    feed(&view, &mut cx, &proxy, b"\x1b[?1049l");
+    for _ in 0..5 {
+        draw(&mut cx);
+    }
+    assert_eq!(
+        identities(&view, &cx),
+        retained,
+        "offscreen code must retain language and parsing state"
+    );
+    cx.simulate_mouse_move(point(px(0.0), px(0.0)), None, Modifiers::default());
+    draw(&mut cx);
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn native_result_diff_keeps_file_boundaries_copy_and_collapse(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let source = "diff --git a/src/config.ts b/src/config.ts\n--- a/src/config.ts\n+++ b/src/config.ts\n@@ -12,3 +12,4 @@\n export const output = {\n-  format: 'text',\n+  format: 'auto',\n+  preserveSource: true,\n };\ndiff --git a/old b/new\nsimilarity index 100%\nrename from old\nrename to new\n";
+    let wire = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 204,
+            rows: 2,
+            mime: "text/x-diff".into(),
+            title: "git diff".into()
+        }
+        .encode(),
+        Packet::Append { wire_id: 204, text: source.into() }.encode(),
+        Packet::End { wire_id: 204, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..10 {
+        draw(&mut cx);
+    }
+    let expanded = cx.debug_bounds("native-diff-file-0").unwrap();
+    assert!(cx.debug_bounds("native-diff-body-0").is_some());
+    assert!(cx.debug_bounds("native-diff-file-1").unwrap().top() >= expanded.bottom());
+    assert!(
+        cx.debug_bounds("native-code-copy").is_none(),
+        "diff uses the original patch copy action"
+    );
+    let collapse = cx.debug_bounds("native-diff-collapse-0").unwrap();
+    assert!(collapse.size.width >= px(28.0) && collapse.size.height >= px(28.0));
+    cx.simulate_mouse_move(collapse.center(), None, Modifiers::default());
+    draw(&mut cx);
+    assert!(
+        !cx.debug_bounds("native-result-tools").unwrap().intersects(&collapse),
+        "floating tools must leave the file collapse target reachable"
+    );
+    cx.simulate_click(collapse.origin + point(px(3.0), px(3.0)), Modifiers::default());
+    for _ in 0..4 {
+        draw(&mut cx);
+    }
+    assert!(cx.debug_bounds("native-diff-body-0").is_none());
+    assert!(cx.debug_bounds("native-diff-file-0").unwrap().size.height < expanded.size.height);
+    // 容器焦点不是 Tab 停靠点；第一个 Tab 就进入第一个文件的折叠按钮。
+    cx.simulate_keystrokes("tab");
+    draw(&mut cx);
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("enter").unwrap() });
+    for _ in 0..4 {
+        draw(&mut cx);
+    }
+    assert!(
+        input(&receiver).is_empty(),
+        "file control navigation must not send Tab or Enter to PTY"
+    );
+    assert!(
+        cx.debug_bounds("native-diff-body-0").is_some(),
+        "keyboard activation expands the file"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("enter").unwrap() });
+    for _ in 0..4 {
+        draw(&mut cx);
+    }
+    assert!(
+        cx.debug_bounds("native-diff-body-0").is_none(),
+        "keyboard focus survives the first activation"
+    );
+    let bounds = cx.debug_bounds("native-result").unwrap();
+    cx.simulate_mouse_move(bounds.origin + point(px(10.0), px(10.0)), None, Modifiers::default());
+    draw(&mut cx);
+    let copy = cx.debug_bounds("native-result-copy").unwrap().center();
+    cx.simulate_click(copy, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(
+        clipboard(&mut cx).as_deref(),
+        Some(source),
+        "copy retains headers, hunk markers, and original signs"
+    );
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn native_result_unsupported_diff_preserves_raw_output(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let source = "diff --cc file\n@@@ -1,1 -1,1 +1,1 @@@\n++new\n";
+    let wire = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 205,
+            rows: 2,
+            mime: "text/x-diff".into(),
+            title: "git diff".into()
+        }
+        .encode(),
+        Packet::Append { wire_id: 205, text: source.into() }.encode(),
+        Packet::End { wire_id: 205, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..6 {
+        draw(&mut cx);
+    }
+    assert!(cx.debug_bounds("native-diff-file-0").is_none());
+    assert!(cx.debug_bounds("native-result-raw-content").is_some());
+    let bounds = cx.debug_bounds("native-result").unwrap();
+    cx.simulate_mouse_move(bounds.origin + point(px(10.0), px(10.0)), None, Modifiers::default());
+    draw(&mut cx);
+    let copy = cx.debug_bounds("native-result-copy").unwrap().center();
+    cx.simulate_click(copy, Modifiers::default());
+    draw(&mut cx);
+    assert_eq!(clipboard(&mut cx).as_deref(), Some(source));
+    assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn native_result_eviction_releases_offscreen_parsed_state(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, _, proxy) = open(cx);
+    let mut stream = StreamProcessor::default();
+    let mut first = None;
+    for id in 0..34 {
+        let wire = format!(
+            "{}\r\n{}{}",
+            Packet::Begin {
+                wire_id: id,
+                rows: 2,
+                mime: "text/markdown".into(),
+                title: "retention".into()
+            }
+            .encode(),
+            Packet::Append { wire_id: id, text: format!("# Result {id}\n\ncontent") }.encode(),
+            Packet::End { wire_id: id, code: 0 }.encode()
+        );
+        view.update(&mut cx, |view, cx| {
+            stream.feed(&mut view.session.as_ref().unwrap().term.lock(), &proxy, wire.as_bytes());
+            cx.notify();
+        });
+        for _ in 0..3 {
+            draw(&mut cx);
+        }
+        if id == 0 {
+            first =
+                view.read_with(&cx, |view, _| view.native_results.entities.keys().next().copied());
+        }
+    }
+    view.read_with(&cx, |view, _| {
+        assert!(!view.native_results.entities.contains_key(&first.unwrap()));
+        assert!(view.native_results.entities.len() <= 32);
+    });
+}
+
+struct CachedTerminal(Entity<TerminalView>);
+impl Render for CachedTerminal {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // 与工作区相同的缓存边界；不以整窗 refresh 掩盖终端漏发通知。
+        div().size_full().child(self.0.clone().cached(gpui::StyleRefinement::default().size_full()))
+    }
+}
+
 fn open(
     cx: &mut TestAppContext,
+) -> (Entity<TerminalView>, VisualTestContext, Receiver<Msg>, session::EventProxy) {
+    open_with_cache(cx, false)
+}
+
+fn open_with_cache(
+    cx: &mut TestAppContext,
+    cached: bool,
 ) -> (Entity<TerminalView>, VisualTestContext, Receiver<Msg>, session::EventProxy) {
     cx.update(|cx| {
         gpui_component::init(cx);
         crate::gpui_shell::terminal::init(cx);
         crate::gpui_shell::math_view::register(cx);
+        snapshot_probe::enable(cx);
         cx.set_global(Settings::load(nebula_settings::ThemeName::Nord));
     });
     let mut result = None;
@@ -47,7 +986,11 @@ fn open(
         let focus_handle = view.read(cx).focus_handle.clone();
         window.focus(&focus_handle, cx);
         result = Some((view.clone(), receiver, proxy));
-        Root::new(view, window, cx)
+        if cached {
+            Root::new(cx.new(|_| CachedTerminal(view)), window, cx)
+        } else {
+            Root::new(view, window, cx)
+        }
     });
     let mut window = window.clone();
     window.simulate_resize(gpui::size(px(900.0), px(600.0)));
@@ -62,7 +1005,6 @@ fn open(
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
-        window.refresh();
         window.draw(cx).clear(cx);
     });
 }

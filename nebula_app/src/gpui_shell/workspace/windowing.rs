@@ -5,7 +5,7 @@
 //! 变更投递到对应 workspace，避免多个 receiver 竞争消费同一事件流。
 
 mod shutdown;
-pub(crate) use shutdown::{quit_all, quit_for_update};
+pub(crate) use shutdown::{quit_all, quit_for_update, schedule_update};
 mod startup;
 use startup::{initial_startup, runtime_window_startup};
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -14,6 +14,8 @@ mod startup_geometry;
 pub(super) use startup_geometry::prepare_initial_grid;
 
 mod elevated_launch;
+mod update_recovery;
+use update_recovery::{open_update_windows, ready_update_windows};
 
 #[cfg(windows)]
 mod quick_window;
@@ -200,6 +202,7 @@ pub(crate) struct WindowRegistry {
     runtime_hub: crate::runtime_api::RuntimeHub,
     session_persistence: SessionPersistence,
     quit_pending: bool,
+    update_restore_windows: Option<Vec<Option<u64>>>,
     quick_terminal: Option<QuickTerminalWindow>,
     quick_size_dirty: Option<nebula_settings::QuickTerminalSize>,
     _subscriptions: Vec<Subscription>,
@@ -264,6 +267,7 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
         runtime_hub,
         session_persistence: SessionPersistence::default(),
         quit_pending: false,
+        update_restore_windows: None,
         quick_terminal: None,
         quick_size_dirty: None,
         _subscriptions: Vec::new(),
@@ -313,34 +317,15 @@ pub(crate) fn open_initial_window(
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
 ) {
-    if !crate::platform::elevation::requires_isolation()
-        && let Some(sessions) = crate::update_download::handoff::restore_ticket()
-    {
-        let mut sessions = sessions.into_iter();
-        if let Some(first) = sessions.next() {
-            open_workspace_window(
-                cx,
-                WorkspaceStartup::RestoreUpdate(first),
-                Some(ai_events),
-                Some(shell_events),
-                true,
-                WindowRole::Regular,
-            )
-            .expect("failed to reopen updated workspace");
-            for session in sessions {
-                if let Err(error) = open_workspace_window(
-                    cx,
-                    WorkspaceStartup::RestoreUpdate(session),
-                    None,
-                    None,
-                    true,
-                    WindowRole::Regular,
-                ) {
-                    log::warn!("Could not reopen an updated window: {error}");
-                }
-            }
-            return;
+    if let Some(sessions) = crate::update_download::handoff::restore_ticket() {
+        if let Err(error) = open_update_windows(sessions, Some(ai_events), Some(shell_events), cx) {
+            log::error!("Could not reopen updated workspace: {}", error.message);
+            assert!(
+                !cx.global::<WindowRegistry>().entries.is_empty(),
+                "failed to reopen updated workspace"
+            );
         }
+        return;
     }
     let startup = if shell_id.is_some() {
         match runtime_window_startup(initial_cwd, shell_id.as_deref()) {
@@ -1375,23 +1360,10 @@ pub(crate) fn autosave_tick(cx: &mut App) {
         log::warn!("Session checkpoint: {error}");
         return;
     }
-    let workspaces = cx
-        .global::<WindowRegistry>()
-        .entries
-        .iter()
-        .filter(|entry| entry.role == WindowRole::Regular)
-        .filter_map(|entry| entry.workspace.upgrade())
-        .collect::<Vec<_>>();
-    let ready = workspaces.iter().all(|workspace| {
-        workspace.read(cx).tabs.iter().all(|tab| match tab {
-            WorkspaceTab::Terminal { panes, .. } => {
-                panes.iter().all(|pane| pane.view.read(cx).recovery_ready())
-            },
-            _ => true,
-        })
-    });
-    if ready {
-        crate::update_download::handoff::acknowledge_restore(workspaces.len());
+    if let Some(count) = ready_update_windows(cx)
+        && crate::update_download::handoff::acknowledge_restore(count)
+    {
+        cx.global_mut::<WindowRegistry>().update_restore_windows = None;
     }
 }
 
