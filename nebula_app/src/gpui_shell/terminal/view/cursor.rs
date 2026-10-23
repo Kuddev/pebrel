@@ -25,6 +25,7 @@ pub(in crate::gpui_shell::terminal) struct CursorGeometry {
     pub grid: (usize, usize),
     pub metrics: (f32, f32, f32),
     pub projection_shift: i32,
+    pub row_projection_shift: f32,
     pub shape: CursorShape,
 }
 
@@ -108,6 +109,11 @@ impl TerminalView {
             // repaint coordinates are not a new target or input authorization.
             return None;
         };
+        let visual_row = self.native_results.projection.borrow().row(cursor.row as f32);
+        if visual_row < 0.0 || visual_row >= geometry.grid.1 as f32 {
+            self.cursor_animation.reset();
+            return None;
+        }
         let expired = self
             .cursor_animation
             .hidden_since
@@ -118,7 +124,7 @@ impl TerminalView {
             self.cursor_animation.geometry = Some(geometry);
         }
         let position = self.cursor_animation.motion.update(
-            Position::new(visual_col as f64, cursor.row as f64),
+            Position::new(visual_col as f64, f64::from(visual_row)),
             now,
             enabled,
             !geometry.screen.1,

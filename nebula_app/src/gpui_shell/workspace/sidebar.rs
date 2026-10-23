@@ -445,20 +445,47 @@ impl NebulaWorkspace {
                 .when_some(logo_image.clone(), |row, image| {
                     row.child(
                         div().w(px(TAB_LABEL_ICON_W)).flex_shrink_0().flex().items_center().justify_center().child(
-                            img(image).size(px(TAB_LABEL_ICON_SIZE)).object_fit(ObjectFit::Contain),
+                            // 共用原图和 GPU 灰度处理；hover 只切绘制层，不重解码或改变占位。
+                            div()
+                                .relative()
+                                .size(px(TAB_LABEL_ICON_SIZE))
+                                .child(
+                                    img(image.clone())
+                                        .id(("sidebar-logo-idle", ix))
+                                        .size_full()
+                                        .object_fit(ObjectFit::Contain)
+                                        .when(!active, |icon| {
+                                            icon.grayscale(true).opacity(0.85)
+                                                .group_hover(hover_group.clone(), |style| style.invisible())
+                                        }),
+                                )
+                                .when(!active, |slot| {
+                                    slot.child(
+                                        img(image)
+                                            .id(("sidebar-logo-hover", ix))
+                                            .absolute()
+                                            .inset_0()
+                                            .size_full()
+                                            .object_fit(ObjectFit::Contain)
+                                            .invisible()
+                                            .group_hover(hover_group.clone(), |style| style.visible()),
+                                    )
+                                }),
                         ),
                     )
                 })
                 .when_some(program_glyph, |row, glyph| {
                     row.child(
                         div()
+                            .id(("sidebar-program-icon", ix))
                             .w(px(if logo_pending { TAB_LABEL_ICON_SIZE } else { TAB_LABEL_ICON_W }))
                             .flex_shrink_0()
                             .font_family(symbol_family.clone())
                             .text_size(px(label_px))
                             .font_weight(FontWeight::NORMAL)
                             .text_color(if active { active_fg } else { muted })
-                            .child(glyph),
+                            .group_hover(hover_group.clone(), |style| style.text_color(active_fg))
+                            .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
                     )
                 })
                 .when(
@@ -1006,7 +1033,7 @@ impl NebulaWorkspace {
                             .font_family(symbol_family)
                             .text_size(px(label_px))
                             .text_color(dim)
-                            .child(glyph),
+                            .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
                     )
                 })
                 .child(

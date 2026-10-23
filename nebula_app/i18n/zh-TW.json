@@ -1013,5 +1013,7 @@
     "empty": "此目錄為空。",
     "error_retry": "{error}（點選右上角重新讀取）",
     "busy_other": "另一主機正在傳輸：{destination}"
-  }
+  },
+  "terminal.ssh_disconnected": "連線已中斷，按 R 重新連線。",
+  "terminal.ssh_reconnect": "重新連線 (R)"
 }

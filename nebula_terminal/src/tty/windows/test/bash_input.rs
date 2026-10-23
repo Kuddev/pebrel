@@ -91,12 +91,12 @@ impl BashSession {
         )
     }
 
-    fn redraw_after_failure(&mut self) -> std::io::Result<()> {
+    fn observe_after_failure(&mut self, redraw: bool) -> std::io::Result<()> {
         self.output_tail.clear();
         self.last_reply = None;
-        // A single redraw distinguishes stale display from retained Readline
-        // input without deleting any more characters or retrying the assertion.
-        self.edit(EditKey::Redraw, 1);
+        if redraw {
+            self.edit(EditKey::Redraw, 1);
+        }
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut buffer = [0; 8192];
         while Instant::now() < deadline {
@@ -109,6 +109,18 @@ impl BashSession {
             thread::sleep(Duration::from_millis(5));
         }
         Ok(())
+    }
+
+    fn failure_phase(&mut self, redraw: bool) -> String {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.observe_after_failure(redraw)
+        }));
+        let result = match outcome {
+            Ok(Ok(())) => "captured for 2 seconds".to_owned(),
+            Ok(Err(error)) => format!("PTY read failed: {error}"),
+            Err(_) => "diagnostic panicked".to_owned(),
+        };
+        format!("({result}): {}", self.diagnostic_snapshot())
     }
 
     fn wait_for(&mut self, label: &str, expected: impl Fn(&Term<Replies>) -> bool) {
@@ -129,21 +141,13 @@ impl BashSession {
             let before_deadline = Instant::now() < deadline;
             if !before_deadline {
                 let original = self.diagnostic_snapshot();
-                // Even a diagnostic I/O failure must retain the original
-                // assertion and its screen/input/output evidence.
-                let redraw = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    self.redraw_after_failure()
-                }));
-                let redraw_result = match redraw {
-                    Ok(Ok(())) => "captured for 2 seconds".to_owned(),
-                    Ok(Err(error)) => format!("PTY read failed: {error}"),
-                    Err(_) => "diagnostic panicked".to_owned(),
-                };
+                // 先只读再发 Ctrl-L，区分处理过慢与新输入才冲出尾部输出；原超时仍判失败。
+                let passive = self.failure_phase(false);
+                let redraw = self.failure_phase(true);
                 assert!(
                     before_deadline,
-                    "{} / {label}: original failure: {original}; Ctrl-L redraw ({redraw_result}): {}",
+                    "{} / {label}: original failure: {original}; no new input {passive}; Ctrl-L redraw {redraw}",
                     self.locale,
-                    self.diagnostic_snapshot(),
                 );
             }
             thread::sleep(Duration::from_millis(5));
