@@ -177,6 +177,9 @@ impl NebulaWorkspace {
                 };
                 let TabPresentation {
                     title,
+                    // 顶栏保持目录名身份；品牌名（headline）与 agent 过滤
+                    // （is_agent_session）只属于侧栏任务条目。
+                    headline: _,
                     tooltip,
                     is_settings,
                     activity,
@@ -188,6 +191,7 @@ impl NebulaWorkspace {
                     renaming,
                     pane_count,
                     local_administrator,
+                    is_agent_session: _,
                 } = self.top_tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);

@@ -128,6 +128,7 @@ pub(super) fn local_options(
     shell: Option<tty::Shell>,
     pane_id: u64,
     cwd: Option<std::path::PathBuf>,
+    project_report: bool,
 ) -> tty::Options {
     let mut options = tty::Options::default();
     options.shell = shell;
@@ -136,6 +137,10 @@ pub(super) fn local_options(
         log::warn!("Could not prepare shell integration: {error}");
     }
     crate::platform::environment::prepare_local_pty(&mut options);
+    // 显式覆盖继承值，关闭侧栏的新窗口不会继承父会话的 Git 探测开关。
+    options
+        .env
+        .insert("PEBREL_PROJECT_REPORT".into(), if project_report { "1" } else { "0" }.into());
     // WSL tab 的命令边界（OSC 133;D/A）与 cwd（OSC 7）：来宾登录 shell 默认
     // 不发，Agent 生命周期、目录树与 Git 视图都会失去来宾侧事实。只对
     // `wsl.exe` 启动生效，见 [`crate::shell_detect::wsl_cwd_report_env`]。
@@ -165,6 +170,9 @@ pub(super) fn local_options(
     // 身份契约必须最后写：它以环境表里 `WSLENV` 的现值为基准合并，才能同时
     // 保住上面那段的 cwd 上报条目。见 [`crate::agent_env`]。
     crate::agent_env::apply(&mut options.env, pane_id);
+    let mut current = options.env.get("WSLENV").cloned().unwrap_or_default();
+    crate::shell_detect::append_wslenv(&mut current, "PEBREL_PROJECT_REPORT");
+    options.env.insert("WSLENV".into(), current);
     crate::platform::wsl_hooks::prepare(&mut options);
     options
 }

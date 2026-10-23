@@ -27,6 +27,7 @@ const RESET_KEYS: &[&str] = &[
     "dim_inactive_panes",
     "multiline_paste_confirm",
     "tab_close_visible",
+    "ai_agent_sidebar",
     "terminal_proxy",
     "refresh_environment",
     "powerline",
@@ -197,6 +198,15 @@ mod tests {
         let restored = default_settings_text(original);
         assert_eq!(restored, "custom_data=keep\n");
         assert!(RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ai_toasts);
+    }
+
+    #[test]
+    fn resetting_preferences_disables_the_ai_agent_sidebar() {
+        let original = "ai_agent_sidebar=1\ncustom_data=keep\n";
+        assert!(RuntimeSettings::from_raw(&RawSettings::from_text(original)).ai_agent_sidebar);
+        let restored = default_settings_text(original);
+        assert_eq!(restored, "custom_data=keep\n");
+        assert!(!RuntimeSettings::from_raw(&RawSettings::from_text(&restored)).ai_agent_sidebar);
     }
 
     #[test]

@@ -84,6 +84,7 @@ mod terminal_activity;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
 mod sidebar;
+mod sidebar_tree;
 mod ssh_dialog;
 mod tab_drag;
 mod tab_duplication;
@@ -91,7 +92,10 @@ mod tab_menu;
 mod tab_presentation;
 use tab_presentation::TabMeta;
 use tab_presentation::TabPresentation;
+use tab_presentation::new_tab_insert_index;
 mod tab_scroll;
+mod task_groups;
+mod task_groups_ssh;
 mod top_tabs;
 mod update_dialog;
 mod vcs_panel;
@@ -583,20 +587,6 @@ fn workspace_ui_language() -> crate::display::UiLanguage {
         .resolved()
 }
 
-fn new_tab_insert_index(
-    position: nebula_settings::NewTabPositionName,
-    active: usize,
-    tab_count: usize,
-) -> usize {
-    match position {
-        nebula_settings::NewTabPositionName::AfterCurrent if tab_count > 0 => {
-            active.saturating_add(1).min(tab_count)
-        },
-        nebula_settings::NewTabPositionName::AfterCurrent
-        | nebula_settings::NewTabPositionName::End => tab_count,
-    }
-}
-
 fn settings_should_fold_sidebar(tabs_position: nebula_settings::TabsPositionName) -> bool {
     tabs_position == nebula_settings::TabsPositionName::Sidebar
 }
@@ -645,6 +635,17 @@ pub struct NebulaWorkspace {
     tabs_fold_seq: u64,
     /// 旧壳 `nebula_tabs_scroll`：TABS 溢出时的整行窗口起点。
     tabs_scroll: usize,
+    /// 揭示意图：事件路径只置位，render 侧行模型换算窗口（`rows_window`）。
+    tabs_scroll_pending_reveal: bool,
+    /// 侧栏分组的折叠状态与 cwd→组键缓存：分组是呈现（不持久化），git
+    /// 根探测只在事件路径（`resolve_project_group`），render 永远只查内存。
+    sidebar_group_collapsed: HashMap<SharedString, bool>,
+    project_group_cache: HashMap<String, task_groups::LocalProject>,
+    project_probe_pending: std::collections::HashSet<String>,
+    project_probe_task: Option<gpui::Task<()>>,
+    /// 组键 → 项目首开序（首次被观测的次序），侧栏分组排序用；同样只在
+    /// 事件路径打点（`note_project_group_open`），不持久化。
+    project_group_open_order: HashMap<SharedString, u32>,
     /// 列表视口（逻辑 px），由 canvas 回写；0 表示尚未量到。
     tabs_viewport_h: f32,
     tabs_list_width: f32,
@@ -784,15 +785,6 @@ pub struct NebulaWorkspace {
 }
 
 impl NebulaWorkspace {
-    /// 所有新建标签共用同一个插入口，避免本地/SSH/设置各自解释配置。
-    fn insert_new_tab(&mut self, tab: WorkspaceTab) {
-        let position = nebula_settings::RuntimeSettings::load().new_tab_position;
-        let at = new_tab_insert_index(position, self.active, self.tabs.len());
-        self.insert_tab_at(at, tab, TabMeta::default());
-        self.active = at;
-        self.reveal_active_tab();
-    }
-
     /// `tabs` + `tab_meta` 的唯一插入口（见 [`TabMeta`] 的同下标合同）。
     fn insert_tab_at(&mut self, at: usize, tab: WorkspaceTab, meta: TabMeta) {
         let at = at.min(self.tabs.len());
@@ -816,11 +808,6 @@ impl NebulaWorkspace {
             if ix < self.tab_meta.len() { self.tab_meta.remove(ix) } else { TabMeta::default() };
         self.clamp_tabs_scroll();
         Some((tab, meta))
-    }
-
-    /// 当前标签的元数据（下标越界时给一份默认值，读取点因此不必各自判空）。
-    fn meta(&self, ix: usize) -> TabMeta {
-        self.tab_meta.get(ix).cloned().unwrap_or_default()
     }
 
     pub fn new(
@@ -926,6 +913,12 @@ impl NebulaWorkspace {
             tabs_fold_frozen: false,
             tabs_fold_seq: 0,
             tabs_scroll: 0,
+            tabs_scroll_pending_reveal: false,
+            sidebar_group_collapsed: HashMap::new(),
+            project_group_cache: HashMap::new(),
+            project_probe_pending: Default::default(),
+            project_probe_task: None,
+            project_group_open_order: HashMap::new(),
             tabs_viewport_h: 0.0,
             tabs_list_width: 0.0,
             tabs_list_origin: gpui::point(px(0.0), px(0.0)),
@@ -1133,11 +1126,15 @@ impl NebulaWorkspace {
         self.reveal_active_tab();
         self.sync_settings_layout(tab_reveal_instant(cx));
         self.sidebar_resizing = None;
+        self.refresh_project_groups(cx);
         self.reveal_if_tray_disabled(cx);
         cx.notify();
     }
 
     fn add_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.add_grouped_ssh_terminal(window, cx) {
+            return;
+        }
         // 旧壳合同（window_context `spawn_tab` 一族）：新 tab 的 cwd 先取
         // 设置页的「启动目录」（存在且是目录才算数），否则继承聚焦 pane
         // 的 cwd——`startup_directory=` 因此在两壳有同一效果。WSL 来宾目录

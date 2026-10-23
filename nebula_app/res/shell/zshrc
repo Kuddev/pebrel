@@ -65,6 +65,23 @@ _nebula_precmd() {
     _nebula_command_running=0
     _nebula_cwd
     printf '\e]133;A\a'
+    # 只在创建会话时启用了分组侧栏才探测 Git；默认路径不增加提示符子进程。
+    if [[ ${PEBREL_PROJECT_REPORT:-0} == 1 ]]; then
+        local repo='' branch=''
+        if command -v git >/dev/null 2>&1; then
+            repo="$(git rev-parse --abbrev-ref HEAD --show-toplevel 2>/dev/null || true)"
+        fi
+        branch="${repo%%$'\n'*}"
+        local root="${repo#*$'\n'}"
+        if [[ $root == "$repo" ]]; then
+            root=''
+        fi
+        printf '\e]2;NEBULA|%s|%s\a' "$PWD" "$branch"
+        if [[ $root != "${_nebula_git_root:-}" ]]; then
+            printf '\e]1337;SetUserVar=pebrel_git_root=%s\a' "$(printf '%s' "$root" | base64 | tr -d '\r\n')"
+            _nebula_git_root="$root"
+        fi
+    fi
     return "$status_code"
 }
 

@@ -149,7 +149,12 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(spawn_shell, pane_id, cwd);
+                let options = session::local_options(
+                    spawn_shell,
+                    pane_id,
+                    cwd,
+                    crate::gpui_shell::config::ai_agent_sidebar(cx),
+                );
                 if let Some(cwd) = &options.working_directory {
                     initial_cwd = cwd.to_string_lossy().into_owned();
                 }
@@ -296,6 +301,7 @@ impl TerminalView {
             title: initial_title,
             cwd: initial_cwd,
             branch: String::new(),
+            git_root: String::new(),
             running_program: None,
             command_running: false,
             command_running_disproved: false,

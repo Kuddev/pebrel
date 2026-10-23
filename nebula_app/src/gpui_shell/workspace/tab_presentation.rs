@@ -7,7 +7,7 @@ use super::*;
 /// 与 `tabs` **同下标**。长度必须一致，所以增删移三种结构性改动只允许走
 /// `insert_tab_at` / `remove_tab_at` / `move_tab`——别处直接 `self.tabs.push`
 /// 会让色条和名字错位到邻居身上。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(super) struct TabMeta {
     pub(super) runtime_id: crate::runtime_api::tabs::TabId,
     /// 用户重命名过的标签名；`None` = 跟着 cwd/文件名自动走。
@@ -26,10 +26,27 @@ pub(super) struct TabMeta {
     pub(super) has_bell: bool,
 }
 
+impl Default for TabMeta {
+    fn default() -> Self {
+        Self {
+            runtime_id: Default::default(),
+            custom_name: None,
+            color: None,
+            shell_tag: None,
+            launch: None,
+            has_bell: false,
+        }
+    }
+}
+
 /// 两种 tab 布局共用的只读展示数据。状态与动作仍由 `NebulaWorkspace`
 /// 持有；这里只集中 cwd 标题、程序图标、AI 活动和用户元数据的解释。
 pub(super) struct TabPresentation {
     pub(super) title: SharedString,
+    /// 侧栏任务条目第一行的展示名：Agent 会话期显示品牌名（"Claude Code"），
+    /// 其余与 `title` 一致。顶栏、runtime API 与重命名预填继续用 `title`
+    /// （目录名身份），品牌名只属于分组视图的条目行。
+    pub(super) headline: SharedString,
     pub(super) tooltip: Option<SharedString>,
     pub(super) is_settings: bool,
     pub(super) activity: SidebarActivity,
@@ -43,6 +60,11 @@ pub(super) struct TabPresentation {
     /// 标记、行尾挂一枚数量胶囊；见 [`pane_header::split_badge`]。
     pub(super) pane_count: usize,
     pub(super) local_administrator: bool,
+    /// 聚焦 pane 是否是识别出的 AI agent 会话（`AgentKind::parse(program)`，
+    /// 与品牌 logo / `agent_headline` 同一权威）。agent 侧栏模式用它过滤
+    /// 状态徽章：普通终端不画常规状态（pane 级故障除外，见
+    /// [`sidebar::agent_scoped_activity`]）；顶栏不消费该字段。
+    pub(super) is_agent_session: bool,
 }
 
 impl NebulaWorkspace {
@@ -98,9 +120,18 @@ impl NebulaWorkspace {
                 (program, view.sidebar_activity())
             })
             .unwrap_or((None, SidebarActivity::Idle));
-        // 事件 vs 状态的唯一裁定处（侧栏与顶栏共用这份 presentation），规则与
-        // 理由见 [`sidebar::resting_activity`]。
-        let activity = sidebar::resting_activity(activity, active, self.meta(ix).has_bell);
+        // 事件 vs 状态的唯一裁定处（侧栏与顶栏共用这份 presentation），语义
+        // 跟随「AI Agent 侧边栏」开关：开 = 完成读作 Ready 状态（当前 tab
+        // 也画，见 [`sidebar_tree::tree_resting_activity`]）；关 = main 的
+        // 经典语义（完成是事件，当前 tab 不画，[`sidebar::resting_activity`]，
+        // 与上游逐字一致）。
+        let activity = if crate::gpui_shell::config::ai_agent_sidebar(cx) {
+            sidebar_tree::tree_resting_activity(activity, active, self.meta(ix).has_bell)
+        } else {
+            sidebar::resting_activity(activity, active, self.meta(ix).has_bell)
+        };
+        // agent 身份只 parse 一次：headline 与 `is_agent_session` 共用。
+        let agent = program.as_deref().and_then(crate::ai_agents::AgentKind::parse);
         let brand_logo = program.as_deref().and_then(crate::display::ai_logo_for_program);
         let logo_image =
             brand_logo.and_then(|logo| self.sidebar_logo_images.get(&(logo, dark)).cloned());
@@ -120,6 +151,13 @@ impl NebulaWorkspace {
                 _ => None,
             });
         let meta = self.meta(ix);
+        // Agent 会话期的侧栏第一行标题：品牌名优先于目录名；用户重命名
+        // 是显式意志，永远最优先。退出 agent 后自然回落目录名。
+        let headline = agent_headline(
+            meta.custom_name.as_deref(),
+            agent.filter(|_| is_terminal),
+            title.clone(),
+        );
         // 分屏 tab 不画 shell 短标：一个 tab 里的 N 个 pane 完全可能跑着不同
         // 的 shell，只贴其中一个（聚焦那个）是误导；数量胶囊「这是一组」才是
         // 此时该占这个槽位的信息。顺带把 28px 让回标题——顶栏挤到 120px 时，
@@ -137,6 +175,7 @@ impl NebulaWorkspace {
             self.tabs[ix].focused_view().map(|view| view.read(cx).tab_tooltip(&title).into());
         TabPresentation {
             title,
+            headline,
             tooltip,
             is_settings,
             activity,
@@ -148,8 +187,54 @@ impl NebulaWorkspace {
             renaming,
             pane_count,
             local_administrator,
+            is_agent_session: agent.is_some(),
         }
     }
+
+    /// 当前标签的元数据（下标越界时给一份默认值，读取点因此不必各自判空）。
+    pub(super) fn meta(&self, ix: usize) -> TabMeta {
+        self.tab_meta.get(ix).cloned().unwrap_or_default()
+    }
+
+    /// 所有新建标签共用同一个插入口，避免本地/SSH/设置各自解释配置。
+    pub(super) fn insert_new_tab(&mut self, tab: WorkspaceTab) {
+        let position = nebula_settings::RuntimeSettings::load().new_tab_position;
+        let at = new_tab_insert_index(position, self.active, self.tabs.len());
+        self.insert_tab_at(at, tab, TabMeta::default());
+        self.active = at;
+        self.reveal_active_tab();
+    }
+}
+
+/// 新建标签的下标：设置「新标签位置」（当前标签之后/末尾）与当前布局
+/// 共同决定。放这里因为它只被 [`Self::insert_new_tab`] 一类的新建路径
+/// 消费（`insert_new_tab` 在本模块）。
+pub(super) fn new_tab_insert_index(
+    position: nebula_settings::NewTabPositionName,
+    active: usize,
+    tab_count: usize,
+) -> usize {
+    match position {
+        nebula_settings::NewTabPositionName::AfterCurrent if tab_count > 0 => {
+            active.saturating_add(1).min(tab_count)
+        },
+        nebula_settings::NewTabPositionName::AfterCurrent
+        | nebula_settings::NewTabPositionName::End => tab_count,
+    }
+}
+
+/// 侧栏条目第一行显示名：识别出的 agent 品牌名替换目录名；用户重命名与
+/// 非 agent 程序保持 `title` 原样。`agent` 是 [`Self::tab_presentation`] 里
+/// 已经 parse 好的身份（与 `is_agent_session` 同一份）。
+fn agent_headline(
+    custom_name: Option<&str>,
+    agent: Option<crate::ai_agents::AgentKind>,
+    title: SharedString,
+) -> SharedString {
+    if custom_name.is_some() {
+        return title;
+    }
+    agent.map(|agent| SharedString::from(agent.display_name())).unwrap_or(title)
 }
 
 pub(super) fn tooltip(text: SharedString, window: &mut Window, cx: &mut App) -> gpui::AnyView {
@@ -187,6 +272,28 @@ mod tests {
     use super::*;
     use gpui::{AssetSource as _, TestAppContext};
     use gpui_component::Root;
+
+    #[test]
+    fn agent_headline_prefers_brand_name_but_never_a_rename() {
+        let title = || SharedString::from("pebrel");
+        assert_eq!(
+            agent_headline(None, agent("claude"), title()),
+            SharedString::from("Claude Code")
+        );
+        assert_eq!(agent_headline(None, agent("kimi"), title()), SharedString::from("Kimi Code"));
+        // 用户重命名是显式意志，agent 在跑也不顶掉。
+        assert_eq!(
+            agent_headline(Some("my-task"), agent("claude"), title()),
+            SharedString::from("pebrel")
+        );
+        // 非 agent 程序与空闲 shell 保持目录名。
+        assert_eq!(agent_headline(None, agent("ssh"), title()), title());
+        assert_eq!(agent_headline(None, None, title()), title());
+    }
+
+    fn agent(raw: &str) -> Option<crate::ai_agents::AgentKind> {
+        crate::ai_agents::AgentKind::parse(raw)
+    }
 
     struct BadgeSurface;
 
