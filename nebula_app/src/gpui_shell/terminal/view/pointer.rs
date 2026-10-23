@@ -991,9 +991,8 @@ impl TerminalView {
                 control: event.modifiers.control,
             };
             if let Some(bytes) = mouse_protocol::report(&mode, point, code, true, mods) {
-                for _ in 0..lines.unsigned_abs() {
-                    session.notifier.notify(bytes.clone());
-                }
+                // Preserve every report, but wake the transport once per wheel event.
+                session.notifier.notify(bytes.repeat(lines.unsigned_abs() as usize));
             }
             cx.notify();
             return;
@@ -1046,6 +1045,51 @@ fn wheel_scroll_lines(
 mod scrolling_tests {
     use super::wheel_scroll_lines;
     use gpui::{ScrollDelta, point, px};
+
+    #[cfg(feature = "gpui-test-support")]
+    #[gpui::test]
+    fn application_mouse_wheel_batches_reports_and_preserves_direction(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::startup_tests::{feed, open};
+        use nebula_terminal::event_loop::Msg;
+        let (view, window, receiver) = open(cx);
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                feed(view, b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");
+                for (delta, code) in [(24.0, 64), (-24.0, 65)] {
+                    view.on_scroll(
+                        &gpui::ScrollWheelEvent {
+                            delta: ScrollDelta::Lines(point(0.0, delta)),
+                            position: point(px(0.0), px(0.0)),
+                            ..Default::default()
+                        },
+                        window,
+                        cx,
+                    );
+                    let Msg::Input(bytes) = receiver.try_recv().unwrap() else {
+                        panic!("expected wheel input")
+                    };
+                    assert_eq!(bytes.as_ref(), format!("\x1b[<{code};1;1M").repeat(24).as_bytes());
+                    assert!(receiver.try_recv().is_err(), "one event wakes the transport once");
+                }
+                feed(view, b"\x1b[?1049l");
+                view.on_scroll_target(
+                    &gpui::ScrollWheelEvent {
+                        delta: ScrollDelta::Lines(point(0.0, 24.0)),
+                        ..Default::default()
+                    },
+                    true,
+                    window,
+                    cx,
+                );
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "stale application gestures cannot reach the primary shell"
+                );
+            });
+        });
+    }
 
     #[test]
     fn normal_wheel_speed_preserves_existing_steps() {
