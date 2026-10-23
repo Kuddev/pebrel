@@ -45,6 +45,7 @@ mod appearance_picker;
 mod background_color;
 mod background_shader;
 mod backup;
+mod command_history;
 mod cursor_motion;
 mod design;
 mod font_picker;
@@ -1329,7 +1330,8 @@ impl SettingsPane {
                 language.text(crate::i18n::Message::SettingsCompletionMode),
                 help("completion_style", language),
                 cx,
-            ));
+            ))
+            .child(self.command_history_row(cx));
         v_flex().w_full().gap(px(GROUP_GAP)).child(terminal).child(completion).child(alerts)
     }
 
