@@ -1140,6 +1140,17 @@ pub enum ControlCommand {
         #[clap(long)]
         pane: u64,
     },
+    /// Notify the user about a pane with the built-in bell flash/sound and a toast.
+    NotifyPane {
+        #[clap(long)]
+        window: Option<u64>,
+        #[clap(long)]
+        pane: u64,
+        #[clap(long)]
+        title: Option<String>,
+        #[clap(long)]
+        message: String,
+    },
     /// Explicitly enable or disable focused-pane zoom for the pane's tab.
     ZoomPane {
         #[clap(long)]

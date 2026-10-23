@@ -385,6 +385,12 @@ fn layout_mutations_parse_and_enforce_their_bounds() {
         Ok(RuntimeCommand::ZoomPane { pane_id: 17, zoomed: false, .. })
     ));
     assert!(matches!(
+        parse("pane.notify", json!({ "pane_id": 17, "title": "ssh", "message": "touch the key" })),
+        Ok(RuntimeCommand::Notify { pane_id: 17, title: Some(ref title), ref message, .. })
+            if title == "ssh" && message == "touch the key"
+    ));
+    assert!(parse("pane.notify", json!({ "pane_id": 17, "message": "" })).is_err());
+    assert!(matches!(
         parse("pane.resize", json!({ "pane_id": 17, "ratio": 0.6 })),
         Ok(RuntimeCommand::ResizePane { pane_id: 17, ratio, .. })
             if (ratio - 0.6).abs() < f32::EPSILON

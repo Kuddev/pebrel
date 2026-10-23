@@ -82,6 +82,17 @@ struct PromptParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct NotifyParams {
+    #[serde(default)]
+    window_id: Option<u64>,
+    pane_id: u64,
+    #[serde(default)]
+    title: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PasteParams {
     #[serde(default)]
     window_id: Option<u64>,
@@ -351,6 +362,19 @@ impl RuntimeCommand {
                     pane_id: params.pane_id,
                     text: params.text,
                     submit: params.submit,
+                })
+            },
+            "pane.notify" => {
+                let params: NotifyParams = parse_params(&request.params)?;
+                validate_prompt(&params.message)?;
+                if let Some(title) = &params.title {
+                    validate_prompt(title)?;
+                }
+                Ok(Self::Notify {
+                    window_id: params.window_id,
+                    pane_id: params.pane_id,
+                    title: params.title,
+                    message: params.message,
                 })
             },
             "pane.paste" => {

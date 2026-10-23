@@ -105,6 +105,9 @@ impl Processor {
                 "method_not_found",
                 "shared files and conversations require the GPUI runtime",
             )),
+            RuntimeCommand::Notify { .. } => {
+                Err(ApiError::new("method_not_found", "pane.notify requires the GPUI runtime"))
+            },
             RuntimeCommand::Snapshot => serde_json::to_value(self.publish_runtime_snapshot())
                 .map_err(|error| ApiError::new("serialization_failed", error.to_string())),
             // 旧壳（winit/GL）没有"按 id 选 shell"的能力。显式拒绝而不是忽略：
