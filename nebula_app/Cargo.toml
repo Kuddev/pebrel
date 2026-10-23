@@ -1,5 +1,6 @@
 [package]
 name = "nebula"
+default-run = "pebrel"
 version = "2.2.2"
 license = "GPL-3.0-or-later"
 description = "Pebrel — a GPU-accelerated terminal emulator"
@@ -12,6 +13,12 @@ rust-version.workspace = true
 [[bin]]
 name = "pebrel"
 path = "src/main.rs"
+
+[[bin]]
+name = "pebrel-cli"
+path = "src/console_main.rs"
+test = false
+bench = false
 
 [dependencies.nebula_terminal]
 path = "../nebula_terminal"
@@ -263,6 +270,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
     # A single process snapshot includes creation times even for protected
     # processes, so reused parent PIDs cannot attach unrelated processes to a pane.
     "Wdk_System_SystemInformation",

@@ -1,6 +1,7 @@
 package io.github.kuddev.pebrel.mobile.session
 
 import android.content.Context
+import io.github.kuddev.pebrel.terminal.normalizedSnapshotZoom
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -37,7 +38,7 @@ data class TerminalPreferences(
         },
         fontSize = fontSize.coerceIn(TerminalPreferenceValues.MIN_FONT_SIZE, TerminalPreferenceValues.MAX_FONT_SIZE),
         scrollbackLines = scrollbackLines.coerceIn(500, 5000),
-        desktopZoom = if (desktopZoom.isFinite()) desktopZoom.coerceIn(.5f, 5f) else 1f,
+        desktopZoom = normalizedSnapshotZoom(desktopZoom),
         cursorStyle = when (cursorStyle) {
             TerminalPreferenceValues.BAR_CURSOR -> TerminalPreferenceValues.BAR_CURSOR
             TerminalPreferenceValues.UNDERLINE_CURSOR -> TerminalPreferenceValues.UNDERLINE_CURSOR
