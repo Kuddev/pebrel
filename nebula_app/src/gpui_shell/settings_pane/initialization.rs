@@ -5,7 +5,10 @@ impl SettingsPane {
         let runtime = RuntimeSettings::load();
         let language = crate::gpui_shell::config::ui_language(cx);
         let mut selects: Vec<(&'static str, SharedSelect, &'static [&'static str])> = Vec::new();
-        let mut subscriptions = Vec::new();
+        let mut subscriptions =
+            vec![cx.observe_global::<crate::gpui_shell::completion_history::ClearState>(
+                |_, cx| cx.notify(),
+            )];
 
         let mut add_select = |key: &'static str,
                               values: &'static [&'static str],
