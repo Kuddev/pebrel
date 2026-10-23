@@ -267,6 +267,15 @@ pub struct SnapshotConfig {
 
 impl RenderSnapshot {
     pub fn capture<T: EventListener>(term: &Term<T>, cfg: &SnapshotConfig) -> Self {
+        Self::capture_rows(term, cfg, |_| true)
+    }
+
+    /// A host may replace source rows with inline content without altering the VT grid.
+    pub fn capture_rows<T: EventListener>(
+        term: &Term<T>,
+        cfg: &SnapshotConfig,
+        include: impl Fn(usize) -> bool,
+    ) -> Self {
         let rows = cfg.rows as usize;
         let cols = cfg.cols as usize;
         let content = term.renderable_content_with_viewport(rows, cols);
@@ -319,7 +328,7 @@ impl RenderSnapshot {
         for indexed in content.display_iter {
             let Some(vp) = point_to_viewport_from(viewport_origin, indexed.point) else { continue };
             let (row, col) = (vp.line, vp.column.0);
-            if row >= rows || col >= cols {
+            if row >= rows || col >= cols || !include(row) {
                 continue;
             }
             let (row, col) = (row as u16, col as u16);

@@ -52,6 +52,7 @@ mod chemistry;
 mod cli;
 mod clipboard;
 mod codex_config;
+mod command_lenses;
 mod completion;
 mod completion_context;
 mod config;
@@ -91,6 +92,8 @@ mod migrate;
 mod mobile_connection;
 mod motion;
 mod mux;
+mod native_result_model;
+mod native_view_cli;
 mod nebula_history;
 mod notify;
 #[cfg(windows)]
@@ -283,6 +286,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Subcommands::Theme(options)) => {
             std::process::exit(theme_library::package::cli::run(options))
         },
+        Some(Subcommands::View(options)) => std::process::exit(native_view_cli::run(options)),
         #[cfg(windows)]
         Some(Subcommands::NotifyTest) => std::process::exit(crate::notify::notify_test()),
         Some(Subcommands::SetupAi(options)) => {

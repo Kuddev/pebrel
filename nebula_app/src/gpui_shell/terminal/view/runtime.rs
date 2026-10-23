@@ -103,10 +103,11 @@ impl TerminalView {
         stage: crate::ssh_session::SshStage,
         cx: &mut Context<Self>,
     ) {
-        self.ssh_stage = Some(stage.clone());
+        let previous = self.ssh_stage.replace(stage.clone());
         super::super::ssh_connect_overlay::update_connection_state(
             &mut self.ssh_connect,
             self.ssh_destination.as_deref(),
+            previous.as_ref(),
             stage.clone(),
         );
         self.ssh_connect_last_step = std::time::Instant::now();
