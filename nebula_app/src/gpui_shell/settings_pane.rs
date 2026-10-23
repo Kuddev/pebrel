@@ -833,7 +833,7 @@ impl SettingsPane {
         desc: impl Into<SettingHelp>,
         checked: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
         let control = crate::gpui_shell::widgets::NebulaSwitch::new(key).checked(checked).on_click(
             cx.listener(move |this, checked: &bool, window, cx| {
                 this.toggle(key, *checked, window, cx);

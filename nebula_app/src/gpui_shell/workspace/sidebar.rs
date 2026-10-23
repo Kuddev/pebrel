@@ -219,7 +219,9 @@ impl NebulaWorkspace {
         // 与下面 `label_avail` 同一份减法口径，两者不能各算一套。
         let row_w = (self.sidebar_width - 16.0 - tab_scroll::TAB_SCROLL_GUTTER).max(1.0);
         let items = (0..self.tabs.len())
-            .filter(|&ix| tab_scroll::index_visible(ix, tabs_scroll, tabs_show))
+            .filter(|&ix| {
+                tab_scroll::index_visible(ix, tabs_scroll, tabs_show) && !self.is_ssh_tab(ix)
+            })
             .map(|ix| {
                 let active = ix == self.active;
                 let TabPresentation {
@@ -611,7 +613,8 @@ impl NebulaWorkspace {
             .collect::<Vec<_>>();
 
         let header_group: SharedString = "sidebar-tabs-header-hover".into();
-        let count: SharedString = self.tabs.len().to_string().into();
+        let count: SharedString =
+            (0..self.tabs.len()).filter(|&ix| !self.is_ssh_tab(ix)).count().to_string().into();
 
         let sidebar = v_flex()
             .w(px(self.sidebar_width))
@@ -630,6 +633,7 @@ impl NebulaWorkspace {
             .on_mouse_move(cx.listener(|this, event, window, cx| {
                 this.update_tab_drag(event, window, cx);
             }))
+            .child(self.render_ssh_section(row_height, label_px, cx))
             .child(
                 h_flex()
                     .id("sidebar-tabs-toggle")
@@ -882,7 +886,7 @@ impl NebulaWorkspace {
                     .occlude()
                     .child(
                         toolbar_button("toggle-sidebar", IconName::PanelLeft)
-                            .disabled(settings_active)
+                            .debug_selector(|| "toggle-sidebar".into())
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
                             .selected(sidebar_visible)
@@ -890,7 +894,11 @@ impl NebulaWorkspace {
                             // 旧壳亮一档；仅此按钮覆写回旧壳 surface。
                             .when(sidebar_visible, |button| button.bg(secondary))
                             .tooltip(language.text(Message::ChromeToggleSidebar))
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.settings_open {
+                                    this.close_settings(window, cx);
+                                    return;
+                                }
                                 if this.reader_focus_active(cx) {
                                     this.clear_reader_focus(cx);
                                 } else {
@@ -1024,6 +1032,323 @@ impl NebulaWorkspace {
                     row.child(pane_header::split_badge(pane_count, label_px, dim, badge_fill))
                 }),
         )
+    }
+
+    /// 侧栏 SSH 分区的展示投影。只取 GUI 里添加的 profile（`ssh_profiles.json`），
+    /// 不并 `~/.ssh/config` 别名——那会起 `ssh -G` 子进程，而且不是"我添加的服务器"。
+    pub(super) fn load_sidebar_ssh_hosts() -> Vec<(String, String, Option<String>)> {
+        let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
+        let Ok(profiles) = crate::ssh_profiles::SshProfiles::load(&path) else {
+            return Vec::new();
+        };
+        profiles
+            .entries()
+            .iter()
+            .map(|profile| {
+                let label = profile
+                    .label
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or(&profile.destination)
+                    .to_owned();
+                (profile.destination.clone(), label, profile.icon.clone())
+            })
+            .collect()
+    }
+
+    /// 与 TABS 平级、位于其上的「SSH」分区。
+    fn render_ssh_section(
+        &self,
+        row_height: f32,
+        label_px: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let ink = theme.foreground;
+        let faint = crate::gpui_shell::theme::faint_ink(cx);
+        let hover_bg = theme.list_hover;
+        let chrome_family = theme.font_family.clone();
+        let collapsed = self.ssh_section_collapsed;
+        // 已连接的会话（ssh tab）按目的地收集；保存的服务器若已连接，不再另画
+        // 第二条「未连接」行——一张表里一个目的地只出现一次，点它就原地变绿。
+        let connected: Vec<(usize, String)> = (0..self.tabs.len())
+            .filter(|&ix| self.is_ssh_tab(ix))
+            .map(|ix| {
+                let host = match &self.meta(ix).launch {
+                    Some(crate::session::LaunchSession::Ssh { host }) => host.clone(),
+                    _ => String::new(),
+                };
+                (ix, host)
+            })
+            .collect();
+        let connected_hosts: std::collections::HashSet<&str> =
+            connected.iter().map(|(_, host)| host.as_str()).collect();
+        let unconnected: Vec<&(String, String, Option<String>)> = self
+            .sidebar_ssh
+            .iter()
+            .filter(|host| !connected_hosts.contains(host.0.as_str()))
+            .collect();
+        let count: SharedString = (connected.len() + unconnected.len()).to_string().into();
+        let header_group: SharedString = "sidebar-ssh-header-hover".into();
+
+        let header = h_flex()
+            .id("sidebar-ssh-toggle")
+            .debug_selector(|| "sidebar-ssh-toggle".into())
+            .group(header_group)
+            .w_full()
+            .h(px(row_height))
+            .pb_1()
+            .pl_2()
+            .items_center()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.ssh_section_collapsed = !this.ssh_section_collapsed;
+                cx.notify();
+            }))
+            .child(
+                h_flex()
+                    .h_full()
+                    .items_center()
+                    .font_family(chrome_family)
+                    .pr_1()
+                    .child(
+                        h_flex()
+                            .w(px(TABS_DISCLOSURE_SLOT_W))
+                            .h_full()
+                            .flex_shrink_0()
+                            .items_center()
+                            .child(
+                                Icon::new(if collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronDown
+                                })
+                                .xsmall()
+                                .text_color(muted),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(muted)
+                            .child("SSH"),
+                    )
+                    .child(
+                        h_flex()
+                            .ml_2()
+                            .h(px((label_px * 1.22 * SIDEBAR_TITLE_SCALE * 1.18).max(11.0)))
+                            .min_w(px(label_px * 0.62 + 8.0))
+                            .px_2()
+                            .justify_center()
+                            .items_center()
+                            .rounded_full()
+                            .bg(theme.muted)
+                            .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(faint)
+                            .child(count),
+                    ),
+            )
+            .child(div().flex_1())
+            .child(
+                h_flex()
+                    .id("sidebar-ssh-manage")
+                    .debug_selector(|| "sidebar-ssh-manage".into())
+                    .w(px(SIDEBAR_PLUS_SIZE))
+                    .h(px(SIDEBAR_PLUS_SIZE))
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(muted)
+                    .hover(|style| style.bg(hover_bg).text_color(ink))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new("添加或管理服务器").build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_settings(window, cx);
+                        if let Some((pane, _)) = &this.settings_surface {
+                            let pane = pane.clone();
+                            window.defer(cx, move |window, cx| {
+                                pane.update(cx, |pane, cx| {
+                                    pane.manage_launcher_ssh(String::new(), false, window, cx)
+                                });
+                            });
+                        }
+                    }))
+                    .child(Icon::new(IconName::Plus).with_size(px(SIDEBAR_HEADER_ICON))),
+            );
+
+        let body = if collapsed {
+            div().into_any_element()
+        } else if connected.is_empty() && self.sidebar_ssh.is_empty() {
+            v_flex()
+                .w_full()
+                .px_2()
+                .pb_1()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
+                        .text_color(muted)
+                        .child("还没有服务器"),
+                )
+                .child(
+                    div()
+                        .text_size(px(label_px * SIDEBAR_TITLE_SCALE))
+                        .text_color(faint)
+                        .child("在 设置 › SSH 中添加"),
+                )
+                .into_any_element()
+        } else {
+            v_flex()
+                .w_full()
+                .gap(px(tab_scroll::tab_row_gap(self.density)))
+                .children(connected.iter().map(|(tab_ix, host)| {
+                    let label = self
+                        .sidebar_ssh
+                        .iter()
+                        .find(|server| &server.0 == host)
+                        .map(|server| server.1.clone())
+                        .unwrap_or_else(|| self.tab_title(*tab_ix, cx).to_string());
+                    self.render_ssh_session_row(*tab_ix, label, row_height, label_px, cx)
+                }))
+                .children(
+                    unconnected
+                        .iter()
+                        .enumerate()
+                        .map(|(ix, host)| self.render_ssh_row(ix, host, row_height, label_px, cx)),
+                )
+                .into_any_element()
+        };
+
+        v_flex().w_full().flex_shrink_0().child(header).child(body)
+    }
+
+    fn render_ssh_row(
+        &self,
+        ix: usize,
+        host: &(String, String, Option<String>),
+        row_height: f32,
+        label_px: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let ink = theme.foreground;
+        let hover_bg = theme.list_hover;
+        let metadata_family = theme.mono_font_family.clone();
+        let glyph = crate::display::ui::os_icons::resolve(host.2.as_deref()).glyph;
+        let destination = host.0.clone();
+        let tooltip = host.0.clone();
+        h_flex()
+            .id(("sidebar-ssh-row", ix))
+            .debug_selector({
+                let index = ix;
+                move || format!("sidebar-ssh-row-{index}")
+            })
+            .w_full()
+            .h(px(row_height))
+            .px_2()
+            .gap(px(6.0))
+            .items_center()
+            .rounded(px(crate::display::UI_CORNER_RADIUS_LOGICAL))
+            .cursor_pointer()
+            .hover(|style| style.bg(hover_bg))
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.add_ssh_terminal(destination.clone(), window, cx);
+            }))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(metadata_family)
+                    .text_size(px(label_px * 0.9))
+                    .text_color(muted)
+                    .child(SharedString::from(glyph.to_string())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(label_px * 0.92))
+                    .text_color(ink)
+                    .child(host.1.clone()),
+            )
+    }
+
+    /// SSH 连接本质是一个标签（有分屏/聚焦），`shell_tag == "ssh"` / `launch`
+    /// 是 `Ssh` 时从 TABS 列表里抽出，单独挂在 SSH 分区。
+    fn is_ssh_tab(&self, ix: usize) -> bool {
+        matches!(self.meta(ix).launch, Some(crate::session::LaunchSession::Ssh { .. }))
+    }
+
+    /// 已打开的 SSH 会话行：绿点表示已连接，点行聚焦，右侧可关。标签用保存的
+    /// label（点「DE」出来的就是 DE），没有 label 的会话回落到 tab 标题。
+    fn render_ssh_session_row(
+        &self,
+        ix: usize,
+        label: String,
+        row_height: f32,
+        label_px: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let ink = theme.foreground;
+        let muted = theme.muted_foreground;
+        let hover_bg = theme.list_hover;
+        let active_bg = theme.sidebar_accent;
+        let active_fg = theme.sidebar_accent_foreground;
+        let active = ix == self.active;
+        let title = SharedString::from(label);
+        h_flex()
+            .id(("sidebar-ssh-session", ix))
+            .debug_selector({
+                let index = ix;
+                move || format!("sidebar-ssh-session-{index}")
+            })
+            .w_full()
+            .h(px(row_height))
+            .px_2()
+            .gap(px(6.0))
+            .items_center()
+            .rounded(px(crate::display::UI_CORNER_RADIUS_LOGICAL))
+            .cursor_pointer()
+            .when(active, |row| row.bg(active_bg))
+            .hover(|style| style.bg(if active { active_bg } else { hover_bg }))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.activate_tab(ix, window, cx);
+            }))
+            .child(div().flex_shrink_0().size(px(6.0)).rounded_full().bg(theme.success))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(label_px * 0.92))
+                    .text_color(if active { active_fg } else { ink })
+                    .child(title),
+            )
+            .child(
+                Button::new(("close-ssh-session", ix))
+                    .icon(IconName::Close)
+                    .ghost()
+                    .xsmall()
+                    .text_color(muted)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.request_close_tab(ix, window, cx);
+                    })),
+            )
     }
 }
 

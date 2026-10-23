@@ -304,6 +304,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
         #[cfg(windows)]
         Some(Subcommands::Ssh(options)) => std::process::exit(crate::ssh::run(options.args)),
+        Some(Subcommands::Cli(options)) => runtime_api::ssh_api::run_cli(options)?,
         None => {
             #[cfg(feature = "legacy-shell")]
             nebula(options)?;

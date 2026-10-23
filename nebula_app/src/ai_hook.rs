@@ -115,6 +115,8 @@ const CLAUDE_EVENTS: [&str; 10] = [
     "SessionEnd",
 ];
 
+pub(crate) use local::install_ai_skills;
+pub(crate) use local::{SSH_SKILL_MD, install_ssh_skill_for};
 pub use local::{setup_ai_cli, spawn_config_guard};
 #[cfg(windows)]
 pub use windows::spawn_gpui_server;

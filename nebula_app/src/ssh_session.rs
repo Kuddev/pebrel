@@ -26,6 +26,7 @@ use crate::event::EventProxy;
 use crate::proxy_test::{ProxyTestFailure, ProxyTestOutcome, ProxyTestResult, ProxyTestRoute};
 
 mod agent;
+mod cli_path;
 pub(crate) mod completion;
 mod config;
 mod exec;
@@ -34,6 +35,8 @@ mod integration;
 mod lifecycle;
 mod route;
 mod transcript;
+pub(crate) use cli_path::{exec_outcome, open_sftp_unattended};
+pub(crate) use exec::ExecOutcome;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
@@ -48,7 +51,7 @@ pub(crate) fn terminal_config(
     config
 }
 
-type SessionError = Box<dyn std::error::Error + Send + Sync>;
+pub(crate) type SessionError = Box<dyn std::error::Error + Send + Sync>;
 type ClientSession = client::Handle<ClientHandler>;
 type SharedSession = Arc<ClientSession>;
 
@@ -779,7 +782,13 @@ async fn authenticated_route<H: SshEventHost>(
         };
         test_authenticate(&mut transport.session, &route.destination, &request).await?;
     } else {
-        authenticate(&mut transport.session, &route.destination, &route.profile).await?;
+        authenticate(
+            &mut transport.session,
+            &route.destination,
+            &route.profile,
+            allow_host_key_prompt,
+        )
+        .await?;
     }
 
     let session = Arc::new(transport.session);
@@ -905,6 +914,7 @@ async fn authenticate(
     session: &mut ClientSession,
     destination: &SshDestination,
     profile: &crate::ssh_profiles::SshProfileAuth,
+    allow_prompt: bool,
 ) -> Result<(), SessionError> {
     if lifecycle::authentication(
         "authentication response",
@@ -938,7 +948,8 @@ async fn authenticate(
                 if matches!(agent_attempt, Some(agent::Attempt::PartialSuccess { .. })) {
                     continue;
                 }
-                if try_private_key(session, destination, &path, true, &mut local_key_errors).await?
+                if try_private_key(session, destination, &path, allow_prompt, &mut local_key_errors)
+                    .await?
                 {
                     clear_secret(&mut reusable_password);
                     return Ok(());
@@ -977,7 +988,7 @@ async fn authenticate(
                     session,
                     destination,
                     reusable_password.as_deref(),
-                    true,
+                    allow_prompt,
                 )
                 .await?;
                 interactive_prompt_was_shown |= attempt.prompted;
@@ -989,8 +1000,9 @@ async fn authenticate(
             AuthMethod::PromptPassword => {
                 // 同一轮里已经用过保存密码，或 keyboard-interactive 已经向用户
                 // 问过一次，就直接报告失败。再次弹相同密码框只会制造重复认证
-                // 尝试，严重时还会触发服务端 MaxAuthTries/限流。
-                if stored_password_was_present || interactive_prompt_was_shown {
+                // 尝试，严重时还会触发服务端 MaxAuthTries/限流。无人值守路径
+                // 根本没有用户可问，同样直接失败。
+                if stored_password_was_present || interactive_prompt_was_shown || !allow_prompt {
                     continue;
                 }
                 if let Some((mut password, save)) =
@@ -1015,7 +1027,9 @@ async fn authenticate(
         }
     }
 
-    if stored_password_was_present {
+    // 只有用户在场时才清理被拒的密码：无人值守的一次尝试（凭据刚好过期、
+    // 服务器临时拒登）不该静默删掉用户存好的凭据。
+    if stored_password_was_present && allow_prompt {
         if let Err(error) = crate::ssh_credentials::forget_password(&destination.original) {
             warn!("Could not remove rejected SSH password: {error}");
         }

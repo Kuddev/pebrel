@@ -186,8 +186,113 @@ fn remove_skill_at(dir: &Path) -> std::io::Result<ManagedSkillRemoval> {
     Ok(ManagedSkillRemoval::Removed)
 }
 
+// ─── SSH skill (Codex + Claude Code) ─────────────────────────────────
+
+pub(crate) const SSH_SKILL_MD: &str = include_str!("../../../../docs/skills/pebrel-ssh/SKILL.md");
+const SSH_SKILL_OPENAI_YAML: &str =
+    include_str!("../../../../docs/skills/pebrel-ssh/agents/openai.yaml");
+
+pub(super) fn ssh_skill_candidates() -> Vec<(&'static str, PathBuf)> {
+    let mut targets = Vec::new();
+    if let Some(profile) = crate::platform::dirs::home_dir() {
+        targets.push((
+            "codex",
+            PathBuf::from(profile).join(".agents").join("skills").join("pebrel-ssh"),
+        ));
+    }
+    if let Some(claude) = claude_config_dir() {
+        targets.push(("claude", claude.join("skills").join("pebrel-ssh")));
+    }
+    targets
+}
+
+pub(super) fn ensure_ssh_skills()
+-> Vec<(&'static str, PathBuf, std::io::Result<ManagedSkillInstall>)> {
+    ssh_skill_candidates()
+        .into_iter()
+        .filter(|(agent, _)| match *agent {
+            "codex" => codex_config_dir().is_some_and(|dir| dir.exists()),
+            "claude" => claude_config_dir().is_some_and(|dir| dir.exists()),
+            _ => false,
+        })
+        .map(|(agent, path)| {
+            let result = ensure_ssh_skill(&path);
+            (agent, path, result)
+        })
+        .collect()
+}
+
+/// SSH skill 没有旧版目录可迁移，直接走与 runtime 相同的"指纹 + 标记"安装。
+fn ensure_ssh_skill(dir: &Path) -> std::io::Result<ManagedSkillInstall> {
+    let skill_path = dir.join("SKILL.md");
+    let metadata_path = dir.join("agents").join("openai.yaml");
+    let marker_path = dir.join(RUNTIME_SKILL_MARKER);
+    let expected = skill_fingerprint(SSH_SKILL_MD.as_bytes(), SSH_SKILL_OPENAI_YAML.as_bytes());
+    let current = read_skill_fingerprint(dir);
+    let marker = read_skill_marker(dir);
+    let exact_skill = std::fs::read(&skill_path).is_ok_and(|c| c == SSH_SKILL_MD.as_bytes());
+    let metadata_compatible = !metadata_path.exists()
+        || std::fs::read(&metadata_path).is_ok_and(|c| c == SSH_SKILL_OPENAI_YAML.as_bytes());
+    let empty = !skill_path.exists() && !metadata_path.exists();
+    let owned = current.as_ref().zip(marker.as_ref()).is_some_and(|(a, b)| a == b);
+    if !(empty || owned || (exact_skill && metadata_compatible)) {
+        return Ok(ManagedSkillInstall::Conflict);
+    }
+    if current.as_deref() == Some(expected.as_str())
+        && std::fs::read_to_string(&marker_path).is_ok_and(|v| v.trim() == expected)
+    {
+        return Ok(ManagedSkillInstall::Current);
+    }
+    crate::atomic_file::write(&skill_path, SSH_SKILL_MD.as_bytes())?;
+    crate::atomic_file::write(&metadata_path, SSH_SKILL_OPENAI_YAML.as_bytes())?;
+    crate::atomic_file::write(&marker_path, format!("{expected}\n").as_bytes())?;
+    Ok(ManagedSkillInstall::Installed)
+}
+
+pub(crate) fn install_ssh_skill_for(agent: crate::ai_agents::AgentKind) -> Result<PathBuf, String> {
+    use crate::ai_agents::AgentKind;
+    use nebula_settings::AgentHook;
+
+    let directory = match agent {
+        AgentKind::Codex => crate::platform::dirs::home_dir().map(|home| home.join(".agents")),
+        AgentKind::Claude => claude_config_dir(),
+        AgentKind::OpenCode => super::opencode_config_dir(),
+        AgentKind::Cursor => crate::platform::dirs::home_dir().map(|home| home.join(".cursor")),
+        AgentKind::Kimi => super::kimi::kimi_config_dir(),
+        AgentKind::Pi => super::pi_agent_dir(),
+        AgentKind::OhMyPi => super::extended::directory(AgentHook::OhMyPi),
+        AgentKind::Copilot => super::extended::directory(AgentHook::Copilot),
+        AgentKind::Grok => super::extended::directory(AgentHook::Grok),
+        _ => None,
+    }
+    .ok_or_else(|| "Agent skill directory unavailable".to_owned())?;
+    let path = directory.join("skills").join("pebrel-ssh");
+    match ensure_ssh_skill(&path).map_err(|error| format!("{}: {error}", path.display()))? {
+        ManagedSkillInstall::Installed | ManagedSkillInstall::Current => Ok(path),
+        ManagedSkillInstall::Conflict => {
+            Err(format!("Preserved an edited or unmanaged skill at {}", path.display()))
+        },
+    }
+}
+
+pub(super) fn remove_ssh_skill(dir: &Path) -> std::io::Result<ManagedSkillRemoval> {
+    remove_skill_at(dir)
+}
+
 #[cfg(test)]
 mod runtime_skill_tests {
+    #[test]
+    fn ssh_skill_installs_idempotently_and_preserves_custom_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("pebrel-ssh");
+        assert_eq!(super::ensure_ssh_skill(&dir).unwrap(), super::ManagedSkillInstall::Installed);
+        assert_eq!(super::ensure_ssh_skill(&dir).unwrap(), super::ManagedSkillInstall::Current);
+        assert_eq!(std::fs::read_to_string(dir.join("SKILL.md")).unwrap(), super::SSH_SKILL_MD);
+        std::fs::write(dir.join("SKILL.md"), "user-owned content\n").unwrap();
+        assert_eq!(super::ensure_ssh_skill(&dir).unwrap(), super::ManagedSkillInstall::Conflict);
+        assert_eq!(std::fs::read_to_string(dir.join("SKILL.md")).unwrap(), "user-owned content\n");
+    }
+
     use super::{
         LEGACY_RUNTIME_SKILL_MARKER, ManagedSkillInstall, ManagedSkillRemoval,
         RUNTIME_SKILL_MARKER, RUNTIME_SKILL_MD, ensure_runtime_skill, remove_runtime_skill,

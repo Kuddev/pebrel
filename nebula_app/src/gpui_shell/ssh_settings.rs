@@ -30,6 +30,7 @@ use crate::gpui_shell::widgets::NebulaButton;
 mod advanced;
 mod editor;
 pub(super) mod library;
+mod skills;
 use crate::i18n::Message;
 
 /// 删除撤销窗口时长，旧壳 Undo 条同值。

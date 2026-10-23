@@ -326,6 +326,10 @@ pub enum Subcommands {
     /// (claude, vim, cargo…). All arguments are forwarded to the system `ssh`.
     #[cfg(windows)]
     Ssh(SshOptions),
+    /// Control the servers saved in Pebrel from an agent: list assets, run one
+    /// command, open a tab, or transfer files. Credentials stay in the system
+    /// keychain and are never passed in or out.
+    Cli(crate::runtime_api::ssh_api::CliOptions),
 }
 
 /// Query timeout shared by the short commands. Long enough to ride out a busy

@@ -14,6 +14,7 @@ pub(crate) mod mobile_bridge;
 mod mobile_screen;
 mod orchestrate;
 mod server;
+pub(crate) mod ssh_api;
 pub(crate) mod tabs;
 mod terminal_read;
 mod transport;
@@ -914,6 +915,12 @@ pub enum RuntimeCommand {
         agent: String,
         generation: Option<u64>,
         lines: usize,
+    },
+    /// 在 GUI 里新开一个 SSH 标签并聚焦。纯 IO 的 `ssh.*` 方法不走这里，
+    /// 只有"要开窗口"这一个动作需要 UI 线程。
+    SshShell {
+        window_id: Option<u64>,
+        asset_id: String,
     },
 }
 

@@ -1,6 +1,6 @@
 ---
 name: pebrel-runtime
-description: Control the live Pebrel terminal workspace from Codex or Claude Code. Use whenever the user asks to split panes, open a tab or file, run a command in another pane, start or prompt Codex/Claude, delegate a task to another agent, read output, wait for an agent, or says 分屏、开一个 Codex/Claude、打开 README、在上面/下面/左边/右边操作、把这个任务派给 Codex/Claude、让 codex 去改、问问另一个 agent、看看它跑完了没. Run `pebrel env` to orient, then use the supported Runtime API immediately instead of scanning processes or source code.
+description: Control the live Pebrel terminal workspace from Codex or Claude Code. Use whenever the user asks to split panes, open a tab or file, run a command in another pane, start or prompt Codex/Claude, delegate a task to another agent, read output, wait for an agent, or says 分屏、开一个 Codex/Claude、打开 README、在上面/下面/左边/右边操作、把这个任务派给 Codex/Claude、让 codex 去改、问问另一个 agent、看看它跑完了没. For servers, load the separate `pebrel-ssh` skill and use `pebrel cli`. Run `pebrel env` to orient, then use the supported Runtime API immediately instead of scanning processes or source code.
 ---
 
 # Pebrel Runtime

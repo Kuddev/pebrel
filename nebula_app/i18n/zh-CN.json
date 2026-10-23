@@ -789,6 +789,12 @@
     "drag_hint": "拖入文件即可上传；拖到资源管理器即可下载。"
   },
   "hosts": {
+    "skill_copied": "已复制 Skill",
+    "install_skill": "安装 Skill 到 Agent",
+    "copy_skill": "复制 Skill",
+    "skill_installing": "正在安装 Skill…",
+    "skill_installed": "已为 {agent} 安装 SSH Skill：{path}。请重启 Agent 加载。",
+    "skill_failed": "无法安装 Skill：{error}",
     "copied": "已创建主机副本：{name}",
     "search": "搜索名称、地址、分组、标签或备注",
     "group": "分组",

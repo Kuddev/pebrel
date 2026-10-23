@@ -789,6 +789,12 @@
     "drag_hint": "Drop files here to upload; drag an item to File Explorer to download."
   },
   "hosts": {
+    "skill_copied": "Skill copied",
+    "install_skill": "Install Skill to Agent",
+    "copy_skill": "Copy Skill",
+    "skill_installing": "Installing Skill…",
+    "skill_installed": "SSH Skill is ready for {agent}: {path}. Restart the agent to load it.",
+    "skill_failed": "Could not install Skill: {error}",
     "copied": "Created host copy: {name}",
     "search": "Search name, address, group, tags or notes",
     "group": "Group",

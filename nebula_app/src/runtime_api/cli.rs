@@ -6,8 +6,14 @@ fn client_stream(
     endpoint: &Endpoint,
     request: &ApiRequest,
     timeout: Option<Duration>,
-) -> Result<TcpStream, IoError> {
-    let mut stream = TcpStream::connect_timeout(&endpoint_addr(&endpoint), CONNECT_TIMEOUT)?;
+) -> Result<TcpStream, Box<dyn Error>> {
+    let mut stream = TcpStream::connect_timeout(&endpoint_addr(&endpoint), CONNECT_TIMEOUT)
+        .map_err(|error| {
+            CliError::new(
+                "runtime_unavailable",
+                format!("cannot connect to resident runtime: {error}"),
+            )
+        })?;
     stream.set_read_timeout(timeout)?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     serde_json::to_writer(&mut stream, request).map_err(IoError::other)?;
@@ -152,10 +158,18 @@ fn read_response(
 }
 
 fn input_transport_error(method: &str, error: Box<dyn Error>) -> Box<dyn Error> {
+    if method.starts_with("ssh.")
+        && error
+            .downcast_ref::<CliError>()
+            .is_some_and(|error| error.code() == "runtime_unavailable")
+    {
+        return error;
+    }
     if matches!(
         method,
         "pane.prompt" | "pane.paste" | "agent.prompt" | "agent.paste" | "agent.delegate"
-    ) {
+    ) || method.starts_with("ssh.")
+    {
         CliError::new(
             "submission_outcome_unknown",
             format!(
@@ -695,6 +709,30 @@ impl Error for CliError {}
 #[cfg(test)]
 mod output_tests {
     use super::*;
+
+    #[test]
+    fn ssh_lost_response_is_an_unknown_outcome_but_connection_refusal_is_safe() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint =
+            Endpoint { port: listener.local_addr().unwrap().port(), token: "test".into() };
+        let port = endpoint.port;
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream).read_line(&mut line).unwrap();
+            assert!(line.contains("ssh.exec"));
+        });
+        let request = ApiRequest::new("test".into(), "ssh.exec", json!({"command":"side effect"}));
+        let error = read_response(&endpoint, &request, Duration::from_secs(2)).unwrap_err();
+        peer.join().unwrap();
+        let error = input_transport_error("ssh.exec", error);
+        assert_eq!(error.downcast_ref::<CliError>().unwrap().code(), "submission_outcome_unknown");
+        let endpoint = Endpoint { port, token: "test".into() };
+        let error = read_response(&endpoint, &request, Duration::from_secs(2)).unwrap_err();
+        let error = input_transport_error("ssh.exec", error);
+        assert_eq!(error.downcast_ref::<CliError>().unwrap().code(), "runtime_unavailable");
+    }
 
     #[test]
     fn plugin_response_checks_identity_and_envelope() {
