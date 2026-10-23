@@ -264,6 +264,10 @@ impl TerminalView {
         ];
 
         let mut view = Self {
+            _history_subscription: cx
+                .observe_global::<crate::gpui_shell::completion_history::ClearState>(|view, cx| {
+                    view.invalidate_completion_history(cx);
+                }),
             native_results: Default::default(),
             pane_id,
             session,

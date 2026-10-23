@@ -6,6 +6,7 @@ pub(crate) fn prepare_local_pty(options: &mut nebula_terminal::tty::Options) {
     {
         // 同一次启动共用设置快照，避免重复读盘或两次读取间设置变化。
         let settings = nebula_settings::RuntimeSettings::load();
+        super::launch_directory::prepare_wsl(options, settings.startup_directory.as_deref());
         prepare_windows_local_pty(options, settings.refresh_environment);
         // Both Windows shells use this adapter after environment refresh. New
         // panes get the selected protocol; existing processes remain unchanged.

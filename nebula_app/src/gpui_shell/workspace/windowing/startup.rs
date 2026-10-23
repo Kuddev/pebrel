@@ -23,14 +23,10 @@ pub(super) fn initial_startup(
     if let Some(command) = command {
         let program = command.program().to_owned();
         let name = program.rsplit(['/', '\\']).next().unwrap_or(&program).to_owned();
-        return WorkspaceStartup::LaunchTerminal {
-            cwd,
-            launch: crate::session::LaunchSession::Shell {
-                name,
-                program,
-                args: command.args().to_vec(),
-            },
-        };
+        let launch =
+            crate::session::LaunchSession::Shell { name, program, args: command.args().to_vec() };
+        let launch = super::super::shell_launch::at_explicit_directory(launch, cwd.as_deref());
+        return WorkspaceStartup::LaunchTerminal { cwd, launch };
     }
     if cwd.is_some() || isolated {
         WorkspaceStartup::NewTerminal { cwd }
@@ -84,6 +80,38 @@ mod startup_tests {
                 args: vec!["--literal=two words".into()]
             }
         );
+    }
+
+    #[test]
+    fn explicit_wsl_command_encodes_the_requested_directory_before_pty_defaults() {
+        let host = tempfile::tempdir().unwrap();
+        for cwd in [host.path(), std::path::Path::new("/home/pebrel-fixture/project space")] {
+            let command = crate::config::ui_config::Program::WithArgs {
+                program: "wsl.exe".into(),
+                args: vec!["-d".into(), "Ubuntu".into(), "--exec".into(), "pwd".into()],
+            };
+            let WorkspaceStartup::LaunchTerminal { launch, cwd: actual_cwd } =
+                initial_startup(Some(cwd.into()), Some(command), false)
+            else {
+                panic!("explicit WSL launch was discarded");
+            };
+            let crate::session::LaunchSession::Shell { program, args, .. } = launch else {
+                panic!("expected command shell");
+            };
+            let mut options = nebula_terminal::tty::Options {
+                shell: Some(nebula_terminal::tty::Shell::new(program, args)),
+                working_directory: actual_cwd,
+                ..Default::default()
+            };
+            crate::platform::launch_directory::prepare_wsl(&mut options, Some("/different"));
+            let directory = cwd.to_str().unwrap();
+            let encoded =
+                if directory.contains(' ') { format!("\"{directory}\"") } else { directory.into() };
+            assert_eq!(
+                options.shell.unwrap().args(),
+                &["--cd", &encoded, "-d", "Ubuntu", "--exec", "pwd"]
+            );
+        }
     }
 
     #[test]

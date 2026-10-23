@@ -126,6 +126,41 @@ fn refresh_completion_from_grid(view: &mut TerminalView, cx: &mut Context<Termin
 }
 
 #[gpui::test]
+fn command_history_clear_invalidates_other_windows_and_cancels_pending_results(
+    cx: &mut TestAppContext,
+) {
+    use crate::gpui_shell::completion_history::ClearState;
+    let (first, window, _first_input) = open(cx);
+    window.run_until_parked();
+    first.update(window, |view, _| {
+        view.suggest.begin_completion_query("old query".into(), false);
+        view.suggest.suggestion = "old recorded command".into();
+        view.suggest.completion_popup_requested = true;
+    });
+    let (second, window, _second_input) = open(cx);
+    window.run_until_parked();
+    let cancellation = second.update(window, |view, cx| {
+        view.ghost_enabled = true;
+        view.completion_style = crate::display::CompletionStyle::Hybrid;
+        view.refresh_suggestion_from_snapshot(Some("systemc".into()), Some((0, 7)), cx);
+        let cancellation = view.suggestion_task.as_ref().unwrap().cancellation();
+        cx.set_global(ClearState::Finished(Ok(())));
+        cancellation
+    });
+    window.run_until_parked();
+    assert!(cancellation.is_cancelled());
+    for view in [first, second] {
+        view.read_with(window, |view, _| {
+            assert!(view.suggestion_task.is_none());
+            assert!(view.suggest.suggestion.is_empty());
+            assert!(!view.suggest.completion_query_matches("old query"));
+            assert!(view.suggest.completion_items.is_empty());
+            assert!(!view.suggest.completion_popup_requested);
+        });
+    }
+}
+
+#[gpui::test]
 fn git_completion_real_repository_reaches_all_modes_and_preserves_quoted_edits(
     cx: &mut TestAppContext,
 ) {

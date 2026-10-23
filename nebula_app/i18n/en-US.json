@@ -180,6 +180,15 @@
   "settings": {
     "quick_terminal_unavailable": "Global shortcut could not be registered: {error}. Enable a GlobalShortcuts desktop portal or use the tray to show Pebrel.",
     "completion": {
+      "history": {
+        "title": "Pebrel command history",
+        "description": "Manage the commands Pebrel remembers for suggestions.",
+        "clear": "Clear history",
+        "clearing": "Clearing…",
+        "confirm": "Clear all command history recorded by Pebrel for local, WSL and SSH terminals? This cannot be undone. Saved commands and your shells' own history are kept.",
+        "cleared": "Pebrel command history cleared.",
+        "failed": "Some history could not be cleared: {error}"
+      },
       "mode": "Completion mode",
       "cycle": "Cycle completion mode",
       "inline": "Inline",
@@ -375,6 +384,7 @@
       "not_detected": "Not installed",
       "config_detected": "Agent configuration detected",
       "unsupported": "Hook integration not available yet",
+      "process_detection": "Process detection",
       "unavailable": "Unavailable",
       "needs_attention": "Needs attention",
       "restart": "Changes apply when you restart the agent. These controls manage agents installed on this computer.",

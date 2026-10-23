@@ -23,7 +23,7 @@ pub(super) fn resolve_shell_at(
     resolve_shell_id(shell_id).map(|launch| at_explicit_directory(launch, cwd))
 }
 
-fn at_explicit_directory(
+pub(super) fn at_explicit_directory(
     mut launch: crate::session::LaunchSession,
     cwd: Option<&Path>,
 ) -> crate::session::LaunchSession {
@@ -36,9 +36,13 @@ fn at_explicit_directory(
         crate::session::LaunchSession::Shell { program, args, .. } => (program, args),
         _ => return launch,
     };
-    // A WSL profile's old --cd must not override the explicit host working directory.
-    if let Some(inherited) = crate::shell_detect::wsl_args_in_host_directory(program, args) {
-        *args = inherited;
+    // Encode explicit directories before the PTY fallback sees an inherited cwd.
+    // Both guest paths and validated host paths go through WSL's own --cd parser.
+    if crate::shell_detect::is_wsl_launcher(program)
+        && let Some(directory) = crate::platform::launch_directory::wsl_argument(cwd)
+        && let Some(updated) = crate::shell_detect::wsl_args_in_directory(program, args, &directory)
+    {
+        *args = updated;
     }
     launch
 }
@@ -60,6 +64,45 @@ pub(super) fn configured_local_launch(cx: &App) -> crate::session::LaunchSession
         },
         None => crate::session::LaunchSession::Default,
     }
+}
+
+pub(super) fn configured_at(cx: &App, cwd: Option<&Path>) -> crate::session::LaunchSession {
+    at_explicit_directory(configured_local_launch(cx), cwd)
+}
+
+pub(super) fn configured_directory() -> Option<std::path::PathBuf> {
+    let settings = nebula_settings::RuntimeSettings::load();
+    let directory = settings.startup_directory.as_deref()?.trim();
+    if directory.is_empty() {
+        return None;
+    }
+    crate::platform::launch_directory::validate(
+        directory.into(),
+        crate::platform::launch_directory::is_wsl(startup_shell(settings.shell.clone()).as_ref()),
+    )
+}
+
+pub(super) fn profile_directory(program: &str, cwd: Option<&str>) -> Option<std::path::PathBuf> {
+    crate::platform::launch_directory::validate(
+        cwd?.into(),
+        crate::platform::launch_directory::is_wsl_program(program),
+    )
+}
+
+pub(super) fn profile_shell(
+    profile: &crate::config::ui_config::Profile,
+) -> nebula_terminal::tty::Shell {
+    let shell = profile.shell();
+    if let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
+        && !launch.chooses_directory
+        && let Some(cwd) =
+            profile.cwd.as_deref().and_then(crate::platform::launch_directory::wsl_argument)
+        && let Some(args) =
+            crate::shell_detect::wsl_args_in_directory(shell.program(), shell.args(), &cwd)
+    {
+        return nebula_terminal::tty::Shell::new(shell.program().to_owned(), args);
+    }
+    shell
 }
 
 /// The shell the first local pane of this process spawns, resolved with the
