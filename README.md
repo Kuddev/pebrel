@@ -78,6 +78,9 @@ each agent's activity, and read its output without leaving the application.
 - Sidebar or top tabs, draggable split panes, and per-pane working directories.
 - Saved workspace layouts and optional AI conversation restoration. On WSL and
   Linux, Codex session metadata can supply an ID when its hook has not reported one.
+- Native Windows Codex identity refreshes share a background helper with startup
+  cursor feedback disabled. Each refresh reads current metadata and remains bounded;
+  a stalled helper is stopped before a later refresh creates its replacement.
 - On Windows, optional background residency keeps running sessions alive when you
   close the window. Restoring a conversation after the process exits is a separate
   feature and requires a supported CLI and a usable session identity.

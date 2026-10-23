@@ -5,6 +5,15 @@ use gpui::{AppContext as _, Context, EventEmitter as _};
 use nebula_terminal::term::TermMode;
 
 impl TerminalView {
+    pub(super) fn invalidate_completion_history(&mut self, cx: &mut Context<Self>) {
+        self.suggestion_task = None;
+        self.suggest.clear_completion_hints();
+        self.suggest.completion_popup_requested = false;
+        self.completion_editor.invalidate();
+        self.editor_query_task = None;
+        cx.notify();
+    }
+
     pub(super) fn handle_completion_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         use crate::display::CompletionStyle;
         let hybrid = self.completion_style == CompletionStyle::Hybrid;
@@ -235,6 +244,7 @@ impl TerminalView {
         let line = editor.as_ref().map(|snapshot| snapshot.line.clone()).or(line);
         let cursor = editor.as_ref().map(|snapshot| snapshot.cursor);
         if self.exited.is_some()
+            || crate::gpui_shell::completion_history::running(cx)
             || !self.ghost_enabled
             || self.session.is_none()
             || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
@@ -279,6 +289,7 @@ impl TerminalView {
         let style = mode.active_style(self.suggest.completion_popup_requested);
         let cursor = cursor.unwrap_or(line.len());
         let revision = self.completion_editor.revision();
+        let history_revision = crate::completion::history_revision();
         let key = format!(
             "{}\0cursor={cursor}\0syntax={:?}",
             crate::completion::cache_key(
@@ -335,6 +346,7 @@ impl TerminalView {
             let _ = this.update(cx, |view, cx| {
                 // 按键、取消与 shell 切换都会使 key 或环境失效，旧结果不得回填。
                 if !view.suggest.completion_query_matches(&key)
+                    || crate::completion::history_revision() != history_revision
                     || view.suggest.cwd != expected_context.cwd
                     || view.suggest.suggest_env != expected_context.env
                     || view.completion_style != mode
