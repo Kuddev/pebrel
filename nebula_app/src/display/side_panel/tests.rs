@@ -43,6 +43,20 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "snapshot worker panicked")]
+    fn waiting_for_a_snapshot_reports_worker_failure() {
+        let mut panel = SidePanel::new();
+        let running = panel.snapshot_running.clone();
+        running.store(true, std::sync::atomic::Ordering::Release);
+        panel.snapshot_thread = Some(std::thread::spawn(move || {
+            let _guard = SnapshotRunningGuard(running);
+            panic!("fixture snapshot failure");
+        }));
+
+        panel.wait_snapshot();
+    }
+
+    #[test]
     fn reopening_and_refreshing_the_same_root_reuses_the_file_index() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("needle.txt"), b"").unwrap();
@@ -480,6 +494,7 @@ mod tests {
         assert_eq!(panel.root(), Some(base.as_path()));
         assert!(panel.custom_root_active(), "upward navigation is window-local");
 
+        panel.wait_snapshot();
         panel.file_index.release_for_test();
         remove_test_directory(&base);
     }
