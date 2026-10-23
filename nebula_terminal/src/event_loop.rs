@@ -30,6 +30,29 @@ pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
 /// Max bytes to read from the PTY while the terminal is locked.
 const MAX_LOCKED_READ: usize = u16::MAX as usize;
 
+/// Network-delivered synchronized frames can span several transport reads.
+/// This is a watchdog for a missing end marker, not a delay for complete frames.
+const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct SyncTimeout {
+    deadline: Option<Instant>,
+}
+
+impl ansi::Timeout for SyncTimeout {
+    fn set_timeout(&mut self, _duration: Duration) {
+        self.deadline = Some(Instant::now() + SYNC_UPDATE_TIMEOUT);
+    }
+
+    fn clear_timeout(&mut self) {
+        self.deadline = None;
+    }
+
+    fn pending_timeout(&self) -> bool {
+        self.deadline.is_some()
+    }
+}
+
 /// ConPTY 光标对账的静默期：最后一次 resize 提交后等这么久再探针，给
 /// conhost 的内部整理（缓冲区塌缩/重锚）和 shell 的 resize 反应留时间。
 const ALIGN_DELAY: Duration = Duration::from_millis(120);
@@ -161,7 +184,7 @@ fn conpty_cursor_probe(_pid: u32) -> Option<ConhostCursor> {
 /// OSC 提取必须紧贴 VT 解析，避免两类会话产生不同的目录、命令和图片状态。
 #[derive(Default)]
 pub struct StreamProcessor {
-    parser: ansi::Processor,
+    parser: ansi::Processor<SyncTimeout>,
     cwd_sniffer: crate::osc_cwd::CwdSniffer,
     window_size: Option<WindowSize>,
     remote_hook_token: Option<String>,
@@ -177,7 +200,7 @@ impl StreamProcessor {
     }
 
     pub fn next_sync_timeout(&self) -> Option<Instant> {
-        self.parser.sync_timeout().sync_timeout()
+        self.parser.sync_timeout().deadline
     }
 
     pub fn sync_bytes_count(&self) -> usize {
@@ -1012,6 +1035,31 @@ mod tests {
         assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
         stream.stop_sync(&mut term);
         assert_eq!(term.grid()[Line(0)][Column(0)].c, 't');
+    }
+
+    #[test]
+    fn synchronized_output_has_a_network_tolerant_deadline_and_bounded_buffer() {
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let started = Instant::now();
+        stream.feed(&mut term, &VoidListener, b"old\x1b[?2026h");
+        let deadline = stream.next_sync_timeout().unwrap();
+        assert!(deadline >= started + Duration::from_secs(1));
+        assert!(deadline <= Instant::now() + Duration::from_secs(1));
+        stream.feed(&mut term, &VoidListener, b"\rnew");
+        assert_eq!(stream.next_sync_timeout(), Some(deadline));
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026l");
+        assert!(stream.next_sync_timeout().is_none());
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h");
+        // The existing parser cap still forces progress when a producer never
+        // ends a large update. A longer watchdog must not remove that cap.
+        stream.feed(&mut term, &VoidListener, &vec![b'x'; 2 * 1024 * 1024]);
+        assert!(stream.next_sync_timeout().is_none());
+        assert_eq!(stream.sync_bytes_count(), 0);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'x');
     }
 
     #[test]

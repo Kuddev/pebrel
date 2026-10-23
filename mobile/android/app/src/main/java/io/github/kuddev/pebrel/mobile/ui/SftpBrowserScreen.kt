@@ -63,6 +63,7 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
     var uploadUri by remember { mutableStateOf<Uri?>(null) }
     var uploadName by remember { mutableStateOf("") }
     var uploadSize by remember { mutableStateOf<Long?>(null) }
+    var waitingForConnection by remember { mutableStateOf(false) }
     var transferred by remember { mutableLongStateOf(0L) }
     var transferTotal by remember { mutableStateOf<Long?>(null) }
     val ready = session.status == "ready"
@@ -173,7 +174,7 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
         }
         if (!ready) HelperText(stringResource(R.string.sftp_disconnected), Modifier.padding(16.dp))
         if (loading && !refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if (uploading != null) SftpTransferProgress(transferred, transferTotal, cancellingUpload) {
+        if (uploading != null) SftpTransferProgress(transferred, transferTotal, cancellingUpload, waitingForConnection) {
             cancellingUpload = true; uploading?.cancel()
         }
         notice?.let { HelperText(stringResource(it), Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) }
@@ -255,7 +256,7 @@ fun SftpBrowserScreen(session: LocalSession, initialPath: String, onPath: (Strin
                         try {
                             withContext(Dispatchers.IO) {
                                 checkNotNull(context.contentResolver.openInputStream(uri)).use { stream ->
-                                    client.upload(path, stream, uploadSize) { count, total -> transferred = count; transferTotal = total }
+                                    client.upload(path, stream, uploadSize, waiting = { waitingForConnection = it }) { count, total -> transferred = count; transferTotal = total }
                                 }
                             }
                             notice = R.string.sftp_uploaded; refresh++
