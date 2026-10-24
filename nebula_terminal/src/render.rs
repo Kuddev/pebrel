@@ -229,9 +229,9 @@ pub struct CursorSnapshot {
 }
 
 /// A cell rendered by built-in geometry ([`boxdraw`]) instead of a font:
-/// box-drawing, block elements and Powerline separators must cover the cell
-/// exactly and join seamlessly across cells — no font (CJK fonts above all)
-/// guarantees that, so these never enter a text segment.
+/// box-drawing, block elements and Powerline separators join seamlessly, and
+/// Braille dots keep the same pitch across cells. Font metrics cannot ensure
+/// this, so these never enter a text segment.
 pub struct BoxGlyph {
     pub row: u16,
     pub col: u16,
@@ -731,5 +731,44 @@ mod tests {
         // Text segments keep only 'a' and 'b', split at the geometry cells.
         let segments: Vec<_> = snap.segments.iter().map(|s| (s.start_col, s.cells.len())).collect();
         assert_eq!(segments, vec![(0, 1), (3, 1)]);
+    }
+
+    #[test]
+    fn braille_capture_preserves_grid_colors_selection_and_cursor() {
+        use crate::index::Side;
+        use crate::selection::{Selection, SelectionType};
+
+        let mut term = term_with(&["A⠀⠁⣿B"]);
+        let position = crate::index::Point::new(Line(0), Column(3));
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(4));
+        let cell = &mut term.grid_mut()[Line(0)][Column(3)];
+        cell.fg = Color::Named(NamedColor::Red);
+        cell.bg = Color::Named(NamedColor::Blue);
+        cell.flags.insert(Flags::BOLD | Flags::DIM | Flags::INVERSE);
+        let mut selection = Selection::new(SelectionType::Simple, position, Side::Left);
+        selection.update(position, Side::Right);
+        term.selection = Some(selection);
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        assert_eq!(
+            snap.box_glyphs.iter().map(|g| (g.col, g.ch)).collect::<Vec<_>>(),
+            vec![(1, '⠀'), (2, '⠁'), (3, '⣿')]
+        );
+        let full = &snap.box_glyphs[2];
+        assert_eq!(full.fg, Color::Named(NamedColor::Blue));
+        assert!(full.bold);
+        assert!(!full.dim, "inverse keeps DIM on the original foreground, now background");
+        assert!(snap.bg_runs.iter().any(|g| g.start <= 3 && g.end > 3 && g.dim));
+        assert!(snap.selection_runs.iter().any(|g| g.start == 3 && g.end == 4));
+        assert_eq!(snap.cursor.unwrap().col, 4);
+        assert_eq!(term.selection_to_string().as_deref(), Some("⣿"));
+        assert_eq!(
+            snap.segments
+                .iter()
+                .flat_map(|s| &s.cells)
+                .map(|c| c.text.as_str())
+                .collect::<String>(),
+            "AB"
+        );
+        assert_eq!(term.grid()[Line(0)][Column(3)].c, '⣿', "source text is still copyable");
     }
 }
