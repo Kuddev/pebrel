@@ -1,8 +1,9 @@
 use gpui::{FontStyle, FontWeight};
 
 use super::{
-    TermMode, cursor_blink_allowed, paste_line_count, paste_needs_confirmation,
-    restart_cursor_blink_phase, selection_scroll_lines, typography,
+    OutputFrameTiming, TermMode, cursor_blink_allowed, cursor_blink_silence_pauses,
+    output_frame_timing, paste_line_count, paste_needs_confirmation, restart_cursor_blink_phase,
+    selection_scroll_lines, typography,
 };
 
 #[test]
@@ -12,6 +13,36 @@ fn ime_preedit_stops_blinking_and_restores_visible_cursor() {
     let (mut visible, mut epoch) = (false, 7);
     assert_eq!(restart_cursor_blink_phase(&mut visible, &mut epoch), 8);
     assert!(visible);
+}
+
+/// 空闲停闪只在整段静默满 8s 后触发：阈值内照常翻转（用户盯着看时不能
+/// 突然停），满阈值后断链保持常亮（静止终端归零渲染帧）。
+#[test]
+fn blink_silence_pauses_only_after_the_full_threshold() {
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_millis(750)));
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_secs(7)));
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_millis(7999)));
+    assert!(cursor_blink_silence_pauses(std::time::Duration::from_secs(8)));
+    assert!(cursor_blink_silence_pauses(std::time::Duration::from_secs(60)));
+}
+
+/// 输出驱动帧的最小间隔：首帧立即渲染；间隔内的批次并入一次尾帧（等待
+/// 剩余时长），间隔外立即渲染。高频输出风暴由此收敛到 ≤125fps，尾延迟
+/// 被 Trail 的等待时长封顶（≤ 8ms）。
+#[test]
+fn output_frames_coalesce_inside_the_minimum_interval() {
+    use std::time::Duration;
+    assert!(matches!(output_frame_timing(None), OutputFrameTiming::Now));
+    assert!(matches!(output_frame_timing(Some(Duration::from_millis(8))), OutputFrameTiming::Now));
+    assert!(matches!(output_frame_timing(Some(Duration::from_secs(1))), OutputFrameTiming::Now));
+    match output_frame_timing(Some(Duration::from_millis(3))) {
+        OutputFrameTiming::Trail(wait) => assert_eq!(wait, Duration::from_millis(5)),
+        other => panic!("3ms 内的批次应并入尾帧，得到 {other:?}"),
+    }
+    assert!(matches!(
+        output_frame_timing(Some(Duration::from_millis(7))),
+        OutputFrameTiming::Trail(wait) if wait == Duration::from_millis(1)
+    ));
 }
 
 #[test]
