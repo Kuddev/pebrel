@@ -231,7 +231,8 @@ fn download_to_partial(
         let agent = crate::update_check::test_source::agent(Duration::from_secs(15 * 60));
         return download_with_job(asset, partial_path, language, &agent, job);
     }
-    let agent = crate::update_proxy::agent(&asset.download_url, Duration::from_secs(15 * 60));
+    let agent = crate::update_proxy::agent(&asset.download_url, Duration::from_secs(15 * 60))
+        .map_err(|error| network_error_text(error, language))?;
     download_with_job(asset, partial_path, language, &agent, job)
 }
 
@@ -552,8 +553,13 @@ mod tests {
         );
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("installer.part");
-        let bytes = super::download_with_agent(&asset, &path, UiLanguage::EnUs, &server.agent(&[]))
-            .unwrap();
+        let bytes = super::download_with_agent(
+            &asset,
+            &path,
+            UiLanguage::EnUs,
+            &server.network_agent("http", None, &[]),
+        )
+        .unwrap();
         assert_eq!(bytes, body.len() as u64);
         assert_eq!(std::fs::read(&path).unwrap(), body.as_bytes());
         assert!(super::verify_file(&path, &asset).is_ok());
@@ -586,7 +592,7 @@ mod tests {
             &asset,
             &directory.path().join("installer.part"),
             UiLanguage::EnUs,
-            &proxy.agent(&["127.0.0.1"]),
+            &proxy.network_agent("http", None, &["127.0.0.1"]),
         )
         .unwrap();
         assert!(proxy.finish()[0].0.starts_with("CONNECT release.update.invalid:80 "));
@@ -646,6 +652,7 @@ mod tests {
                 Error::ConnectProxyFailed("http://user:secret@proxy.local".into()),
                 Message::UpdateDownloadProxy,
             ),
+            (Error::InvalidProxyUrl, Message::UpdateDownloadProxy),
             (Error::ConnectionFailed, Message::UpdateDownloadNetwork),
         ] {
             let text = super::network_error_text(error, UiLanguage::ZhCn);

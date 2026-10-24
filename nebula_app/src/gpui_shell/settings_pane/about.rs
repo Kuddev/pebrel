@@ -123,22 +123,34 @@ impl SettingsPane {
         });
         let checking = matches!(self.about_update, AboutUpdateState::Checking);
         let (status, status_color): (SharedString, Hsla) = match &self.about_update {
-            AboutUpdateState::Idle => (language.pick("尚未检查", "Not checked yet").into(), muted),
+            AboutUpdateState::Idle => {
+                (language.text(crate::i18n::Message::CommonNotChecked).into(), muted)
+            },
             AboutUpdateState::Checking => {
-                (language.pick("正在检查更新…", "Checking for updates...").into(), muted)
+                (language.text(crate::i18n::Message::SettingsAboutCheckingForUpdates).into(), muted)
             },
             AboutUpdateState::UpToDate(latest) => (
-                format!("{} (GitHub v{latest})", language.pick("已是最新版本", "Up to date"))
-                    .into(),
+                format!(
+                    "{} (GitHub v{latest})",
+                    language.text(crate::i18n::Message::CommonUpToDate)
+                )
+                .into(),
                 success,
             ),
             AboutUpdateState::Available(latest) => (
-                format!("{} v{latest}", language.pick("发现新版本", "New version available"))
-                    .into(),
+                format!(
+                    "{} v{latest}",
+                    language.text(crate::i18n::Message::SettingsAboutNewVersionAvailable)
+                )
+                .into(),
                 warning,
             ),
             AboutUpdateState::Failed(error) => (
-                format!("{}: {error}", language.pick("检查失败", "Update check failed")).into(),
+                format!(
+                    "{}: {error}",
+                    language.text(crate::i18n::Message::SettingsAboutUpdateCheckFailed)
+                )
+                .into(),
                 danger,
             ),
         };
@@ -151,9 +163,9 @@ impl SettingsPane {
             .label(if managed {
                 language.text(crate::i18n::Message::UpdateManagedLabel)
             } else if checking {
-                language.pick("正在检查…", "Checking...")
+                language.text(crate::i18n::Message::CommonChecking)
             } else {
-                language.pick("检查更新", "Check for updates")
+                language.text(crate::i18n::Message::CommonCheckUpdates)
             })
             .primary()
             .disabled(checking || managed)
@@ -195,12 +207,9 @@ impl SettingsPane {
                                 .text_color(ink)
                                 .child(crate::brand::NAME),
                         )
-                        .child(div().text_color(muted).child(
-                            language.pick(
-                                "GPU 加速终端 · Windows",
-                                "GPU-accelerated terminal · Windows",
-                            ),
-                        ))
+                        .child(div().text_color(muted).child(language.text(
+                            crate::i18n::Message::SettingsAboutGpuAcceleratedTerminalWindows,
+                        )))
                         .child(
                             h_flex()
                                 .mt(px(12.0))
@@ -248,9 +257,9 @@ impl SettingsPane {
             .gap_2()
             .child(div().text_size(px(base_px * 0.78)).text_color(muted).child(
                 if self.runtime.auto_check_updates {
-                    language.pick("开启", "On")
+                    language.text(crate::i18n::Message::SettingsFontLigaturesOn)
                 } else {
-                    language.pick("关闭", "Off")
+                    language.text(crate::i18n::Message::SettingsCursorMotionOff)
                 },
             ))
             .child(auto_update_switch);
@@ -278,7 +287,7 @@ impl SettingsPane {
         let last_checked: SharedString = self
             .about_last_checked
             .clone()
-            .unwrap_or_else(|| language.pick("尚未检查", "Not checked yet").to_owned())
+            .unwrap_or_else(|| language.text(crate::i18n::Message::CommonNotChecked).to_owned())
             .into();
         let section_title = |title: &'static str| {
             div()
@@ -291,11 +300,14 @@ impl SettingsPane {
         let update_column = v_flex()
             .flex_1()
             .min_w(px(280.0))
-            .child(section_title(language.pick("版本与更新", "Version and updates")))
+            .child(section_title(
+                language.text(crate::i18n::Message::SettingsAboutVersionAndUpdates),
+            ))
             .when(!managed, |column| {
                 column
                     .child(Self::about_value_row(
-                        language.pick("自动检查更新", "Automatically check for updates"),
+                        language
+                            .text(crate::i18n::Message::SettingsAboutAutomaticallyCheckForUpdates),
                         auto_update,
                         cx,
                     ))
@@ -306,7 +318,7 @@ impl SettingsPane {
                     ))
             })
             .child(Self::about_value_row(
-                language.pick("更新通道", "Update channel"),
+                language.text(crate::i18n::Message::SettingsAboutUpdateChannel),
                 div().text_color(muted).child(distribution.label()),
                 cx,
             ))
@@ -318,7 +330,7 @@ impl SettingsPane {
                         cx,
                     ))
                     .child(Self::about_value_row(
-                        language.pick("上次检查", "Last checked"),
+                        language.text(crate::i18n::Message::SettingsAboutLastChecked),
                         div().text_color(muted).child(last_checked),
                         cx,
                     ))
@@ -330,32 +342,34 @@ impl SettingsPane {
         let actions = v_flex()
             .flex_1()
             .min_w(px(280.0))
-            .child(section_title(language.pick("项目与支持", "Project and support")))
+            .child(section_title(
+                language.text(crate::i18n::Message::SettingsAboutProjectAndSupport),
+            ))
             .child(Self::about_action_row(
                 "about-report-issue",
                 IconName::TriangleAlert,
-                language.pick("反馈问题", "Report an issue"),
+                language.text(crate::i18n::Message::SettingsAboutReportAnIssue),
                 issue_url(),
                 cx,
             ))
             .child(Self::about_action_row(
                 "about-github",
                 IconName::Github,
-                language.pick("GitHub 仓库", "GitHub repository"),
+                language.text(crate::i18n::Message::SettingsAboutGithubRepository),
                 REPOSITORY_URL.to_owned(),
                 cx,
             ))
             .child(Self::about_action_row(
                 "about-releases",
                 IconName::BookOpen,
-                language.pick("更新内容", "Release notes"),
+                language.text(crate::i18n::Message::SettingsAboutReleaseNotes),
                 release_page,
                 cx,
             ))
             .child(Self::about_page_row(
                 "about-sponsors",
                 IconName::Heart,
-                language.pick("赞助商", "Sponsors"),
+                language.text(crate::i18n::Message::SettingsAboutSponsors),
                 cx.listener(|this, _, _, cx| this.open_sponsor_page(cx)),
                 cx,
             ));

@@ -6,6 +6,10 @@
     "en_us": "English"
   },
   "settings": {
+    "opacity": {
+      "title": "창 배경 불투명도",
+      "description": "값이 낮을수록 터미널과 설정 배경이 투명해집니다. 텍스트는 불투명하게 유지됩니다."
+    },
     "sidebar": {
       "application": "애플리케이션",
       "appearance": "모양",

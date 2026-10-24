@@ -80,8 +80,20 @@ impl BashSession {
     }
 
     fn diagnostic_snapshot(&self) -> String {
+        use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+
+        let child = self.pty.child_watcher();
+        let mut exit_code = 0;
+        let exit_status = if unsafe { GetExitCodeProcess(child.raw_handle(), &mut exit_code) } != 0
+        {
+            Ok(exit_code)
+        } else {
+            Err(std::io::Error::last_os_error())
+        };
         format!(
-            "cursor {:?}, rows {:?} / {:?}; last input {:?}, last reply {:?}, output tail {:?}",
+            "child pid {:?}, exit code {:?} (259 means STILL_ACTIVE); cursor {:?}, rows {:?} / {:?}; last input {:?}, last reply {:?}, output tail {:?}",
+            child.pid(),
+            exit_status,
             self.term.grid().cursor.point,
             row(&self.term, 0),
             row(&self.term, 1),

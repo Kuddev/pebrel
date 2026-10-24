@@ -77,6 +77,9 @@ impl TerminalView {
         let Some(payload) = cx.read_from_clipboard().and_then(clipboard_payload) else { return };
         match payload {
             ClipboardPayload::Text(text) => {
+                if self.try_native_clipboard_paste(&text, true, cx) {
+                    return;
+                }
                 let lines = paste_line_count(&text);
                 if nebula_settings::RuntimeSettings::load().multiline_paste_confirm
                     && paste_needs_confirmation(&text, self.term_mode())
