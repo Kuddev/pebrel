@@ -29,6 +29,7 @@ pub mod cell;
 mod clear;
 pub mod color;
 mod damage;
+mod grid_content;
 mod input;
 mod keyboard;
 #[cfg(test)]
@@ -376,8 +377,8 @@ impl<T> Term<T> {
         let num_lines = dimensions.screen_lines();
 
         let history_size = config.scrolling_history;
-        let mut grid = Grid::new(num_lines, num_cols, history_size);
-        let mut inactive_grid = Grid::new(num_lines, num_cols, 0);
+        let mut grid = Grid::new_for_terminal(num_lines, num_cols, history_size);
+        let mut inactive_grid = Grid::new_for_terminal(num_lines, num_cols, 0);
 
         // Keep the grid's logical rows reversible on both in-box and side-loaded
         // ConPTY. The host has a private buffer, while the terminal grid remains
@@ -707,13 +708,6 @@ impl<T> Term<T> {
         &self.grid
     }
 
-    /// Mutable access to the raw grid data structure.
-    pub fn grid_mut(&mut self) -> &mut Grid<Cell> {
-        self.reset_input_cluster();
-        self.reading.invalidate();
-        &mut self.grid
-    }
-
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
         self.presentation_origin = None;
@@ -802,7 +796,7 @@ impl<T> Term<T> {
         self.cancel_redraw_anchor();
         if !self.mode.contains(TermMode::ALT_SCREEN) {
             // Set alt screen cursor to the current primary screen cursor.
-            self.inactive_grid.cursor = self.grid.cursor.clone();
+            self.inactive_grid.copy_cursor_from(&self.grid);
 
             // Drop information about the primary screens saved cursor.
             self.grid.saved_cursor = self.grid.cursor.clone();

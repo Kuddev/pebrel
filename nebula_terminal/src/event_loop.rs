@@ -268,7 +268,7 @@ impl StreamProcessor {
                     }
                     if let Some(surface) = self.inline_content.apply(packet) {
                         // 换行由发送端写出，ConPTY 与前端必须共同看到占位，不能只推进本地网格。
-                        let grid = terminal.grid_mut();
+                        let grid = terminal.inline_content_grid_mut();
                         let point = grid.cursor.point;
                         if point.column.0 == 0 {
                             grid[point.line].reset(&crate::term::cell::Cell::default());
@@ -1086,7 +1086,11 @@ mod tests {
             ]
             .concat();
             for split in 0..=wire.len() {
-                let mut term = Term::new(Config::default(), &TermSize::new(24, 24), Lens);
+                let mut term = Term::new(
+                    Config { scrolling_history: 0, ..Config::default() },
+                    &TermSize::new(24, 24),
+                    Lens,
+                );
                 let mut plain = Term::new(Config::default(), &TermSize::new(24, 24), VoidListener);
                 let mut stream = StreamProcessor::default();
                 stream.feed(&mut term, &Lens, &wire[..split]);
@@ -1098,6 +1102,8 @@ mod tests {
                     .unwrap()
                     .surface;
                 assert!(surface.has_grid_source());
+                // Native text markers require cleanup, not per-cell image lookup.
+                assert!(!term.grid().may_have_images());
                 let text = &surface.update_since(0).chunks[0].text;
                 assert_eq!(text, &output.replace("\r\n", "\n"));
                 assert_eq!(
@@ -1126,6 +1132,12 @@ mod tests {
                     assert_eq!(task.state, crate::program_status::State::Done);
                     assert!(!task.result_acknowledged);
                 }
+                let lifetime = Arc::downgrade(surface);
+                stream.feed(&mut term, &Lens, &b"\r\n".repeat(24));
+                assert!(lifetime.upgrade().is_none());
+                stream.feed(&mut term, &Lens, b"\x1bc");
+                assert!(lifetime.upgrade().is_none());
+                assert!(!term.grid().may_have_images());
             }
         }
     }
