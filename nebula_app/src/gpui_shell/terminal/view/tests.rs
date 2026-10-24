@@ -276,28 +276,36 @@ fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
 }
 
 #[test]
-fn line_height_uses_shaped_metrics_and_device_pixel_offset() {
-    // Maple's hhea metrics are 1.32em. At 150% DPI, the legacy 4px
-    // Windows offset yields floor(15 * 1.32 * 1.5 + 4) = 33 device px.
+fn explicit_line_height_offset_is_still_measured_in_device_pixels() {
+    // Preserve the offset formula, independently of the default row spacing.
     let height = typography::effective_line_height(15.0 * 1.32, 4.0, 1.5);
     assert!((f32::from(height) - 22.0).abs() < f32::EPSILON);
 }
 
 #[test]
-fn theme_line_height_none_preserves_shaped_metrics() {
-    let natural = 15.0 * 1.32;
-    let legacy = typography::effective_line_height(natural, 4.0, 1.5);
-    let themed = typography::effective_line_height_with_theme(natural, 15.0, None, 4.0, 1.5);
-
-    assert_eq!(themed, legacy);
+fn default_character_art_grid_stays_near_two_to_one_across_dpi_and_zoom() {
+    for font_size in [12.0, 14.0, 15.0, 18.0, 24.0] {
+        for scale in [1.0, 1.5, 2.0] {
+            let width = typography::effective_cell_width(
+                font_size * 0.6,
+                nebula_settings::CellWidthModeName::Compact,
+                scale,
+                0.0,
+            );
+            let height = typography::effective_line_height_with_theme(font_size, None, 0.0, scale);
+            // Independent width/height flooring may differ by one device px.
+            assert!(((height - width * 2.0).as_f32() * scale).abs() <= 1.001);
+        }
+    }
+    let height = typography::effective_line_height_with_theme(14.0, None, 0.0, 1.5);
+    assert!((height.as_f32() * 1.5 - 25.0).abs() < 1e-4);
 }
 
 #[test]
 fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
     // 15px * 1.5 = 22.5 logical px; at 150% DPI with a 4px device offset,
     // floor(22.5 * 1.5 + 4) = 37 device px, or 37 / 1.5 logical px.
-    let height =
-        typography::effective_line_height_with_theme(15.0 * 1.32, 15.0, Some(1.5), 4.0, 1.5);
+    let height = typography::effective_line_height_with_theme(15.0, Some(1.5), 4.0, 1.5);
 
     assert!((f32::from(height) - 37.0 / 1.5).abs() < f32::EPSILON);
 }

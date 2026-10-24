@@ -1,4 +1,4 @@
-//! 内建字形几何：框线、块元素与 Powerline 分隔符。
+//! 内建字形几何：框线、块元素、盲文点阵与 Powerline 分隔符。
 //!
 //! 从 nebula_app 的 builtin_font（像素栅格化）移植而来，改为输出纯几何
 //! 指令（矩形 + 凸多边形），由前端用自己的图元 API 填充。放进渲染合同的
@@ -22,6 +22,8 @@ pub fn is_builtin(c: char) -> bool {
         c,
         // 框线与块元素。
         '\u{2500}'..='\u{259f}'
+        // Braille uses a continuous 2 × 4 grid, including the empty pattern.
+        | '\u{2800}'..='\u{28ff}'
         // Legacy Computing 六分块与上部块。
         | '\u{1fb00}'..='\u{1fb3b}'
         | '\u{1fb82}'..='\u{1fb8b}'
@@ -47,6 +49,9 @@ pub enum Primitive {
     /// 凸多边形（对角线、Powerline 笔画、圆弧分段）。顶点保证凸序，
     /// 消费方可安全用首点三角扇填充。
     Poly { points: Vec<[f32; 2]> },
+    /// Round Braille dot. Fractional centers preserve equal spacing across
+    /// cell boundaries; the frontend antialiases the circle, not its position.
+    Circle { center: [f32; 2], radius: f32 },
 }
 
 /// 生成 `c` 的填充图元。`width`/`height` 是该字形占据的逻辑像素盒
@@ -169,6 +174,9 @@ impl Geom {
                 Primitive::Poly { points } => Primitive::Poly {
                     points: points.into_iter().map(|[x, y]| [x * inv, y * inv]).collect(),
                 },
+                Primitive::Circle { center: [x, y], radius } => {
+                    Primitive::Circle { center: [x * inv, y * inv], radius: radius * inv }
+                },
             })
             .collect()
     }
@@ -214,6 +222,26 @@ fn draw(c: char, g: &mut Geom) {
     let heavy = stroke * 2.0;
     let (w, h) = (g.w, g.h);
     match c {
+        '\u{2800}'..='\u{28ff}' => {
+            let bits = c as u32 - 0x2800;
+            g.out.reserve(bits.count_ones() as usize);
+            // Unicode numbers dots down each column (1,2,3 / 4,5,6),
+            // then adds the bottom row (7,8). Each dot occupies half of
+            // its subcell; radius stays circular even with custom line height.
+            let radius = (w / 2.0).min(h / 4.0) / 4.0;
+            for (bit, (col, row)) in
+                [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (0, 3), (1, 3)]
+                    .into_iter()
+                    .enumerate()
+            {
+                if bits & (1 << bit) != 0 {
+                    g.out.push(Primitive::Circle {
+                        center: [(col as f32 + 0.5) * w / 2.0, (row as f32 + 0.5) * h / 4.0],
+                        radius,
+                    });
+                }
+            }
+        },
         // 对角线 '╱','╲','╳'：中心线贯穿两个对角，竖直方向厚 stroke，
         // 端点上下各出格半个笔画以在相邻行间连续（旧实现用放大画布）。
         '\u{2571}'..='\u{2573}' => {
@@ -798,7 +826,7 @@ mod tests {
             .into_iter()
             .filter_map(|p| match p {
                 Primitive::Rect { rect, alpha } => Some((rect, alpha)),
-                Primitive::Poly { .. } => None,
+                Primitive::Poly { .. } | Primitive::Circle { .. } => None,
             })
             .collect()
     }
@@ -826,6 +854,64 @@ mod tests {
         for c in outside {
             assert!(primitives(c, W, H, 1.0).is_none(), "{c:?} 不应内建");
             assert!(!is_builtin(c));
+        }
+    }
+
+    #[test]
+    fn braille_bits_match_unicode_dot_positions_including_blank() {
+        let positions = [
+            [3.0, 3.0],
+            [3.0, 9.0],
+            [3.0, 15.0],
+            [9.0, 3.0],
+            [9.0, 9.0],
+            [9.0, 15.0],
+            [3.0, 21.0],
+            [9.0, 21.0],
+        ];
+        for bits in 0u32..=255 {
+            let ch = char::from_u32(0x2800 + bits).unwrap();
+            let dots = primitives(ch, 12.0, 24.0, 1.0).expect("Braille must bypass font fallback");
+            let expected: Vec<_> = positions
+                .iter()
+                .enumerate()
+                .filter(|(bit, _)| bits & (1 << bit) != 0)
+                .map(|(_, &center)| Primitive::Circle { center, radius: 1.5 })
+                .collect();
+            assert_eq!(dots, expected, "{ch}");
+        }
+        assert!(!is_builtin('\u{27ff}'));
+        assert!(!is_builtin('\u{2900}'));
+    }
+
+    #[test]
+    fn braille_dot_pitch_is_continuous_across_cell_edges_at_every_scale() {
+        for scale in [1.0f32, 1.25, 1.5, 2.0] {
+            // Include odd device dimensions and intentionally tall/short
+            // user-configured rows. Neither may add a gap at the row boundary.
+            for (width, height) in [(8.0, 16.0), (9.0, 25.0), (12.0, 17.0), (1.0, 1.0)] {
+                let w = (width * scale).round().max(1.0) / scale;
+                let h = (height * scale).round().max(1.0) / scale;
+                let dots = primitives('⣿', width, height, scale).unwrap();
+                let mut centers = Vec::new();
+                for dot in dots {
+                    let Primitive::Circle { center, radius } = dot else {
+                        panic!("expected a dot")
+                    };
+                    assert!(radius > 0.0);
+                    assert!(center[0] - radius >= 0.0 && center[0] + radius <= w);
+                    assert!(center[1] - radius >= 0.0 && center[1] + radius <= h);
+                    centers.push(center);
+                }
+                let near = |a: f32, b: f32| assert!((a - b).abs() < 1e-5, "{a} != {b}");
+                for (a, b) in [(0, 1), (1, 2), (2, 6), (3, 4), (4, 5), (5, 7)] {
+                    near(centers[b][1] - centers[a][1], h / 4.0);
+                }
+                near(h + centers[0][1] - centers[6][1], h / 4.0);
+                near(h + centers[3][1] - centers[7][1], h / 4.0);
+                near(centers[3][0] - centers[0][0], w / 2.0);
+                near(w + centers[0][0] - centers[3][0], w / 2.0);
+            }
         }
     }
 
@@ -947,6 +1033,9 @@ mod tests {
                 }
                 !(positive && negative)
             },
+            Primitive::Circle { center, radius } => {
+                (point[0] - center[0]).hypot(point[1] - center[1]) <= *radius
+            },
         })
     }
 
@@ -1057,6 +1146,9 @@ mod tests {
                                         assert!((-1e-4..=cell_width + 1e-4).contains(&x));
                                         assert!((-1e-4..=cell_height + 1e-4).contains(&y));
                                     }
+                                },
+                                Primitive::Circle { .. } => {
+                                    panic!("a rounded box corner is not a dot")
                                 },
                             }
                         }
