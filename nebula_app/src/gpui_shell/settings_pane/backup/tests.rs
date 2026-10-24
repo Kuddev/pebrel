@@ -85,10 +85,15 @@ fn backup_wizard_requires_connection_and_matching_passwords(cx: &mut gpui::TestA
         cx.simulate_resize(gpui::size(px(width), px(1400.0)));
         draw(cx);
         let wizard = cx.debug_bounds("backup-wizard").unwrap();
-        assert!(wizard.right() <= px(width));
-        assert!(wizard.size.width <= px(700.0));
-        let center = px((width + SETTINGS_NAV_WIDTH) / 2.0);
-        assert!(f32::from(wizard.center().x - center).abs() <= 2.0);
+        assert!((f32::from(wizard.left()) - (SETTINGS_NAV_WIDTH + 20.0)).abs() <= 2.0);
+        assert!((f32::from(wizard.right()) - (width - 20.0)).abs() <= 2.0);
+        let first = cx.debug_bounds("backup-provider-0").unwrap();
+        let second = cx.debug_bounds("backup-provider-1").unwrap();
+        if width >= 960.0 {
+            assert_eq!(second.top(), first.top(), "wide windows show storage in two columns");
+        } else {
+            assert!(first.bottom() <= second.top());
+        }
         assert!(cx.debug_bounds("backup-content-0").is_none());
     }
     click(cx, "backup-provider-4");
@@ -404,7 +409,7 @@ fn backup_provider_rows_contain_titles_and_wrapped_hints(cx: &mut gpui::TestAppC
                         );
                     }
                 }
-                let mut previous_bottom = None;
+                let mut rows: Vec<gpui::Bounds<gpui::Pixels>> = Vec::new();
                 let mut wrapped = false;
                 for (row_selector, title_selector, hint_selector) in [
                     ("backup-provider-0", "backup-provider-title-0", "backup-provider-hint-0"),
@@ -432,10 +437,14 @@ fn backup_provider_rows_contain_titles_and_wrapped_hints(cx: &mut gpui::TestAppC
                         hint.left() >= row.left() && hint.right() <= row.right(),
                         "hint exceeds row width"
                     );
-                    if let Some(bottom) = previous_bottom {
-                        assert!(bottom + px(4.0) <= row.top(), "provider rows overlap");
+                    for other in &rows {
+                        assert!(
+                            other.right() + px(4.0) <= row.left()
+                                || other.bottom() + px(4.0) <= row.top(),
+                            "provider rows overlap: {other:?}, {row:?}"
+                        );
                     }
-                    previous_bottom = Some(row.bottom());
+                    rows.push(row);
                     wrapped |= hint.size.height > px(30.0);
                 }
                 if width == 600.0 {

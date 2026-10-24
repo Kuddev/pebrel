@@ -130,7 +130,6 @@ impl SettingsPane {
         }
         v_flex()
             .w_full()
-            .max_w(px(720.0))
             .gap_4()
             .child(
                 h_flex()
