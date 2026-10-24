@@ -216,12 +216,15 @@ impl NebulaWorkspace {
         id: String,
         name: String,
         count: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let hover = cx.theme().list_hover;
         let active = cx.theme().list_active;
         let muted = cx.theme().muted_foreground;
         let selected = index == self.command_manager_selection.cursor;
+        let order_buttons =
+            self.render_command_order_buttons(OrderTarget::Group(id.clone()), window, cx);
         let delete_id = Some(id.clone());
         let click_id = id.clone();
         let language = crate::gpui_shell::config::ui_language(cx);
@@ -285,6 +288,7 @@ impl NebulaWorkspace {
                         ),
                     ),
             )
+            .children(order_buttons)
             .when_some(delete_id, |row, id| {
                 row.child(
                     Button::new(SharedString::from(format!("delete-command-group-{id}")))

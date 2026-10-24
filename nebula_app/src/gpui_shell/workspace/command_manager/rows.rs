@@ -54,10 +54,12 @@ impl NebulaWorkspace {
         let copy_command = command.clone();
         let edit_id = command.id.clone();
         let delete_id = command.id.clone();
+        let order_buttons =
+            self.render_command_order_buttons(OrderTarget::Command(command.id.clone()), window, cx);
         // 透明而非 hidden，保留按钮的 Tab 顺序；真实键盘聚焦时露出操作区。
         let actions_focus = window
             .use_keyed_state(
-                SharedString::from(format!("saved-command-actions-focus-{index}")),
+                SharedString::from(format!("saved-command-actions-focus-{}", command.id)),
                 cx,
                 |_, cx| cx.focus_handle().tab_stop(false),
             )
@@ -66,7 +68,7 @@ impl NebulaWorkspace {
         let actions_focused = actions_focus.contains_focused(window, cx);
 
         h_flex()
-            .id(SharedString::from(format!("saved-command-row-{index}")))
+            .id(SharedString::from(format!("saved-command-row-{}", command.id)))
             .debug_selector(move || format!("saved-command-row-{index}").into())
             .when(!selecting, |row| row.on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone())))
             .on_mouse_down(
@@ -169,7 +171,7 @@ impl NebulaWorkspace {
             )
             .child(
                 h_flex()
-                    .id(SharedString::from(format!("saved-command-actions-{index}")))
+                    .id(SharedString::from(format!("saved-command-actions-{}", command.id)))
                     .debug_selector(move || format!("saved-command-actions-{index}"))
                     .track_focus(&actions_focus)
                     .flex_shrink_0()
@@ -177,6 +179,7 @@ impl NebulaWorkspace {
                     .gap_1()
                     .opacity(if actions_focused { 1.0 } else { 0.0 })
                     .group_hover(hover_group, |style| style.opacity(1.0))
+                    .children(order_buttons)
                     .child(
                         Button::new(SharedString::from(format!("saved-command-copy-{index}")))
                             .icon(IconName::Copy)

@@ -682,6 +682,9 @@
     "ungrouped": "未分组",
     "remove_from_group": "移出分组",
     "move_to_group": "移到分组",
+    "move_up": "上移",
+    "move_down": "下移",
+    "order_save_failed": "无法保存命令顺序：{error}",
     "delete_group": "删除分组，保留其中的命令",
     "group_save_failed": "无法保存命令分组",
     "builtin": {

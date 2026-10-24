@@ -682,6 +682,9 @@
     "ungrouped": "Ungrouped",
     "remove_from_group": "Remove from group",
     "move_to_group": "Move to group",
+    "move_up": "Move up",
+    "move_down": "Move down",
+    "order_save_failed": "Could not save command order: {error}",
     "delete_group": "Delete group; keep commands ungrouped",
     "group_save_failed": "Could not save command groups",
     "builtin": {

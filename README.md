@@ -97,6 +97,15 @@ each agent's activity, and read its output without leaving the application.
   a custom folder requires confirmation and keeps its commands in Ungrouped.
   Batch changes reuse the existing locked, refreshed, atomic store transaction;
   the saved file format is unchanged and stale selections preserve unrelated edits.
+- Custom folders and custom commands within a folder have **Move up / Move down**
+  controls, replacing creation-only ordering so frequent items can be kept near the
+  top. Command controls appear on hover or keyboard focus; Tab, Enter and Space work.
+  At either end, keyboard focus stays in the order controls so further Enter/Space presses do
+  not run a command or open a folder.
+  Moves persist across restarts using the existing store transaction and file format.
+  Ungrouped and the built-in folder keep their positions; built-in recipes keep their
+  catalog order. Search retains its existing ranking and hides ordering controls,
+  as does selection mode. Dragging commands still changes their folder.
 - Remapping or disabling terminal shortcuts preserves text fields' native paste keys.
   Restoring defaults updates existing windows without restarting. Runtime overrides
   replace their previous rules, avoiding the stale disabled bindings from the append-only

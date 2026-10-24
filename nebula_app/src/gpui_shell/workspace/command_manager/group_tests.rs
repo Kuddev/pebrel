@@ -1,7 +1,7 @@
 use super::*;
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 
-fn draw(cx: &mut VisualTestContext) {
+pub(super) fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
         window.refresh();
@@ -9,7 +9,7 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
-fn open_manager(
+pub(super) fn open_manager(
     saved: crate::saved_commands::SavedCommands,
     cx: &mut TestAppContext,
 ) -> (Entity<NebulaWorkspace>, VisualTestContext) {

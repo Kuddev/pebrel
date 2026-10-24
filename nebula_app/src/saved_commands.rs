@@ -3,7 +3,9 @@
 pub(crate) mod builtins;
 mod bulk;
 mod groups;
+mod ordering;
 pub(crate) use groups::BUILTIN_GROUP_ID;
+pub(crate) use ordering::MoveDirection;
 
 use std::collections::{BTreeSet, HashSet};
 use std::io;
