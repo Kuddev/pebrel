@@ -311,6 +311,8 @@
       "ligatures_theme": "跟随主题",
       "ui_family": "界面字体",
       "ui_family_description": "输入已安装的字体名称；留空使用默认字体。按回车或离开输入框后生效。",
+      "tab_family": "标签字体",
+      "tab_family_description": "输入用于侧栏和顶栏标签标题的字体名称；留空使用界面默认字体。按回车或离开输入框后生效。",
       "ui_size": "界面字号",
       "ui_size_description": "独立调整界面文字和组件字号，不影响终端文字。",
       "english": "英文终端字体",
