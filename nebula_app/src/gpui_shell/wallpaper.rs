@@ -223,18 +223,16 @@ pub fn native_underlay_active(cx: &App) -> bool {
     animated::underlay_ready(cx)
 }
 
-/// `gpui_component::Root` fills the whole window with the shell color. Content
-/// painted above it is unaffected, but a native layer below GPUI would be hidden,
-/// so the root fill is cleared while one is shown. Shell regions around the card
-/// are painted separately and keep their color.
+/// Workspace paints each shell/card surface once. Keep Root transparent after
+/// every background refresh, including when no native wallpaper is active;
+/// restoring its default fill would add a second full-window surface.
 fn sync_root_background(cx: &mut App) {
-    let underlay = animated::underlay_ready(cx);
     cx.defer(move |cx| {
         for handle in cx.windows() {
             if let Err(error) = handle.update(cx, |_, window, cx| {
                 let Some(Some(root)) = window.root::<gpui_component::Root>() else { return };
                 root.update(cx, |root, cx| {
-                    let background = underlay.then(|| gpui::Fill::from(gpui::transparent_black()));
+                    let background = Some(gpui::Fill::from(gpui::transparent_black()));
                     let style = gpui::Styled::style(root);
                     if style.background != background {
                         style.background = background;

@@ -58,6 +58,7 @@ use keyboard_bindings::{
 };
 mod details_panel;
 mod documents;
+mod export;
 mod file_tree;
 mod key_actions;
 mod launcher_menu;
@@ -658,6 +659,7 @@ pub struct NebulaWorkspace {
     command_manager_group: Option<String>,
     command_group_menu: Option<command_manager::GroupMenu>,
     command_manager_input: Entity<InputState>,
+    command_manager_language: crate::i18n::UiLanguage,
     command_manager_selection: command_manager::CommandSelection,
     command_manager_scroll: gpui::UniformListScrollHandle,
     saved_commands: crate::saved_commands::SavedCommands,
@@ -807,12 +809,10 @@ impl NebulaWorkspace {
         let runtime = nebula_settings::RuntimeSettings::load();
         let sidebar_width = runtime.sidebar_width;
         windowing::observe_window_bounds(runtime_window_id, window, cx);
-        let initial_grid = windowing::prepare_initial_grid(
-            window,
-            cx,
-            sidebar_width,
-            window_role == windowing::WindowRole::Regular,
-        );
+        let fit_default_grid = window_role == windowing::WindowRole::Regular
+            && !windowing::startup_geometry::restored_size(runtime_window_id, &startup, cx);
+        let initial_grid =
+            windowing::prepare_initial_grid(window, cx, sidebar_width, fit_default_grid);
         let this = cx.entity().downgrade();
         let appearance_sub = window.observe_window_appearance(move |_, cx| {
             if let Some(workspace) = this.upgrade() {
@@ -833,10 +833,15 @@ impl NebulaWorkspace {
                     cx.notify();
                 }
             });
-        let command_palette_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索命令…"));
-        let command_manager_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("搜索已保存命令…"));
+        let language = crate::gpui_shell::config::ui_language(cx);
+        let command_palette_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(language.text(crate::i18n::Message::WorkspaceSearchCommands))
+        });
+        let command_manager_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(language.text(crate::i18n::Message::CommandsSearch))
+        });
         let file_tree_search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(
                 workspace_ui_language().text(crate::i18n::Message::FilesFilterPlaceholder),
@@ -921,6 +926,7 @@ impl NebulaWorkspace {
             command_manager_group: None,
             command_group_menu: None,
             command_manager_input,
+            command_manager_language: language,
             command_manager_selection: Default::default(),
             command_manager_scroll: gpui::UniformListScrollHandle::new(),
             saved_commands: crate::saved_commands::SavedCommands::load().unwrap_or_default(),
@@ -1516,15 +1522,6 @@ impl NebulaWorkspace {
         (0..self.tabs.len()).find_map(|tab_ix| self.busy_process_in_tab(tab_ix, None, cx))
     }
 
-    fn save_clean_window_session(&mut self, cx: &mut App) -> std::io::Result<()> {
-        windowing::save_current_window_session(
-            self.runtime_window_id,
-            self.snapshot_session(cx),
-            session_persistence::SaveReason::WindowClose,
-            cx,
-        )
-    }
-
     /// 聚焦另一个 pane（点击上报或方向导航落点）。
     fn focus_pane(
         &mut self,
@@ -1647,6 +1644,7 @@ impl NebulaWorkspace {
             self.runtime_window_id,
             self.snapshot_session(cx),
             session_persistence::SaveReason::TabsClosed,
+            window,
             cx,
         ) {
             log::warn!("Could not save closed tabs: {error}");
@@ -2205,48 +2203,6 @@ impl NebulaWorkspace {
             .unwrap_or_else(|| "tab".to_owned());
         let export = crate::session::Session::new(0, vec![tab]);
         self.prompt_save_workspace(export, &stem, window, cx);
-    }
-
-    fn prompt_save_workspace(
-        &self,
-        export: crate::session::Session,
-        stem: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let stem: String = stem
-            .chars()
-            .map(|c| {
-                if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
-                    '-'
-                } else {
-                    c
-                }
-            })
-            .collect();
-        let directory =
-            crate::platform::dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let prompt =
-            cx.prompt_for_new_path(&directory, Some(&format!("{stem}.nebula-workspace.json")));
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(path))) = prompt.await else { return };
-            let result = crate::session::save_to(&path, &export);
-            let _ = this.update_in(cx, |_, window, cx| match result {
-                Ok(()) => crate::gpui_shell::toast::toast(
-                    window,
-                    cx,
-                    crate::display::ToastKind::Success,
-                    format!("已导出到 {}", path.display()),
-                ),
-                Err(error) => crate::gpui_shell::toast::toast(
-                    window,
-                    cx,
-                    crate::display::ToastKind::Warning,
-                    format!("工作区导出失败：{error}"),
-                ),
-            });
-        })
-        .detach();
     }
 
     /// Terminal tab 的内容区：单叶直渲、缩放态聚焦 pane 满卡，否则按

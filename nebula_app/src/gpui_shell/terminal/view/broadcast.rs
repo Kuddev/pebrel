@@ -88,7 +88,9 @@ impl TerminalView {
             return;
         }
         if paste {
-            self.paste_now_impl(text, false, cx);
+            if !self.try_native_clipboard_paste(text, false, cx) {
+                self.paste_now_impl(text, false, cx);
+            }
         } else {
             if !self.term_mode().contains(TermMode::ALT_SCREEN) {
                 crate::display::nebula_input_text(&mut self.suggest, text);

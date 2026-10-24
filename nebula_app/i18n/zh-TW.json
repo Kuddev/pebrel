@@ -17,6 +17,10 @@
     "en_us": "English"
   },
   "settings": {
+    "opacity": {
+      "title": "視窗背景不透明度",
+      "description": "同步調整終端機與設定頁背景；數值越低越透明，文字不變。"
+    },
     "completion": {
       "mode": "補齊模式",
       "cycle": "切換補齊模式",
