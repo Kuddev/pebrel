@@ -6,7 +6,7 @@ use nebula_settings::AgentHook;
 
 use crate::ai_agents::AgentKind;
 
-pub(crate) const AGENTS: [AgentKind; 9] = [
+pub(crate) const AGENTS: [AgentKind; 10] = [
     AgentKind::Claude,
     AgentKind::Codex,
     AgentKind::OpenCode,
@@ -16,6 +16,7 @@ pub(crate) const AGENTS: [AgentKind; 9] = [
     AgentKind::OhMyPi,
     AgentKind::Copilot,
     AgentKind::Grok,
+    AgentKind::Hermes,
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -90,6 +91,9 @@ fn executable_directories() -> Vec<PathBuf> {
             home.join(".cargo/bin"),
             home.join(".bun/bin"),
             home.join(".grok/bin"),
+            home.join(".opencode/bin"),
+            home.join(".kimi-code/bin"),
+            home.join(".pi/agent/bin"),
         ]);
     }
     if cfg!(target_os = "macos") {
@@ -99,7 +103,12 @@ fn executable_directories() -> Vec<PathBuf> {
         paths.push(PathBuf::from(appdata).join("npm"));
     }
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        paths.push(PathBuf::from(local).join("cursor-agent"));
+        let local = PathBuf::from(local);
+        paths.extend([
+            local.join("cursor-agent"),
+            local.join("hermes/bin"),
+            local.join("Programs/OpenAI/Codex/bin"),
+        ]);
     }
     paths
 }
@@ -203,5 +212,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("claude")).unwrap();
         assert_eq!(find_executable(AgentKind::Claude, &[dir.path().to_path_buf()]), None);
+    }
+
+    #[test]
+    fn hermes_entry_discovers_the_cli_without_claiming_hook_support() {
+        assert!(AGENTS.contains(&AgentKind::Hermes));
+        assert_eq!(hook_for(AgentKind::Hermes), None);
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("hermes/bin");
+        let path = executable(&bin, "hermes");
+        assert_eq!(find_executable(AgentKind::Hermes, &[bin.clone()]), Some(path.clone()));
+        std::fs::remove_file(path).unwrap();
+        std::fs::create_dir(bin.join("hermes")).unwrap();
+        assert_eq!(find_executable(AgentKind::Hermes, &[bin]), None);
+        assert_eq!(AgentKind::parse_command("hermes"), Some(AgentKind::Hermes));
+        assert_eq!(AgentKind::parse("HERMES.EXE"), Some(AgentKind::Hermes));
     }
 }

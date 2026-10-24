@@ -19,6 +19,9 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+/** The desktop grid scale is independent of the user's base font size. */
+fun normalizedSnapshotZoom(value: Float): Float = value.takeIf { it.isFinite() }?.coerceIn(.5f, 5f) ?: 1f
+
 /** A grid mirror with optional authorized input. Gestures never resize the PC PTY. */
 class TerminalSnapshotView(context: Context) : View(context) {
     private var inputGeneration = 0
@@ -78,6 +81,9 @@ class TerminalSnapshotView(context: Context) : View(context) {
     }
     private var fontPixels = 14f * resources.displayMetrics.scaledDensity
     private var zoom = 1f
+    private var pinchInProgress = false
+    val zoomScale: Float get() = zoom
+    var onZoomScaleChanged: ((Float) -> Unit)? = null
     private var offsetX = 0f
     private var offsetY = 0f
     private var cellWidth = 1f
@@ -157,6 +163,18 @@ class TerminalSnapshotView(context: Context) : View(context) {
         selection.clear()
         paint.typeface = typeface
         fontPixels = pixels
+        metrics()
+        reproject()
+        constrainOffsets()
+        invalidate()
+    }
+
+    fun setZoomScale(value: Float) {
+        val bounded = normalizedSnapshotZoom(value)
+        if (pinchInProgress || zoom == bounded) return
+        selection.clear()
+        zoom = bounded
+        stopScrolling()
         metrics()
         reproject()
         constrainOffsets()
@@ -278,6 +296,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
     private val scaling = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
             if (!pinchZoom) return false
+            pinchInProgress = true
             stopScrolling()
             reportZoom(true)
             return true
@@ -286,7 +305,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
             if (!pinchZoom) return false
             val oldWidth = cellWidth
             val oldHeight = cellHeight
-            zoom = (zoom * detector.scaleFactor).coerceIn(.5f, 5f)
+            zoom = normalizedSnapshotZoom(zoom * detector.scaleFactor)
             metrics()
             reproject()
             offsetX = (offsetX + detector.focusX) * cellWidth / oldWidth - detector.focusX
@@ -296,7 +315,11 @@ class TerminalSnapshotView(context: Context) : View(context) {
             reportZoom(true)
             return true
         }
-        override fun onScaleEnd(detector: ScaleGestureDetector) { reportZoom(false) }
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            pinchInProgress = false
+            onZoomScaleChanged?.invoke(zoom)
+            reportZoom(false)
+        }
     })
 
     private fun reportZoom(gesturing: Boolean) {
@@ -350,15 +373,21 @@ class TerminalSnapshotView(context: Context) : View(context) {
         val target = scrollTarget
         val source = frame
         // 先移动已在手机上的网格；本地边缘以外仍遵守原有远端滚轮及权限边界。
-        if (!wrapLines && source != null && source.history?.applicationScroll != false &&
+        if (source != null && source.history?.applicationScroll != false &&
             source.rows.isNotEmpty() && source.columns > 0 &&
             target?.supportsScroll == true) {
             val remaining = dy - (offsetY - previousY)
             scrollRemainder = (scrollRemainder - remaining / cellHeight).coerceIn(-32f, 32f)
             val lines = scrollRemainder.toInt()
             if (lines != 0) {
-                val column = ((gestureX + offsetX) / cellWidth).toInt().coerceIn(0, source.columns - 1)
-                val row = ((gestureY + offsetY) / cellHeight).toInt().coerceIn(0, source.rows.size - 1)
+                val visual = renderedFrame ?: source
+                val visualRow = ((gestureY + offsetY) / cellHeight).toInt().coerceIn(0, visual.rows.lastIndex)
+                val visualColumn = ((gestureX + offsetX) / cellWidth).toInt().coerceIn(0, visual.columns - 1)
+                // 手机换行只是显示投影，滚轮仍须指向原网格的格子，不能发送投影行列。
+                val cell = visual.sourceOffsets?.getOrNull(visualRow)?.plus(visualColumn)
+                    ?: (visualRow * source.columns + visualColumn)
+                val column = (cell % source.columns).coerceIn(0, source.columns - 1)
+                val row = (cell / source.columns).coerceIn(0, source.rows.size - 1)
                 if (target.scroll(lines, column, row)) {
                     scrollRemainder -= lines
                     followOutput = false
@@ -504,6 +533,7 @@ class TerminalSnapshotView(context: Context) : View(context) {
     private fun resetZoom() {
         stopScrolling()
         zoom = 1f
+        onZoomScaleChanged?.invoke(zoom)
         metrics(); reproject()
         offsetX = 0f; offsetY = 0f
         followOutput = true

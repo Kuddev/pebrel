@@ -4,6 +4,233 @@ Every release entry is provided in English and Simplified Chinese.
 
 每个版本条目均同时提供英文和简体中文说明。
 
+## 2.2.2 - 2026-10-16
+
+- `Pebrel-v2.2.2-linux-x64-preview.AppImage`: `7ea76a93d49724eba09c5ba1a59b88e52047d937bca1107caa48b13b64248781`
+- `Pebrel-v2.2.2-linux-x64-preview.deb`: `47fbd6e31657dfab0621f4f48e3faee10488f3c5b9964382fcfda8b205bed765`
+- `Pebrel-v2.2.2-linux-x64-preview.tar.gz`: `39a8582a2830ac06737192ca37ad9ac5285567ea6076ad74ace59545d06d19dd`
+- `Pebrel-v2.2.2-macos-arm64-preview.dmg`: `2658e970643de72258cc483f0d2f0cda0f125298fe3b2871ced1b0f36542c84b`
+- `Pebrel-v2.2.2-macos-x64-preview.dmg`: `783ef14e8454c67d94c0231166e18270bf22711139db05456efc4e828d6dc48e`
+- `Pebrel-v2.2.2-windows-x64.zip`: `78ce7464b73b63ae2b8f6629bf7774dd2fe4738f4d2bb6c7f4cbb44aba4e79f5`
+- `Pebrel-v2.2.2-windows-x64-setup.exe`: `d2a48efc43c96a19de1661817bfbf598a0e05fe053c0bf7bad27030d97d4afe8`
+- `Pebrel-v2.2.2-windows-arm64.zip`: `2cb8987325a99f0adecf112daa9b32f37a51fe2e2416173ea04be256d77946aa`
+- `Pebrel-v2.2.2-windows-arm64-setup.exe`: `1bbf7c945c179bb2e2a647af3ca22ee2f5eb20e686160dd9d70740827eca640d`
+
+### English
+
+This release updates Windows, macOS and Linux. Android Preview remains at [2.2.1](https://github.com/Kuddev/pebrel/releases/tag/v2.2.1).
+
+#### Added
+
+- Added: The file tree keeps the active ancestor folder visible while scrolling. Its clickable breadcrumb shows the last three path levels and provides a menu for earlier ancestors.
+- Added: Git history shows author avatars when available, with initials while an image is unavailable or cannot load.
+
+#### Improved
+
+- Improved: The interface bundles the compact Geist variable font for English text. Chinese uses installed font fallbacks without adding a bundled Chinese font; terminal font preferences remain independent, and paths and other metadata retain their monospace styling.
+- Improved: File filtering uses a softer search field, a clearer Filter files placeholder and quieter case, whole-word and regular-expression controls. Breadcrumbs and terminal actions provide stronger text or icon color feedback on hover with transparent backgrounds.
+- Improved: Adjacent choices share a smooth sliding indicator across Settings, SSH controls, Shell and Quick Jump filters, Git views, theme previews and import/export choices. The indicator follows actual option sizes, continues from its visible position when reversed and respects reduced-motion preferences.
+- Improved: The Shell and SSH picker uses a shorter search header and more space above its filter choices.
+- Improved: Command Manager shows Copy, Edit and Delete on row hover or keyboard focus. The three-dot button is removed; moving commands between folders remains available from the row context menu.
+- Improved: Git added and deleted line totals of 1,000 or more use one-decimal k units while retaining their signs and colors.
+- Improved: Tab titles, filenames and settings labels use more consistent text weights and spacing. Tab text follows the existing interface-size preference, iconless rows avoid an empty icon gutter, and shell types use plain text labels.
+- Improved: Captured-answer reader controls, notices, image selection and image errors follow the interface language. Switching languages preserves the original answer and author-provided image descriptions, and Copy source retains the exact original content. ([#545](https://github.com/Kuddev/pebrel/pull/545))
+
+#### Fixed
+
+- Fixed: Git history lines join across adjacent rows and use smoother branch curves.
+- Fixed: Git-ignored file and folder names retain their italic styling, and ordinary interface labels avoid unintended bold Chinese text.
+- Fixed: A tab's custom color strip stays separate from its icon at small interface sizes.
+- Fixed: Windows recreates a missing temporary welcome script when opening a new tab or split, and retries failed writes instead of keeping a stale cached path. Addresses [#622](https://github.com/Kuddev/pebrel/issues/622).
+- Fixed: On macOS, default GPUI shortcuts release plain Control character combinations such as Control+K to the terminal while Command shortcuts perform the corresponding interface actions. Explicit user bindings and navigation combinations retain their established behavior. Addresses [#656](https://github.com/Kuddev/pebrel/issues/656). ([#658](https://github.com/Kuddev/pebrel/pull/658))
+- Fixed: Local file links with trailing line-count annotations, including terminal-truncated annotations, resolve to an existing base file. Existing filenames containing parentheses still take precedence; this does not add line-number navigation. Addresses [#619](https://github.com/Kuddev/pebrel/issues/619). ([#663](https://github.com/Kuddev/pebrel/pull/663))
+
+### 中文
+
+本版更新 Windows、macOS 和 Linux；Android Preview 保持为已发布的 [2.2.1](https://github.com/Kuddev/pebrel/releases/tag/v2.2.1)。
+
+#### 新增
+
+- 新增：文件树滚动时将当前祖先目录保持在顶部；可点击的面包屑显示末尾三级路径，更早的祖先目录通过列表菜单访问。
+- 新增：Git 历史在可用时显示作者头像，图片暂不可用或加载失败时显示姓名首字母。
+
+#### 改进
+
+- 改进：内置体积较小的 Geist 可变字体用于英文界面；中文使用本机字体回退，不增加内置中文字库。终端字体偏好保持独立，路径等辅助信息继续使用等宽字体。
+- 改进：文件过滤框采用更柔和的颜色和清晰的“过滤文件...”占位提示，大小写、全词及正则选项的默认颜色更克制；路径和终端操作按钮在悬停时通过更明显的文字或图标颜色反馈，背景保持透明。
+- 改进：设置、SSH、Shell 与 Quick Jump 筛选、Git 视图、主题预览及导入导出的紧邻选项共用平滑滑动指示器；浮块跟随真实选项尺寸，快速反向时从当前位置继续，并遵循减少动态效果设置。
+- 改进：Shell 和 SSH 选择器调矮搜索栏，并增加筛选选项上方的留白。
+- 改进：命令管理器中的复制、编辑、删除操作在整行悬停或键盘聚焦时显示；移除三个点按钮，命令分组移动继续通过行右键菜单访问。
+- 改进：Git 增删行数达到 1,000 时使用保留一位小数的 k 单位，并保留正负号及原有颜色。
+- 改进：统一 Tab 标题、文件名及设置标签的字重和间距；Tab 文字继续读取原有界面字号偏好，无图标行不保留空白图标槽，Shell 类型使用纯文字标签。
+- 改进：完整回答阅读器的控件、提示、图片选择和图片错误跟随界面语言；切换语言保留回答原文及作者提供的图片说明，“复制原文”保留完整原始内容。 ([#545](https://github.com/Kuddev/pebrel/pull/545))
+
+#### 修复
+
+- 修复：Git 历史线路在相邻行之间连续连接，并采用更平滑的分支曲线。
+- 修复：Git 忽略的文件和文件夹名称保留斜体，普通界面标签避免出现意外加粗的中文。
+- 修复：较小界面字号下，Tab 的自定义色条与图标保持间距。
+- 修复：Windows 新建标签或分屏时会重建丢失的临时欢迎脚本，写入失败后可重试，避免持续使用失效的缓存路径。对应 [#622](https://github.com/Kuddev/pebrel/issues/622)。
+- 修复：macOS 的默认 GPUI 快捷键将 Control+K 等纯 Control 字符组合交给终端，使用 Command 快捷键执行对应界面操作；显式用户绑定及导航组合保留原有行为。对应 [#656](https://github.com/Kuddev/pebrel/issues/656)。 ([#658](https://github.com/Kuddev/pebrel/pull/658))
+- 修复：带有尾随行数说明的本地文件链接可回退到实际存在的基础文件，也兼容终端截断后的说明；真实带括号的文件名仍优先匹配，本次不增加行号导航。对应 [#619](https://github.com/Kuddev/pebrel/issues/619)。 ([#663](https://github.com/Kuddev/pebrel/pull/663))
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Aschenbath"><img src="https://avatars.githubusercontent.com/u/184111764?v=4&amp;s=96" width="48" height="48" alt="Aschenbath" title="Aschenbath" /></a>
+  <a href="https://github.com/YinBuLiao"><img src="https://avatars.githubusercontent.com/u/35324248?v=4&amp;s=96" width="48" height="48" alt="YinBuLiao" title="YinBuLiao" /></a>
+  <a href="https://github.com/galact-byte"><img src="https://avatars.githubusercontent.com/u/94279960?v=4&amp;s=96" width="48" height="48" alt="galact-byte" title="galact-byte" /></a>
+  <a href="https://github.com/Kuddev"><img src="https://avatars.githubusercontent.com/u/292709043?v=4&amp;s=96" width="48" height="48" alt="Kuddev" title="Kuddev" /></a>
+</p>
+
+Thanks to Aschenbath ([#545](https://github.com/Kuddev/pebrel/pull/545)), YinBuLiao ([#658](https://github.com/Kuddev/pebrel/pull/658)), galact-byte ([#663](https://github.com/Kuddev/pebrel/pull/663)) and Kuddev for the fixes, interface improvements and release integration.
+
+感谢 Aschenbath（[#545](https://github.com/Kuddev/pebrel/pull/545)）、YinBuLiao（[#658](https://github.com/Kuddev/pebrel/pull/658)）、galact-byte（[#663](https://github.com/Kuddev/pebrel/pull/663)）和 Kuddev 对修复、界面改进及发布整合的贡献。
+
+## 2.2.1 - 2026-10-15
+
+### English
+
+#### Added
+
+- Added: Saved commands support selection and batch deletion, clearing all or built-in commands, and restoring deleted built-ins. Batch deletion, clearing commands and removing custom folders ask for confirmation; removing a folder keeps its commands in Ungrouped. Changing the search or folder clears the selection. Addresses [#511](https://github.com/Kuddev/pebrel/issues/511). ([#530](https://github.com/Kuddev/pebrel/pull/530))
+- Added: Terminal scrollbars offer Auto-hide, On hover and Always modes, applied to open terminals. Minimum-size thumbs keep their position when grabbed at the live bottom. Addresses [#425](https://github.com/Kuddev/pebrel/issues/425). ([#447](https://github.com/Kuddev/pebrel/pull/447))
+- Added: New WSL Zsh panes report their directory and command boundaries after guest verification, allowing directory-dependent features to follow them. Existing Zsh configuration and explicit startup choices are preserved; panes opened before verification keep their original startup environment. ([#409](https://github.com/Kuddev/pebrel/pull/409))
+- Added: Editable Markdown previews offer centered floating drafts for formulas and images, with live formula previews, image thumbnails and dimensions, and a local image picker. Cancel discards the draft; Done applies a document edit that can be undone or redone. Saving the file remains a separate action. ([#649](https://github.com/Kuddev/pebrel/pull/649), [#652](https://github.com/Kuddev/pebrel/pull/652))
+- Added: Find literal text in retained terminal output, with match counts, previous/next navigation and case matching. Open search with Ctrl+Shift+H, with Command+F also available on macOS. Search input stays out of the shell and the terminal grid keeps its size. ([#650](https://github.com/Kuddev/pebrel/pull/650), [#652](https://github.com/Kuddev/pebrel/pull/652))
+- Added: Choose a completed shell command to search its retained output, jump to its start or end, or copy it. Supported command results also offer a copy control on hover with feedback. Command scopes require shell integration; copies are limited to 8 MiB, and expired or oversized output leaves the clipboard unchanged. ([#650](https://github.com/Kuddev/pebrel/pull/650))
+- Added: Hovering a Markdown link shows Edit, Open and Copy actions and a stronger underline. Open and Copy keep the full destination; Edit changes only the selected occurrence, preserves its label and supports cancel and undo. Files are saved separately, and documents without edit permission keep Edit disabled.
+
+#### Improved
+
+- Improved: Inline code in Markdown uses rounded backgrounds and horizontal padding while preserving original source text, copied content, links and selection offsets. ([#649](https://github.com/Kuddev/pebrel/pull/649))
+- Improved: Reader/source switching sits before the upper-right toolbar divider and uses the same sliding indicator transition as Settings, including continuous retargeting and reduced-motion behavior. The file menu brings together path/name copying and applicable local-file actions. ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- Improved: Code-block language and copy controls appear along the top on hover or keyboard focus without reserving extra layout space. ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- Improved: Terminal search appears before Command Manager in both tab layouts. Search and the command palette use compact controls with clearer spacing, search scope and match feedback. ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- Improved: Add 351 Japanese translations from the 2.2.0 catalog for backup, phone remote, backgrounds, terminal effects, SSH forwarding and theme management. Newer untranslated entries continue to use the existing English fallback. ([#568](https://github.com/Kuddev/pebrel/pull/568))
+- Improved: Focus rings retain keyboard and pointer styling without repeatedly triggering theme updates when their color is unchanged. ([#648](https://github.com/Kuddev/pebrel/pull/648))
+
+#### Fixed
+
+- Fixed: macOS remote-backup setup saves WebDAV passwords and S3 secrets through the existing system credential store instead of rejecting the final step as Windows-only. Linux uses the existing Secret Service adapter; environment-variable precedence and storage failures retain their established behavior. Addresses [#561](https://github.com/Kuddev/pebrel/issues/561). ([#581](https://github.com/Kuddev/pebrel/pull/581))
+- Fixed: Copy and Cut in saved-command name and multiline command fields provide feedback; empty selections remain quiet and Undo is preserved. Identical notifications in different windows no longer suppress each other. Addresses [#510](https://github.com/Kuddev/pebrel/issues/510). ([#584](https://github.com/Kuddev/pebrel/pull/584))
+- Fixed: Command-dialog inputs retain native paste shortcuts after terminal Paste is disabled or remapped. Restoring defaults takes effect in existing windows without restarting. Addresses [#509](https://github.com/Kuddev/pebrel/issues/509). ([#534](https://github.com/Kuddev/pebrel/pull/534))
+- Fixed: Assigning bare input or editing keys such as Enter, Space or letters to an action requires confirmation before the binding can intercept normal typing. ([#350](https://github.com/Kuddev/pebrel/pull/350))
+- Fixed: Chinese punctuation and following prose are excluded from bare URL targets, while custom hint expressions retain their existing behavior. ([#635](https://github.com/Kuddev/pebrel/pull/635))
+- Fixed: The sidebar Tab scrollbar no longer flickers when its decorative thumb is hovered; drawing, hit testing and dragging keep consistent geometry. ([#636](https://github.com/Kuddev/pebrel/pull/636))
+- Fixed: SGR 2 dim text is rendered correctly, distinguishing thinking text and suggestions in tools such as Claude Code from normal input. Inverse, palette and OSC colors retain their correct roles without dimming twice. Addresses [#617](https://github.com/Kuddev/pebrel/issues/617). ([#564](https://github.com/Kuddev/pebrel/pull/564))
+- Fixed: Overflowing single-cell glyphs such as circled numbers fit their terminal cell instead of overlapping neighboring text. Private-use icon glyphs retain their existing treatment. Addresses [#570](https://github.com/Kuddev/pebrel/issues/570). ([#611](https://github.com/Kuddev/pebrel/pull/611))
+- Fixed: Windows MSVC source builds reserve an 8 MiB main-thread stack, preventing the Git-panel stack overflow reported in debug builds. Addresses [#569](https://github.com/Kuddev/pebrel/issues/569). ([#612](https://github.com/Kuddev/pebrel/pull/612))
+- Fixed: SSH destinations accept compound JumpServer usernames and preserve the literal identity in history, authentication and native command arguments. Native Unicode acceptance remains governed by the installed SSH client. ([#588](https://github.com/Kuddev/pebrel/pull/588))
+- Fixed: Pending local SSH port-forward operations finish on the surviving terminal after it moves to another window and the original window closes, releasing the pending state so further operations remain available. ([#586](https://github.com/Kuddev/pebrel/pull/586))
+- Fixed: Remote Files follows each SSH pane's reported directory while preserving manual browsing when the directory has not changed. Canceled or outdated listings release their owned work and cannot replace the current pane's results. Addresses [#557](https://github.com/Kuddev/pebrel/issues/557). ([#582](https://github.com/Kuddev/pebrel/pull/582))
+- Fixed: SSH launcher, command-palette and Quick Jump searches include groups, tags and notes, with multiple keywords and Unicode-aware case handling. Connection identity, pin order and hidden state are preserved. Addresses [#482](https://github.com/Kuddev/pebrel/issues/482). ([#525](https://github.com/Kuddev/pebrel/pull/525))
+- Fixed: Native PowerShell launched from a WSL UNC path starts in the Windows home directory so CMD-based child launchers receive a valid working directory. Ordinary network shares and WSL shells keep their directories. ([#462](https://github.com/Kuddev/pebrel/pull/462))
+- Fixed: Repeated Windows administrator launches follow the configured window-reuse policy while preserving the selected program, literal arguments and working directory. Elevated launches remain separate from ordinary windows. ([#573](https://github.com/Kuddev/pebrel/pull/573))
+- Fixed: Starting Pebrel at the end of installation clears the inherited DPI compatibility override for that launch and then restores the installer's original environment, preventing the installer's override from affecting application scaling. ([#555](https://github.com/Kuddev/pebrel/pull/555))
+- Fixed: New relay installations on systemd 247–250, including Debian 11 and Ubuntu 22.04, select a compatible service definition. The Android Preview APK's bundled relay and matching offline relay kit include this fix. Servers that already recorded the broken definition require an uninstall before reinstalling. ([#537](https://github.com/Kuddev/pebrel/pull/537))
+- Fixed: The Markdown reader scrolls when the pointer is over either side margin or the top whitespace, instead of responding only over the text. ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- Fixed: Long display formulas keep their text size and scroll horizontally without widening the page or shifting surrounding content. ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- Fixed: Ctrl-click resolves HTTP(S) URLs split across aligned continuation rows in bordered terminal table cells, without including padding or neighboring columns. Normal terminal soft wraps and OSC 8 targets keep their complete destination; artificial search limits no longer produce clickable URL prefixes. Addresses [#620](https://github.com/Kuddev/pebrel/issues/620).
+- Fixed: Android forwards alternate-screen gestures through negotiated mouse or arrow input in direct SSH sessions and desktop mirroring, including phone-only line reflow. Primary-screen history stays independent even when a program enables mouse tracking; a queued application gesture arriving after fullscreen exit does not move PC history. Fullscreen program changes remain shared between devices.
+- Fixed: Linux silent startup respects initial window visibility; closing through the client titlebar follows the workspace's keep-session guard, and normal and quick-terminal windows use the installed desktop identity. Global-shortcut activation retains portal tokens and reports unavailable registration. Portal and compositor support still govern activation. Addresses [#629](https://github.com/Kuddev/pebrel/issues/629) and [#624](https://github.com/Kuddev/pebrel/issues/624). ([#642](https://github.com/Kuddev/pebrel/pull/642))
+- Fixed: Plugin manifests cannot grant themselves Runtime methods that the host has not opened to plugins. Package checks and native/Lua command dispatch enforce the same capability boundary. ([#647](https://github.com/Kuddev/pebrel/pull/647))
+- Fixed: Markdown reference links keep their resolved destinations through parsing and rendering, so hovering, opening and copying them receive the complete target instead of an empty URL.
+
+### 中文
+
+#### 新增
+
+- 新增：保存命令支持勾选与批量删除、清空全部或内置命令，以及恢复已删除的内置命令。批量删除、清空及删除自定义文件夹前先确认；文件夹中的命令保留在“未分组”，切换搜索条件或文件夹时清除当前选择。对应 [#511](https://github.com/Kuddev/pebrel/issues/511)。 ([#530](https://github.com/Kuddev/pebrel/pull/530))
+- 新增：终端滚动条提供自动隐藏、悬停显示、始终显示三种模式，并立即应用到已打开的终端；最小滚动块在实时底部被抓取时保持位置。对应 [#425](https://github.com/Kuddev/pebrel/issues/425)。 ([#447](https://github.com/Kuddev/pebrel/pull/447))
+- 新增：WSL 的 Zsh 来宾环境核验完成后，新打开的窗格可上报当前目录和命令边界，供目录相关功能跟随。保留用户原有 Zsh 配置及显式启动选择；核验完成前打开的窗格继续使用原启动环境。 ([#409](https://github.com/Kuddev/pebrel/pull/409))
+- 新增：可编辑 Markdown 文档的阅读预览支持点击公式或图片，打开居中的悬浮编辑草稿，提供公式原位预览、图片缩略图与尺寸、本地图片选择。取消会丢弃草稿，完成后应用到文档并支持撤销、重做；文件仍通过原有保存操作写入磁盘。 ([#649](https://github.com/Kuddev/pebrel/pull/649), [#652](https://github.com/Kuddev/pebrel/pull/652))
+- 新增：终端支持字面文本查找，可搜索当前保留的输出，显示匹配计数并前后跳转，支持大小写匹配。通过 Ctrl+Shift+H 打开，macOS 也可使用 Command+F；搜索输入不会发送到 Shell，也不会改变终端网格尺寸。 ([#650](https://github.com/Kuddev/pebrel/pull/650), [#652](https://github.com/Kuddev/pebrel/pull/652))
+- 新增：可选择已完成的 Shell 命令，搜索其保留输出、跳转到起止位置或复制整段输出；适用的命令结果还提供悬停复制与反馈。按命令限定范围依赖 Shell 集成；复制上限为 8 MiB，输出过期或过大时保留原剪贴板内容。 ([#650](https://github.com/Kuddev/pebrel/pull/650))
+- 新增：Markdown 链接悬停显示 Edit、Open、Copy，并加粗链接下划线。打开和复制保留完整目标；编辑只修改选中的链接，保留标签文字，支持取消与撤销。文件仍单独保存，无编辑权限的文档禁用 Edit。
+
+#### 改进
+
+- 改进：Markdown 行内代码采用圆角底色及水平留白，同时保留原始源码、复制内容、链接和选区位置。 ([#649](https://github.com/Kuddev/pebrel/pull/649))
+- 改进：阅读与源码切换放到右上工具栏竖线前，采用与设置相同的滑动指示器，快速反向切换可连续过渡，并遵循减少动态效果设置；文件菜单集中提供复制路径、复制文件名及适用的本地文件操作。 ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- 改进：代码块的语言与复制控件在悬停或键盘焦点进入时显示于顶部，不额外占用正文布局空间。 ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- 改进：两种标签布局都将终端搜索放到命令管理器前；终端查找与命令面板采用更紧凑的控件，并改善留白、搜索范围和匹配反馈的呈现。 ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- 改进：补齐 2.2.0 文案目录中的 351 条日语翻译，覆盖备份、手机远程、背景、终端效果、SSH 转发及主题管理；后续尚未翻译的条目继续使用既有英文回退。 ([#568](https://github.com/Kuddev/pebrel/pull/568))
+- 改进：焦点环颜色未变化时不再反复触发主题更新，键盘与鼠标操作切换仍能更新正确的焦点样式。 ([#648](https://github.com/Kuddev/pebrel/pull/648))
+
+#### 修复
+
+- 修复：macOS 远端备份向导通过既有系统凭据存储保存 WebDAV 密码和 S3 secret，避免最后一步被仅限 Windows 的分支拒绝；Linux 使用既有 Secret Service 适配器，保留环境变量优先级及存储失败语义。对应 [#561](https://github.com/Kuddev/pebrel/issues/561)。 ([#581](https://github.com/Kuddev/pebrel/pull/581))
+- 修复：保存命令的名称和多行命令输入框在复制、剪切后提供反馈，空选区保持安静并保留撤销能力；不同窗口中的相同通知不会互相吞掉。对应 [#510](https://github.com/Kuddev/pebrel/issues/510)。 ([#584](https://github.com/Kuddev/pebrel/pull/584))
+- 修复：禁用或重映射终端粘贴后，命令对话框输入框仍保留原生粘贴快捷键；恢复默认无需重启即可在已有窗口生效。对应 [#509](https://github.com/Kuddev/pebrel/issues/509)。 ([#534](https://github.com/Kuddev/pebrel/pull/534))
+- 修复：将 Enter、空格或字母等无修饰键的输入、编辑按键绑定为动作前，先确认其会影响正常输入。 ([#350](https://github.com/Kuddev/pebrel/pull/350))
+- 修复：裸 URL 后的中文标点及正文不再被误识别为链接目标的一部分，自定义链接识别表达式保留原行为。 ([#635](https://github.com/Kuddev/pebrel/pull/635))
+- 修复：侧栏 Tab 滚动条悬停时不再出现滑块闪烁，绘制、命中与拖动保持一致的几何规则。 ([#636](https://github.com/Kuddev/pebrel/pull/636))
+- 修复：终端正确显示 SGR 2 淡化文字，使 Claude Code 等工具的思考内容、自动建议与普通输入可区分；反色、调色板及 OSC 颜色保持正确归属，并避免二次变暗。对应 [#617](https://github.com/Kuddev/pebrel/issues/617)。 ([#564](https://github.com/Kuddev/pebrel/pull/564))
+- 修复：带圈数字等溢出的单列字形适配其终端格，避免覆盖相邻文字；私用区图标字形保留原有处理方式。对应 [#570](https://github.com/Kuddev/pebrel/issues/570)。 ([#611](https://github.com/Kuddev/pebrel/pull/611))
+- 修复：Windows MSVC 源码构建为主线程预留 8 MiB 栈空间，修复调试构建打开 Git 面板时报告的栈溢出。对应 [#569](https://github.com/Kuddev/pebrel/issues/569)。 ([#612](https://github.com/Kuddev/pebrel/pull/612))
+- 修复：SSH 连接支持 JumpServer 复合用户名，并在历史记录、认证和原生命令参数中保留字面身份；原生 Unicode 用户名支持仍取决于所安装的 SSH 客户端。 ([#588](https://github.com/Kuddev/pebrel/pull/588))
+- 修复：终端移至其他窗口并关闭原窗口后，等待中的本地 SSH 端口转发操作仍由存活终端处理结果并释放等待状态，后续操作可继续使用。 ([#586](https://github.com/Kuddev/pebrel/pull/586))
+- 修复：远端 Files 跟随各 SSH 窗格上报的目录，目录未变化时保留手动浏览；取消或过期的列表请求释放所属工作，不能覆盖当前窗格的结果。对应 [#557](https://github.com/Kuddev/pebrel/issues/557)。 ([#582](https://github.com/Kuddev/pebrel/pull/582))
+- 修复：SSH 启动器、命令面板和 Quick Jump 搜索包含分组、标签及备注，支持多关键词和 Unicode 大小写处理，保留连接身份、固定顺序及隐藏状态。对应 [#482](https://github.com/Kuddev/pebrel/issues/482)。 ([#525](https://github.com/Kuddev/pebrel/pull/525))
+- 修复：从 WSL UNC 路径启动原生 PowerShell 时使用 Windows 主目录，使 CMD 类子程序得到有效工作目录；普通网络共享和 WSL Shell 保留原目录。 ([#462](https://github.com/Kuddev/pebrel/pull/462))
+- 修复：重复以管理员启动 Windows 终端时遵循配置的窗口复用策略，并保留所选程序、字面参数和工作目录；提权启动与普通窗口保持隔离。 ([#573](https://github.com/Kuddev/pebrel/pull/573))
+- 修复：安装结束启动 Pebrel 时，为本次启动清除继承的 DPI 兼容标记，随后恢复安装器原有环境，避免安装器的兼容设置影响应用缩放。 ([#555](https://github.com/Kuddev/pebrel/pull/555))
+- 修复：在 systemd 247～250（如 Debian 11、Ubuntu 22.04）上新安装中继时选择兼容的服务定义；Android Preview APK 内嵌中继及配套离线中继包均包含此修复。已经记录旧错误定义的服务器仍需先卸载中继再重新安装。 ([#537](https://github.com/Kuddev/pebrel/pull/537))
+- 修复：Markdown 阅读页在指针位于两侧或顶部留白时也能滚动，不再仅对正文区域的滚轮输入响应。 ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- 修复：长显示公式保持字号并支持横向滚动，不再撑宽页面或挤动周围正文。 ([#652](https://github.com/Kuddev/pebrel/pull/652))
+- 修复：Ctrl 点击终端有边框表格内对齐续行的 HTTP(S) 链接时，拼接同一单元格的完整地址，不夹入留白或相邻列；普通终端自动折行与 OSC 8 链接保留完整目标，搜索人为限额不再生成可点击的 URL 前缀。对应 [#620](https://github.com/Kuddev/pebrel/issues/620)。
+- 修复：Android 直接 SSH 和桌面镜像中的备用屏手势按协商后的鼠标或方向键协议发送，也支持手机独立换行显示。主屏即使启用鼠标追踪仍保留手机独立历史；全屏退出后才到达的排队手势不会滚动 PC 历史。全屏程序内容的变化仍由两端共享。
+- 修复：Linux 静默启动遵循初始窗口可见性；通过客户端标题栏关闭时沿用工作区的会话驻留守卫，普通窗口与快速终端使用已安装的桌面身份。全局快捷键保留 portal 激活令牌，并反馈注册不可用的情况；唤起能力仍取决于 portal 和合成器支持。对应 [#629](https://github.com/Kuddev/pebrel/issues/629)、[#624](https://github.com/Kuddev/pebrel/issues/624)。 ([#642](https://github.com/Kuddev/pebrel/pull/642))
+- 修复：插件清单自行声明权限时，不能调用宿主尚未开放给插件的 Runtime 方法；包检查和 native/Lua 命令执行遵循同一能力边界。 ([#647](https://github.com/Kuddev/pebrel/pull/647))
+- 修复：Markdown 引用式链接在解析和渲染之间保留已解析地址，悬停、打开和复制可取得完整目标，不再得到空 URL。
+
+### Contributors
+
+<p>
+  <a href="https://github.com/Aschenbath"><img src="https://avatars.githubusercontent.com/u/184111764?v=4&amp;s=96" width="48" height="48" alt="Aschenbath" title="Aschenbath" /></a>
+  <a href="https://github.com/M1nt-Ch0c0"><img src="https://avatars.githubusercontent.com/u/232783406?v=4&amp;s=96" width="48" height="48" alt="M1nt-Ch0c0" title="M1nt-Ch0c0" /></a>
+  <a href="https://github.com/MomentDerek"><img src="https://avatars.githubusercontent.com/u/40252940?v=4&amp;s=96" width="48" height="48" alt="MomentDerek" title="MomentDerek" /></a>
+  <a href="https://github.com/Sakyvo"><img src="https://avatars.githubusercontent.com/u/169263722?v=4&amp;s=96" width="48" height="48" alt="Sakyvo" title="Sakyvo" /></a>
+  <a href="https://github.com/Tettu0530"><img src="https://avatars.githubusercontent.com/u/89886910?v=4&amp;s=96" width="48" height="48" alt="Tettu0530" title="Tettu0530" /></a>
+  <a href="https://github.com/WilliamWang1721"><img src="https://avatars.githubusercontent.com/u/140129782?v=4&amp;s=96" width="48" height="48" alt="WilliamWang1721" title="WilliamWang1721" /></a>
+  <a href="https://github.com/YinBuLiao"><img src="https://avatars.githubusercontent.com/u/35324248?v=4&amp;s=96" width="48" height="48" alt="YinBuLiao" title="YinBuLiao" /></a>
+  <a href="https://github.com/azzliang6"><img src="https://avatars.githubusercontent.com/u/112920194?v=4&amp;s=96" width="48" height="48" alt="azzliang6" title="azzliang6" /></a>
+  <a href="https://github.com/drchiodo"><img src="https://avatars.githubusercontent.com/u/30090207?v=4&amp;s=96" width="48" height="48" alt="drchiodo" title="drchiodo" /></a>
+</p>
+
+- [@Aschenbath](https://github.com/Aschenbath) — [#525](https://github.com/Kuddev/pebrel/pull/525), [#530](https://github.com/Kuddev/pebrel/pull/530), [#534](https://github.com/Kuddev/pebrel/pull/534)
+- [@azzliang6](https://github.com/azzliang6) — [#537](https://github.com/Kuddev/pebrel/pull/537)
+- [@drchiodo](https://github.com/drchiodo) — [#564](https://github.com/Kuddev/pebrel/pull/564)
+- [@Kuddev](https://github.com/Kuddev) — [#506](https://github.com/Kuddev/pebrel/pull/506), [#528](https://github.com/Kuddev/pebrel/pull/528), [#529](https://github.com/Kuddev/pebrel/pull/529), [#532](https://github.com/Kuddev/pebrel/pull/532), [#573](https://github.com/Kuddev/pebrel/pull/573), [#577](https://github.com/Kuddev/pebrel/pull/577), [#613](https://github.com/Kuddev/pebrel/pull/613), [#635](https://github.com/Kuddev/pebrel/pull/635), [#636](https://github.com/Kuddev/pebrel/pull/636), [#641](https://github.com/Kuddev/pebrel/pull/641), [#642](https://github.com/Kuddev/pebrel/pull/642), [#647](https://github.com/Kuddev/pebrel/pull/647), [#648](https://github.com/Kuddev/pebrel/pull/648), [#649](https://github.com/Kuddev/pebrel/pull/649), [#650](https://github.com/Kuddev/pebrel/pull/650), [#652](https://github.com/Kuddev/pebrel/pull/652), [#657](https://github.com/Kuddev/pebrel/pull/657)
+- [@M1nt-Ch0c0](https://github.com/M1nt-Ch0c0) — [#555](https://github.com/Kuddev/pebrel/pull/555)
+- [@MomentDerek](https://github.com/MomentDerek) — [#409](https://github.com/Kuddev/pebrel/pull/409)
+- [@Sakyvo](https://github.com/Sakyvo) — [#350](https://github.com/Kuddev/pebrel/pull/350)
+- [@Tettu0530](https://github.com/Tettu0530) — [#568](https://github.com/Kuddev/pebrel/pull/568)
+- [@WilliamWang1721](https://github.com/WilliamWang1721) — [#447](https://github.com/Kuddev/pebrel/pull/447), [#462](https://github.com/Kuddev/pebrel/pull/462), [#611](https://github.com/Kuddev/pebrel/pull/611), [#612](https://github.com/Kuddev/pebrel/pull/612)
+- [@YinBuLiao](https://github.com/YinBuLiao) — [#581](https://github.com/Kuddev/pebrel/pull/581), [#582](https://github.com/Kuddev/pebrel/pull/582), [#584](https://github.com/Kuddev/pebrel/pull/584), [#586](https://github.com/Kuddev/pebrel/pull/586), [#588](https://github.com/Kuddev/pebrel/pull/588)
+
+Thank you to the authors of the linked changes and to everyone who reported and verified these issues.
+感谢上述改动的作者，以及报告和核验这些问题的贡献者。
+
+[Full comparison since v2.2.0 / 自 v2.2.0 起的完整提交对比](https://github.com/Kuddev/pebrel/compare/v2.2.0...v2.2.1) also includes build, test and release-maintenance changes. / 同时包含构建、测试与发行维护改动。
+
+---
+
+**SHA256**
+
+- `Pebrel-v2.2.1-linux-x64-preview.AppImage`: `ddfb0737f2129b02ccfa07745c7412d2d872ce37705a30f760fecab1788f35a2`
+- `Pebrel-v2.2.1-linux-x64-preview.deb`: `669c80eb10358f83cece77ffb30cf44267c96fcea3f39b66caf0d5759695fda1`
+- `Pebrel-v2.2.1-linux-x64-preview.tar.gz`: `1d2d611065ffcf2d943acf3b3d58fa690a975f7b474cb8ce8c3205457c3ba2d8`
+- `Pebrel-v2.2.1-macos-arm64-preview.dmg`: `33aa6fd44e3c9184f5d321e8800e378d686ffefcd846f21943c646dfc272bfeb`
+- `Pebrel-v2.2.1-macos-x64-preview.dmg`: `884606ba07eb61884c3f781dbd702b51437a556f174db777e490c8a5a38f70e3`
+- `Pebrel-v2.2.1-windows-x64.zip`: `4b0344cbad616b6b8e108277775d7bb2e349e76106adab6c526825a5cdc2787d`
+- `Pebrel-v2.2.1-windows-x64-setup.exe`: `a9ca01b351de041e573b508d4524a1021da7768c791a438cc0e44316dad61928`
+- `Pebrel-v2.2.1-windows-arm64.zip`: `4cba3026abe7a91fc6558b33323f0ad1da04df5eec31a2f32b8bdcaf72624ce8`
+- `Pebrel-v2.2.1-windows-arm64-setup.exe`: `22f234b0d54bb6de56e54f6b8d99c2cc0d3b940c017f6ee182d21f02b526b6ca`
+- `Pebrel-v2.2.1-android-universal-preview.apk`: `e7961a10bf1558b7f2a25a3a926609240647f935139818edba2a065ad42160ac`
+- `Pebrel-v2.2.1-relay-manual.tar.gz`: `d39104cf1d0c584a9ac6ae2f6f8b8dc50b227c8bf462d7e01e27f0632dda433a`
+
 ## 2.2.0 - 2026-10-08
 
 ### English

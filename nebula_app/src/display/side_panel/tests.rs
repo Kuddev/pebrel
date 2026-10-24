@@ -43,6 +43,20 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "snapshot worker panicked")]
+    fn waiting_for_a_snapshot_reports_worker_failure() {
+        let mut panel = SidePanel::new();
+        let running = panel.snapshot_running.clone();
+        running.store(true, std::sync::atomic::Ordering::Release);
+        panel.snapshot_thread = Some(std::thread::spawn(move || {
+            let _guard = SnapshotRunningGuard(running);
+            panic!("fixture snapshot failure");
+        }));
+
+        panel.wait_snapshot();
+    }
+
+    #[test]
     fn reopening_and_refreshing_the_same_root_reuses_the_file_index() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("needle.txt"), b"").unwrap();
@@ -480,6 +494,7 @@ mod tests {
         assert_eq!(panel.root(), Some(base.as_path()));
         assert!(panel.custom_root_active(), "upward navigation is window-local");
 
+        panel.wait_snapshot();
         panel.file_index.release_for_test();
         remove_test_directory(&base);
     }
@@ -991,8 +1006,8 @@ mod tests {
 #[test]
 fn git_history_parser_keeps_commit_identity_parents_and_fields() {
     let output = concat!(
-        "\u{1e}aaaaaaaa\u{1f}a1b2c3d\u{1f}HEAD -> refs/heads/main, tag: refs/tags/v1\u{1f}ship it\u{1f}Alice\u{1f}1700000000\u{1f}1111111 2222222\n",
-        "\u{1e}dddddddd\u{1f}d4e5f6a\u{1f}refs/heads/topic\u{1f}side work\u{1f}Bob\u{1f}1699999000\u{1f}3333333\n",
+        "\u{1e}aaaaaaaa\u{1f}a1b2c3d\u{1f}HEAD -> refs/heads/main, tag: refs/tags/v1\u{1f}ship it\u{1f}Alice\u{1f}alice@example.test\u{1f}1700000000\u{1f}1111111 2222222\n",
+        "\u{1e}dddddddd\u{1f}d4e5f6a\u{1f}refs/heads/topic\u{1f}side work\u{1f}Bob\u{1f}bob@example.test\u{1f}1699999000\u{1f}3333333\n",
     );
     let commits = parse_git_history(output);
     assert_eq!(commits.len(), 2);
@@ -1002,6 +1017,7 @@ fn git_history_parser_keeps_commit_identity_parents_and_fields() {
     assert_eq!(first.decorations, "HEAD -> refs/heads/main, tag: refs/tags/v1");
     assert_eq!(first.subject, "ship it");
     assert_eq!(first.author, "Alice");
+    assert_eq!(first.author_email, "alice@example.test");
     assert_eq!(first.timestamp, 1_700_000_000);
     assert_eq!(first.parent_hashes, ["1111111", "2222222"]);
     assert_eq!(commits[1].subject, "side work");

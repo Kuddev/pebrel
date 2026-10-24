@@ -23,6 +23,7 @@ import io.github.kuddev.pebrel.terminal.TerminalRow
 import io.github.kuddev.pebrel.terminal.TerminalSession
 import io.github.kuddev.pebrel.terminal.TerminalSnapshotView
 import io.github.kuddev.pebrel.terminal.TerminalInputTarget
+import io.github.kuddev.pebrel.mobile.session.DisplayPreferences
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -205,6 +206,43 @@ class TerminalSnapshotViewTest {
         swipe(24f, 160f)
         assertEquals(count, scrolls.size)
         assertSame(original, view.frame)
+    }
+
+    @Test fun reflowedAlternateScreenSwipeUsesOriginalCellsAndKeepsHistoryReadOnly() {
+        val view = view(row("abcdefgh"), width = 39, height = 200)
+        view.frame = TerminalFrame(arrayOf(row("abcdefgh")),
+            intArrayOf(8, 1, 0, 0, 0, background, red, 2),
+            history = TerminalHistory(0, 0, 1, 0, 1, true))
+        view.wrapLines = true
+        val scrolls = mutableListOf<Triple<Int, Int, Int>>()
+        view.scrollTarget = object : TerminalInputTarget {
+            override val supportsScroll = true
+            override fun scroll(lines: Int, column: Int, row: Int): Boolean {
+                scrolls += Triple(lines, column, row)
+                return true
+            }
+            override fun text(text: String): Boolean = error("scroll must not type")
+            override fun key(code: Int, modifiers: Int, action: Int, text: String, unshifted: Int): Boolean =
+                error("application scroll is encoded by the desktop")
+        }
+        val down = eventTime
+        touch(view, down, MotionEvent.ACTION_DOWN, 10f to 10f)
+        touch(view, down, MotionEvent.ACTION_MOVE, 10f to 140f)
+        touch(view, down, MotionEvent.ACTION_CANCEL, 10f to 140f)
+        assertTrue("phone reflow must not disable application scrolling", scrolls.isNotEmpty())
+        assertTrue("coordinates refer to the original one-row grid", scrolls.all { it.second in 0..7 && it.third == 0 })
+        val count = scrolls.size
+        view.frame = TerminalFrame(Array(200) { row("abcdefgh") },
+            intArrayOf(8, 200, 0, 0, 0, background, red, 2),
+            history = TerminalHistory(100, 0, 500, 480, 20, false))
+        val requests = mutableListOf<Long?>()
+        view.onHistoryPage = { requests += it }
+        val next = eventTime
+        touch(view, next, MotionEvent.ACTION_DOWN, 10f to 10f)
+        touch(view, next, MotionEvent.ACTION_MOVE, 10f to 20000f)
+        touch(view, next, MotionEvent.ACTION_CANCEL, 10f to 20000f)
+        assertEquals("primary history never sends a PC wheel", count, scrolls.size)
+        assertTrue(requests.any { it != null && it < 100 })
     }
 
     @Test fun doubleTapCopiesWordAndTripleTapCopiesOnlyItsVisualRow() {
@@ -749,6 +787,41 @@ class TerminalSnapshotViewTest {
         pinch(view)
         assertEquals(second, colorBounds(render(view), red).height())
         assertEquals("disabled pinch has no size or haptic feedback", count, feedback.size)
+    }
+
+    @Test fun desktopZoomKeepsItsFullRangeAndResetPersistsWithoutChangingTheBaseFont() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = DisplayPreferences(context)
+        preferences.update { it.copy(desktopZoom = 3.125f) }
+        fun restored() = view(row("████"), height = 300).apply {
+            setFont(Typeface.MONOSPACE, preferences.state.value.fontSize)
+            setZoomScale(DisplayPreferences(context).state.value.desktopZoom)
+            onZoomScaleChanged = { value -> preferences.update { it.copy(desktopZoom = value) } }
+            onZoomChanged = { _, _ -> setZoomScale(preferences.state.value.desktopZoom) }
+        }
+        val first = restored()
+        val initial = colorBounds(render(first), red).height()
+        assertEquals(3.125f, DisplayPreferences(context).state.value.desktopZoom, 0f)
+        assertEquals(initial, colorBounds(render(restored()), red).height())
+        pinch(first)
+        assertTrue("a stale preference reapplied during the gesture cannot cancel it",
+            preferences.state.value.desktopZoom > 3.125f)
+        assertEquals(16, preferences.state.value.fontSize)
+        assertEquals(colorBounds(render(first), red).height(), colorBounds(render(restored()), red).height())
+
+        eventTime += 500
+        repeat(2) {
+            val down = eventTime
+            touch(first, down, MotionEvent.ACTION_DOWN, 180f to 290f)
+            touch(first, down, MotionEvent.ACTION_UP, 180f to 290f)
+        }
+        assertEquals("double tap on blank space saves the reset", 1f,
+            DisplayPreferences(context).state.value.desktopZoom, 0f)
+        assertTrue(colorBounds(render(restored()), red).height() < initial)
+        for ((requested, expected) in listOf(.1f to .5f, 8f to 5f, Float.NaN to 1f)) {
+            preferences.update { it.copy(desktopZoom = requested) }
+            assertEquals(expected, DisplayPreferences(context).state.value.desktopZoom, 0f)
+        }
     }
 
     @Test fun localPinchSurvivesPreferenceReapplicationFromTheLiveIndicator() {

@@ -29,6 +29,7 @@ $requiredPatterns = [ordered]@{
     'localized Chinese launch error' = 'chinesesimplified\.LaunchEnvironmentFailed=.*%1'
     'idempotent cleanup entry' = 'RunOnceId: "RemovePebrelAiHooks"'
     'hook helper payload' = 'pebrel-hook\.exe'
+    'console CLI payload' = 'pebrel-cli\.exe.*DestName: "pebrel\.com"'
     'ConPTY payload' = 'conpty\.dll'
     'ConPTY host payload' = 'OpenConsole\.exe'
     'font payload' = 'MapleMonoNormal-NF-CN-Regular\.ttf'

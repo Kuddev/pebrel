@@ -56,7 +56,14 @@ impl gpui::RenderOnce for HostMoreTrigger {
 }
 
 /// Center the glyph's ink, not its monospace advance or the surrounding text line.
-fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> impl IntoElement {
+fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> gpui::AnyElement {
+    if glyph == '\u{f489}' {
+        return Icon::new(Icon::empty())
+            .path(crate::gpui_shell::assets::nav::TERMINAL)
+            .size(px(22.0))
+            .text_color(color)
+            .into_any_element();
+    }
     gpui::canvas(
         move |bounds, window, _| {
             let font = gpui::font(family);
@@ -101,6 +108,7 @@ fn host_icon(glyph: char, family: SharedString, color: gpui::Hsla) -> impl IntoE
         },
     )
     .size(px(22.0))
+    .into_any_element()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -188,6 +196,46 @@ impl SettingsPane {
 
     fn library_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let language = crate::gpui_shell::config::ui_language(cx);
+        let choices = [
+            (HostScope::All, Message::HostsScopeAll),
+            (HostScope::Pinned, Message::HostsPinned),
+            (HostScope::Recent, Message::HostsRecent),
+        ];
+        let selected =
+            choices.iter().position(|(scope, _)| self.ssh_library.scope == *scope).unwrap_or(0);
+        let buttons = choices
+            .into_iter()
+            .enumerate()
+            .map(|(index, (scope, label))| {
+                let selected = self.ssh_library.scope == scope;
+                Button::new(("host-scope", index))
+                    .debug_selector(move || format!("host-scope-{index}"))
+                    .label(language.text(label))
+                    .small()
+                    .h(px(28.0))
+                    .rounded(px(6.0))
+                    .custom(
+                        gpui_component::button::ButtonCustomVariant::new(cx)
+                            .foreground(if selected {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .hover(if selected {
+                                cx.theme().transparent
+                            } else {
+                                cx.theme().foreground.opacity(0.04)
+                            })
+                            .active(cx.theme().foreground.opacity(0.08)),
+                    )
+                    .toggled(selected)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.ssh_library.scope = scope;
+                        this.ssh_library.reset_scroll();
+                        cx.notify();
+                    }))
+            })
+            .collect::<Vec<_>>();
         let owner = cx.entity().downgrade();
         let group_filter = self.ssh_library.group_filter.clone();
         let groups = self.ssh_hosts.profiles.groups();
@@ -203,41 +251,14 @@ impl SettingsPane {
             .gap_2()
             .items_center()
             .flex_wrap()
-            .child(
-                h_flex()
-                    .p(px(3.0))
-                    .gap(px(2.0))
-                    .rounded(px(8.0))
-                    .bg(cx.theme().secondary)
-                    .children(
-                        [
-                            (HostScope::All, Message::HostsScopeAll),
-                            (HostScope::Pinned, Message::HostsPinned),
-                            (HostScope::Recent, Message::HostsRecent),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (scope, label))| {
-                            let selected = self.ssh_library.scope == scope;
-                            Button::new(("host-scope", index))
-                                .debug_selector(move || format!("host-scope-{index}"))
-                                .label(language.text(label))
-                                .ghost()
-                                .small()
-                                .h(px(28.0))
-                                .rounded(px(6.0))
-                                .selected(selected)
-                                .when(selected, |button| {
-                                    button.bg(crate::gpui_shell::theme::settings_panel_bg(cx))
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.ssh_library.scope = scope;
-                                    this.ssh_library.reset_scroll();
-                                    cx.notify();
-                                }))
-                        }),
-                    ),
-            )
+            .child(h_flex().p(px(3.0)).rounded(px(8.0)).bg(cx.theme().secondary).child(
+                crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                    "ssh-host-scope",
+                    selected,
+                    h_flex().gap(px(2.0)).h(px(28.0)).children(buttons),
+                    div().rounded(px(6.0)).bg(crate::gpui_shell::theme::settings_panel_bg(cx)),
+                ),
+            ))
             .child(
                 Button::new("host-group-filter")
                     .debug_selector(|| "host-group-filter".into())

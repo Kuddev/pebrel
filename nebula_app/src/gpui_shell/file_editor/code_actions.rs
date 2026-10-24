@@ -17,6 +17,7 @@ pub(super) struct CodeSpec {
 struct CodeLanguage {
     list: Entity<ListState<LanguageListDelegate>>,
     focus: FocusHandle,
+    controls_focus: FocusHandle,
     open: bool,
     plain: SharedString,
     selected: SharedString,
@@ -60,30 +61,26 @@ fn code_ui_colors(cx: &App) -> CodeUiColors {
 #[derive(Clone)]
 struct LanguageOption {
     name: SharedString,
-    glyph: SharedString,
     aliases: SharedString,
 }
 
 impl LanguageOption {
     fn new(name: SharedString) -> Self {
         let lower = name.to_lowercase();
-        let (glyph, aliases) = match lower.as_str() {
-            "rust" | "rs" => ("Rs", "rust rs"),
-            "javascript" | "js" => ("JS", "javascript js"),
-            "typescript" | "ts" => ("TS", "typescript ts"),
-            "python" | "py" => ("Py", "python py"),
-            "c" => ("C", "c"),
-            "cpp" | "c++" => ("C+", "cpp c++"),
-            "csharp" | "c#" => ("C#", "csharp c#"),
-            "html" | "xml" => ("<> ", "html xml"),
-            "css" => ("#{}", "css"),
-            "json" => ("{}", "json"),
-            "bash" | "shell" | "sh" | "zsh" => ("$", "bash shell sh zsh"),
-            "markdown" | "md" => ("M↓", "markdown md"),
-            "plaintext" | "text" | "纯文本" => ("≡", "plaintext text 纯文本"),
-            _ => ("<> ", lower.as_str()),
+        let aliases = match lower.as_str() {
+            "rust" | "rs" => "rust rs",
+            "javascript" | "js" => "javascript js",
+            "typescript" | "ts" => "typescript ts",
+            "python" | "py" => "python py",
+            "cpp" | "c++" => "cpp c++",
+            "csharp" | "c#" => "csharp c#",
+            "html" | "xml" => "html xml",
+            "bash" | "shell" | "sh" | "zsh" => "bash shell sh zsh",
+            "markdown" | "md" => "markdown md",
+            "plaintext" | "text" | "纯文本" => "plaintext text 纯文本",
+            _ => lower.as_str(),
         };
-        Self { name, glyph: glyph.trim().into(), aliases: aliases.into() }
+        Self { name, aliases: aliases.into() }
     }
 
     fn matches(&self, query: &str) -> bool {
@@ -148,24 +145,9 @@ impl RenderOnce for LanguageRow {
             .text_color(colors.ink)
             .when(self.highlighted, |row| row.bg(colors.hover))
             .when(!self.highlighted, |row| row.hover(|row| row.bg(colors.hover)))
-            .child(
-                div()
-                    .w(px(18.0))
-                    .h(px(18.0))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(11.0))
-                    .text_color(colors.secondary)
-                    .child(self.option.glyph),
-            )
-            // Keep the label as real text instead of an ellipsis-bearing
-            // flex child. This matters for localized/CJK language names.
+            // 语言列表只显示名称，用底色和字重区分当前选择。
+            .when(self.checked && !self.highlighted, |row| row.bg(colors.code).font_semibold())
             .child(div().flex_none().child(self.option.name))
-            .when(self.checked, |row| {
-                row.child(Icon::new(IconName::Check).size(px(14.0)).text_color(colors.accent))
-            })
     }
 }
 
@@ -294,19 +276,6 @@ fn render_language_picker(
                         .flex_none()
                         .child(current),
                 )
-                .child(
-                    div()
-                        .w(px(16.0))
-                        .h(px(28.0))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(colors.secondary)
-                        .when(!open, |icon| icon.opacity(0.0))
-                        .group_hover("markdown-language-trigger", |icon| icon.opacity(1.0))
-                        .child(Icon::new(IconName::ChevronDown).size(px(10.0))),
-                )
                 .on_click(window.listener_for(&state, CodeLanguage::toggle)),
         );
     if !open {
@@ -334,8 +303,8 @@ fn render_language_picker(
                         .text_color(colors.ink)
                         .border_1()
                         .border_color(colors.line)
-                        .rounded(px(6.0))
-                        .shadow_lg()
+                        .rounded(px(12.0))
+                        .shadow_md()
                         .p(px(6.0))
                         .child(
                             div().debug_selector(|| "markdown-language-search".to_owned()).child(
@@ -491,6 +460,7 @@ pub(super) fn render_with_input(
                 // trigger tracks it instead of letting the Div create an
                 // implicit, non-tab-stop handle.
                 focus: cx.focus_handle().tab_stop(true),
+                controls_focus: cx.focus_handle(),
                 open: false,
                 plain,
                 selected: current_for_state,
@@ -522,6 +492,9 @@ pub(super) fn render_with_input(
     let list = state.read(cx).list.clone();
     let picker_open = state.read(cx).open;
     let picker_focus = state.read(cx).focus.clone();
+    let controls_focus = state.read(cx).controls_focus.clone();
+    let keyboard_active =
+        controls_focus.contains_focused(window, cx) && window.last_input_was_keyboard();
     let copy_feedback = state.read(cx).copy_feedback.clone();
     let copied = copy_feedback.read(cx).is_copied();
     let source = code.source;
@@ -529,8 +502,9 @@ pub(super) fn render_with_input(
     let mut surface = div()
         .id("code-surface")
         .px(px(18.0))
-        .py(px(16.0))
-        .rounded(px(3.0))
+        .pt(px(40.0))
+        .pb(px(16.0))
+        .rounded(px(reader_presentation::CODE_RADIUS))
         .bg(colors.code)
         .text_color(colors.ink)
         .text_size(px(13.0))
@@ -546,6 +520,7 @@ pub(super) fn render_with_input(
     v_flex()
         .relative()
         .group(hover_group.clone())
+        .track_focus(&controls_focus)
         .w_full()
         .min_w_0()
         .debug_selector(|| "pebrel-code-block".to_owned())
@@ -555,8 +530,9 @@ pub(super) fn render_with_input(
                     .w_full()
                     .min_w_0()
                     .px(px(18.0))
-                    .py(px(16.0))
-                    .rounded(px(3.0))
+                    .pt(px(40.0))
+                    .pb(px(16.0))
+                    .rounded(px(reader_presentation::CODE_RADIUS))
                     .bg(colors.code)
                     .text_color(colors.ink)
                     .child(input)
@@ -572,26 +548,27 @@ pub(super) fn render_with_input(
                     .into_any_element()
             },
         ))
-        .child(h_flex().w_full().h(px(28.0)).justify_end().child(render_language_picker(
-            state.clone(),
-            list,
-            current,
-            picker_open,
-            picker_focus,
-            language.text(Message::EditorSearchCodeLanguage),
-            window,
-            cx,
-        )))
         .child(
-            div()
-                .debug_selector(|| "markdown-copy-code".to_owned())
+            h_flex()
+                .debug_selector(|| "markdown-code-toolbar".to_owned())
                 .absolute()
-                .top(px(8.0))
+                .top(px(4.0))
+                .left(px(10.0))
                 .right(px(8.0))
-                .invisible()
-                .when(copied, |slot| slot.visible())
-                .group_hover(hover_group, |slot| slot.visible())
-                .child({
+                .justify_between()
+                .opacity(if picker_open || copied || keyboard_active { 1.0 } else { 0.0 })
+                .group_hover(hover_group, |bar| bar.opacity(1.0))
+                .child(render_language_picker(
+                    state.clone(),
+                    list,
+                    current,
+                    picker_open,
+                    picker_focus,
+                    language.text(Message::EditorSearchCodeLanguage),
+                    window,
+                    cx,
+                ))
+                .child(div().debug_selector(|| "markdown-copy-code".to_owned()).child({
                     let feedback = copy_feedback.clone();
                     let button = Button::new("copy-code")
                         .custom(
@@ -601,21 +578,19 @@ pub(super) fn render_with_input(
                         )
                         .size(px(32.0))
                         .icon(if copied { IconName::Check } else { IconName::Copy })
+                        .aria_label(language.text(Message::EditorCopyCode))
                         .tooltip(language.text(Message::EditorCopyCode))
                         .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
                             cx.write_to_clipboard(ClipboardItem::new_string(source.to_string()));
                             feedback.update(cx, |feedback, cx| feedback.mark_copied(cx));
                         });
                     div()
-                            // This selector exists only while the checked
-                            // state is actually rendered; unlike the outer
-                            // invisible hit target it is useful for asserting
-                            // feedback expiry in interaction tests.
-                            .when(copied, |control| {
-                                control.debug_selector(|| "markdown-copy-code-success".to_owned())
-                            })
-                            .child(button)
-                }),
+                        .when(copied, |control| {
+                            control.debug_selector(|| "markdown-copy-code-success".to_owned())
+                        })
+                        .child(button)
+                })),
         )
         .into_any_element()
 }

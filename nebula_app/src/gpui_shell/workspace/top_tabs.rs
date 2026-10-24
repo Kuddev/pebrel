@@ -58,8 +58,8 @@ fn strip_overflows(strip_w: f32, capacity_w: f32) -> bool {
     strip_w > capacity_w + 0.5
 }
 
-/// GPUI 横向滚动偏移是 ≤ 0（内容向左移），与 [`NebulaWorkspace::on_top_tabs_wheel`]
-/// 同一套符号。可滚范围因此是 `[-(strip - viewport), 0]`。
+/// GPUI 横向滚动偏移是 ≤ 0（内容向左移）。
+/// 可滚范围因此是 `[-(strip - viewport), 0]`。
 fn clamp_strip_offset(x: f32, strip_w: f32, viewport_w: f32) -> f32 {
     let max = (strip_w - viewport_w).max(0.0);
     x.clamp(-max, 0.0)
@@ -78,12 +78,6 @@ fn at_strip_start(x: f32) -> bool {
 
 fn at_strip_end(x: f32, strip_w: f32, viewport_w: f32) -> bool {
     x <= -(strip_w - viewport_w).max(0.0) + 0.5
-}
-
-/// 普通鼠标滚轮没有 X 分量时，把主滚动轴映射到横向；触控板原生横向
-/// 分量更强时则保留它。
-fn horizontal_wheel_delta(x: f32, y: f32) -> f32 {
-    if x.abs() > y.abs() { x } else { y }
 }
 
 /// 顶部加号的生产调用点与鼠标测试共用同一个元素构造，避免测试只证明
@@ -147,7 +141,8 @@ impl NebulaWorkspace {
         let tab_reveal = settings
             .map(|settings| settings.tab_reveal)
             .unwrap_or(nebula_settings::TabRevealName::Slide);
-        let chrome_family = theme.mono_font_family.clone();
+        let chrome_family = theme.font_family.clone();
+        let metadata_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
         let port_forward_w = if port_forward_button.is_some() { 32.0 } else { 0.0 };
@@ -172,7 +167,6 @@ impl NebulaWorkspace {
             .as_ref()
             .filter(|drag| drag.active && drag.axis == TabDragAxis::Horizontal)
             .map(|drag| (drag.source, Self::drag_slot(drag, self.tabs.len()), drag.offset));
-        let items_running = std::cell::Cell::new(false);
         let items = (0..self.top_tab_count())
             .map(|ix| {
                 let settings_navigation = self.settings_tab_open && ix == self.tabs.len();
@@ -201,17 +195,16 @@ impl NebulaWorkspace {
                 let status_width = Self::shell_status_width(
                     window,
                     shell_tag.as_ref(),
-                    &chrome_family,
+                    &metadata_family,
                     label_px * 0.8,
                     TOP_TAB_STATUS_W,
                     tab_w * 0.4,
                 );
                 let resting_status: Option<gpui::AnyElement> = match activity {
                     SidebarActivity::Running => {
-                        items_running.set(true);
                         let (track, head) =
                             crate::gpui_shell::theme::sidebar_spinner_colors(cx, active);
-                        Some(Self::spinner(self.spinner_phase, track, head).into_any_element())
+                        Some(Self::spinner(self.spinner_phase, track, head, cx.weak_entity()).into_any_element())
                     },
                     SidebarActivity::Paused => Some(
                         Icon::new(IconName::Pause)
@@ -251,7 +244,7 @@ impl NebulaWorkspace {
                     SidebarActivity::Idle => shell_tag.map(|tag| {
                         Self::shell_status_label(
                             tag,
-                            chrome_family.clone(),
+                            metadata_family.clone(),
                             label_px * 0.8,
                             status_color,
                         )
@@ -299,8 +292,8 @@ impl NebulaWorkspace {
                     .font_weight(FontWeight::NORMAL)
                     .cursor_pointer()
                     // TitleBar 的父层是 WindowControlArea::Drag；tab 必须自己
-                    // 占住命中区，否则拖动标签会变成拖动窗口。
-                    .occlude()
+                    // 占住普通鼠标命中区，滚轮仍交给外层标签滚动容器。
+                    .block_mouse_except_scroll()
                     .when(active, |item| item.bg(active_bg).text_color(active_fg))
                     .when(!active && !dragged, |item| {
                         item.text_color(muted).hover(|style| style.bg(hover_bg))
@@ -404,7 +397,7 @@ impl NebulaWorkspace {
                                 .text_size(px(label_px))
                                 .font_weight(FontWeight::NORMAL)
                                 .text_color(if active { active_fg } else { muted })
-                                .child(glyph),
+                                .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
                         )
                     })
                     .when(
@@ -456,7 +449,7 @@ impl NebulaWorkspace {
                             .truncate()
                             .font_family(chrome_family.clone())
                             .text_size(px(label_px))
-                            .font_weight(FontWeight::LIGHT)
+                            .font_weight(FontWeight::NORMAL)
                             .child(title)
                             .into_any_element(),
                     })
@@ -543,10 +536,6 @@ impl NebulaWorkspace {
                 }
             })
             .collect::<Vec<_>>();
-        self.spinner_visible.set(items_running.get());
-        if items_running.get() {
-            self.arm_activity_spinner_frame(window, cx);
-        }
 
         let menu_workspace = cx.entity().downgrade();
 
@@ -596,11 +585,14 @@ impl NebulaWorkspace {
                             .min_w_0()
                             .h(px(row_height))
                             .overflow_hidden()
+                            // 保留内部滚动命中，截断外层原生标题栏 Drag 命中区。
+                            .occlude()
                             // 待命拖拽在越过 4px 前由此接收移动；激活后根罩层接管。
                             .on_mouse_move(cx.listener(|this, event, window, cx| {
                                 this.update_tab_drag(event, window, cx);
                             }))
-                            .on_scroll_wheel(cx.listener(Self::on_top_tabs_wheel))
+                            // 内层 GPUI scroller 是唯一偏移所有者；这里只消费事件。
+                            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                             .child(
                                 h_flex()
                                     .id("top-tabs-scroll")
@@ -702,12 +694,14 @@ impl NebulaWorkspace {
             .child(
                 title_bar_panel_controls()
                     .gap(px(8.0))
+                    .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
                         toolbar_button(
                             "top-toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
                         )
+                            .debug_selector(|| "command-manager-toggle".into())
                             .selected(self.command_manager_open)
                             .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -718,24 +712,6 @@ impl NebulaWorkspace {
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()
-    }
-
-    fn on_top_tabs_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let delta = event.delta.pixel_delta(px(TOP_TAB_MIN_W * 0.6));
-        let delta = horizontal_wheel_delta(f32::from(delta.x), f32::from(delta.y));
-        if delta == 0.0 {
-            return;
-        }
-        let mut offset = self.top_tabs_scroll.offset();
-        offset.x += px(delta);
-        self.top_tabs_scroll.set_offset(offset);
-        cx.stop_propagation();
-        cx.notify();
     }
 
     /// 翻页按钮的落点：一次一个 tab 步距，钳在可滚范围内。
@@ -805,12 +781,6 @@ mod tests {
         assert_eq!(tab_width(500.0, 10), TOP_TAB_MIN_W);
         assert_eq!(tab_width(0.0, 3), TOP_TAB_MAX_W);
         assert_eq!(tab_strip_width(200.0, 3), 608.0);
-    }
-
-    #[test]
-    fn wheel_uses_the_stronger_axis_for_horizontal_tabs() {
-        assert_eq!(horizontal_wheel_delta(2.0, -40.0), -40.0);
-        assert_eq!(horizontal_wheel_delta(24.0, -3.0), 24.0);
     }
 
     #[test]

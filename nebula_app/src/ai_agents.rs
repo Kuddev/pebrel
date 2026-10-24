@@ -287,6 +287,7 @@ impl AgentKind {
             Self::Pi => Some("pi".to_owned()),
             Self::OhMyPi => Some("omp".to_owned()),
             Self::Kimi => Some("kimi".to_owned()),
+            Self::Hermes => Some("hermes".to_owned()),
             _ => None,
         }
     }
@@ -940,6 +941,7 @@ mod tests {
         assert_eq!(AgentKind::Pi.start_command().as_deref(), Some("pi"));
         assert_eq!(AgentKind::OhMyPi.start_command().as_deref(), Some("omp"));
         assert_eq!(AgentKind::Kimi.start_command().as_deref(), Some("kimi"));
+        assert_eq!(AgentKind::Hermes.start_command().as_deref(), Some("hermes"));
         assert_eq!(AgentKind::Gemini.start_command(), None);
         assert_eq!(
             AgentKind::Claude.resume_command("abc-123").as_deref(),

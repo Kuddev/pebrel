@@ -410,13 +410,16 @@ const PALETTE_METADATA_MAX_WIDTH: f32 = 260.0;
 /// 与 Shell 选择器的 launcher row 共用同一命中高度；不能只放大文字或底色，
 /// 否则 hover、点击和键盘选中会再次出现三套几何。
 const PALETTE_ROW_HEIGHT: f32 = 42.0;
-const PALETTE_GROUP_HEADER_HEIGHT: f32 = 26.0;
-const PALETTE_FILTER_BAR_HEIGHT: f32 = 26.0;
+const PALETTE_GROUP_HEADER_HEIGHT: f32 = 40.0;
+const PALETTE_FILTER_BAR_HEIGHT: f32 = 44.0;
 const PALETTE_ROW_GAP: f32 = 4.0;
 const PALETTE_SCROLLBAR_CONTENT_GUTTER: f32 = 16.0;
 
 #[derive(Clone)]
 enum WorkspacePaletteAction {
+    TerminalReading {
+        commands: bool,
+    },
     Shared(crate::display::command_palette::PaletteAction),
     /// 聚焦已经存在的工作区标签，不创建副本。
     FocusTab(usize),
@@ -750,11 +753,11 @@ pub struct NebulaWorkspace {
     sidebar_logo_load: logos::LogoLoad,
     /// 跟随系统深浅：OS 外观切换的监听（旧壳 ThemeChanged 的对应物）。
     _appearance_sub: Subscription,
-    /// spinner 在窗口失焦时冻结为静态状态；重新聚焦后由一次 render 恢复按需帧循环。
+    /// 可见失焦窗口继续转圈；活跃状态只用于跳过不必要的最小化查询。
     spinner_window_active: bool,
     _spinner_activation_sub: Subscription,
-    /// 侧栏「运行中」spinner 的相位（0..1，旧壳 `SPINNER_PERIOD` 800ms 一
-    /// 圈）与上次帧时刻。侧栏和顶栏共用 GPUI 屏幕帧时钟。
+    /// 侧栏「运行中」spinner 的相位（0..1，每秒一圈）与上次帧时刻。
+    /// 侧栏和顶栏共用 GPUI 屏幕帧时钟。
     spinner_phase: f32,
     spinner_last: std::time::Instant,
     /// render 与 next-frame 回调之间的单槽门闩：防止其他 UI 更新重复挂帧。
@@ -857,7 +860,7 @@ impl NebulaWorkspace {
                 }
                 if workspace.spinner_window_active != active {
                     workspace.spinner_window_active = active;
-                    workspace.spinner_last = std::time::Instant::now();
+                    workspace.spinner_last = cx.background_executor().now();
                     cx.notify();
                 }
             });
@@ -867,7 +870,7 @@ impl NebulaWorkspace {
             cx.new(|cx| InputState::new(window, cx).placeholder("搜索已保存命令…"));
         let file_tree_search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(
-                workspace_ui_language().pick("搜索文件和文件夹…", "Search files and folders..."),
+                workspace_ui_language().text(crate::i18n::Message::FilesFilterPlaceholder),
             )
         });
         let git_commit_input = vcs_panel::CommitInput::new(window, cx);
@@ -984,7 +987,7 @@ impl NebulaWorkspace {
             spinner_window_active,
             _spinner_activation_sub: spinner_activation_sub,
             spinner_phase: 0.0,
-            spinner_last: std::time::Instant::now(),
+            spinner_last: cx.background_executor().now(),
             spinner_frame_pending: std::cell::Cell::new(false),
             spinner_visible: std::cell::Cell::new(false),
             window_close_confirm_open: false,
@@ -1081,13 +1084,13 @@ impl NebulaWorkspace {
                     name: name.clone(),
                     command: command.clone(),
                     args: args.clone(),
-                    cwd: profile_cwd.as_deref().and_then(crate::session::valid_dir),
+                    cwd: shell_launch::profile_directory(command, profile_cwd.as_deref()),
                     shell_id: shell_id.clone(),
                     terminal_profile_id: None,
                 };
                 TerminalLaunch::Local {
                     cwd: profile.cwd.clone().or(cwd),
-                    shell: Some(profile.shell()),
+                    shell: Some(shell_launch::profile_shell(&profile)),
                     shell_name: profile.shell_id.clone().or_else(|| Some(profile.name.clone())),
                 }
             },
@@ -1146,9 +1149,9 @@ impl NebulaWorkspace {
         self.add_terminal_with(launch, cwd, None, window, cx);
     }
 
-    /// 设置页「启动目录」：非空且确实存在的目录才生效（旧壳同判定）。
+    /// 设置页「启动目录」：宿主验证本机路径，WSL 验证来宾路径。
     fn startup_directory() -> Option<std::path::PathBuf> {
-        nebula_settings::RuntimeSettings::load().startup_directory_path()
+        shell_launch::configured_directory()
     }
 
     /// 创建一个 pane 实体（分配 id、spawn 会话、挂宿主订阅）；调用方决定
@@ -1201,7 +1204,7 @@ impl NebulaWorkspace {
         // 默认 shell 只在“创建新 Tab”的这一刻取样，并把实际 program/args
         // 一起冻结进 Tab launch。设置页随后改默认值只影响下一次创建；冷
         // 恢复也按本 Tab 的 launch 重建，不会把混合工作区抹成同一种 shell。
-        let launch_session = shell_launch::configured_local_launch(cx);
+        let launch_session = shell_launch::configured_at(cx, cwd.as_deref());
         self.add_terminal_with(launch_session, cwd, command, window, cx)
     }
 
@@ -1911,52 +1914,6 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
-    fn run_selected_palette_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let action = self
-            .filtered_palette_rows(cx)
-            .get(self.command_palette_selected)
-            .map(|item| item.action.clone());
-        let Some(action) = action else { return };
-        match action {
-            WorkspacePaletteAction::Shared(action) => self.run_palette_action(action, window, cx),
-            WorkspacePaletteAction::LayoutRecipes => {
-                self.dismiss_palette_state();
-                self.open_layout_recipes(window, cx);
-            },
-            WorkspacePaletteAction::FocusTab(tab) => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::FocusPane { tab, pane } => {
-                self.dismiss_palette_state();
-                self.activate_tab(tab, window, cx);
-                self.focus_pane(tab, pane, window, cx);
-                self.focus_active(window, cx);
-                cx.notify();
-            },
-            WorkspacePaletteAction::OpenDirectory(path) => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(Some(path), None, window, cx);
-            },
-            WorkspacePaletteAction::RunAiSession { command, cwd } => {
-                self.dismiss_palette_state();
-                self.add_terminal_at(cwd, Some(command), window, cx);
-            },
-            WorkspacePaletteAction::LaunchSshHost(host) => {
-                self.dismiss_palette_state();
-                self.add_ssh_terminal(host, window, cx);
-            },
-            WorkspacePaletteAction::LaunchShell(detected) => {
-                self.launch_palette_shell(detected, window, cx);
-            },
-            WorkspacePaletteAction::LaunchProfile(profile) => {
-                self.launch_palette_profile(profile, window, cx);
-            },
-        }
-    }
-
     fn open_quick_jump_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.command_manager_open = false;
         self.shell_picker_open = false;
@@ -2327,7 +2284,7 @@ impl NebulaWorkspace {
         };
         if *zoomed || tree.is_leaf() {
             let pane = self.tabs[tab_ix].primary_terminal_pane();
-            let view = pane.map(|pane| pane.view.clone());
+            let view = pane.map(terminal_activity::terminal_surface);
             let probe = pane.map(|pane| {
                 let pane_id = pane.id;
                 let store = self.pane_bounds.clone();
@@ -2412,7 +2369,7 @@ impl NebulaWorkspace {
             SplitTree::Leaf(id) => {
                 let id = *id;
                 let pane = panes.iter().find(|pane| pane.id == id);
-                let view = pane.map(|pane| pane.view.clone());
+                let view = pane.map(terminal_activity::terminal_surface);
                 let store = self.pane_bounds.clone();
                 let is_focused = id == focused;
                 let dim = gpui::black().opacity(crate::display::NEBULA_UNFOCUSED_SPLIT_DIM);

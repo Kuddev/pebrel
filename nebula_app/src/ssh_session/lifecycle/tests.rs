@@ -17,10 +17,16 @@ struct Events {
     stages: Arc<Mutex<Vec<SshStage>>>,
     replies: Option<mpsc::UnboundedSender<Msg>>,
     hooks: Arc<Mutex<Vec<Vec<u8>>>>,
+    wakeups: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl EventListener for Events {
     fn send_event(&self, event: TerminalEvent) {
+        if matches!(event, TerminalEvent::Wakeup)
+            && let Some(sender) = &self.wakeups
+        {
+            let _ = sender.send(());
+        }
         if let TerminalEvent::AiHookEnvelope(envelope) = &event {
             self.hooks.lock().unwrap().push(envelope.clone());
         }
@@ -60,6 +66,8 @@ fn check(future: impl Future<Output = ()>) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Open,
+    EchoOutput,
+    BackpressuredEcho,
     TerminalQuery,
     RejectPty,
     RejectShell,
@@ -176,7 +184,17 @@ impl server::Handler for Loopback {
             std::future::pending::<()>().await;
         }
         reply.accept().await;
-        self.channels.push(channel);
+        if self.mode == Mode::BackpressuredEcho {
+            // Consume the fixture's channel queue as a real shell would. The
+            // backpressure under test belongs to the client's receive queue.
+            let (mut reader, writer) = channel.split();
+            tokio::spawn(async move {
+                while reader.wait().await.is_some() {}
+                drop(writer);
+            });
+        } else {
+            self.channels.push(channel);
+        }
         Ok(())
     }
 
@@ -252,13 +270,23 @@ impl server::Handler for Loopback {
         &mut self,
         channel: ChannelId,
         data: &[u8],
-        _session: &mut Session,
+        session: &mut Session,
     ) -> Result<(), Self::Error> {
         if let Some(script) = self.scripts.get_mut(&channel) {
             script.extend_from_slice(data);
             return Ok(());
         }
         let _ = self.data.send(data.to_vec());
+        if matches!(self.mode, Mode::EchoOutput | Mode::BackpressuredEcho) {
+            match data {
+                b"\x04" => {
+                    session.eof(channel)?;
+                    session.exit_status_request(channel, 0)?;
+                },
+                b"\x03" => session.close(channel)?,
+                _ => session.data(channel, data.to_vec())?,
+            }
+        }
         Ok(())
     }
 
@@ -527,6 +555,8 @@ impl Fixture {
         .unwrap();
         let config = Arc::new(server::Config {
             keys: vec![key],
+            window_size: if mode == Mode::BackpressuredEcho { 4096 } else { 2097152 },
+            maximum_packet_size: if mode == Mode::BackpressuredEcho { 512 } else { 32768 },
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
             ..Default::default()
@@ -751,6 +781,182 @@ fn ssh_resize_updates_grid_and_remote_pty() {
 
         input_tx.send(Msg::Shutdown).unwrap();
         assert!(running.await.unwrap().is_ok());
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_delayed_synchronized_redraw_keeps_the_complete_screen_visible() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::EchoOutput).await;
+        let acquired = fixture.connect().await;
+        let (wake_tx, mut wakes) = mpsc::unbounded_channel();
+        let events = Events { wakeups: Some(wake_tx), ..Default::default() };
+        let terminal = terminal(&events);
+        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let (input_tx, mut input) = mpsc::unbounded_channel();
+        let pump_terminal = Arc::clone(&terminal);
+        let pump_events = events.clone();
+        let running = tokio::spawn(async move {
+            pump(&mut channel, token, size(), &pump_terminal, &pump_events, &mut input).await
+        });
+        wakes.recv().await.unwrap(); // Initial shell output.
+
+        for bytes in [b"\x1b[2J\x1b[HCOMPLETE".as_slice(), b"\x1b[?2026h\x1b[HEARLY HISTORY"] {
+            input_tx.send(Msg::Input(bytes.to_vec().into())).unwrap();
+            assert_eq!(fixture.data.recv().await.unwrap(), bytes);
+            wakes.recv().await.unwrap();
+        }
+        // Longer than the parser's local-PTY default, but a realistic network gap.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let first_row = || {
+            use nebula_terminal::index::{Column, Line};
+            let terminal = terminal.lock();
+            (0..terminal.columns())
+                .map(|column| terminal.grid()[Line(0)][Column(column)].c)
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        assert_eq!(first_row(), "COMPLETE", "an incomplete remote redraw became visible");
+
+        // Holding a display frame must not hold keyboard input behind it.
+        input_tx.send(Msg::Input(b"key".to_vec().into())).unwrap();
+        assert_eq!(fixture.data.recv().await.unwrap(), b"key");
+        wakes.recv().await.unwrap();
+        assert_eq!(first_row(), "COMPLETE");
+
+        let final_frame = b"\x1b[2J\x1b[HLATEST\x1b[?2026l";
+        input_tx.send(Msg::Input(final_frame.to_vec().into())).unwrap();
+        assert_eq!(fixture.data.recv().await.unwrap(), final_frame);
+        wakes.recv().await.unwrap();
+        assert_eq!(first_row(), "LATEST");
+
+        input_tx.send(Msg::Input(b"\x1b[?2026h\x1b[2J\x1b[HRECOVERED".to_vec().into())).unwrap();
+        fixture.data.recv().await.unwrap();
+        wakes.recv().await.unwrap();
+        assert_eq!(first_row(), "LATEST");
+        // A silent peer that omits the end marker cannot freeze the pane.
+        tokio::time::timeout(Duration::from_secs(2), wakes.recv()).await.unwrap().unwrap();
+        assert_eq!(first_row(), "RECOVERED");
+        input_tx.send(Msg::Shutdown).unwrap();
+        assert!(running.await.unwrap().is_ok());
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_unfinished_synchronized_output_is_preserved_on_exit_disconnect_and_shutdown() {
+    check(async {
+        for ending in [Some(b'\x04'), Some(b'\x03'), None] {
+            let mut fixture = Fixture::new(Mode::EchoOutput).await;
+            let acquired = fixture.connect().await;
+            let (wake_tx, mut wakes) = mpsc::unbounded_channel();
+            let events = Events { wakeups: Some(wake_tx), ..Default::default() };
+            let terminal = terminal(&events);
+            let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+            let (input_tx, mut input) = mpsc::unbounded_channel();
+            let pump_terminal = Arc::clone(&terminal);
+            let pump_events = events.clone();
+            let running = tokio::spawn(async move {
+                pump(&mut channel, token, size(), &pump_terminal, &pump_events, &mut input).await
+            });
+            wakes.recv().await.unwrap();
+            input_tx
+                .send(Msg::Input(b"\x1b[?2026h\x1b[2J\x1b[HFINAL OUTPUT".to_vec().into()))
+                .unwrap();
+            fixture.data.recv().await.unwrap();
+            wakes.recv().await.unwrap();
+            input_tx
+                .send(ending.map_or(Msg::Shutdown, |byte| Msg::Input(vec![byte].into())))
+                .unwrap();
+            let result = running.await.unwrap();
+            assert_eq!(result.is_ok(), ending != Some(b'\x03'));
+            let terminal = terminal.lock();
+            use nebula_terminal::index::{Column, Line};
+            let row: String = (0..terminal.columns())
+                .map(|column| terminal.grid()[Line(0)][Column(column)].c)
+                .collect();
+            assert_eq!(row.trim_end(), "FINAL OUTPUT");
+            drop(terminal);
+            fixture.forget(&acquired.session).await;
+        }
+    });
+}
+
+#[test]
+fn ssh_queued_unmarked_redraw_publishes_once_and_preserves_split_text() {
+    check(async {
+        let fixture = Fixture::new(Mode::Open).await;
+        let acquired = fixture.connect().await;
+        let (wake_tx, mut wakes) = mpsc::unbounded_channel();
+        let events = Events { wakeups: Some(wake_tx), ..Default::default() };
+        let terminal = terminal(&events);
+        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        channel.pending.clear();
+        // An already received redraw has no frame markers. Packet boundaries
+        // must not each trigger a separate display update or alter UTF-8/VT order.
+        for row in 0..100 {
+            channel.pending.push_back(ChannelMsg::Data {
+                data: format!("\r\nEARLY HISTORY {row:03}").into_bytes().into(),
+            });
+        }
+        let final_frame = "\x1b[2J\x1b[HLATEST 中文".as_bytes();
+        for bytes in final_frame.chunks(3) {
+            channel.pending.push_back(ChannelMsg::ExtendedData { data: bytes.into(), ext: 1 });
+        }
+        let (input_tx, mut input) = mpsc::unbounded_channel();
+        input_tx.send(Msg::Shutdown).unwrap();
+        pump(&mut channel, token, size(), &terminal, &events, &mut input).await.unwrap();
+        let mut wakeups = 0;
+        while wakes.try_recv().is_ok() {
+            wakeups += 1;
+        }
+        assert_eq!(wakeups, 1, "one queued redraw produced {wakeups} display updates");
+        use nebula_terminal::index::{Column, Line};
+        let terminal = terminal.lock();
+        let row: String = (0..terminal.columns())
+            .map(|column| terminal.grid()[Line(0)][Column(column)].c)
+            .collect();
+        assert!(row.starts_with("LATEST 中 文"), "{row:?}");
+        drop(terminal);
+        fixture.forget(&acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_output_batches_yield_at_control_messages_and_work_limits() {
+    check(async {
+        let fixture = Fixture::new(Mode::Open).await;
+        let acquired = fixture.connect().await;
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, _) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let mut stream = StreamProcessor::default();
+
+        for count in [1usize, 127, 128, 256] {
+            channel.pending =
+                (0..count).map(|_| ChannelMsg::Data { data: b"x".as_slice().into() }).collect();
+            channel.pending.push_back(ChannelMsg::Eof);
+            channel.pending.push_back(ChannelMsg::ExitStatus { exit_status: 0 });
+            let first = channel.pending.pop_front().unwrap();
+            feed_ready_output(&mut channel, first, &mut stream, &terminal, &events);
+            let remaining_data = count.saturating_sub(128);
+            assert_eq!(channel.pending.len(), remaining_data + 2);
+            if remaining_data == 0 {
+                assert!(matches!(channel.next_message().await, Some(ChannelMsg::Eof)));
+                assert!(matches!(
+                    channel.next_message().await,
+                    Some(ChannelMsg::ExitStatus { .. })
+                ));
+            }
+        }
+
+        channel.pending =
+            (0..8).map(|_| ChannelMsg::Data { data: vec![b'\r'; 32 * 1024].into() }).collect();
+        let first = channel.pending.pop_front().unwrap();
+        feed_ready_output(&mut channel, first, &mut stream, &terminal, &events);
+        assert_eq!(channel.pending.len(), 6, "large packets must yield at the byte budget");
         fixture.forget(&acquired.session).await;
     });
 }
@@ -1029,5 +1235,33 @@ fn completion_real_ssh_git_and_project_scripts_end_to_end() {
         .await
         .unwrap();
         super::super::evict_pooled_session(&route.pool_key(), &acquired.session).await;
+    });
+}
+
+#[test]
+fn ssh_echo_keeps_draining_while_a_large_input_waits_for_window_space() {
+    check(async {
+        let mut fixture = Fixture::new(Mode::BackpressuredEcho).await;
+        let acquired = fixture.connect().await;
+        let (sender, mut input) = mpsc::unbounded_channel();
+        let events = Events::default();
+        let terminal = terminal(&events);
+        let (mut channel, token) = open_shell(&acquired, size(), None, &events).await.unwrap();
+        let bytes = b"echo remains responsive\r\n".repeat(20_000);
+        sender.send(Msg::Input(bytes.clone().into())).unwrap();
+        let exchange = async {
+            let mut received = Vec::with_capacity(bytes.len());
+            while received.len() < bytes.len() {
+                received.extend(fixture.data.recv().await.unwrap());
+            }
+            assert_eq!(received, bytes);
+            sender.send(Msg::Input(vec![4].into())).unwrap();
+        };
+        let (result, ()) = tokio::join!(
+            pump(&mut channel, token, size(), &terminal, &events, &mut input),
+            exchange,
+        );
+        result.unwrap();
+        fixture.forget(&acquired.session).await;
     });
 }

@@ -310,7 +310,8 @@ SSH Pane 返回 `remote_exec_unsupported`。stdout/stderr 始终并行排水，�
 误列为 Agent。Agent 对象包含规范化 `kind`、显示名、hook 上报的可选 `session_id`，以及
 `state_source`：
 
-- `hook`：CLI hook 的生命周期边沿，是最高置信度事实。
+- `osc7501`：GPUI 产品优先读取程序通过 OSC 7501 显式上报的有效状态；`app` 只能识别客户端种类，不能生成会话 ID。Pane/传输故障仍优先显示。
+- `hook`：没有有效 OSC 7501 状态时采用 CLI hook 的生命周期边沿；会话身份、回答和权限请求仍由 hook 管理。
 - `screen`：声明式屏幕规则补偿漏失 hook；`state_rule` 给出命中的规则 id。
 - `process`：只确认进程身份，不能把它提升成“已完成”或“需要批准”的强结论。
 
@@ -398,6 +399,29 @@ Shell/hook 结束事件归位；因此即使命令在 120ms Runtime pump 的两�
 服务端只监听 `127.0.0.1`，发现文件位于 Pebrel 数据目录下的 `runtime.port`，其中包含随机
 token。无 token 的连接会被静默丢弃。该边界用于阻止其他本机用户误调用，不承诺抵御已经
 能读取当前用户文件或注入当前用户进程的攻击者。
+
+### 地址发现与实例生命周期
+
+普通驻留实例为本地 PTY 导出 `PEBREL_RUNTIME_ENDPOINT=resident`。CLI 在每次新调用时读取
+当前 `runtime.port`，因此端口或 token 在驻留实例重启后变化时，终端继承的环境值仍然有效。
+此前，普通 PTY 与隔离实例一样继承固定的端口/token，已存在的 Shell 会一直使用旧地址。
+新标记沿用现有 `WSLENV` 透传与 `PEBREL_CLI` 可执行文件入口，不增加环境变量或后台轮询。
+
+管理员等隔离实例仍导出固定的端口/token，不写共享发现文件。显式填写的端口/token
+（包括旧格式末尾的协议版本号）也保持固定目标；无效的显式值不会回退到其他实例。
+正在托管 Runtime 的进程始终优先使用自己的服务端。`resident` 对应的发现文件缺失或损坏时，
+调用按现有 `runtime_unavailable` 路径失败，不复用缓存地址。
+
+这项变更在发送请求之前选择地址，不自动重发请求，也不重连已经建立的事件订阅。
+传输失败后的输入是否送达仍按 `submission_outcome_unknown` 处理。重新发现 Runtime 不会
+恢复旧的 Window/Pane/Agent 身份；调用方仍需核对当前目标及 generation。
+
+升级前已打开的终端可能仍继承固定的旧值。确认它属于普通驻留实例后，可重新打开终端，
+或在该 Shell 中一次性设置 `$env:PEBREL_RUNTIME_ENDPOINT = 'resident'`（PowerShell）/
+`export PEBREL_RUNTIME_ENDPOINT=resident`（POSIX），使后续 CLI 子进程使用当前发现记录。
+不要把隔离实例的专属地址改为此标记。旧版 CLI 不识别 `resident`，应使用当前 PTY 导出的
+`PEBREL_CLI`。生命周期取舍与验证边界见
+[地址发现决策](../architecture/notes/nebula_app/runtime_api/2026-10-23-resident-endpoint-lifetime.md)。
 
 旧版 `PING/ATTACH` 文本请求仍由同一服务端接受，保证单实例与会话重新挂载不因协议升级
 失效；新功能只通过版本化 JSON 协议开放。

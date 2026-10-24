@@ -78,6 +78,9 @@ each agent's activity, and read its output without leaving the application.
 - Sidebar or top tabs, draggable split panes, and per-pane working directories.
 - Saved workspace layouts and optional AI conversation restoration. On WSL and
   Linux, Codex session metadata can supply an ID when its hook has not reported one.
+- Native Windows Codex identity refreshes share a background helper with startup
+  cursor feedback disabled. Each refresh reads current metadata and remains bounded;
+  a stalled helper is stopped before a later refresh creates its replacement.
 - On Windows, optional background residency keeps running sessions alive when you
   close the window. Restoring a conversation after the process exits is a separate
   feature and requires a supported CLI and a usable session identity.
@@ -153,7 +156,9 @@ discover candidates from the current environment without matching prior commands
   states. Supported hook events provide more precise progress and attention signals.
 - Notifications follow their source pane; clicking one returns you to that terminal.
 - Captured Claude Code and Codex answers open in a reader with Markdown, formulas,
-  source text, and local image previews.
+  source text, and local image previews. Reader controls and notices follow the
+  selected language; Copy source preserves the complete original answer. See
+  [reader language behavior](docs/answer-reader-language.md).
 - Clipboard images are saved as PNG files and their paths inserted into local,
   WSL, or SSH sessions. Inline terminal images require the CLI to emit the supported
   OSC 1337 protocol; image attachment previews depend on the CLI itself.

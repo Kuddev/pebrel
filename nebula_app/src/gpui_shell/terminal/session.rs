@@ -32,6 +32,14 @@ impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         self.events.send(event);
     }
+
+    fn command_view(
+        &self,
+        shell: &str,
+        command: &str,
+    ) -> Option<nebula_terminal::inline_content::CommandView> {
+        crate::command_lenses::classify(shell, command)
+    }
 }
 
 impl crate::ssh_session::SshEventHost for EventProxy {
@@ -136,6 +144,7 @@ pub(super) fn local_options(
         log::warn!("Could not prepare shell integration: {error}");
     }
     crate::platform::environment::prepare_local_pty(&mut options);
+    options.env.insert("PEBREL_NATIVE_RESULTS".into(), "1".into());
     // WSL tab 的命令边界（OSC 133;D/A）与 cwd（OSC 7）：来宾登录 shell 默认
     // 不发，Agent 生命周期、目录树与 Git 视图都会失去来宾侧事实。只对
     // `wsl.exe` 启动生效，见 [`crate::shell_detect::wsl_cwd_report_env`]。

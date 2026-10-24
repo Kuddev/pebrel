@@ -1,5 +1,6 @@
 //! 插件命令的冷路径入口；普通 GUI 启动不构造插件实例、VM 或工作线程。
 
+mod boundary;
 pub(crate) mod cli;
 mod json;
 mod lua;

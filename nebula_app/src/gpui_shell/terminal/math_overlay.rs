@@ -495,6 +495,7 @@ pub fn paint_frame(
     cell: (f32, f32),
     pixels_per_point: f32,
     selection_color: Rgba,
+    map_y: &dyn Fn(f32) -> f32,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -506,14 +507,14 @@ pub fn paint_frame(
         // 裁剪跟随 bleed 预算（与旧壳 MathClip 同一矩形），交给 GPUI 的
         // content mask 执行像素级裁剪。
         let clip = Bounds::new(
-            point(origin.x + px(plan.clip_left), origin.y + px(plan.clip_top)),
+            point(origin.x + px(plan.clip_left), origin.y + px(map_y(plan.clip_top))),
             size(
                 px((plan.clip_right - plan.clip_left).max(0.0)),
-                px((plan.clip_bottom - plan.clip_top).max(0.0)),
+                px((map_y(plan.clip_bottom) - map_y(plan.clip_top)).max(0.0)),
             ),
         );
         let left = origin.x + px(plan.origin_x);
-        let baseline = origin.y + px(plan.baseline_y);
+        let baseline = origin.y + px(map_y(plan.baseline_y));
         window.with_content_mask(Some(gpui::ContentMask { bounds: clip }), |window| {
             math_view::paint_formula_image(
                 &source,
@@ -561,7 +562,7 @@ pub fn paint_frame(
                 );
                 let target = point(
                     origin.x + px(x),
-                    origin.y + px(plan.baseline_y + op.baseline_y) - line.ascent,
+                    origin.y + px(map_y(plan.baseline_y + op.baseline_y)) - line.ascent,
                 );
                 let _ = line.paint(
                     target,

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::{Error, Result, json};
+use super::{Error, Result, boundary, json};
 
 const MAX_MANIFEST_BYTES: usize = 32 * 1024;
 pub(super) const MAX_SOURCE_BYTES: usize = 256 * 1024;
@@ -101,7 +101,8 @@ impl Package {
                 format!("undeclared runtime method: {method}"),
             ));
         }
-        Ok(())
+        // 清单只声明需求；即使声明了方法，也不得扩大宿主公开的能力边界。
+        boundary::require_runtime_method(method)
     }
 }
 
@@ -128,6 +129,10 @@ impl Manifest {
                 "invalid_permissions",
                 "permissions must be unique one-shot method names",
             ));
+        }
+        // 在读取入口或创建 VM 前拦截越界声明，check 和 run 使用同一份规则。
+        for method in &self.permissions {
+            boundary::require_runtime_method(method)?;
         }
         let mut has_lua = false;
         for (index, command) in self.commands.iter().enumerate() {

@@ -237,6 +237,7 @@ pub enum RuntimeTaskState {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAgentStateSource {
     Hook,
+    Osc7501,
     Screen,
     Process,
 }
@@ -842,6 +843,7 @@ pub enum RuntimeCommand {
         lines: i16,
         column: u16,
         row: u16,
+        application_only: bool,
     },
     Procs {
         window_id: Option<u64>,

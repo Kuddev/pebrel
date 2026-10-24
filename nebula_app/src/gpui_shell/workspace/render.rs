@@ -3,6 +3,7 @@ use super::*;
 
 impl Render for NebulaWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.spinner_visible.set(false);
         let theme_transition = self.theme_transition.render(window, cx);
         crate::gpui_shell::theme::sync_component_focus_ring(window, cx);
         if window.is_window_active() {
@@ -77,6 +78,7 @@ impl Render for NebulaWorkspace {
             // 旧壳每个像素只画一次：整窗先透明清屏，再分别画标题栏、侧栏、
             // 卡外壳与卡底。根节点不能再铺一张半透明底。
             .bg(gpui::transparent_black())
+            .font(crate::gpui_shell::typography::ui_font(cx))
             .text_color(cx.theme().foreground)
             .can_drop({
                 let runtime_window_id = self.runtime_window_id;
@@ -420,7 +422,7 @@ impl Render for NebulaWorkspace {
                 },
             )
             .when(self.command_palette_open, |root| {
-                root.child(self.render_command_palette(cx))
+                root.child(self.render_command_palette(window, cx))
             })
             .when(self.command_manager_open, |root| {
                 root.child(self.render_command_manager(window, cx))

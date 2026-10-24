@@ -5,20 +5,23 @@
 //! 变更投递到对应 workspace，避免多个 receiver 竞争消费同一事件流。
 
 mod shutdown;
-pub(crate) use shutdown::{quit_all, quit_for_update};
+pub(crate) use shutdown::{quit_all, quit_for_update, schedule_update};
 mod startup;
 use startup::{initial_startup, runtime_window_startup};
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod linux_native_tests;
 mod startup_geometry;
 pub(super) use startup_geometry::prepare_initial_grid;
 
 mod elevated_launch;
+mod update_recovery;
+use update_recovery::{open_update_windows, ready_update_windows};
 
 #[cfg(windows)]
 mod quick_window;
 #[cfg(not(windows))]
 #[path = "windowing/quick_window_unix.rs"]
 mod quick_window;
-pub(crate) use quick_window::toggle_quick_terminal_window;
 pub(super) use quick_window::{observe_window_bounds, quick_terminal_bounds_changed};
 
 use std::cell::RefCell;
@@ -40,6 +43,55 @@ use serde_json::json;
 use super::session_persistence::{SaveReason, SessionPersistence, combine_sessions};
 use super::{NebulaWorkspace, TabMeta, WorkspaceTab, dock_tree};
 use crate::gpui_shell::GpuiShellEvent;
+
+pub(crate) fn toggle_quick_terminal_window(cx: &mut App) {
+    toggle_quick_terminal_window_with_token(cx, None);
+}
+
+pub(super) fn report_quick_terminal_failure(error: &str, cx: &mut App) -> bool {
+    let handle = entries_by_mru(cx).into_iter().find_map(|entry| {
+        entry
+            .workspace
+            .upgrade()
+            .filter(|workspace| !workspace.read(cx).window_hidden)
+            .map(|_| entry.handle)
+    });
+    let Some(handle) = handle else { return false };
+    handle
+        .update(cx, |_, window, cx| {
+            let language = crate::gpui_shell::config::ui_language(cx);
+            crate::gpui_shell::toast::banner(
+                window,
+                cx,
+                crate::display::ToastKind::Warning,
+                language.format(
+                    crate::i18n::Message::SettingsQuickTerminalUnavailable,
+                    &[("error", error)],
+                ),
+            );
+        })
+        .is_ok()
+}
+
+pub(crate) fn toggle_quick_terminal_window_with_token(cx: &mut App, token: Option<&str>) {
+    quick_window::toggle_quick_terminal_window(cx);
+    let Some(token) = token else { return };
+    let handle = if nebula_settings::RuntimeSettings::load().quick_terminal_mode
+        == nebula_settings::QuickTerminalMode::Existing
+    {
+        entries_by_mru(cx).first().map(|entry| entry.handle)
+    } else {
+        cx.global::<WindowRegistry>()
+            .quick_terminal
+            .as_ref()
+            .filter(|quick| quick.target_visible)
+            .map(|quick| quick.handle)
+    };
+    // 收起操作不重新激活；首次创建时框架将令牌保留到真实首帧提交之后。
+    if let Some(handle) = handle {
+        let _ = handle.update(cx, |_, window, _| window.activate_window_with_token(token));
+    }
+}
 #[cfg(windows)]
 use crate::motion::{MotionClock, MotionPolicy, MotionRole, Tween};
 use crate::runtime_api::{
@@ -150,6 +202,7 @@ pub(crate) struct WindowRegistry {
     runtime_hub: crate::runtime_api::RuntimeHub,
     session_persistence: SessionPersistence,
     quit_pending: bool,
+    update_restore_windows: Option<Vec<Option<u64>>>,
     quick_terminal: Option<QuickTerminalWindow>,
     quick_size_dirty: Option<nebula_settings::QuickTerminalSize>,
     _subscriptions: Vec<Subscription>,
@@ -214,6 +267,7 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
         runtime_hub,
         session_persistence: SessionPersistence::default(),
         quit_pending: false,
+        update_restore_windows: None,
         quick_terminal: None,
         quick_size_dirty: None,
         _subscriptions: Vec::new(),
@@ -263,34 +317,15 @@ pub(crate) fn open_initial_window(
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
 ) {
-    if !crate::platform::elevation::requires_isolation()
-        && let Some(sessions) = crate::update_download::handoff::restore_ticket()
-    {
-        let mut sessions = sessions.into_iter();
-        if let Some(first) = sessions.next() {
-            open_workspace_window(
-                cx,
-                WorkspaceStartup::RestoreUpdate(first),
-                Some(ai_events),
-                Some(shell_events),
-                true,
-                WindowRole::Regular,
-            )
-            .expect("failed to reopen updated workspace");
-            for session in sessions {
-                if let Err(error) = open_workspace_window(
-                    cx,
-                    WorkspaceStartup::RestoreUpdate(session),
-                    None,
-                    None,
-                    true,
-                    WindowRole::Regular,
-                ) {
-                    log::warn!("Could not reopen an updated window: {error}");
-                }
-            }
-            return;
+    if let Some(sessions) = crate::update_download::handoff::restore_ticket() {
+        if let Err(error) = open_update_windows(sessions, Some(ai_events), Some(shell_events), cx) {
+            log::error!("Could not reopen updated workspace: {}", error.message);
+            assert!(
+                !cx.global::<WindowRegistry>().entries.is_empty(),
+                "failed to reopen updated workspace"
+            );
         }
+        return;
     }
     let startup = if shell_id.is_some() {
         match runtime_window_startup(initial_cwd, shell_id.as_deref()) {
@@ -372,7 +407,7 @@ fn workspace_window_options(
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(760.0), px(540.0)).min(&bounds.size)),
                 titlebar: Some(TitleBar::title_bar_options()),
-                app_id: Some("pebrel".to_owned()),
+                app_id: Some(crate::platform::window_chrome::application_id("pebrel")),
                 window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
                 focus,
                 ..Default::default()
@@ -405,7 +440,9 @@ fn workspace_window_options(
                 // 与旧壳一致：无系统标题栏，但保留 Nebula 自绘标题栏及三枚
                 // 窗口按钮。TitleBar options 负责 Windows 客户区命中测试。
                 titlebar: Some(TitleBar::title_bar_options()),
-                app_id: Some("pebrel-quick-terminal".to_owned()),
+                app_id: Some(crate::platform::window_chrome::application_id(
+                    "pebrel-quick-terminal",
+                )),
                 window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
                 focus: !cfg!(windows),
                 show: !cfg!(windows),
@@ -1320,23 +1357,10 @@ pub(crate) fn autosave_tick(cx: &mut App) {
         log::warn!("Session checkpoint: {error}");
         return;
     }
-    let workspaces = cx
-        .global::<WindowRegistry>()
-        .entries
-        .iter()
-        .filter(|entry| entry.role == WindowRole::Regular)
-        .filter_map(|entry| entry.workspace.upgrade())
-        .collect::<Vec<_>>();
-    let ready = workspaces.iter().all(|workspace| {
-        workspace.read(cx).tabs.iter().all(|tab| match tab {
-            WorkspaceTab::Terminal { panes, .. } => {
-                panes.iter().all(|pane| pane.view.read(cx).recovery_ready())
-            },
-            _ => true,
-        })
-    });
-    if ready {
-        crate::update_download::handoff::acknowledge_restore(workspaces.len());
+    if let Some(count) = ready_update_windows(cx)
+        && crate::update_download::handoff::acknowledge_restore(count)
+    {
+        cx.global_mut::<WindowRegistry>().update_restore_windows = None;
     }
 }
 

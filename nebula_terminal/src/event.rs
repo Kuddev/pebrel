@@ -54,6 +54,9 @@ pub enum Event {
     /// Windows 任务栏原生支持这套语义，映射在消费端。
     Progress { state: u8, value: Option<u8> },
 
+    /// OSC 7501 records changed; consumers read the latest bounded set from Term.
+    ProgramStatusChanged,
+
     /// 已通过 SSH 通道令牌校验的远端 AI Hook 原始信封。
     AiHookEnvelope(Vec<u8>),
 
@@ -119,6 +122,7 @@ impl Debug for Event {
             },
             Event::Notify(text) => write!(f, "Notify({text})"),
             Event::Progress { state, value } => write!(f, "Progress({state}, {value:?})"),
+            Event::ProgramStatusChanged => write!(f, "ProgramStatusChanged"),
             Event::AiHookEnvelope(envelope) => {
                 write!(f, "AiHookEnvelope({} bytes)", envelope.len())
             },
@@ -175,6 +179,15 @@ pub trait OnResize {
 /// Event Loop for notifying the renderer about terminal events.
 pub trait EventListener {
     fn send_event(&self, _event: Event) {}
+
+    /// The host chooses a renderer for a literal shell command. Core only owns its source range.
+    fn command_view(
+        &self,
+        _shell: &str,
+        _command: &str,
+    ) -> Option<crate::inline_content::CommandView> {
+        None
+    }
 }
 
 /// Null sink for events.
