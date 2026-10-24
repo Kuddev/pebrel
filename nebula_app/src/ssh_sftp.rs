@@ -2,6 +2,8 @@
 pub(crate) mod document;
 #[path = "ssh_sftp/export.rs"]
 pub(crate) mod export;
+#[path = "ssh_sftp/intake.rs"]
+pub(crate) mod intake;
 #[path = "ssh_sftp/limits.rs"]
 pub(crate) mod limits;
 #[path = "ssh_sftp/remote_cwd.rs"]

@@ -42,7 +42,7 @@ impl TerminalView {
         let key = &event.keystroke;
         let mods = &key.modifiers;
         if !self.ssh_disconnected()
-            || !key.key.eq_ignore_ascii_case("r")
+            || !(key.key.eq_ignore_ascii_case("r") || key.key == "enter")
             || mods.control
             || mods.alt
             || mods.platform
@@ -51,36 +51,28 @@ impl TerminalView {
             return false;
         }
         if !event.is_held {
-            let destination = self.ssh_destination.clone().expect("disconnected SSH destination");
-            self.retry_ssh(&destination, cx);
+            if key.key == "enter" {
+                cx.emit(TerminalViewEvent::RequestClose);
+            } else {
+                let destination =
+                    self.ssh_destination.clone().expect("disconnected SSH destination");
+                self.retry_ssh(&destination, cx);
+            }
         }
         true
     }
 
-    pub(super) fn ssh_disconnect_banner(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn ssh_disconnect_notice(&self, cx: &mut Context<Self>) -> AnyElement {
         let lang = crate::gpui_shell::config::ui_language(cx);
-        let destination = self.ssh_destination.clone().expect("disconnected SSH destination");
         let reason = match &self.ssh_stage {
             Some(SshStage::Failed(reason)) => reason.clone(),
             _ => String::new(),
         };
-        let retry = crate::gpui_shell::widgets::settings_button(
-            Button::new("ssh-disconnected-retry")
-                .debug_selector(|| "ssh-disconnected-retry".into())
-                .label(lang.text(Message::TerminalSshReconnect))
-                .disabled(self.ssh_retry_pending)
-                .on_click(cx.listener(move |this, _, _, cx| this.retry_ssh(&destination, cx))),
-            true,
-            cx,
-        );
-        let close = crate::gpui_shell::widgets::settings_button(
-            Button::new("ssh-disconnected-close")
-                .debug_selector(|| "ssh-disconnected-close".into())
-                .label(lang.text(Message::CommonClose))
-                .on_click(cx.listener(|_, _, _, cx| cx.emit(TerminalViewEvent::RequestClose))),
-            false,
-            cx,
-        );
+        let status = if self.ssh_retry_pending {
+            Message::TerminalSshReconnecting
+        } else {
+            Message::TerminalSshSessionStopped
+        };
 
         v_flex()
             .id("ssh-disconnected")
@@ -89,13 +81,12 @@ impl TerminalView {
             .bottom(px(8.0))
             .left(px(12.0))
             .right(px(12.0))
-            .p_2()
+            .py_2()
             .gap_1()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .text_sm()
+            .font_family(self.font.family.clone())
+            .text_size(self.font_size)
+            .bg(self.palette.background)
+            .text_color(self.palette.foreground)
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,
@@ -104,17 +95,23 @@ impl TerminalView {
                     cx.stop_propagation();
                 }),
             )
-            .child(lang.text(Message::TerminalSshDisconnected))
+            .child(
+                div()
+                    .min_w_0()
+                    .w_full()
+                    .debug_selector(|| "ssh-disconnected-status".into())
+                    .child(lang.text(status)),
+            )
             .when(!reason.is_empty(), |banner| {
-                banner.child(
-                    div()
-                        .truncate()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(reason),
-                )
+                banner.child(div().truncate().text_color(self.palette.dim_foreground).child(reason))
             })
-            .child(h_flex().flex_wrap().gap_2().child(retry).child(close))
+            .child(
+                div()
+                    .min_w_0()
+                    .w_full()
+                    .debug_selector(|| "ssh-disconnected-keys".into())
+                    .child(lang.text(Message::TerminalSshSessionKeys)),
+            )
             .into_any_element()
     }
 }

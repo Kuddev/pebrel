@@ -366,14 +366,7 @@ impl Settings {
 }
 
 fn default_font_offset() -> RawDelta {
-    #[cfg(windows)]
-    {
-        RawDelta { x: 0, y: 4 }
-    }
-    #[cfg(not(windows))]
-    {
-        RawDelta { x: 0, y: 0 }
-    }
+    RawDelta { x: 0, y: 0 }
 }
 
 fn runtime_background(
@@ -871,6 +864,19 @@ mod tests {
     #[test]
     fn default_terminal_font_is_bundled_on_every_platform() {
         assert_eq!(super::default_font_family(), crate::font_install::REQUIRED_FONT_FAMILY);
+    }
+
+    #[test]
+    fn font_offset_has_no_platform_padding_and_preserves_explicit_values() {
+        for (input, expected) in [
+            ("", (0, 0)),
+            ("[font.offset]\nx = 2\ny = 4", (2, 4)),
+            ("[font.offset]\ny = -2", (0, -2)),
+        ] {
+            let raw: super::RawConfig = toml::from_str(input).unwrap();
+            let offset = raw.font.offset.unwrap_or_else(super::default_font_offset);
+            assert_eq!((offset.x, offset.y), expected);
+        }
     }
 
     #[test]

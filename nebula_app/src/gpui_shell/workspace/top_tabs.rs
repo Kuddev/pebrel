@@ -418,7 +418,7 @@ impl NebulaWorkspace {
                                     .child(pane_header::split_glyph(
                                         label_px * 0.78,
                                         if active { active_fg } else { muted },
-                                    )),
+                                )),
                             )
                         },
                     )
@@ -459,17 +459,23 @@ impl NebulaWorkspace {
                         row.child(
                             div()
                                 .id(("top-pane-count", ix))
+                                .size(px(28.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.0))
+                                .hover(|style| style.bg(theme.muted.opacity(0.5)))
+                                .active(|style| style.bg(theme.muted))
                                 .flex_shrink_0()
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     this.cycle_pane_focus(ix, window, cx);
                                 }))
-                                .child(pane_header::split_badge(
-                                    pane_count,
+                                .child(pane_header::split_layout_icon(
+                                    &self.tabs[ix],
                                     label_px,
                                     if active { active_fg } else { muted },
-                                    if active { active_bg } else { theme.muted },
                                 )),
                         )
                     })

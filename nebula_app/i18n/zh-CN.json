@@ -694,6 +694,12 @@
     "drop_paths_expired": "当前输入状态已改变，已取消路径粘贴。",
     "drop_paths_failed": "无法为此 WSL 会话转换路径，请重试。",
     "drop_paths_remote": "SSH 中不能直接使用本地路径，请将文件拖到远程文件树上传。",
+    "file_upload_disconnected": "请先连接 SSH 会话再上传文件。",
+    "file_upload_busy": "上一组文件仍在上传。",
+    "file_upload_failed": "无法上传文件：{error}",
+    "file_upload_cancelling": "正在取消文件上传…",
+    "file_upload_preparing": "正在准备上传文件…",
+    "file_upload_progress": "正在上传文件：{percent}%",
     "image_paste_failed": "无法粘贴图片：{error}",
     "image_paste_busy": "上一张图片仍在处理。",
     "image_paste_expired": "当前输入状态已改变，已取消图片粘贴。",
@@ -1856,5 +1862,8 @@
     "backup_passphrase_body": "口令至少 8 个字符。Pebrel 不会保存口令，丢失后无法恢复此备份。"
   },
   "terminal.ssh_disconnected": "连接已断开，按 R 重新连接。",
-  "terminal.ssh_reconnect": "重新连接 (R)"
+  "terminal.ssh_reconnect": "重新连接 (R)",
+  "terminal.ssh_session_stopped": "会话已结束。",
+  "terminal.ssh_session_keys": "按 R 重新连接，按 Enter 关闭此终端。",
+  "terminal.ssh_reconnecting": "正在重新连接…"
 }
