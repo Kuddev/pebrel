@@ -131,7 +131,9 @@
     "turn_failed_reason": "请求失败：{error}",
     "turn_failed": "请求失败，请查看终端中的错误详情。",
     "turn_incomplete": "回复未完成，请查看终端后再继续。",
-    "turn_ended": "回合已结束，请查看终端中的结果。"
+    "turn_ended": "回合已结束，请查看终端中的结果。",
+    "input_needed": "需要你的确认或输入",
+    "turn_finished": "回合完成，等待下一条指令"
   },
   "language": {
     "self_name": "简体中文",
@@ -178,6 +180,10 @@
     }
   },
   "settings": {
+    "opacity": {
+      "title": "窗口背景不透明度",
+      "description": "同步调整终端和设置页背景；数值越低越透明，文字不变。"
+    },
     "quick_terminal_unavailable": "全局快捷键注册失败：{error}。请启用桌面的 GlobalShortcuts portal，或从托盘打开 Pebrel。",
     "completion": {
       "history": {
@@ -301,7 +307,58 @@
     "appearance": {
       "background_color_description": "覆盖主题自带的终端底色。改了它，OSC 11 上报给程序的背景色也跟着变——TUI 判断明暗模式靠的就是这个值。",
       "background_cover_title": "让背景图覆盖窗口控件区域？",
-      "background_cover_description": "背景图会延伸到标题栏、窗口按钮、Tab 与 SSH 侧栏下方，低对比度图片可能影响操作可见性；界面仍会保留最低不透明度保护。"
+      "background_cover_description": "背景图会延伸到标题栏、窗口按钮、Tab 与 SSH 侧栏下方，低对比度图片可能影响操作可见性；界面仍会保留最低不透明度保护。",
+      "terminal_font_size_ctrl_wheel": "终端字号（Ctrl+滚轮缩放）",
+      "changes_only_the_terminal_text": "只调整终端文字大小。",
+      "one_palette_for_the_terminal": "终端与界面的配色，统一选择。",
+      "switches_between_light_and_dark": "随系统自动切换深浅色。",
+      "independent_of_the_theme_changing": "独立于主题，切换配色时保持不变。",
+      "custom_background": "自定义背景",
+      "background_image_fit": "背景图像拉伸模式",
+      "background_image_alignment": "背景图像对齐",
+      "background_image_opacity": "背景图像不透明度",
+      "extend_the_background_image_into": "将背景图扩展到标题栏和侧边栏",
+      "cursor_shape": "光标形状",
+      "blink_cursor": "光标闪烁",
+      "show_tab_close_buttons": "显示标签关闭按钮",
+      "interface_density": "界面外观",
+      "terminal_content_opacity": "终端正文不透明度",
+      "background_blur": "背景模糊",
+      "terminal_appearance": "终端外观",
+      "character_spacing": "字体间距",
+      "startup_system_information": "启动欢迎信息",
+      "powerline_prompt": "Powerline 提示符",
+      "app_icon_colors": "应用图标配色",
+      "dark": "深色背景",
+      "light": "浅色背景",
+      "this_only_changes_the_preview": "这里只切换预览背景。图标不会跟随主题自动变化。",
+      "icon_name": {
+        "titanium": "钛银",
+        "glacier": "冰川白",
+        "ice_blue": "冰蓝雾",
+        "cobalt": "钴蓝",
+        "midnight_blue": "午夜蓝",
+        "steel_blue": "钢蓝",
+        "glass_blue": "琉璃蓝",
+        "porcelain_blue": "蓝瓷",
+        "deep_blue": "深海电蓝",
+        "mist_violet": "雾紫",
+        "violet": "紫罗兰",
+        "night_violet": "冷夜紫",
+        "silver_violet": "银紫",
+        "ice_cyan": "冰青",
+        "cyan": "青蓝",
+        "polar_cyan": "极夜青",
+        "cool_mint": "冷薄荷",
+        "emerald": "冷翡翠",
+        "night_mint": "夜薄荷",
+        "porcelain": "冷瓷白",
+        "graphite": "石墨",
+        "monochrome": "纯黑白",
+        "sage_light": "原版浅苔",
+        "sage_dark": "原版深苔",
+        "graphite_violet": "石墨紫"
+      }
     },
     "font": {
       "ligatures": "字体连字",
@@ -323,7 +380,19 @@
       "expand": "展开字体列表",
       "collapse": "收起字体列表",
       "ctrl_wheel_zoom": "Ctrl+滚轮调整字号",
-      "ctrl_wheel_zoom_description": "按住 Ctrl 在终端上滚动即可调整字号。关闭后该手势被完全忽略：既不改变字号，也不滚动终端；Ctrl+=、Ctrl+-、Ctrl+0 快捷键不受影响。"
+      "ctrl_wheel_zoom_description": "按住 Ctrl 在终端上滚动即可调整字号。关闭后该手势被完全忽略：既不改变字号，也不滚动终端；Ctrl+=、Ctrl+-、Ctrl+0 快捷键不受影响。",
+      "enter_a_font_family": "输入字体名称",
+      "primary": "主",
+      "move_up": "上移",
+      "move_down": "下移",
+      "remove_from_font_group": "移出字体组",
+      "bundled": "内置",
+      "imported": "导入",
+      "proportional": "比例",
+      "add_to_font_group": "加入字体组",
+      "font_group": "字体组",
+      "current_order": "当前顺序",
+      "available_fonts": "可用字体"
     },
     "keymap": {
       "conflict": "{combo} 同时绑定了「{first}」与「{second}」——只有排前面的「{first}」会触发",
@@ -332,7 +401,48 @@
       "restore": "恢复此动作的默认快捷键",
       "bare_title": "绑定裸键？",
       "bare_description": "{combo} 是正常输入键（没有 Ctrl/Alt 等修饰），绑定后它不再能作为文本输入。仍然绑定吗？",
-      "bare_confirm": "仍然绑定"
+      "bare_confirm": "仍然绑定",
+      "quick_terminal": "快速终端",
+      "unbound": "未绑定",
+      "press_a_new_key": "按新按键…",
+      "read_only": "只读",
+      "action": {
+        "command_palette": "命令面板",
+        "quick_jump": "快速跳转",
+        "shell_picker": "Shell 选择器",
+        "fullscreen": "全屏",
+        "new_tab": "新建标签页",
+        "close_tab_pane": "关闭标签页 / 分屏",
+        "next_tab": "下一个标签页",
+        "previous_tab": "上一个标签页",
+        "split_right": "左右分屏",
+        "split_down": "上下分屏",
+        "zoom_current_pane": "放大当前分屏",
+        "focus_pane_left": "焦点：左侧分屏",
+        "focus_pane_right": "焦点：右侧分屏",
+        "focus_pane_up": "焦点：上方分屏",
+        "focus_pane_down": "焦点：下方分屏",
+        "files_panel": "目录树面板",
+        "git_panel": "Git 面板",
+        "previous_prompt": "跳到上一个提示符",
+        "next_prompt": "跳到下一个提示符",
+        "search_forward": "搜索（向前）",
+        "search_backward": "搜索（向后）",
+        "font_size_up": "增大字号",
+        "font_size_down": "减小字号",
+        "reset_font_size": "重置字号"
+      },
+      "group": {
+        "global": "全局",
+        "tabs": "标签页",
+        "panes": "窗格",
+        "side_panels": "侧栏面板"
+      },
+      "readonly": {
+        "select_tab_n": "切换到第 N 个标签页",
+        "launch_profile_n": "启动 Profile N",
+        "paste_ai_fix_suggestion": "贴入 AI 修复建议"
+      }
     },
     "input": {
       "backup_secret": "凭据只写入系统凭据管理器"
@@ -395,6 +505,31 @@
       "needs_repair": "Hook 已安装 · 需修复",
       "initialize": "请先运行一次此工具以创建配置，然后刷新。",
       "config_path": "配置：{path}"
+    },
+    "about": {
+      "checking_for_updates": "正在检查更新…",
+      "new_version_available": "发现新版本",
+      "update_check_failed": "检查失败",
+      "gpu_accelerated_terminal_windows": "GPU 加速终端 · Windows",
+      "version_and_updates": "版本与更新",
+      "automatically_check_for_updates": "自动检查更新",
+      "update_channel": "更新通道",
+      "last_checked": "上次检查",
+      "project_and_support": "项目与支持",
+      "report_an_issue": "反馈问题",
+      "github_repository": "GitHub 仓库",
+      "release_notes": "更新内容",
+      "sponsors": "赞助商"
+    },
+    "pane": {
+      "restore_default": "还原为默认值",
+      "hide_details": "收起说明",
+      "more_details": "详细说明",
+      "failed_to_restore_defaults": "恢复默认设置失败",
+      "defaults_restored_hosts_and_credentials": "已恢复默认设置；主机与凭据保持不变，原设置已备份。",
+      "defaults_restored_hosts_and_credentials_v2": "已恢复默认设置；主机与凭据保持不变。",
+      "search_all_settings": "在全部设置中搜索",
+      "import_terminal_directory": "导入终端目录…"
     }
   },
   "provider": {
@@ -638,6 +773,7 @@
     "reveal": "在文件管理器中显示",
     "open_external": "用默认应用打开",
     "preview_limited": "此文档较大，富文本预览已缩短。切换到编辑可查看已加载的源码。",
+    "save_busy": "另一个编辑器正在保存此文件。你的草稿仍保留，请稍后重试。",
     "cursor_position": "第 {line} 行，第 {column} 列",
     "mode_shortcut": "切换为{mode}（Ctrl+/ 或 ⌘/）",
     "object_latex_source": "LaTeX 源码",
@@ -733,7 +869,13 @@
       "ssh_key": "SSH · 创建 Ed25519 密钥"
     },
     "builtin_label": "内置",
-    "save_copy": "保存副本"
+    "save_copy": "保存副本",
+    "search": "搜索已保存命令…",
+    "read_failed": "无法读取已保存命令：{error}",
+    "no_terminal": "当前标签不是可用的终端",
+    "send_failed": "无法发送命令：{error}",
+    "copied": "命令已复制",
+    "missing": "这条命令已不存在"
   },
   "files": {
     "path_unavailable": "路径已不存在",
@@ -774,7 +916,9 @@
       "title": "删除 {name}？",
       "folder_body": "文件夹及其全部内容会移入回收站。",
       "file_body": "文件会移入回收站。"
-    }
+    },
+    "remote_session_unavailable": "远端浏览会话不可用，请重新打开文件抽屉",
+    "remote_connection_unavailable": "远端连接不可用，请稍后重试"
   },
   "recipe": {
     "title": "布局配方",
@@ -922,7 +1066,44 @@
     "directory_unavailable": "所选目录不可用",
     "following_directory": "所选目录不可用，已跟随当前目录",
     "command_failed": "{program} 失败",
-    "task_start_failed": "无法启动版本控制任务: {error}"
+    "task_start_failed": "无法启动版本控制任务: {error}",
+    "svn": {
+      "repository_empty": "空版本库 · 还没有内容",
+      "repository_standard_layout": "标准布局 · {entries}",
+      "repository_top_level": "顶层 · {entries}",
+      "repository_hint": "服务端版本库本身没有文件状态，检出成工作副本后才有。",
+      "add": "添加",
+      "update": "更新",
+      "log": "日志",
+      "check_changes": "检查修改",
+      "checkout": "检出",
+      "create_layout": "建标准布局",
+      "tortoise_missing": "未检测到 TortoiseSVN：日志、锁定、属性等对话框不可用（提交与更新仍可走 svn 命令行）",
+      "more": "更多 SVN 操作",
+      "file_actions": "此文件的 SVN 操作",
+      "browse_repository": "版本库浏览器",
+      "update_revision": "更新至版本…",
+      "branch_tag": "分支 / 标记…",
+      "switch": "切换…",
+      "merge": "合并…",
+      "export": "导出…",
+      "revision_graph": "修订图",
+      "relocate": "重定位…",
+      "properties": "属性",
+      "cleanup": "清理",
+      "show_log": "显示日志",
+      "blame": "责任追溯",
+      "lock": "获得锁定…",
+      "unlock": "释放锁定",
+      "ignore": "加入忽略列表…",
+      "rename": "重命名…",
+      "edit_conflict": "编辑冲突",
+      "confirm_revert": "确认还原",
+      "revert": "还原 SVN 改动",
+      "add_file": "添加到 SVN",
+      "resolve": "解决",
+      "mark_resolved": "保留当前内容并标记冲突已解决"
+    }
   },
   "launcher": {
     "open_admin": "以管理员身份打开",
@@ -1278,7 +1459,8 @@
     "select_terminal": "选择终端",
     "command_list": "命令列表",
     "toggle_sidebar": "折叠/展开侧边栏 (Ctrl+Shift+B)",
-    "settings_shortcut": "设置 (Ctrl+,)"
+    "settings_shortcut": "设置 (Ctrl+,)",
+    "new_terminal_ctrl_k": "新建终端 (Ctrl+K)"
   },
   "workspace": {
     "pane": {
@@ -1304,7 +1486,16 @@
     },
     "close_tab": {
       "title": "关闭此标签页？"
-    }
+    },
+    "search_commands": "搜索命令…",
+    "exported": "已导出到 {path}",
+    "export_failed": "工作区导出失败：{error}",
+    "recovery_skipped": "连续多次启动未完成恢复，已跳过；现场保存在 {path}",
+    "recovery_unclean": "上次未正常退出，已恢复 {count} 个标签",
+    "recovery_restored": "已恢复 {count} 个标签",
+    "resume_hint": "恢复 · {source} · {location}",
+    "fork_label": "分叉 · {title}",
+    "fork_title": "{title} 分叉"
   },
   "remote": {
     "locating": "正在定位远端目录…",
@@ -1602,6 +1793,78 @@
     "save_failed": "效果列表保存失败，请检查设置目录的写入权限后重试。",
     "advanced": "高级效果",
     "advanced_active": "高级效果 · 终端效果已启用"
+  },
+  "merge": {
+    "title": "合并 · {name}",
+    "unresolved_notice": "合并结果中仍有冲突标记，请处理后再应用",
+    "loading": "正在读取三个 Git 阶段…",
+    "unresolved": "仍有冲突标记",
+    "ready": "可应用",
+    "saving": "正在写回并暂存…",
+    "resolved": "已写回并暂存",
+    "ours": "当前版本",
+    "ours_missing": "当前版本（文件不存在）",
+    "theirs": "传入版本",
+    "theirs_missing": "传入版本（文件不存在）",
+    "result": "合并结果",
+    "result_editable": "合并结果（可编辑）",
+    "reload": "重新读取冲突阶段",
+    "apply": "应用并暂存",
+    "clear_markers": "请先清除合并结果中的冲突标记",
+    "stage_tooltip": "写回工作树并执行 git add",
+    "use_ours": "用当前版本替换合并结果",
+    "use_theirs": "用传入版本替换合并结果",
+    "error": {
+      "invalid_path": "冲突文件路径无效",
+      "outside_repository": "冲突文件不在当前仓库内",
+      "missing_stages": "Git 索引里没有可合并的 :2/:3 阶段",
+      "document_too_large": "{part}超过 {limit} MB，不能在三栏编辑器中安全处理",
+      "binary": "{part}是二进制内容，三栏文本合并器无法处理",
+      "invalid_utf8": "{part}不是 UTF-8 文本，已阻止可能破坏编码的写回",
+      "read_failed": "读取合并结果失败: {error}",
+      "read_wsl_failed": "无法从 WSL 读取冲突文件: {error}",
+      "result_too_large": "合并结果超过 {limit} MB，已取消写回",
+      "write_failed": "写回合并结果失败: {error}",
+      "start_wsl_write_failed": "无法向 WSL 写回冲突文件: {error}",
+      "wsl_pipe_missing": "无法打开 WSL 写入管道",
+      "write_wsl_failed": "写入 WSL 冲突文件失败: {error}",
+      "wait_wsl_failed": "等待 WSL 写回失败: {error}",
+      "wsl_failed": "WSL 写回失败",
+      "stage_failed": "git add 失败；文件已写回但尚未暂存",
+      "git_start_failed": "无法运行 git: {error}"
+    }
+  },
+  "image": {
+    "loading": "正在加载图片…",
+    "read_failed": "无法读取 {path}: {error}",
+    "decode_failed": "无法解码 {path}: {error}"
+  },
+  "terminal": {
+    "process_exited": "进程已退出（{code}）",
+    "pty_failure": "PTY 故障：{error}",
+    "session_ended": "会话已结束",
+    "ssh_start_failed": "SSH 会话启动失败: {error}",
+    "pty_start_failed": "PTY 启动失败: {error}"
+  },
+  "confirmation": {
+    "cover_title": "让背景图覆盖窗口控件区域？",
+    "cover_body": "背景图会延伸到标题栏、窗口按钮、Tab 与 SSH 侧栏下方，低对比度图片可能影响操作可见性；界面仍会保留最低不透明度保护。",
+    "resize_title": "开启侧栏拖拽调节？",
+    "resize_body": "拖动左侧栏或右侧抽屉的宽度时，终端内容会跟随实时重排；在低性能设备或超大回滚缓冲下可能出现掉帧。拖动已按帧率与列宽双重节流，把左侧栏一路拖到最左即可收起。宽度会保存，此功能可随时关闭。",
+    "font_title": "建议安装终端字体",
+    "font_body": "未检测到 Maple Mono Nerd Font；缺少图标时可安装后重启 Pebrel。",
+    "paste_body": "多行粘贴会被 shell 逐行执行，请确认来源可信。",
+    "ssh_hide_title": "隐藏 SSH 主机 {host}？",
+    "ssh_hide_body": "只从 Pebrel 隐藏；~/.ssh/config 不会修改，保存的密码将在撤销期后清除。",
+    "ssh_delete_title": "删除 SSH 主机 {host}？",
+    "ssh_delete_body": "会从主机列表移除，保存的 Windows 密码将在撤销期后清除。",
+    "remote_delete_title": "删除远端项目 {name}？",
+    "remote_delete_directory_body": "文件夹及其全部远端内容会被递归删除，此操作无法撤销。",
+    "remote_delete_file_body": "远端文件会被永久删除，此操作无法撤销。",
+    "restore_passphrase_title": "输入恢复口令",
+    "restore_passphrase_body": "输入导出时使用的口令；认证通过后才会写入任何文件。",
+    "backup_passphrase_title": "设置备份口令",
+    "backup_passphrase_body": "口令至少 8 个字符。Pebrel 不会保存口令，丢失后无法恢复此备份。"
   },
   "terminal.ssh_disconnected": "连接已断开，按 R 重新连接。",
   "terminal.ssh_reconnect": "重新连接 (R)"

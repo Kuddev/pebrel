@@ -284,6 +284,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             terminal_options.command(),
             shell_id,
             options.config_file.clone(),
+            options.launched_at_login,
         );
         return Ok(());
     }
@@ -302,6 +303,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(Subcommands::Migrate(options)) => migrate::migrate(options),
         Some(Subcommands::Config(options)) => std::process::exit(config_cli::run(options)),
         Some(Subcommands::Plugin(options)) => std::process::exit(plugins::cli::run(options)),
+        #[cfg(feature = "gpui-shell")]
         Some(Subcommands::Theme(options)) => {
             std::process::exit(theme_library::package::cli::run(options))
         },
