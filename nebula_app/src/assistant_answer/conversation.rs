@@ -27,7 +27,7 @@ mod remote;
 
 pub(crate) enum Location {
     Local(PaneExecContext),
-    Ssh(crate::ssh_session::TranscriptReader),
+    Ssh(crate::ssh_session::PaneConnection),
 }
 
 pub(crate) struct Source {

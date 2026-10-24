@@ -3,12 +3,12 @@ use serde_json::{Value, json};
 
 use super::{Capture, HEAD_BYTES, PAGE_BYTES, changed, io_failure};
 use crate::runtime_api::ApiError;
-use crate::ssh_session::TranscriptReader;
+use crate::ssh_session::PaneConnection;
 
 const SCRIPT: &str = include_str!("remote_read.py");
 
 pub(super) fn capture(
-    reader: &TranscriptReader,
+    reader: &PaneConnection,
     path: &str,
     before: Option<u64>,
 ) -> Result<Capture, ApiError> {
