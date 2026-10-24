@@ -306,6 +306,42 @@ pub(crate) fn completion_qa_shell(_output: &std::path::Path) -> nebula_terminal:
     }
 }
 
+/// Windows bootstrap for the clipboard acceptance fixture; UI checks remain in the view.
+#[cfg(test)]
+pub(crate) fn native_clipboard_qa_shell(
+    program: String,
+    output: &std::path::Path,
+) -> nebula_terminal::tty::Shell {
+    #[cfg(windows)]
+    {
+        let shell = nebula_terminal::tty::powershell_with_nebula_integration(
+            program,
+            vec!["-NoLogo".into(), "-NoProfile".into()],
+        );
+        let mut args = shell.args().to_vec();
+        let result_file = output.join("execution.txt").to_string_lossy().replace('\'', "''");
+        args.last_mut().unwrap().push_str(&format!(r#";
+Set-PSReadLineOption -HistorySaveStyle SaveNothing
+if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource')) {{ Set-PSReadLineOption -PredictionSource None }}
+function global:PasteFixture {{ param($value); [IO.File]::AppendAllText('{result_file}', "$value`n") }}
+@{{ powershell=$PSVersionTable.PSVersion.ToString(); psreadline=(Get-Module PSReadLine).Version.ToString(); editor=$global:PebrelCompletionInputReady; clipboard=(Get-PebrelClipboardCapability) }} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:PEBREL_NATIVE_CLIPBOARD_QA_DIR 'shell.json')
+"#));
+        // PTY arguments are Windows command-line text. A BOM-marked file keeps
+        // quoting and Unicode intact for both Windows PowerShell and PowerShell 7.
+        let startup = args.pop().unwrap();
+        let startup_path = output.join("clipboard-startup.ps1");
+        std::fs::write(&startup_path, format!("\u{feff}{startup}\n")).unwrap();
+        *args.last_mut().unwrap() = "-File".into();
+        args.push(format!("\"{}\"", startup_path.display()));
+        nebula_terminal::tty::Shell::new(shell.program().into(), args)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (program, output);
+        panic!("native clipboard acceptance requires Windows");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -43,7 +43,7 @@ use nebula_terminal::index::Point;
 
 use crate::cli::WindowOptions;
 use crate::config::UiConfig;
-use crate::config::window::{Identity, WindowConfig};
+use crate::config::window::{Decorations, Identity, WindowConfig};
 use crate::display::SizeInfo;
 
 /// Window icon for `_NET_WM_ICON` property.

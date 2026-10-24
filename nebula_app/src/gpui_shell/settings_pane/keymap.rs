@@ -135,7 +135,7 @@ impl SettingsPane {
         }
         let name = |flat: usize| -> String {
             if flat == keymap::QUICK_TERMINAL_ROW {
-                language.pick("快速终端", "Quick terminal").to_owned()
+                language.text(crate::i18n::Message::SettingsKeymapQuickTerminal).to_owned()
             } else {
                 keymap::EDITABLE_ACTIONS
                     .get(flat - 1)
@@ -330,7 +330,8 @@ impl SettingsPane {
             })
             .child(if text.is_empty() && !capturing {
                 SharedString::from(
-                    crate::gpui_shell::config::ui_language(cx).pick("未绑定", "Unbound"),
+                    crate::gpui_shell::config::ui_language(cx)
+                        .text(crate::i18n::Message::SettingsKeymapUnbound),
                 )
             } else {
                 SharedString::from(text.to_owned())
@@ -343,7 +344,7 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         let custom = keymap::build_bindings(&self.keymap_binds);
         let label: SharedString = if flat == keymap::QUICK_TERMINAL_ROW {
-            language.pick("快速终端", "Quick terminal").into()
+            language.text(crate::i18n::Message::SettingsKeymapQuickTerminal).into()
         } else {
             keymap::EDITABLE_ACTIONS
                 .get(flat - 1)
@@ -366,7 +367,7 @@ impl SettingsPane {
         let capturing = self.keymap_capture == Some(flat);
         let cap_text = if capturing {
             if self.keymap_capture_preview.is_empty() {
-                language.pick("按新按键…", "Press a new key...").to_owned()
+                language.text(crate::i18n::Message::SettingsKeymapPressANewKey).to_owned()
             } else {
                 format!("{}…", self.keymap_capture_preview)
             }
@@ -436,7 +437,7 @@ impl SettingsPane {
             ));
         }
         let mut start = 0usize;
-        for (zh, en, count) in keymap::GROUPS {
+        for (group, (.., count)) in keymap::GROUPS.iter().enumerate() {
             let end = start + count;
             let rows: Vec<_> = visible
                 .iter()
@@ -450,7 +451,7 @@ impl SettingsPane {
                         .pb_1()
                         .text_size(px(self.font_size_px(cx) * 0.86))
                         .text_color(cx.theme().muted_foreground)
-                        .child(language.pick(zh, en)),
+                        .child(keymap::group_label(group, language)),
                 );
                 for row in rows {
                     groups_block = groups_block.child(row);
@@ -464,12 +465,13 @@ impl SettingsPane {
         let mut readonly: Vec<(&str, &str)> = keymap::GPUI
             .readonly_rows()
             .iter()
-            .filter(|(zh, en, combo)| {
+            .enumerate()
+            .filter(|(_, (zh, en, combo))| {
                 query
                     .split_whitespace()
                     .all(|word| format!("{zh} {en} {combo}").to_lowercase().contains(word))
             })
-            .map(|(zh, en, combo)| (language.pick(zh, en), *combo))
+            .map(|(index, (.., combo))| (keymap::readonly_label(index, language), *combo))
             .collect();
         let dialog_label = Self::confirmation_shortcuts_label(cx);
         let dialog_shortcuts = Self::confirmation_shortcuts_search_text();
@@ -483,7 +485,7 @@ impl SettingsPane {
                     .pb_1()
                     .text_size(px(self.font_size_px(cx) * 0.86))
                     .text_color(cx.theme().muted_foreground)
-                    .child(language.pick("只读", "Read-only")),
+                    .child(language.text(crate::i18n::Message::SettingsKeymapReadOnly)),
             );
             for (label, combo) in readonly {
                 groups_block = groups_block.child(
