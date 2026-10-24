@@ -637,12 +637,15 @@ function global:Nebula-List {
         "$meta$mode$e[0m  $muted$size$e[0m  $muted$date$e[0m  $e]8;;$uri$b$col$($i.Name)$e[0m$e]8;;$b"
     }
 }
-Remove-Item Alias:ls  -Force -ErrorAction SilentlyContinue
-Remove-Item Alias:dir -Force -ErrorAction SilentlyContinue
-Remove-Item Alias:ll  -Force -ErrorAction SilentlyContinue
-Set-Alias -Name ls  -Value Nebula-List -Scope Global -Option AllScope -Force
-Set-Alias -Name ll  -Value Nebula-List -Scope Global -Option AllScope -Force
-Set-Alias -Name dir -Value Nebula-List -Scope Global -Option AllScope -Force
+# builtin_ls=0 in the settings file keeps PowerShell's own ls/dir.
+if (Get-NebulaBoolSetting 'builtin_ls' $true) {
+    Remove-Item Alias:ls  -Force -ErrorAction SilentlyContinue
+    Remove-Item Alias:dir -Force -ErrorAction SilentlyContinue
+    Remove-Item Alias:ll  -Force -ErrorAction SilentlyContinue
+    Set-Alias -Name ls  -Value Nebula-List -Scope Global -Option AllScope -Force
+    Set-Alias -Name ll  -Value Nebula-List -Scope Global -Option AllScope -Force
+    Set-Alias -Name dir -Value Nebula-List -Scope Global -Option AllScope -Force
+}
 
 function global:Convert-NebulaBareEnvAssignment {
     param([string]$Line)
@@ -1268,6 +1271,15 @@ mod test {
             !NEBULA_PROMPT_PS1.contains("NEBULA|$loc|$branch"),
             "the display-only tilde path must not leak into cwd consumers"
         );
+    }
+
+    #[test]
+    fn builtin_ls_aliases_can_be_opted_out() {
+        let gate = NEBULA_PROMPT_PS1
+            .find("if (Get-NebulaBoolSetting 'builtin_ls' $true) {")
+            .expect("builtin_ls gate");
+        let alias = NEBULA_PROMPT_PS1.find("Set-Alias -Name ls ").expect("ls alias");
+        assert!(gate < alias, "the ls/ll/dir aliases must sit behind the builtin_ls gate");
     }
 
     #[test]
