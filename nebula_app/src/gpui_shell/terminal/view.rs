@@ -492,11 +492,10 @@ impl TerminalView {
         typography::effective_cell_width(raw_width, self.cell_width_mode, scale, self.font_offset_x)
     }
 
-    pub(super) fn line_height_for_metrics(&self, natural_height: f32, scale: f32) -> Pixels {
-        typography::line_height_for_view(
-            self.font_size,
+    pub(super) fn line_height_at_scale(&self, scale: f32) -> Pixels {
+        typography::effective_line_height_with_theme(
+            self.font_size.as_f32(),
             self.line_height_multiplier,
-            natural_height,
             self.font_offset_y,
             scale,
         )
