@@ -198,7 +198,7 @@
       "save_failed": "起動設定を変更できませんでした: {error}"
     },
     "agents": {
-      "title": "コーディングエージェント",
+      "title": "エージェント CLI & TUI",
       "description": "エージェントの動作状況、完了、承認リクエストを Pebrel に表示します。Claude Code と Codex は既定で有効です。",
       "refresh": "更新",
       "platform_unsupported": "フックの自動インストールは現在 Windows でのみ利用できます。",
@@ -399,7 +399,7 @@
   "editor": {
     "bold_selection": "選択範囲を太字（Ctrl+B / ⌘B）",
     "italic_selection": "選択範囲を斜体（Ctrl+I / ⌘I）",
-    "release_to_close_sidebar": "離すとサイドバーを閉じます",
+    "release_to_close_sidebar": "離すと閉じる",
     "document_actions": "ドキュメントの操作",
     "source": "ソース",
     "edit_in_place": "編集",
@@ -698,7 +698,7 @@
     "not_repository": "現在のディレクトリは Git/SVN リポジトリ内にありません",
     "refresh_status": "{vcs} の状態を更新",
     "close_status": "{vcs} の状態を閉じる",
-    "toggle_git": "Git の状態（Ctrl+Shift+G）",
+    "toggle_git": "Git（Ctrl+Shift+G）",
     "time_now": "たった今",
     "time_minute": "1 分前",
     "time_minutes": "{count} 分前",
@@ -1063,7 +1063,7 @@
     "scroll_tabs_right": "タブを右にスクロール",
     "select_terminal": "ターミナルを選択",
     "command_list": "コマンド一覧",
-    "toggle_sidebar": "サイドバーの表示/非表示（Ctrl+Shift+B）",
+    "toggle_sidebar": "サイドバー（Ctrl+Shift+B）",
     "settings_shortcut": "設定（Ctrl+,）"
   },
   "workspace": {

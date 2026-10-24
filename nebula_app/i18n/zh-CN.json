@@ -377,7 +377,7 @@
       "save_failed": "无法更改启动设置：{error}"
     },
     "agents": {
-      "title": "编程智能体",
+      "title": "智能体 CLI & TUI",
       "description": "在 Pebrel 中显示运行状态、完成通知和授权请求。Claude Code 与 Codex 默认开启。",
       "refresh": "刷新",
       "platform_unsupported": "目前仅 Windows 支持自动安装 hooks。",
@@ -579,14 +579,14 @@
   "editor": {
     "bold_selection": "选中文字加粗（Ctrl+B / ⌘B）",
     "italic_selection": "选中文字斜体（Ctrl+I / ⌘I）",
-    "release_to_close_sidebar": "松开收起侧栏",
+    "release_to_close_sidebar": "松开收起",
     "document_actions": "文档操作",
     "source": "源码",
     "edit_in_place": "编辑",
     "finish_editing": "完成",
     "finish_editing_shortcut": "结束编辑（Ctrl+Enter / ⌘Enter）",
     "edit_block": "编辑此段落",
-    "right_sidebar": "展开或收起右侧栏",
+    "right_sidebar": "右侧栏",
     "loading": "正在读取文件…",
     "save": "保存",
     "saving": "正在保存…",
@@ -911,7 +911,7 @@
     "not_repository": "当前目录不在 Git/SVN 仓库中",
     "refresh_status": "刷新 {vcs} 状态",
     "close_status": "关闭 {vcs} 状态",
-    "toggle_git": "Git 状态 (Ctrl+Shift+G)",
+    "toggle_git": "Git (Ctrl+Shift+G)",
     "time_now": "刚刚",
     "time_minute": "1 分钟前",
     "time_minutes": "{count} 分钟前",
@@ -1281,7 +1281,7 @@
     "scroll_tabs_right": "向右翻标签",
     "select_terminal": "选择终端",
     "command_list": "命令列表",
-    "toggle_sidebar": "折叠/展开侧边栏 (Ctrl+Shift+B)",
+    "toggle_sidebar": "侧边栏 (Ctrl+Shift+B)",
     "settings_shortcut": "设置 (Ctrl+,)"
   },
   "workspace": {
