@@ -78,20 +78,21 @@ impl CommandCapture {
             if term.grid()[line][..].iter().any(|cell| cell.inline_marker().is_some()) {
                 return;
             }
+            let Some(hash) = source_hash(&term.grid()[line][..]) else { return };
             // 每个物理行只消费一次；选区 API 会补入下一行宽字，逐行相加会重复。
             let part = term.line_to_string(line, Column(0)..term.last_column(), false);
             if text.len().saturating_add(part.len()) > MAX_CONTENT_BYTES {
                 return;
             }
             text.push_str(&part);
-            hashes.push(source_hash(&term.grid()[line][..]));
+            hashes.push(hash);
         }
         if text.trim().is_empty() {
             return;
         }
         let surface = registry.capture(view, text, hashes, 0);
         // 只增加标记，字符、VT 光标、历史和 PTY 尺寸均保留原值。
-        let grid = term.grid_mut();
+        let grid = term.inline_content_grid_mut();
         for row in 0..rows {
             grid[Point::new(first + row, Column(0))]
                 .set_inline_marker(Marker { surface: surface.clone(), row: row as u16 });
