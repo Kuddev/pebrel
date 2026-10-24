@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
-pub(super) struct Node {
+pub(crate) struct Node {
     pub data: Vec<u8>,
     pub permissions: u32,
     pub uid: u32,
@@ -17,7 +17,7 @@ pub(super) struct Node {
 }
 
 impl Node {
-    pub(super) fn new(data: &[u8]) -> Self {
+    pub(crate) fn new(data: &[u8]) -> Self {
         Self { data: data.to_vec(), permissions: 0o100640, uid: 1001, gid: 1002, modified: 10 }
     }
 
@@ -34,7 +34,7 @@ impl Node {
 }
 
 #[derive(Default)]
-pub(super) struct Store {
+pub(crate) struct Store {
     pub files: BTreeMap<String, Node>,
     pub aliases: BTreeMap<String, String>,
     pub fail_writes: bool,
@@ -42,6 +42,9 @@ pub(super) struct Store {
     pub edit_before_backup: Option<Vec<u8>>,
     pub create_after_backup: Option<Vec<u8>>,
     pub cancel_after_backup: Option<DocumentOperation>,
+    pub after_write: Option<Box<dyn FnOnce() + Send>>,
+    pub after_open: Option<Box<dyn FnOnce() + Send>>,
+    pub writes_before_failure: Option<usize>,
 }
 
 struct Peer {
@@ -95,7 +98,7 @@ impl russh_sftp::server::Handler for Peer {
         id: u32,
         filename: String,
         flags: OpenFlags,
-        _: FileAttributes,
+        attrs: FileAttributes,
     ) -> Result<Handle, StatusCode> {
         let mut store = self.store.lock().unwrap();
         if flags.contains(OpenFlags::CREATE) {
@@ -105,6 +108,7 @@ impl russh_sftp::server::Handler for Peer {
             store.files.entry(filename.clone()).or_insert_with(|| Node {
                 uid: 0,
                 gid: 0,
+                permissions: 0o100000 | attrs.permissions.unwrap_or(0o640),
                 ..Node::new(&[])
             });
         }
@@ -113,6 +117,9 @@ impl russh_sftp::server::Handler for Peer {
         }
         let handle = format!("handle-{id}");
         self.handles.insert(handle.clone(), filename);
+        if let Some(after_open) = store.after_open.take() {
+            after_open();
+        }
         Ok(Handle { id, handle })
     }
 
@@ -143,8 +150,11 @@ impl russh_sftp::server::Handler for Peer {
     ) -> Result<Status, StatusCode> {
         let path = self.handles.get(&handle).ok_or(StatusCode::NoSuchFile)?;
         let mut store = self.store.lock().unwrap();
-        if store.fail_writes {
+        if store.fail_writes || store.writes_before_failure == Some(0) {
             return Err(StatusCode::PermissionDenied);
+        }
+        if let Some(remaining) = &mut store.writes_before_failure {
+            *remaining -= 1;
         }
         let node = store.files.get_mut(path).ok_or(StatusCode::NoSuchFile)?;
         let start = usize::try_from(offset).map_err(|_| StatusCode::Failure)?;
@@ -157,6 +167,9 @@ impl russh_sftp::server::Handler for Peer {
         }
         node.data[start..end].copy_from_slice(&data);
         node.modified = 20;
+        if let Some(after_write) = store.after_write.take() {
+            after_write();
+        }
         Ok(success(id))
     }
 
@@ -215,21 +228,19 @@ impl russh_sftp::server::Handler for Peer {
     }
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, StatusCode> {
-        self.store.lock().unwrap().files.remove(&path).ok_or(StatusCode::NoSuchFile)?;
+        let mut store = self.store.lock().unwrap();
+        store.files.remove(&path).ok_or(StatusCode::NoSuchFile)?;
         Ok(success(id))
     }
 }
 
-pub(super) async fn connect(
+pub(crate) async fn connect(
     data: &[u8],
 ) -> (Arc<Mutex<Store>>, Arc<russh_sftp::client::SftpSession>) {
     let store = Arc::new(Mutex::new(Store::default()));
     store.lock().unwrap().files.insert("/config".into(), Node::new(data));
     let (client, server) = tokio::io::duplex(128 * 1024);
-    tokio::spawn(russh_sftp::server::run(
-        server,
-        Peer { store: store.clone(), handles: BTreeMap::new() },
-    ));
+    tokio::spawn(serve(server, store.clone()));
     let session = russh_sftp::client::SftpSession::new_with_config(
         client,
         crate::ssh_sftp::limits::session_config(),
@@ -237,4 +248,11 @@ pub(super) async fn connect(
     .await
     .unwrap();
     (store, Arc::new(session))
+}
+
+pub(crate) async fn serve(
+    stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    store: Arc<Mutex<Store>>,
+) {
+    russh_sftp::server::run(stream, Peer { store, handles: BTreeMap::new() }).await;
 }

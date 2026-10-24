@@ -1,7 +1,9 @@
 use super::*;
-use crate::gpui_shell::terminal::view::TerminalLaunch;
+use crate::gpui_shell::terminal::view::{TerminalLaunch, TerminalViewEvent};
 use crate::gpui_shell::workspace::{TabMeta, windowing};
-use gpui::{AssetSource as _, TestAppContext, VisualTestContext, point, size};
+use gpui::{
+    AssetSource as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, size,
+};
 use gpui_component::Root;
 use nebula_split::SplitTree;
 
@@ -14,7 +16,7 @@ fn draw(cx: &mut VisualTestContext) {
 }
 
 #[gpui::test]
-fn terminal_menu_renders_without_a_selection_and_escape_restores_focus(cx: &mut TestAppContext) {
+fn terminal_menu_restores_focus_before_paste_input_and_after_escape(cx: &mut TestAppContext) {
     let paste_icon = crate::gpui_shell::assets::NebulaAssets
         .load(crate::gpui_shell::assets::nav::CLIPBOARD_PASTE)
         .unwrap()
@@ -111,4 +113,51 @@ fn terminal_menu_renders_without_a_selection_and_escape_restores_focus(cx: &mut 
         cx.update(|window, cx| assert!(source.read(cx).focus_handle(cx).is_focused(window)));
         assert_eq!(workspace.read_with(&cx, |workspace, _| workspace.tabs.len()), 1);
     }
+
+    let receiver = source.update(&mut cx, |view, _| {
+        // The local fake session reads only GPUI's test clipboard, never the
+        // user's native CF_HDROP payload. File-paste focus guards are tested
+        // separately with the same TerminalView input lifetime.
+        assert!(view.ssh_destination.is_none());
+        view.install_completion_test_session()
+    });
+    let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let pasted = observed.clone();
+    let _subscription = cx.update(|window, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(r"C:\copied-as-text.txt".into()));
+        workspace.update(cx, |_, cx| {
+            cx.subscribe_in(&source, window, move |workspace, source, event, window, cx| {
+                if matches!(event, TerminalViewEvent::UserInput(_)) {
+                    assert!(workspace.selection_context_menu.is_some(), "observe before dismissal");
+                    assert!(
+                        source.read(cx).focus_handle.is_focused(window),
+                        "menu Paste must restore terminal focus before processing its payload"
+                    );
+                    pasted.set(true);
+                }
+            })
+        })
+    });
+    draw(&mut cx);
+    let position = point(px(400.0), px(150.0));
+    let modifiers = Modifiers { control: true, ..Modifiers::default() };
+    cx.simulate_mouse_down(position, MouseButton::Right, modifiers);
+    cx.simulate_mouse_up(position, MouseButton::Right, modifiers);
+    draw(&mut cx);
+    assert!(cx.debug_bounds("terminal-selection-context-menu").is_some());
+    cx.update(|window, cx| assert!(!source.read(cx).focus_handle.is_focused(window)));
+    // The first Down selects Copy; the second selects the actual Paste item.
+    cx.simulate_keystrokes("down down enter");
+    draw(&mut cx);
+    assert!(observed.get(), "the real menu item must enter the normal paste route");
+    let bytes: Vec<u8> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            nebula_terminal::event_loop::Msg::Input(bytes) => Some(bytes.into_owned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(bytes, br"C:\copied-as-text.txt");
+    assert!(workspace.read_with(&cx, |workspace, _| workspace.selection_context_menu.is_none()));
 }

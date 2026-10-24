@@ -15,6 +15,7 @@ pub(crate) mod ai_session_identity;
 #[cfg(all(feature = "gpui-shell", feature = "video-background"))]
 pub(crate) mod background_media;
 pub mod capabilities;
+pub(crate) mod clipboard_files;
 pub mod credentials;
 pub mod dirs;
 pub(crate) mod distribution;

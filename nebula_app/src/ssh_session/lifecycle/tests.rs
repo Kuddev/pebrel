@@ -79,6 +79,7 @@ enum Mode {
     CompletionMetadata,
     Integration,
     RejectIntegration,
+    Sftp,
 }
 
 struct Loopback {
@@ -88,6 +89,7 @@ struct Loopback {
     window_changes: mpsc::UnboundedSender<WindowSize>,
     channels: Vec<Channel<server::Msg>>,
     scripts: std::collections::HashMap<ChannelId, Vec<u8>>,
+    sftp: Arc<Mutex<crate::ssh_sftp::test_peer::Store>>,
 }
 
 impl server::Handler for Loopback {
@@ -216,6 +218,22 @@ impl server::Handler for Loopback {
         }
     }
 
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if self.mode != Mode::Sftp || name != "sftp" {
+            return session.channel_failure(channel);
+        }
+        let index = self.channels.iter().position(|value| value.id() == channel).unwrap();
+        let stream = self.channels.remove(index).into_stream();
+        session.channel_success(channel)?;
+        tokio::spawn(crate::ssh_sftp::test_peer::serve(stream, self.sftp.clone()));
+        Ok(())
+    }
+
     async fn window_change_request(
         &mut self,
         channel: ChannelId,
@@ -272,6 +290,9 @@ impl server::Handler for Loopback {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.mode == Mode::Sftp {
+            return Ok(()); // The SFTP codec consumes the channel's data queue.
+        }
         if let Some(script) = self.scripts.get_mut(&channel) {
             script.extend_from_slice(data);
             return Ok(());
@@ -531,6 +552,7 @@ struct Fixture {
     window_changes: mpsc::UnboundedReceiver<WindowSize>,
     task: tokio::task::JoinHandle<()>,
     _directory: tempfile::TempDir,
+    sftp: Arc<Mutex<crate::ssh_sftp::test_peer::Store>>,
 }
 
 impl Drop for Fixture {
@@ -563,6 +585,8 @@ impl Fixture {
         });
         let (data_tx, data) = mpsc::unbounded_channel();
         let (window_changes_tx, window_changes) = mpsc::unbounded_channel();
+        let sftp = Arc::new(Mutex::new(crate::ssh_sftp::test_peer::Store::default()));
+        let remote_files = sftp.clone();
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
             let mut first = true;
@@ -576,6 +600,7 @@ impl Fixture {
                     window_changes: window_changes_tx.clone(),
                     channels: Vec::new(),
                     scripts: Default::default(),
+                    sftp: remote_files.clone(),
                 };
                 first = false;
                 let config = config.clone();
@@ -593,7 +618,7 @@ impl Fixture {
             transport: RouteTransport::Direct,
             known_hosts_path: Some(known_hosts),
         };
-        Self { route, data, window_changes, task, _directory: directory }
+        Self { route, data, window_changes, task, _directory: directory, sftp }
     }
 
     async fn connect(&self) -> AcquiredSession {
@@ -603,6 +628,58 @@ impl Fixture {
     async fn forget(&self, session: &SharedSession) {
         super::super::evict_pooled_session(&self.route.pool_key(), session).await;
     }
+}
+
+#[test]
+fn file_paste_uses_the_original_connection_and_cleans_up_after_its_owner_closes() {
+    use crate::ssh_session::{PooledSession, SftpSource, connection_pool, pane_scope::PaneScope};
+    use crate::ssh_sftp::clipboard_files::{Operation, upload};
+    check(async {
+        let original = Fixture::new(Mode::Sftp).await;
+        let replacement = Fixture::new(Mode::Sftp).await;
+        let acquired = original.connect().await;
+        let other = replacement.connect().await;
+        let (owner, connection) = PaneScope::new(&acquired.session);
+        let source = SftpSource::new(connection);
+        // A later destination resolution/pool lookup would now select another
+        // endpoint. The pane capability must still use the original transport.
+        let previous = connection_pool().lock().await.insert(
+            acquired.key.clone(),
+            PooledSession::new(other.session.clone(), "edited destination".into()),
+        );
+        let path = original._directory.path().join("report.txt");
+        std::fs::write(&path, b"for original host").unwrap();
+        upload(source.clone(), Some("/project".into()), vec![path], Operation::default())
+            .await
+            .unwrap()
+            .keep();
+        assert_eq!(
+            original.sftp.lock().unwrap().files["/project/report.txt"].data,
+            b"for original host"
+        );
+        assert!(replacement.sftp.lock().unwrap().files.is_empty());
+
+        // End the owner while an exclusive OPEN is awaiting acknowledgement.
+        // The same future must receive that handle and remove only its new file.
+        let path = original._directory.path().join("cancel.txt");
+        std::fs::write(&path, b"cancel before writing").unwrap();
+        original.sftp.lock().unwrap().after_open = Some(Box::new(move || drop(owner)));
+        let operation = Operation::default();
+        assert!(
+            upload(source.clone(), Some("/project".into()), vec![path], operation.clone())
+                .await
+                .is_err()
+        );
+        assert!(operation.is_cancelled());
+        assert_eq!(original.sftp.lock().unwrap().files.len(), 1);
+        assert!(!source.is_open());
+        assert!(!acquired.session.is_closed(), "another pane may keep the shared transport alive");
+        assert!(source.open().await.is_err());
+        assert!(replacement.sftp.lock().unwrap().files.is_empty());
+        connection_pool().lock().await.insert(acquired.key.clone(), previous.unwrap());
+        original.forget(&acquired.session).await;
+        replacement.forget(&other.session).await;
+    });
 }
 
 #[test]

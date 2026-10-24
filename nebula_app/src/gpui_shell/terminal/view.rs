@@ -12,6 +12,7 @@ mod conversation;
 pub(super) mod cursor;
 mod cwd_report;
 mod editor;
+mod file_paste;
 mod image_paste;
 mod layout;
 mod native_clipboard;
@@ -351,6 +352,7 @@ pub struct TerminalView {
     /// 只用事件携带的绝对行锚定到对应的 scrollback 位置。
     pub(super) inline_images: super::inline_image::InlineImageStore,
     image_paste: image_paste::ImagePasteState,
+    file_paste: file_paste::FilePasteState,
     native_clipboard: native_clipboard::NativeClipboard,
     path_drop: path_drop::PathDropState,
     /// SSH 直连目的地（`user@host[:port]`）；本地会话为 None。
@@ -547,6 +549,7 @@ impl TerminalView {
     ) {
         if !visible {
             self.clear_output_hover(cx);
+            self.file_paste.cancel();
         }
         if self.output_visible != visible {
             self.cursor_animation.reset();
@@ -763,6 +766,7 @@ impl TerminalView {
 
     /// `Exited` 只对宿主发一次；重复的退出信号（ChildExit 之后必然跟 Exit）只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<Self>) {
+        self.file_paste.cancel();
         self.clear_output_hover(cx);
         self.reading.cancel_query();
         self.reading.cancel_copy();
@@ -786,6 +790,7 @@ impl TerminalView {
 
     /// 让 EventLoop 退出并回收 ConPTY/子进程。幂等：重复调用只会得到发送失败。
     pub fn shutdown(&self) {
+        self.file_paste.cancel();
         if let Some(session) = &self.session {
             let _ = session.notifier.0.send(Msg::Shutdown);
         }
@@ -810,6 +815,7 @@ impl TerminalView {
         self.cursor_animation.note_input(&bytes);
         self.prompt_input_epoch = self.prompt_input_epoch.wrapping_add(1);
         self.path_drop.invalidate();
+        self.file_paste.cancel();
         self.image_paste.observe_input(&bytes);
         self.confirmation.observe_input(&bytes);
         self.awaiting_input = false;
@@ -1178,6 +1184,11 @@ impl TerminalView {
         }
         let ks = &event.keystroke;
         let mods = &ks.modifiers;
+
+        if self.cancel_file_paste_key(ks, cx) {
+            cx.stop_propagation();
+            return;
+        }
 
         if self.handle_ssh_reconnect_key(event, cx) {
             cx.stop_propagation();
@@ -1591,6 +1602,7 @@ impl Render for TerminalView {
         if self.session.is_some() {
             root = root.child(self.reading_chrome(cx));
         }
+        root = root.children(self.file_paste_indicator(cx));
         root.into_any_element()
     }
 }

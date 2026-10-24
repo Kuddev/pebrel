@@ -230,14 +230,24 @@ pub(crate) async fn upload_stream(
     remote: &str,
     observer: &dyn TransferObserver,
 ) -> TransferResult<()> {
-    let mut source =
-        tokio::io::BufReader::with_capacity(LOCAL_IO_BUFFER, tokio::fs::File::open(local).await?);
+    let mut source = tokio::fs::File::open(local).await?;
     let mut target = sftp
         .open_with_flags(
             remote.to_owned(),
             OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
         )
         .await?;
+    upload_to_writer(&mut source, &mut target, observer).await
+}
+
+/// Copy to an already-owned destination. Clipboard uploads open exclusively;
+/// ordinary SFTP transfers keep their existing staging/publication policy.
+pub(super) async fn upload_to_writer(
+    source: &mut (impl tokio::io::AsyncRead + Unpin),
+    target: &mut (impl tokio::io::AsyncWrite + Unpin),
+    observer: &dyn TransferObserver,
+) -> TransferResult<()> {
+    let mut source = tokio::io::BufReader::with_capacity(LOCAL_IO_BUFFER, source);
     let mut buffer = vec![0u8; TRANSFER_CHUNK];
     loop {
         guard(observer)?;

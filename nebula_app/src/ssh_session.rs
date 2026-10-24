@@ -32,11 +32,14 @@ mod exec;
 mod forward;
 mod integration;
 mod lifecycle;
+mod pane_scope;
 mod route;
+mod sftp;
 mod transcript;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
 use route::{ResolvedRoute, RouteTransport};
+pub use sftp::SftpSource;
 pub use transcript::TranscriptReader;
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
@@ -75,6 +78,7 @@ pub trait SshEventHost:
 {
     /// A read capability belongs to this pane's live authenticated transport.
     fn ssh_transcript_reader(&self, _reader: Option<TranscriptReader>) {}
+    fn ssh_file_transfer(&self, _source: Option<SftpSource>) {}
 
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
@@ -1101,16 +1105,7 @@ pub(crate) async fn open_sftp(
 
     // SFTP 面板自己有加载态，不参与终端 pane 的连接卡片。
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
-    let channel = lifecycle::network("SFTP channel", session.channel_open_session()).await?;
-    channel.request_subsystem(true, "sftp").await?;
-    // 显式给参数而不是用上游默认值：默认单包 256 KiB 会让每个 READ/WRITE 都
-    // 顶满一个巨型请求（部分服务端在这个尺寸上会静默出错），而默认在途写
-    // 请求只有 8 个，高时延链路上填不满管道。判据见 `ssh_sftp::limits`。
-    Ok(russh_sftp::client::SftpSession::new_with_config(
-        channel.into_stream(),
-        crate::ssh_sftp::limits::session_config(),
-    )
-    .await?)
+    sftp::open_on(&session).await
 }
 
 // ---- 「测试连接」（SSH 编辑器页脚，spec ui-redesign 稿一） ----

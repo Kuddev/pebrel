@@ -1,3 +1,5 @@
+#[path = "ssh_sftp/clipboard_files.rs"]
+pub(crate) mod clipboard_files;
 #[path = "ssh_sftp/document.rs"]
 pub(crate) mod document;
 #[path = "ssh_sftp/export.rs"]
@@ -10,6 +12,10 @@ pub(crate) mod remote_cwd;
 mod transaction;
 #[path = "ssh_sftp/transfer.rs"]
 mod transfer;
+
+#[cfg(test)]
+#[path = "ssh_sftp/document/tests/peer.rs"]
+pub(crate) mod test_peer;
 
 use std::collections::HashSet;
 use std::future::Future;

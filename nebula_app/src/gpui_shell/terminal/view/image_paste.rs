@@ -74,7 +74,19 @@ struct StagedImage {
 
 impl TerminalView {
     pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(payload) = cx.read_from_clipboard().and_then(clipboard_payload) else { return };
+        if self.paste_native_files(window, cx) {
+            return;
+        }
+        self.paste_clipboard_item(cx.read_from_clipboard(), window, cx);
+    }
+
+    pub(super) fn paste_clipboard_item(
+        &mut self,
+        item: Option<ClipboardItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(payload) = item.and_then(clipboard_payload) else { return };
         match payload {
             ClipboardPayload::Text(text) => {
                 if self.try_native_clipboard_paste(&text, true, cx) {

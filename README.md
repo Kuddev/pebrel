@@ -149,6 +149,15 @@ discover candidates from the current environment without matching prior commands
 - Saved hosts, SSH config aliases, proxy and jump-host options, private-key and
   keyboard-interactive authentication, and host-key verification.
 - SFTP browsing, uploads and downloads, folder transfers, progress, and cancellation.
+- On Windows, copying files in Explorer and pasting into a connected SSH pane uploads
+  up to 32 regular files, then inserts their quoted remote paths without pressing Enter.
+  This replaces the unusable local-path paste for native file copies; ordinary text
+  and image paste keep their own behavior. Uploads use the pane's reported directory,
+  or the authenticated SFTP home when no directory is known. Existing names are never
+  overwritten; directories and duplicate names are rejected. Cancel/Esc, typing,
+  switching panes or closing the session cancels path insertion. Failed or abandoned
+  uploads remove newly created files where the connection permits cleanup; a disconnect
+  can leave files to remove manually. See the [ownership and validation boundary](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-24-ssh-file-paste-ownership.md).
 - Local file browsing and Git actions alongside your terminals.
 - Duplicated WSL and SSH tabs retain their known working directory.
 

@@ -147,7 +147,12 @@ impl NebulaWorkspace {
             .icon(Icon::default().path(crate::gpui_shell::assets::nav::CLIPBOARD_PASTE))
             .on_click(move |_, window, cx| {
                 if let Some(source) = paste_source.upgrade() {
-                    source.update(cx, |view, cx| view.paste(window, cx));
+                    source.update(cx, |view, cx| {
+                        // The menu dismisses after this handler; file paste must
+                        // already belong to the terminal when its upload starts.
+                        view.focus_handle.focus(window, cx);
+                        view.paste(window, cx);
+                    });
                 }
             });
         let mut items = vec![copy_item, paste_item, copy_cwd, PopupMenuItem::separator()];

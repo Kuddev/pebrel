@@ -1,6 +1,5 @@
 use super::*;
-#[path = "tests/peer.rs"]
-mod peer;
+use crate::ssh_sftp::test_peer as peer;
 
 fn run(future: impl std::future::Future<Output = ()>) {
     tokio::runtime::Builder::new_multi_thread()

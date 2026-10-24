@@ -3,6 +3,8 @@ use winit::raw_window_handle::RawDisplayHandle;
 
 use nebula_terminal::term::ClipboardType;
 
+pub(crate) mod files;
+
 #[cfg(any(feature = "x11", target_os = "macos", windows))]
 use copypasta::ClipboardContext;
 use copypasta::ClipboardProvider;
