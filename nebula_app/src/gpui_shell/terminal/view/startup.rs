@@ -341,6 +341,7 @@ impl TerminalView {
             last_ai_session_probe: None,
             error,
             exited: None,
+            retain_failed_session: false,
             scrollbar_drag: None,
             scrollbar_hovered: false,
             scrollbar_visibility: cx

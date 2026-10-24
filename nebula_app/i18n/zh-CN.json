@@ -1591,5 +1591,9 @@
     "advanced_active": "高级效果 · 终端效果已启用"
   },
   "terminal.ssh_disconnected": "连接已断开，按 R 重新连接。",
-  "terminal.ssh_reconnect": "重新连接 (R)"
+  "terminal.ssh_reconnect": "重新连接 (R)",
+  "terminal.choose_shell": "选择 Shell…",
+  "terminal.failed_session_help": "此会话不可用。请选择 Shell 打开新标签，或到设置中更换默认 Shell。",
+  "session.tabs_reopened": "已重新打开 {count} 个标签。会话正在启动，启动错误会保留在对应标签中。",
+  "session.tabs_reopened_after_crash": "上次未正常退出，已重新打开 {count} 个标签。会话正在启动，启动错误会保留在对应标签中。"
 }

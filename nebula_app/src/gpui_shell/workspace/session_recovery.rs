@@ -33,8 +33,8 @@ impl NebulaWorkspace {
         restored
     }
 
-    /// 启动恢复：断路器跳闸就隔离现场并走干净路径；恢复成功弹一条
-    /// 自动消失的提示（崩溃现场多一句来源说明）。返回是否恢复出了 tab。
+    /// 启动恢复：断路器跳闸就隔离现场并走干净路径；标签重建后提示
+    /// 会话仍在启动（崩溃现场多一句来源说明）。返回是否恢复出了 tab。
     pub(super) fn try_restore_session(
         &mut self,
         resume_ai: bool,
@@ -72,12 +72,14 @@ impl NebulaWorkspace {
         }
         self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
         self.focus_active(window, cx);
-        let text = if crashed {
-            format!("上次未正常退出，已恢复 {restored} 个标签")
+        let language = workspace_ui_language();
+        let message = if crashed {
+            crate::i18n::Message::SessionTabsReopenedAfterCrash
         } else {
-            format!("已恢复 {restored} 个标签")
+            crate::i18n::Message::SessionTabsReopened
         };
-        crate::gpui_shell::toast::toast(window, cx, ToastKind::Success, text);
+        let text = language.format(message, &[("count", &restored.to_string())]);
+        crate::gpui_shell::toast::toast(window, cx, ToastKind::Info, text);
         cx.notify();
         true
     }

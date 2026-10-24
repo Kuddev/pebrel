@@ -22,6 +22,7 @@ impl TerminalView {
         self.session = Some(session);
         self.error = None;
         self.exited = None;
+        self.retain_failed_session = false;
         self.exec_context = None;
         self.suggest.suggest_env = crate::display::SuggestEnv::Wsl { distro: "Debian".into() };
         receiver

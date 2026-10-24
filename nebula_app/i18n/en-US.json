@@ -1591,5 +1591,9 @@
     "advanced_active": "Advanced effects · Terminal effects enabled"
   },
   "terminal.ssh_disconnected": "Connection closed. Press R to reconnect.",
-  "terminal.ssh_reconnect": "Reconnect (R)"
+  "terminal.ssh_reconnect": "Reconnect (R)",
+  "terminal.choose_shell": "Choose a shell…",
+  "terminal.failed_session_help": "This session is unavailable. Choose a shell to open a new tab, or change the default shell in Settings.",
+  "session.tabs_reopened": "Reopened {count} tabs. Sessions are starting; any startup errors remain in their tabs.",
+  "session.tabs_reopened_after_crash": "After an unexpected exit, reopened {count} tabs. Sessions are starting; any startup errors remain in their tabs."
 }
