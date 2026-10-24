@@ -11829,7 +11829,7 @@ checksum = "2fb433233f2df9344722454bc7e96465c9d03bff9d77c248f9e7523fe79585b5"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/MeshedPoto/xim-rs?rev=405efc92426b3dc3a761005709a84567185cc3ca#405efc92426b3dc3a761005709a84567185cc3ca"
 dependencies = [
  "encoding_rs",
 ]
@@ -11837,7 +11837,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/MeshedPoto/xim-rs?rev=405efc92426b3dc3a761005709a84567185cc3ca#405efc92426b3dc3a761005709a84567185cc3ca"
 dependencies = [
  "bitflags 2.13.0",
 ]
@@ -12167,7 +12167,7 @@ dependencies = [
 [[package]]
 name = "zed-xim"
 version = "0.4.0-zed"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/MeshedPoto/xim-rs?rev=405efc92426b3dc3a761005709a84567185cc3ca#405efc92426b3dc3a761005709a84567185cc3ca"
 dependencies = [
  "ahash",
  "hashbrown 0.14.5",
