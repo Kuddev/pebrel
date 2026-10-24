@@ -27,6 +27,8 @@ mod background_effects;
 pub use background_effects::{BackgroundEffectRequest, BackgroundEffects};
 mod terminal_effects;
 pub use terminal_effects::{EffectAnimation, TerminalEffects};
+mod tab_bar_material;
+pub use tab_bar_material::TabBarMaterial;
 mod cursor_motion;
 mod custom_theme;
 pub use cursor_motion::CursorMotion;
@@ -1071,6 +1073,8 @@ pub struct RuntimeSettings {
     pub tray: bool,
     pub blur: BlurModeName,
     pub opacity: f32,
+    /// File-only overrides shared by sidebar and top tab layouts.
+    pub tab_bar_material: TabBarMaterial,
     /// Whether the corresponding material value was explicitly present in
     /// `nebula_settings.txt`. Theme defaults may fill an absent value, while
     /// an explicit user value (including `none` or `1.0`) remains authoritative.
@@ -1272,6 +1276,7 @@ impl RuntimeSettings {
             tray: raw.bool_on("tray").unwrap_or(true),
             blur,
             opacity,
+            tab_bar_material: TabBarMaterial::from_raw(raw),
             opacity_explicit,
             blur_explicit,
             background: raw.value("background").and_then(parse_hex_rgb),
