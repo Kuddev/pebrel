@@ -692,6 +692,12 @@
     "drop_paths_expired": "Path paste was canceled because the active input changed.",
     "drop_paths_failed": "Could not convert the paths for this WSL session. Please try again.",
     "drop_paths_remote": "Local paths cannot be used directly over SSH. Drop the files into the remote file tree to upload them.",
+    "file_upload_disconnected": "Connect the SSH session before uploading files.",
+    "file_upload_busy": "The previous file upload is still in progress.",
+    "file_upload_failed": "Could not upload files: {error}",
+    "file_upload_cancelling": "Cancelling file upload…",
+    "file_upload_preparing": "Preparing file upload…",
+    "file_upload_progress": "Uploading files: {percent}%",
     "image_paste_failed": "Could not paste image: {error}",
     "image_paste_busy": "An image paste is still in progress.",
     "image_paste_expired": "Image paste was canceled because the active input changed.",
@@ -1867,5 +1873,8 @@
     "backup_passphrase_body": "Use at least 8 characters. Pebrel does not save the passphrase; the backup cannot be restored if you lose it."
   },
   "terminal.ssh_disconnected": "Connection closed. Press R to reconnect.",
-  "terminal.ssh_reconnect": "Reconnect (R)"
+  "terminal.ssh_reconnect": "Reconnect (R)",
+  "terminal.ssh_session_stopped": "Session stopped.",
+  "terminal.ssh_session_keys": "Press R to reconnect. Press Enter to close this terminal.",
+  "terminal.ssh_reconnecting": "Reconnecting…"
 }
