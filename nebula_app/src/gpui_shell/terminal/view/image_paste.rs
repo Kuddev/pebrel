@@ -47,9 +47,25 @@ impl ImagePasteState {
 enum ClipboardPayload {
     Text(String),
     Image(Vec<u8>),
+    Files(Vec<std::path::PathBuf>),
 }
 
 fn clipboard_payload(item: ClipboardItem) -> Option<ClipboardPayload> {
+    // Native file copies may also offer a text representation. Only the file
+    // payload authorizes reading/uploading; path-looking text stays ordinary text.
+    let files: Vec<_> = item
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ClipboardEntry::ExternalPaths(paths) => Some(paths.paths()),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect();
+    if !files.is_empty() {
+        return Some(ClipboardPayload::Files(files));
+    }
     if let Some(text) = item.text().filter(|text| !text.is_empty()) {
         return Some(ClipboardPayload::Text(text));
     }
@@ -90,6 +106,7 @@ impl TerminalView {
                 }
             },
             ClipboardPayload::Image(bytes) => self.paste_image(bytes, window, cx),
+            ClipboardPayload::Files(paths) => self.drop_external_paths(&paths, window, cx),
         }
     }
 
@@ -357,6 +374,25 @@ mod tests {
         assert!(
             matches!(clipboard_payload(mixed), Some(ClipboardPayload::Text(text)) if text == "text")
         );
+    }
+
+    #[test]
+    fn native_files_take_priority_but_path_looking_text_never_uploads() {
+        let path = std::path::PathBuf::from("report.pdf");
+        let item = ClipboardItem {
+            entries: vec![
+                ClipboardEntry::String(gpui::ClipboardString::new("report.pdf".into())),
+                ClipboardEntry::ExternalPaths(gpui::ExternalPaths(vec![path.clone()].into())),
+            ],
+        };
+        assert!(
+            matches!(clipboard_payload(item), Some(ClipboardPayload::Files(files)) if files == [path])
+        );
+        for text in ["C:\\Users\\me\\report.pdf", "/home/me/report.pdf"] {
+            assert!(
+                matches!(clipboard_payload(ClipboardItem::new_string(text.into())), Some(ClipboardPayload::Text(value)) if value == text)
+            );
+        }
     }
 
     #[test]

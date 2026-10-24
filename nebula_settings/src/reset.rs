@@ -58,6 +58,8 @@ const RESET_KEYS: &[&str] = &[
     "silent_start",
     "blur",
     "opacity",
+    "tab_bar_opacity",
+    "tab_bar_blur",
     "background",
     "theme_foreground",
     "custom_theme",
@@ -248,6 +250,16 @@ mod tests {
             let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
             assert_eq!(runtime.completion_style, crate::CompletionStyleName::Inline);
         }
+    }
+
+    #[test]
+    fn reset_restores_inherited_tab_material_and_keeps_unknown_keys() {
+        let restored = default_settings_text(
+            "tab_bar_opacity=0.6\n TAB_BAR_BLUR = acrylic\nfuture_setting=keep\n",
+        );
+        assert_eq!(restored, "future_setting=keep\n");
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_text(&restored));
+        assert_eq!(runtime.tab_bar_material, crate::TabBarMaterial::default());
     }
 
     #[test]

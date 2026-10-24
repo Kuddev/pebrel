@@ -610,6 +610,15 @@ fn apply_shell_opacity(chrome: &ResolvedTheme, cx: &mut App) {
     theme.tokens.title_bar_border = shell.into();
 }
 
+/// Shared tab surface for sidebar and top layouts. Text/icons keep their alpha.
+pub(super) fn tab_bar_background(cx: &App) -> Hsla {
+    // The prepared shell token already contains the resolved theme color.
+    // Replace its alpha, avoiding both a second multiplication and render-time I/O.
+    let mut color = cx.theme().background;
+    color.a = crate::gpui_shell::wallpaper::tab_bar_surface_opacity(cx);
+    color
+}
+
 /// 旧壳 [`Skin`] → gpui-component 全局 token。改全局而不是逐组件覆样式：
 /// 后续直接引入的组件自然进入 Nebula 视觉系统，上游升级时差异集中在一处。
 ///
