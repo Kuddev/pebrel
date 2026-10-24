@@ -145,6 +145,17 @@ fn real_bundled_font_shapes_ligatures_and_preserves_the_cached_natural_layout() 
         let aligned = shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(8.0));
         assert_eq!(glyph_ids(&aligned), glyph_ids(&natural), "keep contextual substitutions");
         assert_eq!(aligned.width, px(32.0));
+        let unit = text_system.shape_line("M".into(), px(15.0), &[run(false)], None).width.as_f32();
+        for delta in [-3.0_f32, 3.0] {
+            let grid = (unit + delta).max(1.0);
+            let spaced =
+                shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(grid));
+            assert_eq!(
+                glyph_ids(&spaced),
+                glyph_ids(&natural),
+                "{sample} must stay joined when the grid is {grid}"
+            );
+        }
         let last = aligned
             .runs
             .iter()
@@ -160,6 +171,67 @@ fn real_bundled_font_shapes_ligatures_and_preserves_the_cached_natural_layout() 
                 .iter()
                 .flat_map(|run| &run.glyphs)
                 .map(|glyph| glyph.position)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // 用真实 shaper 展开构造的坍缩 cluster；Linux 不解析 Monaco 的 AAT，
+    // 此处只模拟它的输入布局，避免把改造字体当作 macOS 原字体的证据。
+    for sample in ["fi", "fl", "fifi", "afile", "afl"] {
+        let mut template = run(true);
+        template.len = sample.len();
+        let cached = text_system.shape_line(sample.into(), px(15.0), &[template.clone()], None);
+        let before = cached
+            .runs
+            .iter()
+            .flat_map(|r| &r.glyphs)
+            .map(|g| (g.id, g.index, g.position))
+            .collect::<Vec<_>>();
+        let unit = text_system.shape_line("M".into(), px(15.0), &[run(false)], None).width;
+        let font_id = cached.runs[0].font_id;
+        let glyph = cached.runs[0].glyphs[0].clone();
+        let mut glyphs = Vec::new();
+        let mut byte = 0;
+        while byte < sample.len() {
+            let mut glyph = glyph.clone();
+            glyph.index = byte;
+            glyph.position.x = unit * glyphs.len() as f32;
+            glyphs.push(glyph);
+            byte += if sample[byte..].starts_with("fi") || sample[byte..].starts_with("fl") {
+                2
+            } else {
+                1
+            };
+        }
+        let layout = gpui::LineLayout {
+            font_size: cached.font_size,
+            width: unit * glyphs.len() as f32,
+            ascent: cached.ascent,
+            descent: cached.descent,
+            runs: vec![gpui::ShapedRun { font_id, glyphs }],
+            len: cached.len(),
+        };
+        let mut collapsed = cached.clone();
+        *collapsed = std::sync::Arc::new(layout);
+        let expanded = crate::gpui_shell::terminal::ligatures::expand_collapsed_ligatures(
+            &collapsed,
+            &text_system,
+            px(15.0),
+            &template,
+        )
+        .expect("constructed fi/fl cluster must expand");
+        let indices =
+            expanded.runs.iter().flat_map(|r| &r.glyphs).map(|g| g.index).collect::<Vec<_>>();
+        assert_eq!(indices, (0..sample.len()).collect::<Vec<_>>(), "{sample}");
+        assert!(expanded.runs.iter().all(|r| r.font_id == font_id));
+        let after = text_system.shape_line(sample.into(), px(15.0), &[template], None);
+        assert_eq!(
+            before,
+            after
+                .runs
+                .iter()
+                .flat_map(|r| &r.glyphs)
+                .map(|g| (g.id, g.index, g.position))
                 .collect::<Vec<_>>()
         );
     }

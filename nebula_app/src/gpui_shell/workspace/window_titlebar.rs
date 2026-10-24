@@ -97,6 +97,13 @@ fn title_bar_frame() -> gpui::Div {
     })
 }
 
+/// 标题栏右侧工具组；右缘留白由平台层决定（见 `RIGHT_CONTROLS_INSET`）。
+pub(super) fn title_bar_right_controls() -> gpui::Div {
+    title_bar_panel_controls()
+        .gap(px(8.0))
+        .pr(px(crate::platform::window_chrome::RIGHT_CONTROLS_INSET))
+}
+
 impl NebulaWorkspace {
     pub(super) fn render_terminal_find_button(
         &self,
@@ -104,12 +111,10 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> gpui_component::button::Button {
         let language = crate::gpui_shell::config::ui_language(cx);
-        toolbar_button("terminal-find", IconName::Search)
+        let disabled = settings_active
+            || self.tabs.get(self.active).and_then(WorkspaceTab::focused_view).is_none();
+        toolbar_button("terminal-find", IconName::Search, disabled)
             .debug_selector(|| "terminal-find".to_owned())
-            .disabled(
-                settings_active
-                    || self.tabs.get(self.active).and_then(WorkspaceTab::focused_view).is_none(),
-            )
             .aria_label(language.text(Message::TerminalReadingOpen))
             .tooltip(language.text(Message::TerminalReadingShortcut))
             .on_click(cx.listener(|this, _, window, cx| {

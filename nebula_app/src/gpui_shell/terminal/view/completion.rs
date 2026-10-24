@@ -60,6 +60,29 @@ impl TerminalView {
                 _ => {},
             }
         }
+        // 原生编辑器未就绪时才由键击镜像兜底；就绪后一律走其权威查询。
+        if key == "tab"
+            && hybrid
+            && self.ghost_enabled
+            && self.suggest.screen_line.is_empty()
+            && !self.completion_editor.ready()
+        {
+            let snapshot = self.session.as_ref().and_then(|session| {
+                let term = session.term.lock();
+                let cursor = term.grid().cursor.point;
+                let line = self.suggest.completion_prefix_from_raw_grid(&term, cursor)?;
+                let point = nebula_terminal::term::point_to_viewport_from(
+                    term.viewport_origin_for(self.rows),
+                    cursor,
+                )?;
+                Some((line.input, (point.line, point.column.0)))
+            });
+            if let Some((line, anchor)) = snapshot {
+                self.suggest.request_completion_popup();
+                self.refresh_suggestion_from_snapshot(Some(line), Some(anchor), cx);
+                return true;
+            }
+        }
         if key == "tab"
             && self.ghost_enabled
             && (self.completion_style != CompletionStyle::Inline
@@ -263,6 +286,9 @@ impl TerminalView {
             self.suggest_anchor = None;
             self.completion_viewport.clear();
             return;
+        }
+        if line.as_deref() == Some(self.suggest.line_buf.as_str()) {
+            self.suggest.completion_mirror_at_end = true;
         }
         let Some(line) = line.filter(|line| !line.is_empty()) else {
             if self.completion_editor.is_querying()

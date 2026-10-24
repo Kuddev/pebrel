@@ -6,6 +6,10 @@
     "en_us": "English"
   },
   "settings": {
+    "opacity": {
+      "title": "Opacité du fond de la fenêtre",
+      "description": "Une valeur faible rend les fonds du terminal et des paramètres plus transparents. Le texte reste opaque."
+    },
     "sidebar": {
       "application": "Application",
       "appearance": "Apparence",
