@@ -356,7 +356,9 @@
     "search_empty": "No matching settings",
     "mouse": {
       "focus_follows_mouse": "Focus follows mouse",
-      "focus_follows_mouse_description": "Focus a terminal pane when the pointer moves over it. Off by default."
+      "focus_follows_mouse_description": "Focus a terminal pane when the pointer moves over it. Off by default.",
+      "click_to_move_cursor": "Click to move cursor",
+      "click_to_move_cursor_description": "Click inside the command you are typing to move the cursor there. Requires shell integration; drag selection, modified clicks and full-screen apps are unaffected."
     },
     "panes": {
       "dim_inactive": "Dim inactive panes",
