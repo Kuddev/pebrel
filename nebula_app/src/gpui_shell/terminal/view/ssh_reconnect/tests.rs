@@ -128,7 +128,7 @@ fn reconnect_key_is_local_only_after_disconnect_and_never_repeats(cx: &mut TestA
 }
 
 #[gpui::test]
-fn disconnected_controls_keep_history_layout_and_selection_available(cx: &mut TestAppContext) {
+fn disconnected_text_keeps_history_layout_and_keyboard_actions_available(cx: &mut TestAppContext) {
     let (view, mut window, receiver) = open(cx);
     let events = Rc::new(RefCell::new(Vec::new()));
     let _subscription = window.update(|_, cx| {
@@ -170,24 +170,25 @@ fn disconnected_controls_keep_history_layout_and_selection_available(cx: &mut Te
         window.simulate_resize(gpui::size(px(width), px(500.0)));
         draw(&mut window);
         let banner = window.debug_bounds("ssh-disconnected").unwrap();
-        for selector in ["ssh-disconnected-retry", "ssh-disconnected-close"] {
+        for selector in ["ssh-disconnected-status", "ssh-disconnected-keys"] {
             let bounds = window.debug_bounds(selector).unwrap();
-            assert!(bounds.size.height >= px(32.0));
-            assert!(banner.contains(&bounds.origin) && banner.contains(&bounds.bottom_right()));
+            assert!(bounds.size.height > px(0.0));
+            assert!(
+                bounds.origin.x >= banner.origin.x
+                    && bounds.origin.y >= banner.origin.y
+                    && bounds.right() <= banner.right()
+                    && bounds.bottom() <= banner.bottom(),
+                "{selector}: {bounds:?} outside {banner:?} at width {width}"
+            );
         }
+        assert!(window.debug_bounds("ssh-disconnected-retry").is_none());
+        assert!(window.debug_bounds("ssh-disconnected-close").is_none());
     }
-    let retry = window.debug_bounds("ssh-disconnected-retry").unwrap().center();
-    window.simulate_mouse_move(retry, None, Modifiers::default());
-    draw(&mut window);
-    window.simulate_mouse_down(retry, MouseButton::Left, Modifiers::default());
-    draw(&mut window);
-    window.simulate_mouse_up(retry, MouseButton::Left, Modifiers::default());
-    draw(&mut window);
-    window.simulate_click(retry, Modifiers::default());
+    window.simulate_keystrokes("r r");
     assert_eq!(*events.borrow(), ["retry"], "pending reconnect cannot be requested twice");
-    let close = window.debug_bounds("ssh-disconnected-close").unwrap().center();
-    window.simulate_click(close, Modifiers::default());
+    window.simulate_keystrokes("enter");
     assert_eq!(*events.borrow(), ["retry", "close"]);
+    assert!(input(&receiver).is_empty(), "disconnected shortcuts must not write to SSH");
 }
 
 #[gpui::test]

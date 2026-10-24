@@ -1,4 +1,4 @@
-//! 分屏 pane 的 24px 标题条，外加 tab 上的分屏数量胶囊。
+//! 分屏 pane 的 24px 标题条，外加 tab 上的布局缩略图。
 //!
 //! # 为什么只在分屏时出现
 //!
@@ -116,34 +116,45 @@ pub(super) fn split_glyph(size_px: f32, color: Hsla) -> impl IntoElement {
     v_flex().gap(px(gap)).child(row()).child(row())
 }
 
-/// 分屏数量胶囊，与同一标题栏的紧凑状态徽章保持一致。
-/// （`top-tabs/TopTabItems.tsx:998-1006`：`text-[10px] px-1.5 rounded-full
-/// min-w-[22px]`、前景 18% 描边、背景 60% 半透明底），但尺寸按 chrome 字号
-/// 等比推导而不是钉死 10px——侧栏字号跟随配置字号，钉死会在大字号下缩成
-/// 一粒米。
-pub(super) fn split_badge(count: usize, label_px: f32, ink: Hsla, fill: Hsla) -> impl IntoElement {
-    let height = (label_px * 1.18).max(15.0);
-    h_flex()
-        .flex_shrink_0()
-        .h(px(height))
-        .min_w(px(height * 1.25))
-        .px(px(5.0))
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .border(px(1.0))
-        .border_color(ink.opacity(0.18))
-        .bg(fill.opacity(0.6))
-        .text_size(px(label_px * 0.68))
-        .font_weight(FontWeight::NORMAL)
-        .text_color(ink.opacity(0.75))
-        .child(SharedString::from(count.to_string()))
+/// A miniature of the committed split tree, with no surrounding badge or count.
+/// Reuse the split engine's geometry so all tab placements show the same layout.
+pub(super) fn split_layout_icon(tab: &WorkspaceTab, label_px: f32, ink: Hsla) -> impl IntoElement {
+    let width = (label_px * 1.2).max(16.0);
+    let height = width * 0.8;
+    let rectangles = match tab {
+        WorkspaceTab::Terminal { tree, .. } => split_icon_rects(tree, width, height),
+        _ => Vec::new(),
+    };
+    div().relative().flex_shrink_0().w(px(width)).h(px(height)).children(
+        rectangles.into_iter().map(|rect| {
+            div()
+                .absolute()
+                .left(px(rect.x))
+                .top(px(rect.y))
+                .w(px(rect.w))
+                .h(px(rect.h))
+                .rounded(px(1.5))
+                .border(px(1.0))
+                .border_color(ink)
+        }),
+    )
 }
 
-/// 胶囊在行内占的水平预算（含左侧 gap）：侧栏标题的列数换算要按同一份减法
-/// 扣掉它，否则省略号会压到胶囊上。
-pub(super) fn split_badge_slot_w(label_px: f32) -> f32 {
-    (label_px * 1.18).max(15.0) * 1.25 + 8.0
+fn split_icon_rects(tree: &SplitTree<u64>, width: f32, height: f32) -> Vec<nebula_split::Rect> {
+    // Lay out in a large logical viewport before scaling: a thumbnail must not
+    // impose the terminal's minimum cell size or change persisted proportions.
+    tree.layout(nebula_split::Rect::new(0.0, 0.0, 1000.0, 800.0), 1.0, 1.0, 0.0, false)
+        .panes
+        .into_iter()
+        .map(|(_, rect)| {
+            let x = rect.x * width / 1000.0;
+            let y = rect.y * height / 800.0;
+            let w = rect.w * width / 1000.0;
+            let h = rect.h * height / 800.0;
+            let gap = 2.0_f32.min(w * 0.3).min(h * 0.3);
+            nebula_split::Rect::new(x + gap * 0.5, y + gap * 0.5, w - gap, h - gap)
+        })
+        .collect()
 }
 
 /// 广播记号：中心点 + 左右各两段同心弧。fork 的 `IconName` 里没有
@@ -796,7 +807,7 @@ fn drag_crossed_threshold(dx: f32, dy: f32) -> bool {
 mod tests {
     use super::{
         HeaderCorners, broadcast_targets, drag_crossed_threshold, header_visible, pane_order,
-        split_badge_slot_w,
+        split_icon_rects,
     };
     use nebula_split::{SplitDirection, SplitTree};
 
@@ -837,10 +848,22 @@ mod tests {
     }
 
     #[test]
-    fn badge_slot_tracks_the_chrome_font_size() {
-        assert!(split_badge_slot_w(15.0) > split_badge_slot_w(11.0));
-        // 小字号下仍保留 15px 的胶囊最小高度，槽宽因此有下限。
-        assert_eq!(split_badge_slot_w(8.0), 15.0 * 1.25 + 8.0);
+    fn split_thumbnail_shows_direction_and_nested_layout_within_its_bounds() {
+        let mut tree = SplitTree::leaf(1);
+        tree.split_leaf(1, 2, SplitDirection::LeftRight, 0.5);
+        tree.split_leaf(2, 3, SplitDirection::TopBottom, 0.5);
+        for (width, height) in [(16.0, 12.8), (18.0, 14.4), (24.0, 19.2)] {
+            let rects = split_icon_rects(&tree, width, height);
+            assert_eq!(rects.len(), 3);
+            assert!(rects[0].x < rects[1].x);
+            assert_eq!(rects[1].x, rects[2].x);
+            assert!(rects[1].y < rects[2].y);
+            assert!(rects[0].h > rects[1].h);
+            for rect in rects {
+                assert!(rect.x >= 0.0 && rect.y >= 0.0 && rect.w > 0.0 && rect.h > 0.0);
+                assert!(rect.x + rect.w <= width && rect.y + rect.h <= height);
+            }
+        }
     }
 
     /// 收角资格必须**只**落在真正贴着卡角的那一枚上：多收一个角会在分屏缝
