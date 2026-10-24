@@ -24,6 +24,11 @@ mod quick_window;
 mod quick_window;
 pub(super) use quick_window::{observe_window_bounds, quick_terminal_bounds_changed};
 
+mod workspace_geometry;
+pub(super) use workspace_geometry::{
+    persist_window_geometry, restored_regular_bounds, workspace_window_geometry_changed,
+};
+
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -205,6 +210,8 @@ pub(crate) struct WindowRegistry {
     update_restore_windows: Option<Vec<Option<u64>>>,
     quick_terminal: Option<QuickTerminalWindow>,
     quick_size_dirty: Option<nebula_settings::QuickTerminalSize>,
+    /// 最后一个普通窗口的几何脏标记；quit/autosave/关窗时落盘。
+    window_geometry_dirty: Option<nebula_settings::WindowGeometry>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -270,11 +277,13 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
         update_restore_windows: None,
         quick_terminal: None,
         quick_size_dirty: None,
+        window_geometry_dirty: None,
         _subscriptions: Vec::new(),
     });
 
     let quit_subscription = cx.on_app_quit(|cx| {
         persist_quick_size(cx);
+        persist_window_geometry(cx);
         if let Err(error) = save_combined_session(cx, true) {
             log::warn!("Final session write: {error}");
         }
@@ -299,6 +308,7 @@ pub(crate) fn initialize(cx: &mut App, runtime_hub: crate::runtime_api::RuntimeH
 }
 
 fn save_after_window_closed(cx: &mut App) {
+    persist_window_geometry(cx);
     prune_entries(cx);
     // 快速终端不能改变普通 session 的生命周期：最后一扇普通窗口关闭后，
     // 即使隐藏的 Quake 窗口仍存活，也不能再补写一份空的普通 session。
@@ -379,6 +389,26 @@ pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App)
     });
 }
 
+/// 无存档几何时的既有居中默认（原 `workspace_window_options` 逻辑不变）。
+fn centered_regular_bounds(cx: &mut App, sidebar_width: f32) -> Bounds<gpui::Pixels> {
+    let preferred = startup_geometry::preferred_size(cx, sidebar_width)
+        .unwrap_or_else(|| size(px(1080.0), px(720.0)));
+    cx.primary_display().map_or_else(
+        || Bounds::centered(None, preferred, cx),
+        |display| {
+            let visible = display.visible_bounds();
+            let fitted = preferred.min(&visible.size);
+            Bounds::new(
+                point(
+                    visible.origin.x + (visible.size.width - fitted.width) / 2.0,
+                    visible.origin.y + (visible.size.height - fitted.height) / 2.0,
+                ),
+                fitted,
+            )
+        },
+    )
+}
+
 fn workspace_window_options(
     cx: &mut App,
     focus: bool,
@@ -387,24 +417,18 @@ fn workspace_window_options(
 ) -> WindowOptions {
     match role {
         WindowRole::Regular => {
-            let preferred = startup_geometry::preferred_size(cx, sidebar_width)
-                .unwrap_or_else(|| size(px(1080.0), px(720.0)));
-            let bounds = cx.primary_display().map_or_else(
-                || Bounds::centered(None, preferred, cx),
-                |display| {
-                    let visible = display.visible_bounds();
-                    let fitted = preferred.min(&visible.size);
-                    Bounds::new(
-                        point(
-                            visible.origin.x + (visible.size.width - fitted.width) / 2.0,
-                            visible.origin.y + (visible.size.height - fitted.height) / 2.0,
-                        ),
-                        fitted,
-                    )
-                },
-            );
+            // 有上次几何则恢复（含最大化）；无则保持既有居中默认。
+            let (bounds, maximized) = match restored_regular_bounds(cx) {
+                Some(restored) => restored,
+                None => (centered_regular_bounds(cx, sidebar_width), false),
+            };
+            let window_bounds = if maximized {
+                WindowBounds::Maximized(bounds)
+            } else {
+                WindowBounds::Windowed(bounds)
+            };
             crate::platform::window_chrome::configure_options(WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(window_bounds),
                 window_min_size: Some(size(px(760.0), px(540.0)).min(&bounds.size)),
                 titlebar: Some(TitleBar::title_bar_options()),
                 app_id: Some(crate::platform::window_chrome::application_id("pebrel")),
@@ -1353,6 +1377,7 @@ pub(crate) fn publish_runtime_snapshot_with_current(
 
 pub(crate) fn autosave_tick(cx: &mut App) {
     persist_quick_size(cx);
+    persist_window_geometry(cx);
     if let Err(error) = save_combined_session(cx, false) {
         log::warn!("Session checkpoint: {error}");
         return;

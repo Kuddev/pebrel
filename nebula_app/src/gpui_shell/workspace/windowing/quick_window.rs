@@ -10,6 +10,7 @@ pub(in crate::gpui_shell::workspace) fn observe_window_bounds(
     let mut icon_scale = window.scale_factor();
     cx.observe_window_bounds(window, move |_, window, cx| {
         quick_terminal_bounds_changed(id, window, cx);
+        super::workspace_window_geometry_changed(id, window, cx);
         if icon_scale != window.scale_factor() {
             icon_scale = window.scale_factor();
             crate::gpui_shell::set_native_window_icon(window);
