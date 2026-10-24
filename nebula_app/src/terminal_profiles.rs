@@ -14,7 +14,7 @@ const STORE_FILE: &str = "terminal_profiles.json";
 /// A launchable terminal profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TerminalProfile {
-    /// Stable profile identity derived from the shell type and command path.
+    /// Stable identity: discovered commands use a path id, custom sessions a random id.
     pub id: String,
     pub name: String,
     /// Absolute executable path.
@@ -23,8 +23,14 @@ pub(crate) struct TerminalProfile {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
-    /// Stable shell integration id (`pwsh`, `powershell`, `bash`, `nu`, `cmd`).
-    pub shell_id: String,
+    /// Optional integration override; absent infers recognized executable names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::profile_environment::ProfileEnvironment::is_empty"
+    )]
+    pub env: crate::profile_environment::ProfileEnvironment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +52,12 @@ impl TerminalProfiles {
     }
 
     pub(crate) fn load_from(path: &Path) -> io::Result<Self> {
+        let mut recorded = Self::read_recorded_from(path)?;
+        recorded.profiles.retain(|profile| command_is_launchable(&profile.command));
+        Ok(recorded)
+    }
+
+    fn read_recorded_from(path: &Path) -> io::Result<Self> {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
@@ -62,14 +74,9 @@ impl TerminalProfiles {
         for profile in &store.profiles {
             validate(profile)?;
         }
-        // 配置文件可能来自另一种 CPU 架构，或其安装目录后来被删除。加载时
-        // 直接隐藏这些条目，避免菜单仍允许点击并最终得到 ERROR_BAD_EXE_FORMAT。
-        let profiles = store
-            .profiles
-            .into_iter()
-            .filter(|profile| command_is_launchable(&profile.command))
-            .collect();
-        Ok(Self { profiles })
+        // Keep unavailable commands on disk. Presentation may hide them, but an
+        // unrelated edit must not erase profiles for a disconnected installation.
+        Ok(Self { profiles: store.profiles })
     }
 
     pub(crate) fn save(&self) -> io::Result<()> {
@@ -86,9 +93,63 @@ impl TerminalProfiles {
                 "terminal profile store is locked by another process",
             ));
         };
+        self.write_locked(path)
+    }
+
+    fn write_locked(&self, path: &Path) -> io::Result<()> {
         let store = ProfileStore { version: STORE_VERSION, profiles: self.profiles.clone() };
         let bytes = serde_json::to_vec_pretty(&store).map_err(io::Error::other)?;
         crate::atomic_file::write(path, &bytes)
+    }
+
+    /// Compare the selected row under the store lock; unrelated edits survive.
+    pub(crate) fn edit_at(
+        path: &Path,
+        expected: Option<&TerminalProfile>,
+        replacement: Option<TerminalProfile>,
+    ) -> io::Result<Self> {
+        let Some(_lock) = crate::atomic_file::try_lock(path)? else {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "terminal profile store is busy",
+            ));
+        };
+        let mut store = Self::read_recorded_from(path)?;
+        if let Some(expected) = expected {
+            if store.profiles.iter().find(|profile| profile.id == expected.id) != Some(expected) {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "terminal profile changed; reload before editing",
+                ));
+            }
+            if replacement.as_ref().is_some_and(|profile| profile.id != expected.id) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "profile identity changed during edit",
+                ));
+            }
+            store.profiles.retain(|profile| profile.id != expected.id);
+        } else if replacement
+            .as_ref()
+            .is_some_and(|profile| store.profiles.iter().any(|existing| existing.id == profile.id))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "profile identity already exists",
+            ));
+        }
+        if let Some(profile) = replacement {
+            store.upsert(profile)?;
+        }
+        store.write_locked(path)?;
+        store.profiles.retain(|profile| command_is_launchable(&profile.command));
+        Ok(store)
+    }
+
+    pub(crate) fn new_id() -> io::Result<String> {
+        let mut bytes = [0_u8; 16];
+        getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
+        Ok(format!("custom-{}", bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>()))
     }
 
     pub(crate) fn profiles(&self) -> &[TerminalProfile] {
@@ -103,19 +164,16 @@ impl TerminalProfiles {
                 command: profile.command.to_string_lossy().into_owned(),
                 args: profile.args.clone(),
                 cwd: profile.cwd.clone(),
-                shell_id: Some(profile.shell_id.clone()),
+                shell_id: profile.shell_id.clone().or_else(|| infer_shell_id(&profile.command)),
                 terminal_profile_id: Some(profile.id.clone()),
             })
             .collect()
     }
 
-    /// Replace the profile for the same command, or append a new command.
+    /// Replace a stable profile identity; different sessions may share an executable.
     pub(crate) fn upsert(&mut self, profile: TerminalProfile) -> io::Result<()> {
         validate(&profile)?;
-        if let Some(existing) = self
-            .profiles
-            .iter_mut()
-            .find(|existing| commands_equal(&existing.command, &profile.command))
+        if let Some(existing) = self.profiles.iter_mut().find(|existing| existing.id == profile.id)
         {
             *existing = profile;
         } else {
@@ -164,11 +222,22 @@ pub(crate) fn scan_directory(directory: &Path) -> io::Result<Vec<TerminalProfile
                 command,
                 args: args.iter().map(|arg| (*arg).to_owned()).collect(),
                 cwd: None,
-                shell_id: shell_id.to_owned(),
+                shell_id: Some(shell_id.to_owned()),
+                env: Default::default(),
             });
         }
     }
     Ok(profiles)
+}
+
+/// Shell family is optional for custom executables. Only recognized basenames
+/// select an integration adapter; command names never need a user-supplied id.
+pub(crate) fn infer_shell_id(command: &Path) -> Option<String> {
+    let text = command.to_string_lossy();
+    let name = text.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    matches!(name, "zsh" | "bash" | "fish" | "pwsh" | "powershell" | "cmd" | "nu" | "sh")
+        .then(|| name.to_owned())
 }
 
 pub(crate) fn store_path() -> PathBuf {
@@ -257,19 +326,26 @@ fn machine_is_supported(_machine: u16) -> bool {
 }
 
 fn validate(profile: &TerminalProfile) -> io::Result<()> {
+    profile.env.validate().map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     if profile.id.trim().is_empty()
         || profile.name.trim().is_empty()
-        || profile.shell_id.trim().is_empty()
+        || profile.shell_id.as_ref().is_some_and(|id| id.trim().is_empty())
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "terminal profile id, name, and shell_id must not be empty",
+            "terminal profile id, name, and explicit shell_id must not be empty",
         ));
     }
     if !profile.command.is_absolute() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "terminal profile command must be absolute",
+        ));
+    }
+    if profile.args.iter().any(|arg| arg.contains('\0')) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "terminal profile argument contains NUL",
         ));
     }
     Ok(())
@@ -314,7 +390,10 @@ mod tests {
 
         let profiles = scan_directory(temp.path()).unwrap();
         assert_eq!(
-            profiles.iter().map(|profile| profile.shell_id.as_str()).collect::<Vec<_>>(),
+            profiles
+                .iter()
+                .map(|profile| profile.shell_id.as_deref().unwrap_or("custom"))
+                .collect::<Vec<_>>(),
             ["pwsh", "cmd"]
         );
         assert!(profiles.iter().all(|profile| profile.command.is_absolute()));
@@ -369,6 +448,110 @@ mod tests {
         assert_eq!(profiles.profiles()[0].name, "replacement");
     }
 
+    #[test]
+    fn local_profile_environment_store_preserves_same_executable_sessions_and_detects_stale_edits()
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("profiles.json");
+        let command = std::env::current_exe().unwrap();
+        let mut alpha = profile(command.clone(), "Alpha");
+        alpha.id = TerminalProfiles::new_id().unwrap();
+        alpha.env = crate::profile_environment::ProfileEnvironment::from_pairs([
+            ("QA_VALUE".into(), "alpha".into()),
+            ("EMPTY".into(), String::new()),
+        ])
+        .unwrap();
+        let mut beta = alpha.clone();
+        beta.id = TerminalProfiles::new_id().unwrap();
+        beta.name = "Beta".into();
+        beta.env.0.insert("QA_VALUE".into(), "beta".into());
+        TerminalProfiles::edit_at(&path, None, Some(alpha.clone())).unwrap();
+        let store = TerminalProfiles::edit_at(&path, None, Some(beta.clone())).unwrap();
+        assert_eq!(store.profiles().len(), 2);
+        assert_eq!(TerminalProfiles::load_from(&path).unwrap(), store);
+        let config = store.as_config_profiles();
+        assert_ne!(config[0].settings_id(), config[1].settings_id());
+        assert_eq!(store.profiles()[0].env.0["EMPTY"], "");
+        let mut edited = alpha.clone();
+        edited.env.0.insert("QA_VALUE".into(), "next-launch".into());
+        let edited_store =
+            TerminalProfiles::edit_at(&path, Some(&alpha), Some(edited.clone())).unwrap();
+        let stale = TerminalProfiles::edit_at(&path, Some(&alpha), None).unwrap_err();
+        assert_eq!(stale.kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(TerminalProfiles::load_from(&path).unwrap(), edited_store);
+        let final_store = TerminalProfiles::edit_at(&path, Some(&edited), None).unwrap();
+        assert_eq!(final_store.profiles(), &[beta]);
+        // Older v1 records without an env map still load with an empty overlay.
+        let mut old = serde_json::to_value(&super::ProfileStore {
+            version: 1,
+            profiles: final_store.profiles().to_vec(),
+        })
+        .unwrap();
+        old["profiles"][0].as_object_mut().unwrap().remove("env");
+        std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert!(TerminalProfiles::load_from(&path).unwrap().profiles()[0].env.is_empty());
+    }
+
+    #[test]
+    fn local_profile_environment_edit_preserves_hidden_unavailable_commands() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("profiles.json");
+        let hidden = profile(temp.path().join("disconnected-shell"), "Unavailable");
+        let mut recorded = TerminalProfiles::default();
+        recorded.upsert(hidden.clone()).unwrap();
+        recorded.save_to(&path).unwrap();
+        assert!(TerminalProfiles::load_from(&path).unwrap().profiles().is_empty());
+        let mut available = profile(std::env::current_exe().unwrap(), "Available");
+        available.id = "distinct-available".into();
+        let visible = TerminalProfiles::edit_at(&path, None, Some(available.clone())).unwrap();
+        assert_eq!(visible.profiles(), &[available.clone()]);
+        let recorded: super::ProfileStore =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(recorded.profiles, [hidden, available]);
+    }
+
+    #[test]
+    fn local_profile_environment_infers_known_shells_and_allows_unknown_executables() {
+        for (path, expected) in [
+            ("/bin/zsh", "zsh"),
+            ("/bin/bash", "bash"),
+            ("/usr/bin/fish", "fish"),
+            (r"C:\Tools\PWSH.EXE", "pwsh"),
+            (r"C:\Windows\CMD.exe", "cmd"),
+        ] {
+            assert_eq!(
+                super::infer_shell_id(std::path::Path::new(path)).as_deref(),
+                Some(expected)
+            );
+        }
+        assert!(super::infer_shell_id(std::path::Path::new("/opt/custom/worker")).is_none());
+        let mut custom = profile(std::env::current_exe().unwrap(), "Custom");
+        custom.shell_id = None;
+        let mut profiles = TerminalProfiles::default();
+        profiles.upsert(custom).unwrap();
+        let profile = &profiles.as_config_profiles()[0];
+        assert!(profile.shell_id.is_none());
+        assert!(profile.settings_id().is_none());
+        assert_eq!(profile.terminal_profile_id.as_deref(), Some("pwsh-test"));
+        assert_ne!(profile.terminal_profile_id.as_deref(), Some("PWSH-TEST"));
+        let stored = TerminalProfile {
+            id: "custom-known".into(),
+            name: "Known".into(),
+            command: std::env::current_exe().unwrap().parent().unwrap().join("zsh"),
+            args: vec![],
+            cwd: None,
+            shell_id: None,
+            env: Default::default(),
+        };
+        let mut inferred = TerminalProfiles::default();
+        inferred.upsert(stored).unwrap();
+        assert_eq!(inferred.as_config_profiles()[0].shell_id.as_deref(), Some("zsh"));
+        assert_eq!(
+            inferred.as_config_profiles()[0].settings_id().as_deref(),
+            Some("profile:zsh|custom-known")
+        );
+    }
+
     fn profile(command: std::path::PathBuf, name: &str) -> TerminalProfile {
         TerminalProfile {
             id: "pwsh-test".into(),
@@ -376,7 +559,8 @@ mod tests {
             command,
             args: vec!["-NoLogo".into()],
             cwd: None,
-            shell_id: "pwsh".into(),
+            shell_id: Some("pwsh".into()),
+            env: Default::default(),
         }
     }
 }

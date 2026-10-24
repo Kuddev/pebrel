@@ -40,6 +40,17 @@ pub fn home_dir() -> Option<PathBuf> {
     raw.map(PathBuf::from).filter(|path| !path.as_os_str().is_empty())
 }
 
+/// SSH discovery and probes share a dedicated test home without changing host HOME.
+pub(crate) fn ssh_config_home() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = std::env::var_os("PEBREL_TEST_SSH_HOME") {
+        let path = PathBuf::from(path);
+        assert!(path.is_absolute() && path.is_dir(), "owned SSH test home must exist");
+        return Some(path);
+    }
+    home_dir()
+}
+
 /// Pebrel 的配置与数据目录，必要时创建。
 ///
 /// 结果缓存在 `OnceLock`：改造前 26 个调用点每次都要读环境变量 +

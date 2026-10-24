@@ -1,5 +1,11 @@
 //! Startup aliases and platform compatibility for local terminal environments.
 
+/// Windows child environments identify names without ASCII case distinctions.
+/// Unix launch adapters retain distinct names such as `PATH` and `Path`.
+pub(crate) const fn names_case_insensitive() -> bool {
+    cfg!(windows)
+}
+
 /// Refresh local pane environments before adding identity and other pane overrides.
 pub(crate) fn prepare_local_pty(options: &mut nebula_terminal::tty::Options) {
     #[cfg(windows)]
