@@ -6,6 +6,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "Estilo de parpadeo del cursor",
+      "blink": "Parpadeo",
+      "smooth": "Suave",
+      "phase": "Pulsación",
+      "expand": "Expansión",
+      "solid": "Fijo"
+    },
     "sidebar": {
       "application": "Aplicación",
       "appearance": "Apariencia",

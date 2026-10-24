@@ -22,6 +22,55 @@ fn geometry(shape: CursorShape) -> CursorGeometry {
 }
 
 #[gpui::test]
+fn blinking_styles_hot_apply_without_changing_the_session_and_obey_vt_visibility(
+    cx: &mut TestAppContext,
+) {
+    use nebula_settings::CursorBlinkStyle;
+    let (view, window, _) = open(cx);
+    window.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            let term = view.session.as_ref().unwrap().term.clone();
+            let before = capture(view).cursor.unwrap();
+            for style in [
+                CursorBlinkStyle::Blink,
+                CursorBlinkStyle::Smooth,
+                CursorBlinkStyle::Phase,
+                CursorBlinkStyle::Expand,
+                CursorBlinkStyle::Solid,
+            ] {
+                let settings = cx.global_mut::<Settings>();
+                settings.cursor_blink_style = style;
+                settings.cursor_blink = Some(style != CursorBlinkStyle::Solid);
+                view.apply_settings(cx);
+                assert!(Arc::ptr_eq(&term, &view.session.as_ref().unwrap().term));
+                assert_eq!(
+                    view.cursor_blink_frame(),
+                    crate::gpui_shell::terminal::cursor_blink::BlinkFrame::default()
+                );
+                let after = capture(view).cursor.unwrap();
+                assert_eq!((after.col, after.row), (before.col, before.row));
+            }
+            view.cursor_window_active = true;
+            view.cursor_pane_focused = true;
+            feed(view, b"\x1b[5 q");
+            view.restart_cursor_blink(cx);
+            assert!(!view.cursor_should_blink(), "solid must also override VT requests to blink");
+            cx.global_mut::<Settings>().cursor_blink_style = CursorBlinkStyle::Smooth;
+            view.restart_cursor_blink(cx);
+            assert!(view.cursor_should_blink());
+            feed(view, b"\x1b[?25l");
+            view.restart_cursor_blink(cx);
+            assert!(
+                !view.cursor_should_blink(),
+                "a VT-hidden cursor must never be animated back on"
+            );
+            view.set_output_visible(false, cx);
+            assert!(!view.cursor_should_blink());
+        });
+    });
+}
+
+#[gpui::test]
 fn cursor_motion_hot_applies_without_replacing_the_session_or_logical_cursor(
     cx: &mut TestAppContext,
 ) {

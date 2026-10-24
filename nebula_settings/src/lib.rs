@@ -25,7 +25,9 @@ mod background_effects;
 pub use background_effects::{BackgroundEffectRequest, BackgroundEffects};
 mod terminal_effects;
 pub use terminal_effects::{EffectAnimation, TerminalEffects};
+mod cursor_blink;
 mod cursor_motion;
+pub use cursor_blink::CursorBlinkStyle;
 mod custom_theme;
 pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
@@ -1004,6 +1006,7 @@ pub struct RuntimeSettings {
     pub ligatures: Ligatures,
     pub cursor_shape: Option<CursorShapeName>,
     pub cursor_blink: Option<bool>,
+    pub cursor_blink_style: CursorBlinkStyle,
     pub cursor_motion: CursorMotion,
     pub copy_on_select: bool,
     /// Maximum retained history for new terminals, without altering open sessions.
@@ -1200,7 +1203,12 @@ impl RuntimeSettings {
                 .and_then(Ligatures::from_settings)
                 .unwrap_or_default(),
             cursor_shape: raw.value("cursor_shape").and_then(CursorShapeName::from_settings),
-            cursor_blink: raw.bool_on("cursor_blink"),
+            cursor_blink: raw
+                .value("cursor_blink_style")
+                .and_then(CursorBlinkStyle::from_settings)
+                .map(|style| style != CursorBlinkStyle::Solid)
+                .or_else(|| raw.bool_on("cursor_blink")),
+            cursor_blink_style: CursorBlinkStyle::resolve(raw),
             cursor_motion: raw
                 .value("cursor_motion")
                 .and_then(CursorMotion::from_settings)

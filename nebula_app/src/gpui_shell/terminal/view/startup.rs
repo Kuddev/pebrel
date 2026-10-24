@@ -371,6 +371,7 @@ impl TerminalView {
             cursor_visible: true,
             cursor_animation: Default::default(),
             cursor_blink_epoch: 0,
+            cursor_blink: Default::default(),
             cursor_window_active,
             cursor_pane_focused,
             output_visible: true,

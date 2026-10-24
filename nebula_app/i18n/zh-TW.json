@@ -17,6 +17,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "游標閃爍樣式",
+      "blink": "閃爍",
+      "smooth": "平滑",
+      "phase": "呼吸",
+      "expand": "伸縮",
+      "solid": "恆亮"
+    },
     "completion": {
       "mode": "補齊模式",
       "cycle": "切換補齊模式",

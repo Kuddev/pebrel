@@ -29,6 +29,7 @@ mod tests {
             shape: CursorShape::Beam,
             focused: true,
             visible: true,
+            blink: Default::default(),
             block_color: palette.cursor,
             stroke: palette.cursor,
             text_color: None,
@@ -91,38 +92,30 @@ impl History {
         let delta = if self.index == 0 { 0.0 } else { seconds - self.last_time };
         self.last_time = seconds;
         let current = cursor
-            .map(|cursor| Cursor {
-                rect: [
-                    f32::from(cursor.rect.left() - bounds.left()) * scale,
-                    f32::from(if cursor.shape == CursorShape::Underline {
-                        cursor.rect.bottom() - gpui::px(2.0) - bounds.top()
+            .map(|cursor| {
+                let rect = cursor.visual_rect();
+                Cursor {
+                    rect: [
+                        f32::from(rect.left() - bounds.left()) * scale,
+                        f32::from(rect.top() - bounds.top()) * scale,
+                        f32::from(rect.size.width) * scale,
+                        f32::from(rect.size.height) * scale,
+                    ],
+                    color: rgba(cursor.visual_color(if cursor.shape == CursorShape::Block {
+                        cursor.block_color
                     } else {
-                        cursor.rect.top() - bounds.top()
-                    }) * scale,
-                    f32::from(if cursor.shape == CursorShape::Beam {
-                        gpui::px(2.0)
-                    } else {
-                        cursor.rect.size.width
-                    }) * scale,
-                    f32::from(if cursor.shape == CursorShape::Underline {
-                        gpui::px(2.0)
-                    } else {
-                        cursor.rect.size.height
-                    }) * scale,
-                ],
-                color: rgba(if cursor.shape == CursorShape::Block {
-                    cursor.block_color
-                } else {
-                    cursor.stroke
-                }),
-                style: match cursor.shape {
-                    CursorShape::Block if cursor.focused => 0,
-                    CursorShape::Block | CursorShape::HollowBlock => 1,
-                    CursorShape::Beam => 2,
-                    CursorShape::Underline => 3,
-                    _ => 4,
-                },
-                visible: cursor.shape != CursorShape::Hidden && (!cursor.focused || cursor.visible),
+                        cursor.stroke
+                    })),
+                    style: match cursor.shape {
+                        CursorShape::Block if cursor.focused => 0,
+                        CursorShape::Block | CursorShape::HollowBlock => 1,
+                        CursorShape::Beam => 2,
+                        CursorShape::Underline => 3,
+                        _ => 4,
+                    },
+                    visible: cursor.shape != CursorShape::Hidden
+                        && (!cursor.focused || cursor.visible),
+                }
             })
             .unwrap_or(Cursor { style: 4, ..Default::default() });
         if self.current != Some(current) {

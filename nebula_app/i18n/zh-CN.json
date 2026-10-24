@@ -201,6 +201,14 @@
       "refresh": "新建终端时刷新系统环境变量",
       "refresh_description": "打开终端时读取 Windows 当前环境设置。关闭后继承启动 Pebrel 时的环境，包括临时添加的 PATH。已打开的终端不受影响。"
     },
+    "cursor_blink": {
+      "title": "光标闪烁样式",
+      "blink": "闪烁",
+      "smooth": "平滑",
+      "phase": "呼吸",
+      "expand": "伸缩",
+      "solid": "常亮"
+    },
     "cursor_motion": {
       "title": "平滑光标",
       "description": "让终端光标平滑移动，大范围跳转仍立即定位。",

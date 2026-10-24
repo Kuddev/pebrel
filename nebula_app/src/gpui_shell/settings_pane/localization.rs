@@ -72,6 +72,13 @@ pub(super) fn localized_select_labels(
             language.text(crate::i18n::Message::SettingsCursorMotionOff),
             language.text(crate::i18n::Message::SettingsCursorMotionSmooth),
         ],
+        "cursor_blink_style" => vec![
+            language.text(crate::i18n::Message::SettingsCursorBlinkBlink),
+            language.text(crate::i18n::Message::SettingsCursorBlinkSmooth),
+            language.text(crate::i18n::Message::SettingsCursorBlinkPhase),
+            language.text(crate::i18n::Message::SettingsCursorBlinkExpand),
+            language.text(crate::i18n::Message::SettingsCursorBlinkSolid),
+        ],
         "tabs_position" => {
             vec![language.pick("左侧边栏", "Left sidebar"), language.pick("顶部", "Top")]
         },

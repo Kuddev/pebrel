@@ -6,6 +6,14 @@
     "en_us": "English"
   },
   "settings": {
+    "cursor_blink": {
+      "title": "Стиль мигания курсора",
+      "blink": "Мигание",
+      "smooth": "Плавное затухание",
+      "phase": "Пульсация",
+      "expand": "Расширение",
+      "solid": "Постоянный"
+    },
     "sidebar": {
       "application": "Приложение",
       "appearance": "Внешний вид",

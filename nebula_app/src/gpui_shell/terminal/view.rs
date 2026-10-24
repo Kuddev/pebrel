@@ -436,6 +436,7 @@ pub struct TerminalView {
     cursor_visible: bool,
     cursor_animation: cursor::CursorAnimation,
     cursor_blink_epoch: u64,
+    cursor_blink: super::cursor_blink::CursorBlink,
     /// OS 窗口前台状态与 pane 内焦点是两层独立条件。缓存它们是因为 blink
     /// timer 回调没有 `Window`，状态变化由 GPUI observer 立即重启相位。
     cursor_window_active: bool,
@@ -505,8 +506,6 @@ impl TerminalView {
     /// 尾沿去抖窗口：视口静默这么久才向 Term/ConPTY 提交一次 resize。
     /// 见 `set_layout` 内的合同注释（conhost rewrap 漂移取证）。
     const RESIZE_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
-    /// 与 legacy `config::cursor::Cursor::default().blink_interval` 保持一致。
-    const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
 
     /// 首帧前的当前单元格度量（与 element prepaint 同一公式：shape "M" 的
     /// advance / ascent / descent + 配置 offset）。让 spawn 网格与首帧布局一致，避免启动
@@ -549,7 +548,11 @@ impl TerminalView {
 
             super::effects::visibility_changed(self, cx);
         }
-        if std::mem::replace(&mut self.output_visible, visible) != visible && visible {
+        let changed = std::mem::replace(&mut self.output_visible, visible) != visible;
+        if changed {
+            self.reset_cursor_blink(cx);
+        }
+        if changed && visible {
             // Hidden output deliberately did not invalidate the cached view.
             // The workspace declares visibility during render, where GPUI can
             // absorb notifications. Invalidate after that draw so a cached child
@@ -832,43 +835,60 @@ impl TerminalView {
     }
 
     fn cursor_should_blink(&self) -> bool {
-        self.session.as_ref().is_some_and(|session| {
-            let term = session.term.lock();
-            let mode = term.mode();
-            cursor_blink_allowed(
-                term.cursor_style().blinking,
-                mode.contains(TermMode::VI),
-                mode.contains(TermMode::SHOW_CURSOR),
-                self.marked_text.is_some(),
-                self.cursor_window_active,
-                self.cursor_pane_focused,
-            )
-        })
+        self.output_visible
+            && self.answer_reader.is_none()
+            && self.cursor_blink.style != nebula_settings::CursorBlinkStyle::Solid
+            && self.session.as_ref().is_some_and(|session| {
+                let term = session.term.lock();
+                let mode = term.mode();
+                cursor_blink_allowed(
+                    term.cursor_style().blinking,
+                    mode.contains(TermMode::VI),
+                    mode.contains(TermMode::SHOW_CURSOR),
+                    self.marked_text.is_some(),
+                    self.cursor_window_active,
+                    self.cursor_pane_focused,
+                )
+            })
     }
 
     fn restart_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        self.reset_cursor_blink(cx);
+        cx.notify();
+    }
+
+    fn reset_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        let style = cx
+            .try_global::<Settings>()
+            .map(|settings| settings.cursor_blink_style)
+            .unwrap_or_default();
+        self.cursor_blink.restart(style, cx.reduce_motion());
         let epoch =
             restart_cursor_blink_phase(&mut self.cursor_visible, &mut self.cursor_blink_epoch);
-        self.schedule_cursor_blink_tick(epoch, cx);
-        cx.notify();
+        if self.cursor_should_blink() {
+            self.schedule_cursor_blink_tick(epoch, cx);
+        }
     }
 
     fn schedule_cursor_blink_tick(&self, epoch: u64, cx: &mut Context<Self>) {
         let executor = cx.background_executor().clone();
+        let interval = self.cursor_blink.interval();
         cx.spawn(async move |this, cx| {
-            executor.timer(Self::CURSOR_BLINK_INTERVAL).await;
+            executor.timer(interval).await;
             let _ = this.update(cx, |view, cx| {
                 if view.cursor_blink_epoch != epoch {
                     return;
                 }
                 if !view.cursor_should_blink() {
-                    if !view.cursor_visible {
+                    if !view.cursor_visible || view.cursor_blink.frame != Default::default() {
                         view.cursor_visible = true;
+                        view.cursor_blink.frame = Default::default();
                         cx.notify();
                     }
                     return;
                 }
-                view.cursor_visible = !view.cursor_visible;
+                let frame = view.cursor_blink.tick();
+                view.cursor_visible = frame.opacity > 0.0 && frame.height > 0.0;
                 view.schedule_cursor_blink_tick(epoch, cx);
                 cx.notify();
             });
@@ -878,6 +898,10 @@ impl TerminalView {
 
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible
+    }
+
+    pub(super) fn cursor_blink_frame(&self) -> super::cursor_blink::BlinkFrame {
+        self.cursor_blink.frame
     }
 
     fn on_bell(&mut self, cx: &mut Context<Self>) {
