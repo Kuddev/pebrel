@@ -71,8 +71,10 @@ pub(super) struct AppearancePicker {
     pub(super) custom_loading: bool,
     pub(super) custom_load_error: Option<String>,
     pub(super) apply_busy: bool,
-    custom_load_seq: u64,
-    preference_revision: Result<crate::theme_library::preferences::PreferenceRevision, String>,
+    pub(super) delete_busy: bool,
+    pub(super) custom_load_seq: u64,
+    pub(super) preference_revision:
+        Result<crate::theme_library::preferences::PreferenceRevision, String>,
     draft_touched: bool,
     pub(super) error: Option<String>,
     /// A picker-only terminal foreground override. `None` means use the
@@ -246,6 +248,7 @@ impl SettingsPane {
             custom_loading: true,
             custom_load_error: None,
             apply_busy: false,
+            delete_busy: false,
             custom_load_seq: load_seq,
             preference_revision: Err(crate::gpui_shell::config::ui_language(cx)
                 .text(Message::ThemePickerLoading)
@@ -606,6 +609,10 @@ impl SettingsPane {
         let label = picker.choice_label(choice, language);
         div()
             .id(SharedString::from(format!("appearance-option-{label}")))
+            .debug_selector({
+                let label = label.clone();
+                move || format!("appearance-option-{label}")
+            })
             .track_focus(&focus.clone().tab_stop(choice == tab_choice))
             .role(Role::RadioButton)
             .aria_label(label)
@@ -747,7 +754,9 @@ impl SettingsPane {
         } else {
             self.icon_picker_body(width - 2.0 - padding * 2.0, compact, window, cx)
         };
-        let apply_label = if picker.apply_busy {
+        let apply_label = if picker.delete_busy {
+            language.text(Message::ThemePickerDeleting)
+        } else if picker.apply_busy {
             language.text(Message::ThemeEditorSaving)
         } else if draft.is_theme() {
             language.text(Message::ThemePickerApply)

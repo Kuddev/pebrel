@@ -63,7 +63,8 @@ impl ThemeDefinition {
         let indexed = IndexedPalette::from_ansi(exact.ansi);
 
         Self {
-            name: base.prompt_name().to_owned(),
+            name: if base == ThemeName::OneDark { "One Dark" } else { base.prompt_name() }
+                .to_owned(),
             base,
             appearance: if term.is_light { ThemeAppearance::Light } else { ThemeAppearance::Dark },
             terminal: TerminalThemeColors {

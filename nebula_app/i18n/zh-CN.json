@@ -962,6 +962,8 @@
     "writing": "正在写入文件…"
   },
   "theme_editor": {
+    "edit_title": "编辑主题",
+    "edit_hint": "保存将更新这个自定义主题；应用后，改动才会在终端中生效。",
     "title": "自定义主题",
     "description": "调整颜色与字体，在右侧查看效果。",
     "template": "模板",
@@ -1039,6 +1041,11 @@
     "window_blur": "窗口模糊／材质"
   },
   "theme_picker": {
+    "delete_title": "删除主题？",
+    "delete_body": "确定删除“{name}”吗？删除后无法撤销。如果正在使用该主题，将切换到默认主题。",
+    "delete_error": "无法删除主题：{error}",
+    "delete_partial_error": "已切换到默认主题，但删除失败：{error}",
+    "deleting": "正在删除…",
     "title": "选择主题",
     "all": "全部",
     "light": "浅色",

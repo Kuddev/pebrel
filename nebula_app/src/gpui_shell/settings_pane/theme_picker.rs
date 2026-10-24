@@ -426,6 +426,15 @@ impl SettingsPane {
             .w(px(grid_width))
             .gap(px(8.0))
             .when_some(picker_status, |column, status| column.child(status))
+            .when(!picker.custom_loading && picker.choices().is_empty(), |column| {
+                column.child(
+                    div()
+                        .debug_selector(|| "custom-themes-empty".to_owned())
+                        .text_size(px(11.0))
+                        .text_color(colors.secondary)
+                        .child(language.text(Message::ThemePickerEmpty)),
+                )
+            })
             .child(grid);
         let (is_light, original_foreground, preview) = match draft {
             AppearanceSelection::Theme(name) => (
@@ -502,6 +511,39 @@ impl SettingsPane {
                         language.text(Message::ThemePickerDark)
                     }),
             )
+            .when(picker.custom_document(draft).is_some(), |preview| {
+                preview.child(
+                    h_flex()
+                        .mt(px(12.0))
+                        .gap(px(8.0))
+                        .child(
+                            Button::new("edit-custom-theme")
+                                .debug_selector(|| "edit-custom-theme".to_owned())
+                                .label(language.text(Message::CommonEdit))
+                                .h(px(32.0))
+                                .disabled(picker.apply_busy || picker.custom_loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.edit_custom_theme(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("delete-custom-theme")
+                                .debug_selector(|| "delete-custom-theme".to_owned())
+                                .label(language.text(if picker.delete_busy {
+                                    Message::ThemePickerDeleting
+                                } else {
+                                    Message::CommonDelete
+                                }))
+                                .h(px(32.0))
+                                .ghost()
+                                .text_color(cx.theme().danger)
+                                .disabled(picker.apply_busy || picker.custom_loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_delete_custom_theme(window, cx);
+                                })),
+                        ),
+                )
+            })
             .child(
                 h_flex()
                     .w_full()

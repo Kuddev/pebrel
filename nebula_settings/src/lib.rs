@@ -229,6 +229,8 @@ pub enum ThemeName {
     CoalDark,
     LinenLight,
     MossDark,
+    /// 深色：用户提供的 One Dark 配色。
+    OneDark,
     /// 深色：Nord 配色（Arctic Ice Studio 公开色板）。出厂默认。
     ///
     /// 跟随系统时与 Nord Light 配对；显式主题选择保持独立。
@@ -261,6 +263,7 @@ impl ThemeName {
             "CoalDark" => Self::CoalDark,
             "LinenLight" => Self::LinenLight,
             "MossDark" => Self::MossDark,
+            "OneDark" | "One Dark" => Self::OneDark,
             "Nord" => Self::Nord,
             "Paper" | "WarmSand" => Self::Paper,
             "NordLight" => Self::NordLight,
@@ -288,6 +291,7 @@ impl ThemeName {
             Self::CoalDark => "CoalDark",
             Self::LinenLight => "LinenLight",
             Self::MossDark => "MossDark",
+            Self::OneDark => "OneDark",
             Self::Nord => "Nord",
             Self::Paper => "WarmSand",
             Self::NordLight => "NordLight",
@@ -309,7 +313,8 @@ impl ThemeName {
         // 背景与 is_light 来自各主题 palette()；powerline 为提示符段色
         // （icon bg/fg、path bg/fg、branch bg/fg、time bg/fg）。
         match self {
-            Self::NordLight
+            Self::OneDark
+            | Self::NordLight
             | Self::Paper
             | Self::BreezeLight
             | Self::BreezeDark
