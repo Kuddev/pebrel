@@ -681,6 +681,7 @@
     "back_to_root": "返回全部命令",
     "group_count": "{count} 条命令",
     "add_group": "新建分组",
+    "rename_group": "重命名分组",
     "group_name": "分组名称",
     "builtin_group": "内置命令",
     "ungrouped": "未分组",

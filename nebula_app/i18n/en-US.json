@@ -681,6 +681,7 @@
     "back_to_root": "Back to all commands",
     "group_count": "{count} commands",
     "add_group": "New group",
+    "rename_group": "Rename group",
     "group_name": "Group name",
     "builtin_group": "Built-in commands",
     "ungrouped": "Ungrouped",

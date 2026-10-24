@@ -51,6 +51,110 @@ fn open_manager(
 }
 
 #[gpui::test]
+fn rename_group_button_prefills_name_and_preserves_commands(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved_commands.json");
+    let mut saved = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    saved.create_group("Work").unwrap();
+    let group = saved.groups()[0].id.clone();
+    let command = saved.insert_in_group("Build", "cargo build", false, Some(&group)).unwrap();
+    let (workspace, mut cx) = open_manager(saved, cx);
+    assert!(cx.debug_bounds("rename-command-group-builtin").is_none());
+    assert!(cx.debug_bounds("rename-command-group-ungrouped").is_none());
+    let selector = Box::leak(format!("rename-command-group-{group}").into_boxed_str());
+    let rename = cx.debug_bounds(selector).unwrap();
+    assert_eq!(rename.size, gpui::size(px(32.0), px(32.0)));
+    // The icon's surrounding padding is part of the action's hit target.
+    cx.simulate_click(rename.origin + gpui::point(px(3.0), px(3.0)), Modifiers::default());
+    draw(&mut cx);
+    workspace.read_with(&cx, |this, _| {
+        assert!(this.command_manager_group.is_none(), "rename must not enter the folder");
+        assert!(this.tabs.is_empty());
+    });
+    assert!(cx.debug_bounds("command-group-save").is_some());
+    cx.simulate_keystrokes("end");
+    cx.simulate_input(" renamed");
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("command-group-save").is_none());
+    let reloaded = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    assert_eq!(reloaded.groups()[0].name, "Work renamed", "the editor prefills the old name");
+    assert_eq!(reloaded.groups()[0].id, group);
+    assert_eq!(reloaded.commands(), std::slice::from_ref(&command));
+    assert_eq!(reloaded.group_for(&command.id), Some(group.as_str()));
+    workspace.read_with(&cx, |this, cx| {
+        assert_eq!(this.saved_commands, reloaded);
+        assert!(matches!(
+            &this.command_manager_rows(cx)[0],
+            groups::ManagerRow::Folder { name, .. } if name == "Work renamed"
+        ));
+    });
+    cx.simulate_resize(gpui::size(px(640.0), px(600.0)));
+    draw(&mut cx);
+    let rename = cx.debug_bounds(selector).unwrap();
+    let folder =
+        cx.debug_bounds(Box::leak(format!("command-group-{group}").into_boxed_str())).unwrap();
+    assert!(rename.right() <= folder.right() && rename.bottom() <= folder.bottom());
+    cx.simulate_click(rename.center(), Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_input(" discarded");
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("command-group-save").is_none());
+    assert_eq!(crate::saved_commands::SavedCommands::load_from(&path).unwrap(), reloaded);
+    let create = cx.debug_bounds("saved-command-add-group").unwrap();
+    cx.simulate_click(create.center(), Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_input("New group");
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    let created = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    assert_eq!(created.groups()[0], reloaded.groups()[0]);
+    assert_eq!(created.groups()[1].name, "New group", "the shared editor still creates groups");
+}
+
+#[gpui::test]
+fn rename_group_errors_keep_the_dialog_open_for_correction_or_cancel(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved_commands.json");
+    let mut saved = crate::saved_commands::SavedCommands::load_from(&path).unwrap();
+    saved.create_group("Work").unwrap();
+    saved.create_group("Servers").unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let (_, mut cx) = open_manager(saved, cx);
+    // From search: Select, Manage, then the first custom folder's rename button.
+    cx.simulate_keystrokes("tab tab tab space");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("command-group-save").is_some());
+    let select_all = match crate::platform::Platform::current() {
+        crate::platform::Platform::MacOS => "cmd-a",
+        _ => "ctrl-a",
+    };
+    for name in ["", "Servers"] {
+        cx.simulate_keystrokes(select_all);
+        cx.simulate_keystrokes("backspace");
+        cx.simulate_input(name);
+        cx.simulate_keystrokes("enter");
+        draw(&mut cx);
+        assert!(cx.debug_bounds("command-group-save").is_some());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+    cx.simulate_keystrokes(select_all);
+    cx.simulate_input("Project");
+    let lock = crate::atomic_file::try_lock(&path).unwrap().unwrap();
+    cx.simulate_keystrokes("enter");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("command-group-save").is_some());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    drop(lock);
+    let cancel = cx.debug_bounds("command-group-cancel").unwrap();
+    cx.simulate_click(cancel.center(), Modifiers::default());
+    draw(&mut cx);
+    assert!(cx.debug_bounds("command-group-save").is_none());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[gpui::test]
 fn batch_selection_never_runs_commands_and_cancel_keeps_the_store(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("saved_commands.json");
