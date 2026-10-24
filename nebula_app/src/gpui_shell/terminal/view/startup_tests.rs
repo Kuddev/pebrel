@@ -854,17 +854,23 @@ fn ssh_tab_name_and_hover_preserve_host_identity_across_remote_titles(cx: &mut T
 }
 
 #[gpui::test]
-fn ai_tab_hover_shows_full_directory_and_reported_task_but_not_stale_task(cx: &mut TestAppContext) {
+fn ai_tab_is_named_after_reported_task_but_not_stale_task(cx: &mut TestAppContext) {
     let (view, window, _) = open(cx);
     view.update(window, |view, cx| {
         view.process_event(Event::CwdReport("/home/test/很长的项目目录".into()), cx);
         view.running_program = Some("codex".into());
         view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
-        assert_eq!(view.tab_label(), "很长的项目目录");
+        assert_eq!(view.tab_label(), "修复 SSH 标签名称");
         let hover = view.tab_tooltip(&view.tab_label());
         assert!(hover.contains("/home/test/很长的项目目录"));
-        assert!(hover.contains("修复 SSH 标签名称"));
+        assert!(hover.contains("codex · 修复 SSH 标签名称"));
+        view.process_event(Event::Title("⠂ 修复 SSH 标签名称".into()), cx);
+        assert_eq!(view.tab_label(), "修复 SSH 标签名称");
+        view.process_event(Event::Title("codex".into()), cx);
+        assert_eq!(view.tab_label(), "很长的项目目录");
+        view.process_event(Event::Title("修复 SSH 标签名称".into()), cx);
         view.process_event(Event::CommandDone { exit_code: Some(0) }, cx);
+        assert_eq!(view.tab_label(), "很长的项目目录");
         assert!(!view.tab_tooltip(&view.tab_label()).contains("修复 SSH 标签名称"));
     });
 }
