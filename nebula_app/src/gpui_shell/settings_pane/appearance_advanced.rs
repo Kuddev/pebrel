@@ -90,6 +90,13 @@ impl SettingsPane {
                 cx,
             ))
             .child(self.switch_row(
+                "show_tab_status",
+                language.text(crate::i18n::Message::SettingsShowTabStatus),
+                language.text(crate::i18n::Message::SettingsShowTabStatusDescription),
+                self.runtime.show_tab_status,
+                cx,
+            ))
+            .child(self.switch_row(
                 "tab_close_visible",
                 language.text(crate::i18n::Message::SettingsAppearanceShowTabCloseButtons),
                 help("tab_close_visible", language),
