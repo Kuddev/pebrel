@@ -39,8 +39,8 @@ pub(super) struct TabPresentation {
     pub(super) shell_tag: Option<SharedString>,
     pub(super) color: Option<Rgb>,
     pub(super) renaming: Option<Entity<InputState>>,
-    /// 本 tab 的分屏数（Terminal tab 才 > 0）。`> 1` 时行首图标换成 2×2 分屏
-    /// 标记、行尾挂一枚数量胶囊；见 [`pane_header::split_badge`]。
+    /// 本 tab 的分屏数（Terminal tab 才 > 0）。`> 1` 时行尾显示布局缩略图；
+    /// 见 [`pane_header::split_layout_icon`]。
     pub(super) pane_count: usize,
     pub(super) local_administrator: bool,
 }
@@ -67,7 +67,7 @@ impl NebulaWorkspace {
                 // API 的 tab label、跨窗拖拽标题和重命名预填，掺进 "⊞2" 会
                 // 一路泄漏，而且长标题下会被 truncate_tab_label 截掉、被
                 // custom_name 整条顶掉。计数改由 TabPresentation::pane_count
-                // 单独画成胶囊，见 sidebar/top_tabs 的渲染。
+                // 决定是否显示布局缩略图，见 sidebar/top_tabs 的渲染。
                 match tab.focused_view() {
                     Some(view) => view.read(cx).tab_label().into(),
                     None => SharedString::from("shell"),
