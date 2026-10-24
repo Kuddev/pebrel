@@ -1048,6 +1048,41 @@ mod tests {
         assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
     }
 
+    /// CLI 2.x 的底部 chrome 长到 5 个非空行，❯ 落在自底向上第 6 行——窗口 4
+    /// 装不下它，prompt_idle 永不命中，会话启动即 Working 等不到 idle 样本。
+    /// 2026-10-12 实捕自 v2.1.286 并用窗口 6 修复；❯ 后是 U+00A0（NBSP），
+    /// \s 须按 Unicode 空白匹配。
+    #[test]
+    fn real_claude_footer_heavy_idle_screen_still_reads_idle() {
+        let screen = "╭─── Claude Code v2.1.286 ───╮\n\
+                      ────────────────────────────────────────────────────\n\
+                      ❯\u{a0}\n\
+                      ────────────────────────────────────────────────────\n\
+                      \x20 ⚠ Transcript saving is off — inherited session\n\
+                      \x20 🧠glm-5.3 | 📁Fleet | 🌿feature/left_tree*\n\
+                      \x20 ⏳5h 🟢 20% 2h7m | 📅MCP 13/1000\n\
+                      \x20 ⏵⏵ auto mode on (shift+tab to cycle)";
+        let detection = detect("claude", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
+    }
+
+    /// 同款 2.x 加宽 chrome 的工作中屏幕：❯ 与中断提示同屏，prompt_idle 的
+    /// not 段必须把它拦下，由 spinner_working 的更高优先级判 Working——窗口
+    /// 放宽不能换来「干活被判空闲」。
+    #[test]
+    fn claude_working_chrome_with_five_bottom_lines_still_reads_working() {
+        let screen = "  ⎿  Running…\n\
+                      ✶ Moseying… (8m 42s · ↓ 18.3k tokens)\n\
+                      ────────────────────────────────────────\n\
+                      ❯ \n\
+                      ────────────────────────────────────────\n\
+                      \x20 ⏵⏵ bypass permissions on (shift+tab to cycle)\n\
+                      \x20 ↳ queued\n\
+                      \x20 ⏸ esc to interrupt · ? for shortcuts · ← for agents";
+        let detection = detect("claude", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Working, "rule={}", detection.rule_id);
+    }
+
     #[test]
     fn real_claude_permission_form_reads_blocked() {
         // 真的停在权限框上。这段同时含「Esc to cancel」，共享 working 规则

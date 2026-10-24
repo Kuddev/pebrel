@@ -88,6 +88,16 @@ const SELECTION_SCROLL_STEP: f32 = 20.0;
 /// 这个值到 +1s；取 1.2s 是为了让它至少跨过一个复核点，不会一闪就没。
 pub(super) const COMPLETION_FLASH: std::time::Duration = std::time::Duration::from_millis(1200);
 
+/// 远端回合停滞对账的阈值：hook 权威在场的回合静默这么久、且屏幕连续两拍是
+/// agent 自家的同一形态，才允许双向对账（见
+/// `ai_hook::lifecycle::AgentActivity::reconcile_stalled_turn`）：两拍 idle
+/// 提示符把回合收敛为结束；两拍转圈把丢了点火事件（UserPromptSubmit/权限
+/// 答复在远端 bridge 丢失）的回合从 Done/Blocked 拉回 Working。这是远端的
+/// 第二重证据——本地有进程树对账，SSH/WSL 没有进程可见性，hook 一旦在远端
+/// bridge 丢失，回合会钉死在丢失前的状态。权限等待屏是 Blocked 检测、不参与
+/// 对账；真正的防线是「稳定的屏幕形态」而非纯计时。
+pub(super) const REMOTE_TURN_STALL: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// 一次自动回滚该滚几行：指针在网格上方为正（往回滚历史）、下方为负，网格
 /// 内为 0。贴边即 1 行，之后每远离 `SELECTION_SCROLL_STEP` 像素加一档。
 ///
@@ -686,6 +696,22 @@ impl TerminalView {
                     // TitleChanged，`on_terminal_event` 才会 `cx.notify()` 重绘。
                     cx.emit(TerminalViewEvent::TitleChanged);
                     cx.notify();
+                }
+                // 无集成的嵌套交互 shell（Cygwin fish、MSYS bash…）没有
+                // 133;D 完成边：Enter 提交靠弱推断标记运行中。OSC 7 随这类
+                // shell 的每次提示符渲染到达，是「回到提示符」的候选证据——
+                // 但 OSC 7 本身只是 cwd 信号，运行中的命令同样能发它
+                // （`bash -c 'printf OSC7; sleep 60'`）。清运行态必须等进程树
+                // 证据：pane 进程树里只剩交互 shell（无命令子进程）才算回到
+                // 提示符；证据在途期间维持运行态。带集成的 shell 先收到
+                // 133;D，这条弱边只是兜底；hook 拥有的 agent 会话不走它。
+                // SSH pane 的进程树在远端，本地看不见命令子进程——该形态
+                // 维持提示符渲染推断（远端进程可见性是已知边界，见 note）。
+                if self.command_running
+                    && !self.command_running_disproved
+                    && !self.agent_activity.hook_seen()
+                {
+                    self.probe_osc7_prompt_evidence(cx);
                 }
             },
             TermEvent::InlineImage { data, abs_line, width, height } => {

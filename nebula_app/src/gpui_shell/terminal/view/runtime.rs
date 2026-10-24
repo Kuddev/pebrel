@@ -944,6 +944,70 @@ impl TerminalView {
         }
     }
 
+    /// OSC 7 到达且弱推断「运行中」时的完成证据探测：清运行态必须先证明
+    /// 「回到提示符」——pane 进程树里只剩交互 shell（根进程或嵌套 shell），
+    /// 没有任何命令子进程。与 `probe_restored_prompt` 共用节流与在途去重
+    /// （同一容器、同一目的：读 pane 进程树）。
+    pub(super) fn probe_osc7_prompt_evidence(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_process_probe.is_some()
+            || self
+                .last_prompt_process_probe
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1))
+        {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let pid = session.shell_pid;
+        let started = self.command_started;
+        self.last_prompt_process_probe = Some(std::time::Instant::now());
+        let work =
+            cx.background_executor().spawn(async move { crate::process_tree::descendants(pid) });
+        self.prompt_process_probe = Some(cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |view, cx| {
+                view.prompt_process_probe = None;
+                view.apply_osc7_prompt_evidence(started, result, cx);
+            });
+        }));
+    }
+
+    /// 应用 OSC 7 完成证据：`started` 代际不符（期间又有提交）、已由更强
+    /// 证据清掉、或进程树里存在非 shell 进程（命令仍在跑，OSC 7 是命令
+    /// 自己发的）时一律不动状态；只剩交互 shell 才清弱推断的运行态。
+    pub(super) fn apply_osc7_prompt_evidence(
+        &mut self,
+        started: Option<std::time::Instant>,
+        result: Result<Vec<crate::process_tree::ProcessEntry>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.command_started != started
+            || !self.command_running
+            || self.command_running_disproved
+            || self.agent_activity.hook_seen()
+            || self.exited.is_some()
+        {
+            return;
+        }
+        let Ok(processes) = result else { return };
+        // 根进程就是会话 shell 本身（bash/zsh/ssh wrapper），无条件算 shell；
+        // 其余进程必须是交互 shell——存在任何一个命令子进程即否决。
+        let only_shells = processes.iter().all(|p| {
+            p.depth == 0
+                || crate::process_tree::is_interactive_shell_command(
+                    &crate::process_tree::display_name(&p.executable),
+                )
+        });
+        if !only_shells {
+            return;
+        }
+        self.command_running = false;
+        self.command_started = None;
+        self.last_process_probe = None;
+        self.prompt_process_probe = None;
+        self.last_prompt_process_probe = None;
+        cx.notify();
+    }
+
     pub(super) fn probe_restored_prompt(&mut self, cx: &mut Context<Self>) {
         if self.prompt_process_probe.is_some()
             || self

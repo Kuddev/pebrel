@@ -33,9 +33,16 @@ pub(crate) struct AgentActivity {
     rule: Option<String>,
     coverage: HookCoverage,
     owner: Option<Owner>,
+    /// 停滞对账的连续形态计数：idle 拍（收敛）与 working 拍（点火）各一份，
+    /// 任一拍出现对方形态即归零——交替出现的证据不构成「稳定形态」。
     idle_samples: u8,
+    working_samples: u8,
     turn_observed: bool,
     pending_submit: bool,
+    /// 屏幕停滞对账推断的完成（Done/Idle）标记。推断不是权威：同 turn 的
+    /// 迟到真 TurnDone 仍要被采纳（补真实的成败与通知），去重护栏只拦
+    /// 权威完成的重放。任何被采纳的 hook 事件与命令边界都会清掉它。
+    inferred_done: bool,
     /// A completion-only hook latches its result until an idle screen or an
     /// explicit submission separates the old frame from a new turn.
     screen_armed: bool,
@@ -43,6 +50,9 @@ pub(crate) struct AgentActivity {
     native_codex: bool,
     turn_id: Option<String>,
     last_remote_sequence: Option<u64>,
+    /// 最近一次被采纳的 hook 事件时刻。远端回合停滞对账的计时基准
+    /// （见 [`AgentActivity::reconcile_stalled_turn`]）。
+    last_hook_at: Option<std::time::Instant>,
 }
 
 impl Default for AgentActivity {
@@ -54,13 +64,16 @@ impl Default for AgentActivity {
             coverage: HookCoverage::None,
             owner: None,
             idle_samples: 0,
+            working_samples: 0,
             turn_observed: false,
             pending_submit: false,
+            inferred_done: false,
             screen_armed: true,
             command_ended: false,
             native_codex: false,
             turn_id: None,
             last_remote_sequence: None,
+            last_hook_at: None,
         }
     }
 }
@@ -136,6 +149,7 @@ impl AgentActivity {
     pub fn input_sent(&mut self) {
         self.screen_armed = true;
         self.idle_samples = 0;
+        self.working_samples = 0;
     }
 
     /// Check ownership before the ordering gate records this event. An ignored
@@ -167,6 +181,7 @@ impl AgentActivity {
             && self.status == AgentStatus::Done
             && event.turn_id.is_some()
             && event.turn_id == self.turn_id
+            && !self.inferred_done
         {
             return false;
         }
@@ -249,6 +264,7 @@ impl AgentActivity {
             self.turn_id = event.turn_id.clone();
         }
         self.command_ended = false;
+        self.inferred_done = false;
         if event.kind == AiHookKind::SessionEnd {
             self.command_finished();
             return true;
@@ -267,6 +283,7 @@ impl AgentActivity {
         self.source = AgentStatusSource::Hook;
         self.rule = None;
         self.idle_samples = 0;
+        self.working_samples = 0;
         if event.kind != AiHookKind::SessionStart {
             self.pending_submit = false;
         }
@@ -306,6 +323,7 @@ impl AgentActivity {
             AiHookKind::NeedsAttention => AgentStatus::Blocked,
             AiHookKind::SessionEnd => unreachable!("handled above"),
         };
+        self.last_hook_at = Some(std::time::Instant::now());
         true
     }
 
@@ -367,6 +385,101 @@ impl AgentActivity {
         self.source = AgentStatusSource::Screen;
         self.rule = Some(detection.rule_id);
         true
+    }
+
+    /// 距最近一次被采纳的 hook 事件是否已静默超过 `threshold`。无 hook 记录
+    /// 时恒 true——调用方先以 [`Self::hook_seen`] 门控，这里只是防御。
+    pub fn hook_quiet_for(&self, threshold: std::time::Duration) -> bool {
+        self.last_hook_at.is_none_or(|at| at.elapsed() >= threshold)
+    }
+
+    /// 远端回合停滞对账（双向）：屏幕证据的第二重用途，语义对齐本地进程树对账
+    /// （`apply_activity_evidence`）的「进程消失 ≠ 失败，只收边」，以及它的镜像
+    /// ——「屏幕持续转圈 ≠ 回合没开始」。前置 `!allows_screen()`——正常路径（无
+    /// hook 权威）仍走 [`Self::observe_screen`]。SSH/WSL 的 hook 有真实丢失路径
+    /// （远端 bridge 通道锁 0.3s busy 即丢、hook 超时、envelope 超限）：丢 Stop
+    /// 把回合永久钉在 Working；丢 UserPromptSubmit/权限答复则把它钉在上一回合的
+    /// Done/Blocked。这里在「hook 已静默超阈值 + 屏幕连续两拍同形态」同时成立时
+    /// 双向收敛：idle 提示符两拍 → Done/Idle（`turn_observed` 语义与
+    /// `observe_screen` 的 idle 分支一致）；working 转圈两拍 → 重新点火 Working
+    /// 并补记 `turn_observed`（迟到的 Stop 能正确收敛）。只改状态，不清身份：
+    /// 远端 CLI 还活着，`running_program`/会话身份归命令边界（133;D /
+    /// SessionEnd）管。
+    ///
+    /// 停滞未到、刚提交（`pending_submit`）、无匹配或两拍中途形态翻面都会归零
+    /// 该方向的连续计数——误判的防线是「agent 自家的稳定屏幕形态」，不是纯计时。
+    pub fn reconcile_stalled_turn(&mut self, detection: Option<&Detection>, stalled: bool) -> bool {
+        if self.allows_screen() {
+            return false;
+        }
+        if !stalled {
+            self.idle_samples = 0;
+            self.working_samples = 0;
+            return false;
+        }
+        if self.pending_submit {
+            // 提交屏障防的是「上一帧的 idle 屏幕把刚提交的回合立刻判完成」，
+            // 它只活到停滞阈值：提交后 hook 全程静默超过阈值（PromptSubmit
+            // 与后续事件在 bridge 上全部丢失）时屏障过期，屏幕证据恢复话语
+            // 权。本拍只过期屏障并把两向计数归零——收敛/点火仍需其后连续
+            // 两拍稳定形态，不因过期而即时定论。
+            self.pending_submit = false;
+            self.idle_samples = 0;
+            self.working_samples = 0;
+            return false;
+        }
+        let Some(detection) = detection else {
+            self.idle_samples = 0;
+            self.working_samples = 0;
+            return false;
+        };
+        let next = match detection.status {
+            AgentStatus::Idle => {
+                self.working_samples = 0;
+                self.idle_samples = self.idle_samples.saturating_add(1);
+                if self.idle_samples < 2 {
+                    return false;
+                }
+                if self.turn_observed { AgentStatus::Done } else { AgentStatus::Idle }
+            },
+            AgentStatus::Working => {
+                self.idle_samples = 0;
+                self.working_samples = self.working_samples.saturating_add(1);
+                if self.working_samples < 2 {
+                    return false;
+                }
+                // 点火即观测到回合：迟到的 Stop 依此收敛为 Done 而非 Idle。
+                self.turn_observed = true;
+                AgentStatus::Working
+            },
+            // 权限等待（Blocked）是 attention 语义，归 Notification hook 与
+            // `observe_screen` 的权威判定管；Done/Unknown 无形态可依。
+            AgentStatus::Blocked | AgentStatus::Done | AgentStatus::Unknown => {
+                self.idle_samples = 0;
+                self.working_samples = 0;
+                return false;
+            },
+        };
+        if next == self.status {
+            return false;
+        }
+        self.status = next;
+        self.source = AgentStatusSource::Screen;
+        self.rule = Some(detection.rule_id.clone());
+        // 收敛为 Done/Idle 是**推断**完成（点火 Working 则推翻旧推断）：
+        // 迟到的同 turn 真 TurnDone 不受去重护栏拦截（见 `accepts_hook`）。
+        self.inferred_done = matches!(next, AgentStatus::Done | AgentStatus::Idle);
+        self.idle_samples = 0;
+        self.working_samples = 0;
+        true
+    }
+
+    /// 测试拨表：把最近一次 hook 时刻倒填，模拟远端事件停滞。
+    #[cfg(test)]
+    pub(crate) fn backdate_hook_for_test(&mut self, back: std::time::Duration) {
+        if let Some(at) = &mut self.last_hook_at {
+            *at = std::time::Instant::now().checked_sub(back).unwrap_or(std::time::Instant::now());
+        }
     }
 }
 
