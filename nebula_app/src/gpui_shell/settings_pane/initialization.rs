@@ -144,6 +144,13 @@ impl SettingsPane {
             cx,
         );
         add_select(
+            "terminal_startup",
+            nebula_settings::TerminalStartup::VALUES,
+            runtime.terminal_startup.settings_value(),
+            window,
+            cx,
+        );
+        add_select(
             "windowing_behavior",
             &["use_new", "use_any_existing", "use_existing"],
             runtime.windowing_behavior.settings_value(),

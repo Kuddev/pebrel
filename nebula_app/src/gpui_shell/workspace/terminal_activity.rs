@@ -154,6 +154,7 @@ impl NebulaWorkspace {
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests {
     use super::*;
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
     use crate::gpui_shell::terminal::element::snapshot_probe::{self, PaintedSnapshot};
     use crate::gpui_shell::terminal::view::TerminalLaunch;
     use gpui::{Modifiers, TestAppContext, VisualTestContext, point};
@@ -361,6 +362,11 @@ mod tests {
 
     #[gpui::test]
     fn sidebar_spinner_follows_real_collapse_and_window_focus(cx: &mut TestAppContext) {
+        let _lock = lock_theme_studio();
+        let _settings = SettingsBytesGuard::capture();
+        // A persisted top layout can queue an extra frame during startup.
+        // Pin the fixture's sidebar baseline before any window callbacks run.
+        nebula_settings::persist_keys(&[("tabs_position", "sidebar".into())]).unwrap();
         let (workspace, _terminals, _receivers, mut window) = open_painted_workspace(&[1], cx);
         assert_spinner_running(&workspace, &mut window);
         let row = window.debug_bounds("sidebar-tab-0").unwrap();
@@ -397,6 +403,9 @@ mod tests {
     fn top_tab_spinners_share_frames_and_stop_when_running_tab_scrolls_out(
         cx: &mut TestAppContext,
     ) {
+        let _lock = lock_theme_studio();
+        let _settings = SettingsBytesGuard::capture();
+        nebula_settings::persist_keys(&[("tabs_position", "sidebar".into())]).unwrap();
         let (workspace, terminals, _receivers, mut window) = open_painted_workspace(&[1; 10], cx);
         for terminal in &terminals {
             terminal.update(&mut window, |view, cx| {

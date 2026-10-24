@@ -38,6 +38,8 @@ mod ligatures;
 pub use ligatures::Ligatures;
 mod notifications;
 pub use notifications::NotificationDuration;
+mod terminal_startup;
+pub use terminal_startup::TerminalStartup;
 mod quick_terminal;
 mod scrolling;
 pub use scrolling::{
@@ -1030,6 +1032,8 @@ pub struct RuntimeSettings {
     /// 发行版等）。解析归 shell 检测层，这里只做持久化往返。
     pub shell: Option<String>,
     pub startup_directory: Option<String>,
+    /// Only new ordinary tabs/windows; existing sessions and explicit launches keep their identity.
+    pub terminal_startup: TerminalStartup,
     /// AI 内联补全（ghost text）。
     pub ghost: bool,
     pub accept: AcceptKeyName,
@@ -1157,16 +1161,6 @@ impl RuntimeSettings {
         Self::from_raw(&RawSettings::load())
     }
 
-    /// 启动时再检查目录：保存后可能被删除，各启动入口应使用同一有效性规则。
-    pub fn startup_directory_path(&self) -> Option<std::path::PathBuf> {
-        let directory = self.startup_directory.as_deref()?.trim();
-        if directory.is_empty() {
-            return None;
-        }
-        let path = std::path::PathBuf::from(directory);
-        path.is_dir().then_some(path)
-    }
-
     pub fn from_raw(raw: &RawSettings) -> Self {
         let blur = raw.value("blur").and_then(BlurModeName::from_settings).unwrap_or_default();
         let blur_explicit = raw.value("blur").and_then(BlurModeName::from_settings).is_some();
@@ -1238,6 +1232,10 @@ impl RuntimeSettings {
             new_tab_position: raw
                 .value("new_tab_position")
                 .and_then(NewTabPositionName::from_settings)
+                .unwrap_or_default(),
+            terminal_startup: raw
+                .value("terminal_startup")
+                .and_then(TerminalStartup::from_settings)
                 .unwrap_or_default(),
             windowing_behavior: raw
                 .value("windowing_behavior")

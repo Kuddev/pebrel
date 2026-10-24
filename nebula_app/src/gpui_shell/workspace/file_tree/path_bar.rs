@@ -116,6 +116,7 @@ impl NebulaWorkspace {
             WorkspaceTab::Code { view, .. } => Some(view.entity_id()),
             WorkspaceTab::Image { view } => Some(view.entity_id()),
             WorkspaceTab::Settings { view, .. } => Some(view.entity_id()),
+            WorkspaceTab::Welcome { view, .. } => Some(view.entity_id()),
         });
         PathOrigin {
             view,

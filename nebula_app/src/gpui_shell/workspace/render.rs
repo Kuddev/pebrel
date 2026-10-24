@@ -40,6 +40,9 @@ impl Render for NebulaWorkspace {
                 .map(|(view, _)| gpui::IntoElement::into_any_element(view.clone()))
         } else {
             match self.tabs.get(self.active) {
+                Some(WorkspaceTab::Welcome { view, .. }) => {
+                    Some(gpui::IntoElement::into_any_element(view.clone()))
+                },
                 Some(WorkspaceTab::Terminal { .. }) => {
                     Some(self.render_terminal_tab(self.active, cx))
                 },
@@ -108,8 +111,11 @@ impl Render for NebulaWorkspace {
                         return;
                     }
                     let position = event.event.position;
-                    this.cross_window_dock = this
-                        .dock_nav_at(f32::from(position.x), f32::from(position.y));
+                    this.cross_window_dock = if payload.can_dock() {
+                        this.dock_nav_at(f32::from(position.x), f32::from(position.y))
+                    } else {
+                        None
+                    };
                     cx.notify();
                 },
             ))

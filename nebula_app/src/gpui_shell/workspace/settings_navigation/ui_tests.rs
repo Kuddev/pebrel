@@ -202,8 +202,12 @@ fn closing_last_regular_tab_keeps_settings_until_it_is_closed(cx: &mut TestAppCo
 
 #[gpui::test]
 fn density_changes_real_tab_bounds_and_sidebar_drag_pitch(cx: &mut TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
     use nebula_settings::{DensityName, TabsPositionName};
 
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("tabs_position", "sidebar".into())]).unwrap();
     let (_directory, workspace, mut cx) = open_workspace(8, cx);
     click_tab("top-tab-0", &mut cx);
     for position in [TabsPositionName::Sidebar, TabsPositionName::Top] {

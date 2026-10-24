@@ -24,6 +24,19 @@ struct WindowParams {
     /// 老客户端不带这个字段的行为不变。
     #[serde(default)]
     shell: Option<String>,
+    #[serde(default)]
+    use_startup_setting: bool,
+}
+
+impl WindowParams {
+    fn validate_startup(&self) -> Result<(), ApiError> {
+        if self.use_startup_setting && self.shell.is_some() {
+            return Err(ApiError::invalid_params(
+                "use_startup_setting cannot be combined with shell",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,7 +282,12 @@ impl RuntimeCommand {
             "tab.close" if request.params.get("tab_id").is_some() => super::tabs::parse(request),
             "window.create" => {
                 let params: WindowParams = parse_params(&request.params)?;
-                Ok(Self::NewWindow { cwd: params.cwd, shell_id: params.shell })
+                params.validate_startup()?;
+                Ok(Self::NewWindow {
+                    cwd: params.cwd,
+                    shell_id: params.shell,
+                    use_startup_setting: params.use_startup_setting,
+                })
             },
             "window.close" => {
                 let params: WindowTargetParams = parse_params(&request.params)?;
@@ -281,10 +299,12 @@ impl RuntimeCommand {
             },
             "tab.new" => {
                 let params: WindowParams = parse_params(&request.params)?;
+                params.validate_startup()?;
                 Ok(Self::NewTab {
                     window_id: params.window_id,
                     cwd: params.cwd,
                     shell_id: params.shell,
+                    use_startup_setting: params.use_startup_setting,
                 })
             },
             "tab.close" => {

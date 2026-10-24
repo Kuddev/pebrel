@@ -126,6 +126,35 @@ pub type SpawnedSession = (
     UnboundedReceiver<crate::ssh_session::SshStage>,
 );
 
+/// Headless UI tests may exercise launch failure without waking GPUI's
+/// deterministic scheduler from a real PTY or SSH thread. Native fixtures do not use this.
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(in crate::gpui_shell) mod spawn_fixture {
+    thread_local! {
+        static FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    pub(in crate::gpui_shell) struct Guard(bool);
+
+    pub(in crate::gpui_shell) fn fail() -> Guard {
+        Guard(FAIL.replace(true))
+    }
+
+    pub(super) fn check() -> std::io::Result<()> {
+        if FAIL.get() {
+            Err(std::io::Error::other("session launch rejected by the UI fixture"))
+        } else {
+            Ok(())
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FAIL.set(self.0);
+        }
+    }
+}
+
 /// 启动一个本地 shell 会话。尺寸随后由首帧 prepaint 按真实布局重设；
 /// `term_config` 携带运行时设置（默认光标形状/闪烁等）。
 ///
@@ -183,6 +212,8 @@ pub fn spawn(
     term_config: Config,
     options: tty::Options,
 ) -> std::io::Result<SpawnedSession> {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    spawn_fixture::check()?;
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
     let proxy = EventProxy { events: tx, stages: stage_tx, remote_reader: Default::default() };
@@ -222,6 +253,8 @@ pub fn spawn_ssh(
     window_size: WindowSize,
     term_config: Config,
 ) -> std::io::Result<SpawnedSession> {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    spawn_fixture::check()?;
     let term_config = crate::ssh_session::terminal_config(term_config);
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();

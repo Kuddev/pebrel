@@ -171,10 +171,10 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 | `agent.paste` | 向同一 Agent generation 发送受控 bracketed-paste 文本 | `agent`, `generation?`, `text`, `submit?` |
 | `agent.read` | 读取命名 Agent 所在 Pane 的真实 Grid 尾部 | `agent`, `generation?`, `lines?` |
 | `agent.wait` | 等待同一 Agent generation 的状态跃迁；被替换/退出即明确失败 | `agent`, `generation`, `state`, `timeout_ms`, `after_seq?` |
-| `window.create` | 创建新窗口 | `cwd?`, `shell?` |
+| `window.create` | 创建新窗口 | `cwd?`, `shell?`, `use_startup_setting?` |
 | `window.close` | 关闭空闲窗口；忙碌 Pane 返回显式确认错误 | `window_id?` |
 | `window.focus` | 聚焦窗口或 Pane | `window_id?`, `pane_id?` |
-| `tab.new` | 创建标签（默认 Shell，或 `shell` 点名的那个） | `window_id?`, `cwd?`, `shell?` |
+| `tab.new` | 创建标签（默认 Shell，或 `shell` 点名的那个） | `window_id?`, `cwd?`, `shell?`, `use_startup_setting?` |
 | `tab.close` | 按窗口内零基索引关闭空闲 Tab | `window_id?`, `tab_index` |
 | `tab.rename` | 设置或清除 Tab 自定义名称 | `window_id?`, `tab_index`, `name` |
 | `tab.move` | 在同一窗口内移动 Tab | `window_id?`, `tab_index`, `to_index` |
@@ -201,6 +201,15 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 静默换掉用户点名要的 Shell 是最难查的失败。注意参数是 `deny_unknown_fields` 的：
 升级后的客户端带 `shell` 请求旧运行时会在解析阶段被拒（`invalid_params`），因此升级后
 需要重启驻留实例。
+
+GPUI 的 `runtime.describe.features` 中，`window.startup_setting` 表示上述两个方法
+接受 `use_startup_setting=true`，按驻留实例的 `terminal_startup` 设置创建终端或欢迎页。
+该参数默认为 `false`，不能与非 `null` 的 `shell` 参数同时使用（返回 `invalid_params`）；
+显式 `shell=null` 等同于未指定。欢迎页的标签 `kind` 为 `welcome`，没有 Pane，
+创建响应中的 `action.pane_id` 为 `null`。普通应用二次启动仅在选择欢迎页且未指定
+Shell 时查询此能力；旧实例或查询失败时省略新参数。创建请求只发送一次，不因探测
+或响应失败重放。`pebrel ctl` 和 `runtime.orchestrate` 默认保持直接创建终端的行为。
+参数的类型与约束以 [v1 Schema](runtime-api-v1.schema.json) 为准。
 
 `pane.paste` 专用于确实需要保留换行的输入：只接受 UTF-8，限制 32 KiB，拒绝 ESC、NUL
 与危险控制字符，并要求目标终端已启用 bracketed-paste。SSH Pane 明确拒绝本地文件/文本

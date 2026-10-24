@@ -101,6 +101,11 @@ impl Processor {
         command: &RuntimeCommand,
     ) -> Result<Value, ApiError> {
         match command {
+            RuntimeCommand::NewWindow { use_startup_setting: true, .. }
+            | RuntimeCommand::NewTab { use_startup_setting: true, .. } => Err(ApiError::new(
+                "unsupported_feature",
+                "the startup page requires the GPUI runtime",
+            )),
             RuntimeCommand::Tab { .. } | RuntimeCommand::Conversation { .. } => Err(ApiError::new(
                 "method_not_found",
                 "shared files and conversations require the GPUI runtime",

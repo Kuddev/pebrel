@@ -1,4 +1,5 @@
 use super::*;
+use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 use crate::gpui_shell::terminal::view::TerminalLaunch;
 use crate::gpui_shell::workspace::tab_drag::{TabDrag, TabDragAxis};
 use gpui::TestAppContext;
@@ -312,6 +313,9 @@ fn alt_drag_survives_nc_move_and_tears_out_via_real_events(cx: &mut TestAppConte
     // 整链路复刻（真实派发，含 GPUI 原生 on_drag 机制）：按住 Alt 从侧栏标签行
     // 拖出，中途插入一个 WM_NCMOUSEMOVE 形状的 None move；修复前该事件会在
     // 激活后静默清掉手势，松手不产生新窗口，这正是 #572 真机 trace 的形状。
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("tabs_position", "sidebar".into())]).unwrap();
     initialize_test(cx);
     let (source_id, source) = cx.update(|cx| open_test_window(cx, 2));
     let handle = cx.update(|cx| entry_by_id(source_id, cx).unwrap().handle);
@@ -365,6 +369,9 @@ fn release_outside_source_window_tears_out_without_alt(cx: &mut TestAppContext) 
     // 无任何 release 行」即此形状。修复后由 paint 期注册的窗口级裸监听兜底，
     // 走 release_tab_drag_at 的 outside 分支撕出新窗口（原「拖出窗口外」语义）。
     // 全程不用 Alt，证明这条不是靠锁存意图走通的。
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("tabs_position", "sidebar".into())]).unwrap();
     initialize_test(cx);
     let (source_id, source) = cx.update(|cx| open_test_window(cx, 2));
     let handle = cx.update(|cx| entry_by_id(source_id, cx).unwrap().handle);

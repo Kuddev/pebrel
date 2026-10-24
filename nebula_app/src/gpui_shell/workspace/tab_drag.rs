@@ -21,7 +21,7 @@ pub(super) enum TabDragAxis {
 /// 按最近边把整棵分屏树 dock 进去。
 pub(super) struct TabDrag {
     pub(super) source: usize,
-    /// 手势开始时冻结的 terminal pane 身份。跨窗提交不能在 mouse-up 时再按
+    /// 手势开始时冻结的 tab 身份。跨窗提交不能在 mouse-up 时再按
     /// source 下标猜，因为拖拽期间其它 tab 可能被关闭或重排。
     pub(super) cross_window: Option<CrossWindowTabDrag>,
     pub(super) cross_window_target: Option<u64>,
@@ -179,7 +179,7 @@ impl NebulaWorkspace {
         .inset_0()
     }
 
-    /// 把当前已激活的 tab 拖拽撕出成独立新窗口：终端 tab 走手势开始时冻结的
+    /// 把当前已激活的 tab 拖拽撕出成独立新窗口：可迁移 tab 走手势开始时冻结的
     /// 跨窗 payload，其它 tab 按源下标延迟移出。调用前须确认拖拽已激活。
     fn tear_out_active_tab_drag(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(drag) = self.tab_drag.take() else {

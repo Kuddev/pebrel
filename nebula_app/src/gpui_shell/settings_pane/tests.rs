@@ -2,6 +2,51 @@ use super::*;
 
 #[cfg(feature = "gpui-test-support")]
 #[gpui::test]
+fn terminal_startup_setting_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
+    use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
+
+    let _lock = lock_theme_studio();
+    let _settings = SettingsBytesGuard::capture();
+    nebula_settings::persist_keys(&[("terminal_startup", "shell".into())]).unwrap();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        cx.set_reduce_motion(true);
+        cx.set_global(crate::gpui_shell::config::Settings::load(ThemeName::Nord));
+    });
+    let mut pane_out = None;
+    let (_, window) = cx.add_window_view(|window, cx| {
+        let pane = cx.new(|cx| SettingsPane::new(window, cx));
+        pane_out = Some(pane.clone());
+        gpui_component::Root::new(pane, window, cx)
+    });
+    let pane = pane_out.unwrap();
+    window.simulate_resize(gpui::size(px(1280.0), px(900.0)));
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.settings_search_input
+                .update(cx, |input, cx| input.replace_all("welcome", window, cx));
+        })
+    });
+    window.run_until_parked();
+    assert_eq!(pane.read_with(window, |pane, _| pane.active_section), 2);
+    window.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let bounds =
+        window.debug_bounds("settings-select-terminal_startup").expect("visible startup choice");
+    window.simulate_click(bounds.center(), gpui::Modifiers::default());
+    window.run_until_parked();
+    window.simulate_keystrokes("down enter");
+    window.run_until_parked();
+    assert_eq!(RuntimeSettings::load().terminal_startup, nebula_settings::TerminalStartup::Welcome);
+    assert_eq!(
+        pane.read_with(window, |pane, _| pane.setting_override("terminal_startup")),
+        Some((true, "shell".into()))
+    );
+}
+
+#[cfg(feature = "gpui-test-support")]
+#[gpui::test]
 fn environment_refresh_switch_is_searchable_and_persists(cx: &mut gpui::TestAppContext) {
     use crate::gpui_shell::settings_fixture::{SettingsBytesGuard, lock_theme_studio};
 

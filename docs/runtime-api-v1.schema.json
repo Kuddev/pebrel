@@ -118,8 +118,7 @@
               "method": {
                 "enum": [
                   "runtime.describe",
-                  "runtime.snapshot",
-                  "window.create"
+                  "runtime.snapshot"
                 ]
               }
             }
@@ -344,7 +343,7 @@
           "if": {
             "properties": {
               "method": {
-                "const": "tab.new"
+                "enum": ["tab.new", "window.create"]
               }
             }
           },
@@ -1511,8 +1510,18 @@
             "string",
             "null"
           ]
+        },
+        "use_startup_setting": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt in to the resident's terminal_startup preference; requires window.startup_setting and cannot be combined with a non-null shell. A welcome page returns a null pane_id."
         }
       },
+      "if": {
+        "required": ["use_startup_setting"],
+        "properties": {"use_startup_setting": {"const": true}}
+      },
+      "then": {"properties": {"shell": {"type": "null"}}},
       "additionalProperties": false
     },
     "tab_target_params": {

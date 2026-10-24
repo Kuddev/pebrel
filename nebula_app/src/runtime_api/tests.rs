@@ -355,6 +355,40 @@ fn tab_and_window_requests_take_an_optional_shell() {
 }
 
 #[test]
+fn startup_page_requests_are_opt_in_and_reject_explicit_shell_conflicts() {
+    for method in ["tab.new", "window.create"] {
+        let parse =
+            |params| RuntimeCommand::from_request(&ApiRequest::new("token".into(), method, params));
+        for params in [json!({}), json!({ "use_startup_setting": false })] {
+            assert!(matches!(
+                parse(params).unwrap(),
+                RuntimeCommand::NewTab { use_startup_setting: false, .. }
+                    | RuntimeCommand::NewWindow { use_startup_setting: false, .. }
+            ));
+        }
+        assert!(matches!(
+            parse(json!({ "use_startup_setting": true, "cwd": "project" })).unwrap(),
+            RuntimeCommand::NewTab { use_startup_setting: true, cwd: Some(_), .. }
+                | RuntimeCommand::NewWindow { use_startup_setting: true, cwd: Some(_), .. }
+        ));
+        for params in [
+            json!({ "use_startup_setting": true, "shell": "cmd" }),
+            json!({ "use_startup_setting": "welcome" }),
+            json!({ "use_startup_setting": null }),
+        ] {
+            assert_eq!(parse(params).unwrap_err().code, "invalid_params");
+        }
+        assert!(parse(json!({ "use_startup_setting": false, "shell": "cmd" })).is_ok());
+        assert!(parse(json!({ "use_startup_setting": true, "shell": null })).is_ok());
+    }
+    let description = runtime_description();
+    assert_eq!(
+        description["features"].as_array().unwrap().contains(&json!("window.startup_setting")),
+        cfg!(feature = "gpui-shell")
+    );
+}
+
+#[test]
 fn layout_mutations_parse_and_enforce_their_bounds() {
     let parse = |method: &str, params: Value| {
         RuntimeCommand::from_request(&ApiRequest::new("token".into(), method, params))

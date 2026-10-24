@@ -80,6 +80,7 @@ mod session_recovery;
 pub(crate) mod shell_launch;
 mod shell_picker;
 mod sidebar_resize;
+mod startup;
 mod terminal_activity;
 use shell_picker::shell_palette_rows;
 mod settings_navigation;
@@ -95,6 +96,7 @@ mod tab_scroll;
 mod top_tabs;
 mod update_dialog;
 mod vcs_panel;
+mod welcome;
 mod window_titlebar;
 pub(crate) mod windowing;
 
@@ -194,6 +196,11 @@ struct TerminalPane {
 }
 
 enum WorkspaceTab {
+    Welcome {
+        view: Entity<welcome::WelcomeView>,
+        cwd: Option<std::path::PathBuf>,
+        _subscription: Subscription,
+    },
     Terminal {
         /// pane 实体属主（无序存储，按 id 查找）。见模块头的生命周期合同。
         panes: Vec<TerminalPane>,
@@ -1012,28 +1019,7 @@ impl NebulaWorkspace {
                 notice,
             );
         }
-        match startup {
-            windowing::WorkspaceStartup::RestoreUpdate(session) => {
-                if !this.restore_update_session(&session, runtime.resume_ai, window, cx) {
-                    this.add_terminal_at(Self::cold_start_cwd(), None, window, cx);
-                }
-            },
-            windowing::WorkspaceStartup::RestoreOrDefault => {
-                // 只有首窗恢复全局 session，避免每个新窗口重复回放同一批 PTY。
-                if !runtime.restore_session
-                    || !this.try_restore_session(runtime.resume_ai, window, cx)
-                {
-                    this.add_terminal_at(Self::cold_start_cwd(), None, window, cx);
-                }
-            },
-            windowing::WorkspaceStartup::NewTerminal { cwd } => {
-                this.add_terminal_at(cwd, None, window, cx);
-            },
-            windowing::WorkspaceStartup::LaunchTerminal { cwd, launch } => {
-                this.add_terminal_with(launch, cwd, None, window, cx);
-            },
-            windowing::WorkspaceStartup::Empty => {},
-        }
+        this.initialize_tabs(startup, &runtime, window, cx);
         if let Some(ai_events) = ai_events {
             Self::start_ai_hook_pump(ai_events, cx);
             // 全局热键是进程级单例，只在承载 ai-hook 泵的那扇初始窗口注册一次。
@@ -1135,18 +1121,6 @@ impl NebulaWorkspace {
         self.sidebar_resizing = None;
         self.reveal_if_tray_disabled(cx);
         cx.notify();
-    }
-
-    fn add_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // 旧壳合同（window_context `spawn_tab` 一族）：新 tab 的 cwd 先取
-        // 设置页的「启动目录」（存在且是目录才算数），否则继承聚焦 pane
-        // 的 cwd——`startup_directory=` 因此在两壳有同一效果。WSL 来宾目录
-        // 见 `tab_duplication::CopyKind::NewTab`。
-        let (launch, cwd) = match Self::startup_directory() {
-            Some(dir) => (shell_launch::configured_local_launch(cx), Some(dir)),
-            None => self.new_tab_from_focused(cx),
-        };
-        self.add_terminal_with(launch, cwd, None, window, cx);
     }
 
     /// 设置页「启动目录」：宿主验证本机路径，WSL 验证来宾路径。
@@ -1734,6 +1708,7 @@ impl NebulaWorkspace {
                 None => return,
             },
             Some(WorkspaceTab::Settings { view, .. }) => view.read(cx).focus_handle(cx),
+            Some(WorkspaceTab::Welcome { view, .. }) => view.read(cx).focus_handle(cx),
             Some(WorkspaceTab::Document { view, .. }) => view.read(cx).focus_handle(cx),
             Some(WorkspaceTab::Code { view, .. }) => view.read(cx).focus_handle(cx),
             Some(WorkspaceTab::Image { .. }) | None => return,

@@ -100,12 +100,15 @@ use crate::runtime_api::{
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod transfer_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod welcome_transfer_tests;
 
 /// 新窗口的首帧内容。只有进程的第一个窗口恢复全局 session；其它窗口必须
 /// 明确创建一个新终端或暂时保持空白，不能把同一份 session 重放多次。
 pub(crate) enum WorkspaceStartup {
     RestoreOrDefault,
     RestoreUpdate(crate::session::Session),
+    Configured { cwd: Option<PathBuf> },
     NewTerminal { cwd: Option<PathBuf> },
     LaunchTerminal { cwd: Option<PathBuf>, launch: crate::session::LaunchSession },
     Empty,
@@ -210,18 +213,23 @@ pub(crate) struct WindowRegistry {
 
 impl Global for WindowRegistry {}
 
-/// GPUI 原生 drag payload 由整个 App 共享。这里只携带稳定 pane id 和源实体，
+/// GPUI 原生 drag payload 由整个 App 共享。这里只携带稳定 tab id 和源实体，
 /// 不把 `WorkspaceTab` 本体塞进 payload；真正的活体所有权只在 drop 事务中移动。
 #[derive(Clone)]
 pub(crate) struct CrossWindowTabDrag {
     source: WeakEntity<NebulaWorkspace>,
     source_window_id: u64,
-    pane_id: u64,
+    tab_id: crate::runtime_api::tabs::TabId,
+    can_dock: bool,
 }
 
 impl CrossWindowTabDrag {
     pub(crate) fn source_window_id(&self) -> u64 {
         self.source_window_id
+    }
+
+    pub(crate) fn can_dock(&self) -> bool {
+        self.can_dock
     }
 }
 
@@ -250,7 +258,7 @@ impl Render for TabDragPreview {
     }
 }
 
-struct DetachedTerminalTab {
+struct DetachedWorkspaceTab {
     tab: WorkspaceTab,
     meta: TabMeta,
     pane_ids: Vec<u64>,
@@ -537,16 +545,19 @@ fn open_workspace_window(
     Ok((runtime_window_id, workspace))
 }
 
-pub(crate) fn open_new_window(cx: &mut App, cwd: Option<PathBuf>) -> gpui::Result<(u64, u64)> {
+pub(crate) fn open_new_window(
+    cx: &mut App,
+    cwd: Option<PathBuf>,
+) -> gpui::Result<(u64, Option<u64>)> {
     let (window_id, workspace) = open_workspace_window(
         cx,
-        WorkspaceStartup::NewTerminal { cwd },
+        WorkspaceStartup::Configured { cwd },
         None,
         None,
         true,
         WindowRole::Regular,
     )?;
-    let pane_id = workspace.read(cx).active_terminal_pane_id().unwrap_or_default();
+    let pane_id = workspace.read(cx).active_terminal_pane_id();
     Ok((window_id, pane_id))
 }
 
@@ -554,12 +565,17 @@ fn open_runtime_window(
     cx: &mut App,
     cwd: Option<PathBuf>,
     shell_id: Option<String>,
-) -> Result<(u64, u64), ApiError> {
-    let startup = runtime_window_startup(cwd, shell_id.as_deref())?;
+    use_startup_setting: bool,
+) -> Result<(u64, Option<u64>), ApiError> {
+    let startup = if use_startup_setting {
+        WorkspaceStartup::Configured { cwd }
+    } else {
+        runtime_window_startup(cwd, shell_id.as_deref())?
+    };
     let (window_id, workspace) =
         open_workspace_window(cx, startup, None, None, false, WindowRole::Regular)
             .map_err(|error| ApiError::new("window_create_failed", error.to_string()))?;
-    let pane_id = workspace.read(cx).active_terminal_pane_id().unwrap_or_default();
+    let pane_id = workspace.read(cx).active_terminal_pane_id();
     Ok((window_id, pane_id))
 }
 
@@ -742,7 +758,7 @@ pub(crate) fn update_cross_window_drag_target(
         let (x, y) =
             logical_client_position(cursor.client_x, cursor.client_y, window.scale_factor());
         target.update(cx, |workspace, cx| {
-            let dock = workspace.dock_nav_at(x, y);
+            let dock = if payload.can_dock() { workspace.dock_nav_at(x, y) } else { None };
             if workspace.cross_window_dock != dock {
                 workspace.cross_window_dock = dock;
                 cx.notify();
@@ -989,32 +1005,34 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
             );
             return;
         },
-        RuntimeCommand::NewWindow { cwd, shell_id } => {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
-                |(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
-                    })
-                },
-            );
+        RuntimeCommand::NewWindow { cwd, shell_id, use_startup_setting } => {
+            let response =
+                open_runtime_window(cx, cwd.clone(), shell_id.clone(), *use_startup_setting).map(
+                    |(window_id, pane_id)| {
+                        let snapshot = publish_runtime_snapshot(cx);
+                        json!({
+                            "action": { "window_id": window_id, "pane_id": pane_id },
+                            "snapshot": snapshot
+                        })
+                    },
+                );
             dispatch.respond(response);
             return;
         },
-        RuntimeCommand::NewTab { window_id: None, cwd, shell_id }
+        RuntimeCommand::NewTab { window_id: None, cwd, shell_id, use_startup_setting }
             if nebula_settings::RuntimeSettings::load().windowing_behavior
                 == nebula_settings::WindowingBehaviorName::UseNew =>
         {
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
-                |(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
-                    })
-                },
-            );
+            let response =
+                open_runtime_window(cx, cwd.clone(), shell_id.clone(), *use_startup_setting).map(
+                    |(window_id, pane_id)| {
+                        let snapshot = publish_runtime_snapshot(cx);
+                        json!({
+                            "action": { "window_id": window_id, "pane_id": pane_id },
+                            "snapshot": snapshot
+                        })
+                    },
+                );
             dispatch.respond(response);
             return;
         },
@@ -1052,18 +1070,21 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
         Err(_error)
             if matches!(dispatch.command, RuntimeCommand::NewTab { window_id: None, .. }) =>
         {
-            let RuntimeCommand::NewTab { cwd, shell_id, .. } = &dispatch.command else {
+            let RuntimeCommand::NewTab { cwd, shell_id, use_startup_setting, .. } =
+                &dispatch.command
+            else {
                 unreachable!()
             };
-            let response = open_runtime_window(cx, cwd.clone(), shell_id.clone()).map(
-                |(window_id, pane_id)| {
-                    let snapshot = publish_runtime_snapshot(cx);
-                    json!({
-                        "action": { "window_id": window_id, "pane_id": pane_id },
-                        "snapshot": snapshot
-                    })
-                },
-            );
+            let response =
+                open_runtime_window(cx, cwd.clone(), shell_id.clone(), *use_startup_setting).map(
+                    |(window_id, pane_id)| {
+                        let snapshot = publish_runtime_snapshot(cx);
+                        json!({
+                            "action": { "window_id": window_id, "pane_id": pane_id },
+                            "snapshot": snapshot
+                        })
+                    },
+                );
             dispatch.respond(response);
             return;
         },
@@ -1526,11 +1547,15 @@ impl NebulaWorkspace {
         ix: usize,
         cx: &Context<Self>,
     ) -> Option<CrossWindowTabDrag> {
-        let WorkspaceTab::Terminal { focused, .. } = self.tabs.get(ix)? else { return None };
+        let tab = self.tabs.get(ix)?;
+        if !matches!(tab, WorkspaceTab::Terminal { .. } | WorkspaceTab::Welcome { .. }) {
+            return None;
+        }
         Some(CrossWindowTabDrag {
             source: cx.entity().downgrade(),
             source_window_id: self.runtime_window_id,
-            pane_id: *focused,
+            tab_id: self.tab_meta.get(ix)?.runtime_id.clone(),
+            can_dock: tab.is_terminal(),
         })
     }
 
@@ -1558,7 +1583,7 @@ impl NebulaWorkspace {
         }
         let detached = match payload
             .source
-            .update(cx, |source, _| source.detach_terminal_tab(payload.pane_id))
+            .update(cx, |source, _| source.detach_cross_window_tab(&payload.tab_id))
         {
             Ok(Some(detached)) => detached,
             _ => return false,
@@ -1573,9 +1598,11 @@ impl NebulaWorkspace {
             for pane in panes {
                 pane._subscription = cx.subscribe_in(&pane.view, window, Self::on_terminal_event);
             }
+        } else if let WorkspaceTab::Welcome { view, _subscription, .. } = &mut tab {
+            *_subscription = cx.subscribe_in(view, window, Self::on_welcome_event);
         }
         self.runtime_hub.move_panes_to_window(source_window_id, self.runtime_window_id, &pane_ids);
-        self.attach_terminal_tab(tab, detached.meta, dock, window, cx);
+        self.attach_cross_window_tab(tab, detached.meta, dock, window, cx);
 
         let source = payload.source.clone();
         if source_became_empty {
@@ -1602,14 +1629,22 @@ impl NebulaWorkspace {
         true
     }
 
-    fn detach_terminal_tab(&mut self, pane_id: u64) -> Option<DetachedTerminalTab> {
-        let ix = self.tab_of_pane(pane_id)?;
+    fn detach_cross_window_tab(
+        &mut self,
+        tab_id: &crate::runtime_api::tabs::TabId,
+    ) -> Option<DetachedWorkspaceTab> {
+        let ix = self.tab_meta.iter().position(|meta| &meta.runtime_id == tab_id)?;
         let (tab, meta) = self.remove_tab_at(ix)?;
-        let WorkspaceTab::Terminal { panes, .. } = &tab else {
-            self.insert_tab_at(ix, tab, meta);
-            return None;
+        let pane_ids = match &tab {
+            WorkspaceTab::Terminal { panes, .. } => {
+                panes.iter().map(|pane| pane.id).collect::<Vec<_>>()
+            },
+            WorkspaceTab::Welcome { .. } => Vec::new(),
+            _ => {
+                self.insert_tab_at(ix, tab, meta);
+                return None;
+            },
         };
-        let pane_ids = panes.iter().map(|pane| pane.id).collect::<Vec<_>>();
         for pane_id in &pane_ids {
             self.pane_bounds.borrow_mut().remove(pane_id);
         }
@@ -1624,7 +1659,7 @@ impl NebulaWorkspace {
             self.active = self.active.min(self.tabs.len() - 1);
         }
         let source_became_empty = self.tabs.is_empty() && !self.settings_tab_open;
-        Some(DetachedTerminalTab {
+        Some(DetachedWorkspaceTab {
             tab,
             meta,
             pane_ids,
@@ -1634,7 +1669,7 @@ impl NebulaWorkspace {
         })
     }
 
-    fn attach_terminal_tab(
+    fn attach_cross_window_tab(
         &mut self,
         tab: WorkspaceTab,
         meta: TabMeta,
@@ -1642,7 +1677,8 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let can_dock = dock.is_some_and(|target| matches!(self.tabs.get(self.active), Some(WorkspaceTab::Terminal { tree, .. }) if target.pane.is_none_or(|pane| tree.contains(pane))));
+        let can_dock = tab.is_terminal()
+            && dock.is_some_and(|target| matches!(self.tabs.get(self.active), Some(WorkspaceTab::Terminal { tree, .. }) if target.pane.is_none_or(|pane| tree.contains(pane))));
         if can_dock {
             let Some(target) = dock else { unreachable!("can_dock requires a direction") };
             let WorkspaceTab::Terminal {
@@ -1652,7 +1688,7 @@ impl NebulaWorkspace {
                 ..
             } = tab
             else {
-                unreachable!("cross-window drag payloads only contain terminal tabs")
+                unreachable!("can_dock checked the incoming terminal tab")
             };
             let Some(WorkspaceTab::Terminal { panes, tree, focused, zoomed, broadcast, .. }) =
                 self.tabs.get_mut(self.active)
@@ -1829,14 +1865,23 @@ mod tests {
             RuntimeWindowPolicy::Focus
         );
         assert_eq!(
-            runtime_window_policy(&RuntimeCommand::NewWindow { cwd: None, shell_id: None }),
+            runtime_window_policy(&RuntimeCommand::NewWindow {
+                cwd: None,
+                shell_id: None,
+                use_startup_setting: false
+            }),
             RuntimeWindowPolicy::CreateWithoutActivation
         );
 
         let preserve = vec![
             RuntimeCommand::Snapshot,
             RuntimeCommand::CloseWindow { window_id: Some(1) },
-            RuntimeCommand::NewTab { window_id: Some(1), cwd: None, shell_id: None },
+            RuntimeCommand::NewTab {
+                window_id: Some(1),
+                cwd: None,
+                shell_id: None,
+                use_startup_setting: false,
+            },
             RuntimeCommand::CloseTab { window_id: Some(1), tab_index: 0 },
             RuntimeCommand::RenameTab {
                 window_id: Some(1),

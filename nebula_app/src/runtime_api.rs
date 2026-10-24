@@ -772,6 +772,8 @@ pub enum RuntimeCommand {
         /// 命令行 `--shell <id>` 指名要用的 shell；`None` = 用设置里的默认 shell。
         /// 右键菜单「在 Pebrel 中打开（Ubuntu）」靠它把 WSL 意图带进已有实例。
         shell_id: Option<String>,
+        /// Opt-in user launch; ordinary automation still creates a terminal directly.
+        use_startup_setting: bool,
     },
     CloseWindow {
         window_id: Option<u64>,
@@ -785,6 +787,7 @@ pub enum RuntimeCommand {
         cwd: Option<PathBuf>,
         /// 见 [`RuntimeCommand::NewWindow::shell_id`]。
         shell_id: Option<String>,
+        use_startup_setting: bool,
     },
     CloseTab {
         window_id: Option<u64>,

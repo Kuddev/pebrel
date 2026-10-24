@@ -54,6 +54,9 @@ impl NebulaWorkspace {
             return custom.into();
         }
         match &self.tabs[ix] {
+            WorkspaceTab::Welcome { .. } => crate::gpui_shell::config::ui_language(cx)
+                .text(crate::i18n::Message::WelcomeTab)
+                .into(),
             WorkspaceTab::Settings { .. } => "设置".into(),
             WorkspaceTab::Image { view } => view.read(cx).title.clone().into(),
             WorkspaceTab::Document { view, .. } => view.read(cx).tab_title().into(),

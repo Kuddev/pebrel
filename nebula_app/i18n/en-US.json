@@ -1,4 +1,11 @@
 {
+  "welcome": {
+    "tab": "Welcome",
+    "title": "Welcome to Pebrel",
+    "description": "Open your default shell or choose an SSH host.",
+    "local": "Local terminal",
+    "ssh": "Open SSH session"
+  },
   "native_result": {
     "diff_expand": "Expand file diff",
     "diff_collapse": "Collapse file diff",
@@ -178,6 +185,12 @@
     }
   },
   "settings": {
+    "terminal_startup": {
+      "label": "Terminal startup",
+      "description": "Choose what new windows and tabs show. Saved sessions and explicit shell or command launches keep their existing behavior.",
+      "shell": "Open default shell",
+      "welcome": "Show welcome page"
+    },
     "opacity": {
       "title": "Window background opacity",
       "description": "Lower values make terminal and Settings backgrounds more transparent. Text stays opaque."

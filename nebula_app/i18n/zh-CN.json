@@ -1,4 +1,11 @@
 {
+  "welcome": {
+    "tab": "欢迎",
+    "title": "欢迎使用 Pebrel",
+    "description": "打开默认 Shell，或选择 SSH 主机。",
+    "local": "本地终端",
+    "ssh": "打开 SSH 会话"
+  },
   "native_result": {
     "diff_expand": "展开文件差异",
     "diff_collapse": "折叠文件差异",
@@ -178,6 +185,12 @@
     }
   },
   "settings": {
+    "terminal_startup": {
+      "label": "终端启动行为",
+      "description": "选择新窗口和新标签的初始页面。已保存的会话以及指定 Shell 或命令的启动方式保持原有行为。",
+      "shell": "直接打开默认 Shell",
+      "welcome": "显示欢迎页"
+    },
     "opacity": {
       "title": "窗口背景不透明度",
       "description": "同步调整终端和设置页背景；数值越低越透明，文字不变。"

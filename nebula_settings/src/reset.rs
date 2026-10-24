@@ -41,6 +41,7 @@ const RESET_KEYS: &[&str] = &[
     "tab_reveal",
     "density",
     "new_tab_position",
+    "terminal_startup",
     "windowing_behavior",
     "cell_width_mode",
     "vcs_display",
@@ -158,6 +159,14 @@ mod tests {
             crate::ScrollbarVisibility::Auto,
         );
         assert!(text.contains("custom=keep"));
+    }
+
+    #[test]
+    fn reset_returns_to_direct_shell_startup_without_erasing_other_data() {
+        let text = default_settings_text("terminal_startup=welcome\ncustom_data=keep\n");
+        let settings = crate::RuntimeSettings::from_raw(&crate::RawSettings::from_text(&text));
+        assert_eq!(settings.terminal_startup, crate::TerminalStartup::Shell);
+        assert!(text.contains("custom_data=keep"));
     }
 
     #[test]

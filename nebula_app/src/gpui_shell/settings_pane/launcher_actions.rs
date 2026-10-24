@@ -3,6 +3,18 @@
 use super::*;
 
 impl SettingsPane {
+    pub(in crate::gpui_shell) fn show_ssh_hosts(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_search_input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.search_origin_section = None;
+        self.active_section = SECTION_IDS.iter().position(|section| *section == "ssh").unwrap();
+        self.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists::load();
+        cx.notify();
+    }
+
     pub(in crate::gpui_shell) fn sync_launcher_shell(
         &mut self,
         window: &mut Window,
@@ -20,10 +32,7 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings_search_input.update(cx, |input, cx| input.set_value("", window, cx));
-        self.search_origin_section = None;
-        self.active_section = SECTION_IDS.iter().position(|section| *section == "ssh").unwrap();
-        self.ssh_hosts = crate::gpui_shell::ssh_hosts::SshHostLists::load();
+        self.show_ssh_hosts(window, cx);
         self.prepare_launcher_ssh_host(&host, window, cx);
         if edit {
             self.open_ssh_editor(Some(host), window, cx);

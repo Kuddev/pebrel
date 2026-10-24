@@ -802,6 +802,7 @@ impl SettingsPane {
             "tab_reveal" => pick!(tab_reveal),
             "density" => pick!(density),
             "new_tab_position" => pick!(new_tab_position),
+            "terminal_startup" => pick!(terminal_startup),
             "windowing_behavior" => pick!(windowing_behavior),
             "cell_width_mode" => pick!(cell_width_mode),
             "ligatures" => pick!(ligatures),
@@ -1280,6 +1281,12 @@ impl SettingsPane {
         let language = crate::gpui_shell::config::ui_language(cx);
         let terminal = self
             .group(language.pick("启动", "Startup"), cx)
+            .child(self.select_row(
+                "terminal_startup",
+                language.text(crate::i18n::Message::SettingsTerminalStartupLabel),
+                language.text(crate::i18n::Message::SettingsTerminalStartupDescription),
+                cx,
+            ))
             .child(self.shell_select_row(cx))
             .child(self.startup_directory_row(cx))
             .when(

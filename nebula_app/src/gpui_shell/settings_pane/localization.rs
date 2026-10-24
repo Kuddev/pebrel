@@ -81,6 +81,10 @@ pub(super) fn localized_select_labels(
             language.pick("当前标签之后", "After current tab"),
             language.pick("列表末尾", "End of list"),
         ],
+        "terminal_startup" => vec![
+            language.text(crate::i18n::Message::SettingsTerminalStartupShell),
+            language.text(crate::i18n::Message::SettingsTerminalStartupWelcome),
+        ],
         "windowing_behavior" => vec![
             language.pick("创建新窗口", "Create a new window"),
             language.pick("附加到最近使用的窗口", "Attach to the most recent window"),

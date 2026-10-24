@@ -261,8 +261,20 @@ impl NebulaWorkspace {
                     cx,
                 )
             },
-            RuntimeCommand::NewTab { window_id, cwd, shell_id } => {
+            RuntimeCommand::NewTab { window_id, cwd, shell_id, use_startup_setting } => {
                 self.runtime_window_requested(*window_id)?;
+                if *use_startup_setting {
+                    self.add_configured_tab(
+                        cwd.clone(),
+                        &nebula_settings::RuntimeSettings::load(),
+                        window,
+                        cx,
+                    );
+                    return self.runtime_result(
+                        json!({ "window_id": self.runtime_window_id, "pane_id": self.active_terminal_pane_id() }),
+                        window, cx,
+                    );
+                }
                 // 带 shell 的请求（右键「在 Pebrel 中打开（Ubuntu）」并入驻留实例）
                 // 必须走 add_terminal_with：add_terminal_at 只认目录，会把 shell
                 // 悄悄丢掉，用户拿到一个自己没要过的 PowerShell 标签。
@@ -914,6 +926,7 @@ impl NebulaWorkspace {
                         )
                     },
                     WorkspaceTab::Settings { .. } => ("settings", None, None, None, Vec::new()),
+                    WorkspaceTab::Welcome { .. } => ("welcome", None, None, None, Vec::new()),
                     WorkspaceTab::Image { .. } => ("image", None, None, None, Vec::new()),
                     WorkspaceTab::Document { .. } => ("document", None, None, None, Vec::new()),
                     WorkspaceTab::Code { .. } => ("code", None, None, None, Vec::new()),

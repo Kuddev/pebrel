@@ -28,8 +28,10 @@ pub(super) fn initial_startup(
         let launch = super::super::shell_launch::at_explicit_directory(launch, cwd.as_deref());
         return WorkspaceStartup::LaunchTerminal { cwd, launch };
     }
-    if cwd.is_some() || isolated {
+    if isolated {
         WorkspaceStartup::NewTerminal { cwd }
+    } else if cwd.is_some() {
+        WorkspaceStartup::Configured { cwd }
     } else {
         WorkspaceStartup::RestoreOrDefault
     }
@@ -45,7 +47,9 @@ mod startup_tests {
     #[gpui::test]
     fn invalid_explicit_shell_cannot_create_a_runtime_window(cx: &mut gpui::TestAppContext) {
         let error = cx
-            .update(|cx| open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into())))
+            .update(|cx| {
+                open_runtime_window(cx, None, Some("pebrel-missing-shell-id".into()), false)
+            })
             .unwrap_err();
         assert_eq!(error.code, "invalid_shell");
         assert!(cx.update(|cx| cx.windows().is_empty()));
@@ -117,6 +121,10 @@ mod startup_tests {
     #[test]
     fn privileged_startup_never_restores_the_ordinary_session() {
         assert!(matches!(initial_startup(None, None, false), WorkspaceStartup::RestoreOrDefault));
+        assert!(matches!(
+            initial_startup(Some(PathBuf::from("project")), None, false),
+            WorkspaceStartup::Configured { cwd: Some(_) }
+        ));
         assert!(matches!(
             initial_startup(None, None, true),
             WorkspaceStartup::NewTerminal { cwd: None }

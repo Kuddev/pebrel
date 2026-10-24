@@ -104,7 +104,7 @@ fn fresh_token() -> String {
     format!("{:016x}{:016x}", a.finish(), b.finish())
 }
 
-/// 普通二次启动并入驻留实例：先恢复/聚焦窗口，再新建一个默认 shell 标签页。
+/// 普通二次启动并入驻留实例：先恢复/聚焦窗口，再按启动设置创建标签页。
 pub fn try_open_default_tab_existing(shell: Option<&str>) -> bool {
     try_open_tab_existing(None, shell)
 }
@@ -139,7 +139,7 @@ pub fn try_open_window_existing(dir: Option<&std::path::Path>, shell: Option<&st
     if legacy_request("ATTACH").is_none() {
         return false;
     }
-    cli::request_once("window.create", handover_params(dir, shell), IO_TIMEOUT)
+    cli::request_once("window.create", launch_handover_params(dir, shell), IO_TIMEOUT)
         .map(|response| response.ok)
         .unwrap_or(false)
 }
@@ -148,15 +148,41 @@ pub fn try_open_window_existing(dir: Option<&std::path::Path>, shell: Option<&st
 ///
 /// 只放**有值**的键——第二份进程与驻留实例可能不是同一个构建，缺省键让老
 /// 那边按 `serde(default)` 走原行为；空白 shell 也当作没给。
-fn handover_params(dir: Option<&std::path::Path>, shell: Option<&str>) -> serde_json::Value {
+fn handover_params(
+    dir: Option<&std::path::Path>,
+    shell: Option<&str>,
+    use_startup_setting: bool,
+) -> serde_json::Value {
     let mut params = serde_json::Map::new();
     if let Some(dir) = dir {
         params.insert("cwd".to_owned(), serde_json::json!(dir));
     }
     if let Some(shell) = shell.map(str::trim).filter(|shell| !shell.is_empty()) {
         params.insert("shell".to_owned(), serde_json::json!(shell));
+    } else if use_startup_setting {
+        params.insert("use_startup_setting".to_owned(), serde_json::json!(true));
     }
     serde_json::Value::Object(params)
+}
+
+fn launch_handover_params(dir: Option<&std::path::Path>, shell: Option<&str>) -> serde_json::Value {
+    // Negotiate the additive parameter with a potentially older resident. Only
+    // this read is optional; the mutating create request is still sent once.
+    let wants_welcome = shell.is_none_or(|shell| shell.trim().is_empty())
+        && nebula_settings::RuntimeSettings::load().terminal_startup
+            == nebula_settings::TerminalStartup::Welcome;
+    let supported = wants_welcome
+        && cli::request_once("runtime.describe", serde_json::json!({}), IO_TIMEOUT)
+            .ok()
+            .filter(|response| response.ok)
+            .and_then(|response| response.result)
+            .and_then(|result| {
+                result.get("features").and_then(serde_json::Value::as_array).cloned()
+            })
+            .is_some_and(|features| {
+                features.iter().any(|feature| feature == "window.startup_setting")
+            });
+    handover_params(dir, shell, supported)
 }
 
 fn try_open_tab_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> bool {
@@ -164,7 +190,7 @@ fn try_open_tab_existing(dir: Option<&std::path::Path>, shell: Option<&str>) -> 
         return false;
     }
     // ATTACH 与 tab.new 落到同一事件队列，窗口先恢复，新标签随后创建。
-    cli::request_once("tab.new", handover_params(dir, shell), IO_TIMEOUT)
+    cli::request_once("tab.new", launch_handover_params(dir, shell), IO_TIMEOUT)
         .map(|response| response.ok)
         .unwrap_or(false)
 }
@@ -320,6 +346,21 @@ mod tests {
         ] {
             assert!(parse_endpoint(invalid).is_none());
         }
+    }
+
+    #[test]
+    fn handover_keeps_explicit_shells_and_older_residents_compatible() {
+        let cwd = std::path::Path::new("project");
+        assert_eq!(handover_params(None, None, false), json!({}));
+        assert_eq!(handover_params(Some(cwd), None, false), json!({ "cwd": "project" }));
+        assert_eq!(
+            handover_params(Some(cwd), Some("  "), true),
+            json!({ "cwd": "project", "use_startup_setting": true })
+        );
+        assert_eq!(
+            handover_params(Some(cwd), Some(" wsl:Ubuntu "), true),
+            json!({ "cwd": "project", "shell": "wsl:Ubuntu" })
+        );
     }
 
     #[test]

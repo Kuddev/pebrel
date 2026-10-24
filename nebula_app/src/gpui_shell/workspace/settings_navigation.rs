@@ -43,7 +43,9 @@ impl NebulaWorkspace {
             },
             SettingsPaneEvent::TerminalProfilesChanged => self.refresh_shell_if_open(window, cx),
             SettingsPaneEvent::LaunchSsh(host) => {
+                let welcome = self.active_welcome();
                 self.add_ssh_terminal(host.clone(), window, cx);
+                self.finish_welcome_tab(welcome, window, cx);
             },
             SettingsPaneEvent::InstallAgent(agent) => {
                 if let Some((launch, command)) = crate::ai_providers::install::launch(*agent) {
