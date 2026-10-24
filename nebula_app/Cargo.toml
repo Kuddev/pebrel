@@ -197,6 +197,7 @@ png = { version = "0.17.5", default-features = false, optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "=3.7.0"
 objc2 = "0.6.1"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFString", "CFUserNotification"] }
 objc2-foundation = { version = "0.3.1", default-features = false, features = [
     "std",
     "NSString",
@@ -230,10 +231,6 @@ objc2-quartz-core = { version = "0.3.2", optional = true, default-features = fal
     "CALayer",
     "CATransaction",
     "objc2-core-foundation",
-] }
-objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
-    "std",
-    "CFCGTypes",
 ] }
 
 [target.'cfg(windows)'.dependencies]
@@ -357,7 +354,7 @@ video-background = [
     "windows/Win32_Media_MediaFoundation",
     "dep:objc2-av-foundation",
     "dep:objc2-quartz-core",
-    "dep:objc2-core-foundation",
+    "objc2-core-foundation/CFCGTypes",
     "objc2-app-kit/NSGraphics",
     "objc2-app-kit/objc2-quartz-core",
     "objc2-foundation/NSGeometry",
