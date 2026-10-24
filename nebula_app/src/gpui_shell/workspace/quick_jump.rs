@@ -12,23 +12,23 @@ const DIRECTORY_LIMIT: usize = 128;
 const AI_SESSION_LIMIT: usize = 30;
 
 pub(super) fn rows(workspace: &NebulaWorkspace, cx: &App) -> Vec<WorkspacePaletteRow> {
-    let language = workspace_ui_language();
+    let language = crate::gpui_shell::config::ui_language(cx);
     let mut rows = tab_rows(workspace, cx, language);
     rows.extend(directory_rows(language));
     rows.extend(ssh_rows(language));
 
     let ai_group = language.pick("AI 会话", "AI sessions");
     rows.extend(
-        ai_session_palette_rows(crate::ai_sessions::scan(AI_SESSION_LIMIT)).into_iter().map(
-            |mut row| {
+        ai_session_palette_rows(crate::ai_sessions::scan(AI_SESSION_LIMIT), language)
+            .into_iter()
+            .map(|mut row| {
                 row.group_order += 4;
                 row.group = format!("{ai_group} · {}", row.group);
                 // 统一星标表达「可恢复的 Agent 会话」，provider 留在文字
                 // 元数据中；这里不把 Claude/Codex 等 CLI 品牌误当成动作图标。
                 row.icon_path = Some(IconName::Star.path());
                 row
-            },
-        ),
+            }),
     );
     rows
 }

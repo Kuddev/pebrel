@@ -102,6 +102,12 @@ each agent's activity, and read its output without leaving the application.
   replace their previous rules, avoiding the stale disabled bindings from the append-only
   path; the saved configuration format is unchanged. See the
   [shortcut ownership decision](architecture/notes/nebula_app/gpui_shell/workspace/2026-10-07-keyboard-override-sources.md).
+- Local Windows PowerShell prompts can keep multiline clipboard paste in
+  PSReadLine for review: Enter submits it, and one Undo removes the whole paste.
+  This requires active shell integration and no user binding on its managed paste shortcut.
+  PSReadLine normalizes CRLF and expands tabs to four spaces; other editors retain
+  their negotiated paste or existing confirmation behavior. See the
+  [clipboard paste contract](architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md).
 
 ### Intelligent Completion
 
@@ -172,6 +178,9 @@ discover candidates from the current environment without matching prior commands
 - GPU-accelerated GPUI interface, light and dark themes, backgrounds, and opacity controls.
 - Application icon palettes and eleven UI language choices with English fallback
   for untranslated text.
+- Workspace dialogs, command feedback, Git/SVN controls and default notifications
+  follow the selected language. Switching languages preserves command search text
+  and selection. See [internationalization](docs/internationalization.md).
 - Searchable settings, a command palette, and Lua configuration with validation and
   live reload. Existing TOML configuration remains supported.
 - Markdown document tabs and native mathematical typesetting without a WebView.

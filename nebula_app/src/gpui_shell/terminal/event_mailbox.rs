@@ -70,6 +70,9 @@ pub(super) fn preserves_native_prompt(mut bytes: &[u8]) -> bool {
         match sequence[end] {
             b'A'..=b'D' | b'H' | b'F' if parameters.is_empty() => {},
             b'~' if matches!(parameters, b"1" | b"2" | b"3" | b"4" | b"5" | b"6") => {},
+            // Ctrl+Shift+F11 is the managed PSReadLine Paste edit. Its legacy
+            // VT encoding must preserve the prompt like its Win32 key record.
+            b'~' if parameters == b"23;6" => {},
             b'_' => {
                 let Ok(parameters) = std::str::from_utf8(parameters) else { return false };
                 let mut fields = parameters.split(';');
