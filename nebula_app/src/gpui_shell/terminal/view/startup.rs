@@ -265,6 +265,7 @@ impl TerminalView {
                 }
             }),
             cx.on_focus_out(&focus_handle, window, |view, _event, _window, cx| {
+                view.path_drop.invalidate();
                 if view.cursor_pane_focused {
                     view.cursor_pane_focused = false;
                     view.restart_cursor_blink(cx);

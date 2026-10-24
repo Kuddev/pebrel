@@ -493,7 +493,7 @@ impl TerminalView {
         typography::effective_cell_width(raw_width, self.cell_width_mode, scale, self.font_offset_x)
     }
 
-    pub(super) fn line_height_for_metrics(&self, natural_height: f32, scale: f32) -> Pixels {
+    pub(super) fn line_height_at_scale(&self, natural_height: f32, scale: f32) -> Pixels {
         typography::line_height_for_view(
             self.font_size,
             self.line_height_multiplier,
@@ -820,7 +820,7 @@ impl TerminalView {
         self.editor_query_task = None;
         self.cursor_animation.note_input(&bytes);
         self.prompt_input_epoch = self.prompt_input_epoch.wrapping_add(1);
-        self.path_drop.invalidate();
+        self.path_drop.observe_input(&bytes);
         self.image_paste.observe_input(&bytes);
         self.confirmation.observe_input(&bytes);
         self.awaiting_input = false;
@@ -1539,7 +1539,11 @@ impl Render for TerminalView {
                  window: &mut Window,
                  cx| {
                     cx.stop_propagation();
-                    this.paste_dropped_paths(&[drag.path_text.clone()], window, cx);
+                    if this.ssh_destination.is_some() {
+                        this.drop_external_paths(std::slice::from_ref(&drag.local_path), window, cx);
+                    } else {
+                        this.paste_dropped_paths(&[drag.path_text.clone()], window, cx);
+                    }
                 },
             ))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
@@ -1559,9 +1563,10 @@ impl Render for TerminalView {
             root = root.child(div().p_4().text_color(gpui::red()).child(error.clone()));
         } else {
             root = root.child(TerminalElement::new(cx.entity()));
+            root = root.children(self.file_upload_indicator(cx));
             root = root.children(self.native_result_elements(window, cx));
             if self.ssh_disconnected() {
-                root = root.child(self.ssh_disconnect_banner(cx));
+                root = root.child(self.ssh_disconnect_notice(cx));
             }
             // SSH 连接卡片（旧壳 `display::ssh_connect` 的 GPUI 形态）：
             // 状态机/文案/常量直接复用，卡片遮罩盖住空 grid。350ms 显示
