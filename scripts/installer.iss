@@ -161,7 +161,7 @@ Source: "{#RepoRoot}\THIRD-PARTY-NOTICES"; DestDir: "{app}\licenses"; Flags: ign
 Name: "{group}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"
 Name: "{group}\{cm:UninstallProgram}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"; Tasks: desktopicon
-Name: "{userstartup}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"; Tasks: autostart
+Name: "{userstartup}\Pebrel"; Filename: "{app}\pebrel.exe"; Parameters: "--gpui --launched-at-login"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "com.pebrel.terminal"; Tasks: autostart
 #endif
 
 [Registry]

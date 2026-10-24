@@ -24,7 +24,7 @@ use crate::renderer::shader::{ShaderProgram, ShaderVersion};
 const IMAGE_SHADER_F: &str = include_str!("../../res/image.f.glsl");
 const IMAGE_SHADER_V: &str = include_str!("../../res/image.v.glsl");
 
-use super::image_layout::wallpaper_rect;
+pub(crate) use super::image_layout::wallpaper_rect;
 pub use super::image_layout::{BackgroundImageAlignment, BackgroundImageFit};
 
 #[repr(C)]
