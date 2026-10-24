@@ -671,7 +671,7 @@ _pebrel() {
 
     case "${cmd}" in
         pebrel)
-            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --config-file --socket --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] view ctl env window tab pane agent migrate config plugin theme setup-ai help"
+            opts="-q -v -e -T -o -h -V --print-events --ref-test --embed --gpui --launched-at-login --config-file --socket --daemon --working-directory --shell --hold --command --title --class --option --help --version [DIRECTORY] view ctl env window tab pane agent migrate config plugin theme setup-ai help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

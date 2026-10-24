@@ -207,6 +207,11 @@ Pane ID 当前在 Window 内稳定，而不是进程内全局唯一。存在多�
 转发。资源 CLI 可从字面文本、`--stdin` 或 `--from-file` 读取，但协议边界始终只接收验证后的
 文本，不接收本地路径或句柄。
 
+Windows 本地 PowerShell 的终端剪贴板操作可委托给当前 PSReadLine 的原生 Paste。
+该能力只用于用户剪贴板操作及其广播接收端，不能作为 Runtime API 目标已开启
+bracketed paste 的证明；`pane.paste` 和 `agent.paste` 仍遵循上述协议校验。
+详见[剪贴板能力边界](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-23-powershell-clipboard-paste.md)。
+
 ## 单请求编排
 
 `runtime.orchestrate` 把模型已经确定的终端操作留在 Runtime 内执行，避免模型在每个步骤之间

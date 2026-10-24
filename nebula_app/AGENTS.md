@@ -4,6 +4,8 @@
 - 原生结果的块级呈现和目录折叠遵循 [`native_results`](../architecture/notes/nebula_app/gpui_shell/terminal/native_results/)；文字、链接和命中共享终端的滚动投影。
 - `src/gpui_shell` 负责 GPUI 呈现、命令和订阅。交互改动必须覆盖默认、hover、pressed、键盘焦点、disabled/loading 以及成功/失败中实际需要的状态。
 - 首帧窗口尺寸、非阻塞 logo 准备与原生呈现顺序的因果记录见 [`workspace`](../architecture/notes/nebula_app/gpui_shell/workspace/)。
+- 独立本地草稿写入的 canonical target 并发合同见 [`file_editor writers`](../architecture/notes/nebula_app/gpui_shell/file_editor/2026-10-11-canonical-target-writers.md)。
+- GPUI 图片解码帧与 zoom/pan 几何一致性见 [`doc_tabs`](../architecture/notes/nebula_app/gpui_shell/doc_tabs/)。
 - Linux 静默启动、关窗守卫、桌面身份与 portal 激活令牌见 [`原生生命周期`](../architecture/notes/nebula_app/platform/2026-10-14-linux-desktop-lifecycle.md)。
 - 操作形成“触发 → 执行 → 可感知结果”的闭环。成功只能在操作真实完成或底层接口明确接受后显示，不能把回调触发当成平台级成功。
 - 异步工作必须有所有者、取消/过期策略和视图销毁清理；旧结果不得覆盖新状态。渲染回调不得同步等待磁盘、网络、子进程或长锁。
@@ -12,14 +14,17 @@
 - 测试真实控件和布局路径；编译或状态单测不能代替 hover、命中区域、键盘路径和视觉验收。
 - 只有跨层所有权、持久化、协议、线程/生命周期或重要性能取舍才写 note，路径镜像到 `architecture/notes/nebula_app/<capability>/`。
 - Agent 集成、改键输入与 SSH 认证的因果记录分别位于 [`ai_hook`](../architecture/notes/nebula_app/ai_hook/)、[`input`](../architecture/notes/nebula_app/input/) 和 [`ssh_session`](../architecture/notes/nebula_app/ssh_session/)。
+- Windows PowerShell 剪贴板粘贴与当前编辑器能力的边界见 [`terminal/view`](../architecture/notes/nebula_app/gpui_shell/terminal/view/)。
 - Runtime 地址发现与隔离实例的生命周期边界见 [`runtime_api`](../architecture/notes/nebula_app/runtime_api/)。
 - 补齐数据源选择和请求快照归 `completion.rs`，界面仅拥有任务与交互；边界依据见 [`completion`](../architecture/notes/nebula_app/completion/)。
 - 旧渲染入口的窗口动画状态归 `display/animations.rs`；迁移及显式 legacy 验证依据见 [`display`](../architecture/notes/nebula_app/display/)。
 - 旧壳逐步退役时，保留共享规则的单一实现；首个滚动条边界切片见 [`scrollbar`](../architecture/notes/nebula_app/scrollbar/)。
 - 新终端代理保持选定协议，不把 SOCKS 改写成 HTTP。见 [`terminal proxy scheme`](../architecture/notes/nebula_app/ssh_proxy/2026-09-29-terminal-proxy-scheme.md)。
+- 新终端的绕过列表写成 curl 的 `no_proxy`，`socks5h` 按原样保存。见 [`terminal proxy bypass`](../architecture/notes/nebula_app/ssh_proxy/2026-09-30-terminal-proxy-bypass.md)。
 - WSL pane 的发行版快照与分屏/新标签继承见 [`shell_detect`](../architecture/notes/nebula_app/shell_detect/)；WSL zsh 启动注入见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-28-wsl-zsh-startup-integration.md)。
 - Windows Codex 身份探测复用进程级辅助进程；光标提示、私有管道、请求期限和退出回收见 [`探测进程生命周期`](../architecture/notes/nebula_app/platform/ai_session_identity/windows/2026-10-23-reusable-probe-process.md)。
 - SSH Files 的 pane cwd 跟随、手动浏览快照与取消归属见 [`remote_files`](../architecture/notes/nebula_app/gpui_shell/workspace/remote_files/)。
 - 管理员更新的受保护目录与会话恢复分别见 [`update_installation`](../architecture/notes/nebula_app/platform/update_installation/) 和 [`update_download`](../architecture/notes/nebula_app/update_download/)，普通会话与管理员更新状态保持独立。
 - Windows Acrylic 的运行库回退与窗口生命周期见 [`platform`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-controller.md)。
 - Windows Acrylic 的动画期间透明回退与计时边界见 [`窗口状态切换`](../architecture/notes/nebula_app/platform/2026-09-22-acrylic-window-transitions.md)。
+- 登录项的启动意图与首窗静默边界见 [`登录启动`](../architecture/notes/nebula_app/platform/startup/2026-10-10-login-launch-intent.md)。
