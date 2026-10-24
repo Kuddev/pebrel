@@ -56,7 +56,7 @@ pub(super) fn help(key: &str, language: UiLanguage) -> SettingHelp {
             None,
         ),
         "opacity" => (
-            language.pick("100% 为完全不透明，不影响设置页。", "100% is fully opaque. The Settings page is unaffected."),
+            language.text(crate::i18n::Message::SettingsOpacityDescription),
             None,
         ),
         "blur" => (

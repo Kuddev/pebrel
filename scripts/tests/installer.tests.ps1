@@ -21,6 +21,7 @@ $requiredPatterns = [ordered]@{
     'no application restart during uninstall' = 'RestartApplications=no'
     'desktop shortcut task' = 'Tasks: desktopicon'
     'login startup task' = '\{userstartup\}\\Pebrel'
+    'login startup intent' = '\{userstartup\}\\Pebrel";[^\r\n]+Parameters: "--gpui --launched-at-login"'
     'hook cleanup command' = 'Parameters: "setup-ai --remove"'
     'gpui start-menu shortcut' = 'Parameters: "--gpui"'
     'scoped post-install launch arguments' = 'Parameters: "\{code:PebrelLaunchParameters\}";.*AfterInstall: RestorePebrelLaunchEnvironment'
