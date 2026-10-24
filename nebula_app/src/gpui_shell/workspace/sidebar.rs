@@ -392,6 +392,7 @@ impl NebulaWorkspace {
                             pitch: row_pitch,
                             offset: 0.0,
                             active: false,
+                            force_tear_out: false,
                             dock: None,
                         });
                     }),
@@ -754,7 +755,8 @@ impl NebulaWorkspace {
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
                                         gpui_component::tooltip::Tooltip::new(
-                                            "新建终端 (Ctrl+Shift+T)",
+                                            crate::gpui_shell::config::ui_language(cx)
+                                                .text(crate::i18n::Message::ChromeNewTerminalCtrlShiftT),
                                         )
                                         .build(window, cx)
                                     })
@@ -775,7 +777,10 @@ impl NebulaWorkspace {
                                     .text_color(muted)
                                     .hover(|button| button.bg(hover_bg).text_color(theme.foreground))
                                     .tooltip(|window, cx| {
-                                        gpui_component::tooltip::Tooltip::new("新建终端 (Ctrl+K)")
+                                        gpui_component::tooltip::Tooltip::new(
+                                            crate::gpui_shell::config::ui_language(cx)
+                                                .text(crate::i18n::Message::ChromeNewTerminalCtrlK),
+                                        )
                                             .build(window, cx)
                                     })
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -912,8 +917,7 @@ impl NebulaWorkspace {
                     .items_center()
                     .occlude()
                     .child(
-                        toolbar_button("toggle-sidebar", IconName::PanelLeft)
-                            .disabled(settings_active)
+                        toolbar_button("toggle-sidebar", IconName::PanelLeft, settings_active)
                             // 侧栏是开关而非一次性动作：展开期间必须持续显示
                             // 选中底，和旧壳 `left_sidebar_visible()` 同义。
                             .selected(sidebar_visible)
@@ -932,7 +936,7 @@ impl NebulaWorkspace {
                             })),
                     )
                     .child(
-                        toolbar_button("open-settings", IconName::Settings)
+                        toolbar_button("open-settings", IconName::Settings, false)
                             .selected(settings_active)
                             .when(settings_active, |button| {
                                 button.bg(settings_active_bg).text_color(settings_active_fg)
@@ -945,14 +949,14 @@ impl NebulaWorkspace {
             )
             .child(self.render_collapsed_tab_title(cx))
             .child(
-                title_bar_panel_controls()
-                    .gap(px(8.0))
+                window_titlebar::title_bar_right_controls()
                     .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
                         toolbar_button(
                             "toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                            false,
                         )
                         .debug_selector(|| "command-manager-toggle".into())
                         .selected(self.command_manager_open)

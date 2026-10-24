@@ -28,6 +28,11 @@ impl Default for SessionPersistence {
 }
 
 impl SessionPersistence {
+    #[cfg(test)]
+    pub(super) fn ordinary_for_test() -> Self {
+        Self { isolated: false, ..Self::default() }
+    }
+
     pub(super) fn update_windows(&self) -> std::io::Result<Vec<Session>> {
         // 管理员只在显式更新事务中落盘；commit 会在授权安装前持久保存这份内存快照。
         (if self.isolated { &self.latest } else { &self.saved })
@@ -128,7 +133,7 @@ mod tests {
     fn ordinary_window() -> SessionPersistence {
         // Hosted Windows runners can be elevated. These tests exercise ordinary
         // window persistence; privileged isolation has its own negative test.
-        SessionPersistence { isolated: false, ..SessionPersistence::default() }
+        SessionPersistence::ordinary_for_test()
     }
 
     fn sample_session() -> Session {

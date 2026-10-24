@@ -865,8 +865,6 @@ fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_re
     assert_eq!(draft.terminal.cursor_text, Some(cursor_text));
 
     click("theme-editor-save-apply", &mut window);
-    assert!(window.debug_bounds("theme-editor-dialog").is_none());
-
     let after_documents = custom_theme_documents();
     for document in &after_documents {
         if document.id().is_some_and(|id| !before_library_ids.iter().any(|before| before == id))
@@ -875,6 +873,18 @@ fn advanced_selection_and_cursor_text_picker_colors_preview_persist_apply_and_re
             theme_cleanup.track(document);
         }
     }
+    // Saving the library entry can succeed before applying preferences fails.
+    // Register cleanup before asserting success so a failure cannot contaminate
+    // the next theme picker fixture with a new custom option.
+    assert!(
+        window.debug_bounds("theme-editor-dialog").is_none(),
+        "save/apply state: {:?}",
+        pane.read_with(&mut window, |pane, _| pane.theme_editor.as_ref().map(|editor| (
+            editor.save_busy,
+            editor.error.clone(),
+            editor.draft.name.clone(),
+        )))
+    );
     let applied_id = RuntimeSettings::load().custom_theme.expect("advanced color theme is active");
     let applied = after_documents
         .iter()

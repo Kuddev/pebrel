@@ -19,6 +19,7 @@ use crate::gpui_shell::terminal::view::SidebarActivity;
 use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::{Message, UiLanguage};
 
+use super::window_titlebar::title_bar_right_controls;
 use super::{
     NebulaWorkspace, NewWindow, OpenSettings, TAB_LABEL_ICON_SIZE, TAB_LABEL_ICON_W, TabDrag,
     TabDragAxis, TabPresentation, ToggleShellPicker, pane_header, title_bar_panel_controls,
@@ -320,6 +321,7 @@ impl NebulaWorkspace {
                                 pitch,
                                 offset: 0.0,
                                 active: false,
+                                force_tear_out: false,
                                 dock: None,
                             });
                         }),
@@ -696,14 +698,14 @@ impl NebulaWorkspace {
             // 共享详情侧栏入口固定在其右侧。
             .child(div().h_full().flex_1().min_w_0())
             .child(
-                title_bar_panel_controls()
-                    .gap(px(8.0))
+                title_bar_right_controls()
                     .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
                         toolbar_button(
                             "top-toggle-command-manager",
                             Icon::new(Icon::empty())
                                 .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                            false,
                         )
                             .debug_selector(|| "command-manager-toggle".into())
                             .selected(self.command_manager_open)
