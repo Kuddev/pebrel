@@ -161,7 +161,7 @@ impl Surface {
     pub fn source_row_matches(&self, row: u16, cells: &[crate::term::cell::Cell]) -> bool {
         self.source_hashes
             .get(usize::from(row))
-            .is_some_and(|expected| *expected == source_hash(cells))
+            .is_some_and(|expected| source_hash(cells) == Some(*expected))
     }
 
     pub fn revision(&self) -> u64 {
@@ -338,7 +338,7 @@ impl Registry {
     }
 }
 
-fn source_hash(cells: &[crate::term::cell::Cell]) -> u64 {
+fn source_hash(cells: &[crate::term::cell::Cell]) -> Option<u64> {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     // 窗口加宽补的空白不是输出内容；软折行标记仍参与校验，避免把重排后的旧跨度当真。
@@ -348,14 +348,18 @@ fn source_hash(cells: &[crate::term::cell::Cell]) -> u64 {
             cell.c != ' '
                 || cell.zerowidth().is_some_and(|z| !z.is_empty())
                 || !cell.flags.is_empty()
+                || cell.image().is_some()
         })
         .map_or(0, |index| index + 1);
     for cell in &cells[..end] {
+        if cell.image().is_some() {
+            return None;
+        }
         cell.c.hash(&mut hash);
         cell.zerowidth().unwrap_or_default().hash(&mut hash);
         cell.flags.bits().hash(&mut hash);
     }
-    hash.finish()
+    Some(hash.finish())
 }
 
 impl Drop for Registry {
@@ -367,6 +371,46 @@ impl Drop for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::GridCell;
+    use crate::inline_image::{ImageCell, ImageIdentity};
+    use crate::term::cell::Cell;
+
+    #[test]
+    fn image_and_marker_share_attributes_and_release_cached_owners() {
+        for image_first in [false, true] {
+            let surface = Arc::new(Surface::new(1, "text/plain".into(), "test".into()));
+            let source = Arc::downgrade(&surface);
+            let image = ImageIdentity::new();
+            let pixels = Arc::downgrade(&image);
+            let mut cell = Cell::default();
+            let tile = ImageCell { image, column: 1, row: 2 };
+            let marker = Marker { surface, row: 0 };
+            if image_first {
+                cell.set_image(tile);
+                cell.set_inline_marker(marker);
+            } else {
+                cell.set_inline_marker(marker);
+                cell.set_image(tile);
+            }
+            let copy = cell.clone();
+            cell.set_underline_color(None);
+            cell.set_hyperlink(None);
+            assert_eq!(cell.image().unwrap().column, 1);
+            assert_eq!(cell.inline_marker().unwrap().row, 0);
+            #[cfg(feature = "serde")]
+            {
+                let roundtrip: Cell =
+                    serde_json::from_str(&serde_json::to_string(&cell).unwrap()).unwrap();
+                assert!(roundtrip.image().is_none() && roundtrip.inline_marker().is_none());
+            }
+            cell.discard();
+            assert!(cell.extra.is_none());
+            assert!(source.upgrade().is_some() && pixels.upgrade().is_some());
+            drop(copy);
+            assert!(source.upgrade().is_none() && pixels.upgrade().is_none());
+        }
+    }
+
     #[test]
     fn native_rows_grow_only_for_contiguous_places_within_cap() {
         let mut registry = Registry::default();
