@@ -101,7 +101,7 @@ impl SettingsPane {
                             .size(px(SETTINGS_NAV_ICON_SIZE))
                             .text_color(cx.theme().muted_foreground),
                     )
-                    .aria_label(language.pick("在全部设置中搜索", "Search all settings")),
+                    .aria_label(language.text(crate::i18n::Message::SettingsPaneSearchAllSettings)),
             )
             .child(
                 div()

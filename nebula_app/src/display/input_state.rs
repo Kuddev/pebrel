@@ -27,6 +27,21 @@ pub(crate) struct PendingEcho {
 }
 
 impl NebulaPaneState {
+    /// A shell prediction may follow the cursor only while the complete typed
+    /// mirror still matches the echoed prefix. Cursor edits invalidate trust.
+    pub(crate) fn completion_prefix_from_raw_grid<T: EventListener>(
+        &self,
+        terminal: &Term<T>,
+        cursor: Point,
+    ) -> Option<PromptLineSnapshot> {
+        if !self.completion_mirror_at_end || self.line_buf.is_empty() {
+            return None;
+        }
+        let line =
+            prompt_line_from_raw_grid(terminal, cursor, &self.line_buf, &self.suggest_env, true)?;
+        (line.input == self.line_buf).then_some(line)
+    }
+
     pub(crate) fn pending_completion_line(&self) -> Option<&str> {
         self.completion_pending_input.as_ref().map(|pending| pending.expected.as_str())
     }
@@ -126,6 +141,7 @@ pub(crate) fn nebula_clear_line(state: &mut NebulaPaneState) {
     state.line_buf.clear();
     state.screen_line.clear();
     state.completion_pending_input = None;
+    state.completion_mirror_at_end = false;
     state.completion_suppressed_line = None;
     state.completion_popup_requested = false;
     state.clear_completion_hints();
@@ -187,8 +203,18 @@ pub(crate) fn nebula_prompt_line_from_raw_grid<T: EventListener>(
     typed_tail: &str,
     env: &SuggestEnv,
 ) -> Option<PromptLineSnapshot> {
+    prompt_line_from_raw_grid(terminal, cursor, typed_tail, env, false)
+}
+
+fn prompt_line_from_raw_grid<T: EventListener>(
+    terminal: &Term<T>,
+    cursor: Point,
+    typed_tail: &str,
+    env: &SuggestEnv,
+    allow_tail: bool,
+) -> Option<PromptLineSnapshot> {
     let input_start = terminal.nebula_prompt_input_point();
-    let (text, boundary) = raw_grid_line_with_boundary(terminal, cursor, input_start)?;
+    let (text, boundary) = raw_grid_line_with_boundary(terminal, cursor, input_start, allow_tail)?;
     if let Some(boundary) = boundary {
         let (prompt, input) = text.split_at(boundary);
         return Some(PromptLineSnapshot { prompt: prompt.to_owned(), input: input.to_owned() });
@@ -233,13 +259,14 @@ pub(crate) fn nebula_shell_prompt_restored_from_raw_grid<T: EventListener>(
 }
 
 fn raw_grid_logical_line<T: EventListener>(terminal: &Term<T>, cursor: Point) -> Option<String> {
-    raw_grid_line_with_boundary(terminal, cursor, None).map(|(text, _)| text)
+    raw_grid_line_with_boundary(terminal, cursor, None, false).map(|(text, _)| text)
 }
 
 fn raw_grid_line_with_boundary<T: EventListener>(
     terminal: &Term<T>,
     cursor: Point,
     input_start: Option<Point>,
+    allow_tail: bool,
 ) -> Option<(String, Option<usize>)> {
     let grid = terminal.grid();
     if !raw_grid_line_is_readable(cursor.line, grid.topmost_line(), grid.bottommost_line()) {
@@ -266,7 +293,7 @@ fn raw_grid_line_with_boundary<T: EventListener>(
         if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
             continue;
         }
-        if !cell.c.is_whitespace() {
+        if !allow_tail && !cell.c.is_whitespace() {
             return None;
         }
     }

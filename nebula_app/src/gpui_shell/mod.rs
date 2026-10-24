@@ -90,6 +90,7 @@ pub fn run_shell(
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
     config_file: Option<std::path::PathBuf>,
+    launched_at_login: bool,
 ) {
     if crate::platform::CAPABILITIES.self_update_install {
         match crate::update_download::handoff::installation_in_progress() {
@@ -239,7 +240,13 @@ pub fn run_shell(
         let ai_events = crate::ai_hook::spawn_gpui_server();
         init(cx, config_file);
         if initial_cwd.is_some()
-            || !crate::platform::startup::start_hidden(&nebula_settings::RuntimeSettings::load())
+            || initial_command.is_some()
+            || shell_id.is_some()
+            || crate::platform::elevation::requires_isolation()
+            || !crate::platform::startup::start_hidden(
+                &nebula_settings::RuntimeSettings::load(),
+                launched_at_login,
+            )
         {
             cx.activate(true);
         }
@@ -251,6 +258,7 @@ pub fn run_shell(
             initial_cwd,
             initial_command,
             shell_id,
+            launched_at_login,
         );
     });
     crate::tray::shutdown();
@@ -335,6 +343,7 @@ fn open_main_window(
     initial_cwd: Option<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
+    launched_at_login: bool,
 ) {
     workspace::windowing::initialize(cx, runtime_hub);
     workspace::windowing::open_initial_window(
@@ -344,6 +353,7 @@ fn open_main_window(
         initial_cwd,
         initial_command,
         shell_id,
+        launched_at_login,
     );
 }
 

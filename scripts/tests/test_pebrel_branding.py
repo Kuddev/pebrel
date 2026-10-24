@@ -34,8 +34,12 @@ class PebrelBrandingTests(unittest.TestCase):
         self.assertIn('DEFAULT_CLASS: &str = "Pebrel";', window)
         gpui = self.source("nebula_app/src/gpui_shell/workspace/windowing.rs")
         self.assertIn('window.set_window_title(crate::brand::NAME)', gpui)
+        self.assertIn("startup_geometry::options(", gpui)
+        geometry = self.source(
+            "nebula_app/src/gpui_shell/workspace/windowing/startup_geometry.rs"
+        )
         for fallback in ('pebrel', 'pebrel-quick-terminal'):
-            self.assertRegex(gpui, rf'application_id\(\s*"{fallback}"\s*,?\s*\)')
+            self.assertRegex(geometry, rf'application_id\(\s*"{fallback}"\s*,?\s*\)')
         for constant, desktop in (
             ('LINUX_APP_ID', 'io.github.kuddev.pebrel'),
             ('LINUX_PREVIEW_APP_ID', 'io.github.kuddev.pebrel.preview'),
