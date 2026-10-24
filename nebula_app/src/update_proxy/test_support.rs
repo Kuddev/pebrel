@@ -12,6 +12,14 @@ pub(crate) struct Server {
 
 impl Server {
     pub(crate) fn start(responses: Vec<String>) -> Self {
+        Self::start_with_socks_auth(responses, None)
+    }
+
+    pub(crate) fn authenticated_socks(responses: Vec<String>, user: &str, password: &str) -> Self {
+        Self::start_with_socks_auth(responses, Some((user.to_owned(), password.to_owned())))
+    }
+
+    fn start_with_socks_auth(responses: Vec<String>, auth: Option<(String, String)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -35,7 +43,7 @@ impl Server {
                 stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
                 let mut reader = BufReader::new(stream);
                 let (connect, request) = if reader.fill_buf().unwrap().first() == Some(&5) {
-                    (socks_connect(&mut reader), read_headers(&mut reader))
+                    (socks_connect(&mut reader, auth.as_ref()), read_headers(&mut reader))
                 } else {
                     let first = read_headers(&mut reader);
                     if first.starts_with("CONNECT ") {
@@ -64,6 +72,33 @@ impl Server {
         self.agent_for_server(&format!("socks=socks5h://{}", self.address), &[])
     }
 
+    /// Synthetic Network settings; never read or alter the user's preferences.
+    pub(crate) fn network_agent(
+        &self,
+        scheme: &str,
+        credentials: Option<&str>,
+        exclusions: &[&str],
+    ) -> ureq::Agent {
+        let prefix = if scheme.is_empty() { String::new() } else { format!("{scheme}://") };
+        let userinfo = credentials.map(|value| format!("{value}@")).unwrap_or_default();
+        let config = crate::ssh_proxy::SshProxyConfig {
+            mode: crate::ssh_proxy::ProxyMode::Custom,
+            url: format!("{prefix}{userinfo}{}", self.address),
+            no_proxy: exclusions.iter().map(|entry| (*entry).to_owned()).collect(),
+        };
+        let proxy = super::resolve_with_network(
+            &config,
+            || panic!("custom Network proxy should win over system"),
+            || panic!("custom Network proxy should win over environment"),
+        )
+        .unwrap();
+        ureq::config::Config::builder()
+            .proxy(proxy)
+            .timeout_global(Some(Duration::from_secs(4)))
+            .build()
+            .new_agent()
+    }
+
     fn agent_for_server(&self, server: &str, exclusions: &[&str]) -> ureq::Agent {
         // Go through the same system-value parser and fallback policy as production.
         let url = super::parse_windows_proxy_server(server, "http").unwrap();
@@ -83,14 +118,31 @@ impl Server {
     }
 }
 
-fn socks_connect(reader: &mut BufReader<TcpStream>) -> String {
+fn socks_connect(reader: &mut BufReader<TcpStream>, auth: Option<&(String, String)>) -> String {
     let mut greeting = [0; 2];
     reader.read_exact(&mut greeting).unwrap();
     assert_eq!(greeting[0], 5);
     let mut methods = vec![0; greeting[1] as usize];
     reader.read_exact(&mut methods).unwrap();
-    assert!(methods.contains(&0));
-    reader.get_mut().write_all(&[5, 0]).unwrap();
+    if let Some((expected_user, expected_password)) = auth {
+        assert!(methods.contains(&2));
+        reader.get_mut().write_all(&[5, 2]).unwrap();
+        let mut header = [0; 2];
+        reader.read_exact(&mut header).unwrap();
+        assert_eq!(header[0], 1);
+        let mut user = vec![0; header[1] as usize];
+        reader.read_exact(&mut user).unwrap();
+        let mut length = [0];
+        reader.read_exact(&mut length).unwrap();
+        let mut password = vec![0; length[0] as usize];
+        reader.read_exact(&mut password).unwrap();
+        assert_eq!(user, expected_user.as_bytes());
+        assert_eq!(password, expected_password.as_bytes());
+        reader.get_mut().write_all(&[1, 0]).unwrap();
+    } else {
+        assert!(methods.contains(&0));
+        reader.get_mut().write_all(&[5, 0]).unwrap();
+    }
     let mut request = [0; 5];
     reader.read_exact(&mut request).unwrap();
     assert_eq!(&request[..4], &[5, 1, 0, 3], "SOCKS5h must send the hostname to the proxy");

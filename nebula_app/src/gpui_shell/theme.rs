@@ -325,9 +325,8 @@ pub fn card_shadow(cx: &App) -> gpui::BoxShadow {
     }
 }
 
-/// 卡内容层底色 = 当前生效的终端背景。终端 tab 之外的卡内容（设置页）
-/// 也用它，让每个 tab 都读作同一张浮在壳上的圆角卡。带窗口透明度
-/// （与终端元素的默认背景同 alpha，透明窗口下整卡一致）。
+/// 终端卡底色使用当前生效的终端背景，并应用窗口背景不透明度。
+/// 设置页通过 `settings_content_bg` 保留主题面板色，复用同一份 alpha。
 pub fn card_content_bg(cx: &App) -> Hsla {
     let mut bg: Hsla = cx
         .try_global::<crate::gpui_shell::config::Settings>()
@@ -411,7 +410,14 @@ pub fn paint_shell_around_card(
     }
 }
 
-/// 旧壳设置页使用不透明 `Skin.panel`，不让终端壁纸穿透设置内容。
+/// 设置页正文与终端卡共用背景不透明度；背景只由 workspace 卡容器绘制。
+pub(crate) fn settings_content_bg(cx: &App) -> Hsla {
+    let mut bg = settings_panel_bg(cx);
+    bg.a *= crate::gpui_shell::wallpaper::card_surface_opacity(cx);
+    bg
+}
+
+/// 弹窗和控件的实色底，独立于正文不透明度以保持可读性。
 pub fn settings_panel_bg(cx: &App) -> Hsla {
     solid(resolved_skin(cx).panel)
 }

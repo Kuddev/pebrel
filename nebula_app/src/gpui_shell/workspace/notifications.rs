@@ -126,7 +126,8 @@ impl NebulaWorkspace {
         };
         if delivery.in_app {
             // Log the original message before the banner creates a bounded preview.
-            let (title, body) = notification.raw_toast_text();
+            let (title, body) =
+                notification.raw_toast_text_in(crate::gpui_shell::config::ui_language(cx));
             let kind = if attention || notification.is_failure() {
                 crate::display::ToastKind::Warning
             } else {

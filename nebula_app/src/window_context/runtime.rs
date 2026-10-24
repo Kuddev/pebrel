@@ -535,7 +535,8 @@ impl WindowContext {
             None,
         );
         if let Some(screen) = screen {
-            let palette = |index| term.colors()[index].unwrap_or(*self.display.colors[index]);
+            let palette =
+                |index: usize| term.colors()[index].unwrap_or(*self.display.colors[index]);
             let capture = match screen {
                 crate::runtime_api::ScreenMode::History { start, rows } => {
                     crate::runtime_api::capture_terminal_history(&term, palette, start, rows)

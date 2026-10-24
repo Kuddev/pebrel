@@ -34,6 +34,8 @@ pub struct Capabilities {
     pub credential_store: bool,
     /// 系统文件管理器可向应用传递目录，安装包声明对应入口。
     pub shell_context_menu: bool,
+    /// The local shell integration can delegate clipboard edits to its native editor.
+    pub native_shell_clipboard: bool,
 }
 
 pub const CAPABILITIES: Capabilities = {
@@ -52,6 +54,7 @@ pub const CAPABILITIES: Capabilities = {
             system_font_enumeration: true,
             credential_store: true,
             shell_context_menu: true,
+            native_shell_clipboard: true,
         }
     }
     #[cfg(not(windows))]
@@ -69,6 +72,7 @@ pub const CAPABILITIES: Capabilities = {
             system_font_enumeration: true,
             credential_store: true,
             shell_context_menu: true,
+            native_shell_clipboard: false,
         }
     }
 };
@@ -91,6 +95,7 @@ mod tests {
             CAPABILITIES.system_font_enumeration,
             CAPABILITIES.credential_store,
             CAPABILITIES.shell_context_menu,
+            CAPABILITIES.native_shell_clipboard,
         ];
         if cfg!(windows) {
             assert!(all.iter().all(|flag| *flag));
@@ -107,6 +112,7 @@ mod tests {
             assert!(CAPABILITIES.ai_hook_server);
             assert!(CAPABILITIES.quick_terminal_hotkey);
             assert!(CAPABILITIES.shell_context_menu);
+            assert!(!CAPABILITIES.native_shell_clipboard);
         }
     }
 }

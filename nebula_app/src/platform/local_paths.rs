@@ -72,6 +72,23 @@ fn hostname_from_buffer(buffer: &[u8]) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
+/// Synthetic filesystem alias creation for tests; permission policy stays in
+/// the test caller so a Windows runner cannot silently hide other failures.
+#[cfg(test)]
+pub(crate) fn symlink_file_for_test(
+    target: &std::path::Path,
+    link: &std::path::Path,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::hostname_from_buffer;

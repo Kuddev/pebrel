@@ -44,12 +44,12 @@ impl SettingsPane {
                 .map(|definition| definition.name.clone().into())
                 .unwrap_or_else(|| chrome_theme(name).short_label().into())
         } else {
-            language.pick(icon.palette().name_zh, icon.palette().name_en).into()
+            super::app_icon::icon_name(icon, language).into()
         };
         let action = if theme {
-            language.pick("更换主题", "Change theme")
+            language.text(crate::i18n::Message::CommonChangeTheme)
         } else {
-            language.pick("更换图标", "Change icon")
+            language.text(crate::i18n::Message::CommonChangeIcon)
         };
         let focus = if theme { &self.theme_picker_trigger } else { &self.icon_picker_trigger };
         let sample = if theme {
@@ -139,7 +139,7 @@ impl SettingsPane {
                     .ghost()
                     .size(px(34.0))
                     .disabled(size <= min)
-                    .tooltip(language.pick("减小字号", "Decrease font size"))
+                    .tooltip(language.text(crate::i18n::Message::CommonDecreaseFont))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let size =
                             if ui { this.font_size_px(cx) } else { this.terminal_font_size_px(cx) };
@@ -185,7 +185,7 @@ impl SettingsPane {
                     .ghost()
                     .size(px(34.0))
                     .disabled(size >= max)
-                    .tooltip(language.pick("增大字号", "Increase font size"))
+                    .tooltip(language.text(crate::i18n::Message::CommonIncreaseFont))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let size =
                             if ui { this.font_size_px(cx) } else { this.terminal_font_size_px(cx) };
@@ -197,12 +197,12 @@ impl SettingsPane {
             if ui {
                 language.text(crate::i18n::Message::SettingsFontUiSize)
             } else {
-                language.pick("终端字号（Ctrl+滚轮缩放）", "Terminal font size (Ctrl+wheel)")
+                language.text(crate::i18n::Message::SettingsAppearanceTerminalFontSizeCtrlWheel)
             },
             if ui {
                 language.text(crate::i18n::Message::SettingsFontUiSizeDescription)
             } else {
-                language.pick("只调整终端文字大小。", "Changes only the terminal text size.")
+                language.text(crate::i18n::Message::SettingsAppearanceChangesOnlyTheTerminalText)
             },
             stepper,
             cx,
@@ -222,33 +222,28 @@ impl SettingsPane {
         let selectors = v_flex()
             .w_full()
             .child(self.row(
-                language.pick("主题", "Theme"),
-                language.pick(
-                    "终端与界面的配色，统一选择。",
-                    "One palette for the terminal and interface.",
-                ),
+                language.text(crate::i18n::Message::CommonTheme),
+                language.text(crate::i18n::Message::SettingsAppearanceOnePaletteForTheTerminal),
                 theme,
                 cx,
             ))
             .child(self.switch_row(
                 "follow_system_theme",
-                language.pick("跟随系统", "Follow system"),
-                language.pick(
-                    "随系统自动切换深浅色。",
-                    "Switches between light and dark with the system.",
-                ),
+                language.text(crate::i18n::Message::LanguageSystem),
+                language.text(crate::i18n::Message::SettingsAppearanceSwitchesBetweenLightAndDark),
                 self.runtime.follow_system_theme,
                 cx,
             ))
-            .child(self.row(
-                language.pick("应用图标", "App icon"),
-                language.pick(
-                    "独立于主题，切换配色时保持不变。",
-                    "Independent of the theme; changing colors keeps the icon.",
+            .child(
+                self.row(
+                    language.text(crate::i18n::Message::CommonAppIcon),
+                    language.text(
+                        crate::i18n::Message::SettingsAppearanceIndependentOfTheThemeChanging,
+                    ),
+                    icon,
+                    cx,
                 ),
-                icon,
-                cx,
-            ));
+            );
         let settings = self.appearance_advanced_settings(window, cx);
         v_flex().w_full().gap(px(GROUP_GAP)).child(selectors).child(settings)
     }
