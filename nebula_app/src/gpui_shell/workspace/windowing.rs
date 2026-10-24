@@ -7,10 +7,11 @@
 mod shutdown;
 pub(crate) use shutdown::{quit_all, quit_for_update, schedule_update};
 mod startup;
+pub(crate) use startup::open_initial_window;
 use startup::{initial_startup, runtime_window_startup};
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod linux_native_tests;
-mod startup_geometry;
+pub(super) mod startup_geometry;
 pub(super) use startup_geometry::prepare_initial_grid;
 
 mod elevated_launch;
@@ -33,10 +34,9 @@ use std::time::Duration;
 use super::DockTarget;
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Bounds, Context, Entity, Global, IntoElement, Render,
-    Styled as _, Subscription, WeakEntity, Window, WindowBounds, WindowOptions, div, point, px,
-    size,
+    Styled as _, Subscription, WeakEntity, Window, div, px,
 };
-use gpui_component::{Root, TitleBar};
+use gpui_component::Root;
 use nebula_split::SplitTree;
 use serde_json::json;
 
@@ -125,6 +125,7 @@ struct WindowEntry {
     last_activated: u64,
     native_hwnd: isize,
     role: WindowRole,
+    configured_position_pending: bool,
 }
 
 struct QuickTerminalWindow {
@@ -309,50 +310,6 @@ fn save_after_window_closed(cx: &mut App) {
     }
 }
 
-pub(crate) fn open_initial_window(
-    cx: &mut App,
-    ai_events: std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>,
-    shell_events: std::sync::mpsc::Receiver<GpuiShellEvent>,
-    initial_cwd: Option<PathBuf>,
-    initial_command: Option<crate::config::ui_config::Program>,
-    shell_id: Option<String>,
-) {
-    if let Some(sessions) = crate::update_download::handoff::restore_ticket() {
-        if let Err(error) = open_update_windows(sessions, Some(ai_events), Some(shell_events), cx) {
-            log::error!("Could not reopen updated workspace: {}", error.message);
-            assert!(
-                !cx.global::<WindowRegistry>().entries.is_empty(),
-                "failed to reopen updated workspace"
-            );
-        }
-        return;
-    }
-    let startup = if shell_id.is_some() {
-        match runtime_window_startup(initial_cwd, shell_id.as_deref()) {
-            Ok(startup) => startup,
-            Err(error) => {
-                log::error!("Could not resolve requested shell: {error:?}");
-                return;
-            },
-        }
-    } else {
-        initial_startup(
-            initial_cwd,
-            initial_command,
-            crate::platform::elevation::requires_isolation(),
-        )
-    };
-    open_workspace_window(
-        cx,
-        startup,
-        Some(ai_events),
-        Some(shell_events),
-        true,
-        WindowRole::Regular,
-    )
-    .expect("failed to open Pebrel GPUI window");
-}
-
 pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App) {
     let result =
         open_workspace_window(cx, WorkspaceStartup::Empty, None, None, true, WindowRole::Regular);
@@ -379,80 +336,6 @@ pub(super) fn open_recipe_window(session: crate::session::Session, cx: &mut App)
     });
 }
 
-fn workspace_window_options(
-    cx: &mut App,
-    focus: bool,
-    role: WindowRole,
-    sidebar_width: f32,
-) -> WindowOptions {
-    match role {
-        WindowRole::Regular => {
-            let preferred = startup_geometry::preferred_size(cx, sidebar_width)
-                .unwrap_or_else(|| size(px(1080.0), px(720.0)));
-            let bounds = cx.primary_display().map_or_else(
-                || Bounds::centered(None, preferred, cx),
-                |display| {
-                    let visible = display.visible_bounds();
-                    let fitted = preferred.min(&visible.size);
-                    Bounds::new(
-                        point(
-                            visible.origin.x + (visible.size.width - fitted.width) / 2.0,
-                            visible.origin.y + (visible.size.height - fitted.height) / 2.0,
-                        ),
-                        fitted,
-                    )
-                },
-            );
-            crate::platform::window_chrome::configure_options(WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(760.0), px(540.0)).min(&bounds.size)),
-                titlebar: Some(TitleBar::title_bar_options()),
-                app_id: Some(crate::platform::window_chrome::application_id("pebrel")),
-                window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
-                focus,
-                ..Default::default()
-            })
-        },
-        WindowRole::QuickTerminal => {
-            let (display_id, visible) = quick_terminal_anchor_display(cx)
-                .map(|(id, bounds)| (Some(id), bounds))
-                .or_else(|| {
-                    cx.primary_display().map(|display| (Some(display.id()), display.bounds()))
-                })
-                .unwrap_or_else(|| (None, Bounds::centered(None, size(px(1080.0), px(720.0)), cx)));
-            let remembered = nebula_settings::RuntimeSettings::load()
-                .quick_terminal_size
-                .map(|size| size.fit(visible.size.width.into(), visible.size.height.into()));
-            let width = remembered.map_or(visible.size.width, |size| px(size.width));
-            let height = remembered.map_or_else(
-                || px((f32::from(visible.size.height) * 0.4).round().max(1.0)),
-                |size| px(size.height),
-            );
-            let bounds = Bounds {
-                origin: point(
-                    visible.origin.x + (visible.size.width - width) * 0.5,
-                    if cfg!(windows) { visible.origin.y - height } else { visible.origin.y },
-                ),
-                size: size(width, height),
-            };
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                // 与旧壳一致：无系统标题栏，但保留 Nebula 自绘标题栏及三枚
-                // 窗口按钮。TitleBar options 负责 Windows 客户区命中测试。
-                titlebar: Some(TitleBar::title_bar_options()),
-                app_id: Some(crate::platform::window_chrome::application_id(
-                    "pebrel-quick-terminal",
-                )),
-                window_background: crate::gpui_shell::wallpaper::initial_background_appearance(),
-                focus: !cfg!(windows),
-                show: !cfg!(windows),
-                display_id,
-                ..Default::default()
-            }
-        },
-    }
-}
-
 fn allocate_window(cx: &mut App) -> (u64, crate::runtime_api::RuntimeHub) {
     let registry = cx.global_mut::<WindowRegistry>();
     let id = registry.next_window_id;
@@ -468,17 +351,29 @@ fn open_workspace_window(
     focus: bool,
     role: WindowRole,
 ) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {
+    open_workspace_window_with_visibility(cx, startup, ai_events, shell_events, focus, role, false)
+}
+
+fn open_workspace_window_with_visibility(
+    cx: &mut App,
+    startup: WorkspaceStartup,
+    ai_events: Option<std::sync::mpsc::Receiver<crate::ai_hook::AiHookEvent>>,
+    shell_events: Option<std::sync::mpsc::Receiver<GpuiShellEvent>>,
+    focus: bool,
+    role: WindowRole,
+    start_hidden: bool,
+) -> gpui::Result<(u64, Entity<NebulaWorkspace>)> {
     let (runtime_window_id, runtime_hub) = allocate_window(cx);
     let runtime = nebula_settings::RuntimeSettings::load();
-    let start_hidden = shell_events.is_some()
-        && matches!(startup, WorkspaceStartup::RestoreOrDefault)
-        && crate::platform::startup::start_hidden(&runtime);
-    let mut options = workspace_window_options(cx, focus, role, runtime.sidebar_width);
+    startup_geometry::load_restore(runtime_window_id, &startup, role, cx);
+    let mut options =
+        startup_geometry::options(cx, focus, role, runtime.sidebar_width, runtime_window_id);
     if start_hidden {
         options.show = false;
         options.focus = false;
     }
     let deferred_show = crate::platform::startup::first_frame::defer_show(&mut options);
+    let configured_position_pending = !options.show && role == WindowRole::Regular;
     let workspace_slot = Rc::new(RefCell::new(None));
     let hwnd_slot = Rc::new(RefCell::new(0isize));
     let workspace_out = workspace_slot.clone();
@@ -486,6 +381,9 @@ fn open_workspace_window(
     let handle = cx.open_window(options, move |window, cx| {
         window.set_window_title(crate::brand::NAME);
         crate::platform::window_chrome::configure(window);
+        if role == WindowRole::Regular && !configured_position_pending {
+            startup_geometry::apply_configured_position(window, cx);
+        }
         *hwnd_out.borrow_mut() = native_hwnd(window).unwrap_or_default();
         #[cfg(windows)]
         crate::gpui_shell::set_native_window_icon(window);
@@ -511,7 +409,9 @@ fn open_workspace_window(
             });
         }
         *workspace_out.borrow_mut() = Some(workspace.clone());
-        cx.new(|cx| Root::new(workspace, window, cx))
+        // Workspace surfaces already supply their own alpha. Root's default
+        // theme fill would composite a second copy behind every surface.
+        cx.new(|cx| Root::new(workspace, window, cx).bg(gpui::transparent_black()))
     })?;
     let workspace =
         workspace_slot.borrow_mut().take().expect("window builder must publish its workspace");
@@ -527,6 +427,7 @@ fn open_workspace_window(
         last_activated,
         native_hwnd,
         role,
+        configured_position_pending,
     });
     crate::gpui_shell::wallpaper::refresh(cx);
     if deferred_show {
@@ -561,7 +462,16 @@ fn open_runtime_window(
     Ok((window_id, pane_id))
 }
 
-pub(crate) fn mark_active(runtime_window_id: u64, cx: &mut App) {
+pub(crate) fn mark_active(runtime_window_id: u64, window: &Window, cx: &mut App) {
+    if let Some(entry) = cx
+        .global_mut::<WindowRegistry>()
+        .entries
+        .iter_mut()
+        .find(|entry| entry.runtime_window_id == runtime_window_id)
+        && std::mem::take(&mut entry.configured_position_pending)
+    {
+        startup_geometry::apply_configured_position(window, cx);
+    }
     let registry = cx.global_mut::<WindowRegistry>();
     if !registry.entries.iter().any(|entry| {
         entry.runtime_window_id == runtime_window_id && entry.role == WindowRole::Regular
@@ -1366,7 +1276,7 @@ pub(crate) fn autosave_tick(cx: &mut App) {
 
 fn combined_session(
     mut current: Option<(u64, crate::session::Session)>,
-    cx: &App,
+    cx: &mut App,
 ) -> Option<crate::session::Session> {
     let mut entries = cx
         .global::<WindowRegistry>()
@@ -1388,7 +1298,12 @@ fn combined_session(
             current.take().expect("current window snapshot exists").1
         } else {
             let Some(workspace) = entry.workspace.upgrade() else { continue };
-            workspace.read(cx).snapshot_session(cx)
+            let mut session = workspace.read(cx).snapshot_session(cx);
+            session.window = entry
+                .handle
+                .update(cx, |_, window, cx| startup_geometry::capture_window(window, cx))
+                .ok();
+            session
         };
         sessions.push((active_handle == Some(entry.handle), session));
     }
@@ -1403,8 +1318,9 @@ fn save_combined_session(cx: &mut App, clean: bool) -> std::io::Result<()> {
 
 pub(super) fn save_current_window_session(
     runtime_window_id: u64,
-    session: crate::session::Session,
+    mut session: crate::session::Session,
     reason: SaveReason,
+    window: &Window,
     cx: &mut App,
 ) -> std::io::Result<()> {
     if !cx.global::<WindowRegistry>().entries.iter().any(|entry| {
@@ -1412,6 +1328,7 @@ pub(super) fn save_current_window_session(
     }) {
         return Ok(());
     }
+    session.window = Some(startup_geometry::capture_window(window, cx));
     let session = combined_session(Some((runtime_window_id, session)), cx);
     cx.global_mut::<WindowRegistry>().session_persistence.save(session, reason)
 }
@@ -1487,7 +1404,7 @@ pub(super) fn close_saved_workspace_window(
     cx: &mut App,
 ) {
     if let Err(error) =
-        save_current_window_session(runtime_window_id, session, SaveReason::WindowClose, cx)
+        save_current_window_session(runtime_window_id, session, SaveReason::WindowClose, window, cx)
     {
         log::warn!("Could not checkpoint moved window: {error}");
     }
@@ -1508,7 +1425,11 @@ pub(crate) fn close_empty_workspace_window(
         let session = combined_session(None, cx);
         let reason =
             if session.is_some() { SaveReason::TabsClosed } else { SaveReason::WindowClose };
-        let session = session.unwrap_or_else(|| crate::session::Session::new(0, Vec::new()));
+        let session = session.unwrap_or_else(|| {
+            let mut session = crate::session::Session::new(0, Vec::new());
+            session.window = Some(startup_geometry::capture_window(window, cx));
+            session
+        });
         if let Err(error) =
             cx.global_mut::<WindowRegistry>().session_persistence.save(Some(session), reason)
         {

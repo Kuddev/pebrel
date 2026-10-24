@@ -208,7 +208,7 @@ async fn ready(
     view: &gpui::Entity<TerminalView>,
 ) -> Result<(), String> {
     wait_for(cx, window, view, |view| {
-        view.completion_editor.ready_for_test()
+        view.completion_editor.ready()
             && view.session.as_ref().is_some_and(|s| s.term.lock().nebula_prompt_active())
     })
     .await?;
