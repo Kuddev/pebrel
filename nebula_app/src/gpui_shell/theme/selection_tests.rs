@@ -25,6 +25,31 @@ fn apply_reader_theme(name: ThemeName, cx: &mut App) {
 }
 
 #[gpui::test]
+fn terminal_and_settings_backgrounds_follow_live_opacity_without_dimming_text(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        for name in [ThemeName::Nord, ThemeName::NordLight] {
+            apply_reader_theme(name, cx);
+            crate::gpui_shell::wallpaper::test_install_visual_effects(
+                cx,
+                1.0,
+                nebula_settings::BlurModeName::None,
+            );
+            let foreground = cx.theme().foreground;
+            for opacity in [1.0, 0.8, 0.5, 0.2, 0.0, 1.0] {
+                crate::gpui_shell::wallpaper::set_opacity_live(opacity, cx);
+                assert!((super::card_content_bg(cx).a - opacity).abs() < 1e-6);
+                assert!((super::settings_content_bg(cx).a - opacity).abs() < 1e-6);
+                assert_eq!(super::settings_panel_bg(cx).a, 1.0, "dialogs stay readable");
+                assert_eq!(cx.theme().foreground, foreground);
+            }
+        }
+    });
+}
+
+#[gpui::test]
 fn text_selection_and_search_matches_stay_distinct_from_the_document(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);

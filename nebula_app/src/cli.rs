@@ -48,6 +48,10 @@ pub struct Options {
     #[cfg_attr(not(feature = "legacy-shell"), clap(long))]
     pub gpui: bool,
 
+    /// Identify a launch from the per-user login item.
+    #[clap(long = "launched-at-login", hide = true)]
+    pub launched_at_login: bool,
+
     /// Launch the legacy winit shell instead of GPUI.
     #[cfg(all(feature = "gpui-shell", feature = "legacy-shell"))]
     #[clap(long = "legacy-shell")]
@@ -316,6 +320,7 @@ pub enum Subcommands {
     /// Check or invoke a local plugin package without starting a GUI or plugin daemon.
     Plugin(crate::plugins::cli::Options),
     /// Export, verify, or import a portable ZIP theme package.
+    #[cfg(feature = "gpui-shell")]
     Theme(crate::theme_library::package::cli::Options),
     /// Test system notification (toast) delivery.
     #[cfg(windows)]
@@ -1487,6 +1492,15 @@ mod tests {
     use clap::CommandFactory;
     use clap_complete::Shell;
     use toml::Table;
+
+    #[test]
+    fn ordinary_gui_launch_has_no_login_intent() {
+        let options = Options::try_parse_from(["pebrel", "--gpui"]).unwrap();
+        assert!(!options.launched_at_login);
+        let terminal = &options.window_options.terminal_options;
+        assert!(terminal.directory.is_none());
+        assert!(terminal.command.is_empty());
+    }
 
     #[test]
     fn dynamic_title_ignoring_options_by_default() {
