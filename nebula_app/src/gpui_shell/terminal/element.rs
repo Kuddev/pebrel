@@ -264,8 +264,7 @@ impl Element for TerminalElement {
         let scale = window.scale_factor();
         let view = self.view.read(cx);
         let cell_width = view.cell_width_for_advance(sample.width.as_f32(), scale);
-        let line_height =
-            view.line_height_for_metrics(sample.ascent.as_f32() + sample.descent.as_f32(), scale);
+        let line_height = view.line_height_at_scale(scale);
 
         // 网格裁定（floor、最小网格、resize 合流）全部由渲染合同的
         // ViewportTracker 在 view 内完成；元素只上报内容矩形与度量。

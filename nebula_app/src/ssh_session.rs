@@ -33,12 +33,12 @@ mod forward;
 mod host_key;
 mod integration;
 mod lifecycle;
+mod pane_connection;
 mod route;
-mod transcript;
 pub(crate) use forward::{LocalForward, open_local_forward};
 pub(crate) use integration::setup_cli as setup_ai_cli;
+pub use pane_connection::PaneConnection;
 use route::{ResolvedRoute, RouteTransport};
-pub use transcript::TranscriptReader;
 
 /// Remote terminals have no pre-primed ConPTY handshake or host row anchoring.
 pub(crate) fn terminal_config(
@@ -74,8 +74,8 @@ struct OpenedTransport {
 pub trait SshEventHost:
     nebula_terminal::event::EventListener + Clone + Send + Sync + 'static
 {
-    /// A read capability belongs to this pane's live authenticated transport.
-    fn ssh_transcript_reader(&self, _reader: Option<TranscriptReader>) {}
+    /// Access is scoped to this pane's live authenticated transport.
+    fn ssh_pane_connection(&self, _connection: Option<PaneConnection>) {}
 
     /// 连接阶段变化（连接卡片/横幅的数据源）。默认丢弃。
     fn ssh_stage(&self, stage: SshStage) {
@@ -1148,6 +1148,12 @@ pub(crate) async fn open_sftp(
 
     // SFTP 面板自己有加载态，不参与终端 pane 的连接卡片。
     let session = authenticated_session(&destination, &profile, None::<&NoopSshEventHost>).await?;
+    sftp_on_session(&session).await
+}
+
+async fn sftp_on_session(
+    session: &ClientSession,
+) -> Result<russh_sftp::client::SftpSession, SessionError> {
     let channel = lifecycle::network("SFTP channel", session.channel_open_session()).await?;
     channel.request_subsystem(true, "sftp").await?;
     // 显式给参数而不是用上游默认值：默认单包 256 KiB 会让每个 READ/WRITE 都
