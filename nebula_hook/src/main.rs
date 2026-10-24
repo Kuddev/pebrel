@@ -26,6 +26,8 @@
 //! ```text
 //! nebula-hook claude                              # payload on stdin
 //! nebula-hook kimi                                # payload on stdin
+//! nebula-hook qoder|codebuddy|qwen|droid          # payload on stdin, claude-style
+//! nebula-hook antigravity --event <event>         # payload on stdin, event in argv
 //! nebula-hook codex <json>                        # payload as last arg
 //! nebula-hook codex --hooks=full                  # native hooks, stdin
 //! nebula-hook codex --chain <exe> <fixed…> <json> # + exec previous notifier
@@ -194,6 +196,10 @@ fn main() {
     {
         let _ = std::io::stdout().lock().write_all(b"{\"continue\":true}\n");
     }
+    // Antigravity parses a hook's stdout as its decision; an empty object decides nothing.
+    if args.first().is_some_and(|source| source == "antigravity") {
+        let _ = std::io::stdout().lock().write_all(b"{}\n");
+    }
 }
 
 fn read_payload(mut reader: impl Read) -> std::io::Result<Option<Vec<u8>>> {
@@ -212,7 +218,20 @@ fn read_payload(mut reader: impl Read) -> std::io::Result<Option<Vec<u8>>> {
 fn known_source(source: &str) -> bool {
     matches!(
         source,
-        "claude" | "codex" | "opencode" | "pi" | "kimi" | "omp" | "copilot" | "grok" | "cursor"
+        "claude"
+            | "codex"
+            | "opencode"
+            | "pi"
+            | "kimi"
+            | "omp"
+            | "copilot"
+            | "grok"
+            | "cursor"
+            | "qoder"
+            | "codebuddy"
+            | "qwen"
+            | "droid"
+            | "antigravity"
     )
 }
 
@@ -221,12 +240,24 @@ fn known_source(source: &str) -> bool {
 /// 无论如何都抽干管道（约束 1：未读的管道会在 CLI 侧变成 hook write error）。
 /// 其余 CLI 把载荷追加为末位参数。
 fn payload_on_stdin(source: &str) -> bool {
-    matches!(source, "claude" | "kimi" | "copilot" | "grok" | "cursor")
+    matches!(
+        source,
+        "claude"
+            | "kimi"
+            | "copilot"
+            | "grok"
+            | "cursor"
+            | "qoder"
+            | "codebuddy"
+            | "qwen"
+            | "droid"
+            | "antigravity"
+    )
 }
 
 fn native_event(args: &[String]) -> Option<&str> {
     if args.len() != 3
-        || !matches!(args[0].as_str(), "copilot" | "grok" | "cursor")
+        || !matches!(args[0].as_str(), "copilot" | "grok" | "cursor" | "antigravity")
         || args[1] != "--event"
     {
         return None;
@@ -286,7 +317,7 @@ fn run(args: &[String]) {
     let pane = hook_env("PANE_ID").and_then(|value| value.into_string().ok()).unwrap_or_default();
     let contract = if native_codex {
         format!(" codex_hooks={}", args[1].strip_prefix("--hooks=").unwrap())
-    } else if matches!(source.as_str(), "copilot" | "grok" | "cursor") {
+    } else if matches!(source.as_str(), "copilot" | "grok" | "cursor" | "antigravity") {
         let Some(event) = native_event(args) else { return };
         format!(" event={event}")
     } else {
@@ -445,6 +476,15 @@ mod tests {
     }
 
     #[test]
+    fn claude_style_sources_are_known_and_drain_stdin_without_an_event_contract() {
+        for source in ["qoder", "codebuddy", "qwen", "droid"] {
+            assert!(super::known_source(source) && super::payload_on_stdin(source), "{source}");
+            let args = [source.to_owned(), "--event".to_owned(), "done".to_owned()];
+            assert_eq!(super::native_event(&args), None);
+        }
+    }
+
+    #[test]
     fn encodes_remote_hook_payload() {
         assert_eq!(base64_encode(b"abc"), "YWJj");
         assert_eq!(base64_encode(b"ab"), "YWI=");
@@ -454,7 +494,7 @@ mod tests {
     #[test]
     fn native_event_contract_accepts_only_known_sources_and_single_header_fields() {
         let args = |source: &str, event: &str| vec![source.into(), "--event".into(), event.into()];
-        for source in ["copilot", "grok", "cursor"] {
+        for source in ["copilot", "grok", "cursor", "antigravity"] {
             assert!(super::known_source(source) && super::payload_on_stdin(source));
             assert_eq!(super::native_event(&args(source, "prompt")), Some("prompt"));
             assert_eq!(super::native_event(&args(source, "done\npane=9")), None);
