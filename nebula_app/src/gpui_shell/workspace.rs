@@ -45,10 +45,12 @@ use gpui_component::input::InputEvent;
 use gpui_component::notification::Notification;
 use nebula_split::{DIVIDER_GAP, HIT_SLOP, RemoveOutcome, SplitDirection, SplitNav, SplitTree};
 
+mod actions;
 mod agents;
 mod closing;
 mod command_manager;
 mod keyboard_bindings;
+mod macos_menu;
 mod render;
 #[cfg(test)]
 use keyboard_bindings::{
@@ -102,48 +104,12 @@ pub(crate) mod windowing;
 // 调用点分散在设置页与窗口层，原样再导出以免拆分波及它们。
 pub(crate) use update_dialog::{open_update_dialog, show_update_notification};
 
+use actions::*;
 use tab_drag::{DockTarget, TabDrag, TabDragAxis};
 
 #[cfg(test)]
 use agents::ai_hook_target_pane;
 use agents::{ai_session_palette_rows, restored_agent_command};
-
-gpui::actions!(
-    nebula_workspace,
-    [
-        NewTerminal,
-        NewWindow,
-        CloseActiveTerminal,
-        ToggleSidebar,
-        OpenSettings,
-        ToggleCommandPalette,
-        CloseCommandPalette,
-        ToggleShellPicker,
-        CommandPaletteUp,
-        CommandPaletteDown,
-        ToggleFileTree,
-        ToggleGitPanel,
-        SplitRight,
-        SplitDown,
-        RenameActiveTab,
-        ToggleZoom,
-        FocusPaneLeft,
-        FocusPaneRight,
-        FocusPaneUp,
-        FocusPaneDown,
-        SelectNextTab,
-        SelectPreviousTab,
-        MoveTabLeft,
-        MoveTabRight,
-        IncreaseFontSize,
-        DecreaseFontSize,
-        ResetFontSize,
-        CopySelection,
-        PasteClipboard,
-        ToggleFullscreen,
-        OpenQuickJump
-    ]
-);
 
 /// 命令面板 / Shell 选择器罩层的 keymap context。Esc 必须挂在这里，
 /// 不能挂全局：否则 CC/Codex 的终止对话键到不了 PTY。
@@ -181,6 +147,9 @@ fn title_bar_panel_controls() -> gpui::Div {
 /// 注册工作区快捷键；在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
     keyboard_bindings::init(cx);
+    if crate::platform::CAPABILITIES.native_application_menu {
+        macos_menu::init(cx);
+    }
 }
 
 /// 一个终端 pane：视图实体 + 宿主订阅。id 即 `TerminalView::pane_id`
@@ -1123,7 +1092,13 @@ impl NebulaWorkspace {
     /// follow_system 折算）、逐终端刷新、重建 chrome 令牌。
     fn apply_runtime_settings(&mut self, cx: &mut Context<Self>) {
         let (runtime, settings) = crate::gpui_shell::config::Settings::load_current_snapshot(cx);
+        let language_changed = cx
+            .try_global::<crate::gpui_shell::config::Settings>()
+            .is_none_or(|previous| previous.ui_language != settings.ui_language);
         cx.set_global(settings);
+        if crate::platform::CAPABILITIES.native_application_menu && language_changed {
+            cx.defer(|cx| macos_menu::init(cx));
+        }
         for tab in &self.tabs {
             if let WorkspaceTab::Terminal { panes, .. } = tab {
                 for pane in panes {

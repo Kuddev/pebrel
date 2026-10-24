@@ -18,6 +18,8 @@ pub struct Capabilities {
     pub launch_at_login: bool,
     /// 系统通知后端已实现；实际投递仍受系统通知权限控制。
     pub system_notifications: bool,
+    /// Native GPUI application menu is installed on macOS.
+    pub native_application_menu: bool,
     /// 系统提示音（`platform::beep`）。
     pub system_bell: bool,
     /// Verified Windows installer or macOS bundle replacement is implemented.
@@ -44,6 +46,7 @@ pub const CAPABILITIES: Capabilities = {
             system_tray: true,
             launch_at_login: true,
             system_notifications: true,
+            native_application_menu: false,
             system_bell: true,
             self_update_install: true,
             ai_hook_server: true,
@@ -61,6 +64,7 @@ pub const CAPABILITIES: Capabilities = {
             system_tray: true,
             launch_at_login: true,
             system_notifications: true,
+            native_application_menu: cfg!(target_os = "macos"),
             system_bell: true,
             self_update_install: cfg!(target_os = "macos"),
             ai_hook_server: true,
@@ -93,6 +97,7 @@ mod tests {
             CAPABILITIES.shell_context_menu,
             CAPABILITIES.native_shell_clipboard,
         ];
+        assert_eq!(CAPABILITIES.native_application_menu, cfg!(target_os = "macos"));
         if cfg!(windows) {
             assert!(all.iter().all(|flag| *flag));
         } else {
