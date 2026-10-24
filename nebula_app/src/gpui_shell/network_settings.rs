@@ -26,7 +26,7 @@ const PROXY_TEST_GAP: f32 = 18.0;
 /// 旧壳 `ssh_proxy_mode_control` 紧凑宽度。
 const PROXY_MODE_SELECT_W: f32 = 156.0;
 /// 旧壳 `ssh_proxy_manual_controls` 协议下拉。
-const PROXY_PROTOCOL_SELECT_W: f32 = 112.0;
+const PROXY_PROTOCOL_SELECT_W: f32 = 132.0;
 const PROXY_MANUAL_GAP: f32 = 8.0;
 /// 旧壳 `ssh_proxy_test_button`：约 108，下限 88。
 const PROXY_TEST_BUTTON_W: f32 = 108.0;
@@ -75,7 +75,11 @@ impl SettingsPane {
         cx: &mut Context<Self>,
     ) {
         let typed = self.proxy_url_input.read(cx).value().to_string();
-        let (protocol, url) = compose_manual_proxy_url(self.current_proxy_protocol(cx), &typed);
+        let Some((protocol, url)) =
+            compose_manual_proxy_url(self.current_proxy_protocol(cx), &typed)
+        else {
+            return;
+        };
         let row =
             MANUAL_PROXY_PROTOCOL_OPTIONS.iter().position(|item| *item == protocol).unwrap_or(0);
         let selected = self.proxy_protocol_select.read(cx).selected_index(cx).map(|path| path.row);
