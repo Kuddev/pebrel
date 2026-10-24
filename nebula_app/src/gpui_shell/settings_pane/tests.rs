@@ -393,9 +393,12 @@ fn ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch(
 }
 
 #[test]
-fn settings_nav_visibility_includes_providers_and_keeps_stable_routes() {
+fn settings_nav_hides_providers_and_keeps_agents_and_stable_routes() {
     let visibility: Vec<_> = (0..SECTION_IDS.len()).map(is_nav_section_visible).collect();
-    assert_eq!(visibility, vec![true; 13]);
+    assert_eq!(
+        visibility,
+        vec![true, true, true, false, true, true, true, true, true, true, true, true, true]
+    );
     assert_eq!(
         SECTION_IDS,
         [
@@ -419,7 +422,7 @@ fn settings_nav_visibility_includes_providers_and_keeps_stable_routes() {
 #[test]
 fn settings_nav_starts_with_application_then_frequent_options() {
     let visible: Vec<_> = visible_nav_sections().collect();
-    assert_eq!(visible, vec![0, 1, 2, 10, 6, 7, 3, 4, 5, 11, 8, 9, RELEASE_NOTES_SECTION]);
+    assert_eq!(visible, vec![0, 1, 2, 10, 6, 7, 4, 5, 11, 8, 9, RELEASE_NOTES_SECTION]);
     let zh_labels: Vec<_> = visible
         .iter()
         .map(|index| section_label(*index, crate::display::UiLanguage::ZhCn))
@@ -433,7 +436,6 @@ fn settings_nav_starts_with_application_then_frequent_options() {
             "Agents",
             "交互",
             "按键映射",
-            "API 供应商",
             "SSH",
             "网络",
             "手机远程",
@@ -455,7 +457,6 @@ fn settings_nav_starts_with_application_then_frequent_options() {
             "Agents",
             "Interaction",
             "Key Bindings",
-            "API Providers",
             "SSH",
             "Network",
             "Phone Remote",

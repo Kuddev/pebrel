@@ -44,7 +44,7 @@ pub(super) const SECTION_SEARCH_TERMS: [&str; 13] = [
     "release notes changelog what is new 更新内容 更新日志 版本说明",
 ];
 
-pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[];
+pub(super) const HIDDEN_NAV_SECTIONS: &[usize] = &[3];
 
 /// 保留原来的分组展开顺序，组名不再渲染；数组里仍保存稳定的 [`SECTION_IDS`]
 /// 下标，不复制设置状态或路由。
