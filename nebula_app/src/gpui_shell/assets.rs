@@ -66,6 +66,10 @@ const COMPRESSED_ICONS: &[(&str, &[u8])] = icons![
     "agent-opencode",
     "agent-pi",
     "agent-grok",
+    "agent-qoder",
+    "agent-qwen",
+    "agent-codebuddy",
+    "agent-antigravity",
     "agent-hermes",
     "provider-gemini",
     "provider-anthropic",
@@ -133,6 +137,10 @@ pub mod nav {
     pub const AGENT_HERMES: &str = "icons/nebula-agent-hermes.svg";
     pub const AGENT_CURSOR: &str = "icons/nebula-agent-cursor.svg";
     pub const AGENT_COPILOT: &str = "icons/nebula-agent-copilot.svg";
+    pub const AGENT_QODER: &str = "icons/nebula-agent-qoder.svg";
+    pub const AGENT_QWEN: &str = "icons/nebula-agent-qwen.svg";
+    pub const AGENT_CODEBUDDY: &str = "icons/nebula-agent-codebuddy.svg";
+    pub const AGENT_ANTIGRAVITY: &str = "icons/nebula-agent-antigravity.svg";
     pub const LAYOUT_GRID: &str = "icons/nebula-layout-grid.svg";
     pub const MOUSE_POINTER: &str = "icons/nebula-mouse-pointer.svg";
     pub const SLIDERS: &str = "icons/nebula-sliders.svg";
