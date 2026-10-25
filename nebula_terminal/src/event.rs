@@ -34,6 +34,15 @@ pub enum Event {
     /// Grid cells own placement and lifetime; frontends only decode/cache pixels.
     InlineImage { data: Arc<Vec<u8>>, placement: crate::inline_image::ImagePlacement },
 
+    /// A Kitty protocol image, published once its cells are already in the grid.
+    ///
+    /// `data` is raw pixels (`channels` 3 = RGB, 4 = RGBA), never an encoded
+    /// container: the protocol transfers pixels, and re-encoding them would put
+    /// a compressor between the PTY reader and the frontend. `placement.layout`
+    /// carries the bitmap's pixel size, so neither side divides by a cell size
+    /// it may not know.
+    KittyImage { data: Arc<Vec<u8>>, channels: u8, placement: crate::inline_image::ImagePlacement },
+
     /// OSC 133;C — a command started executing in this pane.
     CommandStart,
 
@@ -113,6 +122,14 @@ impl Debug for Event {
             Event::InlineImage { data, placement } => {
                 write!(f, "InlineImage({} bytes, id={})", data.len(), placement.id)
             },
+            Event::KittyImage { data, channels, placement } => write!(
+                f,
+                "KittyImage({} bytes, {channels} channels, {}x{} cells, id={})",
+                data.len(),
+                placement.layout.columns,
+                placement.layout.rows,
+                placement.id
+            ),
             Event::CommandStart => write!(f, "CommandStart"),
             Event::CommandDone { exit_code } => write!(f, "CommandDone({exit_code:?})"),
             Event::UserVar { name, value } => {

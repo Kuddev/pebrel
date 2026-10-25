@@ -1,6 +1,7 @@
 //! Mutable grid content and its transient resource ownership.
 
 use super::*;
+use crate::index::{Column, Line, Point};
 use crate::inline_image::{ImageCell, ImageIdentity, ImageLayout, ImagePlacement};
 
 impl<T> Term<T> {
@@ -54,5 +55,75 @@ impl<T: EventListener> Term<T> {
         self.grid.cursor.input_needs_wrap = end_column == self.columns();
         self.mark_fully_damaged();
         ImagePlacement { id: image.id, lifetime: Arc::downgrade(&image), layout }
+    }
+
+    /// Write one tile of an externally placed image at the cursor without
+    /// moving it. The kitty protocol addresses cells directly (`C=1` means
+    /// "leave the cursor alone"), so text cursor state must survive the write.
+    pub(crate) fn nebula_insert_kitty_block(
+        &mut self,
+        image: &Arc<ImageIdentity>,
+        tile_column: usize,
+        tile_row: usize,
+        columns: usize,
+        rows: usize,
+    ) {
+        // Snapshots take an image-free fast path unless the grid knows it
+        // carries images, so the flag has to follow the tiles in.
+        self.grid.track_transient_content();
+        let saved_point = self.grid.cursor.point;
+        let saved_wrap = self.grid.cursor.input_needs_wrap;
+        let start_column = saved_point.column.0;
+        let start_line = saved_point.line;
+        let screen_lines = self.screen_lines();
+        for row in 0..rows {
+            let line = start_line.0 + row as i32;
+            if line < 0 || line as usize >= screen_lines {
+                break;
+            }
+            for column in 0..columns {
+                let target = start_column + column;
+                if target >= self.columns() {
+                    break;
+                }
+                self.grid.cursor.point = Point::new(Line(line), Column(target));
+                self.write_at_cursor(' ');
+                self.grid[Line(line)][Column(target)].set_image(ImageCell {
+                    image: image.clone(),
+                    column: tile_column + column,
+                    row: tile_row + row,
+                });
+            }
+        }
+        self.grid.cursor.point = saved_point;
+        self.grid.cursor.input_needs_wrap = saved_wrap;
+        self.mark_fully_damaged();
+    }
+
+    /// Blank every cell carrying `id`. Protocol clients erase placement by
+    /// placement, so the whole screen is scanned once per image instead of once
+    /// per erased cell.
+    pub(crate) fn nebula_clear_image_cells(&mut self, id: u64) {
+        let saved_point = self.grid.cursor.point;
+        let saved_wrap = self.grid.cursor.input_needs_wrap;
+        let mut cleared = false;
+        for line in 0..self.screen_lines() {
+            for column in 0..self.columns() {
+                let carries_image = self.grid[Line(line as i32)][Column(column)]
+                    .image()
+                    .is_some_and(|tile| tile.image.id == id);
+                if !carries_image {
+                    continue;
+                }
+                self.grid.cursor.point = Point::new(Line(line as i32), Column(column));
+                self.write_at_cursor(' ');
+                cleared = true;
+            }
+        }
+        self.grid.cursor.point = saved_point;
+        self.grid.cursor.input_needs_wrap = saved_wrap;
+        if cleared {
+            self.mark_fully_damaged();
+        }
     }
 }

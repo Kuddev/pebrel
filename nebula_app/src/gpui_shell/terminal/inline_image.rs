@@ -23,6 +23,10 @@ pub(super) struct PendingInlineImage {
     sequence: u64,
     data: Arc<Vec<u8>>,
     placement: ImagePlacement,
+    /// Raw pixel channels when the transfer carried pixels rather than an
+    /// encoded container: 3 = RGB, 4 = RGBA. Kitty protocol sends raw pixels,
+    /// so re-guessing a container format there would reject every image.
+    channels: Option<u8>,
 }
 
 #[derive(Clone)]
@@ -74,7 +78,63 @@ impl InlineImageStore {
 
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1);
-        self.queued.push_back(PendingInlineImage { sequence, data, placement });
+        self.queued.push_back(PendingInlineImage { sequence, data, placement, channels: None });
+        self.queued_bytes = next_bytes;
+        Ok(())
+    }
+
+    /// Queue a Kitty protocol transfer, whose payload is raw pixels rather than
+    /// an encoded container. `channels` is the byte count per pixel (3 = RGB,
+    /// 4 = RGBA); the pixel geometry rides along in `placement.layout`.
+    pub fn enqueue_pixels(
+        &mut self,
+        data: Arc<Vec<u8>>,
+        channels: u8,
+        placement: ImagePlacement,
+    ) -> Result<(), &'static str> {
+        if !matches!(channels, 3 | 4) {
+            return Err("image transfer has an unsupported channel count");
+        }
+
+        if data.len() > MAX_IMAGE_DECODED_BYTES {
+            return Err("image transfer exceeds the decoded image budget");
+        }
+        if !placement.layout.width.is_finite()
+            || !placement.layout.height.is_finite()
+            || placement.layout.width <= 0.0
+            || placement.layout.height <= 0.0
+        {
+            return Err("image transfer has an invalid display size");
+        }
+        let pixels = placement.layout.width as u64 * placement.layout.height as u64;
+        if pixels > MAX_IMAGE_PIXELS {
+            return Err("image transfer exceeds the pixel budget");
+        }
+        if (pixels * u64::from(channels)) > data.len() as u64 {
+            return Err("image transfer is shorter than its declared size");
+        }
+        if !placement.is_alive() {
+            return Ok(());
+        }
+        if self.queued.len() >= MAX_QUEUED_IMAGES {
+            return Err("too many terminal images are waiting to decode");
+        }
+        let next_bytes = self
+            .queued_bytes
+            .checked_add(data.len())
+            .ok_or("terminal image queue size overflow")?;
+        if next_bytes > MAX_QUEUED_BYTES {
+            return Err("terminal image decode queue exceeds 32 MiB");
+        }
+
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.wrapping_add(1);
+        self.queued.push_back(PendingInlineImage {
+            sequence,
+            data,
+            placement,
+            channels: Some(channels),
+        });
         self.queued_bytes = next_bytes;
         Ok(())
     }
@@ -123,11 +183,70 @@ impl InlineImageStore {
 }
 
 pub(super) fn decode(pending: PendingInlineImage) -> Result<(u64, InlineImage), String> {
-    let (render_image, decoded_bytes) = decode_bytes(pending.data.as_slice())?;
+    let (render_image, decoded_bytes) = match pending.channels {
+        Some(channels) => decode_pixels(&pending.data, channels, pending.placement.layout)?,
+        None => decode_bytes(pending.data.as_slice())?,
+    };
     Ok((
         pending.sequence,
         InlineImage { image: render_image, placement: pending.placement, decoded_bytes },
     ))
+}
+
+/// Turn a image transfer into a texture. The protocol transfers pixels in RGB or
+/// RGBA order, so nothing is guessed from the bytes; only the channel swap GPUI
+/// expects is applied.
+fn decode_pixels(
+    data: &[u8],
+    channels: u8,
+    layout: ImageLayout,
+) -> Result<(Arc<RenderImage>, usize), String> {
+    let width = layout.width.round() as usize;
+    let height = layout.height.round() as usize;
+    let Some(pixels) = width.checked_mul(height) else {
+        return Err("image transfer has an impossible size".to_owned());
+    };
+    if width == 0 || height == 0 || pixels as u64 > MAX_IMAGE_PIXELS {
+        return Err("image transfer has an impossible size".to_owned());
+    }
+    let stride = usize::from(channels);
+    let Some(needed) = pixels.checked_mul(stride) else {
+        return Err("image transfer has an impossible size".to_owned());
+    };
+    let Some(source) = data.get(..needed) else {
+        return Err("image transfer is shorter than its declared size".to_owned());
+    };
+
+    let bgra = pixels_to_bgra(source, channels, pixels)?;
+    let decoded_bytes = bgra.len();
+    let Some(buffer) = image::RgbaImage::from_raw(width as u32, height as u32, bgra) else {
+        return Err("image transfer has an impossible size".to_owned());
+    };
+    Ok((Arc::new(RenderImage::new([Frame::new(buffer)])), decoded_bytes))
+}
+
+/// Repack `pixels` worth of RGB/RGBA source bytes into the BGRA order GPUI
+/// samples. Transparent-capable transfers keep their alpha; RGB ones become
+/// opaque. Kept separate from texture creation so the byte layout is testable
+/// without a window.
+fn pixels_to_bgra(source: &[u8], channels: u8, pixels: usize) -> Result<Vec<u8>, String> {
+    let stride = usize::from(channels);
+    let Some(needed) = pixels.checked_mul(stride) else {
+        return Err("image transfer has an impossible size".to_owned());
+    };
+    let Some(source) = source.get(..needed) else {
+        return Err("image transfer is shorter than its declared size".to_owned());
+    };
+
+    let mut bgra = vec![0u8; pixels * 4];
+    for (index, pixel) in source.chunks_exact(stride).enumerate() {
+        let target = &mut bgra[index * 4..(index + 1) * 4];
+        target[0] = pixel[2];
+        target[1] = pixel[1];
+        target[2] = pixel[0];
+        target[3] = if stride == 4 { pixel[3] } else { 0xff };
+    }
+    Ok(bgra)
 }
 
 /// Paint only cells present in this frame's grid snapshot. Sampling always
@@ -306,7 +425,55 @@ mod tests {
             sequence: 7,
             data: Arc::new(data),
             placement: placement(&ImageIdentity::new()),
+            channels: None,
         }
+    }
+
+    fn pending_pixels(data: Vec<u8>, channels: u8) -> PendingInlineImage {
+        PendingInlineImage {
+            sequence: 8,
+            data: Arc::new(data),
+            placement: placement(&ImageIdentity::new()),
+            channels: Some(channels),
+        }
+    }
+
+    #[test]
+    fn raw_rgb_pixels_are_repacked_into_opaque_bgra() {
+        let bgra = pixels_to_bgra(&[10, 20, 30, 40, 50, 60], 3, 2).unwrap();
+        assert_eq!(bgra, vec![30, 20, 10, 0xff, 60, 50, 40, 0xff]);
+    }
+
+    #[test]
+    fn raw_rgba_pixels_keep_their_alpha_when_repacked() {
+        let bgra = pixels_to_bgra(&[10, 20, 30, 40], 4, 1).unwrap();
+        assert_eq!(bgra, vec![30, 20, 10, 40]);
+    }
+
+    #[test]
+    fn raw_pixels_shorter_than_the_declared_size_are_rejected() {
+        let error = pixels_to_bgra(&[1, 2, 3], 3, 2).unwrap_err();
+        assert!(error.contains("shorter"), "{error}");
+    }
+
+    #[test]
+    fn raw_transfer_lands_in_the_cache_with_the_placement_geometry() {
+        let mut store = InlineImageStore::default();
+        let image = ImageIdentity::new();
+        let placement = placement(&image);
+        store.enqueue_pixels(Arc::new(vec![1, 2, 3, 4, 5, 6]), 3, placement).unwrap();
+        let pending = store.start_next().expect("queued transfer should start");
+        let (_, decoded) = decode(pending).unwrap();
+        assert_eq!(decoded.decoded_bytes, 8);
+        assert_eq!(decoded.placement.layout.columns, 2);
+    }
+
+    #[test]
+    fn raw_transfer_with_an_unknown_channel_count_is_dropped() {
+        let mut store = InlineImageStore::default();
+        let image = ImageIdentity::new();
+        let error = store.enqueue_pixels(Arc::new(vec![0; 8]), 2, placement(&image)).unwrap_err();
+        assert!(error.contains("channel"), "{error}");
     }
 
     fn encoded_png() -> Vec<u8> {
