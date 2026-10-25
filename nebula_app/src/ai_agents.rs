@@ -13,7 +13,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{OnceLock, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
@@ -495,6 +496,16 @@ struct CompiledGate {
 struct Cache {
     manifests: HashMap<AgentKind, CompiledManifest>,
     last_override_scan: Instant,
+    /// manifest 集合的世代：override 磁盘变更触发重建时递增。identify/detect
+    /// 的结果记忆以它为键的一部分——规则变了，旧结论整批失效。
+    generation: u64,
+}
+
+/// manifest 世代发号器：`cache()` 初始化与 override 重建各领一个新号。
+static MANIFEST_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn next_manifest_generation() -> u64 {
+    MANIFEST_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Skeleton rules merged into every manifest below (and into user overrides).
@@ -527,7 +538,11 @@ static CACHE: OnceLock<RwLock<Cache>> = OnceLock::new();
 
 fn cache() -> &'static RwLock<Cache> {
     CACHE.get_or_init(|| {
-        RwLock::new(Cache { manifests: build_cache(), last_override_scan: Instant::now() })
+        RwLock::new(Cache {
+            manifests: build_cache(),
+            last_override_scan: Instant::now(),
+            generation: next_manifest_generation(),
+        })
     })
 }
 
@@ -608,16 +623,63 @@ fn refresh_overrides_if_needed() {
     });
     if changed {
         guard.manifests = build_cache();
+        guard.generation = next_manifest_generation();
     }
 }
+
+/// Bound cached pure detection results without changing lifecycle sampling cadence.
+/// Each key includes program/screen identity; a manifest reload invalidates all slots.
+const MEMO_SLOTS: usize = 8;
+
+/// 按 `(program, screen)` 键的检测记忆（评审 3：单槽在多 pane 交替时互相
+/// 逐出，「同屏多 pane 各自命中」根本不成立——同 agent 的两个 pane 交替
+/// 就是纯逐出）。manifest 世代一变整表作废。
+static DETECT_MEMO: LazyLock<Mutex<(u64, HashMap<(String, String), Option<Detection>>)>> =
+    LazyLock::new(|| Mutex::new((0, HashMap::new())));
+
+/// `identify` 没有 program 维度，键就是屏幕串本身。
+static IDENTIFY_MEMO: LazyLock<Mutex<(u64, HashMap<String, Option<AgentKind>>)>> =
+    LazyLock::new(|| Mutex::new((0, HashMap::new())));
+
+#[cfg(test)]
+static DETECT_MEMO_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Match one live screen snapshot. No match is `None`: callers retain their
 /// higher-confidence hook/process state rather than fabricating idle.
 pub fn detect(program: &str, screen: &str) -> Option<Detection> {
     let agent = AgentKind::parse(program)?;
     refresh_overrides_if_needed();
-    let guard = cache().read().ok()?;
-    let loaded = guard.manifests.get(&agent)?;
+    // Hold one manifest snapshot through lookup, computation and publication.
+    // A concurrent override must not label an old result with a new generation.
+    let manifests = cache().read().ok()?;
+    let generation = manifests.generation;
+    {
+        let mut memo = DETECT_MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if memo.0 != generation {
+            memo.0 = generation;
+            memo.1.clear();
+        } else if let Some(hit) = memo.1.get(&(program.to_owned(), screen.to_owned())) {
+            #[cfg(test)]
+            DETECT_MEMO_HITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return hit.clone();
+        }
+    }
+    let result = detect_from_manifests(&manifests.manifests, agent, screen);
+    let mut memo = DETECT_MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if memo.1.len() >= MEMO_SLOTS {
+        memo.1.clear();
+    }
+    memo.1.insert((program.to_owned(), screen.to_owned()), result.clone());
+    result
+}
+
+/// [`detect`] 的未缓存内核（单测直接打到这里的都是行为断言，不经过记忆）。
+fn detect_from_manifests(
+    manifests: &HashMap<AgentKind, CompiledManifest>,
+    agent: AgentKind,
+    screen: &str,
+) -> Option<Detection> {
+    let loaded = manifests.get(&agent)?;
     let attention_screen = screen_context::attention_region(agent, screen);
     let live_input = screen_context::has_live_input_controls(attention_screen);
     let mut best: Option<(&Rule, &CompiledGate)> = None;
@@ -646,9 +708,35 @@ pub fn detect(program: &str, screen: &str) -> Option<Detection> {
 /// where Toolhelp can see `wsl.exe` but not the Linux `codex` process behind it.
 pub fn identify(screen: &str) -> Option<AgentKind> {
     refresh_overrides_if_needed();
-    let guard = cache().read().ok()?;
+    // Hold one manifest snapshot through lookup, computation and publication.
+    // A concurrent override must not label an old result with a new generation.
+    let manifests = cache().read().ok()?;
+    let generation = manifests.generation;
+    {
+        let mut memo = IDENTIFY_MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if memo.0 != generation {
+            memo.0 = generation;
+            memo.1.clear();
+        } else if let Some(hit) = memo.1.get(screen) {
+            return *hit;
+        }
+    }
+    let result = identify_from_manifests(&manifests.manifests, screen);
+    let mut memo = IDENTIFY_MEMO.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if memo.1.len() >= MEMO_SLOTS {
+        memo.1.clear();
+    }
+    memo.1.insert(screen.to_owned(), result);
+    result
+}
+
+/// [`identify`] 的未缓存内核。
+fn identify_from_manifests(
+    manifests: &HashMap<AgentKind, CompiledManifest>,
+    screen: &str,
+) -> Option<AgentKind> {
     let mut found = None;
-    for (agent, loaded) in &guard.manifests {
+    for (agent, loaded) in manifests {
         if !loaded.identity.iter().any(|gate| gate.matches(screen)) {
             continue;
         }
@@ -736,13 +824,23 @@ fn compile_gate(gate: &Gate) -> Result<CompiledGate, String> {
 
 impl CompiledGate {
     fn matches(&self, text: &str) -> bool {
-        let lower = text.to_lowercase();
-        self.contains.iter().all(|needle| lower.contains(needle))
+        // 小写拷贝惰性做一次、嵌套 gate 复用同一份：此前每个 gate（含
+        // all/any/not 的递归）各自 `to_lowercase` 整段拷一遍——identify 的
+        // 20 套 manifest 在同一份屏幕上每秒最多拷几十次。contains 为空的
+        // gate 一次也不拷。
+        let mut lower = None;
+        self.matches_with(text, &mut lower)
+    }
+
+    fn matches_with(&self, text: &str, lower: &mut Option<String>) -> bool {
+        self.contains
+            .iter()
+            .all(|needle| lower.get_or_insert_with(|| text.to_lowercase()).contains(needle))
             && self.regex.iter().all(|regex| regex.is_match(text))
             && self.line_regex.iter().all(|regex| text.lines().any(|line| regex.is_match(line)))
-            && self.all.iter().all(|gate| gate.matches(text))
-            && (self.any.is_empty() || self.any.iter().any(|gate| gate.matches(text)))
-            && !self.not_gate.iter().any(|gate| gate.matches(text))
+            && self.all.iter().all(|gate| gate.matches_with(text, lower))
+            && (self.any.is_empty() || self.any.iter().any(|gate| gate.matches_with(text, lower)))
+            && !self.not_gate.iter().any(|gate| gate.matches_with(text, lower))
     }
 }
 
@@ -1048,6 +1146,30 @@ mod tests {
         assert_eq!(identify("› generic shell prompt"), None);
     }
 
+    /// 记忆化是纯函数内部的事：同一份屏幕重复询问必须给出同一结论，不同
+    /// 屏幕各自重算。缓存绝不能改变调用方的节奏（observe_screen 逐秒样本
+    /// 累积），这里只钉「同键同值、异键重算」。
+    #[test]
+    fn detection_memo_returns_stable_results_per_screen() {
+        let screen = "✻ Baked for 15m 24s\n\
+                      ────────────────────────────────────────\n\
+                      ❯ \n\
+                      ────────────────────────────────────────\n\
+                      \x20 ⏸ manual mode on · ? for shortcuts · ← for agents";
+        let first = detect("claude", screen).unwrap();
+        let second = detect("claude", screen).unwrap();
+        assert_eq!(first.rule_id, second.rule_id);
+        assert_eq!(first.status, second.status);
+        // 屏幕一变即重算（不命中旧槽位）。
+        let working = format!("{screen}\n\x20 esc to interrupt");
+        let flipped = detect("claude", &working).unwrap();
+        assert_ne!(flipped.status, first.status);
+        // 换回旧屏幕，结论回到旧值。
+        assert_eq!(detect("claude", screen).unwrap().rule_id, first.rule_id);
+        // identify 同一屏幕重复询问结论稳定。
+        assert_eq!(identify(screen), identify(screen));
+    }
+
     /// 下面四段都是 2026-08-22 用 runtime `pane.read` 从真实窗口抓的原文，
     /// 也就是判错的现场。规则改动必须对着它们回归，不能对着记忆里的格式写。
     #[test]
@@ -1068,6 +1190,35 @@ mod tests {
         assert_eq!(detection.status, AgentStatus::Working, "rule={}", detection.rule_id);
     }
 
+    /// 评审 3：多 pane 交替（同 agent 两个 pane、各自不同的屏幕）不得互相
+    /// 逐出——单槽记忆下第二次访问永远 miss；按 (program, screen) 键后，
+    /// 交替访问各自命中。
+    #[test]
+    fn alternating_pane_screens_keep_their_own_memo_slots() {
+        let idle_screen = "✻ Baked for 15m 24s
+                      ────────────────────────────────────────
+                      ❯ 
+                      ────────────────────────────────────────
+                        ⏸ manual mode on · ? for shortcuts · ← for agents";
+        let working_screen = "  ⎿  Running…
+                      ✶ Moseying… (8m 42s · ↓ 18.3k tokens)
+                      ────────────────────────────────────────
+                      ❯ 
+                      ────────────────────────────────────────
+                        ⏵⏵ bypass permissions on (shift+tab to cycle)";
+        super::DETECT_MEMO_HITS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let a1 = detect("claude", idle_screen);
+        let b1 = detect("claude", working_screen);
+        let a2 = detect("claude", idle_screen);
+        let b2 = detect("claude", working_screen);
+        assert_eq!(a1, a2);
+        assert_eq!(b1, b2);
+        assert!(
+            super::DETECT_MEMO_HITS.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "alternating panes must hit their own memo slots"
+        );
+    }
+
     #[test]
     fn real_claude_idle_chrome_reads_idle() {
         // 回合已结束：没有中断提示，输入框空着。输入框可见本身不是判据——
@@ -1079,6 +1230,52 @@ mod tests {
                       \x20 ⏸ manual mode on · ? for shortcuts · ← for agents";
         let detection = detect("claude", screen).unwrap();
         assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
+    }
+
+    /// CLI 2.x 的底部 chrome 长到 5 个非空行，❯ 落在自底向上第 6 行——窗口 4
+    /// 装不下它，prompt_idle 永不命中，会话启动即 Working 等不到 idle 样本。
+    /// 2026-10-12 实捕自 v2.1.286 并用窗口 6 修复；❯ 后是 U+00A0（NBSP），
+    /// \s 须按 Unicode 空白匹配。
+    #[test]
+    fn real_claude_footer_heavy_idle_screen_still_reads_idle() {
+        let screen = "╭─── Claude Code v2.1.286 ───╮\n\
+                      ────────────────────────────────────────────────────\n\
+                      ❯\u{a0}\n\
+                      ────────────────────────────────────────────────────\n\
+                      \x20 ⚠ Transcript saving is off — inherited session\n\
+                      \x20 🧠glm-5.3 | 📁Fleet | 🌿feature/left_tree*\n\
+                      \x20 ⏳5h 🟢 20% 2h7m | 📅MCP 13/1000\n\
+                      \x20 ⏵⏵ auto mode on (shift+tab to cycle)";
+        let detection = detect("claude", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Idle, "rule={}", detection.rule_id);
+        assert_eq!(detection.rule_id, "prompt_idle_extended_footer");
+    }
+
+    #[test]
+    fn claude_custom_running_footer_without_interrupt_hint_is_not_idle() {
+        for screen in [
+            "* Ideating… (2m · 123 tokens)\n────────\n❯\n────────\n版本 2.1.301\n上下文 25%\n状态 运行中\n/project",
+            "* Ideating… (1m 20s · 2.3k tokens)\n\n❯ \n\n状态 运行中\n模型 Claude Sonnet\n目录 /project\n上下文 12%",
+        ] {
+            assert!(detect("claude", screen).is_none(), "custom footer must not invent idle");
+        }
+    }
+
+    /// 同款 2.x 加宽 chrome 的工作中屏幕：❯ 与中断提示同屏，prompt_idle 的
+    /// not 段必须把它拦下，由 spinner_working 的更高优先级判 Working——窗口
+    /// 放宽不能换来「干活被判空闲」。
+    #[test]
+    fn claude_working_chrome_with_five_bottom_lines_still_reads_working() {
+        let screen = "  ⎿  Running…\n\
+                      ✶ Moseying… (8m 42s · ↓ 18.3k tokens)\n\
+                      ────────────────────────────────────────\n\
+                      ❯ \n\
+                      ────────────────────────────────────────\n\
+                      \x20 ⏵⏵ bypass permissions on (shift+tab to cycle)\n\
+                      \x20 ↳ queued\n\
+                      \x20 ⏸ esc to interrupt · ? for shortcuts · ← for agents";
+        let detection = detect("claude", screen).unwrap();
+        assert_eq!(detection.status, AgentStatus::Working, "rule={}", detection.rule_id);
     }
 
     #[test]

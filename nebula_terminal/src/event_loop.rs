@@ -188,6 +188,9 @@ pub struct StreamProcessor {
     cwd_sniffer: crate::osc_cwd::CwdSniffer,
     window_size: Option<WindowSize>,
     remote_hook_token: Option<String>,
+    // The stream owns unreplayed payloads: disconnecting drops them even if
+    // the pane retains its Term. The Term only holds weak replay entries.
+    pending_images: Vec<Arc<crate::term::PendingImage>>,
     inline_content: crate::inline_content::Registry,
     command_capture: crate::inline_content::CommandCapture,
 }
@@ -212,6 +215,7 @@ impl StreamProcessor {
     pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
         terminal.cancel_redraw_anchor();
         terminal.with_program_status_preserved(|terminal| self.parser.stop_sync(terminal));
+        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
     }
 
     fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
@@ -228,14 +232,18 @@ impl StreamProcessor {
         });
     }
 
+    /// Returns the input byte count passed to VTE, including ordered image
+    /// markers. Synchronization-buffer accounting uses this count; transport
+    /// byte counts remain unchanged.
     pub fn feed<U: EventListener>(
         &mut self,
         terminal: &mut Term<U>,
         event_proxy: &U,
         bytes: &[u8],
-    ) {
+    ) -> usize {
         let osc_events = self.cwd_sniffer.feed(bytes);
         let mut advanced = 0;
+        let mut parser_input_bytes = bytes.len();
         for (offset, event) in osc_events {
             // Titles and shell identity/cwd reports must retain wire order:
             // coalescing a remote cwd past a parent prompt would attribute that
@@ -268,7 +276,7 @@ impl StreamProcessor {
                     }
                     if let Some(surface) = self.inline_content.apply(packet) {
                         // 换行由发送端写出，ConPTY 与前端必须共同看到占位，不能只推进本地网格。
-                        let grid = terminal.grid_mut();
+                        let grid = terminal.inline_content_grid_mut();
                         let point = grid.cursor.point;
                         if point.column.0 == 0 {
                             grid[point.line].reset(&crate::term::cell::Cell::default());
@@ -323,29 +331,27 @@ impl StreamProcessor {
                     terminal.reading_shell_marker(b'B', None, self.parser.sync_bytes_count() == 0);
                     terminal.nebula_mark_prompt_input();
                 },
-                OscEvent::InlineImage { data, width, height } => {
-                    let (cell_w, cell_h) = self.window_size.map_or((9.0, 20.0), |ws| {
-                        (f32::from(ws.cell_width), f32::from(ws.cell_height))
+                OscEvent::InlineImage { data, width, height, options } => {
+                    let viewport = self.window_size.unwrap_or(WindowSize {
+                        num_cols: terminal.columns() as u16,
+                        num_lines: terminal.screen_lines() as u16,
+                        cell_width: 9,
+                        cell_height: 20,
                     });
-                    let max_w = terminal.columns() as f32 * cell_w;
-                    let scale = (max_w / width as f32).min(1.0);
-                    let disp_w = width as f32 * scale;
-                    let disp_h = height as f32 * scale;
-                    let rows = (disp_h / cell_h).ceil().max(1.0) as usize;
-                    let abs_line = terminal.nebula_cursor_abs_line();
-                    for _ in 0..=rows {
-                        self.advance(terminal, b"\r\n");
+                    if let Some((marker, image)) =
+                        terminal.nebula_queue_inline_image(data, width, height, options, viewport)
+                    {
+                        self.pending_images.push(image);
+                        self.advance(terminal, marker.as_bytes());
+                        parser_input_bytes += marker.len();
+                        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
                     }
-                    event_proxy.send_event(Event::InlineImage {
-                        data: std::sync::Arc::new(data),
-                        abs_line,
-                        width: disp_w,
-                        height: disp_h,
-                    });
                 },
             }
         }
         self.advance(terminal, &bytes[advanced..]);
+        self.pending_images.retain(|image| Arc::weak_count(image) != 0);
+        parser_input_bytes
     }
 }
 
@@ -508,6 +514,7 @@ where
     {
         let mut unprocessed = 0;
         let mut processed = 0;
+        let mut parser_input_bytes = 0;
 
         // Reserve the next terminal lock for PTY reading.
         let _terminal_lease = Some(self.terminal.lease());
@@ -568,7 +575,8 @@ where
                 writer.write_all(&buf[..unprocessed]).unwrap();
             }
 
-            state.stream.feed(&mut **terminal, &self.event_proxy, &buf[..unprocessed]);
+            parser_input_bytes +=
+                state.stream.feed(&mut **terminal, &self.event_proxy, &buf[..unprocessed]);
             trace_terminal_state("after-pty-read", &terminal);
 
             processed += unprocessed;
@@ -580,8 +588,9 @@ where
             }
         }
 
-        // Queue terminal redraw unless all processed bytes were synchronized.
-        if state.stream.sync_bytes_count() < processed && processed > 0 {
+        // Compare parser input with its buffered tail, including injected
+        // markers on both sides. Wire bytes alone can hide a committed prefix.
+        if state.stream.sync_bytes_count() < parser_input_bytes && processed > 0 {
             self.event_proxy.send_event(Event::Wakeup);
         }
 
@@ -1086,7 +1095,11 @@ mod tests {
             ]
             .concat();
             for split in 0..=wire.len() {
-                let mut term = Term::new(Config::default(), &TermSize::new(24, 24), Lens);
+                let mut term = Term::new(
+                    Config { scrolling_history: 0, ..Config::default() },
+                    &TermSize::new(24, 24),
+                    Lens,
+                );
                 let mut plain = Term::new(Config::default(), &TermSize::new(24, 24), VoidListener);
                 let mut stream = StreamProcessor::default();
                 stream.feed(&mut term, &Lens, &wire[..split]);
@@ -1098,6 +1111,8 @@ mod tests {
                     .unwrap()
                     .surface;
                 assert!(surface.has_grid_source());
+                // Native text markers require cleanup, not per-cell image lookup.
+                assert!(!term.grid().may_have_images());
                 let text = &surface.update_since(0).chunks[0].text;
                 assert_eq!(text, &output.replace("\r\n", "\n"));
                 assert_eq!(
@@ -1126,6 +1141,12 @@ mod tests {
                     assert_eq!(task.state, crate::program_status::State::Done);
                     assert!(!task.result_acknowledged);
                 }
+                let lifetime = Arc::downgrade(surface);
+                stream.feed(&mut term, &Lens, &b"\r\n".repeat(24));
+                assert!(lifetime.upgrade().is_none());
+                stream.feed(&mut term, &Lens, b"\x1bc");
+                assert!(lifetime.upgrade().is_none());
+                assert!(!term.grid().may_have_images());
             }
         }
     }
@@ -1439,3 +1460,7 @@ mod tests {
         assert!(!terminal.nebula_prompt_active());
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "event_loop/sync_tests.rs"]
+mod sync_tests;

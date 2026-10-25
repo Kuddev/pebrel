@@ -348,6 +348,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn image_fragments_follow_native_result_height_without_changing_texture_bounds() {
+        use gpui::{point, px};
+        use nebula_terminal::inline_image::{ImageLayout, ImageRun};
+        for height in [1.0, 5.5] {
+            let mut projection = Projection {
+                slots: vec![Slot { id: 1, start: 1, rows: 3, height, hide_source: true }],
+                active: true,
+                ..Default::default()
+            };
+            if height == 1.0 {
+                assert_eq!(projection.source_rows(4), 6);
+            }
+            let layout = ImageLayout {
+                width: 50.0,
+                height: 60.0,
+                cell_width: 10.0,
+                cell_height: 20.0,
+                columns: 5,
+                rows: 3,
+            };
+            let mut original = None;
+            for source_row in 0..3usize {
+                let run = ImageRun {
+                    id: 1,
+                    row: (4 + source_row) as u16,
+                    column: 6,
+                    columns: 2,
+                    source_column: 2,
+                    source_row,
+                };
+                let (image, clip) = super::super::super::inline_image::image_geometry(
+                    layout,
+                    &run,
+                    point(px(5.0), px(7.0)),
+                    px(10.0),
+                    px(20.0),
+                    &|row| px(20.0) * projection.row(row),
+                );
+                assert_eq!(image.origin.x, px(45.0));
+                assert_eq!(clip.origin.y, px(7.0) + px(20.0) * projection.row(run.row as f32));
+                assert_eq!(clip.size, gpui::size(px(20.0), px(20.0)));
+                if let Some(original) = original {
+                    assert_eq!(image, original);
+                }
+                original = Some(image);
+            }
+            let original = original.unwrap();
+            projection.top += 1.0;
+            let run =
+                ImageRun { id: 1, row: 5, column: 6, columns: 2, source_column: 2, source_row: 1 };
+            let (scrolled, _) = super::super::super::inline_image::image_geometry(
+                layout,
+                &run,
+                point(px(5.0), px(7.0)),
+                px(10.0),
+                px(20.0),
+                &|row| px(20.0) * projection.row(row),
+            );
+            assert_eq!(scrolled.origin.y, original.origin.y - px(20.0));
+            assert_eq!(scrolled.size, original.size);
+        }
+    }
+
+    #[test]
     fn native_result_projection_keeps_prompt_and_middle_of_document_addressable() {
         let p = Projection {
             slots: vec![Slot { id: 1, start: 2, rows: 1, height: 100.0, hide_source: true }],

@@ -99,6 +99,8 @@ use crate::runtime_api::{
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
+mod runtime_resize_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
 mod transfer_tests;
 
 /// 新窗口的首帧内容。只有进程的第一个窗口恢复全局 session；其它窗口必须
@@ -989,10 +991,25 @@ fn dispatch_runtime(dispatch: Arc<RuntimeDispatch>, cx: &mut App) {
     let command = dispatch.command.clone();
     let workspace = entry.workspace.clone();
     let result = entry.handle.update(cx, move |_, window, cx| {
-        workspace.update(cx, |workspace, cx| {
+        let result = workspace.update(cx, |workspace, cx| {
             apply_runtime_window_policy(window_policy, workspace, window);
             workspace.execute_runtime_command(&command, window, cx)
-        })
+        });
+        if matches!(&result, Ok(Ok(_)))
+            && matches!(
+                command,
+                RuntimeCommand::Split { .. }
+                    | RuntimeCommand::ZoomPane { .. }
+                    | RuntimeCommand::ResizePane { .. }
+            )
+        {
+            // Commit actual layout before acknowledging structural geometry. A fast
+            // client can otherwise send input before the platform's next frame.
+            // Release the workspace borrow first; prepaint owns the PTY sizes.
+            window.refresh();
+            window.draw(cx).clear(cx);
+        }
+        result
     });
     dispatch.respond(match result {
         Ok(Ok(result)) => result,

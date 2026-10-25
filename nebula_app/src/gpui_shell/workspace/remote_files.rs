@@ -816,7 +816,7 @@ impl NebulaWorkspace {
                 (crate::display::side_panel::file_type_icon(&row.name), theme.muted_foreground)
             },
         };
-        let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol_family: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let label = row.name.clone();
         let activate = row.clone();
         let source = (!row.is_parent).then(|| self.current_remote_transfer_target()).flatten();

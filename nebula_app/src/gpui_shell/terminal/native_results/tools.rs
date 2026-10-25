@@ -171,7 +171,7 @@ impl NativeResult {
                         .custom(variant())
                         .tooltip(language.text(Message::NativeResultFilter))
                         .toggled(self.filter_open)
-                        .disabled(self.table.is_none())
+                        .disabled(self.table.is_none() && self.json.document.is_none())
                         .child(Icon::new(IconName::Search).size(px(14.0)))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.filter_open = !this.filter_open;
