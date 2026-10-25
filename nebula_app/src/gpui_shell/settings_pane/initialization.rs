@@ -545,10 +545,9 @@ impl SettingsPane {
 
         let font_family_cjk_input = cx.new(|cx| {
             InputState::new(window, cx).default_value(
-                runtime
-                    .font_family_cjk
-                    .clone()
-                    .unwrap_or_else(|| crate::font_install::REQUIRED_FONT_FAMILY.to_owned()),
+                runtime.font_family_cjk.clone().unwrap_or_else(|| {
+                    cx.global::<crate::gpui_shell::config::Settings>().font_family.clone()
+                }),
             )
         });
         subscriptions.push(cx.subscribe_in(
@@ -556,6 +555,24 @@ impl SettingsPane {
             window,
             |this: &mut Self, _, event: &InputEvent, window, cx| {
                 this.on_cjk_font_family_input_event(event, window, cx);
+            },
+        ));
+
+        let ui_font_family_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(localized_input_placeholder("font_family", language))
+                .default_value(runtime.ui_font_family.clone().unwrap_or_default())
+        });
+        subscriptions.push(cx.subscribe_in(
+            &ui_font_family_input,
+            window,
+            |this: &mut Self, input, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    let value = input.read(cx).value().trim().to_owned();
+                    if value != this.runtime.ui_font_family.as_deref().unwrap_or_default() {
+                        this.persist(&[("ui_font_family", value)], cx);
+                    }
+                }
             },
         ));
 
@@ -733,6 +750,7 @@ impl SettingsPane {
             font_imported: Vec::new(),
             font_family_input,
             font_family_cjk_input,
+            ui_font_family_input,
             font_size_input,
             font_size_editing: None,
             line_height_editing: false,

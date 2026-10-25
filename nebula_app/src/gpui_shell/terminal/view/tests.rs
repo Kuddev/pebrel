@@ -1,8 +1,9 @@
 use gpui::{FontStyle, FontWeight};
 
 use super::{
-    TermMode, cursor_blink_allowed, paste_line_count, paste_needs_confirmation,
-    restart_cursor_blink_phase, selection_scroll_lines, typography,
+    OutputFrameTiming, TermMode, cursor_blink_allowed, cursor_blink_silence_pauses,
+    output_frame_timing, paste_line_count, paste_needs_confirmation, restart_cursor_blink_phase,
+    selection_scroll_lines, typography,
 };
 
 #[test]
@@ -12,6 +13,36 @@ fn ime_preedit_stops_blinking_and_restores_visible_cursor() {
     let (mut visible, mut epoch) = (false, 7);
     assert_eq!(restart_cursor_blink_phase(&mut visible, &mut epoch), 8);
     assert!(visible);
+}
+
+/// 空闲停闪只在整段静默满 8s 后触发：阈值内照常翻转（用户盯着看时不能
+/// 突然停），满阈值后断链保持常亮（静止终端归零渲染帧）。
+#[test]
+fn blink_silence_pauses_only_after_the_full_threshold() {
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_millis(750)));
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_secs(7)));
+    assert!(!cursor_blink_silence_pauses(std::time::Duration::from_millis(7999)));
+    assert!(cursor_blink_silence_pauses(std::time::Duration::from_secs(8)));
+    assert!(cursor_blink_silence_pauses(std::time::Duration::from_secs(60)));
+}
+
+/// 输出驱动帧的最小间隔：首帧立即渲染；间隔内的批次并入一次尾帧（等待
+/// 剩余时长），间隔外立即渲染。高频输出风暴由此收敛到 ≤125fps，尾延迟
+/// 被 Trail 的等待时长封顶（≤ 8ms）。
+#[test]
+fn output_frames_coalesce_inside_the_minimum_interval() {
+    use std::time::Duration;
+    assert!(matches!(output_frame_timing(None), OutputFrameTiming::Now));
+    assert!(matches!(output_frame_timing(Some(Duration::from_millis(8))), OutputFrameTiming::Now));
+    assert!(matches!(output_frame_timing(Some(Duration::from_secs(1))), OutputFrameTiming::Now));
+    match output_frame_timing(Some(Duration::from_millis(3))) {
+        OutputFrameTiming::Trail(wait) => assert_eq!(wait, Duration::from_millis(5)),
+        other => panic!("3ms 内的批次应并入尾帧，得到 {other:?}"),
+    }
+    assert!(matches!(
+        output_frame_timing(Some(Duration::from_millis(7))),
+        OutputFrameTiming::Trail(wait) if wait == Duration::from_millis(1)
+    ));
 }
 
 #[test]
@@ -283,29 +314,36 @@ fn explicit_line_height_offset_is_still_measured_in_device_pixels() {
 }
 
 #[test]
-fn default_character_art_grid_stays_near_two_to_one_across_dpi_and_zoom() {
-    for font_size in [12.0, 14.0, 15.0, 18.0, 24.0] {
-        for scale in [1.0, 1.5, 2.0] {
-            let width = typography::effective_cell_width(
-                font_size * 0.6,
-                nebula_settings::CellWidthModeName::Compact,
-                scale,
-                0.0,
-            );
-            let height = typography::effective_line_height_with_theme(font_size, None, 0.0, scale);
-            // Independent width/height flooring may differ by one device px.
-            assert!(((height - width * 2.0).as_f32() * scale).abs() <= 1.001);
+fn default_line_height_keeps_square_dot_pitch_across_fonts_dpi_and_zoom() {
+    for font_size in [10.0, 13.0, 14.0, 15.0, 18.0, 24.0] {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5] {
+            for advance_ratio in [0.5, 0.55, 0.6, 0.65] {
+                for mode in [
+                    nebula_settings::CellWidthModeName::Compact,
+                    nebula_settings::CellWidthModeName::Relaxed,
+                ] {
+                    let width = typography::effective_cell_width(
+                        font_size * advance_ratio,
+                        mode,
+                        scale,
+                        0.0,
+                    );
+                    let height = typography::effective_line_height_with_theme(
+                        width, font_size, None, 0.0, scale,
+                    );
+                    assert!((height.as_f32() / 4.0 - width.as_f32() / 2.0).abs() < 1e-5);
+                }
+            }
         }
     }
-    let height = typography::effective_line_height_with_theme(14.0, None, 0.0, 1.5);
-    assert!((height.as_f32() * 1.5 - 25.0).abs() < 1e-4);
 }
 
 #[test]
 fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
     // 15px * 1.5 = 22.5 logical px; at 150% DPI with a 4px device offset,
     // floor(22.5 * 1.5 + 4) = 37 device px, or 37 / 1.5 logical px.
-    let height = typography::effective_line_height_with_theme(15.0, Some(1.5), 4.0, 1.5);
+    let height =
+        typography::effective_line_height_with_theme(gpui::px(9.0), 15.0, Some(1.5), 4.0, 1.5);
 
     assert!((f32::from(height) - 37.0 / 1.5).abs() < f32::EPSILON);
 }
@@ -315,14 +353,46 @@ fn explicit_line_height_uses_natural_metrics_and_preserves_theme_in_auto() {
     use gpui::px;
     for multiplier in [0.5, 1.0, 1.46, 5.0] {
         assert_eq!(
-            typography::line_height_for_view(px(15.0), Some(1.5), Some(multiplier), 20.0, 4.0, 1.5,),
+            typography::line_height_for_view(
+                px(9.0),
+                px(15.0),
+                Some(1.5),
+                Some(multiplier),
+                20.0,
+                4.0,
+                1.5,
+            ),
             typography::effective_line_height(20.0 * multiplier, 4.0, 1.5),
         );
     }
     for theme in [None, Some(1.5)] {
         assert_eq!(
-            typography::line_height_for_view(px(15.0), theme, None, 20.0, 4.0, 1.5),
-            typography::effective_line_height_with_theme(15.0, theme, 4.0, 1.5),
+            typography::line_height_for_view(px(9.0), px(15.0), theme, None, 20.0, 4.0, 1.5),
+            typography::effective_line_height_with_theme(px(9.0), 15.0, theme, 4.0, 1.5),
         );
+    }
+}
+
+#[test]
+fn fallback_baseline_alignment_preserves_glyph_size_and_positions() {
+    use gpui::{LineLayout, ShapedLine, px};
+    let primary_baseline = typography::baseline(px(14.28), px(4.2), px(16.0));
+    for (ascent, descent) in [(14.28, 4.2), (16.0, 6.0), (12.0, 2.0)] {
+        let mut line = ShapedLine::default();
+        *line = std::sync::Arc::new(LineLayout {
+            font_size: px(14.0),
+            width: px(8.4),
+            ascent: px(ascent),
+            descent: px(descent),
+            runs: Vec::new(),
+            len: 1,
+        });
+        let original_layout = std::ops::Deref::deref(&line).clone();
+        let origin = typography::glyph_origin_y(&line, px(32.0), px(16.0), primary_baseline);
+        let painted_baseline = origin + typography::baseline(line.ascent, line.descent, px(16.0));
+        assert!((painted_baseline.as_f32() - (32.0 + primary_baseline.as_f32())).abs() < 1e-5);
+        assert!(std::sync::Arc::ptr_eq(&original_layout, &line));
+        assert_eq!(line.font_size, px(14.0));
+        assert_eq!(line.width, px(8.4));
     }
 }

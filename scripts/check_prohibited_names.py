@@ -115,7 +115,7 @@ REMOTE_SESSION_PATTERNS = tuple(re.compile(pattern) for pattern in (
     r"\bcommand -v (?:tmux|herdr)(?=\s+>)",
     r"\bGet-Command herdr(?= -ErrorAction\b)",
     r"\btmux (?:-u )?(?:list-sessions|list-windows|list-clients)(?= -[a-zA-Z]\b)",
-    r"\btmux (?:select-window -t|select-pane -t|display-message -p -t|attach-session -t)(?= )",
+    r"\btmux (?:select-window -t|select-pane -t|display-message -p -t|attach-session -t|has-session -t)(?= )",
     r"\bherdr session list --json\b",
     r"\bherdr session attach(?= \$\{psQuote\()",
     r"\bherdr --session(?= \$\{(?:quote|psQuote)\()",
@@ -159,6 +159,23 @@ def remote_reference_remainder(path: str, text: str) -> str:
     model_test = is_test and path.endswith("Test.kt") and any(
         part in path for part in ("/connection/", "/session/")
     )
+    if path.endswith("/connection/TmuxEndpoint.kt"):
+        # Executable defaults, process-name comparisons and executable path regexes
+        # are interface data. Only remove the matched tokens, never the whole line.
+        text = re.sub(r'\bexecutable: String = "tmux"', "", text)
+        text = re.sub(r'== "(?:tmux|tmux:)"', "", text)
+        text = text.replace(r"\/tmux${'$'}/", "").replace(r"\/tmux\)$/", "")
+    if path.endswith("/connection/SshPtyIdentity.kt"):
+        text = re.sub(r'\bit\.command == "tmux"', "", text)
+        text = re.sub(r'\bit\.command\.startsWith\("tmux:"\)', "", text)
+    if is_test and path.endswith(("/connection/TmuxSessionControlTest.kt", "/connection/TmuxRecoveryCommandTest.kt")):
+        text = re.sub(r'\bTmuxEndpoint\("(?:tmux|/[^"\n]*/tmux)"(?=,)', lambda m: m[0].replace("tmux", ""), text)
+        text = re.sub(r'"/tmp/tmux-[0-9]+/[^"\n]+"', lambda m: m[0].replace("tmux", ""), text)
+        text = re.sub(r'(?<=\\n)[0-9]+ [0-9]+ (?:pts/[0-9]+|\?) tmux: (?:client|server)(?=\\n)', "", text)
+    if is_test and path.endswith("/connection/TmuxRecoveryCommandTest.kt"):
+        text = re.sub(r'\brun\("tmux", "-S", socket, (?="(?:-f|display-message|has-session|kill-server)")', "", text)
+        for pattern in REMOTE_DISCOVERY_TEST_PATTERNS:
+            text = pattern.sub("", text)
     if path.endswith(REMOTE_MODEL_CONSUMERS) or model_test:
         for pattern in REMOTE_MODEL_REFERENCE_PATTERNS:
             text = pattern.sub("", text)
@@ -221,6 +238,18 @@ def source_without_allowed_occurrences(path: str, text: str) -> str:
             text = pattern.sub("", text)
     for pattern in PROTOCOL_COMPATIBILITY_PATTERNS:
         text = pattern.sub("", text)
+    # The desktop SSH adapter owns the same typed endpoint contract as mobile.
+    # Strip exact interface fragments only; the remainder still goes through the gate.
+    if path == "nebula_app/src/ssh_session/resume.rs":
+        text = text.replace('executable: "tmux".into()', "")
+    if path == "nebula_app/src/ssh_session/resume/identity.rs":
+        text = re.sub(r'\bcommand == "(?:tmux|tmux:)"', "", text)
+        text = text.replace('command.ends_with("/tmux")', "")
+    if path == "nebula_app/src/ssh_session/resume/discover.sh":
+        text = re.sub(r'\$3 == "(?:tmux|tmux:)"', "", text)
+        text = text.replace(r"/\/tmux$/", "").replace(r"\/tmux\)$/", "")
+    if path == "nebula_app/src/ssh_session/resume/tests.rs":
+        text = re.sub(r'(?<=\\n)[0-9]+ pts/[0-9]+ tmux: client(?=\\n)', "", text)
     return mobile_reference_remainder(path, text)
 
 

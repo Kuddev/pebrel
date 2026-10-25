@@ -1,8 +1,82 @@
-//! Legacy shell adapter for shared session snapshots.
+//! Legacy shell adapter for saving and reopening shared session snapshots.
 
 use super::*;
 
 impl WindowContext {
+    /// Append one saved tab: spawn its first pane per launch identity, rebuild
+    /// its split tree, and re-apply name/color/focus. Returns `false` when the
+    /// first pane could not spawn — the tab is skipped so the session's
+    /// remaining tabs still restore.
+    pub(super) fn append_session_tab(&mut self, tab: &session::TabSession) -> bool {
+        let before = self.tabs.len();
+        let launch = tab.launch.as_ref().unwrap_or(&session::LaunchSession::Default);
+        match launch {
+            session::LaunchSession::Serial { .. } => return false,
+            session::LaunchSession::Default => {
+                self.append_default_tab(tab);
+            },
+            session::LaunchSession::Shell { name, program, args } => {
+                let shell = nebula_terminal::tty::Shell::new(program.clone(), args.clone());
+                self.spawn_tab_shell(name.clone(), shell, TabPlacement::AfterActive);
+            },
+            session::LaunchSession::Profile { name, command, args, cwd, shell_id } => {
+                self.spawn_tab_profile_value(
+                    crate::config::ui_config::Profile {
+                        name: name.clone(),
+                        command: command.clone(),
+                        args: args.clone(),
+                        cwd: cwd.as_ref().map(std::path::PathBuf::from),
+                        shell_id: shell_id.clone(),
+                        terminal_profile_id: None,
+                    },
+                    TabPlacement::AfterActive,
+                );
+            },
+            session::LaunchSession::Ssh { host } => {
+                self.spawn_tab_ssh(host.clone(), TabPlacement::AfterActive)
+            },
+        }
+        if self.tabs.len() == before {
+            // Cross-platform degradation: a workspace made on another OS may
+            // name a program this machine lacks (wsl.exe on Linux, a distro
+            // shell on Windows). The tab must survive as a default shell in
+            // its saved directory rather than silently vanish; the SSH path
+            // reports its own failure and gets no fallback tab.
+            let is_command = matches!(
+                launch,
+                session::LaunchSession::Shell { .. } | session::LaunchSession::Profile { .. }
+            );
+            if !(is_command && self.append_default_tab(tab)) {
+                return false;
+            }
+        }
+
+        // The new tab is active now. Grow the saved split tree around its
+        // first pane, then re-apply the saved presentation.
+        let first_pane = self.tabs[self.active_tab].active_pane;
+        if let Some(saved) = tab.layout.as_ref().filter(|layout| layout.pane_count() > 1) {
+            let mut seed = Some(first_pane);
+            if let Some(built) = self.rebuild_layout(saved, &mut seed) {
+                let entry = &mut self.tabs[self.active_tab];
+                entry.layout = built;
+                let mut leaves = Vec::new();
+                entry.layout.leaves(&mut leaves);
+                entry.active_pane =
+                    leaves.get(tab.active_pane).or(leaves.first()).copied().unwrap_or(first_pane);
+                self.resize_active_layout();
+            }
+        }
+        let entry = &mut self.tabs[self.active_tab];
+        if tab.custom_name.is_some() {
+            // `None` must not clobber the launch-derived label (SSH host,
+            // shell name) that spawn_tab_* already set.
+            entry.custom_name = tab.custom_name.clone();
+        }
+        entry.custom_color = tab.color;
+        self.resume_agent_sessions(tab);
+        true
+    }
+
     /// Current tab list + per-tab cwd as a persistable session.
     pub(super) fn session_snapshot(&self) -> session::Session {
         let active_tab = self

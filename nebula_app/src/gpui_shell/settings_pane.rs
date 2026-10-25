@@ -228,6 +228,7 @@ pub struct SettingsPane {
     font_imported: Vec<String>,
     font_family_input: Entity<InputState>,
     font_family_cjk_input: Entity<InputState>,
+    ui_font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     font_size_editing: Option<bool>,
     line_height_editing: bool,
@@ -346,6 +347,7 @@ impl SettingsPane {
             (&self.ssh_icon_filter_input, "ssh_icon_filter"),
             (&self.font_family_input, "font_family"),
             (&self.font_family_cjk_input, "font_family"),
+            (&self.ui_font_family_input, "font_family"),
             (&self.backup_pass_input, "backup_password"),
             (&self.backup_secret_input, "backup_secret"),
         ] {

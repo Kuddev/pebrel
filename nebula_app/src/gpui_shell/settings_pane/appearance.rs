@@ -478,5 +478,25 @@ mod tests {
             assert!(pane.font_size_editing.is_none());
             assert!(!pane.line_height_editing);
         });
+        let terminal_family = RuntimeSettings::load().font_family;
+        for value in ["Consolas", ""] {
+            cx.update(|window, cx| {
+                pane.read(cx).ui_font_family_input.read(cx).focus_handle(cx).focus(window, cx);
+                let _ = window.draw(cx);
+            });
+            cx.simulate_keystrokes(match crate::platform::Platform::current() {
+                crate::platform::Platform::MacOS => "cmd-a",
+                _ => "ctrl-a",
+            });
+            cx.simulate_input(value);
+            if value.is_empty() {
+                cx.simulate_keystrokes("backspace");
+            }
+            cx.simulate_keystrokes("enter");
+            cx.run_until_parked();
+            let saved = RuntimeSettings::load();
+            assert_eq!(saved.ui_font_family.as_deref(), (!value.is_empty()).then_some(value));
+            assert_eq!(saved.font_family, terminal_family);
+        }
     }
 }
