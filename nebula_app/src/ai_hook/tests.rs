@@ -2,7 +2,9 @@
 use super::ordering::AiHookEventGate;
 use super::payload::RAW_CONTEXT_MAX_BYTES;
 
-use super::{AiHookKind, GateVerdict, capabilities_for, parse_remote_envelope, reorder_batch};
+use super::{
+    AiHookKind, AiTurnOutcome, GateVerdict, capabilities_for, parse_remote_envelope, reorder_batch,
+};
 
 #[test]
 fn remote_envelope_uses_local_pane_identity() {
@@ -521,4 +523,26 @@ fn kimi_capabilities_are_declared() {
     assert!(!capabilities.background_tasks);
     assert!(!capabilities.bridge_sequence);
     assert!(!capabilities.serialized_delivery);
+}
+
+#[test]
+fn claude_style_agents_share_the_lifecycle_under_their_own_source() {
+    for source in ["qoder", "codebuddy", "qwen", "droid"] {
+        let parse = |body: &str| {
+            let raw = format!("nebula-hook/1 source={source} pane=3\n{body}");
+            parse_remote_envelope(raw.as_bytes(), Some(3))
+        };
+        let stop = parse(r#"{"hook_event_name":"Stop","session_id":"s1"}"#).unwrap();
+        assert_eq!(stop.source, source);
+        assert_eq!((stop.kind, stop.session_id.as_deref()), (AiHookKind::TurnDone, Some("s1")));
+        assert_eq!(stop.turn_outcome, AiTurnOutcome::Succeeded);
+        let ask = r#"{"hook_event_name":"Notification","notification_type":"permission_prompt"}"#;
+        assert_eq!(parse(ask).unwrap().kind, AiHookKind::NeedsAttention);
+        let idle = r#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#;
+        assert!(parse(idle).is_none(), "an idle reminder is not a blocking question");
+        assert!(parse(r#"{"hookEventName":"Stop","sessionId":"x"}"#).is_none());
+        let camel = parse(r#"{"hook_event_name":"Stop","sessionId":"x"}"#).unwrap();
+        assert_eq!(camel.session_id, None);
+        assert!(capabilities_for(source).attention_context);
+    }
 }

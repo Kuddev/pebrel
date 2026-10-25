@@ -4,6 +4,7 @@ use std::ops::Range;
 
 pub(crate) mod diff;
 mod directory;
+pub(crate) mod json;
 pub(crate) use directory::{FileKind, FileMetadata};
 
 pub(crate) const MAX_TABLE_ROWS: usize = 20_000;

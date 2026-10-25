@@ -38,6 +38,13 @@ Copyright (c) 2023 LobeHub. Unused SVG metadata was removed; path geometry
 is unchanged. Product names and trademarks belong to their respective
 owners and identify the tools without implying endorsement.
 
+The Qoder, Qwen Code, CodeBuddy and Antigravity settings icons are adapted from LobeHub's
+@lobehub/icons-static-svg 1.95.0 (github.com/lobehub/lobe-icons),
+distributed under the MIT License reproduced below. Copyright (c) 2023 LobeHub.
+Unused SVG metadata was removed; path geometry is unchanged. Product names and
+trademarks belong to their respective owners and identify the tools without
+implying endorsement.
+
 The bundled conpty.dll and OpenConsole.exe come from the Windows
 Terminal project (github.com/microsoft/terminal), distributed under the
 MIT License.
@@ -401,3 +408,11 @@ Hermes Agent SVG mark
 ---------------------
 Source: https://github.com/NousResearch/hermes-agent/blob/ddabd3837862022a6053331fe3ba97cf9716b9e3/assets/icon-master.svg
 See licenses/hermes-agent-MIT.txt. Geometry is preserved; SVGZ is lossless gzip.
+
+
+Pebrel Symbols is a renamed symbol-only derivative of the bundled Maple Mono
+Normal NF CN Regular font (SIL Open Font License 1.1). The original copyright
+and license metadata are retained in the font; see licenses/LICENSE-PEBREL-SYMBOLS.
+Source: https://github.com/subframe7536/maple-font
+Regeneration: python scripts/build_symbol_font.py (requires fontTools).
+The complete Maple face remains unchanged and separately selectable.

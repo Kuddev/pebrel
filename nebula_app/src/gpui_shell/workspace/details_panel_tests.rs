@@ -252,6 +252,52 @@ fn shared_sidebar_drag_changes_actual_geometry_and_escape_cancels(cx: &mut TestA
 }
 
 #[gpui::test]
+fn both_sidebar_drags_commit_outside_the_window_after_non_client_moves(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("outside-release.md");
+    std::fs::write(&path, "# Heading\n\nBody").unwrap();
+    let (workspace, mut cx) = open(path, cx);
+    for left in [true, false] {
+        workspace.update(&mut cx, |view, cx| {
+            view.sidebar_collapsed = false;
+            view.tabs_position = nebula_settings::TabsPositionName::Sidebar;
+            view.side_panel.open = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let handle = if left { "sidebar-resize-handle" } else { "workspace-details-resize" };
+        let start = cx.debug_bounds(handle).unwrap().center();
+        let outside = cx.update(|window, _| {
+            point(if left { px(-100.0) } else { window.viewport_size().width + px(100.0) }, start.y)
+        });
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_mouse_move(outside, Some(MouseButton::Left), Modifiers::default());
+        cx.run_until_parked();
+        workspace.read_with(&cx, |view, _| {
+            let drag = if left { view.sidebar_resizing } else { view.details_panel.resize };
+            assert!(drag.is_some_and(|drag| drag.close));
+        });
+        // Windows can send this while crossing its non-client border, before the release.
+        cx.simulate_mouse_move(outside, None, Modifiers::default());
+        cx.run_until_parked();
+        assert!(workspace.read_with(&cx, |view, _| view.pointer_drag_active()));
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        workspace.read_with(&cx, |view, _| {
+            assert!(!view.pointer_drag_active());
+            assert!(if left { view.sidebar_collapsed } else { !view.side_panel.open });
+        });
+        // A duplicate bubbled release must not reopen the panel or leave a new gesture.
+        cx.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        assert!(!workspace.read_with(&cx, |view, _| view.pointer_drag_active()));
+    }
+}
+
+#[gpui::test]
 fn sidebar_tabs_keep_square_hit_targets_and_files_precedes_git(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("controls.md");

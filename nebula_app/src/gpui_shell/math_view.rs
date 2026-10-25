@@ -596,15 +596,19 @@ impl Render for MathFormulaView {
                         .min_w_0()
                         .flex()
                         .items_center()
-                        .py(px(12.0))
+                        .pt(px(4.0))
+                        .pb(px(12.0))
                         .overflow_x_scroll()
                         .track_scroll(&self.scroll)
                         // 自动边距只分配正的剩余宽度；长公式从左侧开始，避免居中后丢掉开头。
                         .child(formula.mx_auto()),
                 )
                 .child(
-                    gpui_component::scroll::Scrollbar::horizontal(&self.scroll)
-                        .scrollbar_show(gpui_component::scroll::ScrollbarShow::Always),
+                    // 四边明确贴合当前公式区域，避免静态绝对位置落到下一段。
+                    div().absolute().top_0().bottom_0().left_0().right_0().child(
+                        gpui_component::scroll::Scrollbar::horizontal(&self.scroll)
+                            .scrollbar_show(gpui_component::scroll::ScrollbarShow::Always),
+                    ),
                 )
         } else {
             formula
@@ -621,7 +625,7 @@ impl Render for MathFormulaView {
                         // 显式零尺寸锚点避免绝对定位的静态位置落到公式底部。
                         div()
                             .absolute()
-                            .top(px(if display { 12.0 } else { 0.0 }))
+                            .top(px(if display { 4.0 } else { 0.0 }))
                             .left(gpui::relative(0.5))
                             .size(px(0.0))
                             .child(
