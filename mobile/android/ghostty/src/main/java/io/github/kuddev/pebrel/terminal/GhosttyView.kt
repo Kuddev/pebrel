@@ -185,10 +185,10 @@ class GhosttyView(context: Context) : View(context) {
     }
 
     private fun updateMetrics() {
-        cellWidth = max(1f, paint.measureText("M"))
-        val metrics = paint.fontMetrics
-        cellHeight = ceil(metrics.descent - metrics.ascent + metrics.leading)
-        baseline = -metrics.ascent
+        val metrics = TerminalGridMetrics.measure(paint)
+        cellWidth = metrics.width
+        cellHeight = metrics.height
+        baseline = metrics.baseline
     }
     private fun updateGeometry() {
         if (width > 0 && height > 0) session?.updateSize(
@@ -267,6 +267,8 @@ class GhosttyView(context: Context) : View(context) {
         paint.color = frame.background
         paint.alpha = 255
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        frame.rows.forEachIndexed { y, row -> if (row != null)
+            TerminalCellPainter.backgrounds(canvas, paint, frame, row, y, cellWidth, cellHeight) }
         frame.rows.forEachIndexed { y, row -> if (row != null) drawRow(canvas, frame, row, y) }
         if (frame.cursorVisible && session?.readingHistory != true && selection.frame == null && cursorOn) drawCursor(canvas, frame)
         canvas.restoreToCount(checkpoint)

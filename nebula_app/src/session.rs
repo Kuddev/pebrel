@@ -60,6 +60,10 @@ pub enum LaunchSession {
     Ssh {
         host: String,
     },
+    /// A serial port (`serial:COM3,115200,8N1`); restoring reopens it.
+    Serial {
+        destination: String,
+    },
 }
 
 /// Split axis, mirrored from `display::SplitDirection` so the display layer

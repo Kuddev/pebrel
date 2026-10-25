@@ -247,3 +247,20 @@ fn pi_prompt_notification_exits_cleanly_without_a_host() {
     let output = invocation.finish();
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
 }
+
+#[test]
+fn antigravity_stop_returns_a_decision_without_restarting_the_agent() {
+    let mut invocation = Invocation::spawn(&["antigravity", "--event", "done"], None);
+    invocation
+        .0
+        .as_mut()
+        .unwrap()
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"terminationReason\":\"model_stop\",\"fullyIdle\":true}")
+        .unwrap();
+    let output = invocation.finish();
+    assert_eq!(output.stdout, b"{\"decision\":\"stop\"}\n");
+    assert!(output.stderr.is_empty());
+}
