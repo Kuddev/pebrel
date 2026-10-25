@@ -202,7 +202,7 @@
       "terms": {
         "application": "应用 更新 版本 支持",
         "appearance": "连字 外观 主题 自定义 模板 导入 导出 字体 透明度 背景 背景模糊 模糊 语言 显示语言 终端效果 着色器 视频 动图 光标 平滑 动画 图标 调暗非活动窗格 分屏变暗 回滚 滚动 速度 历史 滚轮 缩放",
-        "profiles": "配置文件 终端 补全 命令历史 清除历史 启动 环境变量 刷新 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 时长 秒 常驻 自动关闭",
+        "profiles": "配置文件 终端 补全 命令历史 清除历史 启动 环境变量 刷新 提醒 通知 弹窗 消息 右下角 ai消息通知 ai 消息通知 ai消息弹窗 ai 消息弹窗 铃声 时长 秒 常驻 自动关闭 自动续跑 自动继续 续跑 自动重试 ai_auto_continue",
         "providers": "供应商 服务商 模型 补齐 预测",
         "ssh": "主机 远程 连接",
         "network": "网络 代理 连接",
@@ -284,6 +284,9 @@
       "duration_thirty": "30 秒",
       "duration_ninety": "90 秒",
       "duration_persistent": "保持常驻",
+      "auto_continue": "Claude 自动续跑",
+      "auto_continue_description": "可重试错误后自动发送 continue。",
+      "auto_continue_details": "Claude 遇到可重试错误后自动发送 continue，连续最多 3 次，间隔至少 5 秒。手动输入会取消待执行的续跑。",
       "ai_messages": "AI 消息弹窗",
       "ai_messages_description": "显示右下角的 AI 弹窗，不影响系统通知。",
       "ai_messages_details": "关闭后收起已有的应用内 AI 弹窗，并停止显示新的完成和确认弹窗。Windows 系统通知及标签状态提示仍保留，终端输出和终端内的确认请求不受影响。",

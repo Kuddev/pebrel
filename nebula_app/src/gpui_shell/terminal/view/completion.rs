@@ -143,7 +143,19 @@ impl TerminalView {
             // Input belongs to the foreground command, not a new shell submission.
             crate::display::nebula_clear_line(&mut self.suggest);
             if agent_active {
-                self.agent_activity.input_sent();
+                if self.running_program.as_deref() == Some("claude") {
+                    match self.agent_activity.status() {
+                        crate::ai_agents::AgentStatus::Unknown
+                        | crate::ai_agents::AgentStatus::Idle
+                        | crate::ai_agents::AgentStatus::Done => self.agent_activity.submitted(),
+                        crate::ai_agents::AgentStatus::Working => {
+                            self.agent_activity.queued_submit();
+                        },
+                        crate::ai_agents::AgentStatus::Blocked => self.agent_activity.input_sent(),
+                    }
+                } else {
+                    self.agent_activity.input_sent();
+                }
             }
             return;
         }
