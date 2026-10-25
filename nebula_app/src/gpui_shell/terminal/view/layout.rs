@@ -45,7 +45,10 @@ impl TerminalView {
             };
             let landed = (viewport.cols, viewport.rows)
                 == (self.window_size.num_cols, self.window_size.num_lines);
-            if !landed && self.spawn_at.elapsed() < Self::STARTUP_GRID_GRACE {
+            if !landed
+                && !self.structural_resize
+                && self.spawn_at.elapsed() < Self::STARTUP_GRID_GRACE
+            {
                 // A quiet shell may never produce another frame after this one.
                 // Arrange an owned deadline, keeping the latest observed geometry.
                 let first = self.pending_resize.replace(viewport).is_none();
@@ -55,6 +58,7 @@ impl TerminalView {
                 return;
             }
             self.pending_resize = None;
+            self.structural_resize = false;
             self.grid_synced = true;
             self.cols = viewport.cols as usize;
             self.rows = viewport.rows as usize;

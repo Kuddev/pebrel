@@ -304,7 +304,7 @@ pub(super) fn overlay(
         .map(|settings| settings.ui_font_size_px)
         .unwrap_or(15.0);
     let chrome_family = theme.font_family.clone();
-    let log_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+    let log_family = theme.mono_font_family.clone();
     let ink_strong = theme.sidebar_accent_foreground;
     let ink = theme.foreground;
     let ink_dim = theme.muted_foreground;

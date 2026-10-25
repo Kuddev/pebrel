@@ -979,12 +979,24 @@ impl Renderer {
         px: (u32, u32),
         rect: (f32, f32, f32, f32),
     ) {
+        self.draw_inline_image_clipped(size_info, id, rgba, px, rect, None);
+    }
+
+    pub fn draw_inline_image_clipped(
+        &mut self,
+        size_info: &SizeInfo,
+        id: u64,
+        rgba: &std::sync::Arc<Vec<u8>>,
+        px: (u32, u32),
+        rect: (f32, f32, f32, f32),
+        clip: Option<(f32, f32, f32, f32)>,
+    ) {
         unsafe {
             gl::Viewport(0, 0, size_info.width() as i32, size_info.height() as i32);
             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
         }
 
-        self.image_renderer.draw_inline(size_info, id, rgba, px, rect);
+        self.image_renderer.draw_inline(size_info, id, rgba, px, rect, clip);
         // Same texture-cache poison risk as the background image path.
         self.invalidate_text_texture_cache();
 

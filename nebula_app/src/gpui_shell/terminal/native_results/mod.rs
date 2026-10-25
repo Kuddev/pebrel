@@ -26,6 +26,7 @@ use std::sync::{Arc, Weak};
 mod code;
 mod diff;
 mod fold;
+mod json;
 mod markdown;
 mod table;
 mod tools;
@@ -123,6 +124,7 @@ pub(super) struct NativeResult {
     code_blocks: HashMap<usize, Entity<code::Code>>,
     diff: Option<Arc<model::diff::Patch>>,
     collapsed_files: HashSet<usize>,
+    json: json::JsonView,
     table: Option<Arc<model::Table>>,
     table_layout: table::Layout,
     table_scroll: gpui::ScrollHandle,
@@ -211,6 +213,7 @@ impl NativeResult {
             code_blocks: HashMap::new(),
             diff: None,
             collapsed_files: HashSet::new(),
+            json: json::JsonView::default(),
             table: None,
             table_layout: table::Layout::default(),
             table_scroll: gpui::ScrollHandle::new(),
@@ -247,6 +250,7 @@ impl NativeResult {
             self.code_blocks.clear();
             self.diff = None;
             self.collapsed_files.clear();
+            self.json = json::JsonView::default();
             self.order.clear();
             self.task = None;
             self.query_epoch += 1;
@@ -287,10 +291,11 @@ impl NativeResult {
         if self.mime.as_ref() == "text/x-diff" && self.status != Status::Receiving {
             self.parse_diff(source.has_grid_source(), cx);
         }
-        if matches!(
-            self.mime.as_ref(),
-            "application/json" | "text/x-directory-listing" | "text/x-powershell-directory"
-        ) && self.status != Status::Receiving
+        if self.mime.as_ref() == "application/json" && self.status != Status::Receiving {
+            self.parse_json(cx);
+        }
+        if matches!(self.mime.as_ref(), "text/x-directory-listing" | "text/x-powershell-directory")
+            && self.status != Status::Receiving
             && self.table.is_none()
             && !self.parsing
         {
@@ -339,6 +344,10 @@ impl NativeResult {
     }
 
     fn order_table(&mut self, cx: &mut Context<'_, Self>) {
+        if self.mime.as_ref() == "application/json" {
+            self.rebuild_json(cx);
+            return;
+        }
         let Some(table) = self.table.clone() else { return };
         self.query_epoch += 1;
         let epoch = self.query_epoch;
@@ -569,7 +578,8 @@ impl Render for NativeResult {
                         )
                         .into_any_element()
                 },
-                "application/json" | "text/x-directory-listing" | "text/x-powershell-directory" => {
+                "application/json" => self.json_element(window, cx),
+                "text/x-directory-listing" | "text/x-powershell-directory" => {
                     self.table_element(window, cx)
                 },
                 "text/x-git-progress" => self.git_element(cx),
@@ -629,7 +639,12 @@ impl Render for NativeResult {
                 if this.focus.is_focused(window) && event.keystroke.key == "c"
                     && (event.keystroke.modifiers.control || event.keystroke.modifiers.platform)
                 {
-                    this.copy_source(cx);
+                    let selected = window.selected_text(cx);
+                    if selected.is_empty() {
+                        this.copy_source(cx);
+                    } else {
+                        cx.write_to_clipboard(ClipboardItem::new_string(selected));
+                    }
                 }
                 if event.keystroke.key == "escape" {
                     if this.filter_open {
@@ -714,13 +729,19 @@ impl Render for NativeResult {
             ))
             // 浮层不占正文行，悬停前后内容位置保持不变。
             .when_some(tools, |root, tools| root.child(tools));
-        for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+        // occlude 已隔离下方终端命中；左键/移动必须继续冒泡给窗口级文本选区。
+        root = root.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                window.focus(&this.focus, cx);
+            }),
+        );
+        for button in [MouseButton::Right, MouseButton::Middle] {
             root = root
                 .on_mouse_down(button, |_, _, cx| cx.stop_propagation())
                 .on_mouse_up(button, |_, _, cx| cx.stop_propagation());
         }
-        // 内部可滚动控件先处理滚轮；标题/空白处仍可滚动终端历史，避免整张卡成为死区。
-        root.on_mouse_move(|_, _, cx| cx.stop_propagation())
+        root
     }
 }
 

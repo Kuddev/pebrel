@@ -125,9 +125,6 @@ impl Render for NebulaWorkspace {
                 this.update_details_panel_resize(event, window, cx);
                 this.update_left_sidebar_resize(event, window, cx);
                 this.continue_pending_tab_drag(event, window, cx);
-                // pane 拖拽的待命态同理：罩层只在激活后才存在，越阈值那一下
-                // 的 move 必须由根节点喂进去。
-                this.continue_pending_pane_drag(event, cx);
             }))
             // 旧壳在窗口级 mouse-up 无条件结束 tab drag。这里必须走 capture：
             // TerminalView 可能在 bubble phase 消费释放，导致 dock 永远不提交。
@@ -139,12 +136,7 @@ impl Render for NebulaWorkspace {
                     cx.stop_propagation();
                     return;
                 }
-                // pane 拖拽先结算：它和 tab 拖拽互斥（起手位置不同），但待命态
-                // 必须在这里清掉，否则下一次点标题条会带着上一次的按点。
-                let pane_dragged = this.release_pane_drag(window, cx);
-                if this.release_tab_drag_at(event.position, event.modifiers.alt, window, cx)
-                    || pane_dragged
-                {
+                if this.release_tab_drag_at(event.position, event.modifiers.alt, window, cx) {
                     // 真拖拽已经完成，不能再让源 tab 的 click 或终端选择收到释放。
                     cx.stop_propagation();
                 }
@@ -433,15 +425,16 @@ impl Render for NebulaWorkspace {
             .children(self.render_details_panel_resize_handle(window, cx))
             .children(self.render_details_panel_resize_overlay(cx))
             .children(self.tabs_scrollbar_drag_overlay(cx))
+            .child(self.pane_drag_capture(cx))
             .children(self.pane_drag_overlay(cx))
             .children(self.split_drag_visual(cx))
             .children(self.render_left_sidebar_resize_overlay(cx))
-            .when(self.tab_drag.is_some(), |root| {
+            .when(self.pointer_drag_active(), |root| {
                 // 拖拽期间挂窗口级裸监听（canvas 在 paint 期注册）：指针移出
                 // 本窗口后的事件坐标在 viewport 之外，hover 门控的监听器全部
                 // 不触发——跨窗合并与「拖出窗口外撕出」都在那里松手，靠它
-                // 兜底。详见 render_tab_drag_global_capture 的注释。
-                root.child(self.render_tab_drag_global_capture(cx))
+                // 兜底。详见 render_pointer_drag_capture 的注释。
+                root.child(self.render_pointer_drag_capture(cx))
             })
             .when_some(
                 self.split_drag.as_ref().map(|drag| drag.direction),

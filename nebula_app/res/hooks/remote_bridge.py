@@ -1,5 +1,6 @@
 """Bounded, fail-open provider hook delivery to the owning SSH terminal."""
 import base64
+import errno
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -157,11 +158,19 @@ def send(source, native, mode, payload, token):
         if len(envelope) > MAX_ENVELOPE:
             return
         osc = b"\x1b]777;nebula-hook;" + token.encode() + b";" + base64.b64encode(envelope) + b"\x07"
-        write_terminal(osc)
+        write_terminal(osc, source)
 
 
-def write_terminal(osc):
-    fd = os.open("/dev/tty", os.O_WRONLY | os.O_NONBLOCK)
+def write_terminal(osc, source=None):
+    try:
+        fd = os.open("/dev/tty", os.O_WRONLY | os.O_NONBLOCK)
+    except OSError as error:
+        if source != "claude" or error.errno != errno.ENXIO:
+            raise
+        # Interactive Claude consumes hook JSON even when its hook has no TTY.
+        # This fallback is only possible before any part of the OSC was written.
+        print(json.dumps({"terminalSequence": osc.decode("ascii")}), flush=True)
+        return
     offset = 0
     deadline = time.monotonic() + 0.5
     try:

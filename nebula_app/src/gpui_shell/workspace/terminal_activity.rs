@@ -52,9 +52,14 @@ impl NebulaWorkspace {
             TerminalViewEvent::Exited => {
                 if let Some((tab_ix, pane_id)) = self.locate_pane(view.entity_id()) {
                     self.runtime_hub.record_pane_exited(self.runtime_window_id, pane_id);
-                    self.close_pane(tab_ix, pane_id, window, cx);
+                    if view.read(cx).local_session_failed() {
+                        cx.notify();
+                    } else {
+                        self.close_pane(tab_ix, pane_id, window, cx);
+                    }
                 }
             },
+            TerminalViewEvent::ChooseShell => self.open_shell_palette(window, cx),
             TerminalViewEvent::FocusRequested => {
                 if let Some((tab_ix, pane_id)) = self.locate_pane(view.entity_id()) {
                     self.focus_pane(tab_ix, pane_id, window, cx);
@@ -154,6 +159,8 @@ impl NebulaWorkspace {
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests {
+    mod session_failure;
+
     use super::*;
     use crate::gpui_shell::terminal::element::snapshot_probe::{self, PaintedSnapshot};
     use crate::gpui_shell::terminal::view::TerminalLaunch;
@@ -248,6 +255,7 @@ mod tests {
                         zoomed: false,
                         broadcast: false,
                     });
+                    workspace.tab_meta.push(TabMeta::default());
                 }
                 let focus = terminals[0].read(cx).focus_handle.clone();
                 window.focus(&focus, cx);

@@ -66,6 +66,7 @@ impl TerminalView {
         // Hook ownership still supplies session identity, answers and requests.
         if self.error.is_some()
             || self.pty_failed
+            || self.retain_failed_session
             || matches!(self.ssh_stage, Some(crate::ssh_session::SshStage::Failed(_)))
         {
             return None;
