@@ -119,11 +119,15 @@ fn complete_rec(
     want_directory: bool,
     isdir: bool,
     enable_exact_match: bool,
+    cancelled: &dyn Fn() -> bool,
 ) -> Vec<PathBuiltFromString> {
+    if cancelled() {
+        return Vec::new();
+    }
     let has_more = !partial.is_empty() && (partial.len() > 1 || isdir);
 
     if let Some((&base, rest)) = partial.split_first()
-        && base.chars().all(|c| c == '.')
+        && matches!(base, "." | "..")
         && has_more
     {
         let built_paths: Vec<_> = built_paths
@@ -142,16 +146,20 @@ fn complete_rec(
             want_directory,
             isdir,
             enable_exact_match,
+            cancelled,
         );
     }
 
     let prefix = partial.first().unwrap_or(&"");
-    let mut matcher = CandidateMatcher::new(prefix, options, true);
+    let mut matcher = CandidateMatcher::literal(prefix, options, true);
 
     let mut exact_match = None;
     let mut multiple_exact_matches = false;
 
     for built in built_paths {
+        if cancelled() {
+            return Vec::new();
+        }
         let mut path = built.cwd.clone();
         for part in &built.parts {
             path.push(part.text.as_str());
@@ -162,6 +170,10 @@ fn complete_rec(
         };
 
         for entry in result.filter_map(|e| e.ok()) {
+            // 系统调用本身无法中断；每个条目之间检查，避免旧输入继续遍历大目录。
+            if cancelled() {
+                return Vec::new();
+            }
             let entry_name = entry.file_name().to_string_lossy().into_owned();
             let entry_isdir = entry.path().is_dir();
             let mut built = built.clone();
@@ -196,7 +208,15 @@ fn complete_rec(
 
     // Single exact match → drill into it directly (hides sibling entries)
     if !multiple_exact_matches && let Some(built) = exact_match {
-        return complete_rec(&partial[1..], &[built], options, want_directory, isdir, true);
+        return complete_rec(
+            &partial[1..],
+            &[built],
+            options,
+            want_directory,
+            isdir,
+            true,
+            cancelled,
+        );
     }
 
     let completion_iter =
@@ -210,7 +230,15 @@ fn complete_rec(
     if has_more {
         completion_iter
             .flat_map(|completion| {
-                complete_rec(&partial[1..], &[completion], options, want_directory, isdir, false)
+                complete_rec(
+                    &partial[1..],
+                    &[completion],
+                    options,
+                    want_directory,
+                    isdir,
+                    false,
+                    cancelled,
+                )
             })
             .collect()
     } else {
@@ -280,6 +308,15 @@ fn dirs_next_home() -> Option<PathBuf> {
     )
 }
 
+/// Expand only a verified leading home token; quoted literal tildes never call this.
+pub fn expand_home(partial: &str) -> Option<String> {
+    let rest = partial.strip_prefix('~')?;
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return None;
+    }
+    Some(format!("{}{rest}", dirs_next_home()?.to_str()?))
+}
+
 /// Remove surrounding quotes from a partial path.
 pub fn surround_remove(partial: &str) -> String {
     for c in ['`', '"', '\''] {
@@ -306,7 +343,6 @@ pub fn surround_remove(partial: &str) -> String {
 /// * `options` — matching configuration.
 /// * `use_ls_colors` — whether to compute ANSI styles from `LS_COLORS`.
 /// * `ls_colors_env` — optional `LS_COLORS` environment variable value.
-#[allow(unused_variables)]
 pub fn complete_item(
     want_directory: bool,
     span: Span,
@@ -316,9 +352,80 @@ pub fn complete_item(
     use_ls_colors: bool,
     ls_colors_env: Option<&str>,
 ) -> Vec<FileSuggestion> {
-    let cleaned_partial = surround_remove(partial);
+    complete_item_with_cancel(
+        want_directory,
+        span,
+        partial,
+        cwds,
+        options,
+        use_ls_colors,
+        ls_colors_env,
+        &|| false,
+    )
+}
+
+/// Complete paths with cooperative cancellation between directory operations.
+/// Cancellation discards partial results; it cannot interrupt a pending OS read.
+#[allow(clippy::too_many_arguments)]
+pub fn complete_item_with_cancel(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    use_ls_colors: bool,
+    ls_colors_env: Option<&str>,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
+    complete_paths(
+        want_directory,
+        span,
+        partial,
+        cwds,
+        options,
+        use_ls_colors,
+        ls_colors_env,
+        false,
+        cancelled,
+    )
+}
+
+/// Match decoded literal paths without shell quoting, home or n-dot interpretation.
+/// The caller owns shell spelling; traversal and cancellation remain shared.
+pub fn complete_literal_with_cancel(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
+    complete_paths(want_directory, span, partial, cwds, options, false, None, true, cancelled)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "color"), allow(unused_variables))]
+fn complete_paths(
+    want_directory: bool,
+    span: Span,
+    partial: &str,
+    cwds: &[impl AsRef<str>],
+    options: &CompletionOptions,
+    use_ls_colors: bool,
+    ls_colors_env: Option<&str>,
+    literal: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSuggestion> {
+    if cancelled() {
+        return Vec::new();
+    }
+    let cleaned_partial = if literal { partial.to_owned() } else { surround_remove(partial) };
     let isdir = cleaned_partial.ends_with(is_separator);
-    let expanded_partial = expand_ndots(Path::new(&cleaned_partial));
+    let expanded_partial = if literal {
+        PathBuf::from(&cleaned_partial)
+    } else {
+        expand_ndots(Path::new(&cleaned_partial))
+    };
     let should_collapse_dots = expanded_partial != Path::new(&cleaned_partial);
     let mut partial = expanded_partial.to_string_lossy().to_string();
 
@@ -355,7 +462,7 @@ pub fn complete_item(
             prefix_len = 1;
             original_cwd = OriginalCwd::Prefix(String::new());
         },
-        Some(Component::Normal(home)) if home.to_string_lossy() == "~" => {
+        Some(Component::Normal(home)) if !literal && home.to_string_lossy() == "~" => {
             cwds = dirs_next_home().map(|dir| vec![dir]).unwrap_or(cwd_pathbufs);
             prefix_len = 1;
             original_cwd = OriginalCwd::Home;
@@ -371,7 +478,7 @@ pub fn complete_item(
         .filter(|s| !s.is_empty())
         .collect();
 
-    complete_rec(
+    let completed = complete_rec(
         partial.as_slice(),
         &cwds
             .into_iter()
@@ -381,56 +488,98 @@ pub fn complete_item(
         want_directory,
         isdir,
         options.match_algorithm == MatchAlgorithm::Prefix,
-    )
-    .into_iter()
-    .map(|mut p| {
-        if should_collapse_dots {
-            p = collapse_ndots(p);
-        }
-        let is_dir = p.isdir;
-
-        let mut path = match &original_cwd {
-            OriginalCwd::None => String::new(),
-            OriginalCwd::Home => format!("~{path_separator}"),
-            OriginalCwd::Prefix(s) => format!("{s}{path_separator}"),
-        };
-        let mut match_index_offset = path.graphemes(true).count();
-        let mut match_indices = Vec::new();
-        for (i, part) in p.parts.iter().enumerate() {
-            path.push_str(&part.text);
-            for ind in &part.match_indices {
-                match_indices.push(ind + match_index_offset);
+        cancelled,
+    );
+    if cancelled() {
+        return Vec::new();
+    }
+    let suggestions = completed
+        .into_iter()
+        .take_while(|_| !cancelled())
+        .map(|mut p| {
+            if should_collapse_dots {
+                p = collapse_ndots(p);
             }
-            match_index_offset += part.text.graphemes(true).count();
-            if i != p.parts.len() - 1 {
+            let is_dir = p.isdir;
+
+            let mut path = match &original_cwd {
+                OriginalCwd::None => String::new(),
+                OriginalCwd::Home => format!("~{path_separator}"),
+                OriginalCwd::Prefix(s) => format!("{s}{path_separator}"),
+            };
+            let mut match_index_offset = path.graphemes(true).count();
+            let mut match_indices = Vec::new();
+            for (i, part) in p.parts.iter().enumerate() {
+                path.push_str(&part.text);
+                for ind in &part.match_indices {
+                    match_indices.push(ind + match_index_offset);
+                }
+                match_index_offset += part.text.graphemes(true).count();
+                if i != p.parts.len() - 1 {
+                    path.push(path_separator);
+                    match_index_offset += path_separator.len_utf8();
+                }
+            }
+            if p.isdir {
                 path.push(path_separator);
-                match_index_offset += path_separator.len_utf8();
             }
-        }
-        if p.isdir {
-            path.push(path_separator);
-        }
 
-        #[cfg(feature = "color")]
-        let style = ls_colors.as_ref().and_then(|lsc| {
-            let real_path = std::path::absolute(&path).ok().unwrap_or_else(|| PathBuf::from(&path));
-            lsc.style_for_path_with_metadata(&real_path, None).map(|s| s.to_nu_ansi_term_style())
-        });
-
-        let (value, display_override) = if let Some(escaped) = escape_path(&path) {
-            (escaped, Some(path))
-        } else {
-            (path, None)
-        };
-        FileSuggestion {
-            span,
-            path: value,
             #[cfg(feature = "color")]
-            style,
-            is_dir,
-            display_override,
-            match_indices,
-        }
-    })
-    .collect()
+            let style = ls_colors.as_ref().and_then(|lsc| {
+                let real_path =
+                    std::path::absolute(&path).ok().unwrap_or_else(|| PathBuf::from(&path));
+                lsc.style_for_path_with_metadata(&real_path, None)
+                    .map(|s| s.to_nu_ansi_term_style())
+            });
+
+            let (value, display_override) = if !literal && let Some(escaped) = escape_path(&path) {
+                (escaped, Some(path))
+            } else {
+                (path, None)
+            };
+            FileSuggestion {
+                span,
+                path: value,
+                #[cfg(feature = "color")]
+                style,
+                is_dir,
+                display_override,
+                match_indices,
+            }
+        })
+        .collect();
+    if cancelled() { Vec::new() } else { suggestions }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn cancellation_stops_directory_enumeration_and_discards_partial_results() {
+        let options = CompletionOptions::default();
+        let cwd = [env!("CARGO_MANIFEST_DIR")];
+        let span = Span::new(0, 4);
+        let expected = complete_item(false, span, "src/", &cwd, &options, false, None);
+        assert!(expected.len() > 3, "source directory supplies multiple real entries");
+        let checks = Cell::new(0);
+        let cancelled = || {
+            checks.set(checks.get() + 1);
+            checks.get() >= 5
+        };
+        let actual =
+            complete_item_with_cancel(false, span, "src/", &cwd, &options, false, None, &cancelled);
+        assert!(actual.is_empty());
+        assert!(checks.get() <= 7, "cancellation must stop enumeration, not just hide its output");
+        let actual =
+            complete_item_with_cancel(false, span, "src/", &cwd, &options, false, None, &|| false);
+        let values = |items: Vec<FileSuggestion>| {
+            items
+                .into_iter()
+                .map(|item| (item.path, item.is_dir, item.display_override, item.match_indices))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(values(actual), values(expected));
+    }
 }

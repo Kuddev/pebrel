@@ -12,8 +12,8 @@ struct Record {
     installation: bool,
 }
 
-fn path() -> PathBuf {
-    nebula_settings::settings_dir().join("updates/download.json")
+fn path() -> std::io::Result<PathBuf> {
+    Ok(super::state_directory("")?.join("download.json"))
 }
 
 pub(super) fn save(asset: &UpdateAsset, status: &DownloadStatus) -> std::io::Result<()> {
@@ -28,7 +28,7 @@ pub(super) fn save(asset: &UpdateAsset, status: &DownloadStatus) -> std::io::Res
         installation: matches!(status, DownloadStatus::InstallFailed(_)),
     };
     let data = serde_json::to_vec(&record)?;
-    crate::atomic_file::write(&path(), &data)
+    crate::atomic_file::write(&path()?, &data)
 }
 
 /// Serializes only background writers. A cancelled completion cannot survive a
@@ -41,18 +41,18 @@ pub(super) fn save_job(job: &DownloadJob, status: &DownloadStatus) -> std::io::R
     save(&job.asset, status)?;
     if !job.is_current() {
         // WRITER excludes newer writers until the stale record is removed.
-        std::fs::remove_file(path())?;
+        std::fs::remove_file(path()?)?;
     }
     Ok(())
 }
 
 pub(super) fn supersedes(result: &Path) -> bool {
     let modified = |path: &Path| std::fs::metadata(path).and_then(|file| file.modified()).ok();
-    matches!((modified(&path()), modified(result)), (Some(cache), Some(result)) if cache > result)
+    matches!((path().ok().and_then(|path| modified(&path)), modified(result)), (Some(cache), Some(result)) if cache > result)
 }
 
 pub(super) fn failure_unseen(prompt_state: &Path) -> bool {
-    let failure = std::fs::metadata(path()).and_then(|file| file.modified()).ok();
+    let failure = path().and_then(std::fs::metadata).and_then(|file| file.modified()).ok();
     let prompted = std::fs::metadata(prompt_state).and_then(|file| file.modified()).ok();
     match (failure, prompted) {
         (Some(failure), Some(prompted)) => failure > prompted,
@@ -62,7 +62,7 @@ pub(super) fn failure_unseen(prompt_state: &Path) -> bool {
 }
 
 pub(super) fn load() -> Option<(UpdateAsset, DownloadStatus)> {
-    let file = File::open(path()).ok()?;
+    let file = File::open(path().ok()?).ok()?;
     if file.metadata().ok()?.len() > 64 * 1024 {
         return None;
     }

@@ -25,15 +25,29 @@ use nebula_terminal::tty::EventedPty as _;
 pub struct EventProxy {
     events: super::event_mailbox::EventSender,
     stages: UnboundedSender<crate::ssh_session::SshStage>,
+    remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         self.events.send(event);
     }
+
+    fn command_view(
+        &self,
+        shell: &str,
+        command: &str,
+    ) -> Option<nebula_terminal::inline_content::CommandView> {
+        crate::command_lenses::classify(shell, command)
+    }
 }
 
 impl crate::ssh_session::SshEventHost for EventProxy {
+    fn ssh_pane_connection(&self, connection: Option<crate::ssh_session::PaneConnection>) {
+        if let Ok(mut current) = self.remote_connection.lock() {
+            *current = connection;
+        }
+    }
     fn ssh_stage(&self, stage: crate::ssh_session::SshStage) {
         let _ = self.stages.unbounded_send(stage);
     }
@@ -67,6 +81,7 @@ pub struct TerminalSession {
     /// PTY 直系 shell PID；关闭确认沿用旧壳 `busy_child(shell_pid)` 判据。
     /// SSH 没有本地 shell 进程，固定为 0。
     pub shell_pid: u32,
+    pub(super) remote_connection: Arc<std::sync::Mutex<Option<crate::ssh_session::PaneConnection>>>,
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -85,7 +100,7 @@ pub(super) fn test_session_with_events() -> (
 ) {
     let (events, event_rx) = super::event_mailbox::channel();
     let (stages, _) = unbounded();
-    let proxy = EventProxy { events, stages };
+    let proxy = EventProxy { events, stages, remote_connection: Default::default() };
     let term =
         Term::new(Config::default(), &GridSize { columns: 80, screen_lines: 24 }, proxy.clone());
     let (sender, receiver) = nebula_terminal::event_loop::EventLoopSender::standalone().unwrap();
@@ -95,6 +110,7 @@ pub(super) fn test_session_with_events() -> (
             notifier: Notifier(sender),
             native_prompt: proxy.events.native_prompt.clone(),
             shell_pid: 0,
+            remote_connection: proxy.remote_connection.clone(),
         },
         receiver,
         event_rx,
@@ -128,16 +144,7 @@ pub(super) fn local_options(
         log::warn!("Could not prepare shell integration: {error}");
     }
     crate::platform::environment::prepare_local_pty(&mut options);
-    // 终端网络代理开启时，把当前系统代理同步给新会话（HTTP(S)_PROXY 变量），
-    // 让会话里的 curl/git/npm 等不必重复设。系统代理探不到则什么都不做。
-    // 放在环境重建之后：注入值作为 pane 专属覆盖，不被注册表快照冲掉。
-    #[cfg(windows)]
-    if ::nebula_settings::RuntimeSettings::load().terminal_proxy
-        && let Some((url, _)) = crate::ssh_proxy::probe_system_proxy()
-    {
-        options.env.insert("HTTP_PROXY".into(), url.clone());
-        options.env.insert("HTTPS_PROXY".into(), url);
-    }
+    options.env.insert("PEBREL_NATIVE_RESULTS".into(), "1".into());
     // WSL tab 的命令边界（OSC 133;D/A）与 cwd（OSC 7）：来宾登录 shell 默认
     // 不发，Agent 生命周期、目录树与 Git 视图都会失去来宾侧事实。只对
     // `wsl.exe` 启动生效，见 [`crate::shell_detect::wsl_cwd_report_env`]。
@@ -149,7 +156,16 @@ pub(super) fn local_options(
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("WSLENV"))
             .map(|(_, value)| value.as_str());
-        let additions = crate::shell_detect::wsl_cwd_report_env(&program, &args, current_wslenv);
+        // Only a guest that confirmed zsh can read it takes the bootstrap.
+        let zsh = crate::platform::wsl_guest_shell::takes_zsh_bootstrap(
+            &program,
+            &args,
+            &crate::shell_detect::effective_wslenv(current_wslenv),
+            crate::platform::wsl_guest_shell::verified,
+        )
+        .then(|| crate::platform::shell_integration::wsl_zsh_path().to_string_lossy().into_owned());
+        let additions =
+            crate::shell_detect::wsl_cwd_report_env(&program, current_wslenv, zsh.as_deref());
         for (name, value) in additions {
             options.env.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
             options.env.insert(name, value);
@@ -169,7 +185,7 @@ pub fn spawn(
 ) -> std::io::Result<SpawnedSession> {
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx };
+    let proxy = EventProxy { events: tx, stages: stage_tx, remote_connection: Default::default() };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -185,6 +201,7 @@ pub fn spawn(
     // 用于 resize 锚定问题的字节级取证。
     let record = std::env::var_os("NEBULA_PTY_RECORD").is_some();
     let native_prompt = proxy.events.native_prompt.clone();
+    let remote_connection = proxy.remote_connection.clone();
     let mut event_loop =
         EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit, record)?;
     if let Some(token) = options.env.get(crate::ai_hook::remote::TOKEN_ENV) {
@@ -193,7 +210,11 @@ pub fn spawn(
     let notifier = Notifier(event_loop.channel());
     let _io_thread = event_loop.spawn();
 
-    Ok((TerminalSession { term, notifier, native_prompt, shell_pid }, rx, stage_rx))
+    Ok((
+        TerminalSession { term, notifier, native_prompt, shell_pid, remote_connection },
+        rx,
+        stage_rx,
+    ))
 }
 
 /// 启动一个 SSH 直连会话（russh，与旧壳 `create_ssh_pane` 同一业务层）：
@@ -208,7 +229,7 @@ pub fn spawn_ssh(
     let term_config = crate::ssh_session::terminal_config(term_config);
     let (tx, rx) = super::event_mailbox::channel();
     let (stage_tx, stage_rx) = unbounded();
-    let proxy = EventProxy { events: tx, stages: stage_tx };
+    let proxy = EventProxy { events: tx, stages: stage_tx, remote_connection: Default::default() };
 
     let grid = GridSize {
         columns: window_size.num_cols as usize,
@@ -216,6 +237,7 @@ pub fn spawn_ssh(
     };
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
     let native_prompt = proxy.events.native_prompt.clone();
+    let remote_connection = proxy.remote_connection.clone();
     let sender = crate::ssh_session::spawn_session_at(
         destination,
         initial_remote_cwd,
@@ -225,7 +247,13 @@ pub fn spawn_ssh(
     )?;
 
     Ok((
-        TerminalSession { term, notifier: Notifier(sender), native_prompt, shell_pid: 0 },
+        TerminalSession {
+            term,
+            notifier: Notifier(sender),
+            native_prompt,
+            shell_pid: 0,
+            remote_connection,
+        },
         rx,
         stage_rx,
     ))

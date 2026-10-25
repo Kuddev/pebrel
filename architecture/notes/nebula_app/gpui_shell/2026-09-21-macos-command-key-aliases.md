@@ -4,6 +4,9 @@
 
 Implemented for issue #238.
 
+The retained plain-Control defaults and Ctrl-only keycap display decision are
+superseded by [macOS Control characters and GUI defaults](../input/2026-10-15-macos-control-character-defaults.md).
+
 ## Context
 
 The GPUI shell registered a macOS ⌘ shortcut set that existed nowhere else.

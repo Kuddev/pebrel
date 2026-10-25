@@ -12,15 +12,19 @@ pub(super) enum AboutUpdateState {
 
 #[derive(Clone, Debug)]
 pub(super) enum ProviderStatus {
+    Notice(crate::i18n::Message),
     Saved,
     Added,
     AtLeastOneRequired,
     Deleted,
     ApiKeySaved,
     Testing,
+    ModelsFetched(usize),
     TestResult { outcome: crate::provider_test::ProviderTestOutcome, elapsed_ms: u64 },
     CodexConfirmation,
     AppliedToCodex(std::path::PathBuf),
+    AppliedToClaude(std::path::PathBuf),
+    ClaudeConfirmation,
     Error(String),
 }
 
@@ -35,6 +39,10 @@ impl ProviderStatus {
 
     pub(in crate::gpui_shell) fn text(&self, language: crate::display::UiLanguage) -> String {
         match self {
+            Self::Notice(message) => language.text(*message).into(),
+            Self::ClaudeConfirmation => language.text(crate::i18n::Message::ProvidersClaudeConfirmation).into(),
+            Self::AppliedToClaude(path) => format!("{}: {}", language.text(crate::i18n::Message::ProvidersAppliedClaude), path.display()),
+            Self::ModelsFetched(count) => language.text(crate::i18n::Message::ProvidersModelsFetched).replace("{count}", &count.to_string()),
             Self::Saved => language.pick("供应商配置已保存", "Provider settings saved").into(),
             Self::Added => language.pick("已添加自定义供应商", "Custom provider added").into(),
             Self::AtLeastOneRequired => {
@@ -81,6 +89,7 @@ pub(super) enum BackupCompletion {
 
 #[derive(Clone, Debug)]
 pub(super) enum BackupStatus {
+    Notice(crate::i18n::Message),
     PassphraseTooShort,
     SelectionRequired,
     Processing,
@@ -106,6 +115,7 @@ impl BackupStatus {
 
     pub(in crate::gpui_shell) fn text(&self, language: crate::display::UiLanguage) -> String {
         match self {
+            Self::Notice(message) => language.text(*message).into(),
             Self::PassphraseTooShort => language
                 .pick("备份密码至少 8 位", "The backup password must be at least 8 characters")
                 .into(),
@@ -204,6 +214,7 @@ pub(in crate::gpui_shell) enum SshStatus {
     LibraryImported { added: usize, skipped: usize },
     LibraryImportedPartial { added: usize, error: String },
     Saved(String),
+    Copied(String),
     Pinned,
     Imported(usize),
     Opening(String),
@@ -256,6 +267,7 @@ impl SshStatus {
             Self::Saved(destination) => {
                 format!("{} {destination}", language.pick("已保存", "Saved"))
             },
+            Self::Copied(label) => language.format(crate::i18n::Message::HostsCopied, &[("name", label)]),
             Self::Pinned => language.pick("置顶状态已更新", "Pin status updated").into(),
             Self::Imported(count) => format!(
                 "{} {count} {}",

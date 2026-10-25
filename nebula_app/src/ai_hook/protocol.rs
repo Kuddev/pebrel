@@ -235,7 +235,11 @@ pub(super) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
             Some("stop") => AiTurnOutcome::Succeeded,
             Some("error") => AiTurnOutcome::Failed,
             Some("aborted") => AiTurnOutcome::Cancelled,
-            Some("length" | "toolUse") => AiTurnOutcome::Incomplete,
+            Some("length") => AiTurnOutcome::Incomplete,
+            // pi ends a turn with `toolUse` when the host or an extension closes it
+            // right after a tool result (the plan menu, a completed goal). That is a
+            // finished turn, not a truncated one, so it must not raise a failure.
+            Some("toolUse") => AiTurnOutcome::Succeeded,
             None if !payload.as_object()?.contains_key("stop_reason") => AiTurnOutcome::Unspecified,
             _ => AiTurnOutcome::Unknown,
         }

@@ -145,6 +145,17 @@ fn real_bundled_font_shapes_ligatures_and_preserves_the_cached_natural_layout() 
         let aligned = shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(8.0));
         assert_eq!(glyph_ids(&aligned), glyph_ids(&natural), "keep contextual substitutions");
         assert_eq!(aligned.width, px(32.0));
+        let unit = text_system.shape_line("M".into(), px(15.0), &[run(false)], None).width.as_f32();
+        for delta in [-3.0_f32, 3.0] {
+            let grid = (unit + delta).max(1.0);
+            let spaced =
+                shape_ascii_span(&text_system, sample.into(), px(15.0), run(true), px(grid));
+            assert_eq!(
+                glyph_ids(&spaced),
+                glyph_ids(&natural),
+                "{sample} must stay joined when the grid is {grid}"
+            );
+        }
         let last = aligned
             .runs
             .iter()
@@ -160,6 +171,67 @@ fn real_bundled_font_shapes_ligatures_and_preserves_the_cached_natural_layout() 
                 .iter()
                 .flat_map(|run| &run.glyphs)
                 .map(|glyph| glyph.position)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // 用真实 shaper 展开构造的坍缩 cluster；Linux 不解析 Monaco 的 AAT，
+    // 此处只模拟它的输入布局，避免把改造字体当作 macOS 原字体的证据。
+    for sample in ["fi", "fl", "fifi", "afile", "afl"] {
+        let mut template = run(true);
+        template.len = sample.len();
+        let cached = text_system.shape_line(sample.into(), px(15.0), &[template.clone()], None);
+        let before = cached
+            .runs
+            .iter()
+            .flat_map(|r| &r.glyphs)
+            .map(|g| (g.id, g.index, g.position))
+            .collect::<Vec<_>>();
+        let unit = text_system.shape_line("M".into(), px(15.0), &[run(false)], None).width;
+        let font_id = cached.runs[0].font_id;
+        let glyph = cached.runs[0].glyphs[0].clone();
+        let mut glyphs = Vec::new();
+        let mut byte = 0;
+        while byte < sample.len() {
+            let mut glyph = glyph.clone();
+            glyph.index = byte;
+            glyph.position.x = unit * glyphs.len() as f32;
+            glyphs.push(glyph);
+            byte += if sample[byte..].starts_with("fi") || sample[byte..].starts_with("fl") {
+                2
+            } else {
+                1
+            };
+        }
+        let layout = gpui::LineLayout {
+            font_size: cached.font_size,
+            width: unit * glyphs.len() as f32,
+            ascent: cached.ascent,
+            descent: cached.descent,
+            runs: vec![gpui::ShapedRun { font_id, glyphs }],
+            len: cached.len(),
+        };
+        let mut collapsed = cached.clone();
+        *collapsed = std::sync::Arc::new(layout);
+        let expanded = crate::gpui_shell::terminal::ligatures::expand_collapsed_ligatures(
+            &collapsed,
+            &text_system,
+            px(15.0),
+            &template,
+        )
+        .expect("constructed fi/fl cluster must expand");
+        let indices =
+            expanded.runs.iter().flat_map(|r| &r.glyphs).map(|g| g.index).collect::<Vec<_>>();
+        assert_eq!(indices, (0..sample.len()).collect::<Vec<_>>(), "{sample}");
+        assert!(expanded.runs.iter().all(|r| r.font_id == font_id));
+        let after = text_system.shape_line(sample.into(), px(15.0), &[template], None);
+        assert_eq!(
+            before,
+            after
+                .runs
+                .iter()
+                .flat_map(|r| &r.glyphs)
+                .map(|g| (g.id, g.index, g.position))
                 .collect::<Vec<_>>()
         );
     }
@@ -204,28 +276,36 @@ fn cell_width_mode_matches_the_legacy_grid_rounding_contract() {
 }
 
 #[test]
-fn line_height_uses_shaped_metrics_and_device_pixel_offset() {
-    // Maple's hhea metrics are 1.32em. At 150% DPI, the legacy 4px
-    // Windows offset yields floor(15 * 1.32 * 1.5 + 4) = 33 device px.
+fn explicit_line_height_offset_is_still_measured_in_device_pixels() {
+    // Preserve the offset formula, independently of the default row spacing.
     let height = typography::effective_line_height(15.0 * 1.32, 4.0, 1.5);
     assert!((f32::from(height) - 22.0).abs() < f32::EPSILON);
 }
 
 #[test]
-fn theme_line_height_none_preserves_shaped_metrics() {
-    let natural = 15.0 * 1.32;
-    let legacy = typography::effective_line_height(natural, 4.0, 1.5);
-    let themed = typography::effective_line_height_with_theme(natural, 15.0, None, 4.0, 1.5);
-
-    assert_eq!(themed, legacy);
+fn default_character_art_grid_stays_near_two_to_one_across_dpi_and_zoom() {
+    for font_size in [12.0, 14.0, 15.0, 18.0, 24.0] {
+        for scale in [1.0, 1.5, 2.0] {
+            let width = typography::effective_cell_width(
+                font_size * 0.6,
+                nebula_settings::CellWidthModeName::Compact,
+                scale,
+                0.0,
+            );
+            let height = typography::effective_line_height_with_theme(font_size, None, 0.0, scale);
+            // Independent width/height flooring may differ by one device px.
+            assert!(((height - width * 2.0).as_f32() * scale).abs() <= 1.001);
+        }
+    }
+    let height = typography::effective_line_height_with_theme(14.0, None, 0.0, 1.5);
+    assert!((height.as_f32() * 1.5 - 25.0).abs() < 1e-4);
 }
 
 #[test]
 fn theme_line_height_uses_font_size_and_keeps_device_pixel_flooring() {
     // 15px * 1.5 = 22.5 logical px; at 150% DPI with a 4px device offset,
     // floor(22.5 * 1.5 + 4) = 37 device px, or 37 / 1.5 logical px.
-    let height =
-        typography::effective_line_height_with_theme(15.0 * 1.32, 15.0, Some(1.5), 4.0, 1.5);
+    let height = typography::effective_line_height_with_theme(15.0, Some(1.5), 4.0, 1.5);
 
     assert!((f32::from(height) - 37.0 / 1.5).abs() < f32::EPSILON);
 }

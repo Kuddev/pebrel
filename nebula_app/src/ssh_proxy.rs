@@ -13,6 +13,7 @@
 //! SOCKS5 一律把主机名交给代理端解析（ATYP=0x03，字面 IP 除外）：访问境外
 //! 主机时本地 DNS 往往被污染或解析不到，本地解析等于代理白配。
 
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream as StdTcpStream};
 use std::pin::Pin;
@@ -455,7 +456,10 @@ fn percent_decode(value: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
+            if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
                 out.push(byte);
                 i += 3;
                 continue;
@@ -595,6 +599,239 @@ pub fn probe_system_proxy() -> Option<(String, SystemProxySource)> {
     }
 }
 
+/// PowerShell 只在这个变量存在时设置 `WebRequest` / `-Proxy`。
+/// 值必须是 Rust 已经接受的 `http://` URL。SOCKS 不写它，也不改写成 HTTP。
+/// 不进入 `WSLENV`：来宾里没有这套 .NET 默认值。
+const POWERSHELL_HTTP_PROXY: &str = "PEBREL_HTTP_PROXY";
+const TERMINAL_PROXY_VARIABLES: [&str; 3] = ["http_proxy", "https_proxy", "all_proxy"];
+
+/// 新开的本地终端要带上的代理变量。
+///
+/// 模式是自定义、并且地址能解析成 HTTP 或 SOCKS 服务器时，直接写入这些变量，
+/// 不看 `use_system_proxy`。跟随系统只在开关打开且 `system_proxy_url` 有值时
+/// 写入。跳板和自定义命令无法表达成环境变量，返回空，终端照常直接启动。
+///
+/// `http_proxy`、`https_proxy`、`all_proxy` 使用同一条已校验 URL，协议不改写。
+/// curl 在协议专用变量存在时忽略 `all_proxy`，所以不能只把原协议留在 `all_proxy`。
+/// HTTP URL 另加 `PEBREL_HTTP_PROXY`，系统代理和自定义地址走同一条标记。
+/// `no_proxy` 只在这次真的导出代理、并且绕过列表非空时追加；空列表由
+/// [`apply_terminal_proxy_env`] 写成空值，用来盖住继承来的绕过项。
+fn terminal_proxy_assignments(
+    mode: ProxyMode,
+    url: &str,
+    use_system_proxy: bool,
+    system_proxy_url: Option<&str>,
+    no_proxy: &str,
+) -> Vec<(String, String)> {
+    let chosen = match mode {
+        ProxyMode::Custom => env_proxy_url(url),
+        ProxyMode::System if use_system_proxy => system_proxy_url.and_then(env_proxy_url),
+        _ => None,
+    };
+    let Some(configured) = chosen else { return Vec::new() };
+    let mut pairs: Vec<(String, String)> = TERMINAL_PROXY_VARIABLES
+        .into_iter()
+        .map(|name| (name.to_owned(), configured.clone()))
+        .collect();
+    if strip_prefix_ignore_case(&configured, "http://").is_some() {
+        pairs.push((POWERSHELL_HTTP_PROXY.to_owned(), configured));
+    }
+    if let Some(bypass) = terminal_no_proxy_value(no_proxy) {
+        pairs.push(("no_proxy".to_owned(), bypass));
+    }
+    pairs
+}
+
+/// curl `no_proxy`：逗号分隔。`<local>`、`*.suffix` 和 IPv4 前缀通配只在导出时翻译，
+/// SSH 的 [`bypassed`] 仍认 WinINET 原文。
+fn terminal_no_proxy_value(raw: &str) -> Option<String> {
+    let mut seen = Vec::new();
+    let mut entries = Vec::new();
+    for entry in raw.split(|character| character == ',' || character == ';') {
+        let translated = translate_no_proxy_entry(entry);
+        if translated.is_empty() {
+            continue;
+        }
+        let key = translated.to_ascii_lowercase();
+        if seen.iter().any(|item: &String| item == &key) {
+            continue;
+        }
+        seen.push(key);
+        entries.push(translated);
+    }
+    if entries.is_empty() { None } else { Some(entries.join(",")) }
+}
+
+fn translate_no_proxy_entry(entry: &str) -> String {
+    let entry = entry.trim().to_ascii_lowercase();
+    if entry.is_empty() {
+        return String::new();
+    }
+    if entry == "<local>" {
+        return "localhost".to_owned();
+    }
+    if let Some(suffix) = entry.strip_prefix("*.")
+        && !suffix.is_empty()
+        && !suffix.contains('*')
+    {
+        return format!(".{suffix}");
+    }
+    ipv4_prefix_wildcard_cidr(&entry).unwrap_or(entry)
+}
+
+/// `10.*` → `10.0.0.0/8`，`192.168.*` → `192.168.0.0/16`，`a.b.c.*` → `/24`。
+/// 裸 `*` 和其他通配留给调用方原样保留。
+fn ipv4_prefix_wildcard_cidr(entry: &str) -> Option<String> {
+    let prefix = entry.strip_suffix('*')?.strip_suffix('.')?;
+    if prefix.is_empty() || prefix.contains('*') {
+        return None;
+    }
+    let parts: Vec<&str> = prefix.split('.').collect();
+    if parts.is_empty() || parts.len() > 3 {
+        return None;
+    }
+    let mut octets = [0u8; 4];
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty()
+            || (part.len() > 1 && part.starts_with('0'))
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        let value: u16 = part.parse().ok()?;
+        if value > 255 {
+            return None;
+        }
+        octets[index] = u8::try_from(value).ok()?;
+    }
+    let bits = parts.len() * 8;
+    Some(format!("{}.{}.{}.{}/{}", octets[0], octets[1], octets[2], octets[3], bits))
+}
+
+/// 把 [`terminal_proxy_assignments`] 写进子进程环境。同名变量不分大小写替换，
+/// 避免刷新出来的 `HTTP_PROXY` 和这里的 `http_proxy` 各留一份。三个代理变量
+/// 保留选定协议。SOCKS 用空标记遮蔽继承来的 `PEBREL_HTTP_PROXY`，避免
+/// WebRequest 还指着上一次的 HTTP 代理。绕过列表为空时同样用空的 `no_proxy`
+/// 盖住继承值。没有导出代理时这两项都不动。Windows 适配器另行维护 WSLENV。
+fn apply_terminal_proxy_env(
+    env: &mut HashMap<String, String>,
+    mode: ProxyMode,
+    url: &str,
+    use_system_proxy: bool,
+    system_proxy_url: Option<&str>,
+    no_proxy: &str,
+) -> bool {
+    let pairs = terminal_proxy_assignments(mode, url, use_system_proxy, system_proxy_url, no_proxy);
+    if pairs.is_empty() {
+        return false;
+    }
+    let marks_http = pairs.iter().any(|(name, _)| name.eq_ignore_ascii_case(POWERSHELL_HTTP_PROXY));
+    if !marks_http {
+        env.retain(|key, _| !key.eq_ignore_ascii_case(POWERSHELL_HTTP_PROXY));
+        // An empty override also shadows a marker inherited by an incremental
+        // child environment; removing a map entry alone cannot remove its parent.
+        env.insert(POWERSHELL_HTTP_PROXY.to_owned(), String::new());
+    }
+    let exports_bypass = pairs.iter().any(|(name, _)| name.eq_ignore_ascii_case("no_proxy"));
+    if !exports_bypass {
+        env.retain(|key, _| !key.eq_ignore_ascii_case("no_proxy"));
+        env.insert("no_proxy".to_owned(), String::new());
+    }
+    for (name, value) in pairs {
+        env.retain(|key, _| !key.eq_ignore_ascii_case(&name));
+        env.insert(name, value);
+    }
+    true
+}
+
+/// 使用启动时的设置快照补代理变量，避免与环境刷新重复读盘。已打开的会话不经过这里。
+pub(crate) fn apply_saved_terminal_proxy_env(
+    env: &mut HashMap<String, String>,
+    settings: &nebula_settings::RuntimeSettings,
+) -> bool {
+    let mode = ProxyMode::parse(settings.ssh_proxy_mode.settings_value());
+    let system =
+        if mode == ProxyMode::System && settings.terminal_proxy { system_proxy() } else { None };
+    let system_url = system.as_ref().map(|(url, _)| url.clone());
+    let no_proxy = match mode {
+        ProxyMode::Custom => settings.ssh_proxy_no_proxy.clone(),
+        ProxyMode::System => {
+            system.as_ref().map(|(_, bypass)| bypass.join(",")).unwrap_or_default()
+        },
+        ProxyMode::Off => String::new(),
+    };
+    apply_terminal_proxy_env(
+        env,
+        mode,
+        &settings.ssh_proxy_url,
+        settings.terminal_proxy,
+        system_url.as_deref(),
+        &no_proxy,
+    )
+}
+
+/// 能交给 curl / git 的代理 URL。已带协议的原样保留（含账号）；裸 `host:port`
+/// 与 SSH 一样按 SOCKS5。解析失败、跳板、自定义命令都不是环境变量代理。
+fn env_proxy_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match ProxyLink::parse(raw) {
+        Ok(ProxyLink::Server(_)) => {
+            Some(if raw.contains("://") { raw.to_owned() } else { format!("socks5://{raw}") })
+        },
+        _ => None,
+    }
+}
+
+fn append_wslenv_name(entries: &mut Vec<String>, name: &str) {
+    if entries
+        .iter()
+        .any(|entry| entry.split('/').next().unwrap_or(entry).eq_ignore_ascii_case(name))
+    {
+        return;
+    }
+    entries.push(name.to_owned());
+}
+
+/// Preserve explicit forwarding flags and, for incremental child environments,
+/// entries inherited from the launcher. Complete snapshots pass no fallback.
+/// `no_proxy` is listed only when this environment already carries it. The
+/// PowerShell marker stays out of `WSLENV`.
+pub(crate) fn forward_terminal_proxy_to_wsl(
+    env: &mut HashMap<String, String>,
+    inherited: Option<&str>,
+) {
+    const WSLENV: &str = "WSLENV";
+    let existing = env
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(WSLENV))
+        .map(|(_, value)| value.as_str())
+        .or(inherited)
+        .unwrap_or_default();
+    let mut entries: Vec<String> = existing
+        .split(':')
+        .filter(|entry| {
+            !entry.is_empty()
+                && !entry
+                    .split('/')
+                    .next()
+                    .unwrap_or(entry)
+                    .eq_ignore_ascii_case(POWERSHELL_HTTP_PROXY)
+        })
+        .map(str::to_owned)
+        .collect();
+    for name in TERMINAL_PROXY_VARIABLES {
+        append_wslenv_name(&mut entries, name);
+    }
+    if env.keys().any(|key| key.eq_ignore_ascii_case("no_proxy")) {
+        append_wslenv_name(&mut entries, "no_proxy");
+    }
+    env.retain(|key, _| !key.eq_ignore_ascii_case(WSLENV));
+    env.insert(WSLENV.to_owned(), entries.join(":"));
+}
+
 /// HKCU\...\Internet Settings：`ProxyEnable` 非零时读 `ProxyServer` 与
 /// `ProxyOverride`。值的解析拆成纯函数，跨平台可测。
 #[cfg(windows)]
@@ -619,8 +856,12 @@ fn wininet_proxy_url(value: &str) -> Option<String> {
     if value.is_empty() {
         return None;
     }
+    // ProxyPin 等工具可能已写入完整 URL；只给裸地址补协议，避免污染终端环境变量。
+    let with_scheme = |addr: &str, default_scheme: &str| {
+        if addr.contains("://") { addr.to_owned() } else { format!("{default_scheme}://{addr}") }
+    };
     if !value.contains('=') {
-        return Some(format!("http://{value}"));
+        return Some(with_scheme(value, "http"));
     }
     let pick = |wanted: &str| {
         value.split(';').find_map(|part| {
@@ -630,9 +871,9 @@ fn wininet_proxy_url(value: &str) -> Option<String> {
         })
     };
     if let Some(addr) = pick("socks") {
-        return Some(format!("socks5://{addr}"));
+        return Some(with_scheme(&addr, "socks5"));
     }
-    pick("https").or_else(|| pick("http")).map(|addr| format!("http://{addr}"))
+    pick("https").or_else(|| pick("http")).map(|addr| with_scheme(&addr, "http"))
 }
 
 /// WinINET `ProxyOverride`：分号分隔，`<local>` 原样保留给 [`bypassed`] 特判。
@@ -869,6 +1110,17 @@ mod tests {
     }
 
     #[test]
+    fn malformed_percent_escapes_with_multibyte_characters_do_not_panic() {
+        for password in ["%中", "%😀", "%a中", "trailing%", "trailing%a", "%zz"] {
+            let server = ProxyServer::parse_url(&format!("http://user:{password}@proxy.lan"))
+                .expect("invalid escapes retain their literal bytes");
+            assert_eq!(server.password.as_deref(), Some(password));
+        }
+        let server = ProxyServer::parse_url("http://user:%E4%B8%AD%40%3A@proxy.lan").unwrap();
+        assert_eq!(server.password.as_deref(), Some("中@:"));
+    }
+
+    #[test]
     fn identity_excludes_password_but_keeps_user() {
         let server = ProxyServer::parse_url("socks5://user:secret@proxy.lan:1080").unwrap();
         let identity = server.identity();
@@ -909,6 +1161,23 @@ mod tests {
             "有 socks= 用 socks（域名交代理解析）"
         );
         assert_eq!(wininet_proxy_url("  "), None);
+    }
+
+    #[test]
+    fn wininet_proxy_preserves_existing_schemes() {
+        for (value, expected) in [
+            ("http://127.0.0.1:9099", "http://127.0.0.1:9099"),
+            ("  HTTP://127.0.0.1:9099  ", "HTTP://127.0.0.1:9099"),
+            ("socks5h://127.0.0.1:1080", "socks5h://127.0.0.1:1080"),
+            ("http=http://127.0.0.1:9099", "http://127.0.0.1:9099"),
+            ("http=127.0.0.1:7890;https= http://127.0.0.1:9099 ", "http://127.0.0.1:9099"),
+            ("http=http://127.0.0.1:9099;socks=socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080"),
+            ("http://user:p%40ss@[::1]:9099", "http://user:p%40ss@[::1]:9099"),
+        ] {
+            let url = wininet_proxy_url(value).unwrap();
+            assert_eq!(url, expected, "系统代理地址必须只包含原有协议头: {value}");
+            ProxyServer::parse_url(&url).expect("系统代理仍可用于 SSH 连接");
+        }
     }
 
     #[test]
@@ -1142,5 +1411,300 @@ mod tests {
             let err = connect(&proxy, "vps.example.com", 22).await.unwrap_err();
             assert!(err.to_string().contains("407"), "{err}");
         });
+    }
+
+    fn assigned_proxy<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        pairs
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn custom_proxy_address_reaches_new_terminals_without_the_system_switch() {
+        let pairs = terminal_proxy_assignments(
+            ProxyMode::Custom,
+            "socks5://127.0.0.1:7897",
+            false,
+            None,
+            "",
+        );
+        assert_eq!(pairs.len(), 3);
+        assert_eq!(assigned_proxy(&pairs, "HTTP_PROXY"), Some("socks5://127.0.0.1:7897"));
+        assert_eq!(assigned_proxy(&pairs, "HTTPS_PROXY"), Some("socks5://127.0.0.1:7897"));
+        assert_eq!(assigned_proxy(&pairs, "ALL_PROXY"), Some("socks5://127.0.0.1:7897"));
+        assert_eq!(assigned_proxy(&pairs, "PEBREL_HTTP_PROXY"), None);
+    }
+
+    #[test]
+    fn system_proxy_switch_does_not_gate_a_custom_address() {
+        let custom = terminal_proxy_assignments(
+            ProxyMode::Custom,
+            "http://127.0.0.1:8080",
+            false,
+            Some("http://system:1"),
+            "",
+        );
+        assert!(custom.iter().all(|(_, value)| value == "http://127.0.0.1:8080"));
+        assert_eq!(assigned_proxy(&custom, "PEBREL_HTTP_PROXY"), Some("http://127.0.0.1:8080"));
+        assert!(
+            terminal_proxy_assignments(
+                ProxyMode::System,
+                "http://127.0.0.1:8080",
+                false,
+                Some("http://system:1"),
+                "",
+            )
+            .is_empty()
+        );
+        let system = terminal_proxy_assignments(
+            ProxyMode::System,
+            "http://saved:1",
+            true,
+            Some("http://system:9"),
+            "",
+        );
+        assert!(system.iter().all(|(_, value)| value == "http://system:9"));
+        assert_eq!(assigned_proxy(&system, "PEBREL_HTTP_PROXY"), Some("http://system:9"));
+        assert!(terminal_proxy_assignments(ProxyMode::System, "", true, None, "").is_empty());
+        assert!(
+            terminal_proxy_assignments(
+                ProxyMode::Off,
+                "socks5://127.0.0.1:7890",
+                true,
+                Some("http://system:9"),
+                "",
+            )
+            .is_empty()
+        );
+        assert!(
+            terminal_proxy_assignments(ProxyMode::Custom, "jump:bastion", false, None, "")
+                .is_empty()
+        );
+        assert!(
+            terminal_proxy_assignments(ProxyMode::Custom, "command:nc %h %p", false, None, "")
+                .is_empty()
+        );
+        assert!(terminal_proxy_assignments(ProxyMode::Custom, "   ", false, None, "").is_empty());
+        assert!(
+            terminal_proxy_assignments(ProxyMode::Custom, "ftp://x", false, None, "").is_empty()
+        );
+    }
+
+    #[test]
+    fn bare_proxy_address_is_exposed_to_terminals_as_socks5() {
+        let pairs =
+            terminal_proxy_assignments(ProxyMode::Custom, "127.0.0.1:7890", false, None, "");
+        assert_eq!(assigned_proxy(&pairs, "http_proxy"), Some("socks5://127.0.0.1:7890"));
+        assert_eq!(assigned_proxy(&pairs, "https_proxy"), Some("socks5://127.0.0.1:7890"));
+        assert_eq!(assigned_proxy(&pairs, "all_proxy"), Some("socks5://127.0.0.1:7890"));
+        assert_eq!(assigned_proxy(&pairs, "PEBREL_HTTP_PROXY"), None);
+    }
+
+    #[test]
+    fn applying_proxy_env_replaces_existing_spellings_and_keeps_credentials() {
+        let mut env = HashMap::from([
+            ("http_proxy".to_owned(), "http://old:1".to_owned()),
+            ("Https_Proxy".to_owned(), "http://old:1".to_owned()),
+            ("WSLENV".to_owned(), "KEEP/p".to_owned()),
+        ]);
+        assert!(apply_terminal_proxy_env(
+            &mut env,
+            ProxyMode::Custom,
+            "socks5://user:p%40ss@127.0.0.1:7890",
+            false,
+            None,
+            "",
+        ));
+        assert_eq!(env.keys().filter(|key| key.eq_ignore_ascii_case("http_proxy")).count(), 1);
+        assert_eq!(
+            env.iter().find(|(key, _)| key.eq_ignore_ascii_case("http_proxy")).unwrap().1,
+            "socks5://user:p%40ss@127.0.0.1:7890"
+        );
+        assert_eq!(
+            env.iter().find(|(key, _)| key.eq_ignore_ascii_case("all_proxy")).unwrap().1,
+            "socks5://user:p%40ss@127.0.0.1:7890"
+        );
+        assert_eq!(env.get("PEBREL_HTTP_PROXY").map(String::as_str), Some(""));
+        forward_terminal_proxy_to_wsl(&mut env, None);
+        let wslenv = env.get("WSLENV").expect("proxy names are listed for WSL");
+        assert!(wslenv.split(':').any(|entry| entry == "KEEP/p"));
+        assert!(wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("http_proxy")));
+        assert!(wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("https_proxy")));
+        assert!(wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("all_proxy")));
+    }
+
+    #[test]
+    fn powershell_marker_follows_http_and_keeps_socks_and_ipv6() {
+        let http = terminal_proxy_assignments(
+            ProxyMode::Custom,
+            "http://user:p%40ss@[::1]:8080",
+            false,
+            None,
+            "",
+        );
+        assert_eq!(assigned_proxy(&http, "http_proxy"), Some("http://user:p%40ss@[::1]:8080"));
+        assert_eq!(
+            assigned_proxy(&http, "PEBREL_HTTP_PROXY"),
+            Some("http://user:p%40ss@[::1]:8080")
+        );
+        let system_socks = terminal_proxy_assignments(
+            ProxyMode::System,
+            "http://ignored:1",
+            true,
+            Some("socks5://[::1]:1080"),
+            "",
+        );
+        assert_eq!(assigned_proxy(&system_socks, "https_proxy"), Some("socks5://[::1]:1080"));
+        assert_eq!(assigned_proxy(&system_socks, "PEBREL_HTTP_PROXY"), None);
+
+        let mut env =
+            HashMap::from([("PEBREL_HTTP_PROXY".to_owned(), "http://stale:1".to_owned())]);
+        assert!(apply_terminal_proxy_env(
+            &mut env,
+            ProxyMode::Custom,
+            "socks5h://127.0.0.1:1080",
+            false,
+            None,
+            "",
+        ));
+        assert_eq!(env.get("http_proxy").map(String::as_str), Some("socks5h://127.0.0.1:1080"));
+        assert_eq!(env.get("PEBREL_HTTP_PROXY").map(String::as_str), Some(""));
+        forward_terminal_proxy_to_wsl(&mut env, None);
+        let wslenv = env.get("WSLENV").expect("proxy names are listed for WSL");
+        assert!(!wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("PEBREL_HTTP_PROXY")));
+
+        assert!(apply_terminal_proxy_env(
+            &mut env,
+            ProxyMode::System,
+            "",
+            true,
+            Some("HTTP://system:9"),
+            "",
+        ));
+        assert_eq!(env.get("http_proxy").map(String::as_str), Some("HTTP://system:9"));
+        assert_eq!(env.get("PEBREL_HTTP_PROXY").map(String::as_str), Some("HTTP://system:9"));
+        let wslenv = env.get("WSLENV").expect("proxy names are listed for WSL");
+        assert!(!wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("PEBREL_HTTP_PROXY")));
+    }
+
+    #[test]
+    fn closed_proxy_mode_does_not_rewrite_an_existing_terminal_environment() {
+        let mut env = HashMap::from([("WSLENV".to_owned(), "KEEP/p".to_owned())]);
+        assert!(!apply_terminal_proxy_env(
+            &mut env,
+            ProxyMode::Off,
+            "http://127.0.0.1:1",
+            true,
+            Some("http://system:9"),
+            "",
+        ));
+        assert_eq!(env.len(), 1);
+        assert_eq!(env.get("WSLENV").map(String::as_str), Some("KEEP/p"));
+    }
+
+    #[test]
+    fn wsl_forwarding_preserves_inherited_and_explicit_environment_scopes() {
+        let mut inherited = HashMap::new();
+        forward_terminal_proxy_to_wsl(&mut inherited, Some("KEEP/p:OTHER/u"));
+        assert_eq!(inherited["WSLENV"], "KEEP/p:OTHER/u:http_proxy:https_proxy:all_proxy");
+        let mut complete = HashMap::new();
+        forward_terminal_proxy_to_wsl(&mut complete, None);
+        assert_eq!(complete["WSLENV"], "http_proxy:https_proxy:all_proxy");
+        let mut explicit = HashMap::from([("WSLENV".into(), "http_proxy/u".into())]);
+        forward_terminal_proxy_to_wsl(&mut explicit, Some("STALE/p"));
+        assert_eq!(explicit["WSLENV"], "http_proxy/u:https_proxy:all_proxy");
+    }
+
+    #[test]
+    fn wsl_forwarding_removes_powershell_marker_from_both_sources() {
+        let entries = "PEBREL_HTTP_PROXY/u:KEEP/p:pebrel_http_proxy:HTTP_PROXY/u:NO_PROXY/lp";
+        for explicit in [false, true] {
+            let mut env = HashMap::from([("no_proxy".to_owned(), "localhost".to_owned())]);
+            if explicit {
+                env.insert("wslenv".to_owned(), entries.to_owned());
+            }
+            forward_terminal_proxy_to_wsl(&mut env, Some(entries));
+            assert_eq!(env["WSLENV"], "KEEP/p:HTTP_PROXY/u:NO_PROXY/lp:https_proxy:all_proxy");
+            assert!(!env.contains_key("wslenv"));
+            forward_terminal_proxy_to_wsl(&mut env, None);
+            assert_eq!(env["WSLENV"], "KEEP/p:HTTP_PROXY/u:NO_PROXY/lp:https_proxy:all_proxy");
+        }
+    }
+
+    #[test]
+    fn terminal_bypass_list_is_exported_as_curl_no_proxy() {
+        let pairs = terminal_proxy_assignments(
+            ProxyMode::Custom,
+            "socks5://127.0.0.1:1080",
+            false,
+            None,
+            "<local>;*.Example.COM,10.*,192.168.*,192.168.1.*,example.com,EXAMPLE.COM,*,foo.*",
+        );
+        assert_eq!(
+            assigned_proxy(&pairs, "no_proxy"),
+            Some(
+                "localhost,.example.com,10.0.0.0/8,192.168.0.0/16,192.168.1.0/24,example.com,*,foo.*"
+            )
+        );
+        assert_eq!(assigned_proxy(&pairs, "http_proxy"), Some("socks5://127.0.0.1:1080"));
+        assert_eq!(assigned_proxy(&pairs, "PEBREL_HTTP_PROXY"), None);
+
+        let mut env = HashMap::from([("NO_PROXY".to_owned(), "stale.example".to_owned())]);
+        assert!(apply_terminal_proxy_env(
+            &mut env,
+            ProxyMode::Custom,
+            "socks5h://127.0.0.1:1080",
+            false,
+            None,
+            "<local>",
+        ));
+        assert_eq!(env.get("http_proxy").map(String::as_str), Some("socks5h://127.0.0.1:1080"));
+        assert_eq!(env.get("no_proxy").map(String::as_str), Some("localhost"));
+        assert_eq!(env.get("PEBREL_HTTP_PROXY").map(String::as_str), Some(""));
+        assert_eq!(env.keys().filter(|key| key.eq_ignore_ascii_case("no_proxy")).count(), 1);
+        forward_terminal_proxy_to_wsl(&mut env, None);
+        let wslenv = env.get("WSLENV").expect("bypass name is listed for WSL");
+        assert!(wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("no_proxy")));
+        assert!(!wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("PEBREL_HTTP_PROXY")));
+    }
+
+    #[test]
+    fn empty_bypass_shadows_inherited_no_proxy_only_when_a_proxy_is_injected() {
+        let mut env = HashMap::from([
+            ("NO_PROXY".to_owned(), "old.example".to_owned()),
+            ("http_proxy".to_owned(), "http://old:1".to_owned()),
+        ]);
+        assert!(apply_terminal_proxy_env(
+            &mut env,
+            ProxyMode::Custom,
+            "http://127.0.0.1:8080",
+            false,
+            None,
+            "",
+        ));
+        assert_eq!(env.get("no_proxy").map(String::as_str), Some(""));
+        assert_eq!(env.keys().filter(|key| key.eq_ignore_ascii_case("no_proxy")).count(), 1);
+        forward_terminal_proxy_to_wsl(&mut env, Some("KEEP/p"));
+        let wslenv = env.get("WSLENV").expect("empty bypass is still forwarded");
+        assert!(wslenv.split(':').any(|entry| entry == "KEEP/p"));
+        assert!(wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("no_proxy")));
+        assert!(!wslenv.split(':').any(|entry| entry.eq_ignore_ascii_case("PEBREL_HTTP_PROXY")));
+
+        let mut untouched = HashMap::from([
+            ("WSLENV".to_owned(), "KEEP/p".to_owned()),
+            ("NO_PROXY".to_owned(), "keep.example".to_owned()),
+        ]);
+        assert!(!apply_terminal_proxy_env(
+            &mut untouched,
+            ProxyMode::Off,
+            "http://127.0.0.1:1",
+            true,
+            Some("http://system:9"),
+            "keep.example",
+        ));
+        assert_eq!(untouched.len(), 2);
+        assert_eq!(untouched.get("NO_PROXY").map(String::as_str), Some("keep.example"));
+        assert_eq!(untouched.get("WSLENV").map(String::as_str), Some("KEEP/p"));
     }
 }

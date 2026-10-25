@@ -53,6 +53,21 @@ fn apply(snapshot: &mut Snapshot, edits: Vec<Edit>) {
 }
 
 #[test]
+fn installed_shell_assets_include_the_native_editor_adapter() {
+    let snapshot = snapshot();
+    let edits = snapshot.plan(Action::Install).unwrap().unwrap();
+    for name in ["bashrc", ".zshrc"] {
+        let content =
+            edits.iter().find(|edit| edit.name == name).unwrap().content.as_deref().unwrap();
+        assert!(
+            content.contains("__pebrel_editor_report()"),
+            "{name} must install the native query"
+        );
+        assert!(content.contains("SetUserVar=pebrel_editor="), "{name} must report actual buffers");
+    }
+}
+
+#[test]
 fn install_repeat_upgrade_remove_restores_foreign_configuration() {
     let mut snapshot = snapshot();
     put(

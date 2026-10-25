@@ -11,11 +11,12 @@ use gpui_component::input::InputEvent;
 use nebula_settings::ProxyModeName;
 
 use crate::display::{
-    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, manual_proxy_parts,
-    manual_proxy_value,
+    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, compose_manual_proxy_url,
+    manual_proxy_parts,
 };
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::settings_pane::SettingsPane;
+
 use crate::gpui_shell::widgets::NebulaButton;
 
 /// 旧壳 `ssh_proxy_test` 横幅高度。
@@ -25,7 +26,7 @@ const PROXY_TEST_GAP: f32 = 18.0;
 /// 旧壳 `ssh_proxy_mode_control` 紧凑宽度。
 const PROXY_MODE_SELECT_W: f32 = 156.0;
 /// 旧壳 `ssh_proxy_manual_controls` 协议下拉。
-const PROXY_PROTOCOL_SELECT_W: f32 = 112.0;
+const PROXY_PROTOCOL_SELECT_W: f32 = 132.0;
 const PROXY_MANUAL_GAP: f32 = 8.0;
 /// 旧壳 `ssh_proxy_test_button`：约 108，下限 88。
 const PROXY_TEST_BUTTON_W: f32 = 108.0;
@@ -66,25 +67,41 @@ impl SettingsPane {
         MANUAL_PROXY_PROTOCOL_OPTIONS.get(row).copied().unwrap_or_default()
     }
 
-    fn composed_proxy_url(&self, cx: &gpui::App) -> String {
-        let protocol = self.current_proxy_protocol(cx);
-        let typed = self.proxy_url_input.read(cx).value();
-        let (_, host) = manual_proxy_parts(typed.trim());
-        manual_proxy_value(protocol, host)
-    }
-
-    /// 把协议 + 地址写成 `ssh_proxy_url`。测试线程随后读落盘值。
-    pub(super) fn commit_proxy_address(&mut self, cx: &mut Context<Self>) {
-        let url = self.composed_proxy_url(cx);
+    /// 把协议 + 地址写成 `ssh_proxy_url`。地址里自带的 `http://` / `socks5://`
+    /// 覆盖左边的下拉，并让下拉和地址框跟上落盘值。测试线程随后读这个值。
+    pub(super) fn commit_proxy_address(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        let typed = self.proxy_url_input.read(cx).value().to_string();
+        let Some((protocol, url)) =
+            compose_manual_proxy_url(self.current_proxy_protocol(cx), &typed)
+        else {
+            return;
+        };
+        let row =
+            MANUAL_PROXY_PROTOCOL_OPTIONS.iter().position(|item| *item == protocol).unwrap_or(0);
+        let selected = self.proxy_protocol_select.read(cx).selected_index(cx).map(|path| path.row);
+        if selected != Some(row) {
+            self.proxy_protocol_select.update(cx, |state, cx| {
+                state.set_selected_index(Some(IndexPath::default().row(row)), window, cx);
+            });
+        }
+        let host = manual_proxy_parts(typed.trim()).1;
+        if host != typed.trim() {
+            let host = host.to_owned();
+            self.proxy_url_input.update(cx, |input, cx| input.set_value(host, window, cx));
+        }
         self.persist(&[("ssh_proxy_url", url)], cx);
     }
 
-    pub(super) fn request_proxy_test(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_proxy_test(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         if matches!(self.proxy_test_status, ProxyTestStatus::Running) {
             return;
         }
         // 先落盘当前输入，再跑测试：验证的是下一条真实连接会读到的值。
-        self.commit_proxy_address(cx);
+        self.commit_proxy_address(window, cx);
         self.proxy_test_seq = self.proxy_test_seq.wrapping_add(1);
         let request_id = self.proxy_test_seq;
         self.proxy_test_status = ProxyTestStatus::Running;
@@ -145,9 +162,14 @@ impl SettingsPane {
         }
     }
 
-    pub(super) fn on_proxy_address_event(&mut self, event: &InputEvent, cx: &mut Context<Self>) {
+    pub(super) fn on_proxy_address_event(
+        &mut self,
+        event: &InputEvent,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(event, InputEvent::Change) {
-            self.commit_proxy_address(cx);
+            self.commit_proxy_address(window, cx);
         }
     }
 
@@ -161,8 +183,8 @@ impl SettingsPane {
             .when(custom, |page| page.child(self.proxy_address_row(cx)))
             .child(self.switch_row(
                 "terminal_proxy",
-                "系统代理",
-                "启用时，新建终端的 HTTP(S)_PROXY 会接入系统代理。",
+                language.text(crate::i18n::Message::SettingsNetworkTerminalLabel),
+                language.text(crate::i18n::Message::SettingsNetworkTerminalDescription),
                 self.runtime.terminal_proxy,
                 cx,
             ))
@@ -213,7 +235,9 @@ impl SettingsPane {
                             .label(caption)
                             .outline()
                             .disabled(running)
-                            .on_click(cx.listener(|this, _, _, cx| this.request_proxy_test(cx))),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.request_proxy_test(window, cx);
+                            })),
                     ),
             )
     }

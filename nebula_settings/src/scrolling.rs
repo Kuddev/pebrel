@@ -1,5 +1,34 @@
 use crate::RawSettings;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollbarVisibility {
+    #[default]
+    Auto,
+    Hover,
+    Always,
+}
+
+impl ScrollbarVisibility {
+    pub const VALUES: &'static [&'static str] = &["auto", "hover", "always"];
+
+    pub fn from_settings(value: &str) -> Option<Self> {
+        match value.trim() {
+            value if value.eq_ignore_ascii_case("auto") => Some(Self::Auto),
+            value if value.eq_ignore_ascii_case("hover") => Some(Self::Hover),
+            value if value.eq_ignore_ascii_case("always") => Some(Self::Always),
+            _ => None,
+        }
+    }
+
+    pub fn settings_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Hover => "hover",
+            Self::Always => "always",
+        }
+    }
+}
+
 /// Persisted choices for newly created terminals; existing history is never resized by this key.
 pub const SCROLLBACK_VALUES: &[&str] =
     &["1000", "2000", "5000", "10000", "20000", "50000", "100000"];
@@ -28,6 +57,23 @@ pub fn normalize_scroll_speed(value: f32) -> f32 {
 mod tests {
     use super::*;
     use crate::{RuntimeSettings, apply_updates};
+
+    #[test]
+    fn scrollbar_visibility_round_trips_and_defaults_to_auto() {
+        for value in ScrollbarVisibility::VALUES {
+            let text = apply_updates("custom=keep\n", &[("scrollbar_visibility", (*value).into())]);
+            let settings = RuntimeSettings::from_raw(&RawSettings::from_text(&text));
+            assert_eq!(settings.scrollbar_visibility.settings_value(), *value);
+            assert!(text.contains("custom=keep"));
+        }
+        for text in ["", "scrollbar_visibility=invalid", "scrollbar_visibility=true"] {
+            assert_eq!(
+                RuntimeSettings::from_raw(&RawSettings::from_text(text)).scrollbar_visibility,
+                ScrollbarVisibility::Auto,
+            );
+        }
+        assert_eq!(ScrollbarVisibility::from_settings(" HOVER "), Some(ScrollbarVisibility::Hover));
+    }
 
     #[test]
     fn all_seven_history_choices_round_trip_without_changing_other_preferences() {

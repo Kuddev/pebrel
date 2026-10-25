@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ssh_retry_credentials_hint">Authentication failed. Enter the password or key passphrase again. It is kept encrypted only for this open session and cleared when you close the tab.</string>
+    <string name="ssh_new_tab_host_hint">Connect another host in a new tab</string>
+</resources>

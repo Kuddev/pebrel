@@ -3,7 +3,7 @@
 //! `=` ring with front/back occlusion, sparse starfield.
 //! Regenerate with `python tools/gen_fetch_art.py`.
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub const NEBULA_STAR_ART: &[&str] = &[
     "                           \x1b[38;2;214;170;78m.               \x1b[38;2;150;128;224m.       \x1b[38;2;150;128;224m.\x1b[0m",
     "          \x1b[38;2;214;170;78m.                     \x1b[38;2;150;128;224m.\x1b[0m",

@@ -20,6 +20,28 @@ fn automatic_authentication_always_contains_the_agent_step() {
 }
 
 #[test]
+fn jumpserver_username_reaches_the_real_ssh_authentication_request_unchanged() {
+    check(async {
+        for username in ["jumpserverUser@root", "运维@root", "运维%40@root"] {
+            let mut fixture = Fixture::new(ServerOptions {
+                username: Some(username.into()),
+                password: Some("synthetic draft password".into()),
+                ..Default::default()
+            })
+            .await;
+            let spec = format!("{username}@127.0.0.1:{}", fixture.route.destination.port);
+            fixture.route.profile.connection.validate(&spec).unwrap();
+            fixture.route.destination = crate::ssh_session::SshDestination::parse(&spec).unwrap();
+            fixture.route.profile.destination = spec;
+            fixture.route.profile.auth = SshAuthMode::Password;
+            fixture.test(Some("synthetic draft password")).await.unwrap();
+            assert_eq!(fixture.stats.passwords.load(Ordering::SeqCst), 1);
+            assert_eq!(*fixture.stats.password_users.lock().unwrap(), [username]);
+        }
+    });
+}
+
+#[test]
 fn agent_only_keys_authenticate_formal_and_test_connections_including_legacy_mode() {
     check(async {
         let key = key();
@@ -63,9 +85,10 @@ fn certificates_are_signed_by_the_agent_and_accepted_by_the_real_server() {
 #[test]
 fn rsa_agent_signatures_follow_the_servers_sha256_or_sha512_advertisement() {
     use russh::keys::ssh_key::{Algorithm, HashAlg, PrivateKey};
+    // 素数搜索耗时不固定且不会让出执行权；它是夹具准备，不占用 SSH 交互超时。
+    let key =
+        Arc::new(PrivateKey::random(&mut rand::rng(), Algorithm::Rsa { hash: None }).unwrap());
     check(async {
-        let key =
-            Arc::new(PrivateKey::random(&mut rand::rng(), Algorithm::Rsa { hash: None }).unwrap());
         for (hash, expected) in [(HashAlg::Sha256, 2), (HashAlg::Sha512, 4)] {
             let agent = Agent::new(vec![Identity::plain(key.clone())]);
             let stats = agent.stats.clone();

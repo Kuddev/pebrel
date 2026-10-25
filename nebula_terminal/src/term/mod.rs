@@ -1,6 +1,5 @@
 //! Exports the `Term` type which is a high-level API for the Grid.
 
-use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
 use std::sync::Arc;
 use std::{cmp, mem, ptr, str};
@@ -12,7 +11,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as Base64;
 use bitflags::bitflags;
 use log::{debug, trace};
-use unicode_width::UnicodeWidthChar;
 
 use crate::event::{Event, EventListener};
 use crate::grid::{Dimensions, Grid, Scroll};
@@ -31,13 +29,17 @@ pub mod cell;
 mod clear;
 pub mod color;
 mod damage;
+mod input;
 mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
+mod program_status;
 mod prompt;
+pub mod reading;
 mod redraw_anchor;
 mod renderable;
 pub mod search;
+mod viewport;
 
 use damage::TermDamageState;
 pub use damage::{LineDamageBounds, TermDamage, TermDamageIterator};
@@ -161,6 +163,8 @@ pub fn viewport_to_point_from(origin: Line, point: Point<usize>) -> Point {
 
 pub struct Term<T> {
     redraw_anchor: redraw_anchor::RedrawAnchor,
+    input_cluster: Option<input::EmojiInput>,
+    input_end: Option<(Point, bool)>,
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
 
@@ -228,15 +232,14 @@ pub struct Term<T> {
     /// Information about damaged cells.
     damage: TermDamageState,
 
-    /// Absolute line numbers of shell prompt rows reported via OSC 133;A
-    /// (see [`Grid::scrolled_out`] for the numbering). Strictly increasing;
-    /// stale entries are pruned lazily. Primary screen only.
-    nebula_prompt_marks: VecDeque<usize>,
+    /// Shell markers and bounded reading share the grid lifecycle.
+    reading: reading::ReadingState,
+    program_statuses: crate::program_status::Records,
 
-    /// Whether OSC 133 currently identifies this pane as accepting shell input.
-    nebula_prompt_active: bool,
-    /// OSC 133;B input start in absolute grid coordinates.
-    nebula_prompt_input: Option<(usize, Column)>,
+    /// Frontend presentation may start inside the live grid when an attachment expands.
+    /// This never changes VT cursor coordinates, scroll regions, or PTY dimensions.
+    presentation_origin: Option<Line>,
+    presentation_scroll_generation: u64,
 
     /// One-shot suppression of the next primary-DA answer: the side-loaded
     /// ConPTY host's bring-up DA1 query was already answered by the response
@@ -345,6 +348,11 @@ impl<T> Term<T> {
     where
         T: EventListener,
     {
+        self.presentation_origin = None;
+        if !self.mode.contains(TermMode::ALT_SCREEN) {
+            self.presentation_scroll_generation =
+                self.presentation_scroll_generation.wrapping_add(1);
+        }
         self.cancel_redraw_anchor();
         let old_display_offset = self.grid.display_offset();
         self.grid.scroll_display(scroll);
@@ -387,6 +395,8 @@ impl<T> Term<T> {
 
         Term {
             redraw_anchor: Default::default(),
+            input_cluster: None,
+            input_end: None,
             inactive_grid,
             scroll_region,
             event_proxy,
@@ -400,9 +410,10 @@ impl<T> Term<T> {
             tabs,
             inactive_keyboard_mode_stack: Default::default(),
             keyboard_mode_stack: Default::default(),
-            nebula_prompt_marks: Default::default(),
-            nebula_prompt_active: false,
-            nebula_prompt_input: None,
+            reading: Default::default(),
+            presentation_origin: None,
+            presentation_scroll_generation: 0,
+            program_statuses: Default::default(),
             active_charset: Default::default(),
             vi_mode_cursor: Default::default(),
             cursor_style: Default::default(),
@@ -595,8 +606,8 @@ impl<T> Term<T> {
         res.strip_suffix('\n').map(str::to_owned).unwrap_or(res)
     }
 
-    /// Convert a single line in the grid to a String.
-    fn line_to_string(
+    /// 逐行捕获关闭选区末尾补字；普通选区仍可包含下一行的跨行宽字。
+    pub(crate) fn line_to_string(
         &self,
         line: Line,
         mut cols: Range<Column>,
@@ -652,8 +663,13 @@ impl<T> Term<T> {
             && line_length.0 >= 2
             && grid_line[line_length - 1].flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
             && include_wrapped_wide
+            && line < self.bottommost_line()
         {
-            text.push(self.grid[line - 1i32][Column(0)].c);
+            let cell = &self.grid[line + 1i32][Column(0)];
+            if cell.flags.contains(Flags::WIDE_CHAR) {
+                text.push(cell.c);
+                text.extend(cell.zerowidth().into_iter().flatten());
+            }
         }
 
         text
@@ -686,40 +702,6 @@ impl<T> Term<T> {
         RenderableContent::with_viewport(self, lines, columns)
     }
 
-    /// First grid row shown at line zero of a `lines`-tall visual viewport.
-    ///
-    /// While an interactive resize is between commit points the visual
-    /// viewport can be smaller than the grid. The crop previews exactly the
-    /// rows the deferred shrink will keep visible — the same anchor
-    /// [`Grid::resize`]/[`Grid::resize_conpty`] will use — so the settled
-    /// reflow lands without a visual jump. A user scrolled into history stays
-    /// anchored to the row they are reading instead.
-    #[inline]
-    pub fn viewport_origin_for(&self, lines: usize) -> Line {
-        let display_offset = self.grid.display_offset();
-        if display_offset != 0 || lines >= self.grid.screen_lines() {
-            return Line(-(display_offset as i32));
-        }
-
-        // The alternate screen is repainted by its application after the
-        // commit, and its shrink only ever follows the cursor.
-        let conpty = self.config.conpty_resize && !self.mode.contains(TermMode::ALT_SCREEN);
-        Line(self.grid.shrink_scroll_amount(conpty, lines) as i32)
-    }
-
-    /// Convert a point in a `lines`-tall visual viewport to grid space.
-    ///
-    /// The result is clamped to cells that exist in the grid: during a
-    /// deferred resize the visual viewport can extend past the committed
-    /// grid, and input must not index rows or columns that are not there yet.
-    #[inline]
-    pub fn visual_viewport_to_point(&self, lines: usize, point: Point<usize>) -> Point {
-        let mut point = viewport_to_point_from(self.viewport_origin_for(lines), point);
-        point.line = cmp::min(point.line, self.bottommost_line());
-        point.column = cmp::min(point.column, self.grid.last_column());
-        point
-    }
-
     /// Access to the raw grid data structure.
     pub fn grid(&self) -> &Grid<Cell> {
         &self.grid
@@ -727,11 +709,14 @@ impl<T> Term<T> {
 
     /// Mutable access to the raw grid data structure.
     pub fn grid_mut(&mut self) -> &mut Grid<Cell> {
+        self.reset_input_cluster();
+        self.reading.invalidate();
         &mut self.grid
     }
 
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
+        self.presentation_origin = None;
         self.cancel_redraw_anchor();
         let old_cols = self.columns();
         let old_lines = self.screen_lines();
@@ -744,6 +729,7 @@ impl<T> Term<T> {
             return;
         }
 
+        self.reset_input_cluster();
         debug!("New num_cols is {num_cols} and num_lines is {num_lines}");
 
         // Move vi mode cursor with the content.
@@ -772,8 +758,9 @@ impl<T> Term<T> {
 
         // Reflow rewraps history rows, so absolute prompt-mark lines no longer
         // match; drop them rather than jump to shifted positions.
-        self.nebula_prompt_marks.clear();
-        self.nebula_prompt_input = None;
+        self.reading.invalidate();
+        self.reading.prompt_marks.clear();
+        self.reading.prompt_input = None;
 
         // Invalidate selection and tabs only when necessary.
         if old_cols != num_cols {
@@ -810,6 +797,8 @@ impl<T> Term<T> {
 
     /// Swap primary and alternate screen buffer.
     pub fn swap_alt(&mut self) {
+        self.reset_input_cluster();
+        self.reading.invalidate();
         self.cancel_redraw_anchor();
         if !self.mode.contains(TermMode::ALT_SCREEN) {
             // Set alt screen cursor to the current primary screen cursor.
@@ -839,6 +828,7 @@ impl<T> Term<T> {
     /// Expects origin to be in scroll range.
     #[inline]
     fn scroll_down_relative(&mut self, origin: Line, mut lines: usize) {
+        self.reset_input_cluster();
         trace!("Scrolling down relative: origin={origin}, lines={lines}");
 
         lines = cmp::min(lines, (self.scroll_region.end - self.scroll_region.start).0 as usize);
@@ -867,6 +857,7 @@ impl<T> Term<T> {
     /// Expects origin to be in scroll range.
     #[inline]
     fn scroll_up_relative(&mut self, origin: Line, mut lines: usize) {
+        self.reset_input_cluster();
         trace!("Scrolling up relative: origin={origin}, lines={lines}");
 
         lines = cmp::min(lines, (self.scroll_region.end - self.scroll_region.start).0 as usize);
@@ -923,6 +914,7 @@ impl<T> Term<T> {
         if delta == 0 || delta >= self.screen_lines() {
             return;
         }
+        self.reset_input_cluster();
         let region = Line(0)..Line(self.screen_lines() as i32);
         // 选区跟着内容走：`rotate` 的正负与内容位移同向（上滚为负）。
         let rotation = if target < cursor { delta as i32 } else { -(delta as i32) };
@@ -951,14 +943,6 @@ impl<T> Term<T> {
         // Clear grid.
         self.grid.reset_region(..);
         self.mark_fully_damaged();
-    }
-
-    #[inline]
-    pub fn exit(&mut self)
-    where
-        T: EventListener,
-    {
-        self.event_proxy.send_event(Event::Exit);
     }
 
     /// Toggle the vi mode.
@@ -1125,9 +1109,16 @@ impl<T> Term<T> {
 
         trace!("Wrapping input");
 
-        self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
+        let next_line = self.grid.cursor.point.line + 1;
+        if next_line < self.screen_lines() || next_line == self.scroll_region.end {
+            self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
+        } else {
+            // Below the scrolling margin at the physical bottom, wrapping cannot
+            // advance. Do not leave a placeholder pointing at a nonexistent row.
+            self.grid.cursor_cell().flags.remove(Flags::WRAPLINE | Flags::LEADING_WIDE_CHAR_SPACER);
+        }
 
-        if self.grid.cursor.point.line + 1 >= self.scroll_region.end {
+        if next_line >= self.scroll_region.end {
             self.linefeed();
         } else {
             self.damage_cursor();
@@ -1207,85 +1198,12 @@ impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {
-        // Number of cells the char will occupy.
-        let width = match c.width() {
-            Some(width) => width,
-            None => return,
-        };
-
-        // Handle zero-width characters.
-        if width == 0 {
-            // Get previous column.
-            let mut column = self.grid.cursor.point.column;
-            if !self.grid.cursor.input_needs_wrap {
-                column.0 = column.saturating_sub(1);
-            }
-
-            // Put zerowidth characters over first fullwidth character cell.
-            let line = self.grid.cursor.point.line;
-            if self.grid[line][column].flags.contains(Flags::WIDE_CHAR_SPACER) {
-                column.0 = column.saturating_sub(1);
-            }
-
-            self.grid[line][column].push_zerowidth(c);
-            return;
-        }
-
-        // Move cursor to next line.
-        if self.grid.cursor.input_needs_wrap {
-            self.wrapline();
-        }
-
-        // If in insert mode, first shift cells to the right.
-        let columns = self.columns();
-        if self.mode.contains(TermMode::INSERT) && self.grid.cursor.point.column + width < columns {
-            let line = self.grid.cursor.point.line;
-            let col = self.grid.cursor.point.column;
-            let row = &mut self.grid[line][..];
-
-            for col in (col.0..(columns - width)).rev() {
-                row.swap(col + width, col);
-            }
-        }
-
-        if width == 1 {
-            self.write_at_cursor(c);
-        } else {
-            if self.grid.cursor.point.column + 1 >= columns {
-                if self.mode.contains(TermMode::LINE_WRAP) {
-                    // Insert placeholder before wide char if glyph does not fit in this row.
-                    self.grid.cursor.template.flags.insert(Flags::LEADING_WIDE_CHAR_SPACER);
-                    self.write_at_cursor(' ');
-                    self.grid.cursor.template.flags.remove(Flags::LEADING_WIDE_CHAR_SPACER);
-                    self.wrapline();
-                } else {
-                    // Prevent out of bounds crash when linewrapping is disabled.
-                    self.grid.cursor.input_needs_wrap = true;
-                    return;
-                }
-            }
-
-            // Write full width glyph to current cursor cell.
-            self.grid.cursor.template.flags.insert(Flags::WIDE_CHAR);
-            self.write_at_cursor(c);
-            self.grid.cursor.template.flags.remove(Flags::WIDE_CHAR);
-
-            // Write spacer to cell following the wide glyph.
-            self.grid.cursor.point.column += 1;
-            self.grid.cursor.template.flags.insert(Flags::WIDE_CHAR_SPACER);
-            self.write_at_cursor(' ');
-            self.grid.cursor.template.flags.remove(Flags::WIDE_CHAR_SPACER);
-        }
-
-        if self.grid.cursor.point.column + 1 < columns {
-            self.grid.cursor.point.column += 1;
-        } else {
-            self.grid.cursor.input_needs_wrap = true;
-        }
+        self.input_character(c);
     }
 
     #[inline]
     fn decaln(&mut self) {
+        self.reset_input_cluster();
         trace!("Decalnning");
 
         for line in (0..self.screen_lines()).map(Line::from) {
@@ -1301,6 +1219,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn goto(&mut self, line: i32, col: usize) {
+        self.reset_input_cluster();
         let line = Line(line);
         let col = Column(col);
 
@@ -1332,6 +1251,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn insert_blank(&mut self, count: usize) {
+        self.reset_input_cluster();
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
 
@@ -1378,6 +1298,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn move_forward(&mut self, cols: usize) {
+        self.reset_input_cluster();
         trace!("Moving forward: {cols}");
         let last_column = cmp::min(self.grid.cursor.point.column + cols, self.last_column());
 
@@ -1390,6 +1311,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn move_backward(&mut self, cols: usize) {
+        self.reset_input_cluster();
         trace!("Moving backward: {cols}");
         let column = self.grid.cursor.point.column.saturating_sub(cols);
 
@@ -1525,6 +1447,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Insert tab at cursor position.
     #[inline]
     fn put_tab(&mut self, mut count: u16) {
+        self.reset_input_cluster();
         // A tab after the last column is the same as a linebreak.
         if self.grid.cursor.input_needs_wrap {
             self.wrapline();
@@ -1557,6 +1480,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Backspace.
     #[inline]
     fn backspace(&mut self) {
+        self.reset_input_cluster();
         trace!("Backspace");
 
         if self.grid.cursor.point.column > Column(0) {
@@ -1571,6 +1495,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Carriage return.
     #[inline]
     fn carriage_return(&mut self) {
+        self.reset_input_cluster();
         trace!("Carriage return");
         let new_col = 0;
         let line = self.grid.cursor.point.line.0 as usize;
@@ -1582,6 +1507,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// Linefeed.
     #[inline]
     fn linefeed(&mut self) {
+        self.reset_input_cluster();
         trace!("Linefeed");
         let next = self.grid.cursor.point.line + 1;
         if next == self.scroll_region.end {
@@ -1678,6 +1604,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn erase_chars(&mut self, count: usize) {
+        self.reset_input_cluster();
         let cursor = &self.grid.cursor;
 
         trace!("Erasing chars: count={}, col={}", count, cursor.point.column);
@@ -1697,6 +1624,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn delete_chars(&mut self, count: usize) {
+        self.reset_input_cluster();
         let columns = self.columns();
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
@@ -1726,6 +1654,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn move_backward_tabs(&mut self, count: u16) {
+        self.reset_input_cluster();
         trace!("Moving backward {count} tabs");
 
         let old_col = self.grid.cursor.point.column.0;
@@ -1751,6 +1680,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn move_forward_tabs(&mut self, count: u16) {
+        self.reset_input_cluster();
         trace!("Moving forward {count} tabs");
 
         let num_cols = self.columns();
@@ -1785,6 +1715,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn restore_cursor_position(&mut self) {
+        self.reset_input_cluster();
         trace!("Restoring cursor position");
 
         self.damage_cursor();
@@ -1794,6 +1725,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn clear_line(&mut self, mode: ansi::LineClearMode) {
+        self.reset_input_cluster();
         trace!("Clearing line: {mode:?}");
 
         let cursor = &self.grid.cursor;
@@ -1909,6 +1841,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn clear_screen(&mut self, mode: ansi::ClearMode) {
+        self.reset_input_cluster();
         self.clear_screen_contents(mode);
     }
 
@@ -1928,6 +1861,8 @@ impl<T: EventListener> Handler for Term<T> {
     /// Reset all important fields in the term struct.
     #[inline]
     fn reset_state(&mut self) {
+        self.reset_program_status();
+        self.reset_input_cluster();
         self.cancel_redraw_anchor();
         if self.mode.contains(TermMode::ALT_SCREEN) {
             mem::swap(&mut self.grid, &mut self.inactive_grid);
@@ -1937,9 +1872,10 @@ impl<T: EventListener> Handler for Term<T> {
         self.cursor_blinking_override = None;
         self.grid.reset();
         self.inactive_grid.reset();
-        self.nebula_prompt_marks.clear();
-        self.nebula_prompt_input = None;
-        self.nebula_prompt_active = false;
+        self.reading.invalidate();
+        self.reading.prompt_marks.clear();
+        self.reading.prompt_input = None;
+        self.reading.prompt_active = false;
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
         self.tabs = TabStops::new(self.columns());
         self.title_stack = Vec::new();
@@ -1959,6 +1895,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn reverse_index(&mut self) {
+        self.reset_input_cluster();
         trace!("Reversing index");
         // If cursor is at the top.
         if self.grid.cursor.point.line == self.scroll_region.start {
@@ -2219,6 +2156,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn set_mode(&mut self, mode: ansi::Mode) {
+        self.reset_input_cluster();
         let mode = match mode {
             ansi::Mode::Named(mode) => mode,
             ansi::Mode::Unknown(mode) => {
@@ -2236,6 +2174,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn unset_mode(&mut self, mode: ansi::Mode) {
+        self.reset_input_cluster();
         let mode = match mode {
             ansi::Mode::Named(mode) => mode,
             ansi::Mode::Unknown(mode) => {
@@ -2491,6 +2430,7 @@ pub mod test {
     use serde::{Deserialize, Serialize};
 
     use crate::event::VoidListener;
+    use unicode_width::UnicodeWidthChar as _;
 
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct TermSize {

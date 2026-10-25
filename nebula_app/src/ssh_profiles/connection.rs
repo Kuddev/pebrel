@@ -117,6 +117,16 @@ impl SshConnectionOptions {
     }
 }
 
+pub(super) fn valid_ssh_username(username: &str) -> bool {
+    !username.starts_with('-')
+        && !username.split('@').any(str::is_empty)
+        && !username.chars().any(|character| {
+            character.is_whitespace()
+                || character.is_control()
+                || ":/[],;&|<>\"'`\\?#".contains(character)
+        })
+}
+
 pub(crate) fn validate_ssh_destination(value: &str) -> Result<(), String> {
     let value = value.trim();
     if value.is_empty()
@@ -133,7 +143,10 @@ pub(crate) fn validate_ssh_destination(value: &str) -> Result<(), String> {
         return Err("SSH 地址不能以选项前缀开头".to_owned());
     }
     let host_port = if let Some((username, host)) = address.rsplit_once('@') {
-        if username.is_empty() || username.contains(['@', ':', '/', '[', ']']) {
+        // JumpServer encodes the target account in the SSH username (for
+        // example, jumpserverUser@root). The last @ separates the host, just
+        // as it does in SshDestination::parse; empty components remain invalid.
+        if !valid_ssh_username(username) {
             return Err("SSH 用户名无效".to_owned());
         }
         host

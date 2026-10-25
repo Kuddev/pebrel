@@ -92,6 +92,7 @@ pub fn apply(env: &mut HashMap<String, String>, pane_id: impl Display) {
     }
 
     crate::runtime_api::apply_child_endpoint(env);
+    crate::ai_hook::apply_child_environment(env);
     merge_wslenv(env);
 }
 

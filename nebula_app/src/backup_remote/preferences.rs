@@ -134,7 +134,7 @@ mod tests {
             ..Default::default()
         };
         for name in
-            ["pebrel-backup-20260918-010101.nbk", "nebula-backup-20260917-010101.nbk", "other.txt"]
+            ["pebrel-backup-20260918-010101.nbk", "pebrel-backup-20260917-010101.nbk", "other.txt"]
         {
             std::fs::write(directory.path().join(name), b"encrypted fixture").unwrap();
         }

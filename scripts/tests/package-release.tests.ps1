@@ -78,6 +78,7 @@ try {
         'licenses/LICENSE-MLUA'
         'licenses/THIRD-PARTY-NOTICES'
         'pebrel.exe'
+        'pebrel.com'
         'runtime/OpenConsole.exe'
         'runtime/conpty.dll'
         'runtime/pebrel-hook.exe'
@@ -91,7 +92,7 @@ try {
     }
 
     $rootFiles = @($actual | Where-Object { -not $_.Contains('/') })
-    if (@(Compare-Object -ReferenceObject @('README.md', 'README.zh-CN.md', 'pebrel.exe') -DifferenceObject $rootFiles).Count -ne 0) {
+    if (@(Compare-Object -ReferenceObject @('README.md', 'README.zh-CN.md', 'pebrel.com', 'pebrel.exe') -DifferenceObject $rootFiles).Count -ne 0) {
         throw "ZIP root must contain the English and Chinese READMEs and pebrel.exe"
     }
 

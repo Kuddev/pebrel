@@ -36,7 +36,9 @@ impl TextFileView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if (self.preview && !self.preview_editable())
+        if (self.preview
+            && (!self.object_editable()
+                || (!self.live_mode && !self.history.reader_can_travel(redo))))
             || self.loading
             || self.document.as_ref().is_none_or(|doc| doc.read_only)
         {

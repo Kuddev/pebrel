@@ -1,0 +1,11 @@
+manifest_version = 1
+api_version = 1
+id = "example.native-overview"
+name = "Native Runtime Overview"
+version = "0.1.0"
+permissions = ["runtime.describe"]
+
+[[commands]]
+id = "describe"
+title = "Describe the running Pebrel instance"
+method = "runtime.describe"

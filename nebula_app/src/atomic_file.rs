@@ -14,6 +14,15 @@ static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(1);
 
 /// Atomically replace `path` with `contents`, syncing the temporary file first.
 pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_with_permissions(path, contents, false)
+}
+
+/// CLI 凭据导出使用私有新文件权限；原子替换不会把 0600 放宽为 umask 默认值。
+pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_with_permissions(path, contents, true)
+}
+
+fn write_with_permissions(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| io::Error::other("state path has no parent"))?;
     std::fs::create_dir_all(parent)?;
 
@@ -23,7 +32,12 @@ pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
         parent.join(format!(".{file_name}.nebula-tmp-{}-{sequence}", std::process::id()));
 
     let result = (|| {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        if private {
+            crate::platform::private_file::restrict_creation(&mut options);
+        }
+        let mut file = options.open(&temporary)?;
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);

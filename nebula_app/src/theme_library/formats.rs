@@ -159,7 +159,7 @@ pub fn inspect(text: &str, filename: impl Into<String>) -> Inspection {
             diagnostics: vec![ImportDiagnostic {
                 filename,
                 format: Some(ThemeFormat::Iterm2),
-                message: "iTerm2 XML import is unavailable without an XML parser dependency".to_owned(),
+                message: "XML theme import is unavailable without an XML parser dependency".to_owned(),
             }],
             ..Inspection::default()
         },
@@ -168,7 +168,7 @@ pub fn inspect(text: &str, filename: impl Into<String>) -> Inspection {
             diagnostics: vec![ImportDiagnostic {
                 filename,
                 format: None,
-                message: "unsupported theme format; use Pebrel JSON, Windows Terminal JSON, Kitty, Ghostty, WezTerm or Alacritty".to_owned(),
+                message: "unsupported theme format; use Pebrel JSON or a supported static terminal color format".to_owned(),
             }],
             ..Inspection::default()
         },
@@ -223,7 +223,7 @@ pub fn export(
         ThemeFormat::WezTerm => export_wezterm(document, terminal, &palette, &indexed),
         ThemeFormat::Alacritty => export_alacritty(document, terminal, &palette, &indexed),
         ThemeFormat::Iterm2 => Err(FormatError::Unsupported(
-            "iTerm2 XML export is unavailable without an XML serializer dependency".to_owned(),
+            "XML theme export is unavailable without an XML serializer dependency".to_owned(),
         )),
     }
 }
@@ -325,9 +325,9 @@ fn import_windows(
     filename: &str,
     index: usize,
 ) -> Result<ImportCandidate, FormatError> {
-    let object = value.as_object().ok_or_else(|| {
-        FormatError::Invalid("Windows Terminal scheme must be an object".to_owned())
-    })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| FormatError::Invalid("JSON color scheme must be an object".to_owned()))?;
     let mut source = SourceTheme {
         name: object
             .get("name")
@@ -396,9 +396,9 @@ fn inspect_key_value(
     expected: ThemeFormat,
 ) -> Result<Vec<ImportCandidate>, FormatError> {
     let entries = parse_key_values(text)?;
-    let ghostty = expected == ThemeFormat::Ghostty
+    let uses_palette_directive = expected == ThemeFormat::Ghostty
         || entries.iter().any(|(key, _)| key == "palette" || key.contains('-'));
-    let format = if ghostty { ThemeFormat::Ghostty } else { ThemeFormat::Kitty };
+    let format = if uses_palette_directive { ThemeFormat::Ghostty } else { ThemeFormat::Kitty };
     let mut source = SourceTheme { name: filename_base(filename), ..SourceTheme::default() };
     let mut unknown = Vec::new();
     for (key, value) in entries {
@@ -421,7 +421,7 @@ fn inspect_key_value(
                         .unwrap_or(256);
                     if index > 255 {
                         return Err(FormatError::Invalid(format!(
-                            "Kitty color index {index} must be 0..255"
+                            "Color index {index} must be 0..255"
                         )));
                     }
                     if index < 16 {
@@ -433,7 +433,7 @@ fn inspect_key_value(
                 "include" | "shell" | "launch" | "map" | "remote_control" => {
                     source
                         .warnings
-                        .push(format!("Kitty {key} directive was retained and not executed"));
+                        .push(format!("The {key} directive was retained and not executed"));
                     unknown.push(format!("{key} {value}"));
                 },
                 _ => unknown.push(format!("{key} {value}")),
@@ -449,7 +449,7 @@ fn inspect_key_value(
                 "command" | "custom-shader" | "keybind" => {
                     source
                         .warnings
-                        .push(format!("Ghostty {key} directive was retained and not executed"));
+                        .push(format!("The {key} directive was retained and not executed"));
                     unknown.push(format!("{key} = {value}"));
                 },
                 _ => unknown.push(format!("{key} = {value}")),
@@ -504,14 +504,14 @@ fn parse_key_values(text: &str) -> Result<Vec<(String, String)>, FormatError> {
 }
 
 fn parse_ghostty_palette(value: &str, source: &mut SourceTheme) -> Result<(), FormatError> {
-    let (index, color) = value.split_once('=').ok_or_else(|| {
-        FormatError::Parse("Ghostty palette must be written as index=#rrggbb".to_owned())
-    })?;
+    let (index, color) = value
+        .split_once('=')
+        .ok_or_else(|| FormatError::Parse("Palette must be written as index=#rrggbb".to_owned()))?;
     let index: u16 = index
         .parse()
-        .map_err(|_| FormatError::Invalid("Ghostty palette index is not an integer".to_owned()))?;
+        .map_err(|_| FormatError::Invalid("Palette index is not an integer".to_owned()))?;
     if index > 255 {
-        return Err(FormatError::Invalid(format!("Ghostty palette index {index} must be 0..255")));
+        return Err(FormatError::Invalid(format!("Palette index {index} must be 0..255")));
     }
     if index < 16 {
         source.palette.insert(index as u8, color.to_owned());
@@ -535,11 +535,11 @@ fn inspect_toml(
         .get("colors")
         .and_then(toml::Value::as_table)
         .ok_or_else(|| FormatError::Invalid("TOML is missing [colors]".to_owned()))?;
-    let alacritty = colors.contains_key("primary")
+    let uses_color_sections = colors.contains_key("primary")
         || colors.contains_key("normal")
         || colors.contains_key("bright")
         || colors.contains_key("indexed_colors");
-    let format = if alacritty { ThemeFormat::Alacritty } else { ThemeFormat::WezTerm };
+    let format = if uses_color_sections { ThemeFormat::Alacritty } else { ThemeFormat::WezTerm };
     if expected != format && expected != ThemeFormat::WezTerm && expected != ThemeFormat::Alacritty
     {
         return Err(FormatError::Invalid(
@@ -547,7 +547,7 @@ fn inspect_toml(
         ));
     }
     let mut source = SourceTheme { name: filename_base(filename), ..SourceTheme::default() };
-    let known = if alacritty {
+    let known = if uses_color_sections {
         parse_alacritty(colors, &mut source)?;
         known_alacritty()
     } else {
@@ -592,14 +592,14 @@ fn parse_wezterm(colors: &toml::value::Table, source: &mut SourceTheme) -> Resul
     if let Some(values) = colors.get("indexed").and_then(toml::Value::as_table) {
         for (index, value) in values {
             let index = index.parse::<u16>().map_err(|_| {
-                FormatError::Invalid(format!("WezTerm indexed key {index} is invalid"))
+                FormatError::Invalid(format!("Indexed color key {index} is invalid"))
             })?;
             source.indexed.insert(
                 index,
                 value
                     .as_str()
                     .ok_or_else(|| {
-                        FormatError::Invalid(format!("WezTerm indexed {index} is not a color"))
+                        FormatError::Invalid(format!("Indexed value {index} is not a color"))
                     })?
                     .to_owned(),
             );
@@ -615,7 +615,7 @@ fn parse_alacritty(
     let primary = colors
         .get("primary")
         .and_then(toml::Value::as_table)
-        .ok_or_else(|| FormatError::Invalid("Alacritty is missing [colors.primary]".to_owned()))?;
+        .ok_or_else(|| FormatError::Invalid("TOML theme is missing [colors.primary]".to_owned()))?;
     source.background = toml_string(primary, "background");
     source.foreground = toml_string(primary, "foreground");
     if let Some(cursor) = colors.get("cursor").and_then(toml::Value::as_table) {
@@ -642,18 +642,18 @@ fn parse_alacritty(
     if let Some(values) = colors.get("indexed_colors").and_then(toml::Value::as_array) {
         for value in values {
             let object = value.as_table().ok_or_else(|| {
-                FormatError::Invalid("Alacritty indexed_colors entry must be a table".to_owned())
+                FormatError::Invalid("TOML indexed_colors entry must be a table".to_owned())
             })?;
             let index = object.get("index").and_then(toml::Value::as_integer).ok_or_else(|| {
-                FormatError::Invalid("Alacritty indexed_colors entry has no index".to_owned())
+                FormatError::Invalid("TOML indexed_colors entry has no index".to_owned())
             })?;
             if !(16..=255).contains(&index) {
                 return Err(FormatError::Invalid(format!(
-                    "Alacritty indexed color {index} must be 16..255"
+                    "TOML indexed color {index} must be 16..255"
                 )));
             }
             let color = object.get("color").and_then(toml::Value::as_str).ok_or_else(|| {
-                FormatError::Invalid("Alacritty indexed_colors entry has no color".to_owned())
+                FormatError::Invalid("TOML indexed_colors entry has no color".to_owned())
             })?;
             source.indexed.insert(index as u16, color.to_owned());
         }
@@ -1004,7 +1004,7 @@ fn export_windows(
     }
     let mut losses = external_losses("Windows Terminal");
     losses.push(
-        "cursor text and selection foreground are not representable in a Windows Terminal scheme"
+        "cursor text and selection foreground are not representable in the selected JSON color scheme"
             .to_owned(),
     );
     if !indexed.is_empty() {

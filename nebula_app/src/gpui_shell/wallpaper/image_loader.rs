@@ -2,8 +2,8 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use image::{DynamicImage, ImageDecoder, ImageError, ImageReader, RgbaImage};
@@ -14,6 +14,8 @@ const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 pub(super) const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_IMAGE_EDGE: u32 = 2048;
+const MAX_PREVIEW_EDGE: u32 = 512;
+static PREPARATION: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FileStamp {
@@ -59,6 +61,29 @@ impl From<ImageError> for LoadError {
 }
 
 pub(super) fn load(request: Request) -> Result<Option<LoadedImage>, LoadError> {
+    let _preparation = PREPARATION.lock().unwrap_or_else(|error| error.into_inner());
+    load_inner(request)
+}
+
+pub(super) fn load_preview(request: Request) -> Result<Option<LoadedImage>, LoadError> {
+    let _preparation = PREPARATION.lock().unwrap_or_else(|error| error.into_inner());
+    let generation = request.generation.clone();
+    let version = request.version;
+    let Some(mut loaded) = load_inner(request)? else { return Ok(None) };
+    if generation.load(Ordering::Acquire) != version {
+        return Ok(None);
+    }
+    if loaded.pixels.width() > MAX_PREVIEW_EDGE || loaded.pixels.height() > MAX_PREVIEW_EDGE {
+        loaded.pixels =
+            image::imageops::thumbnail(&loaded.pixels, MAX_PREVIEW_EDGE, MAX_PREVIEW_EDGE);
+    }
+    if generation.load(Ordering::Acquire) != version {
+        return Ok(None);
+    }
+    Ok(Some(loaded))
+}
+
+fn load_inner(request: Request) -> Result<Option<LoadedImage>, LoadError> {
     if request.cancelled() {
         return Ok(None);
     }
@@ -161,6 +186,27 @@ mod tests {
         assert_eq!(admit_dimensions(10000, 10000, 1), Err(LoadError::TooLarge));
         assert_eq!(admit_dimensions(16, 16, MAX_DECODE_BYTES + 1), Err(LoadError::TooLarge));
         assert_eq!(admit_dimensions(0, 16, 0), Err(LoadError::Decode));
+    }
+
+    #[test]
+    fn preview_has_a_one_mib_output_budget_and_keeps_layout_and_bgra() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preview.png");
+        RgbaImage::from_pixel(1200, 800, image::Rgba([10, 20, 30, 255])).save(&path).unwrap();
+        let loaded = load_preview(request(path)).unwrap().unwrap();
+        assert!(
+            loaded.pixels.width() <= MAX_PREVIEW_EDGE && loaded.pixels.height() <= MAX_PREVIEW_EDGE
+        );
+        assert!(loaded.pixels.len() <= 1024 * 1024);
+        assert_eq!((loaded.layout_width, loaded.layout_height), (1200, 800));
+        assert_eq!(loaded.pixels.get_pixel(0, 0).0, [30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn cancelled_preview_does_not_open_or_decode_a_file() {
+        let request = request(PathBuf::from("does-not-exist.png"));
+        request.generation.fetch_add(1, Ordering::Release);
+        assert!(load_preview(request).unwrap().is_none());
     }
 
     #[test]

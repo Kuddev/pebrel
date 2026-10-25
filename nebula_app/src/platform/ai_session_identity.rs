@@ -12,10 +12,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(any(target_os = "macos", test))]
+mod macos;
 #[cfg(windows)]
 mod windows;
 
-/// A short-lived native probe must finish before GUI, hooks or CLI setup.
+/// Native probe helpers run before GUI, hooks or CLI setup.
 pub(crate) fn run_helper_if_requested() -> Option<i32> {
     #[cfg(windows)]
     return windows::run_helper_if_requested();
@@ -52,10 +54,16 @@ for proc in /proc/[0-9]*; do
         [ -n "$guest_home" ] || continue
         codex_root="$guest_home/.codex"
     fi
+    case "$codex_root" in
+        /*) ;;
+        *) codex_root="$proc/cwd/$codex_root" ;;
+    esac
+    # fd 返回真实路径；每个已匹配进程只解析一次目录，避免逐句柄重复 I/O。
+    sessions_root=$(CDPATH= cd -P "$codex_root/sessions" 2>/dev/null && pwd -P) || continue
     for fd in "$proc"/fd/*; do
         link=$(readlink "$fd" 2>/dev/null || true)
         case "$link" in
-            "$codex_root"/sessions/*/rollout-*.jsonl)
+            "$sessions_root"/*/rollout-*.jsonl)
                 first=$(head -c 65536 "$fd" 2>/dev/null | head -n 1)
                 [ -n "$first" ] || continue
                 printf '%s\t%s\t%s\t%s\n' "$pid" "${fd##*/}" "$link" "$first"
@@ -86,7 +94,8 @@ pub(crate) struct CodexSession {
 /// WSL panes are inspected inside the guest because Windows Toolhelp cannot
 /// see Linux processes or their open session files. Linux hosts use the same
 /// process metadata directly. Windows inspects only the pane shell's verified
-/// descendants in a disposable helper, bounding potentially blocking file APIs.
+/// descendants in one reusable, process-owned helper. Each request remains bounded;
+/// a stalled helper is terminated before a later request can replace it.
 pub(crate) fn probe_codex_session(
     pane_id: u64,
     exec_context: Option<&crate::runtime_exec::PaneExecContext>,
@@ -99,10 +108,15 @@ pub(crate) fn probe_codex_session(
         return probe_wsl(distro, context.wsl_user(), &pane_id, instance);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         let _ = shell_pid;
         return probe_local_proc(&pane_id, instance);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (pane_id, instance);
+        return macos::probe(shell_pid?);
     }
     #[cfg(windows)]
     {
@@ -245,37 +259,12 @@ fn wsl_probe_args(
 
 /// Bound the guest lookup by time and output size. A temporary file avoids a
 /// reader thread surviving when a descendant keeps the output handle open.
-fn run_probe_command(mut command: Command) -> Option<CodexSession> {
-    let mut output = tempfile::tempfile().ok()?;
-    command.stdin(Stdio::null()).stdout(output.try_clone().ok()?).stderr(Stdio::null());
-    let mut child = command.spawn().ok()?;
-    let deadline = Instant::now() + PROBE_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None)
-                if Instant::now() < deadline
-                    && output
-                        .metadata()
-                        .is_ok_and(|meta| meta.len() <= MAX_PROBE_OUTPUT as u64) =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            },
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            },
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            },
-        }
-    };
-    output.rewind().ok()?;
-    let output = read_bounded(output, MAX_PROBE_OUTPUT).ok()?;
-    status.success().then(|| parse_probe_context(&String::from_utf8_lossy(&output)))?
+fn run_probe_command(command: Command) -> Option<CodexSession> {
+    parse_probe_context(&String::from_utf8_lossy(&run_probe_output(command)?))
+}
+
+fn run_probe_output(command: Command) -> Option<Vec<u8>> {
+    super::process_output::read(command, PROBE_TIMEOUT, MAX_PROBE_OUTPUT).ok()
 }
 
 fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
@@ -294,7 +283,7 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut output = String::new();
@@ -328,11 +317,17 @@ fn probe_local_proc(pane_id: &str, instance: &str) -> Option<CodexSession> {
         let Some(codex_home) = codex_home_from_environment(&environment) else {
             continue;
         };
+        // /proc/fd 返回真实路径；先统一目录身份，再做词法边界检查，且不逐句柄访问磁盘。
+        let Ok(sessions_root) =
+            proc_dir.join("cwd").join(codex_home).join("sessions").canonicalize()
+        else {
+            continue;
+        };
         let Ok(fds) = std::fs::read_dir(proc_dir.join("fd")) else { continue };
         for fd in fds.flatten() {
             let fd_path = fd.path();
             let Ok(link) = std::fs::read_link(&fd_path) else { continue };
-            if !is_rollout_link(&link, &codex_home) {
+            if !is_rollout_link(&link, &sessions_root) {
                 continue;
             }
             let Ok(first_line) = read_first_line(&fd_path) else { continue };
@@ -391,9 +386,8 @@ fn codex_home_from_environment(environment: &[u8]) -> Option<std::path::PathBuf>
 }
 
 #[cfg(unix)]
-fn is_rollout_link(link: &Path, codex_home: &Path) -> bool {
-    let sessions = codex_home.join("sessions");
-    link.strip_prefix(sessions).is_ok_and(|relative| {
+fn is_rollout_link(link: &Path, sessions_root: &Path) -> bool {
+    link.strip_prefix(sessions_root).is_ok_and(|relative| {
         relative.components().count() >= 2
             && link
                 .file_name()
@@ -420,6 +414,8 @@ fn read_metadata_line(file: impl Read) -> std::io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    mod proc_fixture;
 
     const ROOT_ID: &str = "01a079fa-4a9b-7d93-8a4a-4a7a9edaf247";
     const GUARDIAN_ID: &str = "01a079f7-7e36-7232-882b-f06d3bde9df8";
@@ -525,5 +521,132 @@ mod tests {
             codex_home_from_environment(environment).as_deref(),
             Some(Path::new("/home/hello/.codex"))
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_probes_resolve_session_symlinks_and_preserve_ownership_boundaries() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::symlink;
+
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("user");
+        let physical = root.path().join("physical data");
+        let sessions = physical.join("sessions/2026/10/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        symlink(&physical, home.join(".codex")).unwrap();
+        let linked_sessions = root.path().join("linked sessions");
+        std::fs::create_dir(&linked_sessions).unwrap();
+        symlink(physical.join("sessions"), linked_sessions.join("sessions")).unwrap();
+        let unrelated = root.path().join("unrelated");
+        std::fs::create_dir_all(unrelated.join("sessions")).unwrap();
+        let rollout = sessions.join(format!("rollout-x-{ROOT_ID}.jsonl"));
+        let metadata = serde_json::json!({"type":"session_meta", "payload": {
+            "id": ROOT_ID, "source": "cli", "thread_source": "user",
+        }});
+        std::fs::write(&rollout, format!("{metadata}\n")).unwrap();
+        // 样本只持有日志文件；就绪字节保证 exec 已完成，避免读到继承的测试线程名。
+        let program = root.path().join("codex");
+        symlink("/bin/sh", &program).unwrap();
+        let pane = "session-symlink-fixture";
+        let instance = std::process::id().to_string();
+        let fixture_cwd = root.path().canonicalize().unwrap();
+        let fixture_rollout = rollout.canonicalize().unwrap();
+        let first_line = metadata.to_string();
+        for (case, (codex_home, expected)) in [
+            (Some(physical.clone()), true),
+            (Some(home.join(".codex")), true),
+            (None, true),
+            (Some(linked_sessions), true),
+            (Some(std::path::PathBuf::from("physical data")), true),
+            (Some(unrelated), false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut command = Command::new(&program);
+            command
+                .args(["-c", "printf R; read -r _"])
+                .current_dir(root.path())
+                .env_clear()
+                .env("HOME", &home)
+                .env("PEBREL_PANE_ID", pane)
+                .env("NEBULA_PANE_ID", pane)
+                .env(crate::agent_env::PROCESS_ENV, &instance)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(std::fs::File::open(&rollout).unwrap());
+            if let Some(value) = &codex_home {
+                command.env("CODEX_HOME", value);
+            }
+            let mut child = OwnedChild(command.spawn().unwrap());
+            // stdin 管道维持样本存活；父进程退出时 EOF 也能结束样本，不遗留休眠进程。
+            let mut ready = child.0.stdout.take().unwrap();
+            let mut event =
+                libc::pollfd { fd: ready.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: pollfd 在调用期间有效；只等待就绪，不重试被测探测器或延长其期限。
+            let signaled =
+                unsafe { libc::poll(&mut event, 1, PROBE_TIMEOUT.as_millis() as libc::c_int) };
+            assert_eq!(signaled, 1, "fixture did not signal readiness");
+            let mut signal = [0];
+            ready.read_exact(&mut signal).unwrap();
+            assert_eq!(signal, [b'R']);
+            let expected_child = proc_fixture::Expected {
+                pane,
+                instance: &instance,
+                home: &home,
+                codex_home: codex_home.as_deref(),
+                cwd: &fixture_cwd,
+                rollout: &fixture_rollout,
+                first_line: &first_line,
+            };
+            proc_fixture::wait_for_child(&mut child.0, &expected_child).unwrap_or_else(|error| {
+                panic!("case={case} home={codex_home:?}: fixture not ready: {error}")
+            });
+            for (query_pane, query_instance, matches) in [
+                (pane, instance.as_str(), expected),
+                ("other-pane", instance.as_str(), false),
+                (pane, "other-instance", false),
+            ] {
+                let assert_found = |probe, found: Option<CodexSession>, elapsed: Duration| {
+                    let context = format!(
+                        "probe={probe} case={case} child={} pane={query_pane} \
+                         instance={query_instance} home={codex_home:?} elapsed={elapsed:?}",
+                        child.0.id(),
+                    );
+                    assert_eq!(found.is_some(), matches, "{context}");
+                    if let Some(found) = found {
+                        assert_eq!(found.session_id, ROOT_ID, "{context}");
+                        assert_eq!(Path::new(&found.session_file), rollout, "{context}");
+                    }
+                };
+                // Assert immediately after each single probe. An eager array
+                // erased which implementation failed in the original CI log.
+                let started = Instant::now();
+                let found = probe_local_proc(query_pane, query_instance);
+                assert_found("local_proc", found, started.elapsed());
+
+                let mut guest = Command::new("/bin/sh");
+                guest.env_clear().env("PATH", "/usr/bin:/bin").env("HOME", &home).args([
+                    "-c",
+                    PROBE_SCRIPT,
+                    "probe",
+                    query_pane,
+                    query_instance,
+                ]);
+                let started = Instant::now();
+                let found = run_probe_command(guest);
+                assert_found("guest_shell", found, started.elapsed());
+            }
+        }
     }
 }

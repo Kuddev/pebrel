@@ -13,13 +13,52 @@ pub const IMAGE_LANGUAGE: &str = "nebula-answer-image";
 pub struct AnswerImage {
     pub target: String,
     pub alt: String,
-    pub placeholder_start: usize,
 }
 
 pub struct ReaderDocument {
     pub markdown: String,
     pub images: Vec<AnswerImage>,
     pub images_omitted: usize,
+    pub image_placeholder_starts: Vec<usize>,
+}
+
+enum ImageReplacement {
+    Load(AnswerImage),
+    Omitted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageError {
+    InvalidPath,
+    RemotePath,
+    DirectoryUnavailable,
+    FileUnavailable,
+    OutsideDirectory,
+    NotFileOrTooLarge,
+    OpenFailed,
+    MetadataFailed,
+    ReadFailed,
+    TooLarge,
+    UnsupportedFormat,
+}
+
+impl ImageError {
+    pub fn localized(self, language: crate::i18n::UiLanguage) -> &'static str {
+        use crate::i18n::Message;
+        language.text(match self {
+            Self::InvalidPath => Message::ReaderImageErrorInvalidPath,
+            Self::RemotePath => Message::ReaderImageErrorRemotePath,
+            Self::DirectoryUnavailable => Message::ReaderImageErrorDirectoryUnavailable,
+            Self::FileUnavailable => Message::ReaderImageErrorFileUnavailable,
+            Self::OutsideDirectory => Message::ReaderImageErrorOutsideDirectory,
+            Self::NotFileOrTooLarge => Message::ReaderImageErrorNotFileOrTooLarge,
+            Self::OpenFailed => Message::ReaderImageErrorOpenFailed,
+            Self::MetadataFailed => Message::ReaderImageErrorMetadataFailed,
+            Self::ReadFailed => Message::ReaderImageErrorReadFailed,
+            Self::TooLarge => Message::ReaderImageErrorTooLarge,
+            Self::UnsupportedFormat => Message::ReaderImageErrorUnsupportedFormat,
+        })
+    }
 }
 
 struct NormalizedSource {
@@ -35,6 +74,7 @@ pub fn prepare(source: &str) -> ReaderDocument {
             markdown: literal_markdown(source),
             images: Vec::new(),
             images_omitted: 0,
+            image_placeholder_starts: Vec::new(),
         };
     };
     let mut definitions = HashMap::new();
@@ -47,7 +87,7 @@ pub fn prepare(source: &str) -> ReaderDocument {
             nodes.extend(children.iter().rev());
         }
     }
-    let mut replacements: Vec<(Range<usize>, String, Option<AnswerImage>)> = Vec::new();
+    let mut replacements: Vec<(Range<usize>, String, Option<ImageReplacement>)> = Vec::new();
     let mut images_omitted = 0;
     let mut image_count = 0;
     nodes.push(&root);
@@ -64,22 +104,18 @@ pub fn prepare(source: &str) -> ReaderDocument {
             (_, Some(range)) if image.is_some() => {
                 let (target, alt) = image.unwrap();
                 if image_count >= MAX_IMAGES {
+                    let index = image_count + images_omitted;
                     images_omitted += 1;
                     replacements.push((
                         range,
-                        "\n\n图片数量超过本次阅读上限；原文仍可复制。\n\n".into(),
-                        None,
+                        format!("\n\n```{IMAGE_LANGUAGE}\n{index}\n```\n\n"),
+                        Some(ImageReplacement::Omitted),
                     ));
                     continue;
                 }
-                let alt = if alt.is_empty() {
-                    format!("图片 {}", image_count + 1)
-                } else {
-                    alt.to_owned()
-                };
-                let image = AnswerImage { target: target.to_owned(), alt, placeholder_start: 0 };
+                let image = AnswerImage { target: target.to_owned(), alt: alt.to_owned() };
                 let replacement = format!("\n\n```{IMAGE_LANGUAGE}\n{image_count}\n```\n\n");
-                replacements.push((range, replacement, Some(image)));
+                replacements.push((range, replacement, Some(ImageReplacement::Load(image))));
                 image_count += 1;
             },
             (Node::Html(_), Some(range)) => {
@@ -106,21 +142,24 @@ pub fn prepare(source: &str) -> ReaderDocument {
     replacements.sort_by_key(|(range, _, _)| range.start);
     let mut markdown = String::with_capacity(source.len());
     let mut images = Vec::new();
+    let mut image_placeholder_starts = Vec::new();
     let mut offset = 0;
     for (range, replacement, image) in replacements {
         if range.start < offset {
             continue;
         }
         markdown.push_str(&source[offset..range.start]);
-        if let Some(mut image) = image {
-            image.placeholder_start = markdown.len() + 2;
-            images.push(image);
+        if let Some(image) = image {
+            image_placeholder_starts.push(markdown.len() + 2);
+            if let ImageReplacement::Load(image) = image {
+                images.push(image);
+            }
         }
         markdown.push_str(&replacement);
         offset = range.end;
     }
     markdown.push_str(&source[offset..]);
-    ReaderDocument { markdown, images, images_omitted }
+    ReaderDocument { markdown, images, images_omitted, image_placeholder_starts }
 }
 
 fn parse_options() -> ParseOptions {
@@ -243,9 +282,9 @@ pub fn literal_markdown(source: &str) -> String {
     format!("{fence}text\n{source}\n{fence}\n")
 }
 
-pub fn local_image_path(target: &str, base: &Path) -> Result<PathBuf, String> {
+pub fn local_image_path(target: &str, base: &Path) -> Result<PathBuf, ImageError> {
     if target.len() > 4096 || target.chars().any(char::is_control) {
-        return Err("图片路径无效，未读取文件。".into());
+        return Err(ImageError::InvalidPath);
     }
     let lower = target.to_ascii_lowercase();
     if lower.contains("://")
@@ -254,14 +293,14 @@ pub fn local_image_path(target: &str, base: &Path) -> Result<PathBuf, String> {
         || network_path(target)
         || network_path(&base.to_string_lossy())
     {
-        return Err("网络图片不会自动下载；可选择本地图片查看。".into());
+        return Err(ImageError::RemotePath);
     }
     let path = Path::new(target);
     let path = if path.is_absolute() { path.to_path_buf() } else { base.join(path) };
-    let root = base.canonicalize().map_err(|_| "无法确认当前本地目录，未读取图片。".to_owned())?;
-    let path = path.canonicalize().map_err(|_| "图片文件不存在或无法访问。".to_owned())?;
+    let root = base.canonicalize().map_err(|_| ImageError::DirectoryUnavailable)?;
+    let path = path.canonicalize().map_err(|_| ImageError::FileUnavailable)?;
     if !path.starts_with(root) {
-        return Err("图片不在当前目录内；请主动选择文件后查看。".into());
+        return Err(ImageError::OutsideDirectory);
     }
     Ok(path)
 }
@@ -271,30 +310,28 @@ fn network_path(path: &str) -> bool {
         && path.as_bytes().get(1).is_some_and(|next| matches!(next, b'\\' | b'/'))
 }
 
-pub fn read_image(path: &Path) -> Result<Vec<u8>, String> {
+pub fn read_image(path: &Path) -> Result<Vec<u8>, ImageError> {
     if !path
         .metadata()
         .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= MAX_IMAGE_BYTES)
     {
-        return Err("图片不是普通文件，或超过 12 MiB 上限。".into());
+        return Err(ImageError::NotFileOrTooLarge);
     }
-    let file = std::fs::File::open(path).map_err(|_| "无法打开图片文件。".to_owned())?;
-    let metadata = file.metadata().map_err(|_| "无法读取图片文件信息。".to_owned())?;
+    let file = std::fs::File::open(path).map_err(|_| ImageError::OpenFailed)?;
+    let metadata = file.metadata().map_err(|_| ImageError::MetadataFailed)?;
     if !metadata.is_file() || metadata.len() > MAX_IMAGE_BYTES {
-        return Err("图片不是普通文件，或超过 12 MiB 上限。".into());
+        return Err(ImageError::NotFileOrTooLarge);
     }
     let mut bytes = Vec::new();
-    file.take(MAX_IMAGE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "无法完整读取图片。".to_owned())?;
+    file.take(MAX_IMAGE_BYTES + 1).read_to_end(&mut bytes).map_err(|_| ImageError::ReadFailed)?;
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        return Err("图片超过 12 MiB 上限，未解码。".into());
+        return Err(ImageError::TooLarge);
     }
     if !matches!(
         image::guess_format(&bytes),
         Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg)
     ) {
-        return Err("本版阅读视图仅支持 PNG / JPEG 图片。".into());
+        return Err(ImageError::UnsupportedFormat);
     }
     Ok(bytes)
 }
@@ -351,6 +388,12 @@ mod tests {
         let document = prepare(&source);
         assert_eq!(document.images.len(), MAX_IMAGES);
         assert_eq!(document.images_omitted, 2);
+        assert_eq!(document.image_placeholder_starts.len(), MAX_IMAGES + 2);
+        for (index, start) in document.image_placeholder_starts.iter().enumerate() {
+            assert!(
+                document.markdown[*start..].starts_with(&format!("```{IMAGE_LANGUAGE}\n{index}\n"))
+            );
+        }
         assert!(
             document.images.iter().all(|image| image.target == "plot.png" && image.alt == "图")
         );
@@ -375,10 +418,8 @@ mod tests {
         assert_eq!(document.images.len(), 2);
         assert!(!document.markdown.contains("https://"));
         assert!(!document.markdown.contains("plot.png"));
-        for image in &document.images {
-            assert!(
-                document.markdown[image.placeholder_start..].starts_with("```nebula-answer-image")
-            );
+        for start in &document.image_placeholder_starts {
+            assert!(document.markdown[*start..].starts_with("```nebula-answer-image"));
         }
         assert!(document.markdown.contains("下一段"));
     }
@@ -417,5 +458,17 @@ mod tests {
         ] {
             assert!(local_image_path(path, &inside).is_err());
         }
+    }
+
+    #[test]
+    fn image_errors_localize_without_exposing_the_rejected_location() {
+        let error =
+            local_image_path("https://example.invalid/private.png", Path::new(".")).unwrap_err();
+        assert_eq!(error, ImageError::RemotePath);
+        let english = error.localized(crate::i18n::UiLanguage::EnUs);
+        let chinese = error.localized(crate::i18n::UiLanguage::ZhCn);
+        assert!(english.starts_with("Network images"));
+        assert_ne!(english, chinese);
+        assert!(!english.contains("private.png") && !chinese.contains("private.png"));
     }
 }

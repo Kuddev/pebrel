@@ -181,7 +181,17 @@ pub(super) fn paint(
             continue;
         }
         let area = Bounds::new(
-            point(bounds.origin.x + x, bounds.origin.y + line_height * block.rows.start as f32),
+            point(
+                bounds.origin.x + x,
+                bounds.origin.y
+                    + line_height
+                        * view
+                            .read(cx)
+                            .native_results
+                            .projection
+                            .borrow()
+                            .row(block.rows.start as f32),
+            ),
             size(available, height),
         );
         let target_width = available.min(height * 2.0);

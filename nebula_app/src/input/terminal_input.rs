@@ -39,7 +39,7 @@ pub(crate) struct KeyInput {
     pub state: ElementState,
     pub location: KeyLocation,
     pub repeat: bool,
-    /// The logical key with every modifier stripped (kitty alternate-key
+    /// The logical key with every modifier stripped (enhanced alternate-key
     /// reporting needs the unshifted base, e.g. `1` for `!`).
     pub key_without_modifiers: Key,
     /// The OS text path with modifiers applied (WM_CHAR / ToUnicode). `None`
@@ -577,7 +577,7 @@ pub(crate) fn shift_enter_as_lf(program: Option<&str>, mode: TermMode) -> bool {
 
 /// Synthesize key-up sequences for modifiers still held when the window loses
 /// focus. Their real key-ups go to whichever window is focused next, so any
-/// protocol stream that reported the key-down (Win32 records, kitty
+/// protocol stream that reported the key-down (Win32 records, enhanced keyboard
 /// `REPORT_ALL_KEYS_AS_ESC`) would leave the application believing the
 /// modifier is held forever — worst case, the first plain `c` typed after an
 /// Alt+Tab round-trip is read as Ctrl+C and kills a running task. Windows
@@ -586,11 +586,11 @@ pub(crate) fn shift_enter_as_lf(program: Option<&str>, mode: TermMode) -> bool {
 /// Only modifiers are synthesized: a stranded ordinary key merely stops
 /// repeating, while a stranded modifier rewrites the meaning of every later
 /// keystroke. Left-side variants are assumed (`ModifiersState` carries no
-/// sidedness); a held right-side modifier under kitty keeps its distinct
-/// keysym and is a recorded, accepted deviation.
+/// sidedness); a held right-side modifier keeps its distinct enhanced-protocol
+/// keysym, which is a recorded, accepted deviation.
 pub(crate) fn build_focus_loss_key_ups(mods: ModifiersState, mode: TermMode) -> Vec<u8> {
-    // Bare modifiers only ever reach the wire through Win32 records or kitty
-    // ALL_KEYS, and releases additionally require REPORT_EVENT_TYPES (the
+    // Bare modifiers only reach the wire through Win32 records or the enhanced
+    // ALL_KEYS mode, and releases additionally require REPORT_EVENT_TYPES (the
     // same gate `key_release` applies to real events). Anywhere else the
     // down was never sent, so there is nothing to release.
     let kitty_release =
@@ -620,8 +620,8 @@ pub(crate) fn build_focus_loss_key_ups(mods: ModifiersState, mode: TermMode) -> 
         }
 
         // A real up event reports the state left after its own release: the
-        // key's own bit is already clear in its KEY_EVENT_RECORD, and kitty
-        // applies modifier keysyms to themselves (`build_sequence` clears the
+        // key's own bit is already clear in its KEY_EVENT_RECORD. The enhanced
+        // protocol applies modifier keysyms to themselves (`build_sequence` clears the
         // flag internally for the key being released).
         #[cfg(target_os = "windows")]
         {
@@ -920,7 +920,7 @@ impl SequenceBuilder {
         // NOTE: CSI-u's protocol mandates that the modifier state is applied before
         // key press, however winit sends them after the key press, so for modifiers
         // itself apply the state based on keysyms and not the _actual_ modifiers
-        // state, which is how kitty is doing so and what is suggested in such case.
+        // state, as required by the negotiated keyboard protocol.
         let press = input.state.is_pressed();
         match named {
             NamedKey::Shift => mods.set(SequenceModifiers::SHIFT, press),
@@ -939,8 +939,8 @@ impl SequenceBuilder {
 }
 
 struct SequenceBase {
-    /// The base of the payload, which is the `number` and optionally an alt base from the kitty
-    /// spec.
+    /// The payload's `number` and optional alternate base, as defined by the
+    /// enhanced keyboard protocol.
     payload: Cow<'static, str>,
     terminator: SequenceTerminator,
 }
@@ -1282,7 +1282,7 @@ mod vt_tests {
         shift.location = KeyLocation::Left;
         let bytes =
             build_sequence(&shift, ModifiersState::empty(), TermMode::REPORT_ALL_KEYS_AS_ESC);
-        // The modifier applies to itself on press, per the kitty spec.
+        // The modifier applies to itself on press, per the negotiated keyboard protocol.
         assert_eq!(bytes, b"\x1b[57441;2u");
     }
 

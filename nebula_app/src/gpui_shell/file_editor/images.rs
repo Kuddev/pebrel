@@ -25,7 +25,7 @@ pub(super) fn rewrite_doc_images(text: &str, base: Option<&Path>) -> String {
         .into_owned()
 }
 
-fn flatten_local_image_url(url: &str, base: Option<&Path>) -> String {
+pub(super) fn flatten_local_image_url(url: &str, base: Option<&Path>) -> String {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("data:") {
         return url.to_owned();

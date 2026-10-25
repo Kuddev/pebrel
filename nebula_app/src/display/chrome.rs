@@ -754,13 +754,6 @@ pub fn resize_edge(
 
 // ---- chrome rendering (moved verbatim from `display::mod`; `d` = Display) ----
 
-const SPINNER_PERIOD: std::time::Duration = std::time::Duration::from_millis(800);
-
-#[inline]
-fn advance_spinner_phase(phase: f32, delta: std::time::Duration) -> f32 {
-    (phase + delta.as_secs_f32() / SPINNER_PERIOD.as_secs_f32()).rem_euclid(1.0)
-}
-
 #[inline]
 fn spinner_dot_center(
     phase: f32,
@@ -781,13 +774,9 @@ fn spinner_dot_center(
 /// (egui-free) chrome pipeline. Text labels and interactivity follow.
 pub(super) fn draw_chrome(d: &mut Display) {
     d.step_chrome_anims();
-    let motion_frame = d.nebula_ui_anims.frame();
+    let motion_frame = d.ui_animations.frame();
     let any_tab_running = d.any_tab_running();
-    if any_tab_running {
-        d.nebula_ui_anims.spinner_phase =
-            advance_spinner_phase(d.nebula_ui_anims.spinner_phase, motion_frame.delta);
-    }
-    let spinner_phase = d.nebula_ui_anims.spinner_phase;
+    let spinner_phase = d.ui_animations.advance_spinner(any_tab_running);
 
     // Chrome colors come from the theme skin (hover washes flip to dark
     // smoke on the light themes); close-hover red stays semantic.
@@ -2349,8 +2338,8 @@ mod sidebar_dock_tests {
 #[cfg(test)]
 mod resize_edge_tests {
     use super::{
-        ChromeHit, advance_spinner_phase, chrome_control_centers, contains_rect, in_chrome_bar,
-        resize_edge, spinner_dot_center, tab_reveal_motion_action, window_control_hit_rect,
+        ChromeHit, chrome_control_centers, contains_rect, in_chrome_bar, resize_edge,
+        spinner_dot_center, tab_reveal_motion_action, window_control_hit_rect,
         window_control_visual_rect,
     };
     use crate::display::SizeInfo;
@@ -2409,15 +2398,6 @@ mod resize_edge_tests {
         let distance = (after.0 - before.0).hypot(after.1 - before.1);
 
         assert!(distance < 0.1, "cycle boundary jumped by {distance}px");
-    }
-
-    #[test]
-    fn spinner_phase_advances_fractionally_and_preserves_wrap_remainder() {
-        let half_turn = advance_spinner_phase(0.0, std::time::Duration::from_millis(400));
-        let wrapped = advance_spinner_phase(0.99, std::time::Duration::from_millis(16));
-
-        assert!((half_turn - 0.5).abs() < f32::EPSILON);
-        assert!((wrapped - 0.01).abs() < 0.000_001);
     }
 
     #[test]

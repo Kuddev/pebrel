@@ -151,15 +151,9 @@ pub(super) const ITEMS: &[PaletteItem] = &[
         action: PaletteAction::ToggleGhost,
     },
     PaletteItem {
-        label: "切换补全接受键",
+        label: "切换补齐模式",
         hint: "",
-        search: "切换补全接受键 cycle accept key completion jieshou",
-        action: PaletteAction::CycleAccept,
-    },
-    PaletteItem {
-        label: "切换补全样式（行内 / 弹窗）",
-        hint: "",
-        search: "切换补全样式 行内 弹窗 completion style inline popup list buquan yangshi",
+        search: "切换补齐模式 行内 列表 混合 completion mode style inline popup list hybrid buqi",
         action: PaletteAction::CycleCompletionStyle,
     },
     PaletteItem {
@@ -186,14 +180,15 @@ pub(super) const ITEMS: &[PaletteItem] = &[
     theme_item(NebulaTheme::MintDark, "theme 主题 mint dark"),
     theme_item(NebulaTheme::SilverLight, "theme 主题 silver light"),
     theme_item(NebulaTheme::Nord, "theme 主题 nord dark"),
-    theme_item(NebulaTheme::Paper, "theme 主题 paper light"),
+    theme_item(NebulaTheme::NordLight, "theme 主题 nord light"),
+    theme_item(NebulaTheme::Paper, "theme 主题 warm sand paper light"),
     theme_item(NebulaTheme::LimestoneLight, "theme 主题 limestone light"),
     theme_item(NebulaTheme::LinenLight, "theme 主题 linen light"),
     theme_item(NebulaTheme::CatppuccinMocha, "theme 主题 catppuccin mocha dark"),
     theme_item(NebulaTheme::CatppuccinLatte, "theme 主题 catppuccin latte light"),
     theme_item(NebulaTheme::CatppuccinFrappe, "theme 主题 catppuccin frappe frappé dark"),
     theme_item(NebulaTheme::CatppuccinMacchiato, "theme 主题 catppuccin macchiato dark"),
-    theme_item(NebulaTheme::GlassLight, "theme 主题 glass light"),
+    theme_item(NebulaTheme::GlassLight, "theme 主题 slate light glass 雾霾 冷灰"),
     theme_item(NebulaTheme::GlassDark, "theme 主题 glass dark"),
 ];
 

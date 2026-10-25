@@ -23,6 +23,8 @@ pub(super) struct Outline {
     pub(super) blocks: Vec<String>,
     pub(super) limited: bool,
     definitions: HashMap<String, (String, Vec<String>)>,
+    image_definitions: HashMap<String, (String, Option<String>)>,
+    image_targets: HashMap<String, String>,
     references: Vec<Vec<String>>,
     pub(super) source_ranges: Vec<std::ops::Range<usize>>,
     pub(super) structures: Vec<Option<std::sync::Arc<super::block_structure::BlockStructure>>>,
@@ -65,6 +67,14 @@ impl Outline {
         for (block, structure) in outline.blocks.iter_mut().zip(&mut outline.structures) {
             if let Some(structure) = structure {
                 for part in &mut std::sync::Arc::make_mut(structure).parts {
+                    if let Some(image) = &part.image_reference {
+                        let key = identifier(&image.identifier);
+                        if let Some((url, _)) = outline.image_definitions.get(&key) {
+                            outline.image_targets.entry(key).or_insert_with(|| {
+                                super::images::flatten_local_image_url(url, base)
+                            });
+                        }
+                    }
                     let source = &block[part.range.clone()];
                     let preview = super::images::rewrite_doc_images(source, base);
                     part.preview = (preview != source).then_some(preview);
@@ -160,7 +170,16 @@ impl Outline {
                 definitions.entry(key).or_insert(value);
                 definitions
             });
-        let mut result = Self { definitions, limited, ..Self::default() };
+        // 图片编辑读取作者的地址，不能把动画预览缓存的路径写回引用定义。
+        let mut image_definitions = HashMap::new();
+        for node in &root.children {
+            if let Node::Definition(definition) = node {
+                image_definitions
+                    .entry(identifier(&definition.identifier))
+                    .or_insert_with(|| (definition.url.clone(), definition.title.clone()));
+            }
+        }
+        let mut result = Self { definitions, image_definitions, limited, ..Self::default() };
         for node in &root.children {
             if matches!(node, Node::Definition(_) | Node::FootnoteDefinition(_)) {
                 continue;
@@ -214,6 +233,27 @@ impl Outline {
             }
         }
         source
+    }
+
+    pub(super) fn image_definition(&self, reference: &str) -> Option<&(String, Option<String>)> {
+        self.image_definitions.get(&identifier(reference))
+    }
+
+    pub(super) fn part_preview(
+        &self,
+        block: usize,
+        part: &super::block_structure::EditPart,
+        raw: &str,
+    ) -> String {
+        if let Some(image) = &part.image_reference {
+            let key = identifier(&image.identifier);
+            if let Some((url, title)) = self.image_definitions.get(&key) {
+                // 可见片段才展开地址，避免长 data URL 随全文的每次引用成倍常驻。
+                let target = self.image_targets.get(&key).unwrap_or(url);
+                return super::object_source::image_markdown(target, &image.alt, title.as_deref());
+            }
+        }
+        self.part_source(block, part.preview.as_deref().unwrap_or(raw))
     }
 
     pub(super) fn visible_headings<'a>(

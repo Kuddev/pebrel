@@ -1,0 +1,14 @@
+<resources>
+    <string name="ssh_error_key">Could not read or decrypt the private key. Check file access, key format, and passphrase.</string>
+    <string name="ssh_save_passphrase">Save passphrase</string>
+    <string name="ssh_clear_saved_passphrase">Remove saved passphrase</string>
+    <string name="ssh_passphrase_saved_hint">Leave empty to keep the saved passphrase, or enter a new one to replace it.</string>
+    <string name="ssh_passphrase_will_save_hint">The passphrase will be saved in the encrypted credential store on this device.</string>
+    <string name="ssh_passphrase_not_saved_hint">The passphrase will only be used for this connection and will not be saved.</string>
+    <string name="ssh_passphrase_saved_status">A passphrase is saved on this device.</string>
+    <string name="ssh_choose_key">Choose private key file</string>
+    <string name="ssh_key_passphrase">Private key passphrase</string>
+    <string name="ssh_key_file_hint">Select an OpenSSH or PEM private key (up to 64 KiB). Access to this document is retained when you save; key contents are not stored in the host profile.</string>
+    <string name="ssh_key_passphrase_hint">Leave the passphrase empty for an unencrypted key. Saved passphrases use the same encrypted credential store as passwords.</string>
+    <string name="ssh_key_access_failed">The key document could not be read. Choose an accessible private key file.</string>
+</resources>

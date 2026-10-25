@@ -56,11 +56,13 @@ a UTF-8 locale and starts from the home directory when launched from `/`, while
 an explicit working directory is preserved. Both platforms use the embedded
 Maple Mono terminal font without requiring a system font installation.
 
-Linux/macOS do not yet provide full Windows feature parity: tray/close-to-background residency,
-global quick-terminal hotkeys, automatic update installation, and automatic
-local AI-hook configuration are not enabled on Linux/macOS. Native IME, display
-scaling, notification permissions, and interactive SSH/SFTP still need native
-user testing. The release procedure and acceptance checklist are in
+Pebrel 2.1 connects macOS and Linux tray actions, quick-terminal windows,
+login startup, terminal sounds, folder-opening entry points, and local AI-hook
+configuration. Linux tray integration requires a desktop status notifier;
+Wayland global shortcuts use the desktop portal and its permission flow.
+Linux upgrades use the package manager or a new downloaded package, while macOS
+can install updates through its native bundle replacement flow.
+The release procedure and acceptance checklist are in
 [`docs/preview-release-checklist.md`](docs/preview-release-checklist.md).
 
 Earlier CI Preview archives may contain `-preview.<id>` and use `x86_64` /

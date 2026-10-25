@@ -1,0 +1,8 @@
+**/.gradle/
+**/build/
+**/.cxx/
+**/local.properties
+**/*.jks
+
+!relay/package.json
+!relay/package-lock.json

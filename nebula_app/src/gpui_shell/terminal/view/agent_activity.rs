@@ -111,6 +111,7 @@ impl TerminalView {
                 });
             }
         }
+        self.sync_program_progress(cx);
         let status = self.agent_activity.status();
         self.confirmation.observe_waiting(status == AgentStatus::Blocked);
         if event.kind == AiHookKind::NeedsAttention {
@@ -169,7 +170,9 @@ impl TerminalView {
                         &self.suggest.suggest_env,
                     )
                 });
-            let screen = self.agent_activity.allows_screen().then(|| {
+            let screen = (self.effective_program_status().is_none()
+                && self.agent_activity.allows_screen())
+            .then(|| {
                 let start = Point::new(Line((lines - lines.min(24)) as i32), Column(0));
                 let end =
                     Point::new(Line(lines as i32 - 1), Column(term.columns().saturating_sub(1)));

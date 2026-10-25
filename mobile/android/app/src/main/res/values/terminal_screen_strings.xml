@@ -1,0 +1,14 @@
+<resources>
+    <string name="desktop_legacy_text">This connection returns plain text without terminal colors or a cursor.</string>
+    <string name="terminal_loading">Reading terminal…</string>
+    <string name="terminal_waiting">Waiting for terminal output</string>
+    <string name="terminal_latest_output">Latest output ↓</string>
+    <string name="terminal_display_mode">Display</string>
+    <string name="terminal_color_grid">Color terminal grid</string>
+    <string name="terminal_plain_text">Plain text</string>
+    <string name="terminal_edit_command_short">Edit</string>
+    <string name="terminal_keyboard_short">Keyboard</string>
+    <string name="terminal_shortcuts_more">More shortcuts</string>
+    <string name="terminal_wrap_lines">Wrap to phone width</string>
+    <string name="desktop_snapshot_text">Select and copy screen text</string>
+</resources>

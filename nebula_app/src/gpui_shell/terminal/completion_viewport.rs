@@ -170,6 +170,7 @@ mod tests {
         state.completion_items = (0..30)
             .map(|index| NebulaCompletionItem {
                 replace_chars: 0,
+                replace_after_chars: 0,
                 label: format!("candidate-{index}"),
                 insert: index.to_string(),
                 kind: NebulaCompletionKind::Command,

@@ -65,6 +65,13 @@ be incorrect. Do not add such a blacklist without semantic evidence and fixtures
 
 Required human review rules:
 
+- Apply the [commercial promotion policy](../CONTRIBUTING.md#commercial-promotion-policy)
+  to PRs, Issues, and comments. Check the user need and any new provider, external
+  link, or brand placement; passing CI and contributor status do not authorize
+  promotion. Once unauthorized promotion is verified, close the PR or Issue
+  directly without requesting further maintainer confirmation. Direct business
+  requests to the policy's email contact. Preserve explicitly approved sponsorship
+  within its scope.
 - One authority for shared behavior: persistence, language registry, split rules,
   terminal state and domain transitions must not be reimplemented per UI shell.
 - Group by capability and lifecycle. Extract domain rules, I/O adapters, rendering
@@ -103,6 +110,12 @@ governance migration; new conclusions supersede old records instead of rewriting
 their rationale. A change to a budget or rule is a dedicated governance change, not
 an unexplained edit hidden inside a feature PR. No automatic exception-adding or
 budget-increasing command is provided.
+
+The maintainer-controlled `size-exempt` label applies only to the default PR
+changed-source-line threshold described in the contribution guide. It cannot waive
+the absolute PR-size ceiling, per-file architecture limits, dependency rules or
+other required checks. A coherent feature module is the review unit; line counts
+do not justify mechanical splitting or establish that a change is well designed.
 
 Emergency/security repairs must not be forced into a dangerous broad refactor just
 to preserve a flawed metric. Escalate the demonstrated conflict to a maintainer,

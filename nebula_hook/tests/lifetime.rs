@@ -75,6 +75,48 @@ fn ordinary_completed_payload_exits_silently() {
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn unix_socket_delivers_the_envelope_and_waits_for_acknowledgement() {
+    use std::io::Read as _;
+    use std::os::unix::net::UnixListener;
+    let path = std::env::temp_dir().join(format!("pebrel-hook-test-{}.sock", std::process::id()));
+    let listener = UnixListener::bind(&path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut invocation = Invocation::spawn(&["claude"], Some(path.to_str().unwrap()));
+    invocation
+        .0
+        .as_mut()
+        .unwrap()
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"hook_event_name\":\"Stop\"}")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            },
+            Err(error) => panic!("helper did not connect: {error}"),
+        }
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut message = String::new();
+    stream.read_to_string(&mut message).unwrap();
+    assert!(message.starts_with("nebula-hook/1 source=claude pane="));
+    assert!(message.ends_with("\n{\"hook_event_name\":\"Stop\"}"));
+    assert!(invocation.0.as_mut().unwrap().try_wait().unwrap().is_none());
+    stream.write_all(b"\n").unwrap();
+    assert!(invocation.finish().stdout.is_empty());
+    drop(listener);
+    std::fs::remove_file(path).unwrap();
+}
+
 #[test]
 fn legacy_notify_still_invokes_the_users_chained_program() {
     let executable = std::env::current_exe().unwrap();
@@ -90,9 +132,11 @@ fn legacy_notify_still_invokes_the_users_chained_program() {
     );
 }
 
+/// A server-side named pipe in the exact state the live transport can leave
+/// behind during shutdown: created, never accepted and never drained. The
+/// default harness runs tests in one process, so every name must be unique.
 #[cfg(windows)]
-#[test]
-fn a_receiver_that_never_reads_cannot_pin_the_helper() {
+mod stalled_receiver {
     use std::ffi::c_void;
 
     #[link(name = "kernel32")]
@@ -110,33 +154,96 @@ fn a_receiver_that_never_reads_cannot_pin_the_helper() {
         fn CloseHandle(handle: *mut c_void) -> i32;
         fn GetNamedPipeClientProcessId(handle: *mut c_void, pid: *mut u32) -> i32;
     }
-    struct Pipe(*mut c_void);
-    impl Drop for Pipe {
+
+    pub struct Receiver(*mut c_void);
+
+    impl Receiver {
+        /// mode 1 = PIPE_ACCESS_INBOUND, one instance: mirrors the live
+        /// transport's one-client-at-a-time shape.
+        pub fn create(discriminator: &str) -> (Self, String) {
+            let name = format!(r"\\.\pipe\pebrel-hook-lifetime-test-{discriminator}");
+            let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+            let handle = unsafe {
+                CreateNamedPipeW(wide.as_ptr(), 1, 0, 1, 4096, 4096, 0, std::ptr::null())
+            };
+            assert_ne!(handle as isize, -1, "{}", std::io::Error::last_os_error());
+            (Self(handle), name)
+        }
+
+        /// Kernel answer to "did this process connect?" — the same identity
+        /// probe the live transport issues for every accepted client.
+        pub fn connected_client(&self) -> Option<u32> {
+            let mut pid = 0;
+            let ok = unsafe { GetNamedPipeClientProcessId(self.0, &mut pid) };
+            (ok != 0 && pid != 0).then_some(pid)
+        }
+    }
+
+    impl Drop for Receiver {
         fn drop(&mut self) {
             unsafe {
                 CloseHandle(self.0);
             }
         }
     }
-    let name = format!(r"\\.\pipe\pebrel-hook-lifetime-test-{}", std::process::id());
-    let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-    // The server owns an inbound byte pipe and deliberately never drains it.
-    let handle =
-        unsafe { CreateNamedPipeW(wide.as_ptr(), 1, 0, 1, 4096, 4096, 0, std::ptr::null()) };
-    assert_ne!(handle as isize, -1, "{}", std::io::Error::last_os_error());
-    let _pipe = Pipe(handle);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_receiver_that_never_reads_cannot_pin_the_helper() {
+    let (receiver, name) = stalled_receiver::Receiver::create("codex-argv");
     let payload = "x".repeat(16 * 1024);
     let invocation = Invocation::spawn(&["codex", &payload], Some(&name));
     let deadline = Instant::now() + Duration::from_secs(6);
     loop {
-        let mut pid = 0;
-        if unsafe { GetNamedPipeClientProcessId(handle, &mut pid) } != 0 {
-            assert_eq!(pid, invocation.0.as_ref().unwrap().id());
+        if receiver.connected_client().is_some_and(|pid| pid == invocation.0.as_ref().unwrap().id())
+        {
             break;
         }
         assert!(Instant::now() < deadline, "helper never connected to the blocked receiver");
         std::thread::sleep(Duration::from_millis(10));
     }
+    let output = invocation.finish();
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
+
+/// Issue #259: Pi's extension launches `pebrel-hook pi <prompt-json>` as a
+/// detached Windows process and never reaps it, so a prompt burst can
+/// outlive its host. The padded context field exceeds the receiver's buffer,
+/// pinning the first connect mid-write — the stalled-write condition the
+/// forwarding deadline exists for.
+#[cfg(windows)]
+#[test]
+fn concurrent_pi_prompt_notifications_exit_against_a_wedged_receiver() {
+    let (receiver, name) = stalled_receiver::Receiver::create("pi-burst");
+    let prompt = |session: u32| {
+        format!(
+            r#"{{"kind":"prompt","session_id":"s-{session}","bridge_instance":"5c1e","bridge_sequence":"{session}","event_id":"5c1e:{session}","cwd":"C:\\Users\\dev\\project","context":"{}"}}"#,
+            "x".repeat(16 * 1024),
+        )
+    };
+    let pending: Vec<_> =
+        (1..=5).map(|session| Invocation::spawn(&["pi", &prompt(session)], Some(&name))).collect();
+    // The wedged receiver pins whichever helper connects first mid-write, so
+    // that connection stays observable until the deadline retires the helper.
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        if receiver.connected_client().is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no pi prompt helper connected to the wedged receiver");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for invocation in pending {
+        let output = invocation.finish();
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn pi_prompt_notification_exits_cleanly_without_a_host() {
+    let invocation =
+        Invocation::spawn(&["pi", r#"{"kind":"prompt","session_id":"s1","cwd":"/tmp"}"#], None);
     let output = invocation.finish();
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
 }

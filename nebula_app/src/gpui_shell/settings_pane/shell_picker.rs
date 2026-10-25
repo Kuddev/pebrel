@@ -34,7 +34,7 @@ impl ShellSelectItem {
     pub(super) fn import_action(language: crate::display::UiLanguage) -> Self {
         Self {
             id: SHELL_IMPORT_ACTION_ID.to_owned(),
-            name: language.pick("导入终端目录…", "Import terminal directory...").into(),
+            name: language.text(crate::i18n::Message::SettingsPaneImportTerminalDirectory).into(),
             closed_image: None,
             row_image: None,
         }

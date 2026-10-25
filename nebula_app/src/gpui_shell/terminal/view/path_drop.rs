@@ -1,4 +1,5 @@
-//! External file paths enter the same bounded, paste-only path as clipboard text.
+//! Local file intake preserves shell spelling; SSH uploads before inserting remote paths.
+mod ssh_upload;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,11 +15,25 @@ use crate::i18n::Message;
 pub(super) struct PathDropState {
     generation: u64,
     pending: bool,
+    upload: Option<crate::ssh_sftp::intake::FileIntake>,
 }
 
 impl PathDropState {
     pub(super) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        if let Some(upload) = &self.upload {
+            upload.cancel();
+        }
+    }
+    pub(super) fn observe_input(&mut self, bytes: &[u8]) {
+        // Let users type a description while a file uploads. Submission or an
+        // interrupt changes the input owner and cancels the pending insertion.
+        if self.upload.is_none()
+            || !bytes.starts_with(b"\x1b[200~")
+                && bytes.iter().any(|b| matches!(b, b'\r' | b'\n' | 3 | 26))
+        {
+            self.invalidate();
+        }
     }
 }
 
@@ -79,15 +94,6 @@ impl TerminalView {
         if self.session.is_none() || self.exited.is_some() {
             return;
         }
-        if self.ssh_destination.is_some() {
-            toast::toast(
-                window,
-                cx,
-                ToastKind::Warning,
-                ui_language().text(Message::CommonDropPathsRemote),
-            );
-            return;
-        }
         let paths: Option<Vec<String>> =
             paths.iter().map(|path| path.to_str().map(str::to_owned)).collect();
         let Some(paths) =
@@ -101,6 +107,10 @@ impl TerminalView {
             );
             return;
         };
+        if self.ssh_destination.is_some() {
+            self.upload_dropped_paths(paths.into_iter().map(PathBuf::from).collect(), window, cx);
+            return;
+        }
         let distro = self
             .exec_context
             .as_ref()
@@ -172,7 +182,7 @@ fn wsl_paths(
     let mut command = std::process::Command::new("wsl.exe");
     // `command_output_with_timeout` 只负责超时和管道，压窗口得调用方自己来
     // （见 `platform::process`）：不压的话，往 WSL pane 拖一次文件就等于从无
-    // 控制台的 GUI 进程起一个新控制台——默认终端是 Windows Terminal 的机器上
+    // 控制台的 GUI 进程起一个新控制台——默认终端使用独立宿主的机器上
     // 会弹一整扇窗口。
     crate::platform::process::hidden_command(&mut command);
     if let Some(distro) = distro {

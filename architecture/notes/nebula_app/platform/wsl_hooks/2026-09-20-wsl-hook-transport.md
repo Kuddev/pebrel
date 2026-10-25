@@ -6,7 +6,7 @@ Proposed for review with implementation.
 
 ## Context
 
-A Windows terminal can launch Codex inside WSL. Windows hook installation does
+A terminal on Windows can launch Codex inside WSL. Windows hook installation does
 not configure the guest home, discover its CLI version, or deliver native Linux
 hook events through a Windows named pipe. Completion-only installation and screen
 observations therefore remained active even when Windows reported native hooks.

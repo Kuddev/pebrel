@@ -1,4 +1,4 @@
-//! 48px 自定义标题栏里的横向标签布局。
+//! 自定义标题栏里的横向标签布局。
 //!
 //! 这里只负责同一组 workspace tab 的第二种呈现；激活、关闭、重命名、排序
 //! 与 dock 都调用 `NebulaWorkspace` 既有动作，不维护平行状态。
@@ -16,14 +16,15 @@ use gpui_component::menu::PopupMenuItem;
 
 use crate::gpui_shell::prelude::*;
 use crate::gpui_shell::terminal::view::SidebarActivity;
+use crate::gpui_shell::widgets::toolbar_button;
 use crate::i18n::{Message, UiLanguage};
 
+use super::window_titlebar::title_bar_right_controls;
 use super::{
     NebulaWorkspace, NewWindow, OpenSettings, TAB_LABEL_ICON_SIZE, TAB_LABEL_ICON_W, TabDrag,
     TabDragAxis, TabPresentation, ToggleShellPicker, pane_header, title_bar_panel_controls,
 };
 
-pub(super) const TOP_TAB_H: f32 = 34.0;
 /// 与顶部模式正文卡片的 `px_2` 左边距同源，让首个 tab 和终端左缘对齐。
 pub(super) const TOP_TAB_LEFT_INSET: f32 = 8.0;
 /// 单个 tab 的最小宽。WT 的 TabView 同一条取舍：标签**不压到读不出来**，
@@ -58,8 +59,8 @@ fn strip_overflows(strip_w: f32, capacity_w: f32) -> bool {
     strip_w > capacity_w + 0.5
 }
 
-/// GPUI 横向滚动偏移是 ≤ 0（内容向左移），与 [`NebulaWorkspace::on_top_tabs_wheel`]
-/// 同一套符号。可滚范围因此是 `[-(strip - viewport), 0]`。
+/// GPUI 横向滚动偏移是 ≤ 0（内容向左移）。
+/// 可滚范围因此是 `[-(strip - viewport), 0]`。
 fn clamp_strip_offset(x: f32, strip_w: f32, viewport_w: f32) -> f32 {
     let max = (strip_w - viewport_w).max(0.0);
     x.clamp(-max, 0.0)
@@ -78,12 +79,6 @@ fn at_strip_start(x: f32) -> bool {
 
 fn at_strip_end(x: f32, strip_w: f32, viewport_w: f32) -> bool {
     x <= -(strip_w - viewport_w).max(0.0) + 0.5
-}
-
-/// 普通鼠标滚轮没有 X 分量时，把主滚动轴映射到横向；触控板原生横向
-/// 分量更强时则保留它。
-fn horizontal_wheel_delta(x: f32, y: f32) -> f32 {
-    if x.abs() > y.abs() { x } else { y }
 }
 
 /// 顶部加号的生产调用点与鼠标测试共用同一个元素构造，避免测试只证明
@@ -110,10 +105,13 @@ pub(super) fn top_tabs_menu_button(settings_active: bool, language: UiLanguage) 
         .tooltip(language.text(Message::ChromeMore))
 }
 
-/// 紧邻 TabView 的操作按钮占满同一条 34px 行，再在槽内居中 32px 按钮。
+/// 紧邻 TabView 的操作按钮占满同一条标签行，再在槽内居中 32px 按钮。
 /// 外层仍贴标题栏底边，tab 与正文相接的既有布局不变。
-pub(super) fn top_tab_action_slot(child: impl gpui::IntoElement) -> gpui::Div {
-    h_flex().h(px(TOP_TAB_H)).items_center().child(child)
+pub(super) fn top_tab_action_slot(
+    density: nebula_settings::DensityName,
+    child: impl gpui::IntoElement,
+) -> gpui::Div {
+    h_flex().h(px(super::tab_scroll::tab_row_height(density))).items_center().child(child)
 }
 
 impl NebulaWorkspace {
@@ -130,7 +128,9 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let row_height = super::tab_scroll::tab_row_height(self.density);
         let language = crate::gpui_shell::config::ui_language(cx);
+        let port_forward_button = self.render_port_forward_button(cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let active_bg = theme.sidebar_accent;
@@ -142,11 +142,14 @@ impl NebulaWorkspace {
         let tab_reveal = settings
             .map(|settings| settings.tab_reveal)
             .unwrap_or(nebula_settings::TabRevealName::Slide);
-        let chrome_family = theme.mono_font_family.clone();
+        let chrome_family = theme.font_family.clone();
+        let metadata_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);
+        let port_forward_w = if port_forward_button.is_some() { 32.0 } else { 0.0 };
         let tab_capacity_w =
-            (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W).max(TOP_TAB_MIN_W);
+            (f32::from(window.viewport_size().width) - TOP_TAB_RESERVED_W - port_forward_w)
+                .max(TOP_TAB_MIN_W);
         let tab_w = tab_width(tab_capacity_w, self.top_tab_count());
         let strip_w = tab_strip_width(tab_w, self.top_tab_count());
         // 溢出时两端各让出一枚翻页按钮。这个反馈是单调的：`tab_w` 已被
@@ -165,7 +168,6 @@ impl NebulaWorkspace {
             .as_ref()
             .filter(|drag| drag.active && drag.axis == TabDragAxis::Horizontal)
             .map(|drag| (drag.source, Self::drag_slot(drag, self.tabs.len()), drag.offset));
-        let items_running = std::cell::Cell::new(false);
         let items = (0..self.top_tab_count())
             .map(|ix| {
                 let settings_navigation = self.settings_tab_open && ix == self.tabs.len();
@@ -186,6 +188,7 @@ impl NebulaWorkspace {
                     color,
                     renaming,
                     pane_count,
+                    local_administrator,
                 } = self.top_tab_presentation(ix, cx, dark);
                 let hover_group: SharedString = format!("top-tab-hover-{ix}").into();
                 let cross_window_drag = self.cross_window_drag_payload(ix, cx);
@@ -193,17 +196,16 @@ impl NebulaWorkspace {
                 let status_width = Self::shell_status_width(
                     window,
                     shell_tag.as_ref(),
-                    &chrome_family,
+                    &metadata_family,
                     label_px * 0.8,
                     TOP_TAB_STATUS_W,
                     tab_w * 0.4,
                 );
                 let resting_status: Option<gpui::AnyElement> = match activity {
                     SidebarActivity::Running => {
-                        items_running.set(true);
                         let (track, head) =
                             crate::gpui_shell::theme::sidebar_spinner_colors(cx, active);
-                        Some(Self::spinner(self.spinner_phase, track, head).into_any_element())
+                        Some(Self::spinner(self.spinner_phase, track, head, cx.weak_entity()).into_any_element())
                     },
                     SidebarActivity::Paused => Some(
                         Icon::new(IconName::Pause)
@@ -243,7 +245,7 @@ impl NebulaWorkspace {
                     SidebarActivity::Idle => shell_tag.map(|tag| {
                         Self::shell_status_label(
                             tag,
-                            chrome_family.clone(),
+                            metadata_family.clone(),
                             label_px * 0.8,
                             status_color,
                         )
@@ -276,7 +278,7 @@ impl NebulaWorkspace {
                     .group(hover_group.clone())
                     .relative()
                     .w(px(tab_w))
-                    .h(px(TOP_TAB_H))
+                    .h(px(row_height))
                     .flex_shrink_0()
                     .min_w_0()
                     .overflow_hidden()
@@ -291,8 +293,8 @@ impl NebulaWorkspace {
                     .font_weight(FontWeight::NORMAL)
                     .cursor_pointer()
                     // TitleBar 的父层是 WindowControlArea::Drag；tab 必须自己
-                    // 占住命中区，否则拖动标签会变成拖动窗口。
-                    .occlude()
+                    // 占住普通鼠标命中区，滚轮仍交给外层标签滚动容器。
+                    .block_mouse_except_scroll()
                     .when(active, |item| item.bg(active_bg).text_color(active_fg))
                     .when(!active && !dragged, |item| {
                         item.text_color(muted).hover(|style| style.bg(hover_bg))
@@ -319,6 +321,7 @@ impl NebulaWorkspace {
                                 pitch,
                                 offset: 0.0,
                                 active: false,
+                                force_tear_out: false,
                                 dock: None,
                             });
                         }),
@@ -357,6 +360,12 @@ impl NebulaWorkspace {
                                 .bg(color),
                         )
                     })
+                    .when(local_administrator, |row| {
+                        row.child(super::tab_presentation::administrator_badge(
+                            format!("top-tab-admin-{ix}").into(),
+                            cx,
+                        ))
+                    })
                     // 图标优先级与侧栏同源：先身份（跟随聚焦 pane），分屏标记
                     // 只在没有身份图标时补位。理由见 sidebar.rs 同处注释。
                     .when(is_settings, |row| {
@@ -390,7 +399,7 @@ impl NebulaWorkspace {
                                 .text_size(px(label_px))
                                 .font_weight(FontWeight::NORMAL)
                                 .text_color(if active { active_fg } else { muted })
-                                .child(glyph),
+                                .child(crate::gpui_shell::widgets::terminal_glyph(glyph, TAB_LABEL_ICON_SIZE)),
                         )
                     })
                     .when(
@@ -409,7 +418,7 @@ impl NebulaWorkspace {
                                     .child(pane_header::split_glyph(
                                         label_px * 0.78,
                                         if active { active_fg } else { muted },
-                                    )),
+                                )),
                             )
                         },
                     )
@@ -442,7 +451,7 @@ impl NebulaWorkspace {
                             .truncate()
                             .font_family(chrome_family.clone())
                             .text_size(px(label_px))
-                            .font_weight(FontWeight::LIGHT)
+                            .font_weight(FontWeight::NORMAL)
                             .child(title)
                             .into_any_element(),
                     })
@@ -450,17 +459,23 @@ impl NebulaWorkspace {
                         row.child(
                             div()
                                 .id(("top-pane-count", ix))
+                                .size(px(28.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.0))
+                                .hover(|style| style.bg(theme.muted.opacity(0.5)))
+                                .active(|style| style.bg(theme.muted))
                                 .flex_shrink_0()
                                 .cursor_pointer()
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     this.cycle_pane_focus(ix, window, cx);
                                 }))
-                                .child(pane_header::split_badge(
-                                    pane_count,
+                                .child(pane_header::split_layout_icon(
+                                    &self.tabs[ix],
                                     label_px,
                                     if active { active_fg } else { muted },
-                                    if active { active_bg } else { theme.muted },
                                 )),
                         )
                     })
@@ -529,10 +544,6 @@ impl NebulaWorkspace {
                 }
             })
             .collect::<Vec<_>>();
-        self.spinner_visible.set(items_running.get());
-        if items_running.get() {
-            self.arm_activity_spinner_frame(window, cx);
-        }
 
         let menu_workspace = cx.entity().downgrade();
 
@@ -552,7 +563,7 @@ impl NebulaWorkspace {
                     // 看不见的入口——tab 一多，用户根本不知道右边还有东西。
                     .when(overflow, |bar| {
                         bar.child(
-                            div().h(px(TOP_TAB_H)).flex().items_center().child(
+                            div().h(px(row_height)).flex().items_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-prev")
                                         .icon(IconName::ChevronLeft)
@@ -580,13 +591,16 @@ impl NebulaWorkspace {
                             .w(px(tab_viewport_w))
                             .flex_shrink(1.0)
                             .min_w_0()
-                            .h(px(TOP_TAB_H))
+                            .h(px(row_height))
                             .overflow_hidden()
+                            // 保留内部滚动命中，截断外层原生标题栏 Drag 命中区。
+                            .occlude()
                             // 待命拖拽在越过 4px 前由此接收移动；激活后根罩层接管。
                             .on_mouse_move(cx.listener(|this, event, window, cx| {
                                 this.update_tab_drag(event, window, cx);
                             }))
-                            .on_scroll_wheel(cx.listener(Self::on_top_tabs_wheel))
+                            // 内层 GPUI scroller 是唯一偏移所有者；这里只消费事件。
+                            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                             .child(
                                 h_flex()
                                     .id("top-tabs-scroll")
@@ -600,7 +614,7 @@ impl NebulaWorkspace {
                     )
                     .when(overflow, |bar| {
                         bar.child(
-                            div().h(px(TOP_TAB_H)).flex().items_center().child(
+                            div().h(px(row_height)).flex().items_center().child(
                                 title_bar_panel_controls().h_auto().child(
                                     Button::new("top-tabs-next")
                                         .icon(IconName::ChevronRight)
@@ -622,7 +636,7 @@ impl NebulaWorkspace {
                         )
                     })
                     .child(
-                        top_tab_action_slot(top_new_tab_control(language, cx.listener(
+                        top_tab_action_slot(self.density, top_new_tab_control(language, cx.listener(
                             |this, _, window, cx| {
                                 this.add_terminal(window, cx);
                             },
@@ -630,6 +644,7 @@ impl NebulaWorkspace {
                     )
                     .child(
                         top_tab_action_slot(
+                            self.density,
                             top_tabs_menu_button(settings_active, language).dropdown_menu_with_anchor(
                                 gpui::Anchor::TopRight,
                                 move |menu, _, _| {
@@ -685,42 +700,26 @@ impl NebulaWorkspace {
             // 共享详情侧栏入口固定在其右侧。
             .child(div().h_full().flex_1().min_w_0())
             .child(
-                title_bar_panel_controls()
+                title_bar_right_controls()
+                    .child(self.render_terminal_find_button(settings_active, cx))
                     .child(
-                        Button::new("top-toggle-command-manager")
-                            .icon(
-                                Icon::new(Icon::empty()).path(
-                                    crate::gpui_shell::assets::nav::COMMAND_MANAGER,
-                                ),
-                            )
-                            .ghost()
+                        toolbar_button(
+                            "top-toggle-command-manager",
+                            Icon::new(Icon::empty())
+                                .path(crate::gpui_shell::assets::nav::COMMAND_MANAGER),
+                            false,
+                        )
+                            .debug_selector(|| "command-manager-toggle".into())
                             .selected(self.command_manager_open)
                             .tooltip(language.text(Message::ChromeCommandList))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_command_manager(window, cx);
                             })),
                     )
+                    .when_some(port_forward_button, |controls, button| controls.child(button))
                     .child(self.render_right_sidebar_button(settings_active, cx)),
             )
             .into_any_element()
-    }
-
-    fn on_top_tabs_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let delta = event.delta.pixel_delta(px(TOP_TAB_MIN_W * 0.6));
-        let delta = horizontal_wheel_delta(f32::from(delta.x), f32::from(delta.y));
-        if delta == 0.0 {
-            return;
-        }
-        let mut offset = self.top_tabs_scroll.offset();
-        offset.x += px(delta);
-        self.top_tabs_scroll.set_offset(offset);
-        cx.stop_propagation();
-        cx.notify();
     }
 
     /// 翻页按钮的落点：一次一个 tab 步距，钳在可滚范围内。
@@ -790,12 +789,6 @@ mod tests {
         assert_eq!(tab_width(500.0, 10), TOP_TAB_MIN_W);
         assert_eq!(tab_width(0.0, 3), TOP_TAB_MAX_W);
         assert_eq!(tab_strip_width(200.0, 3), 608.0);
-    }
-
-    #[test]
-    fn wheel_uses_the_stronger_axis_for_horizontal_tabs() {
-        assert_eq!(horizontal_wheel_delta(2.0, -40.0), -40.0);
-        assert_eq!(horizontal_wheel_delta(24.0, -3.0), 24.0);
     }
 
     #[test]

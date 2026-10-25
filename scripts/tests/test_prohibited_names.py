@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts import check_prohibited_names
 
@@ -20,6 +21,53 @@ def run_git(repository: Path, *args: str) -> None:
 
 
 class ProhibitedNamesTests(unittest.TestCase):
+    def test_desktop_endpoint_protocol_references_do_not_allow_prose(self) -> None:
+        cases = (
+            ("resume.rs", 'Self { executable: "tmux".into(), socket: String::new() }'),
+            ("resume/identity.rs", 'command == "tmux" || command == "tmux:" || command.ends_with("/tmux")'),
+            ("resume/discover.sh", r'$3 == "tmux" || $3 == "tmux:" || $3 ~ /\/tmux$/'),
+            ("resume/discover.sh", r"sed -n 's/^n\(.*\/tmux\)$/\1/p'"),
+            ("resume/tests.rs", r'identity.has_client("42 pts/3 bash\n43 pts/3 tmux: client\n")'),
+        )
+        for suffix, text in cases:
+            path = "nebula_app/src/ssh_session/" + suffix
+            with self.subTest(path=path, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + " // use tmux"))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + " // use Ghostty"))
+        for path, text in (
+            ("resume.rs", 'let description = "tmux";'),
+            ("resume/identity.rs", '// use tmux for everything'),
+            ("resume/discover.sh", "tmux unknown-command"),
+            ("resume/tests.rs", 'println!("tmux");'),
+            ("other.rs", 'Self { executable: "tmux".into(), socket: String::new() }'),
+        ):
+            self.assertTrue(check_prohibited_names.prohibited_source_line("nebula_app/src/ssh_session/" + path, text))
+
+    def test_truncated_unicode_hunk_context_preserves_added_source_checks(self) -> None:
+        context = "managed generation 改变时，旧回调".encode("utf-8")[:-1]
+        sample = "++" + check_prohibited_names.PROHIBITED_EXAMPLES[0]
+        for parents, header, prefix in ((None, b"@@ -1 +1 @@ ", b"+"), (2, b"@@@ -1 -1 +1 @@@ ", b"++")):
+            with self.subTest(parents=parents):
+                diff = (
+                    b"+++ b/source.rs\n" + header + context + b"\n"
+                    + prefix + b"safe\n" + prefix + sample.encode("utf-8") + b"\n"
+                )
+                lines = list(check_prohibited_names.added_patch_lines(diff, parents))
+                self.assertEqual(lines, [(3, "safe"), (4, sample)])
+                self.assertTrue(check_prohibited_names.prohibited_source_line("source.rs", lines[1][1]))
+                if parents is None:
+                    with patch.object(check_prohibited_names, "git", return_value=diff):
+                        self.assertEqual(list(check_prohibited_names.added_lines("source.rs", "--cached")), lines)
+
+    def test_invalid_added_utf8_is_not_hidden_by_a_truncated_hunk_header(self) -> None:
+        for parents, prefix in ((None, b"+"), (2, b"++")):
+            with self.subTest(parents=parents):
+                diff = b"@@@ context \xe8\xb0\n" + prefix + b"bad \xff\n"
+                with self.assertRaises(UnicodeDecodeError):
+                    list(check_prohibited_names.added_patch_lines(diff, parents))
+
     def check_staged(self, repository: Path):
         return subprocess.run(
             [sys.executable, str(CHECKER), "staged"], cwd=repository,
@@ -129,6 +177,236 @@ class ProhibitedNamesTests(unittest.TestCase):
         self.assertFalse(check_prohibited_names.prohibited_source_line("Cargo.toml", dependency))
         self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", dependency))
 
+    def test_mobile_build_and_session_references_preserve_their_interfaces(self) -> None:
+        cases = (
+            ("mobile/android/third_party/reader-build/package-lock.json", '"node_modules/@types/d3-contour": {'),
+            ("mobile/android/app/build.gradle.kts", 'implementation(project(":ghostty"))'),
+            ("mobile/android/settings.gradle.kts", 'include(":app", ":ghostty")'),
+            ("mobile/tools/generate_assets.py", 'root / "mobile/android/ghostty/UPSTREAM.json"'),
+            (".github/workflows/android-release.yml", "path: 'mobile/android/ghostty/build/upstream'"),
+            (".github/workflows/android-release.yml", "key: native-${{ hashFiles('mobile/android/ghostty/UPSTREAM.json') }}"),
+            ("mobile/tools/generate_assets.py", 'notices / "Ghostty"'),
+            ("mobile/tools/test_apk_audit.py", '"assets/licenses/Ghostty/Ghostty-MIT.txt": b"fixture"'),
+            ("mobile/android/ghostty/src/main/cpp/bridge.h", '#include <ghostty/vt.h>'),
+            ("mobile/android/ghostty/UPSTREAM.json", '"project": "https://github.com/ghostty-org/ghostty",'),
+            ("mobile/ssh/licenses/SOURCE.json", '"url": "https://raw.githubusercontent.com/warp-tech/russh/revision/LICENSE.txt",'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'TMUX("tmux"), HERDR("herdr")'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.TMUX -> "exec tmux new-session -A -s \'pebrel\'"'),
+            ("mobile/android/app/src/main/java/connection/SshSessionMode.kt", 'SshSessionMode.HERDR -> "exec herdr"'),
+            ("mobile/android/app/src/androidTest/SshIntegrationTest.kt", '"tmux kill-session -t \'session\'" else "herdr session stop \'session\'"'),
+        )
+        for path, text in cases:
+            with self.subTest(path=path, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                # 合法引用仅保护自身，不能让同行追加的比较文案一起逃逸。
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with Ghostty'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+
+    def test_remote_discovery_commands_and_wire_tags_are_not_promotion(self) -> None:
+        path = "mobile/android/app/src/main/java/io/github/kuddev/pebrel/mobile/connection/RemoteSessions.kt"
+        cases = (
+            "if command -v tmux >/dev/null; then",
+            "if command -v herdr >/dev/null; then herdr session list --json; fi",
+            "tmux list-sessions -F '#{session_id}'",
+            "tmux list-windows -a -F '#{window_id}'",
+            "if (Get-Command herdr -ErrorAction SilentlyContinue) { & herdr session list --json }",
+            '"tmux select-window -t ${quote(window.id)}"',
+            '"$(tmux display-message -p -t ${quote(session.id)})"',
+            '"exec tmux attach-session -t ${quote(session.id)}"',
+            '"& herdr session attach ${psQuote(session.id)}"',
+            '"herdr --session ${quote(session.id)} tab focus ${quote(window.id)}"',
+            '"& herdr --session ${psQuote(session.id)} workspace list"',
+            '"& herdr --session ${psQuote(session.id)} tab list"',
+            'val sessions = data["tmux"].orEmpty()',
+            'data["herdr"]?.let { body ->',
+            'RemoteSession("tmux", id, name)',
+            'RemoteSession("herdr", id, name)',
+            'if (session.kind != "herdr") return session.windows',
+            'require(session.kind == "herdr")',
+            '    "tmux" -> {',
+            '    "herdr" -> {',
+            '}.onFailure { warnings += "herdr" }',
+            "[Console]::Write([char]30 + 'herdr' + [char]10)",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+                for name in ("tmux", "herdr", "Ghostty"):
+                    self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + "; compare with " + name))
+        for text in ('val label = "herdr"', '"tmux is better"', 'herdr unknown-command', 'tmux unknown-command'):
+            with self.subTest(text=text):
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(
+            path.replace("RemoteSessions.kt", "Other.kt"), 'RemoteSession("tmux", id, name)',
+        ))
+
+    def test_mobile_reference_paths_do_not_exempt_ordinary_mentions(self) -> None:
+        for path in (
+            "mobile/tools/generate_assets.py", "mobile/android/app/build.gradle.kts",
+            ".github/workflows/android-release.yml",
+            "mobile/android/ghostty/UPSTREAM.json", "mobile/ssh/licenses/SOURCE.json",
+            "mobile/android/app/src/main/java/connection/SshSessionMode.kt",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"description": "Inspired by Ghostty"'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, '"url": "https://example.invalid/ghostty"'))
+
+    def test_remote_endpoint_metadata_and_isolated_recovery_commands_are_scoped(self) -> None:
+        root = "mobile/android/app/src/"
+        package = "java/io/github/kuddev/pebrel/mobile/connection/"
+        cases = (
+            ("main/" + package + "TmuxEndpoint.kt", 'data class TmuxEndpoint(val executable: String = "tmux", val socket: String = "")'),
+            ("main/" + package + "TmuxEndpoint.kt", 'require(executable == "tmux" || validPath(executable))'),
+            ("main/" + package + "TmuxEndpoint.kt", r'''${'$'}3 == "tmux:" || ${'$'}3 ~ /\/tmux${'$'}/'''),
+            ("main/" + package + "TmuxEndpoint.kt", r"sed -n 's/^n\(.*\/tmux\)$/\1/p'"),
+            ("main/" + package + "SshPtyIdentity.kt", 'it.command == "tmux" || it.command.startsWith("tmux:")'),
+            ("main/" + package + "SshSessionMode.kt", "tmux has-session -t '=original'"),
+            ("test/" + package + "TmuxSessionControlTest.kt", 'TmuxEndpoint("/opt/server 3.8/bin/tmux", "/tmp/tmux-123/custom socket")'),
+            ("test/" + package + "TmuxSessionControlTest.kt", r'"20 10 pts/7 sh\n21 20 pts/7 tmux: client\n50 10 ? sh\n"'),
+            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'TmuxEndpoint("tmux", socket)'),
+            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'ProcessBuilder("tmux", "-V")'),
+            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'environment().remove("TMUX")'),
+            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "-f", "/dev/null", "new-session", "-d")'),
+            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "has-session", "-t", "original")'),
+            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "display-message", "-p")'),
+            ("test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "kill-server")'),
+        )
+        for relative, text in cases:
+            path = root + relative
+            with self.subTest(path=path, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with tmux'))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with Ghostty'))
+        for filename, text in (
+            ("TmuxEndpoint.kt", 'val label = "tmux"'),
+            ("TmuxEndpoint.kt", '// tmux is better'),
+            ("SshPtyIdentity.kt", 'val label = "tmux"'),
+            ("Other.kt", 'it.command == "tmux"'),
+        ):
+            self.assertTrue(check_prohibited_names.prohibited_source_line(root + "main/" + package + filename, text))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(
+            root + "test/" + package + "TmuxRecoveryCommandTest.kt", 'run("tmux", "-S", socket, "unknown-command")'))
+        for text in ('TmuxEndpoint("/opt/Ghostty/tmux", socket)', 'val socket = "/tmp/tmux-123/Ghostty"'):
+            self.assertTrue(check_prohibited_names.prohibited_source_line(
+                root + "test/" + package + "TmuxSessionControlTest.kt", text))
+
+    def test_remote_history_commands_allow_only_the_supported_cli_forms(self) -> None:
+        root = "mobile/android/app/src/main/java/io/github/kuddev/pebrel/mobile/connection/"
+        cases = (
+            ("RemoteSessions.kt", "tmux -u list-sessions -F '#{session_id}'"),
+            ("RemoteSessions.kt", "tmux -u list-windows -a -F '#{window_id}'"),
+            ("RemoteSessions.kt", '"tmux select-pane -t ${quote(pane)} && "'),
+            ("TmuxSessionControl.kt", "tmux list-clients -F '#{client_tty}'"),
+            ("TmuxSessionControl.kt", "tmux -u list-clients -F '#{client_tty}'"),
+            ("TmuxSessionControl.kt", 'else "tmux copy-mode -t \'$target\' && "'),
+            ("TmuxSessionControl.kt", '"tmux send-keys -X -N ${count} -t \'$target\' $action"'),
+            ("TmuxSessionControl.kt", '"tmux send-keys -X -t \'${target(attachment)}\' cancel"'),
+        )
+        for filename, text in cases:
+            path = root + filename
+            with self.subTest(path=path, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+                for name in ("tmux", "herdr", "Ghostty"):
+                    self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + "; compare with " + name))
+        for text in ("tmux unknown-command", "tmux -u unknown-command", "tmux send-keys -l text", "tmux copy-mode advice"):
+            self.assertTrue(check_prohibited_names.prohibited_source_line(root + "TmuxSessionControl.kt", text))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(root + "Other.kt", "tmux copy-mode -t '$target'"))
+
+    def test_remote_model_tags_follow_typed_consumers_and_their_tests(self) -> None:
+        root = "mobile/android/app/src/"
+        package = "java/io/github/kuddev/pebrel/mobile/"
+        paths = (
+            "main/" + package + "connection/RemoteSessions.kt",
+            "main/" + package + "connection/TmuxSessionControl.kt",
+            "main/" + package + "session/SessionRepository.kt",
+            "test/" + package + "connection/SshReconnectTest.kt",
+            "test/" + package + "connection/TmuxDiscoveryTest.kt",
+            "test/" + package + "session/SshRecoveryTest.kt",
+        )
+        for path in paths:
+            for text in ('RemoteSession("tmux", id, name)', 'RemoteSession("herdr", id, name)',
+                         'attachment?.session?.kind == "tmux"', 'it.kind == "tmux"'):
+                with self.subTest(path=path, text=text):
+                    self.assertFalse(check_prohibited_names.prohibited_source_line(root + path, text))
+                    self.assertTrue(check_prohibited_names.prohibited_source_line(root + path, text + '; compare with tmux'))
+            self.assertTrue(check_prohibited_names.prohibited_source_line(root + path, 'val label = "tmux"'))
+        path = root + paths[0]
+        for text in ('SshSessionMode.TMUX -> "tmux"', 'SshSessionMode.HERDR -> "herdr"'):
+            self.assertFalse(check_prohibited_names.prohibited_source_line(path, text))
+            self.assertTrue(check_prohibited_names.prohibited_source_line(path, text + '; compare with herdr'))
+        self.assertTrue(check_prohibited_names.prohibited_source_line(path, 'SshSessionMode.TMUX -> "herdr"'))
+        for path in ("README.md", root + "main/" + package + "connection/Other.kt",
+                     root + "test/" + package + "ui/PromotionTest.kt"):
+            self.assertTrue(check_prohibited_names.prohibited_source_line(path, 'RemoteSession("tmux", id, name)'))
+
+    def test_real_remote_process_fixtures_keep_executable_and_environment_names(self) -> None:
+        root = "mobile/android/app/src/test/java/io/github/kuddev/pebrel/mobile/connection/"
+        cases = (
+            ("TmuxDiscoveryTest.kt", 'ProcessBuilder("tmux", "-V").start()'),
+            ("TmuxDiscoveryTest.kt", 'command("tmux", "-f", "/dev/null", "new-session", "-d", "-s", "fixture")'),
+            ("TmuxDiscoveryTest.kt", 'command("tmux", "kill-server")'),
+            ("TmuxDiscoveryTest.kt", 'remove("TMUX"); remove("LANG")'),
+            ("SshPtyIdentityTest.kt", "            111 110 pts/7 tmux: client"),
+            ("SshPtyIdentityTest.kt", "            300 1 ? tmux: server"),
+        )
+        for filename, text in cases:
+            with self.subTest(filename=filename, text=text):
+                self.assertFalse(check_prohibited_names.prohibited_source_line(root + filename, text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(root + filename, text + "; compare with tmux"))
+                self.assertTrue(check_prohibited_names.prohibited_source_line(root + "OtherTest.kt", text))
+                self.assertTrue(check_prohibited_names.prohibited_source_line("README.md", text))
+        for text in ('command("tmux", "buy-now")', 'ProcessBuilder("tmux", "sponsor")',
+                     'val label = "tmux"', 'remove("TMUX premium")', "tmux: client", "111 110 pts/7 tmux: sponsor"):
+            for filename in ("TmuxDiscoveryTest.kt", "SshPtyIdentityTest.kt"):
+                self.assertTrue(check_prohibited_names.prohibited_source_line(root + filename, text))
+
+    def test_technical_notes_and_fix_subjects_do_not_exempt_ordinary_mentions(self) -> None:
+        paths = (
+            "architecture/notes/mobile/android/app/connection/2026-10-22-recovery.md",
+            "mobile/android/app/src/main/java/connection/TmuxSessionControl.kt",
+            "mobile/android/app/src/test/java/connection/TmuxDiscoveryTest.kt",
+            "README.md",
+        )
+        for path in paths:
+            for text in ("Compare with tmux.", "Typed tmux commands use an independent channel.",
+                         "Promote herdr.", "Use Ghostty instead."):
+                self.assertTrue(check_prohibited_names.prohibited_source_line(path, text))
+        with tempfile.TemporaryDirectory() as directory:
+            message = Path(directory) / "message.txt"
+            for text in ("fix(android): scroll tmux history", "fix(android): compare with herdr"):
+                message.write_text(text, encoding="utf-8")
+                self.assertTrue(check_prohibited_names.scan_message(message))
+
+    def test_range_and_staged_checks_keep_remote_commands_but_reject_appended_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            run_git(repository, "init", "-q")
+            run_git(repository, "config", "user.name", "CI test")
+            run_git(repository, "config", "user.email", "ci@example.invalid")
+            run_git(repository, "commit", "--allow-empty", "-qm", "baseline")
+            base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+            path = "mobile/android/app/src/main/java/connection/TmuxSessionControl.kt"
+            source = repository / path
+            source.parent.mkdir(parents=True)
+            line = 'val command = "tmux send-keys -X -t \'$target\' cancel"'
+            source.write_text(line + "\n", encoding="utf-8")
+            run_git(repository, "add", path)
+            self.assertEqual(self.check_staged(repository).returncode, 0)
+            run_git(repository, "commit", "-qm", "fix(android): return the remote client to live input")
+            check = [sys.executable, str(CHECKER), "range", "--base", base, "--head", "HEAD"]
+            clean = subprocess.run(check, cwd=repository, text=True, capture_output=True)
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            source.write_text(line + " // Sponsor https://example.invalid/tmux\n", encoding="utf-8")
+            run_git(repository, "add", path)
+            self.assertEqual(self.check_staged(repository).returncode, 1)
+            run_git(repository, "commit", "-qm", "append a forbidden promotion")
+            bad = subprocess.run(check, cwd=repository, text=True, capture_output=True)
+            self.assertEqual(bad.returncode, 1, bad.stderr)
+            self.assertIn("example.invalid/tmux", bad.stderr)
+
     def test_staged_hook_configuration_is_not_exempt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
@@ -206,7 +484,7 @@ class ProhibitedNamesTests(unittest.TestCase):
     def test_range_uses_merge_base_and_keeps_added_then_deleted_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
-            run_git(repository, "init", "-q")
+            run_git(repository, "init", "-q", "-b", "fixture-base")
             run_git(repository, "config", "user.name", "CI test")
             run_git(repository, "config", "user.email", "ci@example.invalid")
             (repository / "README.md").write_text("Historical Ghostty attribution\n", encoding="utf-8")
@@ -267,7 +545,7 @@ class ProhibitedNamesTests(unittest.TestCase):
     def test_range_scans_merge_resolution_without_replaying_second_parent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
-            run_git(repository, "init", "-q")
+            run_git(repository, "init", "-q", "-b", "fixture-base")
             run_git(repository, "config", "user.name", "CI test")
             run_git(repository, "config", "user.email", "ci@example.invalid")
             (repository / "shared.md").write_text("base\n", encoding="utf-8")

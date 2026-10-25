@@ -175,14 +175,16 @@ impl Render for RecipeLibrary {
             .child(
                 div().text_sm().text_color(muted).child(language.text(Message::RecipeDescription)),
             )
-            .child(
+            .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                "recipe-scope",
+                usize::from(self.current_tab),
                 h_flex()
                     .gap_2()
                     .child(
                         Button::new("recipe-scope-window")
                             .small()
                             .ghost()
-                            .selected(!self.current_tab)
+                            .toggled(!self.current_tab)
                             .label(language.text(Message::RecipeWindow))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.current_tab = false;
@@ -193,7 +195,7 @@ impl Render for RecipeLibrary {
                         Button::new("recipe-scope-tab")
                             .small()
                             .ghost()
-                            .selected(self.current_tab)
+                            .toggled(self.current_tab)
                             .disabled(self.tab_snapshot.is_none())
                             .label(language.text(Message::RecipeTab))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -201,7 +203,8 @@ impl Render for RecipeLibrary {
                                 cx.notify();
                             })),
                     ),
-            )
+                div().rounded(px(6.0)).bg(cx.theme().secondary),
+            ))
             .child(
                 h_flex()
                     .w_full()

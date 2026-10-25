@@ -8,6 +8,7 @@ const MAX_IMPORT_HOSTS: usize = 10_000;
 #[derive(Clone, Debug)]
 pub(crate) struct HostRecord {
     pub destination: String,
+    pub connect_to: Option<String>,
     pub label: String,
     pub organization: HostOrganization,
 }
@@ -30,6 +31,7 @@ pub(crate) fn parse_csv(text: &str) -> Result<Vec<HostRecord>, String> {
     let notes = column(&["notes", "description"]);
     let username = column(&["username", "user"]);
     let port = column(&["port"]);
+    let connect_to = column(&["connect_to"]);
     let secrets: Vec<_> = header
         .iter()
         .enumerate()
@@ -80,7 +82,11 @@ pub(crate) fn parse_csv(text: &str) -> Result<Vec<HostRecord>, String> {
         }
         let organization = HostOrganization::from_inputs(field(group), field(tags), field(notes))
             .map_err(|e| format!("Row {}: {e}", index + 1))?;
-        records.push(HostRecord { destination: target, label, organization });
+        let connect_to = (!field(connect_to).is_empty()).then(|| field(connect_to).to_owned());
+        if let Some(address) = &connect_to {
+            validate_ssh_destination(address).map_err(|e| format!("Row {}: {e}", index + 1))?;
+        }
+        records.push(HostRecord { destination: target, connect_to, label, organization });
         if records.len() > MAX_IMPORT_HOSTS {
             return Err("Host import exceeds 10000 entries".into());
         }
@@ -110,14 +116,18 @@ impl SshProfiles {
                 connection: Default::default(),
             });
             updated.set_organization(&record.destination, record.organization.clone())?;
+            if let Some(target) = &record.connect_to {
+                updated.set_connection_destination(&record.destination, target)?;
+            }
             added += 1;
         }
+        updated.validate_targets()?;
         *self = updated;
         Ok(added)
     }
 
     pub(crate) fn export_csv(&self) -> String {
-        let mut csv = "destination,label,group,tags,notes\r\n".to_owned();
+        let mut csv = "destination,label,group,tags,notes,connect_to\r\n".to_owned();
         for profile in &self.profiles {
             let meta = self.organization(&profile.destination);
             let tags = meta.tags.join(";");
@@ -127,6 +137,7 @@ impl SshProfiles {
                 &meta.group,
                 &tags,
                 &meta.notes,
+                self.targets.get(&profile.destination).map(String::as_str).unwrap_or_default(),
             ];
             csv.push_str(&fields.into_iter().map(quote_csv).collect::<Vec<_>>().join(","));
             csv.push_str("\r\n");

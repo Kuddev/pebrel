@@ -58,7 +58,6 @@ pub mod keycap;
 mod keycap_model;
 pub mod os_icons;
 pub mod overlay_list;
-mod scrollbar;
 pub mod surface;
 pub mod text_field;
 pub mod theme;

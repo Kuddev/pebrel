@@ -1,12 +1,7 @@
-name: AI review after CI
+name: Legacy manual AI review
 
 on:
-  workflow_run:
-    workflows: [Full native tests, Architecture contracts, PR size]
-    types: [completed]
-  # Metadata only: never check out or execute pull-request content with this token.
-  pull_request_target:
-    types: [ready_for_review]
+  # Automatic review is retired. This legacy manual entry remains disabled in GitHub.
   workflow_dispatch:
     inputs:
       pull_number:
@@ -29,7 +24,7 @@ concurrency:
 
 jobs:
   request-review:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

@@ -219,14 +219,24 @@ impl Snapshot {
             quote(&self.python),
             quote(&self.file("bridge.py")?.path)
         );
+        let bashrc = format!(
+            "{}\n{}",
+            include_str!("../../res/shell/bashrc"),
+            nebula_terminal::tty::connection_shell()
+        );
+        let zshrc = format!(
+            "{}\n{}",
+            include_str!("../../res/shell/zshrc"),
+            nebula_terminal::tty::connection_shell()
+        );
         let mut assets = vec![
             ("pebrel-hook", launcher.as_str()),
             ("bridge.py", BRIDGE),
             ("shell.py", SHELL),
-            ("bashrc", include_str!("../../res/shell/bashrc")),
+            ("bashrc", bashrc.as_str()),
             (".zshenv", include_str!("../../res/shell/zshenv")),
             (".zprofile", include_str!("../../res/shell/zprofile")),
-            (".zshrc", include_str!("../../res/shell/zshrc")),
+            (".zshrc", zshrc.as_str()),
         ];
         if self.present("opencode") {
             assets.push(("opencode", bridges::OPENCODE_PLUGIN_JS));

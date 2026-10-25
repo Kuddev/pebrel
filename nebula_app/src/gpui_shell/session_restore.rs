@@ -25,12 +25,12 @@ fn direction_of(axis: SplitAxis) -> SplitDirection {
 /// 不被 f32 序列化噪声绊倒，旧壳同因）。
 pub fn layout_from_tree(
     tree: &SplitTree<u64>,
-    leaf_data: &impl Fn(u64) -> (String, Option<AgentSession>, Option<LaunchSession>),
+    leaf_data: &impl Fn(u64) -> (String, Option<AgentSession>, Option<LaunchSession>, Option<String>),
 ) -> LayoutSession {
     match tree {
         SplitTree::Leaf(id) => {
-            let (cwd, agent, launch) = leaf_data(*id);
-            LayoutSession::Pane { cwd, agent, launch }
+            let (cwd, agent, launch, custom_name) = leaf_data(*id);
+            LayoutSession::Pane { cwd, agent, launch, custom_name }
         },
         SplitTree::Split { direction, ratio, first, second, .. } => LayoutSession::Split {
             axis: axis_of(*direction),
@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn layout_round_trips_structure_ratio_and_leaf_order() {
         let tree = sample_tree();
-        let layout = layout_from_tree(&tree, &|id| (format!("D:/pane-{id}"), None, None));
+        let layout = layout_from_tree(&tree, &|id| (format!("D:/pane-{id}"), None, None, None));
         assert_eq!(layout.pane_count(), 3);
 
         let mut next = 10u64;
@@ -133,6 +133,7 @@ mod tests {
                     source: "claude".into(),
                     session_id: Some("abc-1".into()),
                 }),
+                None,
                 None,
             )
         });

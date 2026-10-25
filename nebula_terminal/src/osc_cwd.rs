@@ -1,8 +1,8 @@
 //! Sniffer for OSC sequences the vte parser drops: OSC 7 / OSC 9;9 (working
-//! directory) and OSC 133;A (FinalTerm/semantic prompt mark).
+//! directory), OSC 133 (shell markers), and OSC 7501 (program status).
 //!
 //! The vte parser Nebula uses (crates.io `vte` 0.15) does not decode OSC 7
-//! (`file://` URI), OSC 9;9 (ConEmu path) or OSC 133 (semantic prompt zones) —
+//! (`file://` URI), OSC 9;9 (working directory) or OSC 133 (semantic prompt zones) —
 //! it logs them as "unhandled" and drops them. Rather than fork the parser, we
 //! tee the raw PTY byte stream through this tiny state machine.
 //!
@@ -12,8 +12,8 @@
 //! `parser.advance` call at these offsets and applies each mark in between —
 //! zero vte changes, perfect cursor accuracy.
 //!
-//! On Windows the cwd channels differ by convention: Nushell/Windows-Terminal
-//! shells default to OSC 9;9 (Nushell's OSC 7 is off by default on Windows),
+//! On Windows, Nushell defaults to OSC 9;9 for working-directory reports
+//! (its OSC 7 reporting is off by default there),
 //! while PowerShell/pwsh and most Unix shells use OSC 7. We accept both.
 //! OSC 133;A comes from Nebula's own shell integration (PS1/prompt hooks) or
 //! natively from shells like Nushell.
@@ -36,9 +36,11 @@ const MAX_IMAGE_PIXELS: u64 = 16 * 1024 * 1024;
 /// 远端 Hook JSON 使用 Base64 传输；上限阻止伪造 OSC 长时间占用内存。
 const MAX_HOOK_PAYLOAD: usize = 96 * 1024;
 
-/// An OSC event recognized by the sniffer.
+/// An OSC or lifecycle event recognized by the sniffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscEvent {
+    /// Pebrel 有界 MIME 内容扩展，呈现类型由前端解释。
+    InlineContent(crate::inline_content::Packet),
     /// OSC 7 / 9;9 — the shell reported its working directory (native path).
     Cwd(String),
     /// OSC 133;A — the shell is about to draw a prompt (semantic zone start).
@@ -55,7 +57,7 @@ pub enum OscEvent {
     /// (the OSC 1337 shell-integration convention). Carries Nebula queries
     /// (`nebula_ai_query`) from the `#`-line interception, among others.
     UserVar { name: String, value: String },
-    /// OSC 9 — free-text program notification (iTerm style).
+    /// OSC 9 — free-text program notification.
     Notify(String),
     /// OSC 9;4 — ConEmu 任务进度。`state` 是原始状态码，`value` 是 0..=100 的
     /// 百分比（只有 state 1 和 4 带值）。
@@ -65,9 +67,14 @@ pub enum OscEvent {
     /// 把未知码当成非法而丢掉，等于让进度条卡在最后一个状态上
     /// 永远不消失。映射交给消费端。
     Progress { state: u8, value: Option<u8> },
+    /// OSC 7501 program status, fully validated before publication.
+    ProgramStatus(crate::program_status::Report),
+    /// RIS clears program records at its byte-stream position, even while VT
+    /// rendering is held in a synchronized-update buffer.
+    ProgramStatusReset,
     /// Nebula 远端 Hook 私有 OSC：随机通道令牌 + 原始 Hook 信封。
     RemoteHook { token: String, envelope: Vec<u8> },
-    /// OSC 1337 `File=...inline=1:<base64>` — an iTerm2 inline image.
+    /// OSC 1337 `File=...inline=1:<base64>` — an inline image.
     /// Only static PNG/JPEG/GIF input is accepted; animated GIFs are rendered
     /// as their first frame by the frontend.
     /// `width`/`height` come from the encoded image header, in pixels.
@@ -87,7 +94,7 @@ enum Phase {
     OscEsc,
 }
 
-/// Streaming OSC 7 / 9;9 / 133;A sniffer. Feed it every PTY byte; it returns
+/// Streaming sniffer for additional terminal controls. Feed it every PTY byte; it returns
 /// the recognized events, each tagged with the offset just past its
 /// terminator (the `parser.advance` split point).
 #[derive(Default)]
@@ -103,6 +110,11 @@ impl CwdSniffer {
     /// Feed a chunk of raw PTY output. Returns all complete events within the
     /// chunk in order, tagged with the byte offset just past each terminator.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<(usize, OscEvent)> {
+        // Plain output cannot start a report. Preserve partial escape/OSC state
+        // across chunks, but let the common ground-state scan use slice search.
+        if matches!(self.phase, Phase::Ground) && !bytes.contains(&0x1b) {
+            return Vec::new();
+        }
         let mut events = Vec::new();
         for (i, &b) in bytes.iter().enumerate() {
             match self.phase {
@@ -111,34 +123,43 @@ impl CwdSniffer {
                         self.phase = Phase::Esc;
                     }
                 },
-                Phase::Esc => match b {
-                    b']' => {
-                        self.phase = Phase::Osc;
-                        self.payload.clear();
-                        self.interested = true;
-                    },
-                    0x1b => {}, // another ESC: stay armed
-                    _ => self.phase = Phase::Ground,
-                },
+                Phase::Esc => self.step_escape(b, i, &mut events),
                 Phase::Osc => self.step_osc(b, i, &mut events),
                 Phase::OscEsc => {
                     if b == b'\\' {
                         // ST terminator (ESC \).
-                        if let Some(event) = self.parse() {
+                        if let Some(event) = self.parse(2) {
                             events.push((i + 1, event));
                         }
                         self.reset_to_ground();
                     } else {
-                        // The ESC belonged to the payload after all; keep it and
-                        // reprocess this byte in the normal OSC state.
-                        self.push(0x1b);
-                        self.phase = Phase::Osc;
-                        self.step_osc(b, i, &mut events);
+                        // ESC starts a new escape, not OSC payload. Retaining
+                        // it could publish an aborted report after a later RIS.
+                        self.reset_to_ground();
+                        self.step_escape(b, i, &mut events);
                     }
                 },
             }
         }
         events
+    }
+
+    fn step_escape(&mut self, b: u8, i: usize, events: &mut Vec<(usize, OscEvent)>) {
+        match b {
+            b']' => {
+                self.phase = Phase::Osc;
+                self.payload.clear();
+                self.interested = true;
+            },
+            b'c' => {
+                self.reset_to_ground();
+                events.push((i + 1, OscEvent::ProgramStatusReset));
+            },
+            // Executed/ignored controls and another ESC leave VTE in Escape.
+            // CAN/SUB are excluded: they cancel that escape as well.
+            0x00..=0x17 | 0x19 | 0x1b..=0x1f | 0x7f => self.phase = Phase::Esc,
+            _ => self.phase = Phase::Ground,
+        }
     }
 
     /// Handle one byte while inside an OSC payload. `i` is the byte's offset
@@ -147,11 +168,12 @@ impl CwdSniffer {
         match b {
             0x07 => {
                 // BEL terminator.
-                if let Some(event) = self.parse() {
+                if let Some(event) = self.parse(1) {
                     events.push((i + 1, event));
                 }
                 self.reset_to_ground();
             },
+            0x18 | 0x1a => self.reset_to_ground(), // CAN / SUB cancel the OSC.
             0x1b => self.phase = Phase::OscEsc,
             _ => self.push(b),
         }
@@ -171,6 +193,8 @@ impl CwdSniffer {
         // Inline images are the one legitimately huge OSC we buffer.
         let cap = if self.payload.starts_with(b"1337;") {
             MAX_IMAGE_PAYLOAD
+        } else if self.payload.starts_with(b"777;pebrel-view;") {
+            crate::inline_content::MAX_FRAME_BYTES
         } else if self.payload.starts_with(b"777;nebula-hook;") {
             MAX_HOOK_PAYLOAD
         } else {
@@ -189,7 +213,20 @@ impl CwdSniffer {
     }
 
     /// Parse a completed payload into an event.
-    fn parse(&self) -> Option<OscEvent> {
+    fn parse(&self, terminator_len: usize) -> Option<OscEvent> {
+        if self.payload.starts_with(b"777;pebrel-view;") {
+            return self
+                .interested
+                .then(|| crate::inline_content::Packet::parse(&self.payload))
+                .flatten()
+                .map(OscEvent::InlineContent);
+        }
+        if let Some(body) = self.payload.strip_prefix(b"7501;") {
+            if !self.interested || self.payload.len() + 2 + terminator_len > 4096 {
+                return None;
+            }
+            return crate::program_status::parse(body).map(OscEvent::ProgramStatus);
+        }
         if let Some(rest) = self.payload.strip_prefix(b"7;") {
             return parse_osc7_uri(rest).map(OscEvent::Cwd);
         }
@@ -208,7 +245,7 @@ impl CwdSniffer {
             return parse_remote_hook(rest);
         }
         if let Some(rest) = self.payload.strip_prefix(b"133;") {
-            // Semantic prompt zones (FinalTerm). `A` may carry kitty-style
+            // Semantic prompt zones. `A` may carry optional
             // `;key=value` params — accept those too.
             let phased = |ch: u8| rest.first() == Some(&ch) && (rest.len() == 1 || rest[1] == b';');
             if phased(b'A') {
@@ -233,8 +270,8 @@ impl CwdSniffer {
             return None;
         }
         if let Some(rest) = self.payload.strip_prefix(b"9;") {
-            // OSC 9 family. `9;9;` (cwd) matched above; `9;4;` is ConEmu
-            // progress; anything else is an iTerm-style text notification.
+            // OSC 9 family. `9;9;` (cwd) matched above; `9;4;` reports
+            // progress; anything else is a free-text notification.
             if let Some(progress) = rest.strip_prefix(b"4;") {
                 let mut fields = progress.split(|&b| b == b';');
                 let state = fields
@@ -263,7 +300,7 @@ fn prefix_could_match(payload: &[u8]) -> bool {
     const D: &[u8] = b"1337;";
     const E: &[u8] = b"777;";
     let matches = |target: &[u8]| target.starts_with(payload) || payload.starts_with(target);
-    matches(A) || matches(B) || matches(C) || matches(D) || matches(E)
+    matches(A) || matches(B) || matches(C) || matches(D) || matches(E) || matches(b"7501;")
 }
 
 /// Parse a `SetUserVar=<name>=<base64>` body. Names are restricted to the
@@ -312,7 +349,7 @@ fn parse_osc1337_image(rest: &[u8]) -> Option<OscEvent> {
     let colon = rest.iter().position(|&b| b == b':')?;
     let (args, data) = (&rest[..colon], &rest[colon + 1..]);
 
-    // `inline=1` is required — without it iTerm2 semantics are "download".
+    // `inline=1` is required — without it the protocol semantics are "download".
     let inline = args.split(|&b| b == b';').any(|arg| arg == b"inline=1");
     if !inline {
         return None;
@@ -554,7 +591,7 @@ mod tests {
 
     #[test]
     fn osc133_with_params() {
-        // kitty-style extra params on A are still a prompt mark.
+        // Extra parameters on A are still a prompt mark.
         assert_eq!(events(b"\x1b]133;A;cl=m\x07"), vec![(13, OscEvent::PromptMark)]);
     }
 

@@ -2,6 +2,15 @@
 
 use super::*;
 
+fn accepts_startup_intro(shell: Option<&nebula_terminal::tty::Shell>) -> bool {
+    // 复用器的 stdin 是界面按键，不是 shell 提示符；注入欢迎命令会误触操作。
+    !shell.is_some_and(|shell| {
+        shell.program().rsplit(['/', '\\']).next().is_some_and(|name| {
+            name.eq_ignore_ascii_case("zellij") || name.eq_ignore_ascii_case("zellij.exe")
+        })
+    })
+}
+
 fn startup_history_directory(
     options: &nebula_terminal::tty::Options,
     env: &crate::display::SuggestEnv,
@@ -86,7 +95,7 @@ impl TerminalView {
             cell_width: (cell_w.as_f32() * scale).round().max(1.0) as u16,
             cell_height: (line_h.as_f32() * scale).round().max(1.0) as u16,
         };
-        let initial_cwd = match &launch {
+        let mut initial_cwd = match &launch {
             TerminalLaunch::Local { cwd, .. } => {
                 cwd.as_ref().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
             },
@@ -95,6 +104,10 @@ impl TerminalView {
             },
         };
         let mut launched_program = String::new();
+        // 启动目录已经是 PTY 的输入事实，不能等第一次 OSC 上报才交给补全。
+        // WSL 的启动目录属于宿主，必须保持空值，直到来宾自己报告 cwd。
+        let mut completion_cwd = String::new();
+        let mut startup_intro = false;
         let (
             ssh_destination,
             initial_title,
@@ -111,16 +124,27 @@ impl TerminalView {
                 if let Some(shell) = effective.as_ref() {
                     launched_program = shell.program().to_owned();
                 }
+                startup_intro = accepts_startup_intro(effective.as_ref());
+                let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
+                // The WSL distribution is resolved once, at spawn, and pinned into
+                // the spawn while `session_launch` stays as configured.
+                let wsl_distro = snapshot_shell.as_ref().and_then(|shell| {
+                    crate::shell_detect::wsl_spawn_distro(shell.program(), shell.args())
+                });
+                let spawn_shell = crate::shell_detect::spawn_shell(
+                    effective,
+                    snapshot_shell.as_ref(),
+                    wsl_distro.as_deref(),
+                );
                 // 补齐要知道这个 pane 面对**哪台机器**：`wsl.exe -d <发行版>`
                 // 启动的 tab，文件系统和命令集都在来宾里，本进程的 `std::fs`
                 // 和 PATH 描述的是另一台机器。
-                let suggest_env = effective
+                let suggest_env = spawn_shell
                     .as_ref()
                     .map(|shell| {
                         crate::completion_context::launch_environment(shell.program(), shell.args())
                     })
                     .unwrap_or_default();
-                let snapshot_shell = crate::platform::shell::snapshot_shell(effective.clone());
                 let session_launch = snapshot_shell.as_ref().map_or(
                     crate::session::LaunchSession::Default,
                     |shell| crate::session::LaunchSession::Shell {
@@ -129,8 +153,15 @@ impl TerminalView {
                         args: shell.args().to_vec(),
                     },
                 );
-                let options = session::local_options(effective, pane_id, cwd);
+                let options = session::local_options(spawn_shell, pane_id, cwd);
+                if let Some(cwd) = &options.working_directory {
+                    initial_cwd = cwd.to_string_lossy().into_owned();
+                }
                 let history_cwd = startup_history_directory(&options, &suggest_env);
+                completion_cwd = history_cwd
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 let exec_context = crate::runtime_exec::PaneExecContext::from_pty_options(&options);
                 let spawned = session::spawn(initial, term_config, options);
                 if spawned.is_ok()
@@ -174,7 +205,7 @@ impl TerminalView {
                 // 链，其余按 PowerShell 智能双列脚本。SSH 会话不注入本地
                 // 欢迎屏（远端 shell 有自己的首屏）。
                 let runtime = nebula_settings::RuntimeSettings::load();
-                if runtime.fetch && !is_ssh {
+                if runtime.fetch && !is_ssh && startup_intro {
                     use nebula_terminal::event::Notify as _;
                     // 以这次实际启动的程序为准。cmd 不能收 PowerShell 的 Clear-Host。
                     let intro_shell = crate::window_context::welcome::intro_shell_from_hints(&[
@@ -195,14 +226,20 @@ impl TerminalView {
                 (Some(session), None)
             },
             Err(err) => {
-                let what = if is_ssh { "SSH 会话启动失败" } else { "PTY 启动失败" };
-                (None, Some(format!("{what}: {err}")))
+                let message = if is_ssh {
+                    crate::i18n::Message::TerminalSshStartFailed
+                } else {
+                    crate::i18n::Message::TerminalPtyStartFailed
+                };
+                let error = crate::gpui_shell::config::ui_language(cx)
+                    .format(message, &[("error", &err.to_string())]);
+                (None, Some(error))
             },
         };
 
-        let (ghost_enabled, accept, completion_style) = match cx.try_global::<Settings>() {
-            Some(settings) => (settings.ghost, settings.accept, settings.completion_style),
-            None => (true, Default::default(), Default::default()),
+        let (ghost_enabled, completion_style) = match cx.try_global::<Settings>() {
+            Some(settings) => (settings.ghost, settings.completion_style),
+            None => (true, Default::default()),
         };
 
         let focus_handle = cx.focus_handle();
@@ -223,6 +260,7 @@ impl TerminalView {
                 }
             }),
             cx.on_focus_out(&focus_handle, window, |view, _event, _window, cx| {
+                view.path_drop.invalidate();
                 if view.cursor_pane_focused {
                     view.cursor_pane_focused = false;
                     view.restart_cursor_blink(cx);
@@ -231,12 +269,20 @@ impl TerminalView {
         ];
 
         let mut view = Self {
+            _history_subscription: cx
+                .observe_global::<crate::gpui_shell::completion_history::ClearState>(|view, cx| {
+                    view.invalidate_completion_history(cx);
+                }),
+            native_results: Default::default(),
             pane_id,
             session,
             focus_handle,
             math: super::super::math_overlay::MathOverlay::default(),
+
+            effect: None,
             answers: crate::assistant_answer::AnswerInbox::default(),
             answer_reader: None,
+            reading: super::super::reading::ReadingState::default(),
             confirmation: super::super::confirmation::ConfirmationState::default(),
             font: mono_font(&families[0], FontWeight::NORMAL, FontStyle::Normal, ligatures),
             font_bold: mono_font(&families[1], FontWeight::BOLD, FontStyle::Normal, ligatures),
@@ -273,6 +319,9 @@ impl TerminalView {
             active_run: None,
             last_run: None,
             agent_activity: Default::default(),
+            program_status: None,
+            program_status_seen: false,
+            pty_failed: false,
             progress: crate::taskbar::TaskProgress::None,
             pending_runtime_submit: None,
             pending_shell_command: None,
@@ -280,11 +329,15 @@ impl TerminalView {
             session_launch,
             inline_images: super::super::inline_image::InlineImageStore::default(),
             image_paste: image_paste::ImagePasteState::default(),
+            native_clipboard: native_clipboard::NativeClipboard::default(),
             path_drop: path_drop::PathDropState::default(),
             ssh_destination,
+            port_forwards: Vec::new(),
+            port_forward_task: None,
             ssh_label: None,
             exec_context,
             ssh_stage: None,
+            ssh_retry_pending: false,
             ssh_connect: None,
             ssh_connect_last_step: std::time::Instant::now(),
             ai_session: None,
@@ -295,6 +348,11 @@ impl TerminalView {
             error,
             exited: None,
             scrollbar_drag: None,
+            scrollbar_hovered: false,
+            scrollbar_visibility: cx
+                .try_global::<Settings>()
+                .map(|settings| settings.scrollbar_visibility)
+                .unwrap_or_default(),
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,
             line_height: line_h,
@@ -317,6 +375,7 @@ impl TerminalView {
             copy_on_select,
             last_report_point: None,
             cursor_visible: true,
+            cursor_animation: Default::default(),
             cursor_blink_epoch: 0,
             cursor_window_active,
             cursor_pane_focused,
@@ -328,13 +387,17 @@ impl TerminalView {
                 // 语法（`..Default::default()`）在本模块用不了；先取默认值，再
                 // 写这里唯一要定制的公开字段。
                 let mut state = crate::display::NebulaPaneState::default();
+                state.cwd = completion_cwd;
                 state.suggest_env = suggest_env;
                 state
             },
             suggest_anchor: None,
+            suggestion_task: None,
+            completion_session: crate::completion::Session::default(),
+            completion_editor: super::editor::Editor::default(),
+            editor_query_task: None,
             completion_viewport: super::super::completion_viewport::CompletionViewport::default(),
             ghost_enabled,
-            accept,
             completion_style,
             awaiting_input: false,
             last_command_failed: false,
@@ -344,8 +407,8 @@ impl TerminalView {
             bell_flash_epoch: 0,
         };
         // 出生即把亮暗种进 Term：`Term::color_scheme_dark` 的默认值是「暗」，
-        // 浅色主题下启动的 pane 如果不种，第一个 DECSET 2031 的订阅方会拿到
-        // 一个错的初值，而且在用户下一次改主题之前都纠不回来。
+        // 浅色主题下启动的 pane 如果不种，第一次真实的亮暗翻转会被
+        // `set_color_scheme` 的同值去重吞掉，订阅方漏收第一条通知。
         if let Some(session) = &view.session {
             session.term.lock().set_color_scheme(view.palette.is_dark());
         }
@@ -358,6 +421,17 @@ impl TerminalView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zellij_launch_preserves_input_for_the_multiplexer() {
+        for program in ["zellij", "/opt/homebrew/bin/zellij", "/usr/local/bin/zellij"] {
+            let shell = nebula_terminal::tty::Shell::new(program.into(), vec![]);
+            assert!(!accepts_startup_intro(Some(&shell)));
+        }
+        assert!(accepts_startup_intro(None));
+        let shell = nebula_terminal::tty::Shell::new("/bin/zsh".into(), vec!["-l".into()]);
+        assert!(accepts_startup_intro(Some(&shell)));
+    }
 
     #[test]
     fn startup_history_uses_only_local_initial_directories() {

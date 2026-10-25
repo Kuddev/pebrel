@@ -34,6 +34,13 @@ pub fn credential_target(destination: &str) -> String {
     format!("Pebrel/SSH/{destination}")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+fn username_hint(destination: &str) -> Option<String> {
+    let address = destination.strip_prefix("ssh://").unwrap_or(destination);
+    let (username, _) = address.rsplit_once('@')?;
+    (!username.is_empty()).then(|| username.to_owned())
+}
+
 pub fn private_key_credential_target(private_key: &[u8]) -> String {
     use sha2::{Digest, Sha512};
     use std::fmt::Write as _;
@@ -66,7 +73,7 @@ pub fn askpass_action(has_stored_password: bool, attempt_marker_exists: bool) ->
 
 #[cfg(windows)]
 pub(crate) mod windows_store {
-    use super::{AskpassAction, askpass_action, classify_prompt, credential_target};
+    use super::{AskpassAction, askpass_action, classify_prompt, credential_target, username_hint};
     use std::ffi::c_void;
     use std::io::{self, Write};
     use std::path::Path;
@@ -343,12 +350,6 @@ pub(crate) mod windows_store {
         }
     }
 
-    fn username_hint(destination: &str) -> Option<String> {
-        let value = destination.strip_prefix("ssh://").unwrap_or(destination);
-        let user = value.split('@').next()?;
-        (!user.is_empty() && value.contains('@')).then(|| user.to_owned())
-    }
-
     fn write_askpass_response(password: &[u8]) -> io::Result<()> {
         let mut out = io::stdout();
         out.write_all(password)?;
@@ -470,6 +471,15 @@ mod tests {
             credential_target("ssh://admin@example.com:2222"),
             "Pebrel/SSH/ssh://admin@example.com:2222"
         );
+    }
+
+    #[test]
+    fn jumpserver_askpass_hint_preserves_the_full_username_and_credential_identity() {
+        let destination = "ssh://jumpserverUser@root@[::1]:2222";
+        assert_eq!(username_hint(destination).as_deref(), Some("jumpserverUser@root"));
+        assert_eq!(credential_target(destination), format!("Pebrel/SSH/{destination}"));
+        assert_eq!(username_hint("host"), None);
+        assert_eq!(username_hint("@host"), None);
     }
 
     #[test]

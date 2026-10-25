@@ -177,3 +177,28 @@ fn hidden_wakeup_still_flushes_shell_commands_and_pending_enter(cx: &mut TestApp
         assert!(view.pending_runtime_submit.is_none());
     });
 }
+
+#[gpui::test]
+fn ssh_exit_and_failure_cancel_pending_forward_and_hide_remote_actions(cx: &mut TestAppContext) {
+    let (view, window, _) = open(cx);
+    for failed in [false, true] {
+        view.update(window, |view, cx| {
+            view.exited = None;
+            view.ssh_destination = Some("fixture@localhost".into());
+            view.apply_ssh_stage(crate::ssh_session::SshStage::Ready, cx);
+            assert_eq!(view.ready_ssh_destination(), Some("fixture@localhost"));
+            view.port_forward_task =
+                Some(cx.spawn(async |_, _| std::future::pending::<()>().await));
+            if failed {
+                view.apply_ssh_stage(
+                    crate::ssh_session::SshStage::Failed("disconnected".into()),
+                    cx,
+                );
+            } else {
+                view.process_event(TermEvent::Exit, cx);
+            }
+            assert!(view.port_forward_task.is_none());
+            assert!(view.ready_ssh_destination().is_none());
+        });
+    }
+}

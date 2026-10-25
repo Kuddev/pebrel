@@ -63,7 +63,7 @@ impl SettingsPane {
             .gap_x(px(7.0))
             .gap_y(px(10.0))
             .role(gpui::accesskit::Role::RadioGroup)
-            .aria_label(language.pick("应用图标配色", "App icon colors"))
+            .aria_label(language.text(crate::i18n::Message::SettingsAppearanceAppIconColors))
             .children(picker.draft.choices(picker.filter).into_iter().map(|choice| {
                 let AppearanceSelection::Icon(icon) = choice else { unreachable!() };
                 let selected = draft == icon;
@@ -110,22 +110,25 @@ impl SettingsPane {
             .border_color(gpui::rgb(if picker.dark_preview { 0x3d434d } else { 0xdfe3e9 }))
             .bg(gpui::rgb(if picker.dark_preview { 0x1a1d24 } else { 0xf0f2f5 }))
             .child(icon_image(draft, if compact { 76.0 } else { 104.0 }, window));
-        let tabs = h_flex().p(px(3.0)).gap_0().rounded(px(6.0)).bg(colors.subtle).children(
-            [false, true].into_iter().map(|dark| {
+        let preview_buttons = [false, true]
+            .into_iter()
+            .map(|dark| {
                 Button::new(if dark { "icon-preview-dark" } else { "icon-preview-light" })
                     .label(if dark {
-                        language.pick("深色背景", "Dark")
+                        language.text(crate::i18n::Message::SettingsAppearanceDark)
                     } else {
-                        language.pick("浅色背景", "Light")
+                        language.text(crate::i18n::Message::SettingsAppearanceLight)
                     })
                     .ghost()
                     .h(px(25.0))
                     .px(px(9.0))
                     .text_size(px(10.0))
                     .rounded(px(4.0))
-                    .text_color(colors.secondary)
-                    .when(picker.dark_preview == dark, |button| {
-                        button.bg(colors.surface).text_color(colors.ink)
+                    .toggled(picker.dark_preview == dark)
+                    .text_color(if picker.dark_preview == dark {
+                        colors.ink
+                    } else {
+                        colors.secondary
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(picker) = this.appearance_picker.as_mut() {
@@ -133,17 +136,20 @@ impl SettingsPane {
                         }
                         cx.notify();
                     }))
-            }),
+            })
+            .collect::<Vec<_>>();
+        let tabs = h_flex().p(px(3.0)).rounded(px(6.0)).bg(colors.subtle).child(
+            crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                "icon-preview-modes",
+                usize::from(picker.dark_preview),
+                h_flex().h(px(25.0)).children(preview_buttons),
+                div().rounded(px(4.0)).bg(colors.surface),
+            ),
         );
         let title = v_flex()
             .items_center()
             .gap(px(5.0))
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .font_semibold()
-                    .child(language.pick(draft.palette().name_zh, draft.palette().name_en)),
-            )
+            .child(div().text_size(px(13.0)).font_semibold().child(icon_name(draft, language)))
             .child(
                 div()
                     .text_size(px(10.5))
@@ -171,10 +177,9 @@ impl SettingsPane {
             .text_size(px(10.5))
             .line_height(gpui::relative(1.7))
             .text_color(colors.secondary)
-            .child(language.pick(
-                "这里只切换预览背景。图标不会跟随主题自动变化。",
-                "This only changes the preview background. Your icon does not follow the theme.",
-            ));
+            .child(
+                language.text(crate::i18n::Message::SettingsAppearanceThisOnlyChangesThePreview),
+            );
         let preview = if compact {
             h_flex()
                 .w_full()
@@ -205,4 +210,36 @@ impl SettingsPane {
             h_flex().w(px(width)).items_start().gap(px(25.0)).child(grid).child(preview)
         }
     }
+}
+
+/// Localized palette name; `palette().name_en` stays available as the subtitle.
+pub(super) fn icon_name(icon: AppIconName, language: crate::i18n::UiLanguage) -> &'static str {
+    use crate::i18n::Message;
+    language.text(match icon {
+        AppIconName::Titanium => Message::SettingsAppearanceIconNameTitanium,
+        AppIconName::Glacier => Message::SettingsAppearanceIconNameGlacier,
+        AppIconName::IceBlue => Message::SettingsAppearanceIconNameIceBlue,
+        AppIconName::Cobalt => Message::SettingsAppearanceIconNameCobalt,
+        AppIconName::MidnightBlue => Message::SettingsAppearanceIconNameMidnightBlue,
+        AppIconName::SteelBlue => Message::SettingsAppearanceIconNameSteelBlue,
+        AppIconName::GlassBlue => Message::SettingsAppearanceIconNameGlassBlue,
+        AppIconName::PorcelainBlue => Message::SettingsAppearanceIconNamePorcelainBlue,
+        AppIconName::DeepBlue => Message::SettingsAppearanceIconNameDeepBlue,
+        AppIconName::MistViolet => Message::SettingsAppearanceIconNameMistViolet,
+        AppIconName::Violet => Message::SettingsAppearanceIconNameViolet,
+        AppIconName::NightViolet => Message::SettingsAppearanceIconNameNightViolet,
+        AppIconName::SilverViolet => Message::SettingsAppearanceIconNameSilverViolet,
+        AppIconName::IceCyan => Message::SettingsAppearanceIconNameIceCyan,
+        AppIconName::Cyan => Message::SettingsAppearanceIconNameCyan,
+        AppIconName::PolarCyan => Message::SettingsAppearanceIconNamePolarCyan,
+        AppIconName::CoolMint => Message::SettingsAppearanceIconNameCoolMint,
+        AppIconName::Emerald => Message::SettingsAppearanceIconNameEmerald,
+        AppIconName::NightMint => Message::SettingsAppearanceIconNameNightMint,
+        AppIconName::Porcelain => Message::SettingsAppearanceIconNamePorcelain,
+        AppIconName::Graphite => Message::SettingsAppearanceIconNameGraphite,
+        AppIconName::Monochrome => Message::SettingsAppearanceIconNameMonochrome,
+        AppIconName::SageLight => Message::SettingsAppearanceIconNameSageLight,
+        AppIconName::SageDark => Message::SettingsAppearanceIconNameSageDark,
+        AppIconName::GraphiteViolet => Message::SettingsAppearanceIconNameGraphiteViolet,
+    })
 }

@@ -8,6 +8,12 @@ pub mod colors;
 mod completion_viewport;
 pub(super) mod confirmation;
 mod cursor_motion;
+mod cursor_painter;
+#[cfg(feature = "shader-background")]
+mod effects;
+#[cfg(not(feature = "shader-background"))]
+#[path = "effects/unavailable.rs"]
+mod effects;
 pub mod element;
 mod event_mailbox;
 mod inline_image;
@@ -17,7 +23,9 @@ mod link_underline;
 pub mod math_overlay;
 mod molecule_overlay;
 pub mod mouse_protocol;
+mod native_results;
 mod osc_links;
+mod reading;
 pub mod session;
 mod session_pump;
 mod ssh_connect_overlay;

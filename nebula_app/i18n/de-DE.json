@@ -6,6 +6,10 @@
     "en_us": "English"
   },
   "settings": {
+    "opacity": {
+      "title": "Deckkraft des Fensterhintergrunds",
+      "description": "Kleinere Werte machen Terminal und Einstellungen transparenter. Text bleibt deckend."
+    },
     "sidebar": {
       "application": "Anwendung",
       "appearance": "Darstellung",

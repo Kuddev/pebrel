@@ -91,7 +91,7 @@ pub(super) fn draw(d: &mut Display) {
         return;
     }
 
-    let frame = d.nebula_ui_anims.frame();
+    let frame = d.ui_animations.frame();
     for toast in &mut d.nebula_toasts {
         toast.progress.step(frame);
         if !toast.leaving && toast.born.elapsed() >= HOLD {

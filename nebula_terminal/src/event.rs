@@ -29,7 +29,7 @@ pub enum Event {
     /// bundled PowerShell prompt emits).
     CwdReport(String),
 
-    /// An iTerm2 OSC 1337 inline image, sniffed out of the PTY stream.
+    /// An OSC 1337 inline image, sniffed out of the PTY stream.
     ///
     /// `abs_line` anchors the image's top row in the grid's absolute line
     /// numbering (see `Grid::scrolled_out`); `width`/`height` are the display
@@ -47,12 +47,15 @@ pub enum Event {
     /// queries and future channels).
     UserVar { name: String, value: String },
 
-    /// OSC 9 — free-text notification from a program (iTerm style).
+    /// OSC 9 — free-text notification from a program.
     Notify(String),
 
     /// OSC 9;4 — ConEmu 任务进度（`state` 原始码，`value` 为 0..=100）。
     /// Windows 任务栏原生支持这套语义，映射在消费端。
     Progress { state: u8, value: Option<u8> },
+
+    /// OSC 7501 records changed; consumers read the latest bounded set from Term.
+    ProgramStatusChanged,
 
     /// 已通过 SSH 通道令牌校验的远端 AI Hook 原始信封。
     AiHookEnvelope(Vec<u8>),
@@ -119,6 +122,7 @@ impl Debug for Event {
             },
             Event::Notify(text) => write!(f, "Notify({text})"),
             Event::Progress { state, value } => write!(f, "Progress({state}, {value:?})"),
+            Event::ProgramStatusChanged => write!(f, "ProgramStatusChanged"),
             Event::AiHookEnvelope(envelope) => {
                 write!(f, "AiHookEnvelope({} bytes)", envelope.len())
             },
@@ -175,6 +179,15 @@ pub trait OnResize {
 /// Event Loop for notifying the renderer about terminal events.
 pub trait EventListener {
     fn send_event(&self, _event: Event) {}
+
+    /// The host chooses a renderer for a literal shell command. Core only owns its source range.
+    fn command_view(
+        &self,
+        _shell: &str,
+        _command: &str,
+    ) -> Option<crate::inline_content::CommandView> {
+        None
+    }
 }
 
 /// Null sink for events.

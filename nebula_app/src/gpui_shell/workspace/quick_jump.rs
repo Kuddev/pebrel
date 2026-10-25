@@ -12,23 +12,23 @@ const DIRECTORY_LIMIT: usize = 128;
 const AI_SESSION_LIMIT: usize = 30;
 
 pub(super) fn rows(workspace: &NebulaWorkspace, cx: &App) -> Vec<WorkspacePaletteRow> {
-    let language = workspace_ui_language();
+    let language = crate::gpui_shell::config::ui_language(cx);
     let mut rows = tab_rows(workspace, cx, language);
     rows.extend(directory_rows(language));
     rows.extend(ssh_rows(language));
 
     let ai_group = language.pick("AI 会话", "AI sessions");
     rows.extend(
-        ai_session_palette_rows(crate::ai_sessions::scan(AI_SESSION_LIMIT)).into_iter().map(
-            |mut row| {
+        ai_session_palette_rows(crate::ai_sessions::scan(AI_SESSION_LIMIT), language)
+            .into_iter()
+            .map(|mut row| {
                 row.group_order += 4;
                 row.group = format!("{ai_group} · {}", row.group);
                 // 统一星标表达「可恢复的 Agent 会话」，provider 留在文字
                 // 元数据中；这里不把 Claude/Codex 等 CLI 品牌误当成动作图标。
                 row.icon_path = Some(IconName::Star.path());
                 row
-            },
-        ),
+            }),
     );
     rows
 }
@@ -140,29 +140,9 @@ fn directory_rows(language: crate::display::UiLanguage) -> Vec<WorkspacePaletteR
 }
 
 fn ssh_rows(language: crate::display::UiLanguage) -> Vec<WorkspacePaletteRow> {
-    let group = language.pick("SSH 主机", "SSH hosts");
-    let icons = ssh_host_icon_ids(&crate::display::nebula_data_dir());
-    crate::gpui_shell::ssh_hosts::SshHostLists::load()
-        .merged_with_labels()
-        .into_iter()
-        .map(|(host, label)| {
-            let glyph =
-                crate::display::ui::os_icons::resolve(icons.get(&host).map(String::as_str)).glyph;
-            let named = (!label.is_empty()).then_some(label.as_str());
-            let (label, hint) = shell_picker::ssh_host_display(named, &host);
-            let search = format!("{label} {host} ssh host remote 远程 连接").to_lowercase();
-            WorkspacePaletteRow {
-                group_order: 3,
-                group: group.to_owned(),
-                label,
-                hint,
-                hint_style: super::WorkspacePaletteHintStyle::Metadata,
-                search,
-                action: WorkspacePaletteAction::LaunchSshHost(host),
-                icon: None,
-                icon_glyph: Some(glyph),
-                icon_path: None,
-            }
-        })
-        .collect()
+    shell_picker::ssh_palette_rows(
+        &crate::gpui_shell::ssh_hosts::SshHostLists::load(),
+        3,
+        language.pick("SSH 主机", "SSH hosts"),
+    )
 }

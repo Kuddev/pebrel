@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::i18n::{Message, UiLanguage};
 use gpui::{Context, Window};
 use nebula_split::SplitTree;
 
@@ -38,6 +39,7 @@ pub(super) fn restored_agent_command(
 
 pub(super) fn ai_session_palette_rows(
     sessions: impl IntoIterator<Item = crate::ai_sessions::AiSession>,
+    language: UiLanguage,
 ) -> Vec<WorkspacePaletteRow> {
     let mut source_order = std::collections::HashMap::new();
     let mut rows = Vec::new();
@@ -53,7 +55,7 @@ pub(super) fn ai_session_palette_rows(
         };
         let group = crate::display::command_palette::source_group_label(session.source);
         let place = session.place_label();
-        let time = crate::ai_sessions::relative_label(session.modified);
+        let time = crate::ai_sessions::relative_label(session.modified, language);
         let location = if place.is_empty() { time } else { format!("{place} · {time}") };
         let source = session.source.display_name();
         let search = format!("{} {} {}", session.title, session.project, session.source.label());
@@ -65,7 +67,10 @@ pub(super) fn ai_session_palette_rows(
                 group_order,
                 group: group.clone(),
                 label: session.title.clone(),
-                hint: format!("恢复 · {source} · {location}"),
+                hint: language.format(
+                    Message::WorkspaceResumeHint,
+                    &[("source", source), ("location", &location)],
+                ),
                 hint_style: super::WorkspacePaletteHintStyle::Metadata,
                 search: format!("恢复 resume {search}"),
                 action: WorkspacePaletteAction::RunAiSession { command, cwd: cwd.clone() },
@@ -78,7 +83,7 @@ pub(super) fn ai_session_palette_rows(
             rows.push(WorkspacePaletteRow {
                 group_order,
                 group: group.clone(),
-                label: format!("分叉 · {}", session.title),
+                label: language.format(Message::WorkspaceForkLabel, &[("title", &session.title)]),
                 hint: format!("{source} · {location}"),
                 hint_style: super::WorkspacePaletteHintStyle::Metadata,
                 search: format!("分叉 fork {search}"),
@@ -120,7 +125,7 @@ impl NebulaWorkspace {
     /// （`next_frame_callbacks` 非空 + 窗口非活跃即节流），不必在这里再停
     /// 一次。
     pub(super) fn arm_activity_spinner_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
-        const PERIOD_SECS: f32 = 0.8;
+        const PERIOD_SECS: f32 = 1.0;
 
         if self.spinner_frame_pending.get()
             || !self.spinner_visible.get()
@@ -129,17 +134,20 @@ impl NebulaWorkspace {
             return;
         }
         self.spinner_frame_pending.set(true);
-        cx.on_next_frame(window, |workspace, window, cx| {
-            workspace.spinner_frame_pending.set(false);
-            if !workspace.spinner_visible.get() || workspace.spinner_offscreen(window) {
-                return;
-            }
-            let now = std::time::Instant::now();
-            let delta = now.saturating_duration_since(workspace.spinner_last);
-            workspace.spinner_last = now;
-            workspace.spinner_phase =
-                (workspace.spinner_phase + delta.as_secs_f32() / PERIOD_SECS).rem_euclid(1.0);
-            cx.notify();
+        let workspace = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            let _ = workspace.update(cx, |workspace, cx| {
+                workspace.spinner_frame_pending.set(false);
+                if !workspace.spinner_visible.get() || workspace.spinner_offscreen(window) {
+                    return;
+                }
+                let now = cx.background_executor().now();
+                let delta = now.saturating_duration_since(workspace.spinner_last);
+                workspace.spinner_last = now;
+                workspace.spinner_phase =
+                    (workspace.spinner_phase + delta.as_secs_f32() / PERIOD_SECS).rem_euclid(1.0);
+                cx.notify();
+            });
         });
     }
 
@@ -326,14 +334,14 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let Some(view) = self.tabs.get(ix).and_then(WorkspaceTab::focused_view) else { return };
-        let (command, cwd, agent) = {
+        let (command, agent) = {
             let view = view.read(cx);
             let Some(command) = view.ai_fork_command() else { return };
             let agent = view
                 .ai_session
                 .as_ref()
                 .and_then(|identity| crate::ai_agents::AgentKind::parse(&identity.source));
-            (command, view.local_cwd(), agent)
+            (command, agent)
         };
         let launch_session = match self.meta(ix).launch {
             // Default 与旧壳一致取「分叉这一刻」的默认 shell，不是源 tab
@@ -349,6 +357,12 @@ impl NebulaWorkspace {
                 | crate::session::LaunchSession::Ssh { .. },
             ) => return,
         };
+        // A WSL session continues in the same guest and directory, as a duplicate does.
+        let (launch_session, cwd) = super::tab_duplication::copy_launch(
+            launch_session,
+            super::tab_duplication::CopyKind::Duplicate,
+            super::tab_duplication::PaneOrigin::of(view.read(cx)),
+        );
         let color = self.meta(ix).color;
         self.activate_tab(ix, window, cx);
 
@@ -370,7 +384,11 @@ impl NebulaWorkspace {
             at,
             tab,
             TabMeta {
-                custom_name: agent.map(|agent| format!("{} 分叉", agent.display_name())),
+                runtime_id: Default::default(),
+                custom_name: agent.map(|agent| {
+                    crate::gpui_shell::config::ui_language(cx)
+                        .format(Message::WorkspaceForkTitle, &[("title", agent.display_name())])
+                }),
                 color,
                 shell_tag,
                 launch: Some(launch_session),

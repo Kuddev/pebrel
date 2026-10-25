@@ -15,6 +15,11 @@ enum Completion {
         visibility_error: Option<String>,
     },
     Exported,
+    Duplicated {
+        profiles: SshProfiles,
+        identity: String,
+        label: String,
+    },
 }
 
 impl SettingsPane {
@@ -58,9 +63,56 @@ impl SettingsPane {
                 cx.emit(SettingsPaneEvent::Changed);
             },
             Ok(Completion::Exported) => self.ssh_status = Some(SshStatus::LibraryExported),
+            Ok(Completion::Duplicated { profiles, identity, label }) => {
+                self.ssh_hosts.profiles = profiles;
+                self.ssh_hosts.load_error = None;
+                self.ssh_library.scope = HostScope::All;
+                if let Some(index) =
+                    self.filtered_library_hosts(cx).iter().position(|host| host == &identity)
+                {
+                    self.ssh_library.scroll.scroll_to_item(index, gpui::ScrollStrategy::Top);
+                }
+                self.ssh_status = Some(SshStatus::Copied(label));
+                cx.emit(SettingsPaneEvent::Changed);
+            },
             Err(error) => self.ssh_status = Some(SshStatus::Error(error)),
         }
         cx.notify();
+    }
+
+    pub(super) fn duplicate_ssh_host(&mut self, host: String, cx: &mut Context<Self>) {
+        let Some(sequence) = self.begin_host_exchange(cx) else { return };
+        let profiles = self.ssh_hosts.profiles.clone();
+        let occupied = self.ssh_hosts.merged();
+        let load_error = self.ssh_hosts.load_error.clone();
+        let task = cx.background_executor().spawn(async move {
+            if let Some(error) = load_error {
+                return Err(error);
+            }
+            let mut bytes = [0u8; 16];
+            getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+            let identity = format!("pebrel-host-{:032x}", u128::from_be_bytes(bytes));
+            if occupied.contains(&identity) {
+                return Err("Host identity already exists".into());
+            }
+            let path = crate::display::nebula_data_dir().join("ssh_profiles.json");
+            let (profiles, label) = crate::ssh_profiles::duplication::save_duplicate(
+                profiles,
+                &path,
+                &host,
+                &identity,
+                crate::ssh_credentials::load_generic_secret,
+                crate::ssh_credentials::store_generic_secret,
+                crate::ssh_credentials::delete_generic_secret,
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(Completion::Duplicated { profiles, identity, label })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| this.finish_host_exchange(sequence, result, cx));
+        })
+        .detach();
     }
 
     pub(super) fn reload_host_library(&mut self, cx: &mut Context<Self>) {

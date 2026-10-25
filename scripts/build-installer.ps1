@@ -3,7 +3,8 @@ param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')]
     [string] $Version,
 
-    [ValidateSet('debug', 'release')]
+    # 与便携包相同，安装器只能收录已内嵌 GPUI 着色器的发布构建。
+    [ValidateSet('release')]
     [string] $Configuration = 'release',
 
     [ValidateSet('NebulaTerminal', 'Pebrel')]
@@ -64,6 +65,7 @@ $setupPath = Join-Path $outputRoot "$PackageBrand-v$Version-windows-$Architectur
 
 $requiredFiles = @(
     (Join-Path $targetRoot 'pebrel.exe'),
+    (Join-Path $targetRoot 'pebrel-cli.exe'),
     (Join-Path $targetRoot 'pebrel-hook.exe'),
     (Join-Path $targetRoot 'conpty.dll'),
     (Join-Path $targetRoot 'OpenConsole.exe'),
@@ -110,6 +112,7 @@ if (-not $AllowStale) {
         'nebula-completions', 'nebula_gpui', 'nebula_settings', 'nebula_split'
     ) | ForEach-Object { Join-Path $repo $_ }
     $sourceScopes = @(
+        @{ Binary = (Join-Path $targetRoot 'pebrel-cli.exe'); Roots = $memberDirs + @((Join-Path $repo 'Cargo.toml')) },
         @{ Binary = $packagedExe; Roots = $memberDirs + @(
             (Join-Path $repo 'Cargo.toml'), (Join-Path $repo '..\gpui-component-fork\crates')) },
         @{ Binary = (Join-Path $targetRoot 'pebrel-hook.exe'); Roots = @(

@@ -10,7 +10,7 @@ Expose smooth terminal cursor movement as a dropdown under Appearance / Cursor w
 RuntimeSettings owns persisted runtime preferences. SettingsPane persists keys and broadcasts Changed, and the workspace hot-applies Settings to open TerminalViews. The existing notification-duration selector demonstrates failure rollback.
 
 ## Decision
-Add the shared enum CursorMotion with stable values `off` and `smooth`. Missing, empty or invalid values resolve to Off. Smooth means the fixed 90 ms silkmux trajectory. Include the key in preference reset. The GPUI adapter reads cached settings and applies changes to existing panes; no PTY restart is involved.
+Add the shared enum CursorMotion with stable values `off` and `smooth`. Missing, empty or invalid values resolve to Off. Smooth means the fixed 90 ms eased cursor trajectory. Include the key in preference reset. The GPUI adapter reads cached settings and applies changes to existing panes; no PTY restart is involved.
 
 ## Rejected alternatives
 A boolean loses the explicit option contract. Multiple duration settings are unnecessary for reproducing the approved effect. A new Lua/TOML override would introduce a second source and priority policy without a user need.

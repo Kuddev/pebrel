@@ -1,0 +1,5 @@
+<resources>
+    <string name="terminal_history">历史回滚行数</string>
+    <string name="terminal_history_lines">%1$d 行</string>
+    <string name="terminal_history_hint">对新建本地和 SSH 终端生效，现有会话保留原历史。默认 1000 行；按设备内存等级，每个终端最多可选 %1$d 行。拖动边缘滚动条可定位历史。</string>
+</resources>

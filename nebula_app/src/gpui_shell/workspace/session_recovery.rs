@@ -1,8 +1,35 @@
 //! Workspace snapshot capture and cold restoration.
 
 use super::*;
+use crate::i18n::Message;
 
 impl NebulaWorkspace {
+    pub(super) fn save_clean_window_session(
+        &mut self,
+        window: &Window,
+        cx: &mut App,
+    ) -> std::io::Result<()> {
+        windowing::save_current_window_session(
+            self.runtime_window_id,
+            self.snapshot_session(cx),
+            session_persistence::SaveReason::WindowClose,
+            window,
+            cx,
+        )
+    }
+
+    /// 冷启动回退（没有恢复出任何标签）时首个终端的 cwd：与 `add_terminal`
+    /// 同一合同，设置页「启动目录」优先，未设置或失效时才继承进程启动目录。
+    pub(super) fn cold_start_cwd() -> Option<std::path::PathBuf> {
+        let wsl = crate::platform::launch_directory::is_wsl(
+            super::shell_launch::startup_shell(None).as_ref(),
+        );
+        cold_start_cwd(
+            Self::startup_directory(),
+            (!wsl).then(|| std::env::current_dir().ok()).flatten(),
+        )
+    }
+
     pub(super) fn restore_update_session(
         &mut self,
         session: &crate::session::Session,
@@ -30,6 +57,7 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) -> bool {
         use crate::display::ToastKind;
+        let language = crate::gpui_shell::config::ui_language(cx);
 
         let Some(mut session) = crate::session::load() else { return false };
         if !crate::session::should_restore(&session) {
@@ -41,7 +69,10 @@ impl NebulaWorkspace {
                         window,
                         cx,
                         ToastKind::Warning,
-                        format!("连续多次启动未完成恢复，已跳过；现场保存在 {}", path.display()),
+                        language.format(
+                            Message::WorkspaceRecoverySkipped,
+                            &[("path", &path.display().to_string())],
+                        ),
                     );
                 }
             }
@@ -60,11 +91,12 @@ impl NebulaWorkspace {
         }
         self.active = session.active_tab.min(self.tabs.len().saturating_sub(1));
         self.focus_active(window, cx);
-        let text = if crashed {
-            format!("上次未正常退出，已恢复 {restored} 个标签")
+        let message = if crashed {
+            Message::WorkspaceRecoveryUnclean
         } else {
-            format!("已恢复 {restored} 个标签")
+            Message::WorkspaceRecoveryRestored
         };
+        let text = language.format(message, &[("count", &restored.to_string())]);
         crate::gpui_shell::toast::toast(window, cx, ToastKind::Success, text);
         cx.notify();
         true
@@ -79,9 +111,21 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.restore_tab_at(tab, resume_ai, self.tabs.len(), window, cx)
+    }
+
+    pub(super) fn restore_tab_at(
+        &mut self,
+        tab: &crate::session::TabSession,
+        resume_ai: bool,
+        at: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         use crate::session::{LaunchSession, LayoutSession};
 
         let layout = tab.layout.clone().unwrap_or(LayoutSession::Pane {
+            custom_name: None,
             launch: None,
             cwd: tab.cwd.clone(),
             agent: None,
@@ -92,7 +136,7 @@ impl NebulaWorkspace {
         let grid = self.initial_grid;
         let mut panes: Vec<TerminalPane> = Vec::new();
         for (index, leaf) in layout.leaves().into_iter().enumerate() {
-            let LayoutSession::Pane { cwd, agent, launch } = leaf else { continue };
+            let LayoutSession::Pane { cwd, agent, launch, custom_name } = leaf else { continue };
             let mut launch_session = launch.clone().unwrap_or_else(|| {
                 if index == 0 {
                     saved_launch.clone()
@@ -105,9 +149,23 @@ impl NebulaWorkspace {
             }
             let guest_directory =
                 tab_duplication::inherit_guest_directory(&mut launch_session, cwd);
-            let local_cwd = if guest_directory { None } else { crate::session::valid_dir(cwd) };
-            let launch = Self::terminal_launch_from_session(&launch_session, local_cwd);
-            let pane = self.new_pane(grid, launch, None, window, cx);
+            let local_cwd =
+                if guest_directory || matches!(launch_session, LaunchSession::Ssh { .. }) {
+                    None
+                } else {
+                    crate::session::valid_dir(cwd)
+                };
+            let launch = match &launch_session {
+                LaunchSession::Ssh { host } => {
+                    crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
+                        destination: host.clone(),
+                        cwd: (!cwd.is_empty()).then(|| cwd.clone()),
+                    }
+                },
+                _ => Self::terminal_launch_from_session(&launch_session, local_cwd),
+            };
+            let mut pane = self.new_pane(grid, launch, None, window, cx);
+            pane.custom_name = custom_name.as_deref().and_then(rename::normalized_name);
             if !matches!(launch_session, LaunchSession::Default) {
                 pane.view.update(cx, |view, _| view.session_launch = launch_session);
             }
@@ -132,13 +190,13 @@ impl NebulaWorkspace {
         });
         let focused =
             panes.get(tab.active_pane).or_else(|| panes.first()).map(|pane| pane.id).unwrap_or(0);
-        // 恢复期保持文件里的既有次序，不套「新标签插入位置」策略。
+        // 冷恢复由调用方追加，复制标签则使用新标签插入位置。
         // 重命名与色标随会话一起回来（旧壳同合同）。
-        let at = self.tabs.len();
         self.insert_tab_at(
             at,
             WorkspaceTab::Terminal { panes, tree, focused, zoomed: false, broadcast: false },
             TabMeta {
+                runtime_id: Default::default(),
                 custom_name: tab.custom_name.clone(),
                 color: tab.color,
                 shell_tag: Self::launch_shell_tag(&saved_launch),
@@ -169,13 +227,23 @@ impl NebulaWorkspace {
             if ix == self.active {
                 active_out = tabs.len();
             }
-            let leaf_data = |id: u64| -> (String, Option<AgentSession>, Option<LaunchSession>) {
+            let leaf_data = |id: u64| -> (
+                String,
+                Option<AgentSession>,
+                Option<LaunchSession>,
+                Option<String>,
+            ) {
                 let Some(pane) = panes.iter().find(|pane| pane.id == id) else {
-                    return (String::new(), None, None);
+                    return (String::new(), None, None, None);
                 };
                 let view = pane.view.read(cx);
                 let agent = view.session_agent();
-                (view.cwd.clone(), agent, Some(view.session_launch.clone()))
+                (
+                    view.cwd.clone(),
+                    agent,
+                    Some(view.session_launch.clone()),
+                    pane.custom_name.clone(),
+                )
             };
             let layout = crate::gpui_shell::session_restore::layout_from_tree(tree, &leaf_data);
             let cwd = panes
@@ -206,5 +274,34 @@ impl NebulaWorkspace {
             });
         }
         Session::new(active_out, tabs)
+    }
+}
+
+/// 开机自启动快捷方式把进程启动目录固定为 `%USERPROFILE%`；只看进程 cwd
+/// 会让首个终端无视「启动目录」，与 Ctrl+T 新标签不一致（#479）。
+fn cold_start_cwd(
+    startup_directory: Option<std::path::PathBuf>,
+    launch_cwd: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    startup_directory.or(launch_cwd)
+}
+
+#[cfg(test)]
+mod cold_start_tests {
+    use super::cold_start_cwd;
+    use std::path::PathBuf;
+
+    #[test]
+    fn configured_startup_directory_wins_over_the_launch_directory() {
+        let home = PathBuf::from("C:/Users/fixture");
+        let configured = PathBuf::from("C:/Users/fixture/workspace");
+        assert_eq!(cold_start_cwd(Some(configured.clone()), Some(home)), Some(configured));
+    }
+
+    #[test]
+    fn unset_startup_directory_keeps_inheriting_the_launch_directory() {
+        let home = PathBuf::from("C:/Users/fixture");
+        assert_eq!(cold_start_cwd(None, Some(home.clone())), Some(home));
+        assert_eq!(cold_start_cwd(None, None), None);
     }
 }

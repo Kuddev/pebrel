@@ -3,7 +3,7 @@ renderer_packages = ["gpui", "gpui_platform", "gpui-component", "gpui-component-
 
 [crates.nebula_app]
 layer = "application"
-dependencies = ["nebula_terminal", "nebula_config", "nebula_config_derive", "nebula_settings", "nebula_split", "nebula-completions"]
+dependencies = ["nebula_terminal", "nebula_config", "nebula_config_derive", "nebula_settings", "nebula_split", "nebula-completions", "mobile/link"]
 build-dependencies = ["nebula_settings"]
 dev-dependencies = []
 
@@ -35,3 +35,6 @@ zero_production_dependencies = true
 
 [crates.nebula_gpui]
 layer = "lab"
+
+[crates."mobile/link"]
+layer = "core"

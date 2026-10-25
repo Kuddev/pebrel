@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const HISTORY_MAX: usize = 5_000;
 pub(crate) const LOCAL_HISTORY_FILE: &str = "pebrel_history.jsonl";
@@ -66,11 +66,18 @@ struct HistoryIndex {
 
 impl HistoryIndex {
     fn hint(&self, prefix: &str) -> Option<&str> {
+        self.hint_with_cancel(prefix, &|| false)
+    }
+
+    fn hint_with_cancel(&self, prefix: &str, cancelled: &dyn Fn() -> bool) -> Option<&str> {
         if prefix.is_empty() {
             return None;
         }
         let mut best: Option<(usize, &str)> = None;
         for (cmd, &pos) in self.index.range(prefix.to_owned()..) {
+            if cancelled() {
+                return None;
+            }
             if !cmd.starts_with(prefix) {
                 break;
             }
@@ -133,9 +140,13 @@ pub struct NebulaHistory {
 impl NebulaHistory {
     pub fn load() -> Self {
         let mut history = Self::default();
-        history.load_file(&HistoryScope::Local);
-        history.load_file(&HistoryScope::Wsl(String::new()));
-        history.load_file(&HistoryScope::Ssh(String::new()));
+        for scope in [
+            HistoryScope::Local,
+            HistoryScope::Wsl(String::new()),
+            HistoryScope::Ssh(String::new()),
+        ] {
+            history.load_file(&scope, &history_path(scope.file_name()));
+        }
         history_debug_log(format!(
             "history_load scopes={} entries={}",
             history.pools.len(),
@@ -168,15 +179,26 @@ impl NebulaHistory {
     /// Popup search retains the stored spelling and ranks ties by recency.
     /// Inline ghost suggestions remain literal suffixes of the current input.
     pub fn search(&self, scope: &HistoryScope, text: &str, limit: usize) -> Vec<&str> {
+        self.search_with_cancel(scope, text, limit, &|| false)
+    }
+
+    pub(crate) fn search_with_cancel(
+        &self,
+        scope: &HistoryScope,
+        text: &str,
+        limit: usize,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Vec<&str> {
         if text.trim().is_empty() || limit == 0 {
             return Vec::new();
         }
         let Some(pool) = self.pools.get(&scope.clone().normalized()) else { return Vec::new() };
-        let mut query = nebula_completions::command_search::CommandQuery::new(text);
+        let mut query = pebrel_completions::command_search::CommandQuery::new(text);
         let mut matches: Vec<_> = pool
             .entries
             .iter()
             .enumerate()
+            .take_while(|_| !cancelled())
             .filter_map(|(index, command)| {
                 (command != text)
                     .then(|| query.score(command))
@@ -184,6 +206,9 @@ impl NebulaHistory {
                     .map(|score| (score, index, command.as_str()))
             })
             .collect();
+        if cancelled() {
+            return Vec::new();
+        }
         matches.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
         matches.into_iter().take(limit).map(|(_, _, command)| command).collect()
     }
@@ -192,14 +217,38 @@ impl NebulaHistory {
         self.pools.get(&scope.clone().normalized())?.hint(prefix)
     }
 
+    pub(crate) fn hint_with_cancel(
+        &self,
+        scope: &HistoryScope,
+        prefix: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<&str> {
+        self.pools.get(&scope.clone().normalized())?.hint_with_cancel(prefix, cancelled)
+    }
+
     pub fn hints(&self, scope: &HistoryScope, prefix: &str, limit: usize) -> Vec<(&str, &str)> {
         self.pools
             .get(&scope.clone().normalized())
             .map_or_else(Vec::new, |pool| pool.hints(prefix, limit))
     }
 
-    fn load_file(&mut self, category: &HistoryScope) {
-        let path = history_path(category.file_name());
+    /// The caller serializes this with recording. Failed categories retain their
+    /// in-memory entries, while successfully removed files cannot reappear on exit.
+    pub(crate) fn clear_at(&mut self, directory: &Path) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for file in history_file_names() {
+            match std::fs::remove_file(directory.join(file)) {
+                Ok(()) => self.pools.retain(|scope, _| scope.file_name() != file),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.pools.retain(|scope, _| scope.file_name() != file);
+                },
+                Err(error) => errors.push(format!("{file}: {error}")),
+            }
+        }
+        if errors.is_empty() { Ok(()) } else { Err(errors.join("; ")) }
+    }
+
+    fn load_file(&mut self, category: &HistoryScope, path: &Path) {
         let Ok(data) = std::fs::read_to_string(path) else { return };
         for line in data.lines() {
             let Some((scope, cmd)) = parse_record(category, line) else { continue };
@@ -207,6 +256,9 @@ impl NebulaHistory {
         }
     }
 }
+
+#[cfg(test)]
+mod deletion_tests;
 
 pub(crate) fn history_file_names() -> [&'static str; 3] {
     [LOCAL_HISTORY_FILE, WSL_HISTORY_FILE, SSH_HISTORY_FILE]
@@ -310,6 +362,27 @@ pub(crate) fn record_category_file(line: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cancellation_stops_history_matching_before_traversing_the_whole_pool() {
+        let scope = super::HistoryScope::Local;
+        let commands: Vec<_> = (0..100).map(|i| format!("git switch branch-{i}")).collect();
+        let history = hist(scope.clone(), &commands.iter().map(String::as_str).collect::<Vec<_>>());
+        for popup in [false, true] {
+            let checks = std::cell::Cell::new(0);
+            let cancelled = || {
+                checks.set(checks.get() + 1);
+                checks.get() >= 3
+            };
+            if popup {
+                assert!(history.search_with_cancel(&scope, "git", 8, &cancelled).is_empty());
+            } else {
+                assert!(history.hint_with_cancel(&scope, "git", &cancelled).is_none());
+            }
+            assert!(checks.get() <= 4, "old input must not scan the remaining history");
+        }
+        assert_eq!(history.hint(&scope, "git switch "), Some("branch-99"));
+    }
+
     #[test]
     fn popup_search_ignores_case_and_keeps_remote_history_scoped() {
         let local = super::HistoryScope::Local;

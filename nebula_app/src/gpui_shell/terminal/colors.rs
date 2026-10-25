@@ -177,6 +177,42 @@ impl Palette {
         }
     }
 
+    /// [`Palette::resolve`] plus SGR 2 (dim/faint), following the old shell's
+    /// `compute_fg_rgb`: the default foreground and ANSI 0-7 move to their dim
+    /// slots, bright 8-15 fall back to normal 0-7, and colors without a dim slot
+    /// (truecolor, indexed 16-255) are darkened by [`Palette::dim_of`]. Dim wins
+    /// over bold's brightening; bold still picks the bold font.
+    pub fn resolve_styled(&self, color: Color, overrides: &Colors, bold: bool, dim: bool) -> Rgba {
+        if !dim {
+            return self.resolve(color, overrides, bold);
+        }
+        match color {
+            Color::Spec(rgb) => Self::dim_of(from_ansi_rgb(rgb)),
+            Color::Indexed(index @ 0..=7) => {
+                let index = index as usize;
+                match (overrides[NamedColor::DimBlack as usize + index], overrides[index]) {
+                    (Some(rgb), _) => from_ansi_rgb(rgb),
+                    (None, Some(rgb)) => Self::dim_of(from_ansi_rgb(rgb)),
+                    (None, None) => self.dim[index],
+                }
+            },
+            Color::Indexed(index @ 8..=15) => {
+                self.resolve(Color::Indexed(index - 8), overrides, false)
+            },
+            Color::Indexed(_) => Self::dim_of(self.resolve(color, overrides, false)),
+            Color::Named(named) => {
+                let target = named.to_dim();
+                let has_dim_slot = named == NamedColor::Foreground || (named as usize) < 8;
+                match (overrides[target], overrides[named]) {
+                    (Some(rgb), _) => from_ansi_rgb(rgb),
+                    // OSC 4/10 只改了源色：跟着源色变暗，不退回主题的 dim 槽。
+                    (None, Some(rgb)) if has_dim_slot => Self::dim_of(from_ansi_rgb(rgb)),
+                    _ => self.named_default(target),
+                }
+            },
+        }
+    }
+
     /// OSC 4/10/11 颜色查询（`Event::ColorRequest`）的回答值。
     pub fn query_reply(&self, index: usize, overrides: &Colors) -> Rgb {
         if let Some(rgb) = overrides[index] {

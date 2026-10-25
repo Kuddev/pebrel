@@ -51,20 +51,14 @@ fn parse_ps_line(line: &str) -> Option<(u32, u32, String)> {
 /// or a throttled identity check, never on the render loop.
 #[cfg(not(windows))]
 fn unix_snapshot() -> Result<Vec<ProcessRow>, String> {
-    let output = std::process::Command::new("ps")
-        .args(["-axo", "pid=,ppid=,comm="])
-        .output()
-        .map_err(|error| format!("could not launch ps: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "ps exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
+    let mut command = std::process::Command::new("/bin/ps");
+    command.args(["-axo", "pid=,ppid=,comm="]);
+    let output =
+        super::process_output::read(command, std::time::Duration::from_secs(1), 8 * 1024 * 1024)
+            .map_err(|error| format!("could not launch ps: {error}"))?;
 
     let mut processes = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in String::from_utf8_lossy(&output).lines() {
         if let Some((pid, parent_pid, executable)) = parse_ps_line(line) {
             processes.push(ProcessRow { pid, parent: parent_pid, executable, created: 0 });
         }

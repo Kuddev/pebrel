@@ -1,9 +1,9 @@
 name: PR size
 
-# Labels every pull request by the number of changed source lines and fails
-# oversized ones so they get split before review. Generated and documentation
-# files do not count. Maintainers bypass the limit with the `size-exempt`
-# label (a release integration branch is the usual case).
+# Keep complete, independently verifiable modules reviewable. The default limit
+# is 1500 changed source lines; maintainers can approve individual exceptions
+# with `size-exempt`. The 5000-line hard ceiling applies even with that label.
+# Generated and documentation files do not count.
 
 on:
   pull_request:
@@ -31,15 +31,26 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const LIMIT = 1500;
+            const HARD_LIMIT = 5000;
             const IGNORED = [
               /^Cargo\.lock$/, /(^|\/)package-lock\.json$/, /(^|\/)yarn\.lock$/,
               /^docs\//, /\.md$/, /\.snap$/, /\.svg$/, /\.png$/, /\.ico$/,
               /^assets\//, /^locales\//, /\.lock$/,
             ];
 
+            const { data: current } = await github.rest.pulls.get({
+              ...context.repo, pull_number: pr.number,
+            });
             const files = await github.paginate(github.rest.pulls.listFiles, {
               ...context.repo, pull_number: pr.number, per_page: 100,
             });
+            // 文件接口有返回数量上限；不完整列表不能证明源码总量符合硬上限。
+            if (!Number.isInteger(current.changed_files) || files.length !== current.changed_files) {
+              const message = `Cannot verify the complete PR size: listed ${files.length} files, expected ${current.changed_files}. size-exempt cannot waive an incomplete count.`;
+              core.setFailed(message);
+              await core.summary.addRaw(message).write();
+              return;
+            }
             let counted = 0, ignored = 0;
             for (const f of files) {
               const lines = f.additions + f.deletions;
@@ -49,13 +60,18 @@ jobs:
             const size = counted <= 100 ? "S" : counted <= 500 ? "M" : counted <= LIMIT ? "L" : "XL";
             const labels = new Set(pr.labels.map((l) => l.name));
             const wanted = `size/${size}`;
-            const oversized = size === "XL" && !labels.has("size-exempt");
+            const exempt = labels.has("size-exempt");
+            const aboveHardLimit = counted > HARD_LIMIT;
+            // 豁免只放宽默认门槛，必须先检查所有 PR 都遵守的绝对上限。
+            const oversized = aboveHardLimit || (size === "XL" && !exempt);
             core.info(`counted ${counted} lines (${ignored} ignored) in ${files.length} files -> ${wanted}`);
             await core.summary
-              .addRaw(`PR size: **${size}**, ${counted} counted lines (${ignored} ignored), limit ${LIMIT}.`)
+              .addRaw(`PR size: **${size}**, ${counted} counted lines (${ignored} ignored), default limit ${LIMIT}, hard limit ${HARD_LIMIT}. size-exempt label: **${exempt ? "present" : "absent"}**.`)
               .write();
-            if (oversized) {
-              core.setFailed(`${counted} changed source lines exceed the ${LIMIT}-line limit; split the pull request or add size-exempt.`);
+            if (aboveHardLimit) {
+              core.setFailed(`${counted} changed source lines exceed the ${HARD_LIMIT}-line hard limit, which size-exempt cannot waive; split along complete, independently verifiable module boundaries.`);
+            } else if (oversized) {
+              core.setFailed(`${counted} changed source lines exceed the ${LIMIT}-line default limit; split into cohesive modules or obtain maintainer approval with size-exempt (maximum ${HARD_LIMIT} lines).`);
             }
             // Fork tokens are read-only. The size decision above is still enforced;
             // optional labels and comments must not turn a valid PR into a 403 failure.
@@ -83,11 +99,11 @@ jobs:
                 ...context.repo, issue_number: pr.number,
                 body: [
                   marker,
-                  `This pull request changes **${counted}** source lines (limit ${LIMIT}; docs, lockfiles and assets excluded). Changes this large cannot be reviewed reliably, so please split it into independent pull requests — one behaviour change each, with its own tests.`,
+                  `This pull request changes **${counted}** source lines (default limit ${LIMIT}, hard limit ${HARD_LIMIT}; docs, lockfiles and assets excluded). Organize each PR around a complete, independently verifiable module. Split along cohesive boundaries when needed.`,
                   "",
-                  `本 PR 改动 **${counted}** 行源码（上限 ${LIMIT}，不计文档、lockfile、资源）。这么大的改动无法可靠审查，请拆成多个相互独立的 PR，每个只做一件事并附测试。`,
+                  `本 PR 改动 **${counted}** 行源码（默认门槛 ${LIMIT}，硬上限 ${HARD_LIMIT}，不计文档、lockfile、资源）。每个 PR 应以完整、可独立验证的功能模块为主；需要拆分时按职责边界拆分。`,
                   "",
-                  "Maintainers can add the `size-exempt` label for integration branches. / 维护者可对集成分支加 `size-exempt` 放行。",
+                  `Maintainers may approve individual PRs up to ${HARD_LIMIT} lines with \`size-exempt\`. The hard ceiling and all other checks still apply. / 维护者可用 \`size-exempt\` 批准不超过 ${HARD_LIMIT} 行的个别 PR；硬上限及其他检查仍须满足。`,
                 ].join("\n"),
               });
             }

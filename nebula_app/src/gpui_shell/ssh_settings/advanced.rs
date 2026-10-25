@@ -301,32 +301,43 @@ impl SettingsPane {
             ("ssh-proxy-socks", "SOCKS5", SshHostProxyMode::Socks5),
             ("ssh-proxy-http", "HTTP", SshHostProxyMode::Http),
         ];
-        let proxy_buttons = proxy_modes.into_iter().map(|(id, label, mode)| {
-            Button::new(id)
-                .label(label)
-                .ghost()
-                .small()
-                .flex_1()
-                .min_w_0()
-                .h(px(30.0))
-                .px_1()
-                .toggled(editor.connection.proxy_mode == mode)
-                .when(editor.connection.proxy_mode == mode, |button| {
-                    button.bg(theme.popover).font_medium().shadow_sm()
-                })
-                .when(editor.connection.proxy_mode != mode, |button| {
-                    button.text_color(theme.muted_foreground)
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(editor) = this.ssh_editor.as_mut() {
-                        editor.connection.proxy_mode = mode;
-                        let placeholder = editor.connection.effective_proxy_port().to_string();
-                        this.ssh_proxy_port_input
-                            .update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
-                    }
-                    this.touch_ssh_editor(cx);
-                }))
-        });
+        let selected_proxy = proxy_modes
+            .iter()
+            .position(|(_, _, mode)| *mode == editor.connection.proxy_mode)
+            .unwrap_or(0);
+        let proxy_buttons = proxy_modes
+            .into_iter()
+            .map(|(id, label, mode)| {
+                Button::new(id)
+                    .label(label)
+                    .custom(
+                        gpui_component::button::ButtonCustomVariant::new(cx)
+                            .hover(theme.foreground.opacity(0.04))
+                            .active(theme.foreground.opacity(0.08)),
+                    )
+                    .small()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(30.0))
+                    .px_1()
+                    .toggled(editor.connection.proxy_mode == mode)
+                    .text_color(if editor.connection.proxy_mode == mode {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(editor) = this.ssh_editor.as_mut() {
+                            editor.connection.proxy_mode = mode;
+                            let placeholder = editor.connection.effective_proxy_port().to_string();
+                            this.ssh_proxy_port_input.update(cx, |input, cx| {
+                                input.set_placeholder(placeholder, window, cx)
+                            });
+                        }
+                        this.touch_ssh_editor(cx);
+                    }))
+            })
+            .collect::<Vec<_>>();
         let jump_modes = [
             (
                 "ssh-jump-inherit",
@@ -336,30 +347,40 @@ impl SettingsPane {
             ("ssh-jump-none", language.pick("不使用", "None"), SshHostJumpMode::None),
             ("ssh-jump-host", language.pick("指定主机", "Use host"), SshHostJumpMode::Host),
         ];
-        let jump_buttons = jump_modes.into_iter().map(|(id, label, mode)| {
-            Button::new(id)
-                .label(label)
-                .ghost()
-                .small()
-                .flex_1()
-                .min_w_0()
-                .h(px(30.0))
-                .px_1()
-                .toggled(editor.connection.jump_mode == mode)
-                .when(editor.connection.jump_mode == mode, |button| {
-                    button.bg(theme.popover).font_medium().shadow_sm()
-                })
-                .when(editor.connection.jump_mode != mode, |button| {
-                    button.text_color(theme.muted_foreground)
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(editor) = this.ssh_editor.as_mut() {
-                        editor.connection.jump_mode = mode;
-                        editor.jump_picker_open = false;
-                    }
-                    this.touch_ssh_editor(cx);
-                }))
-        });
+        let selected_jump = jump_modes
+            .iter()
+            .position(|(_, _, mode)| *mode == editor.connection.jump_mode)
+            .unwrap_or(0);
+        let jump_buttons = jump_modes
+            .into_iter()
+            .map(|(id, label, mode)| {
+                Button::new(id)
+                    .label(label)
+                    .custom(
+                        gpui_component::button::ButtonCustomVariant::new(cx)
+                            .hover(theme.foreground.opacity(0.04))
+                            .active(theme.foreground.opacity(0.08)),
+                    )
+                    .small()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(30.0))
+                    .px_1()
+                    .toggled(editor.connection.jump_mode == mode)
+                    .text_color(if editor.connection.jump_mode == mode {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(editor) = this.ssh_editor.as_mut() {
+                            editor.connection.jump_mode = mode;
+                            editor.jump_picker_open = false;
+                        }
+                        this.touch_ssh_editor(cx);
+                    }))
+            })
+            .collect::<Vec<_>>();
         let destination = self.ssh_destination_from_draft(cx).unwrap_or_default();
         let route = self.ssh_connection_from_draft(&destination, cx).ok().map(|connection| {
             let mut steps = vec![language.pick("本机", "Local").to_owned()];
@@ -399,7 +420,12 @@ impl SettingsPane {
                 "仅覆盖这台主机，不改变全局网络设置。",
                 "Applies to this host without changing global network settings.",
             ), cx).mt_1())
-            .child(h_flex().mt_3().p(px(3.0)).gap(px(3.0)).rounded_lg().bg(theme.input).children(proxy_buttons))
+            .child(h_flex().mt_3().p(px(3.0)).rounded_lg().bg(theme.input)
+                .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                    "ssh-proxy-modes", selected_proxy,
+                    h_flex().w_full().h(px(30.0)).gap(px(3.0)).children(proxy_buttons),
+                    div().rounded(px(5.0)).bg(theme.popover).shadow_sm(),
+                ).w_full()))
             .when(custom_proxy, |body| {
                 body.child(
                     h_flex().mt_4().gap_3().items_start()
@@ -456,7 +482,12 @@ impl SettingsPane {
             .child(
                 v_flex().mt_5().pt_5().border_t_1().border_color(theme.border)
                     .child(div().text_xs().font_medium().child(language.pick("SSH 跳板机", "SSH jump host")))
-                    .child(h_flex().mt_3().p(px(3.0)).gap(px(3.0)).rounded_lg().bg(theme.input).children(jump_buttons))
+                    .child(h_flex().mt_3().p(px(3.0)).rounded_lg().bg(theme.input)
+                        .child(crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                            "ssh-jump-modes", selected_jump,
+                            h_flex().w_full().h(px(30.0)).gap(px(3.0)).children(jump_buttons),
+                            div().rounded(px(5.0)).bg(theme.popover).shadow_sm(),
+                        ).w_full()))
                     .when(editor.connection.jump_mode == SshHostJumpMode::Host, |section| {
                         section.child(
                             v_flex().mt_4().gap_2()

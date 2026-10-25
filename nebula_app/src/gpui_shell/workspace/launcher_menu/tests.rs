@@ -34,10 +34,24 @@ fn open(cx: &mut TestAppContext) -> (Entity<NebulaWorkspace>, VisualTestContext)
             )
         });
         view.update(cx, |workspace, cx| {
+            let mut hosts = crate::gpui_shell::ssh_hosts::SshHostLists::default();
+            hosts.profiles.upsert(hosts.profiles.for_destination("test-host"));
+            hosts
+                .profiles
+                .set_organization(
+                    "test-host",
+                    crate::ssh_profiles::HostOrganization::from_inputs(
+                        "生产",
+                        "Linux, Équipe",
+                        "Owner: Alice",
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
             workspace.palette_override = Some(shell_palette_rows(
                 vec![shell("cmd"), shell("pwsh")],
                 vec![],
-                [("test-host".into(), String::new())],
+                &hosts,
                 "cmd",
                 workspace_ui_language(),
                 1.0,
@@ -61,6 +75,77 @@ fn draw(cx: &mut VisualTestContext) {
         window.refresh();
         window.draw(cx).clear(cx);
     });
+}
+
+#[gpui::test]
+fn ssh_launcher_search_matches_tags_notes_and_multiple_keywords(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx);
+    for query in ["LINUX", "alice", "生产", "ÉQUIPE", "linux ALICE 生产", "missing-tag"] {
+        // 查询替换只依赖输入框的全选动作，不重复判断平台快捷键。
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+        });
+        cx.simulate_input(query);
+        draw(&mut cx);
+        workspace.read_with(&cx, |workspace, cx| {
+            let rows = workspace.filtered_palette_rows(cx);
+            if query == "missing-tag" {
+                assert!(rows.is_empty(), "unmatched metadata must not show unrelated hosts");
+            } else {
+                assert_eq!(rows.len(), 1, "query: {query}");
+                assert!(matches!(&rows[0].action,
+                    WorkspacePaletteAction::LaunchSshHost(host) if host == "test-host"));
+            }
+            assert!(workspace.tabs.is_empty(), "search must not connect a host");
+        });
+        assert_eq!(cx.debug_bounds("command-palette-row-0").is_some(), query != "missing-tag");
+        assert!(cx.debug_bounds("command-palette-row-1").is_none());
+    }
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    workspace.read_with(&cx, |workspace, _| {
+        assert!(!workspace.command_palette_open);
+        assert!(workspace.tabs.is_empty());
+    });
+}
+
+#[gpui::test]
+fn launcher_filters_keep_compact_search_spacing_and_follow_real_slots(cx: &mut TestAppContext) {
+    let (workspace, mut cx) = open(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    draw(&mut cx);
+    let search = cx.debug_bounds("workspace-palette-search").unwrap();
+    assert_eq!(search.size.height, px(48.0));
+    let all = cx.debug_bounds("workspace-palette-filter-Launcher(All)").unwrap();
+    assert!(all.top() - search.bottom() >= px(10.0));
+    for (filter, selector) in [
+        (
+            crate::display::command_palette::LauncherFilter::Ssh,
+            "workspace-palette-filter-Launcher(Ssh)",
+        ),
+        (
+            crate::display::command_palette::LauncherFilter::Shell,
+            "workspace-palette-filter-Launcher(Shell)",
+        ),
+        (
+            crate::display::command_palette::LauncherFilter::All,
+            "workspace-palette-filter-Launcher(All)",
+        ),
+    ] {
+        let slot = cx.debug_bounds(selector).unwrap();
+        cx.simulate_click(slot.center(), Modifiers::default());
+        draw(&mut cx);
+        assert_eq!(
+            cx.debug_bounds("launcher-filters-indicator").unwrap(),
+            cx.debug_bounds(selector).unwrap()
+        );
+        workspace.read_with(&cx, |workspace, cx| {
+            assert_eq!(workspace.launcher_filter, filter);
+            assert_eq!(workspace.command_palette_selected, 0);
+            assert!(!workspace.filtered_palette_rows(cx).is_empty());
+            assert!(workspace.tabs.is_empty(), "filtering must not launch a shell or connect SSH");
+        });
+    }
 }
 
 fn right_click(selector: &'static str, cx: &mut VisualTestContext) {

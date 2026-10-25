@@ -80,6 +80,7 @@ impl DownloadJob {
 }
 
 pub(crate) fn begin(asset: &UpdateAsset) -> Result<Option<DownloadJob>, String> {
+    crate::platform::distribution::require_direct_update()?;
     validate_asset(asset)?;
     Ok(begin_download_session(asset))
 }
@@ -140,6 +141,9 @@ pub(crate) fn run(job: DownloadJob, language: UiLanguage) {
 /// Restore local update state without requiring a successful network check.
 /// Call once on a background executor; a user-started task always takes priority.
 pub(crate) fn hydrate() {
+    if crate::platform::distribution::current().externally_managed() {
+        return;
+    }
     let cached = handoff::failed_update()
         .map(|(asset, error)| (asset, DownloadStatus::InstallFailed(error)))
         .or_else(cache::load);
@@ -187,6 +191,7 @@ fn download_and_verify(
     language: UiLanguage,
     job: Option<&DownloadJob>,
 ) -> Result<(PathBuf, u64), String> {
+    crate::platform::distribution::require_direct_update()?;
     validate_asset(asset)?;
     let (partial_path, final_path) = download_paths(asset)?;
     let _download_lock = crate::atomic_file::try_lifetime_lock(&final_path)
@@ -224,7 +229,8 @@ fn download_to_partial(
         let agent = crate::update_check::test_source::agent(Duration::from_secs(15 * 60));
         return download_with_job(asset, partial_path, language, &agent, job);
     }
-    let agent = crate::update_proxy::agent(&asset.download_url, Duration::from_secs(15 * 60));
+    let agent = crate::update_proxy::agent(&asset.download_url, Duration::from_secs(15 * 60))
+        .map_err(|error| network_error_text(error, language))?;
     download_with_job(asset, partial_path, language, &agent, job)
 }
 
@@ -404,12 +410,16 @@ fn set_progress(job: Option<&DownloadJob>, downloaded: u64, total: Option<u64>) 
 }
 
 fn download_paths(asset: &UpdateAsset) -> Result<(PathBuf, PathBuf), String> {
-    let directory = nebula_settings::settings_dir().join("updates");
+    let directory = state_directory("").map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("无法创建更新下载目录：{error}"))?;
     let final_path = directory.join(&asset.name);
     let partial_path = directory.join(format!("{}.part", asset.name));
     Ok((partial_path, final_path))
+}
+
+fn state_directory(relative: &str) -> std::io::Result<PathBuf> {
+    crate::platform::update_installation::state_directory(Path::new(relative))
 }
 
 fn verify_package_trailer(file: &mut File, asset: &UpdateAsset) -> Result<(), String> {
@@ -536,8 +546,13 @@ mod tests {
         );
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("installer.part");
-        let bytes = super::download_with_agent(&asset, &path, UiLanguage::EnUs, &server.agent(&[]))
-            .unwrap();
+        let bytes = super::download_with_agent(
+            &asset,
+            &path,
+            UiLanguage::EnUs,
+            &server.network_agent("http", None, &[]),
+        )
+        .unwrap();
         assert_eq!(bytes, body.len() as u64);
         assert_eq!(std::fs::read(&path).unwrap(), body.as_bytes());
         assert!(super::verify_file(&path, &asset).is_ok());
@@ -570,7 +585,7 @@ mod tests {
             &asset,
             &directory.path().join("installer.part"),
             UiLanguage::EnUs,
-            &proxy.agent(&["127.0.0.1"]),
+            &proxy.network_agent("http", None, &["127.0.0.1"]),
         )
         .unwrap();
         assert!(proxy.finish()[0].0.starts_with("CONNECT release.update.invalid:80 "));
@@ -630,6 +645,7 @@ mod tests {
                 Error::ConnectProxyFailed("http://user:secret@proxy.local".into()),
                 Message::UpdateDownloadProxy,
             ),
+            (Error::InvalidProxyUrl, Message::UpdateDownloadProxy),
             (Error::ConnectionFailed, Message::UpdateDownloadNetwork),
         ] {
             let text = super::network_error_text(error, UiLanguage::ZhCn);

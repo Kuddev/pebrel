@@ -24,6 +24,7 @@ macro_rules! eprintln {
 
 mod assets;
 pub mod code_tab;
+pub(crate) mod completion_history;
 pub mod config;
 pub(crate) mod copy_feedback;
 pub mod doc_tabs;
@@ -33,16 +34,20 @@ mod file_preview;
 pub mod http;
 pub mod math_view;
 mod molecule_view;
+mod motion;
 pub mod network_settings;
 pub mod prelude;
 mod scientific_render;
 pub mod session_restore;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) mod settings_fixture;
 pub mod settings_pane;
 pub mod ssh_hosts;
 pub mod ssh_settings;
 pub mod terminal;
 pub mod theme;
 pub mod toast;
+mod typography;
 pub mod wallpaper;
 pub mod widgets;
 pub mod workspace;
@@ -70,6 +75,8 @@ pub(crate) enum GpuiShellEvent {
     RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
     UpdateAvailable(crate::update_check::UpdateCheckResult),
     SshPrompt(std::sync::Arc<crate::ssh_prompt::Prompt>),
+    OpenDirectories(Vec<String>),
+    ElevatedLaunch(std::sync::Arc<crate::platform::elevation::handover::Dispatch>),
 }
 
 /// 在当前线程启动 GPUI 运行时并打开主窗口，阻塞直至 UI 退出。
@@ -80,6 +87,8 @@ pub fn run_shell(
     initial_cwd: Option<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
+    config_file: Option<std::path::PathBuf>,
+    launched_at_login: bool,
 ) {
     if crate::platform::CAPABILITIES.self_update_install {
         match crate::update_download::handoff::installation_in_progress() {
@@ -93,12 +102,51 @@ pub fn run_shell(
             Ok(false) => {},
         }
     }
+    let (shell_tx, shell_rx) = std::sync::mpsc::channel();
+    let _elevated_handover = if crate::platform::elevation::is_elevated().is_ok_and(|value| value) {
+        use crate::platform::elevation::handover::{Request, Startup, start_or_forward};
+        let settings = nebula_settings::RuntimeSettings::load();
+        let request = Request {
+            cwd: crate::platform::startup::resident_launch_directory(
+                initial_cwd.clone(),
+                &settings,
+                crate::platform::launch_directory::is_wsl(
+                    initial_command
+                        .clone()
+                        .map(Into::into)
+                        .or_else(|| workspace::shell_launch::startup_shell(shell_id.clone()))
+                        .as_ref(),
+                ),
+            ),
+            command: initial_command.clone(),
+            shell_id: shell_id.clone(),
+            update_restore: (initial_command.is_none() && shell_id.is_none())
+                .then(crate::update_download::handoff::pending_restore_path)
+                .flatten(),
+        };
+        let sender = shell_tx.clone();
+        // 在托盘、Hook 和 Runtime 创建前决定唯一管理员拥有者，不复用普通实例的端口。
+        match start_or_forward(request, config_file.as_deref(), move |request| {
+            sender.send(GpuiShellEvent::ElevatedLaunch(request)).is_ok()
+        }) {
+            Ok(Startup::Resident(server)) => Some(server),
+            Ok(Startup::Forwarded) => return,
+            Err(error) => {
+                log::error!("Elevated launch handover failed: {error}");
+                crate::platform::startup::report_error(&error, true);
+                return;
+            },
+        }
+    } else {
+        None
+    };
+    // 管理员重复启动先交给已有拥有者；不能提前消耗“下次启动安装”的预约。
     if crate::platform::CAPABILITIES.self_update_install
         && crate::update_download::handoff::apply_scheduled()
     {
         return;
     }
-    let (shell_tx, shell_rx) = std::sync::mpsc::channel();
+    let open_urls_tx = shell_tx.clone();
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::ssh_prompt::install({
         let sender = shell_tx.clone();
@@ -139,7 +187,14 @@ pub fn run_shell(
     {
         // 与另一份进程同时启动时，对方可能已经拿到 owner lock、但尚未来得及
         // 发布 endpoint。短暂等待并交接，避免继续打开一个无控制面的空窗口。
-        let handover_cwd = initial_cwd.clone().or_else(|| std::env::current_dir().ok());
+        let settings = nebula_settings::RuntimeSettings::load();
+        let handover_cwd = crate::platform::startup::resident_launch_directory(
+            initial_cwd.clone(),
+            &settings,
+            crate::platform::launch_directory::is_wsl(
+                workspace::shell_launch::startup_shell(shell_id.clone()).as_ref(),
+            ),
+        );
         for _ in 0..40 {
             let behavior = nebula_settings::RuntimeSettings::load().windowing_behavior;
             let handed_over = match behavior {
@@ -163,37 +218,58 @@ pub fn run_shell(
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
     }
+    if runtime_server.is_some() {
+        crate::mobile_connection::resume_saved();
+    }
     let _runtime_server = runtime_server;
     let _acrylic = crate::platform::acrylic::RunGuard::default();
-    // GPUI 默认只有 macOS 在最后一扇窗关掉后仍驻留（Dock 里留个没有窗口的
-    // 进程）。Nebula 没有 Dock 重开入口，也没法在 Mac 上验证那个无窗状态，
-    // 首版三端统一：最后一扇窗关闭即退出（驻留另有 keep_session 能力位管）。
-    gpui_platform::application()
+    let _ai_config_guard = crate::ai_hook::spawn_config_guard();
+    // 驻留由工作区持有隐藏窗口；真正关闭最后窗口时统一退出并回收服务。
+    let application = gpui_platform::application()
         .with_assets(NebulaAssets)
-        .with_quit_mode(gpui::QuitMode::LastWindowClosed)
-        .run(move |cx| {
-            // GPUI is the only event loop in `--gpui` mode, so it owns the same
-            // per-process hook pipe before the first TerminalView spawns.
-            let ai_events = crate::ai_hook::spawn_gpui_server();
-            #[cfg(windows)]
-            crate::ai_hook::spawn_config_guard();
-            init(cx);
-            if initial_cwd.is_some()
-                || !crate::platform::startup::start_hidden(&nebula_settings::RuntimeSettings::load())
-            {
-                cx.activate(true);
-            }
-            open_main_window(cx, ai_events, shell_rx, runtime_hub, initial_cwd, initial_command, shell_id);
-        });
+        .with_quit_mode(gpui::QuitMode::LastWindowClosed);
+    application.on_open_urls(move |urls| {
+        let _ = open_urls_tx.send(GpuiShellEvent::OpenDirectories(urls));
+    });
+    application.on_reopen(|cx| workspace::windowing::focus_notification(None, cx));
+    application.run(move |cx| {
+        // GPUI is the only event loop in `--gpui` mode, so it owns the same
+        // per-process hook pipe before the first TerminalView spawns.
+        let ai_events = crate::ai_hook::spawn_gpui_server();
+        init(cx, config_file);
+        if initial_cwd.is_some()
+            || initial_command.is_some()
+            || shell_id.is_some()
+            || crate::platform::elevation::requires_isolation()
+            || !crate::platform::startup::start_hidden(
+                &nebula_settings::RuntimeSettings::load(),
+                launched_at_login,
+            )
+        {
+            cx.activate(true);
+        }
+        open_main_window(
+            cx,
+            ai_events,
+            shell_rx,
+            runtime_hub,
+            initial_cwd,
+            initial_command,
+            shell_id,
+            launched_at_login,
+        );
+    });
     crate::tray::shutdown();
+    crate::ai_hook::shutdown();
 }
 
 /// 组件库/主题/快捷键/用户配置的一次性初始化。
-fn init(cx: &mut App) {
+fn init(cx: &mut App, config_file: Option<std::path::PathBuf>) {
     crate::platform::acrylic::init(cx);
     // 三端都注册内嵌 Maple：Linux/macOS 的系统等宽字体没有 NF 图标码点，
     // 侧栏与提示符会出方框；字形同源也是跨平台截图能互相比对的前提。
     register_bundled_fonts(cx);
+    typography::init(cx);
 
     // 组件库必须只初始化一次，否则全局 action、菜单和主题状态会重复注册。
     gpui_component::init(cx);
@@ -216,6 +292,7 @@ fn init(cx: &mut App) {
     let settings = config::Settings::load_with_runtime(theme, runtime);
     gpui_component::set_locale(settings.ui_language.gpui_component_locale());
     cx.set_global(settings);
+    cx.set_global(config::StartupWindow::load(config_file));
     theme::apply_chrome_theme(cx);
     terminal::init(cx);
     workspace::init(cx);
@@ -223,13 +300,11 @@ fn init(cx: &mut App) {
 }
 
 fn register_bundled_fonts(cx: &App) {
-    // GPUI resolves a family through the system collection first and silently
-    // falls back when it is absent. Add Maple before any component/window can
-    // resolve a font so the default remains the same private face as winit.
-    if let Err(error) = cx.text_system().add_fonts(vec![
-        Cow::Borrowed(crate::font_install::REQUIRED_FONT_BYTES),
-        Cow::Borrowed(include_bytes!("../../../assets/fonts/MapleMono-NF-CN-Regular.ttf")),
-    ]) {
+    // 在组件解析字体前注册默认 Normal 字体，保持原有字形与中文/图标兜底。
+    // 其他 Maple 变体走系统或导入字体，避免再内嵌一套完整的中文与图标字库。
+    if let Err(error) =
+        cx.text_system().add_fonts(vec![Cow::Borrowed(crate::font_install::REQUIRED_FONT_BYTES)])
+    {
         try_write_stderr(format_args!(
             "[nebula:gpui] failed to register bundled Maple font: {error}"
         ));
@@ -266,6 +341,7 @@ fn open_main_window(
     initial_cwd: Option<std::path::PathBuf>,
     initial_command: Option<crate::config::ui_config::Program>,
     shell_id: Option<String>,
+    launched_at_login: bool,
 ) {
     workspace::windowing::initialize(cx, runtime_hub);
     workspace::windowing::open_initial_window(
@@ -275,6 +351,7 @@ fn open_main_window(
         initial_cwd,
         initial_command,
         shell_id,
+        launched_at_login,
     );
 }
 
@@ -289,14 +366,14 @@ pub(crate) fn apply_tray_setting() {
 /// 旧壳 detach 是销毁窗口、进程无窗驻留。GPUI 用 `SW_HIDE` 达到同一
 /// 用户可见效果。禁止 `minimize_window`：托盘关着时任务栏不能留一个
 /// 点不掉的最小化窗口。
-pub(crate) fn hide_native_window(window: &gpui::Window) {
+pub(crate) fn hide_native_window(window: &gpui::Window) -> bool {
     #[cfg(windows)]
     {
-        native_show(window, false);
+        native_show(window, false)
     }
     #[cfg(not(windows))]
     {
-        let _ = window;
+        crate::platform::window_visibility::set_visible(window, false)
     }
 }
 
@@ -304,14 +381,14 @@ pub(crate) fn hide_native_window(window: &gpui::Window) {
 ///
 /// Windows 的 `SW_SHOW` 自带激活语义，不能用来处理后台 runtime 请求；
 /// 显式 focus 由调用方在恢复可见性后另行调用 `activate_window`。
-pub(crate) fn reveal_native_window(window: &gpui::Window) {
+pub(crate) fn reveal_native_window(window: &gpui::Window) -> bool {
     #[cfg(windows)]
     {
-        native_show(window, true);
+        native_show(window, true)
     }
     #[cfg(not(windows))]
     {
-        let _ = window;
+        crate::platform::window_visibility::set_visible(window, true)
     }
 }
 

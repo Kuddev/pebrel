@@ -78,7 +78,7 @@ impl NebulaWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        #[cfg(windows)]
+        self.theme_transition.clear(window);
         windowing::quick_terminal_bounds_changed(self.runtime_window_id, window, cx);
         if self.window_close_pending {
             return false;
@@ -198,7 +198,7 @@ impl NebulaWorkspace {
                         cx.notify();
                         return;
                     }
-                    if workspace.save_clean_window_session(cx).is_err() {
+                    if workspace.save_clean_window_session(window, cx).is_err() {
                         workspace.window_close_pending = false;
                         let language = crate::gpui_shell::config::ui_language(cx);
                         crate::gpui_shell::toast::banner(

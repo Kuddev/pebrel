@@ -20,6 +20,11 @@ impl TextFileView {
         }
         self.render_active = active;
         if !active {
+            self.link_hover = None;
+            self.link_hide_task = None;
+            if let Some(edit) = &mut self.object_edit {
+                edit.task = None;
+            }
             self.update_live_edit(window, cx);
             self.finish_live_edit(cx);
             self.resume_edit = self.last_edit_cursor.is_some();
@@ -33,6 +38,9 @@ impl TextFileView {
             self.preview_scrollbar_hovered = false;
         } else if self.preview_stale {
             self.schedule_preview(cx);
+        }
+        if active && self.object_edit.is_some() {
+            self.refresh_object_draft(cx);
         }
         self.preview_images.update(cx, |images, cx| {
             images.set_active(active && self.preview, window, cx);

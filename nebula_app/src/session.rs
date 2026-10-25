@@ -133,6 +133,9 @@ impl AgentSession {
 pub enum LayoutSession {
     Pane {
         cwd: String,
+        /// User pane title, independent of the tab title and shell-reported title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_name: Option<String>,
         /// v4 的追加可选字段（老文件缺省、老版本忽略，无需升版）：快照时
         /// 该 pane 前台的 AI CLI 对话，冷恢复据此自动接续。
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -216,16 +219,19 @@ impl TabSession {
 }
 
 /// Last normal (non-maximized, non-fullscreen) inner size in logical pixels.
-/// Logical units keep the perceived size stable when the next launch lands on
-/// a monitor with a different DPI scale factor. Write-only since v4: startup
-/// always sizes the window from the configured column/line count, so this
-/// record is diagnostic and forward-compat data, never replayed at boot.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Logical units keep the perceived size stable across display DPI changes.
+/// Windows position is the normal client origin in physical desktop pixels;
+/// the stable display identity keeps an existing monitor as the restore target.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowState {
     pub width: u32,
     pub height: u32,
     #[serde(default)]
     pub maximized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<(i32, i32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<[u8; 16]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -444,7 +450,8 @@ mod tests {
     #[test]
     fn window_state_round_trip_preserves_logical_size_and_maximize() {
         let mut session = Session::new(0, Vec::new());
-        session.window = Some(WindowState { width: 1280, height: 720, maximized: true });
+        session.window =
+            Some(WindowState { width: 1280, height: 720, maximized: true, ..Default::default() });
         let json = serde_json::to_string(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.window, session.window);
@@ -467,6 +474,7 @@ mod tests {
             axis: SplitAxis::LeftRight,
             ratio_permille: 618,
             first: Box::new(LayoutSession::Pane {
+                custom_name: Some("前端".into()),
                 launch: None,
                 cwd: "D:/work".into(),
                 agent: Some(AgentSession {
@@ -479,11 +487,13 @@ mod tests {
                 axis: SplitAxis::TopBottom,
                 ratio_permille: 500,
                 first: Box::new(LayoutSession::Pane {
+                    custom_name: Some("后端".into()),
                     launch: None,
                     cwd: "D:/logs".into(),
                     agent: None,
                 }),
                 second: Box::new(LayoutSession::Pane {
+                    custom_name: None,
                     launch: None,
                     cwd: String::new(),
                     agent: None,
@@ -507,10 +517,16 @@ mod tests {
         let session = parse(json).expect("v4 without agent must parse");
         assert_eq!(
             session.tabs[0].layout,
-            Some(LayoutSession::Pane { launch: None, cwd: "D:/w".into(), agent: None })
+            Some(LayoutSession::Pane {
+                custom_name: None,
+                launch: None,
+                cwd: "D:/w".into(),
+                agent: None
+            })
         );
 
         let with_agent = LayoutSession::Pane {
+            custom_name: None,
             launch: None,
             cwd: "D:/w".into(),
             agent: Some(AgentSession {
@@ -561,12 +577,23 @@ mod tests {
         let tree = LayoutSession::Split {
             axis: SplitAxis::LeftRight,
             ratio_permille: 500,
-            first: Box::new(LayoutSession::Pane { launch: None, cwd: "a".into(), agent: None }),
+            first: Box::new(LayoutSession::Pane {
+                custom_name: None,
+                launch: None,
+                cwd: "a".into(),
+                agent: None,
+            }),
             second: Box::new(LayoutSession::Split {
                 axis: SplitAxis::TopBottom,
                 ratio_permille: 500,
-                first: Box::new(LayoutSession::Pane { launch: None, cwd: "b".into(), agent: None }),
+                first: Box::new(LayoutSession::Pane {
+                    custom_name: None,
+                    launch: None,
+                    cwd: "b".into(),
+                    agent: None,
+                }),
                 second: Box::new(LayoutSession::Pane {
+                    custom_name: None,
                     launch: None,
                     cwd: "c".into(),
                     agent: None,
@@ -595,6 +622,7 @@ mod tests {
             .map(|id| {
                 let mut tab = TabSession::single("/home/user/project".into(), None, None);
                 tab.layout = Some(LayoutSession::Pane {
+                    custom_name: None,
                     launch: None,
                     cwd: "/home/user/project".into(),
                     agent: Some(AgentSession {

@@ -986,16 +986,29 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         // `nebula_settings.txt` `keybind=` overrides + TOML remaps all funnel
         // through `process_key_bindings` below (spec 002).
 
-        // 弹窗补齐：出现时先保持空选中，Enter 因而提交用户实际输入；只有用户
-        // 用 Up/Down/Tab 主动进入列表后，Enter/Right 才接受候选。列表关闭后
-        // 按键立即恢复原义（上下键回到 shell 历史）。
-        let accept = self.ctx.nebula_accept();
+        // 模式决定接受键，避免旧配置的 accept 与当前选择互相覆盖。
+        let hybrid = self.ctx.nebula_completion_style() == crate::display::CompletionStyle::Hybrid;
         let popup_active = self.ctx.nebula_completion_popup_active();
-        if mods.is_empty()
-            && popup_active
+        let completion_input = mods.is_empty()
+            && !mode.intersects(TermMode::ALT_SCREEN | TermMode::VI)
+            && self.ctx.nebula_chrome_active()
             && !self.ctx.display().hint_state.active()
-            && !self.ctx.search_active()
+            && !self.ctx.search_active();
+        if completion_input
+            && matches!(&key.logical_key, Key::Named(NamedKey::Escape))
+            && self.ctx.nebula_completion_popup_dismiss()
         {
+            return;
+        }
+        if completion_input
+            && hybrid
+            && !popup_active
+            && matches!(&key.logical_key, Key::Named(NamedKey::Tab))
+            && self.ctx.nebula_completion_popup_request()
+        {
+            return;
+        }
+        if completion_input && popup_active {
             let popup_accept = match &key.logical_key {
                 Key::Named(NamedKey::ArrowDown) => {
                     self.ctx.nebula_completion_popup_move(1);
@@ -1005,22 +1018,20 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
                     self.ctx.nebula_completion_popup_move(-1);
                     return;
                 },
-                Key::Named(NamedKey::Tab) => {
+                Key::Named(NamedKey::Tab) if hybrid => {
                     self.ctx.nebula_completion_popup_move(1);
                     return;
                 },
-                Key::Named(NamedKey::Escape) => {
-                    if self.ctx.nebula_completion_popup_dismiss() {
-                        return;
-                    }
-                    false
-                },
-                Key::Named(NamedKey::Enter) => true,
-                Key::Named(NamedKey::ArrowRight) => accept.accepts_right(),
+                Key::Named(NamedKey::Tab | NamedKey::Enter | NamedKey::ArrowRight) => true,
                 _ => false,
             };
             if popup_accept {
-                if let Some(item) = self.ctx.nebula_completion_popup_take() {
+                let mut item = self.ctx.nebula_completion_popup_take();
+                if item.is_none() && matches!(&key.logical_key, Key::Named(NamedKey::Tab)) {
+                    self.ctx.nebula_completion_popup_move(1);
+                    item = self.ctx.nebula_completion_popup_take();
+                }
+                if let Some(item) = item {
                     for _ in 0..item.replace_chars {
                         self.ctx.nebula_input_backspace();
                     }
@@ -1037,15 +1048,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             }
         }
 
-        // Accept the Nebula ghost-text suggestion with the configured key
-        // (Right/Tab/both): write the remaining text so the shell echoes it,
-        // as if typed. Tab only accepts when a suggestion exists; otherwise it
-        // falls through to the shell's own completion below.
-        let is_accept = mods.is_empty()
-            && matches!(&key.logical_key,
-                Key::Named(NamedKey::ArrowRight) if accept.accepts_right())
-            || mods.is_empty()
-                && matches!(&key.logical_key, Key::Named(NamedKey::Tab) if accept.accepts_tab());
+        // 无候选时继续交给 shell；混合模式的 Tab 仅打开列表。
+        let is_accept = completion_input
+            && (matches!(&key.logical_key, Key::Named(NamedKey::ArrowRight))
+                || !hybrid && matches!(&key.logical_key, Key::Named(NamedKey::Tab)));
         if is_accept {
             let ghost = self.ctx.nebula_take_suggestion();
             if !ghost.is_empty() {
@@ -1232,7 +1238,6 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             OpenSettings => self.ctx.nebula_tab(TabRequest::OpenSettings),
             OpenSettingsFile => self.ctx.display().open_user_config_file(),
             ToggleGhost => self.ctx.display().toggle_ghost(),
-            CycleAccept => self.ctx.display().cycle_accept(),
             CycleCompletionStyle => self.ctx.display().cycle_completion_style(),
             PickBackgroundImage => self.ctx.display().pick_background_image(),
             CycleBackground => self.ctx.display().cycle_background_color(),

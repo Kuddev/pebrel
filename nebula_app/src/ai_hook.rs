@@ -8,13 +8,9 @@
 //! `PEBREL_HOOK_LOG` (legacy `NEBULA_HOOK_LOG`) diagnoses bridge delivery without
 //! payloads; `GateVerdict` explains rejected events in application debug logs.
 
-#![cfg_attr(not(windows), allow(dead_code))]
-
 mod bridges;
 mod event;
 pub(crate) mod installation;
-// Native discovery/configuration keeps the existing private installer boundary.
-#[path = "platform/agent_integrations.rs"]
 pub(crate) mod integrations;
 pub(crate) mod lifecycle;
 mod native_events;
@@ -84,10 +80,8 @@ fn is_helper_shell_command(command: &str, source: &str) -> bool {
         }
         quoted
     } else if let Some(quoted) = path.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
-        if quoted.contains('\'') {
-            return false;
-        }
-        quoted
+        let decoded = quoted.replace("'\\''", "'");
+        return remote::quote(&decoded) == path && is_helper_executable(&decoded);
     } else {
         if path.chars().any(char::is_whitespace)
             || path.contains(['"', '\'', ';', '&', '|', '<', '>'])
@@ -121,16 +115,29 @@ const CLAUDE_EVENTS: [&str; 10] = [
     "SessionEnd",
 ];
 
-#[cfg(all(windows, feature = "legacy-shell"))]
-pub use win::spawn_server;
+pub use local::{setup_ai_cli, spawn_config_guard};
 #[cfg(windows)]
-pub use win::{setup_ai_cli, spawn_config_guard, spawn_gpui_server};
+pub use windows::spawn_gpui_server;
+#[cfg(all(windows, feature = "legacy-shell"))]
+pub use windows::spawn_server;
 
-#[cfg(not(windows))]
-pub fn spawn_gpui_server() -> std::sync::mpsc::Receiver<AiHookEvent> {
-    let (_tx, rx) = std::sync::mpsc::channel();
-    rx
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+pub use unix::spawn_gpui_server;
+
+mod local;
+#[cfg(windows)]
+mod windows;
+
+pub(crate) fn apply_child_environment(env: &mut std::collections::HashMap<String, String>) {
+    #[cfg(unix)]
+    unix::apply_child_environment(env);
+    #[cfg(not(unix))]
+    let _ = env;
 }
 
-#[cfg(windows)]
-mod win;
+pub(crate) fn shutdown() {
+    #[cfg(unix)]
+    unix::shutdown();
+}

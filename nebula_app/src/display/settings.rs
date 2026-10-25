@@ -29,7 +29,6 @@ pub(crate) use super::background_color_model::{BACKGROUND_SWATCHES, hsv_to_rgb, 
 use super::keymap;
 pub(crate) use super::network_proxy_model::{
     MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, manual_proxy_parts,
-    manual_proxy_value,
 };
 use super::ui::theme::Skin;
 use super::ui::{icons, os_icons, surface, text_field, tokens, widgets};
@@ -137,7 +136,7 @@ pub enum SettingsDropdown {
     BackupProtocol,
     /// 代理：SSH 连接代理模式（关闭/系统/自定义）。
     SshProxyMode,
-    /// 网络→指定代理→手动填写：地址协议（SOCKS5/HTTP）。
+    /// 网络→指定代理→手动填写：地址协议（SOCKS5/SOCKS5H/HTTP）。
     SshProxyProtocol,
     /// 网络→指定代理→SSH 跳板：已保存主机的选择下拉。
     SshJumpHost,
@@ -173,8 +172,7 @@ pub(super) const LANGUAGE_OPTIONS: &[LanguagePreference] = LanguagePreference::A
 pub(super) const ACCEPT_OPTIONS: [AcceptKey; 3] =
     [AcceptKey::Both, AcceptKey::Tab, AcceptKey::Right];
 
-pub(super) const COMPLETION_STYLE_OPTIONS: [CompletionStyle; 2] =
-    [CompletionStyle::Inline, CompletionStyle::Popup];
+pub(super) const COMPLETION_STYLE_OPTIONS: [CompletionStyle; 3] = CompletionStyle::ALL;
 
 pub(super) const TAB_REVEAL_OPTIONS: [TabRevealMotion; 2] =
     [TabRevealMotion::Slide, TabRevealMotion::Instant];
@@ -208,10 +206,7 @@ fn manual_proxy_protocol_label(
     protocol: ManualProxyProtocol,
     _language: UiLanguage,
 ) -> &'static str {
-    match protocol {
-        ManualProxyProtocol::Socks5 => "SOCKS5",
-        ManualProxyProtocol::Http => "HTTP",
-    }
+    super::network_proxy_model::manual_proxy_protocol_label(protocol)
 }
 
 /// 设置页的悬停层使用当前主题的 accent，而不是固定的灰色或另一套绿色。
@@ -437,10 +432,7 @@ fn accept_label(accept: AcceptKey, language: UiLanguage) -> &'static str {
 }
 
 fn completion_style_label(style: CompletionStyle, language: UiLanguage) -> &'static str {
-    match style {
-        CompletionStyle::Inline => language.pick("行内灰字", "Inline ghost"),
-        CompletionStyle::Popup => language.pick("弹窗列表", "Popup list"),
-    }
+    language.completion_style_label(style)
 }
 
 fn backup_protocol_label(
@@ -1577,7 +1569,7 @@ fn settings_geometry(
     let startup_directory_y0 = terminal_import_y0 + ROW_H;
     let font_y0 = startup_directory_y0 + ROW_H;
     let ghost_y0 = font_y0 + ROW_H + GROUP_ADVANCE;
-    let open_y0 = ghost_y0 + 3.0 * ROW_H + GROUP_ADVANCE;
+    let open_y0 = ghost_y0 + 2.0 * ROW_H + GROUP_ADVANCE;
     let profiles_h = s(open_y0 + ROW_H + 32.0 - 72.0);
 
     // AI providers intentionally use a denser list + editor flow inspired by
@@ -1840,7 +1832,7 @@ fn settings_geometry(
         powerline: (row_x, at(terminal_appearance_y0 + 3.0 * ROW_H), row_w, row_h),
         ghost: (row_x, at(ghost_y0), row_w, row_h),
         accept: (row_x, at(ghost_y0 + ROW_H), row_w, row_h),
-        completion_style: (row_x, at(ghost_y0 + 2.0 * ROW_H), row_w, row_h),
+        completion_style: (row_x, at(ghost_y0 + ROW_H), row_w, row_h),
         open_config_file: (row_x, at(open_y0), row_w, row_h),
         terminal_import: (row_x, at(terminal_import_y0), row_w, row_h),
         ssh_host_row0,
@@ -2686,9 +2678,6 @@ pub fn settings_hit(
                 if contains_rect(widgets::toggle_rect(geometry.ghost, scale_factor), x, y) {
                     return SettingsHit::GhostToggle;
                 }
-                if contains_rect(widgets::combobox_rect(geometry.accept, scale_factor), x, y) {
-                    return SettingsHit::AcceptCycle;
-                }
                 if contains_rect(
                     widgets::combobox_rect(geometry.completion_style, scale_factor),
                     x,
@@ -3184,7 +3173,7 @@ fn ssh_proxy_manual_controls(
     let s = |v: f32| v * scale;
     let (x, y, w, h) = sync_input_rect(row, scale);
     let gap = s(8.0);
-    let protocol_w = s(112.0).min((w - gap) * 0.38);
+    let protocol_w = s(132.0).min((w - gap) * 0.38);
     let protocol = (x, y, protocol_w, h);
     let address = (x + protocol_w + gap, y, (w - protocol_w - gap).max(s(80.0)), h);
     (protocol, address)
@@ -4091,7 +4080,7 @@ pub(super) fn push_quads(
             group_frame(quads, geometry.shell, 2);
             group_frame(quads, geometry.startup_directory, 1);
             group_frame(quads, geometry.font, 1);
-            group_frame(quads, geometry.ghost, 3);
+            group_frame(quads, geometry.ghost, 2);
             group_frame(quads, geometry.open_config_file, 1);
             for (hit, rect) in [
                 (SettingsHit::ShellCycle, geometry.shell),
@@ -4099,7 +4088,6 @@ pub(super) fn push_quads(
                 (SettingsHit::StartupDirectory, geometry.startup_directory),
                 (SettingsHit::FontCycle, geometry.font),
                 (SettingsHit::GhostToggle, geometry.ghost),
-                (SettingsHit::AcceptCycle, geometry.accept),
                 (SettingsHit::CompletionStyleCycle, geometry.completion_style),
                 (SettingsHit::OpenConfigFile, geometry.open_config_file),
             ] {
@@ -4137,13 +4125,6 @@ pub(super) fn push_quads(
                 geometry.font,
                 view.hover == SettingsHit::FontCycle,
                 view.dropdown == Some(SettingsDropdown::Font),
-            );
-            combobox(
-                quads,
-                &mut staged,
-                geometry.accept,
-                view.hover == SettingsHit::AcceptCycle,
-                view.dropdown == Some(SettingsDropdown::Accept),
             );
             combobox(
                 quads,
@@ -6584,26 +6565,6 @@ pub(super) fn draw_text(
                     sk.ink,
                 );
             }
-            if visible(geometry.accept.1, geometry.accept.3) {
-                row_label(
-                    r,
-                    gc,
-                    size,
-                    scale,
-                    &sk,
-                    geometry.accept,
-                    language.pick("补全接受键", "Completion accept key"),
-                    "",
-                    sk.ink,
-                );
-                combobox_value(
-                    r,
-                    gc,
-                    geometry.accept,
-                    accept_label(view.accept, language),
-                    sk.accent,
-                );
-            }
             if visible(geometry.completion_style.1, geometry.completion_style.3) {
                 row_label(
                     r,
@@ -6612,7 +6573,7 @@ pub(super) fn draw_text(
                     scale,
                     &sk,
                     geometry.completion_style,
-                    language.pick("补全样式", "Completion style"),
+                    language.text(crate::i18n::Message::SettingsCompletionMode),
                     "",
                     sk.ink,
                 );

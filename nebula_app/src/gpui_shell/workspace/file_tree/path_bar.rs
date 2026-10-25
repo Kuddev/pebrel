@@ -28,6 +28,37 @@ fn display_path(path: &std::path::Path) -> String {
     }
 }
 
+fn breadcrumbs(origin: &PathOrigin) -> Vec<(String, String)> {
+    if let Some(wsl) = &origin.wsl {
+        let mut parts = vec![("/".to_owned(), "/".to_owned())];
+        let mut path = String::new();
+        for name in wsl.guest.split('/').filter(|name| !name.is_empty()) {
+            path.push('/');
+            path.push_str(name);
+            parts.push((name.to_owned(), path.clone()));
+        }
+        return parts;
+    }
+    let mut parts: Vec<(String, String)> = Vec::new();
+    let mut path = PathBuf::new();
+    if let Some(root) = &origin.root {
+        let shown = display_path(root);
+        for component in std::path::Path::new(&shown).components() {
+            path.push(component.as_os_str());
+            if component == std::path::Component::RootDir && !parts.is_empty() {
+                // Windows 的盘符和根分隔符属于同一个导航目标。
+                parts.last_mut().unwrap().1 = display_path(&path);
+            } else {
+                parts.push((
+                    component.as_os_str().to_string_lossy().into_owned(),
+                    display_path(&path),
+                ));
+            }
+        }
+    }
+    parts
+}
+
 fn resolve_directory(
     origin: &PathOrigin,
     text: &str,
@@ -137,6 +168,23 @@ impl NebulaWorkspace {
         cx.notify();
     }
 
+    fn navigate_file_tree_breadcrumb(
+        &mut self,
+        target: String,
+        origin: &PathOrigin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.file_tree_path_origin() != *origin {
+            return;
+        }
+        self.begin_file_tree_path_edit(window, cx);
+        if let Some(edit) = &self.file_tree_path {
+            edit.input.update(cx, |input, cx| input.set_value(target, window, cx));
+        }
+        self.commit_file_tree_path(window, cx);
+    }
+
     fn commit_file_tree_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = self.file_tree_path.as_ref().filter(|edit| edit.pending.is_none()) else {
             return;
@@ -212,27 +260,144 @@ impl NebulaWorkspace {
         }
         let language = crate::gpui_shell::config::ui_language(cx);
         let Some(edit) = self.file_tree_path.as_ref() else {
-            let value = origin
-                .wsl
-                .as_ref()
-                .map(|wsl| wsl.guest.clone())
-                .or_else(|| origin.root.as_deref().map(display_path))
-                .unwrap_or_else(|| language.text(Message::FilesPathChoose).to_owned());
-            return Button::new("file-tree-path")
-                .debug_selector(|| "file-tree-path".into())
-                .ghost()
-                .small()
+            let parts = breadcrumbs(&origin);
+            let count = parts.len();
+            let first_visible = count.saturating_sub(3);
+            let theme = cx.theme();
+            let hover_ink = hover_text_color(cx);
+            let mut bar = h_flex()
+                .id("file-tree-breadcrumbs")
+                .debug_selector(|| "file-tree-breadcrumbs".into())
                 .h(px(28.0))
                 .w_full()
                 .min_w_0()
-                .px_1()
                 .overflow_hidden()
-                .tooltip(language.text(Message::FilesPathEdit))
-                .child(div().w_full().min_w_0().truncate().text_left().text_xs().child(value))
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.begin_file_tree_path_edit(window, cx)),
-                )
-                .into_any_element();
+                .gap(px(1.0));
+            if first_visible > 0 {
+                let ancestors = parts[..first_visible].to_vec();
+                let workspace = cx.entity().downgrade();
+                let menu_origin = origin.clone();
+                bar = bar.child(
+                    color_feedback_button(
+                        "file-tree-crumb-overflow",
+                        "...",
+                        theme.muted_foreground,
+                        hover_ink,
+                    )
+                    .debug_selector(|| "file-tree-crumb-overflow".into())
+                    .small()
+                    .h(px(28.0))
+                    .px(px(3.0))
+                    .aria_label(language.text(Message::FilesPathAncestors))
+                    .tooltip(language.text(Message::FilesPathAncestors))
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for (_, target) in &ancestors {
+                            let destination = target.clone();
+                            let expected_origin = menu_origin.clone();
+                            let owner = workspace.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(target.clone())
+                                    .icon(IconName::FolderClosed)
+                                    .on_click(move |_, window, cx| {
+                                        if let Some(owner) = owner.upgrade() {
+                                            owner.update(cx, |this, cx| {
+                                                this.navigate_file_tree_breadcrumb(
+                                                    destination.clone(),
+                                                    &expected_origin,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+                );
+            }
+            for (index, (label, target)) in parts.into_iter().enumerate().skip(first_visible) {
+                let current = index + 1 == count;
+                if index > 0 {
+                    bar = bar.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(12.0))
+                            .text_color(theme.muted_foreground.opacity(0.55))
+                            .child("/"),
+                    );
+                }
+                let click_origin = origin.clone();
+                bar = bar.child(
+                    color_feedback_button(SharedString::from(if current {
+                        "file-tree-path".to_owned()
+                    } else {
+                        format!("file-tree-crumb-{index}")
+                    }),
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_size(px(12.0))
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .child(label.clone()),
+                        if current { theme.foreground } else { theme.muted_foreground },
+                        hover_ink,
+                    )
+                    .debug_selector(move || {
+                        if current {
+                            "file-tree-path".into()
+                        } else if index + 2 == count {
+                            "file-tree-crumb-parent".into()
+                        } else {
+                            format!("file-tree-crumb-{index}")
+                        }
+                    })
+                    .small()
+                    .h(px(28.0))
+                    .min_w_0()
+                    // Button 默认禁止收缩；路径变深时必须让各段在栏内截断，保留点击区域。
+                    .flex_shrink_1()
+                    .px(px(2.0))
+                    .overflow_hidden()
+                    .aria_label(label)
+                    .tooltip(if current {
+                        language.text(Message::FilesPathEdit).to_owned()
+                    } else {
+                        target.clone()
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if current {
+                            if this.file_tree_path_origin() == click_origin {
+                                this.begin_file_tree_path_edit(window, cx);
+                            }
+                        } else {
+                            // 可见目录和折叠列表共用后台校验及旧结果隔离。
+                            this.navigate_file_tree_breadcrumb(target.clone(), &click_origin, window, cx);
+                        }
+                    })),
+                );
+            }
+            if count == 0 {
+                bar =
+                    bar.child(
+                        color_feedback_button(
+                            "file-tree-path",
+                            language.text(Message::FilesPathChoose),
+                            theme.muted_foreground,
+                            hover_ink,
+                        )
+                        .debug_selector(|| "file-tree-path".into())
+                        .small()
+                        .h(px(28.0))
+                        .px(px(2.0))
+                        .aria_label(language.text(Message::FilesPathChoose))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.begin_file_tree_path_edit(window, cx)
+                        })),
+                    );
+            }
+            return bar.into_any_element();
         };
         let busy = edit.pending.is_some();
         h_flex()

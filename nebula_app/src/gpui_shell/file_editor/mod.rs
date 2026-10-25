@@ -24,12 +24,16 @@ mod inline_selection;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod inline_selection_tests;
 mod input_rules;
+mod link_actions;
 mod live_commands;
 mod live_edit;
 mod live_navigation;
 mod live_selection;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod live_tests;
+mod object_edit;
+mod object_source;
+mod object_view;
 mod outline;
 mod outline_view;
 mod preview;
@@ -65,7 +69,18 @@ use document::SaveError;
 use outline::Outline;
 use source::{DocumentSource, LoadedDocument};
 
-actions!(file_editor, [SaveFile, ToggleSource, FinishBlockEdit, BoldSelection, ItalicSelection]);
+actions!(
+    file_editor,
+    [
+        SaveFile,
+        ToggleSource,
+        FinishBlockEdit,
+        ApplyObjectEdit,
+        CancelObjectEdit,
+        BoldSelection,
+        ItalicSelection
+    ]
+);
 
 pub(super) fn init(cx: &mut App) {
     cx.bind_keys([
@@ -83,6 +98,9 @@ pub(super) fn init(cx: &mut App) {
         KeyBinding::new("ctrl-enter", FinishBlockEdit, Some("MarkdownLive")),
         KeyBinding::new("cmd-enter", FinishBlockEdit, Some("MarkdownLive")),
         KeyBinding::new("escape", FinishBlockEdit, Some("MarkdownLive")),
+        KeyBinding::new("ctrl-enter", ApplyObjectEdit, Some("MarkdownObject")),
+        KeyBinding::new("cmd-enter", ApplyObjectEdit, Some("MarkdownObject")),
+        KeyBinding::new("escape", CancelObjectEdit, Some("MarkdownObject")),
         KeyBinding::new("ctrl-s", SaveFile, Some("FileEditor")),
         KeyBinding::new("cmd-s", SaveFile, Some("FileEditor")),
         KeyBinding::new("ctrl-a", gpui_component::input::SelectAll, Some("FileEditor")),
@@ -116,6 +134,9 @@ pub struct TextFileView {
     preview: bool,
     live_mode: bool,
     live_edit: Option<live_edit::LiveEdit>,
+    object_edit: Option<object_edit::ObjectEdit>,
+    link_hover: Option<link_actions::LinkHover>,
+    link_hide_task: Option<Task<()>>,
     render_active: bool,
     preview_stale: bool,
     last_edit_cursor: Option<activity::EditCursor>,
@@ -145,15 +166,20 @@ pub struct TextFileView {
     selected_heading: Option<usize>,
     all_selected: bool,
     revision: u64,
+    content_revision: u64,
     preview_task: Option<Task<()>>,
     _input_subscription: Subscription,
+    source_cursor: (u32, u32),
+    _cursor_subscription: Subscription,
 }
 
 impl EventEmitter<TextFileEvent> for TextFileView {}
 
 impl Focusable for TextFileView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
-        if let Some(edit) = &self.live_edit {
+        if let Some(edit) = &self.object_edit {
+            edit.input.read(cx).focus_handle(cx)
+        } else if let Some(edit) = &self.live_edit {
             edit.input.read(cx).focus_handle(cx)
         } else if self.preview {
             self.focus.clone()
@@ -207,6 +233,7 @@ impl TextFileView {
         });
         let subscription = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
             if matches!(event, InputEvent::Change) {
+                this.content_revision = this.content_revision.wrapping_add(1);
                 if this.markdown {
                     let input = this.input.read(cx);
                     this.history.record_rope(input.text());
@@ -220,6 +247,17 @@ impl TextFileView {
                 }
                 cx.emit(TextFileEvent::Changed);
                 cx.notify();
+            }
+        });
+        let cursor_subscription = cx.observe(&input, |view, input, cx| {
+            let cursor = input.read(cx).cursor_position();
+            let next = (cursor.line, cursor.character);
+            // 光标闪烁也会触发 Input 通知；状态栏只在位置真正变化时重绘。
+            if view.source_cursor != next {
+                view.source_cursor = next;
+                if view.markdown && !view.preview {
+                    cx.notify();
+                }
             }
         });
         let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -246,9 +284,10 @@ impl TextFileView {
             notice: None,
             markdown,
             preview: markdown,
-            // Rendered Markdown opens as a selectable reader. Editing is explicit via source mode.
+            // 正文默认可选择；公式、图片通过独立草稿编辑，全文编辑仍由源码模式承担。
             live_mode: false,
             live_edit: None,
+            object_edit: None,
             render_active: true,
             preview_stale: false,
             last_edit_cursor: None,
@@ -259,6 +298,8 @@ impl TextFileView {
             outline: Outline::default(),
             blocks: Rc::default(),
             inline_views: Rc::default(),
+            link_hover: None,
+            link_hide_task: None,
             scroll: ListState::new(0, ListAlignment::Top, px(500.0)),
             preview_selection_scroll_epoch: 0,
             preview_selection_scroll_active: false,
@@ -273,8 +314,11 @@ impl TextFileView {
             selected_heading: None,
             all_selected: false,
             revision: 0,
+            content_revision: 0,
             preview_task: None,
             _input_subscription: subscription,
+            source_cursor: (0, 0),
+            _cursor_subscription: cursor_subscription,
         };
         this.reload(window, cx);
         this
@@ -289,10 +333,23 @@ impl TextFileView {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty || self.object_edit.as_ref().is_some_and(|edit| edit.changed)
     }
     pub fn is_saving(&self) -> bool {
         self.saving
+    }
+
+    pub(super) fn reader_revision(&self) -> Option<u64> {
+        (!self.loading && self.document.is_some()).then_some(self.content_revision)
+    }
+
+    pub(super) fn reader_snapshot(&self, cx: &App) -> Option<(gpui_component::Rope, u64)> {
+        // Rope 克隆共享不可变节点；编码和分块放到后台，不在 UI 线程复制整篇文档。
+        self.reader_revision().map(|revision| (self.input.read(cx).text().clone(), revision))
+    }
+
+    pub(super) fn reader_is_remote(&self) -> bool {
+        self.source.is_remote()
     }
 
     pub(super) fn reader_focus(&self) -> bool {
@@ -364,19 +421,21 @@ impl TextFileView {
     }
 
     pub fn tab_title(&self) -> String {
-        if self.dirty { format!("{} •", self.title) } else { self.title.clone() }
+        if self.is_dirty() { format!("{} •", self.title) } else { self.title.clone() }
     }
 
     /// Reopening the same path must preserve a draft and its undo history.
     pub fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dirty || self.saving || self.loading {
+        if self.is_dirty() || self.saving || self.loading {
             return;
         }
         self.load(window, cx);
     }
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_object_edit(cx);
         self.loading = true;
+        self.content_revision = self.content_revision.wrapping_add(1);
         self.revision += 1;
         self.preview_task = None;
         let path = self.path.clone();
@@ -441,7 +500,7 @@ impl TextFileView {
         if self.saving || self.loading {
             return;
         }
-        if !self.dirty {
+        if !self.is_dirty() {
             self.load(window, cx);
             return;
         }
@@ -468,6 +527,11 @@ impl TextFileView {
     /// A successful save only cleans the exact snapshot written. Edits made while
     /// I/O is running remain dirty; a second write cannot race the first one.
     pub fn save(&mut self, cx: &mut Context<Self>) -> Task<bool> {
+        if self.object_edit.as_ref().is_some_and(|edit| edit.changed) {
+            self.notice = Some((Message::EditorObjectFinishFirst, None));
+            cx.notify();
+            return Task::ready(false);
+        }
         if self.saving || self.loading {
             return Task::ready(false);
         }
@@ -500,6 +564,7 @@ impl TextFileView {
                     Err(error) => {
                         view.notice = Some(match error {
                             SaveError::Changed => (Message::EditorConflict, None),
+                            SaveError::Busy => (Message::EditorSaveBusy, None),
                             SaveError::ReadOnly => (Message::EditorReadOnly, None),
                             SaveError::Io(error)
                                 if error.kind() == std::io::ErrorKind::Interrupted =>
@@ -525,7 +590,7 @@ impl TextFileView {
         self.revision += 1;
         self.preview_stale = true;
         self.preview_task = None;
-        if !self.render_active || self.live_edit.is_some() {
+        if !self.render_active || self.live_edit.is_some() || self.object_edit.is_some() {
             return;
         }
         let revision = self.revision;
@@ -545,7 +610,11 @@ impl TextFileView {
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
-                if view.render_active && view.revision == revision && view.live_edit.is_none() {
+                if view.render_active
+                    && view.revision == revision
+                    && view.live_edit.is_none()
+                    && view.object_edit.is_none()
+                {
                     view.apply_outline(outline, cx);
                 }
             });
@@ -553,6 +622,8 @@ impl TextFileView {
     }
 
     fn apply_outline(&mut self, outline: Outline, cx: &mut Context<Self>) {
+        self.link_hover = None;
+        self.link_hide_task = None;
         self.preview_stale = false;
         self.preview_code_languages.clear();
         self.inline_views.borrow_mut().clear();
@@ -573,8 +644,18 @@ impl TextFileView {
     }
 
     fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(edit) = &mut self.object_edit {
+            if edit.changed {
+                edit.warning = Some(Message::EditorObjectFinishFirst);
+                cx.notify();
+                return;
+            }
+            self.cancel_object_edit(cx);
+        }
         self.finish_live_edit(cx);
         self.preview = !self.preview;
+        self.link_hover = None;
+        self.link_hide_task = None;
         self.preview_images.update(cx, |images, cx| {
             images.set_active(self.render_active && self.preview, window, cx);
         });
@@ -695,6 +776,15 @@ impl Render for TextFileView {
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
                 this.save(cx).detach();
             }))
+            .on_action(cx.listener(|this, _: &ApplyObjectEdit, window, cx| {
+                this.apply_object_edit(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CancelObjectEdit, window, cx| {
+                if !this.settle_object_composition(window, cx) {
+                    this.cancel_object_edit(cx);
+                    this.focus.focus(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleSource, window, cx| {
                 if this.markdown {
                     this.toggle_preview(window, cx);
@@ -703,6 +793,10 @@ impl Render for TextFileView {
             .when(self.markdown, |root| {
                 root.capture_action(cx.listener(
                     |view, _: &gpui_component::input::Undo, window, cx| {
+                        if view.object_edit.is_some() {
+                            cx.propagate();
+                            return;
+                        }
                         let composing = view.live_edit.as_ref().is_some_and(|edit| {
                             edit.input.update(cx, |input, cx| {
                                 input.marked_text_range(window, cx).is_some()
@@ -719,6 +813,10 @@ impl Render for TextFileView {
                     },
                 ))
                 .capture_action(cx.listener(|view, _: &gpui_component::input::Redo, window, cx| {
+                    if view.object_edit.is_some() {
+                        cx.propagate();
+                        return;
+                    }
                     let composing = view.live_edit.as_ref().is_some_and(|edit| {
                         edit.input
                             .update(cx, |input, cx| input.marked_text_range(window, cx).is_some())
@@ -734,6 +832,17 @@ impl Render for TextFileView {
                 }))
                 .capture_action(cx.listener(
                     |view, _: &gpui_component::input::Escape, window, cx| {
+                        if view.object_edit.is_some() {
+                            if view.settle_object_composition(window, cx) {
+                                // Input 的 Escape 会继续冒泡；此处消费按键，避免同次 Escape 又取消草稿。
+                                cx.stop_propagation();
+                            } else {
+                                view.cancel_object_edit(cx);
+                                view.focus.focus(window, cx);
+                                cx.stop_propagation();
+                            }
+                            return;
+                        }
                         let composing = view.live_edit.as_ref().is_some_and(|edit| {
                             edit.input.update(cx, |input, cx| {
                                 input.marked_text_range(window, cx).is_some()
@@ -752,6 +861,15 @@ impl Render for TextFileView {
                 ))
                 .capture_action(cx.listener(
                     |view, action: &gpui_component::input::Enter, window, cx| {
+                        if view.object_edit.is_some() {
+                            if action.secondary && !view.object_composing(window, cx) {
+                                view.apply_object_edit(window, cx);
+                                cx.stop_propagation();
+                            } else {
+                                cx.propagate();
+                            }
+                            return;
+                        }
                         let composing = view.live_edit.as_ref().is_some_and(|edit| {
                             edit.input.update(cx, |input, cx| {
                                 input.marked_text_range(window, cx).is_some()
@@ -884,7 +1002,7 @@ impl Render for TextFileView {
             .on_action(cx.listener(|view, _: &ItalicSelection, window, cx| {
                 view.format_live_selection("_", window, cx);
             }))
-            .when(self.preview && self.live_edit.is_none(), |root| {
+            .when(self.preview && self.live_edit.is_none() && self.object_edit.is_none(), |root| {
                 root.capture_action(cx.listener(
                     |this, _: &gpui_component::input::SelectAll, _, cx| {
                         for block in this.blocks.borrow().iter().flatten() {
@@ -917,6 +1035,7 @@ impl Render for TextFileView {
                 )
             })
             .child(self.render_toolbar(editable, window, cx))
+            .child(self.render_link_actions(cx))
             .when_some(notice, |root, notice| {
                 root.child(div().px_3().py_1().text_xs().text_color(muted).child(notice))
             })

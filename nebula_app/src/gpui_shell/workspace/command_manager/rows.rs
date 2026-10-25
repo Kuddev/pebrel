@@ -8,6 +8,7 @@ impl NebulaWorkspace {
         index: usize,
         command: crate::saved_commands::SavedCommand,
         list_scrollable: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use crate::display::ui::tokens::{radius, space};
@@ -20,7 +21,10 @@ impl NebulaWorkspace {
         let accent = theme.primary;
         let mono_family = theme.mono_font_family.clone();
         let language = crate::gpui_shell::config::ui_language(cx);
-        let selected = index == self.command_manager_selected;
+        let selected = index == self.command_manager_selection.cursor;
+        let selecting = self.command_manager_selection.selecting;
+        let checked = self.command_manager_selection.ids.contains(&command.id);
+        let select_id = command.id.clone();
         let builtin = command.id.starts_with("builtin:");
         let hover_group = SharedString::from(format!("saved-command-row-hover-{index}"));
         let preview = command
@@ -45,17 +49,26 @@ impl NebulaWorkspace {
         let run_icon = command_run_icon(builtin, command.append_enter);
         let drag = CommandDrag::new(&command);
         let menu_id = command.id.clone();
-        let menu_button_id = command.id.clone();
         let run_command = command.clone();
         let row_command = command.clone();
         let copy_command = command.clone();
         let edit_id = command.id.clone();
         let delete_id = command.id.clone();
+        // 透明而非 hidden，保留按钮的 Tab 顺序；真实键盘聚焦时露出操作区。
+        let actions_focus = window
+            .use_keyed_state(
+                SharedString::from(format!("saved-command-actions-focus-{index}")),
+                cx,
+                |_, cx| cx.focus_handle().tab_stop(false),
+            )
+            .read(cx)
+            .clone();
+        let actions_focused = actions_focus.contains_focused(window, cx);
 
         h_flex()
             .id(SharedString::from(format!("saved-command-row-{index}")))
             .debug_selector(move || format!("saved-command-row-{index}").into())
-            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .when(!selecting, |row| row.on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone())))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -76,10 +89,25 @@ impl NebulaWorkspace {
             .when(selected, |row| row.bg(selected_bg))
             .when(!selected, |row| row.group_hover(hover_group.clone(), |row| row.bg(hover_bg)))
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.command_manager_selected = index;
-                this.dispatch_saved_command(row_command.clone(), window, cx);
+                this.command_manager_selection.cursor = index;
+                if selecting {
+                    this.toggle_command_selection(&row_command.id, cx);
+                } else {
+                    this.dispatch_saved_command(row_command.clone(), window, cx);
+                }
             }))
-            .child(
+            .child(if selecting {
+                gpui_component::checkbox::Checkbox::new(SharedString::from(format!(
+                    "command-check-{index}"
+                )))
+                .debug_selector(move || format!("command-check-{index}"))
+                .checked(checked)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.toggle_command_selection(&select_id, cx);
+                }))
+                .into_any_element()
+            } else {
                 Button::new(SharedString::from(format!("saved-command-run-{index}")))
                     .debug_selector(move || format!("saved-command-run-{index}"))
                     .icon(Icon::new(run_icon).size(px(ROW_ICON_SIZE)))
@@ -90,10 +118,11 @@ impl NebulaWorkspace {
                     .tooltip(run_tooltip)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.command_manager_selected = index;
+                        this.command_manager_selection.cursor = index;
                         this.dispatch_saved_command(run_command.clone(), window, cx);
-                    })),
-            )
+                    }))
+                    .into_any_element()
+            })
             .child(
                 v_flex()
                     .flex_1()
@@ -140,29 +169,14 @@ impl NebulaWorkspace {
             )
             .child(
                 h_flex()
+                    .id(SharedString::from(format!("saved-command-actions-{index}")))
+                    .debug_selector(move || format!("saved-command-actions-{index}"))
+                    .track_focus(&actions_focus)
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "saved-command-group-menu-{index}"
-                        )))
-                        .icon(IconName::EllipsisVertical)
-                        .ghost()
-                        .xsmall()
-                        .tooltip(language.text(crate::i18n::Message::CommandsMoveToGroup))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.open_command_group_menu(
-                                    menu_button_id.clone(),
-                                    window.mouse_position(),
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
+                    .opacity(if actions_focused { 1.0 } else { 0.0 })
+                    .group_hover(hover_group, |style| style.opacity(1.0))
                     .child(
                         Button::new(SharedString::from(format!("saved-command-copy-{index}")))
                             .icon(IconName::Copy)

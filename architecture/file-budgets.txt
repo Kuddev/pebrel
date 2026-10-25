@@ -8,6 +8,7 @@ root nebula_hook
 root nebula_gpui
 root nebula_settings
 root nebula_split
+root mobile/link
 root scripts
 root tools
 nebula_app/src/display/chrome.rs 2442

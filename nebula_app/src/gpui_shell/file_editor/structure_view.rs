@@ -102,14 +102,48 @@ impl TextFileView {
                     .live_edit
                     .as_ref()
                     .is_some_and(|edit| edit.block == block && edit.part == Some(part));
-                div()
+                let object = !self.live_mode;
+                v_flex()
                     .id(("editable-math", part))
                     .debug_selector(move || format!("markdown-math-block-{block}"))
                     .w_full()
                     .min_h(px(40.0))
+                    .relative()
+                    .justify_center()
                     .cursor_text()
+                    .when(object && self.object_editable(), |frame| {
+                        frame
+                            .focusable()
+                            .tab_stop(true)
+                            .cursor_pointer()
+                            .rounded(px(6.0))
+                            .focus_visible(|style| style.bg(cx.theme().muted.opacity(0.35)))
+                            .on_key_down(cx.listener(
+                                move |view, event: &gpui::KeyDownEvent, window, cx| {
+                                    if view.object_edit.as_ref().is_some_and(|edit| {
+                                        edit.block == block && edit.part == part
+                                    }) {
+                                        return;
+                                    }
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        view.begin_object_edit(block, part, None, window, cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                    })
+                    .when(
+                        self.object_edit
+                            .as_ref()
+                            .is_some_and(|edit| edit.block == block && edit.part == part),
+                        |frame| frame.bg(cx.theme().muted.opacity(0.45)),
+                    )
                     .on_click(cx.listener(move |view, event, window, cx| {
-                        view.begin_live_part_at(block, Some(part), Some(event), window, cx);
+                        if object {
+                            view.begin_object_edit(block, part, Some(event), window, cx);
+                        } else {
+                            view.begin_live_part_at(block, Some(part), Some(event), window, cx);
+                        }
                         cx.stop_propagation();
                     }))
                     .child(if active {
@@ -123,13 +157,27 @@ impl TextFileView {
                     } else {
                         TextView::markdown(
                             ("formula-preview", part),
-                            source[span.clone()].to_owned(),
+                            self.object_edit
+                                .as_ref()
+                                .filter(|edit| edit.block == block && edit.part == part)
+                                .map(|edit| edit.preview.clone())
+                                .unwrap_or_else(|| source[span.clone()].to_owned()),
                         )
                         .w_full()
                         .min_w_0()
                         .scrollable(false)
+                        .style(TextViewStyle {
+                            paragraph_gap: gpui::rems(0.0),
+                            ..Default::default()
+                        })
                         .into_any_element()
                     })
+                    .when(
+                        self.object_edit
+                            .as_ref()
+                            .is_some_and(|edit| edit.block == block && edit.part == part),
+                        |frame| frame.child(self.render_object_editor(window, cx)),
+                    )
                     .into_any_element()
             },
             StructureNode::Quote(children) => {
@@ -219,6 +267,7 @@ impl TextFileView {
                     .border_1()
                     .border_color(cx.theme().border)
                     .rounded(px(6.0))
+                    .rounded_t(px(reader_presentation::TABLE_TOP_RADIUS))
                     .overflow_hidden();
                 for (row_index, row) in rows.iter().enumerate() {
                     let mut line = h_flex()
@@ -281,9 +330,7 @@ impl TextFileView {
             self.render_live_input(cx)
         } else {
             let spec = &structure.parts[part];
-            let text = self
-                .outline
-                .part_source(block, spec.preview.as_deref().unwrap_or(&source[spec.range.clone()]));
+            let text = self.outline.part_preview(block, spec, &source[spec.range.clone()]);
             let state = window.use_keyed_state(
                 gpui::SharedString::from(format!("document-part-{block}-{part}")),
                 cx,
@@ -291,20 +338,34 @@ impl TextFileView {
             );
             let state = state.read(cx).clone();
             state.update(cx, |state, cx| state.set_text(&text, cx));
+            self.inline_views.borrow_mut().insert((block, part), state.downgrade());
+            let hover_source = state.downgrade();
+            let hover_owner = cx.weak_entity();
             TextView::new(&state)
                 .w_full()
                 .min_w_0()
                 .selectable(true)
                 .scrollable(false)
+                .on_link_hover(move |hover, _, cx| {
+                    let Some(source) =
+                        hover_source.upgrade().map(|source| source.read(cx).source())
+                    else {
+                        return;
+                    };
+                    let _ = hover_owner.update(cx, |view, cx| {
+                        view.update_link_hover(block, Some(part), &source, hover, cx)
+                    });
+                })
                 .style(TextViewStyle {
                     paragraph_gap: gpui::rems(0.0),
                     image_base: self.path.parent().map(std::sync::Arc::from),
                     highlight_theme: cx.theme().highlight_theme.clone(),
                     is_dark: cx.theme().is_dark(),
                     inline_code: gpui::HighlightStyle {
-                        background_color: Some(super::super::theme::code_block_background(cx)),
+                        background_color: Some(super::super::theme::inline_code_background(cx)),
                         ..Default::default()
                     },
+                    inline_code_radius: px(reader_presentation::INLINE_CODE_RADIUS),
                     ..Default::default()
                 })
                 .markdown_extensions(self.preview_extensions.clone())

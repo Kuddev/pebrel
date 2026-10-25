@@ -19,6 +19,7 @@ pub(crate) struct TextSnapshot {
 #[derive(Debug)]
 pub(crate) enum SaveError {
     Changed,
+    Busy,
     ReadOnly,
     Io(io::Error),
 }
@@ -33,6 +34,7 @@ impl std::fmt::Display for SaveError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Changed => formatter.write_str("The file changed since it was opened"),
+            Self::Busy => formatter.write_str("Another editor is saving this file"),
             Self::ReadOnly => formatter.write_str("The document is read-only"),
             Self::Io(error) => error.fmt(formatter),
         }

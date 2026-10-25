@@ -23,7 +23,7 @@ pub(super) fn resolve_shell_at(
     resolve_shell_id(shell_id).map(|launch| at_explicit_directory(launch, cwd))
 }
 
-fn at_explicit_directory(
+pub(super) fn at_explicit_directory(
     mut launch: crate::session::LaunchSession,
     cwd: Option<&Path>,
 ) -> crate::session::LaunchSession {
@@ -36,9 +36,13 @@ fn at_explicit_directory(
         crate::session::LaunchSession::Shell { program, args, .. } => (program, args),
         _ => return launch,
     };
-    // A WSL profile's old --cd must not override the explicit host working directory.
-    if let Some(inherited) = crate::shell_detect::wsl_args_in_host_directory(program, args) {
-        *args = inherited;
+    // Encode explicit directories before the PTY fallback sees an inherited cwd.
+    // Both guest paths and validated host paths go through WSL's own --cd parser.
+    if crate::shell_detect::is_wsl_launcher(program)
+        && let Some(directory) = crate::platform::launch_directory::wsl_argument(cwd)
+        && let Some(updated) = crate::shell_detect::wsl_args_in_directory(program, args, &directory)
+    {
+        *args = updated;
     }
     launch
 }
@@ -60,6 +64,65 @@ pub(super) fn configured_local_launch(cx: &App) -> crate::session::LaunchSession
         },
         None => crate::session::LaunchSession::Default,
     }
+}
+
+pub(super) fn configured_at(cx: &App, cwd: Option<&Path>) -> crate::session::LaunchSession {
+    at_explicit_directory(configured_local_launch(cx), cwd)
+}
+
+pub(super) fn configured_directory() -> Option<std::path::PathBuf> {
+    let settings = nebula_settings::RuntimeSettings::load();
+    let directory = settings.startup_directory.as_deref()?.trim();
+    if directory.is_empty() {
+        return None;
+    }
+    crate::platform::launch_directory::validate(
+        directory.into(),
+        crate::platform::launch_directory::is_wsl(startup_shell(settings.shell.clone()).as_ref()),
+    )
+}
+
+pub(super) fn profile_directory(program: &str, cwd: Option<&str>) -> Option<std::path::PathBuf> {
+    crate::platform::launch_directory::validate(
+        cwd?.into(),
+        crate::platform::launch_directory::is_wsl_program(program),
+    )
+}
+
+pub(super) fn profile_shell(
+    profile: &crate::config::ui_config::Profile,
+) -> nebula_terminal::tty::Shell {
+    let shell = profile.shell();
+    if let Some(launch) = crate::shell_detect::wsl_launch(shell.program(), shell.args())
+        && !launch.chooses_directory
+        && let Some(cwd) =
+            profile.cwd.as_deref().and_then(crate::platform::launch_directory::wsl_argument)
+        && let Some(args) =
+            crate::shell_detect::wsl_args_in_directory(shell.program(), shell.args(), &cwd)
+    {
+        return nebula_terminal::tty::Shell::new(shell.program().to_owned(), args);
+    }
+    shell
+}
+
+/// The shell the first local pane of this process spawns, resolved with the
+/// same authority as that pane: `--shell <id>`, else the runtime `shell`
+/// setting, through [`resolve_shell_id`] (detected shells, terminal profiles,
+/// the synthetic WSL launch), then the PTY-default snapshot. Used to warm the
+/// guest verdict before the pane exists (`platform::wsl_guest_shell::warm_up`).
+pub(crate) fn startup_shell(shell_id: Option<String>) -> Option<nebula_terminal::tty::Shell> {
+    use crate::gpui_shell::terminal::view::TerminalLaunch;
+
+    let launch = shell_id
+        .or_else(|| nebula_settings::RuntimeSettings::load().shell)
+        .filter(|id| !id.trim().is_empty())
+        .and_then(|id| resolve_shell_id(&id).ok())
+        .unwrap_or(crate::session::LaunchSession::Default);
+    let shell = match super::NebulaWorkspace::terminal_launch_from_session(&launch, None) {
+        TerminalLaunch::Local { shell, .. } => shell,
+        TerminalLaunch::Ssh { .. } => return None,
+    };
+    crate::platform::shell::snapshot_shell(shell)
 }
 
 /// 把一个 shell id 解析成启动身份。
@@ -195,6 +258,23 @@ mod tests {
             );
         }
         assert!(super::profile_launch_for_id(profiles, "profile:sh|qa-PROJECT").is_none());
+    }
+
+    /// Warm-up resolves the first pane's shell with the pane's own authority:
+    /// `shell_detect::resolve_id` alone misses `wsl` whenever distributions are
+    /// registered. Needs a `wsl.exe` on the machine, like the real launch.
+    #[test]
+    fn startup_shell_resolves_bare_wsl_like_the_first_pane() {
+        if crate::platform::shell::wsl_executable().is_none() {
+            return;
+        }
+        let shell = super::startup_shell(Some("wsl".into())).expect("a WSL launch");
+        assert!(crate::shell_detect::is_wsl_launcher(shell.program()));
+        let named = super::startup_shell(Some("wsl:Ubuntu".into())).expect("a WSL launch");
+        assert_eq!(
+            crate::shell_detect::wsl_launch_distro(named.program(), named.args()),
+            Some("Ubuntu")
+        );
     }
 
     /// `--shell` 的 WSL id 语义：`wsl:<发行版>` 必须落成一条真会跑的

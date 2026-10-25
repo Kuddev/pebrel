@@ -23,6 +23,18 @@ fn parses_saved_destinations() {
 }
 
 #[test]
+fn copied_profile_resolves_the_endpoint_but_retains_its_credential_identity() {
+    let mut profiles = crate::ssh_profiles::SshProfiles::default();
+    profiles.duplicate_host("alice@192.0.2.42:2200", "pebrel-host-copy-test").unwrap();
+    let resolved = SshDestination::resolve_profile("pebrel-host-copy-test", &profiles).unwrap();
+    assert_eq!(resolved.original, "pebrel-host-copy-test");
+    assert_eq!(
+        (resolved.user.as_str(), resolved.host.as_str(), resolved.port),
+        ("alice", "192.0.2.42", 2200)
+    );
+}
+
+#[test]
 fn parses_resolved_ssh_config() {
     let config =
         "user deploy\nhostname server.internal\nport 2200\nidentityfile ~/.ssh/id_ed25519\n";
@@ -160,6 +172,58 @@ fn openssh_probe_normalizes_legacy_destinations_with_explicit_ports() {
     );
     assert_eq!(ssh_config_probe_target("root@example.com"), "root@example.com");
     assert_eq!(ssh_config_probe_target("root@2001:db8::1"), "root@2001:db8::1");
+}
+
+#[test]
+fn jumpserver_openssh_probe_encodes_only_the_uri_username_and_keeps_identity() {
+    for (spec, expected) in [
+        ("jumpserverUser@root@example.com", "jumpserverUser@root@example.com"),
+        ("jumpserverUser@root@example.com:2222", "ssh://jumpserverUser%40root@example.com:2222"),
+        ("ssh://jumpserverUser@root@[::1]:2222", "ssh://jumpserverUser%40root@[::1]:2222"),
+        ("ssh://jumpserverUser@root@example.com", "ssh://jumpserverUser%40root@example.com"),
+        ("literal%40@root@example.com:2222", "ssh://literal%2540%40root@example.com:2222"),
+        ("运维@root@example.com:2222", "ssh://%E8%BF%90%E7%BB%B4%40root@example.com:2222"),
+    ] {
+        let parsed = SshDestination::parse(spec).unwrap();
+        let probe = ssh_config_probe_target(spec);
+        assert_eq!(probe, expected);
+        assert_eq!(parsed.original, spec);
+        assert_eq!(
+            crate::ssh_credentials::credential_target(&parsed.original),
+            format!("Pebrel/SSH/{spec}")
+        );
+    }
+    assert_eq!(
+        super::ssh_config_probe_args("ssh://literal%40@root@[::1]:2222"),
+        ["-l", "literal%40@root", "-p", "2222", "--", "::1"]
+    );
+    assert_eq!(super::ssh_config_probe_args("root@::1"), ["-l", "root", "--", "::1"]);
+    assert_eq!(
+        super::ssh_config_probe_args("运维@root@gateway:2222"),
+        ["-o", "User=运维@root", "-p", "2222", "--", "gateway"]
+    );
+    assert_eq!(
+        super::ssh_config_probe_args("运维@root@gateway"),
+        ["-o", "User=运维@root", "--", "gateway"]
+    );
+    assert_eq!(
+        super::ssh_config_probe_args("ssh://运维@root@[::1]:2222"),
+        ["-o", "User=运维@root", "-p", "2222", "--", "::1"]
+    );
+    for spec in [
+        "运维%40@root@gateway:2222",
+        "运维${USER}@root@gateway:2222",
+        "运维$(id)@root@gateway:2222",
+        "运维{root}@gateway:2222",
+        "-运维@root@gateway:2222",
+        "运维\\@gateway:2222",
+    ] {
+        assert_eq!(
+            super::ssh_config_probe_args(spec),
+            ["--".to_owned(), ssh_config_probe_target(spec).into_owned()],
+            "a configuration User option must not expand tokens or bypass native username checks"
+        );
+    }
 }
 
 #[test]

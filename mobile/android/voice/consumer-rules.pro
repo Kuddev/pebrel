@@ -1,0 +1,1 @@
+-keep class io.github.kuddev.pebrel.voice.NativeWhisper { *; }

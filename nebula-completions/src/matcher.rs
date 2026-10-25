@@ -67,6 +67,7 @@ pub struct CandidateMatcher<'a, T> {
     options: &'a CompletionOptions,
     should_sort: bool,
     needle: String,
+    strip_quotes: bool,
     state: State<T>,
 }
 
@@ -82,6 +83,17 @@ impl<T> CandidateMatcher<'_, T> {
         should_sort: bool,
     ) -> CandidateMatcher<'_, T> {
         let needle = needle.as_ref().trim_matches(QUOTES);
+        let mut matcher = Self::literal(needle, options, should_sort);
+        matcher.strip_quotes = true;
+        matcher
+    }
+
+    /// Match decoded values; quote characters belong to the filename/argument.
+    pub fn literal<'a>(
+        needle: &str,
+        options: &'a CompletionOptions,
+        should_sort: bool,
+    ) -> CandidateMatcher<'a, T> {
         match options.match_algorithm {
             MatchAlgorithm::Prefix | MatchAlgorithm::Substring => {
                 let lowercase_needle = if options.case_sensitive {
@@ -93,6 +105,7 @@ impl<T> CandidateMatcher<'_, T> {
                     options,
                     should_sort,
                     needle: lowercase_needle,
+                    strip_quotes: false,
                     state: State::Unscored(Vec::new()),
                 }
             },
@@ -112,6 +125,7 @@ impl<T> CandidateMatcher<'_, T> {
                     options,
                     should_sort,
                     needle: needle.to_owned(),
+                    strip_quotes: false,
                     state: State::Fuzzy {
                         matcher: Matcher::new({
                             let mut cfg = Config::DEFAULT;
@@ -128,9 +142,13 @@ impl<T> CandidateMatcher<'_, T> {
 
     /// Internal: test `haystack` against the needle and optionally store the item.
     fn matches_aux(&mut self, orig_haystack: &str, item: Option<T>) -> Option<Vec<usize>> {
-        let haystack = orig_haystack.trim_start_matches(QUOTES);
+        let haystack = if self.strip_quotes {
+            orig_haystack.trim_start_matches(QUOTES)
+        } else {
+            orig_haystack
+        };
         let offset = orig_haystack.len() - haystack.len();
-        let haystack = haystack.trim_end_matches(QUOTES);
+        let haystack = if self.strip_quotes { haystack.trim_end_matches(QUOTES) } else { haystack };
         match &mut self.state {
             State::Unscored(matches) => {
                 let haystack_folded = if self.options.case_sensitive {

@@ -1,0 +1,21 @@
+<resources>
+    <plurals name="background_live_sessions">
+        <item quantity="one">%1$d live session</item>
+        <item quantity="other">%1$d live sessions</item>
+    </plurals>
+    <string name="notification_exit">Exit</string>
+    <string name="notification_acquire_wakelock">Acquire wakelock</string>
+    <string name="notification_release_wakelock">Release wakelock</string>
+    <string name="notification_wakelock_active">Wakelock held</string>
+    <string name="shared_storage_title">Local terminal storage</string>
+    <string name="shared_storage_required">Shared storage access is required for local terminals.</string>
+    <string name="shared_storage_explanation">After access is granted, Pebrel starts local terminals in /storage/emulated/0/Pebrel and keeps that directory as HOME. Grant access to continue; it will not fall back to private app data.</string>
+    <string name="shared_storage_all_files_explanation">Android needs a one-time “All files access” grant for the shared Pebrel folder.</string>
+    <string name="shared_storage_grant">Grant shared storage access</string>
+    <string name="shared_storage_open_settings">Open app settings</string>
+    <string name="shared_storage_ready">Local terminals use shared storage.</string>
+    <string name="shared_storage_location">Local terminal home: %1$s</string>
+    <string name="shared_storage_unavailable">Shared storage is unavailable. Mount external storage and try again.</string>
+    <string name="shared_storage_directory_error">Pebrel could not create its shared storage folder. Try again after checking storage access.</string>
+    <string name="shared_storage_check_again">Check again</string>
+</resources>

@@ -11,13 +11,28 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Window, canvas, div, px,
 };
 
-use crate::display::ui::widgets::{self, OverlayScrollbar};
 use crate::gpui_shell::prelude::*;
+use crate::scrollbar::{self, OverlayScrollbar};
 
-use super::{NebulaWorkspace, TAB_ROW_H, TAB_ROW_PITCH};
+use nebula_settings::DensityName;
 
-/// 行间距（pitch − 行高）。旧壳 `gap = s(8)`。
-const TAB_ROW_GAP: f32 = TAB_ROW_PITCH - TAB_ROW_H;
+use super::NebulaWorkspace;
+
+pub(super) fn tab_row_height(density: DensityName) -> f32 {
+    match density {
+        DensityName::Standard => 34.0,
+        DensityName::Compact => crate::display::ui::tokens::control::MIN_HIT_TARGET,
+    }
+}
+
+pub(super) fn tab_row_gap(density: DensityName) -> f32 {
+    use crate::display::ui::tokens::space;
+    match density {
+        DensityName::Standard => space::XS,
+        DensityName::Compact => space::XXS,
+    }
+}
+
 /// 旧壳 `tab_right_pad`：给覆盖式滚动条留的恒定沟槽，出现与否都不改行宽。
 pub(super) const TAB_SCROLL_GUTTER: f32 = 9.0;
 
@@ -89,6 +104,19 @@ fn point_in_rect((rx, ry, rw, rh): (f32, f32, f32, f32), x: f32, y: f32) -> bool
     x >= rx && y >= ry && x < rx + rw && y < ry + rh
 }
 
+fn tabs_scroll_thumb(bar: &OverlayScrollbar, color: gpui::Hsla) -> gpui::Div {
+    // 滑块只负责绘制，命中由独立轨道处理；遮挡父列表会形成 hover 显隐反馈循环。
+    div()
+        .debug_selector(|| "sidebar-tabs-scroll-thumb".to_owned())
+        .absolute()
+        .left(px(bar.thumb.0))
+        .top(px(bar.thumb.1))
+        .w(px(bar.thumb.2))
+        .h(px(bar.thumb.3))
+        .rounded_full()
+        .bg(color)
+}
+
 struct TabsWindow {
     scroll: usize,
     show: usize,
@@ -97,9 +125,18 @@ struct TabsWindow {
 }
 
 impl NebulaWorkspace {
+    pub(super) fn tab_row_pitch(&self) -> f32 {
+        tab_row_height(self.density) + tab_row_gap(self.density)
+    }
+
     fn tabs_window(&self) -> TabsWindow {
         let want = self.tabs.len();
-        let show = visible_count(want, self.tabs_viewport_h, TAB_ROW_PITCH, TAB_ROW_GAP);
+        let show = visible_count(
+            want,
+            self.tabs_viewport_h,
+            self.tab_row_pitch(),
+            tab_row_gap(self.density),
+        );
         let max = max_scroll(want, show);
         let scroll = clamp_scroll(self.tabs_scroll, max);
         TabsWindow { scroll, show, max, want }
@@ -137,15 +174,16 @@ impl NebulaWorkspace {
         if window.show == 0 || window.want <= window.show {
             return None;
         }
-        let viewport = rows_h(window.show, TAB_ROW_PITCH, TAB_ROW_GAP).max(1.0);
-        let content = rows_h(window.want, TAB_ROW_PITCH, TAB_ROW_GAP);
+        let viewport =
+            rows_h(window.show, self.tab_row_pitch(), tab_row_gap(self.density)).max(1.0);
+        let content = rows_h(window.want, self.tab_row_pitch(), tab_row_gap(self.density));
         let width = self.tabs_list_width.max(1.0);
         let height = self.tabs_viewport_h.max(viewport);
-        widgets::overlay_scrollbar(
+        scrollbar::overlay_scrollbar(
             (0.0, 0.0, width, height),
             viewport,
             content,
-            window.scroll as f32 * TAB_ROW_PITCH,
+            window.scroll as f32 * self.tab_row_pitch(),
             1.0,
         )
     }
@@ -191,7 +229,7 @@ impl NebulaWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let delta_y = f32::from(event.delta.pixel_delta(px(TAB_ROW_PITCH)).y);
+        let delta_y = f32::from(event.delta.pixel_delta(px(self.tab_row_pitch())).y);
         let rows = wheel_rows(delta_y);
         if rows == 0 {
             return;
@@ -254,19 +292,9 @@ impl NebulaWorkspace {
                 .absolute()
                 .size_full(),
             )
-            .child(v_flex().w_full().gap_2().children(items))
+            .child(v_flex().w_full().gap(px(tab_row_gap(self.density))).children(items))
             .when_some(bar.filter(|_| show_thumb), |list, bar| {
-                list.child(
-                    div()
-                        .absolute()
-                        .left(px(bar.thumb.0))
-                        .top(px(bar.thumb.1))
-                        .w(px(bar.thumb.2))
-                        .h(px(bar.thumb.3))
-                        .rounded_full()
-                        .bg(thumb_color)
-                        .occlude(),
-                )
+                list.child(tabs_scroll_thumb(&bar, thumb_color))
             })
             .when_some(bar, |list, bar| {
                 list.child(
@@ -304,7 +332,10 @@ impl NebulaWorkspace {
         }
         // 折叠中/已折叠：裁剪高度不是 `tabs_avail`。写回去会让
         // `visible_count` 按 20–40px 算出 0/1 行，展开后整列锁死。
-        if !self.tabs_section_collapsed && !self.tabs_fold_frozen && h >= TAB_ROW_H {
+        if !self.tabs_section_collapsed
+            && !self.tabs_fold_frozen
+            && h >= tab_row_height(self.density)
+        {
             self.tabs_viewport_h = h;
         }
         self.tabs_list_width = w;
@@ -348,6 +379,24 @@ mod tests {
         apply_wheel, clamp_scroll, index_visible, max_scroll, reveal_index, rows_h, visible_count,
         wheel_rows,
     };
+
+    #[test]
+    fn compact_rows_fit_more_tabs_without_shrinking_hit_targets() {
+        use super::{DensityName, tab_row_gap, tab_row_height};
+        for (density, expected_height, expected_show) in
+            [(DensityName::Standard, 34.0, 2), (DensityName::Compact, 32.0, 3)]
+        {
+            let height = tab_row_height(density);
+            let gap = tab_row_gap(density);
+            let pitch = height + gap;
+            assert_eq!(height, expected_height);
+            assert!(height >= crate::display::ui::tokens::control::MIN_HIT_TARGET);
+            assert_eq!(rows_h(1, pitch, gap), height);
+            let show = visible_count(10, 104.0, pitch, gap);
+            assert_eq!(show, expected_show);
+            assert_eq!(reveal_index(9, 0, show), max_scroll(10, show));
+        }
+    }
 
     const PITCH: f32 = 42.0;
     const GAP: f32 = 8.0;
@@ -396,5 +445,89 @@ mod tests {
         assert_eq!(apply_wheel(0, 5, -1), 0);
         assert_eq!(apply_wheel(5, 5, 1), 5);
         assert_eq!(apply_wheel(2, 5, 1), 3);
+    }
+
+    #[cfg(feature = "gpui-test-support")]
+    mod hover {
+        use super::super::{scrollbar, tabs_scroll_thumb};
+        use gpui::prelude::*;
+        use gpui::{Context, MouseButton, Render, TestAppContext, Window, div, point, px};
+
+        #[derive(Default)]
+        struct ScrollHoverProbe {
+            hovered: bool,
+            presses: usize,
+            hover_transitions: usize,
+        }
+
+        impl Render for ScrollHoverProbe {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let bar =
+                    scrollbar::overlay_scrollbar((0.0, 0.0, 200.0, 200.0), 200.0, 800.0, 0.0, 1.0)
+                        .unwrap();
+                div()
+                    .id("tabs-hover-probe")
+                    .relative()
+                    .w(px(200.0))
+                    .h(px(200.0))
+                    .on_hover(cx.listener(|this, hovered, _, cx| {
+                        if this.hovered != *hovered {
+                            this.hovered = *hovered;
+                            this.hover_transitions += 1;
+                            // 本场景只进出列表各一次；直接拦住反馈循环，避免回归时挂住测试。
+                            assert!(
+                                this.hover_transitions <= 2,
+                                "ancestor hover keeps oscillating"
+                            );
+                            cx.notify();
+                        }
+                    }))
+                    .when(self.hovered, |list| list.child(tabs_scroll_thumb(&bar, gpui::black())))
+                    .child(
+                        div()
+                            .id("tabs-hover-track")
+                            .absolute()
+                            .left(px(bar.hit.0))
+                            .top(px(bar.hit.1))
+                            .w(px(bar.hit.2))
+                            .h(px(bar.hit.3))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.presses += 1;
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    )
+            }
+        }
+
+        #[gpui::test]
+        fn thumb_keeps_parent_hover_stable_and_track_clickable(cx: &mut TestAppContext) {
+            let (probe, cx) = cx.add_window_view(|_, _| ScrollHoverProbe::default());
+            let draw = |cx: &mut gpui::VisualTestContext| {
+                cx.update(|window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                });
+            };
+            cx.simulate_mouse_move(point(px(195.0), px(190.0)), None, Default::default());
+            draw(cx);
+            let thumb = cx.debug_bounds("sidebar-tabs-scroll-thumb").expect("hover shows thumb");
+            cx.simulate_mouse_move(thumb.center(), None, Default::default());
+            // 鼠标保持不动、连续重绘，复现遮挡父 hover 导致的显示/隐藏反馈循环。
+            for frame in 0..8 {
+                draw(cx);
+                assert!(probe.read_with(cx, |probe, _| probe.hovered), "frame {frame}");
+                assert_eq!(cx.debug_bounds("sidebar-tabs-scroll-thumb"), Some(thumb));
+            }
+            cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Default::default());
+            cx.simulate_mouse_up(thumb.center(), MouseButton::Left, Default::default());
+            assert_eq!(probe.read_with(cx, |probe, _| probe.presses), 1);
+            cx.simulate_mouse_move(point(px(220.0), px(100.0)), None, Default::default());
+            draw(cx);
+            assert!(!probe.read_with(cx, |probe, _| probe.hovered));
+            assert!(cx.debug_bounds("sidebar-tabs-scroll-thumb").is_none());
+        }
     }
 }

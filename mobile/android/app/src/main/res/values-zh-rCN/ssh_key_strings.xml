@@ -1,0 +1,14 @@
+<resources>
+    <string name="ssh_error_key">读取或解密私钥失败，请检查文件授权、密钥格式和口令。</string>
+    <string name="ssh_save_passphrase">保存口令</string>
+    <string name="ssh_clear_saved_passphrase">移除已保存口令</string>
+    <string name="ssh_passphrase_saved_hint">留空会保留已保存口令，输入新口令则替换它。</string>
+    <string name="ssh_passphrase_will_save_hint">口令将保存到此设备的加密凭据存储中。</string>
+    <string name="ssh_passphrase_not_saved_hint">口令仅用于本次连接，不会保存。</string>
+    <string name="ssh_passphrase_saved_status">此设备已保存私钥口令。</string>
+    <string name="ssh_choose_key">选择私钥文件</string>
+    <string name="ssh_key_passphrase">私钥口令</string>
+    <string name="ssh_key_file_hint">选择 OpenSSH 或 PEM 私钥（不超过 64 KiB）。保存时保留该文档的读取授权，私钥内容不写入主机配置。</string>
+    <string name="ssh_key_passphrase_hint">未加密的私钥可留空。保存口令时使用与密码相同的加密凭据存储。</string>
+    <string name="ssh_key_access_failed">读取密钥文档失败，请重新选择可访问的私钥文件。</string>
+</resources>

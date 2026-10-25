@@ -140,7 +140,7 @@ header = (
     "//! Latitude-banded ball (o/0 indigo, * cyan, ~ magenta), golden tilted\n"
     "//! `=` ring with front/back occlusion, sparse starfield.\n"
     "//! Regenerate with `python tools/gen_fetch_art.py`.\n\n"
-    "#[cfg(windows)]\n"
+    "#[cfg(any(windows, test))]\n"
     "pub const NEBULA_STAR_ART: &[&str] = &[\n"
 )
 body = "".join(f'    "{l}",\n' for l in rs_lines)

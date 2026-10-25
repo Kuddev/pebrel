@@ -19,18 +19,19 @@ fn appearance_theme_catalog_matches_the_approved_gallery_order() {
             "Mint Dark",
             "Silver",
             "Nord",
-            "Paper",
+            "Nord Light",
+            "Warm Sand",
             "Limestone",
             "Linen",
             "Catppuccin Mocha",
             "Catppuccin Latte",
             "Catppuccin Frappé",
             "Catppuccin Macchiato",
-            "Glass Light",
+            "Slate Light",
             "Glass Dark"
         ]
     );
-    assert_eq!(themes.choices(1).len(), 8);
+    assert_eq!(themes.choices(1).len(), 9);
     assert_eq!(themes.choices(2).len(), 7);
     for choice in themes.choices(0) {
         assert_ne!(themes.choices(1).contains(&choice), themes.choices(2).contains(&choice));

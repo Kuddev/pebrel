@@ -186,7 +186,7 @@ jobs:
         run: cargo test --locked -p nebula --features gpui-test-support dialog
 
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
+        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
 
       - name: Download pinned linuxdeploy
         env:
@@ -375,7 +375,7 @@ jobs:
           df -h . "${TMPDIR:-/tmp}"
 
       - name: Build GPUI release binary
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
+        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
 
       - name: Import signing credentials into a temporary keychain
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.macos_signing == 'developer-id' }}
@@ -522,7 +522,7 @@ jobs:
       - name: Test SSH confirmation and password dialogs
         run: cargo test --locked -p nebula --features gpui-test-support dialog
       - name: Build GPUI comparison binary
-        run: cargo build --locked --release -p nebula --bin pebrel --features gpui-shell
+        run: cargo build --locked --release -p nebula --bin pebrel -p nebula_hook --bin pebrel-hook --features nebula/gpui-shell
       - name: Run Windows conformance
         env:
           NEBULA_RESIZE_TRACE: "1"

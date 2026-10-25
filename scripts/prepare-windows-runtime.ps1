@@ -9,33 +9,24 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
-# Reuse the Microsoft 1.22 runtime pair already shipped with Pebrel's predecessor.
-# Only these two redistributables are extracted, never the older application.
-$archiveHash = '9B2413144C0434E29749CCBD5C2B0F93E930DAFD22634DD70D34B763037E0DA4'
-$sourceUrl = 'https://github.com/Kuddev/pebrel/releases/download/v1.5.0/NebulaTerminal-v1.5.0-windows-x64.zip'
+# Use the official stable pair for both architectures so x64 no longer ships the old host.
+# Microsoft MIT-licensed redistributables; the NuGet declares build 17763+.
+$archiveHash = '175640566A3B59C4B132070EE96C2C77E5AB7EDD2E92732A5EB3610BBF63D90E'
+$sourceUrl = 'https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.24.260710001/microsoft.windows.console.conpty.1.24.260710001.nupkg'
+$archiveName = 'pebrel-conpty-source-1.24.260710001.nupkg'
 $expected = [ordered]@{
-    'conpty.dll' = '375BFB0479B6C53836AB307E3F9FD17BEDBD733F2E9690943D0F12E72FB80777'
-    'OpenConsole.exe' = '55B18996761C88C351820E82508E05AB0EC2194AEEAD20724FDFAEEDEC076EF4'
+    'conpty.dll' = '39FBA2713E2495117B1591AE8C32A3B904BEA7AA66069CF7815E2844C76D75D8'
+    'OpenConsole.exe' = 'B7FD936C2668B87B9ECF7B3366DC6568AFC1C6F981874CBA3E955A1C35CF8160'
 }
 $entries = @{
-    'conpty.dll' = 'runtime\conpty.dll'
-    'OpenConsole.exe' = 'runtime\OpenConsole.exe'
+    'conpty.dll' = "runtimes/win-$Architecture/native/conpty.dll"
+    'OpenConsole.exe' = "build/native/runtimes/$Architecture/OpenConsole.exe"
 }
-$archiveName = 'pebrel-conpty-source-v1.5.0.zip'
 $machine = 0x8664
 if ($Architecture -eq 'arm64') {
-    # Microsoft MIT-licensed redistributables; the NuGet declares build 17763+.
-    # Keep the previously shipped x64 runtime unchanged.
-    $sourceUrl = 'https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.24.260710001/microsoft.windows.console.conpty.1.24.260710001.nupkg'
-    $archiveName = 'pebrel-conpty-source-1.24.260710001.nupkg'
-    $archiveHash = '175640566A3B59C4B132070EE96C2C77E5AB7EDD2E92732A5EB3610BBF63D90E'
     $expected = [ordered]@{
         'conpty.dll' = 'DB3D173640B172BAFD42D5B541B638A9AEEC1C7D0E40DD636BF02822A32C912C'
         'OpenConsole.exe' = 'ED7622FD0D3BEDC9AB9F122F5E58EDF0DEF9E7999224F52DD395BA9F54EDBE09'
-    }
-    $entries = @{
-        'conpty.dll' = 'runtimes/win-arm64/native/conpty.dll'
-        'OpenConsole.exe' = 'build/native/runtimes/arm64/OpenConsole.exe'
     }
     $machine = 0xAA64
 }

@@ -71,6 +71,7 @@ pub struct GitCommit {
     pub decorations: String,
     pub subject: String,
     pub author: String,
+    pub author_email: String,
     pub timestamp: i64,
     /// 按 Git 记录顺序保存父提交：第一个是主线，后续父提交是合并进来的线路。
     pub parent_hashes: Vec<String>,
@@ -456,6 +457,9 @@ pub struct SidePanel {
     /// against stacking workers; a refresh requested meanwhile re-arms
     /// `needs_refresh` and runs after this one lands.
     snapshot_running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Fixtures must finish the real worker before removing its working directory.
+    #[cfg(test)]
+    snapshot_thread: Option<std::thread::JoinHandle<()>>,
     /// The worker's finished snapshot, harvested by `sync` on the next frame.
     /// 切换视图/根不再同步跑 git——旧内容原样留在屏上，新快照落地后整体
     /// 替换。
@@ -534,6 +538,8 @@ impl SidePanel {
             op_done: Default::default(),
             op_error: Default::default(),
             snapshot_running: Default::default(),
+            #[cfg(test)]
+            snapshot_thread: None,
             snapshot_slot: Default::default(),
             enumeration_failed: false,
             needs_refresh: false,
@@ -681,11 +687,8 @@ impl SidePanel {
     /// 测试辅助：等后台快照工人落地并收割。生产路径永不阻塞。
     #[cfg(test)]
     fn wait_snapshot(&mut self) {
-        for _ in 0..1000 {
-            if !self.snapshot_running.load(std::sync::atomic::Ordering::Acquire) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(2));
+        if let Some(worker) = self.snapshot_thread.take() {
+            worker.join().expect("snapshot worker panicked");
         }
         self.harvest_snapshot();
     }
@@ -956,7 +959,7 @@ impl SidePanel {
         let wsl = self.followed_wsl.clone();
         let running = std::sync::Arc::clone(&self.snapshot_running);
         let slot = std::sync::Arc::clone(&self.snapshot_slot);
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             let _running_guard = SnapshotRunningGuard(running);
             let (rows, enumeration_ok) = match &files_wsl {
                 Some(located) => SidePanel::tree_rows_wsl(located, &expanded),
@@ -1009,6 +1012,12 @@ impl SidePanel {
                     Some(PanelSnapshot { root, files_wsl, rows, enumeration_ok, git: Some(git) });
             }
         });
+        #[cfg(test)]
+        {
+            self.snapshot_thread = Some(worker);
+        }
+        #[cfg(not(test))]
+        drop(worker);
     }
 
     /// Rebuild only the flattened rows (tree shape / filter changes; the git

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $builder = Join-Path $PSScriptRoot '../build-windows-product.ps1'
 $originalTarget = $env:CARGO_TARGET_DIR
@@ -20,7 +20,7 @@ try {
         if ($arguments[$i] -eq '--bin') { $binaries += $arguments[$i + 1] }
     }
     if (($packages -join ',') -ne 'nebula,nebula_hook') { throw 'Unexpected package selection' }
-    if (($binaries -join ',') -ne 'pebrel,pebrel-hook') { throw 'Unexpected product binaries' }
+    if (($binaries -join ',') -ne 'pebrel,pebrel-cli,pebrel-hook') { throw 'Unexpected product binaries' }
     foreach ($required in @('--locked', '--release', '--features', 'nebula/gpui-shell')) {
         if ($required -notin $arguments) { throw "Missing product build argument: $required" }
     }
@@ -36,6 +36,15 @@ try {
     if (-not $failed) { throw 'Cargo failure must fail packaging' }
     if ($env:CARGO_TARGET_DIR -ne 'preserve-caller-target') { throw 'Failure changed caller target' }
     if ((Get-Location).Path -ne $originalDirectory) { throw 'Failure changed caller directory' }
+    # 本地调试仍允许构建；分发入口必须在执行构建或收集文件之前拒绝调试包。
+    foreach ($name in @('package-release.ps1', 'build-installer.ps1')) {
+        $packager = Join-Path $PSScriptRoot "../$name"
+        $rejected = $false
+        try { & $packager -Configuration debug } catch {
+            $rejected = $_.FullyQualifiedErrorId -like 'ParameterArgumentValidationError*'
+        }
+        if (-not $rejected) { throw "$name must reject non-portable debug builds" }
+    }
     Write-Output 'build-windows-product.tests.ps1: PASS'
 } finally {
     $env:CARGO_TARGET_DIR = $originalTarget

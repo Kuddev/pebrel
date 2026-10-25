@@ -20,8 +20,70 @@ pub(crate) struct PromptLineSnapshot {
     pub(crate) input: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PendingEcho {
+    before: String,
+    expected: String,
+}
+
+impl NebulaPaneState {
+    /// A shell prediction may follow the cursor only while the complete typed
+    /// mirror still matches the echoed prefix. Cursor edits invalidate trust.
+    pub(crate) fn completion_prefix_from_raw_grid<T: EventListener>(
+        &self,
+        terminal: &Term<T>,
+        cursor: Point,
+    ) -> Option<PromptLineSnapshot> {
+        if !self.completion_mirror_at_end || self.line_buf.is_empty() {
+            return None;
+        }
+        let line =
+            prompt_line_from_raw_grid(terminal, cursor, &self.line_buf, &self.suggest_env, true)?;
+        (line.input == self.line_buf).then_some(line)
+    }
+
+    pub(crate) fn pending_completion_line(&self) -> Option<&str> {
+        self.completion_pending_input.as_ref().map(|pending| pending.expected.as_str())
+    }
+
+    pub(crate) fn expect_completion_echo(&mut self, before: String, expected: String) {
+        self.line_buf = expected.clone();
+        self.completion_pending_input = Some(PendingEcho { before, expected });
+    }
+
+    fn pending_edit(&mut self) -> &mut String {
+        let echoed = &self.screen_line;
+        &mut self
+            .completion_pending_input
+            .get_or_insert_with(|| PendingEcho { before: echoed.clone(), expected: echoed.clone() })
+            .expected
+    }
+
+    /// 仅拒绝已发送编辑的中间回显；历史召回等不同文本仍由 shell 真值接管。
+    pub(crate) fn completion_echo_ready(&mut self, line: &str) -> bool {
+        let Some(pending) = &self.completion_pending_input else { return true };
+        let common: usize = pending
+            .before
+            .chars()
+            .zip(pending.expected.chars())
+            .take_while(|(left, right)| left == right)
+            .map(|(ch, _)| ch.len_utf8())
+            .sum();
+        if line != pending.expected
+            && line.starts_with(&pending.before[..common])
+            && (pending.expected.starts_with(line) || pending.before.starts_with(line))
+        {
+            self.clear_completion_hints();
+            return false;
+        }
+        self.completion_pending_input = None;
+        true
+    }
+}
+
 #[inline(never)]
 pub(crate) fn nebula_input_char(state: &mut NebulaPaneState, c: char) {
+    state.pending_edit().push(c);
     state.line_buf.push(c);
     state.touched = true;
     state.clear_completion_hints();
@@ -29,6 +91,7 @@ pub(crate) fn nebula_input_char(state: &mut NebulaPaneState, c: char) {
 }
 
 pub(crate) fn nebula_input_backspace(state: &mut NebulaPaneState) {
+    state.pending_edit().pop();
     state.line_buf.pop();
     state.touched = true;
     state.clear_completion_hints();
@@ -36,15 +99,20 @@ pub(crate) fn nebula_input_backspace(state: &mut NebulaPaneState) {
 }
 
 pub(crate) fn nebula_input_delete_word(state: &mut NebulaPaneState) {
+    delete_last_word(state.pending_edit());
     state.touched = true;
-    while state.line_buf.ends_with(char::is_whitespace) {
-        state.line_buf.pop();
-    }
-    while state.line_buf.chars().last().is_some_and(|c| !c.is_whitespace()) {
-        state.line_buf.pop();
-    }
+    delete_last_word(&mut state.line_buf);
     state.clear_completion_hints();
     nebula_debug_log(format!("input_delete_word line_buf={:?}", state.line_buf));
+}
+
+fn delete_last_word(line: &mut String) {
+    while line.ends_with(char::is_whitespace) {
+        line.pop();
+    }
+    while line.chars().last().is_some_and(|c| !c.is_whitespace()) {
+        line.pop();
+    }
 }
 
 /// Merge pasted or IME-committed literal text into the prompt mirror. Text
@@ -56,6 +124,7 @@ pub(crate) fn nebula_input_text(state: &mut NebulaPaneState, text: &str) {
         return;
     }
 
+    state.pending_edit().push_str(text);
     state.line_buf.push_str(text);
     state.touched = true;
     state.clear_completion_hints();
@@ -71,7 +140,10 @@ pub(crate) fn nebula_clear_line(state: &mut NebulaPaneState) {
     }
     state.line_buf.clear();
     state.screen_line.clear();
+    state.completion_pending_input = None;
+    state.completion_mirror_at_end = false;
     state.completion_suppressed_line = None;
+    state.completion_popup_requested = false;
     state.clear_completion_hints();
 }
 
@@ -131,8 +203,18 @@ pub(crate) fn nebula_prompt_line_from_raw_grid<T: EventListener>(
     typed_tail: &str,
     env: &SuggestEnv,
 ) -> Option<PromptLineSnapshot> {
+    prompt_line_from_raw_grid(terminal, cursor, typed_tail, env, false)
+}
+
+fn prompt_line_from_raw_grid<T: EventListener>(
+    terminal: &Term<T>,
+    cursor: Point,
+    typed_tail: &str,
+    env: &SuggestEnv,
+    allow_tail: bool,
+) -> Option<PromptLineSnapshot> {
     let input_start = terminal.nebula_prompt_input_point();
-    let (text, boundary) = raw_grid_line_with_boundary(terminal, cursor, input_start)?;
+    let (text, boundary) = raw_grid_line_with_boundary(terminal, cursor, input_start, allow_tail)?;
     if let Some(boundary) = boundary {
         let (prompt, input) = text.split_at(boundary);
         return Some(PromptLineSnapshot { prompt: prompt.to_owned(), input: input.to_owned() });
@@ -177,13 +259,14 @@ pub(crate) fn nebula_shell_prompt_restored_from_raw_grid<T: EventListener>(
 }
 
 fn raw_grid_logical_line<T: EventListener>(terminal: &Term<T>, cursor: Point) -> Option<String> {
-    raw_grid_line_with_boundary(terminal, cursor, None).map(|(text, _)| text)
+    raw_grid_line_with_boundary(terminal, cursor, None, false).map(|(text, _)| text)
 }
 
 fn raw_grid_line_with_boundary<T: EventListener>(
     terminal: &Term<T>,
     cursor: Point,
     input_start: Option<Point>,
+    allow_tail: bool,
 ) -> Option<(String, Option<usize>)> {
     let grid = terminal.grid();
     if !raw_grid_line_is_readable(cursor.line, grid.topmost_line(), grid.bottommost_line()) {
@@ -210,7 +293,7 @@ fn raw_grid_line_with_boundary<T: EventListener>(
         if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
             continue;
         }
-        if !cell.c.is_whitespace() {
+        if !allow_tail && !cell.c.is_whitespace() {
             return None;
         }
     }
@@ -373,6 +456,35 @@ fn likely_prompt(prompt: &str, marker: char, env: &SuggestEnv) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_waits_for_append_and_delete_echo_but_releases_shell_rewrites() {
+        let mut state = NebulaPaneState::default();
+        state.screen_line = "cat ".into();
+        nebula_input_text(&mut state, "中文.txt");
+        for line in ["cat ", "cat 中", "cat 中文.tx"] {
+            assert!(!state.completion_echo_ready(line), "{line}");
+        }
+        assert!(state.completion_echo_ready("cat 中文.txt"));
+        state.screen_line = "cat 中文.txt".into();
+        nebula_input_delete_word(&mut state);
+        assert!(!state.completion_echo_ready("cat 中文.tx"));
+        assert!(state.completion_echo_ready("cat "));
+        state.screen_line = "cat \"qa po\"".into();
+        nebula_input_backspace(&mut state);
+        nebula_input_text(&mut state, "pup\"");
+        for line in ["cat \"qa po\"", "cat \"qa po", "cat \"qa pop"] {
+            assert!(!state.completion_echo_ready(line), "replacement echo: {line}");
+        }
+        assert!(state.completion_echo_ready("cat \"qa popup\""));
+        state.screen_line = "cat ".into();
+        nebula_input_text(&mut state, "next");
+        assert!(state.completion_echo_ready("echo recalled"));
+        assert!(state.completion_echo_ready("cat n"));
+        nebula_input_text(&mut state, "pending");
+        nebula_clear_line(&mut state);
+        assert!(state.completion_echo_ready("cat "));
+    }
 
     #[test]
     fn prompt_mirror_tracks_plain_edits_and_invalidates_control_text() {

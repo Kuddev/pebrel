@@ -15,7 +15,10 @@ const writes = [], failures = [], summaries = [];
 const listFiles = () => {}, listComments = () => {};
 const github = {
   rest: {
-    pulls: {listFiles},
+    pulls: {
+      listFiles,
+      get: async () => ({data: {changed_files: input.changedFiles}}),
+    },
     issues: {
       listComments,
       addLabels: async (value) => writes.push(['add', value]),
@@ -51,9 +54,10 @@ class PrSizeWorkflowTests(unittest.TestCase):
         # Execute the actual inline action, without duplicating its policy.
         cls.script = textwrap.dedent(workflow.split('          script: |\n', 1)[1])
 
-    def run_size(self, lines, *, fork=True, exempt=False, deleted=False):
+    def run_size(self, lines, *, fork=True, exempt=False, deleted=False, changed_files=3):
         data = {
             'script': self.script, 'fork': fork, 'deleted': deleted,
+            'changedFiles': changed_files,
             'labels': [{'name': 'size-exempt'}] if exempt else [],
             'files': [
                 {'filename': 'src/example.rs', 'additions': lines, 'deletions': 0},
@@ -80,9 +84,26 @@ class PrSizeWorkflowTests(unittest.TestCase):
         self.assertIn('1501', result['failures'][0])
         self.assertEqual(result['writes'], [])
 
+    def test_incomplete_file_listing_cannot_be_exempted(self):
+        for changed_files in (3001, None):
+            for exempt in (False, True):
+                with self.subTest(changed_files=changed_files, exempt=exempt):
+                    result = self.run_size(127, exempt=exempt, changed_files=changed_files)
+                    self.assertEqual(len(result['failures']), 1)
+                    self.assertIn('complete', result['failures'][0])
+                    self.assertEqual(result['writes'], [])
+
     def test_exact_limit_and_existing_maintainer_exemption(self):
         self.assertEqual(self.run_size(1500)['failures'], [])
         self.assertEqual(self.run_size(1501, exempt=True)['failures'], [])
+        for fork in (True, False):
+            with self.subTest(fork=fork):
+                self.assertEqual(self.run_size(5000, fork=fork, exempt=True)['failures'], [])
+                for exempt in (False, True):
+                    with self.subTest(exempt=exempt):
+                        result = self.run_size(5001, fork=fork, exempt=exempt)
+                        self.assertEqual(len(result['failures']), 1)
+                        self.assertIn('5000', result['failures'][0])
 
     def test_same_repository_keeps_labels_and_oversize_guidance(self):
         small = self.run_size(127, fork=False)

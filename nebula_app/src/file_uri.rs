@@ -140,6 +140,8 @@ pub fn classify_link_target_with_cwd(raw: &str, cwd: Option<&Path>) -> LinkTarge
         let is_unc = path.to_str().map_or(false, |s| s.starts_with(r"\\"));
         if is_unc || path.exists() {
             return LinkTargetKind::LocalExisting(path);
+        } else if let Some(base) = path_without_line_count(&path).filter(|base| base.exists()) {
+            return LinkTargetKind::LocalExisting(base);
         } else {
             return LinkTargetKind::LocalMissing(path);
         }
@@ -183,6 +185,23 @@ pub fn classify_link_target_with_cwd(raw: &str, cwd: Option<&Path>) -> LinkTarge
     }
 
     LinkTargetKind::Unrecognized(target.to_string())
+}
+
+// A bare hint can stop at the space in `(121 行)`, leaving only `(121`.
+// Only a missing target may fall back; literal filenames retain priority.
+fn path_without_line_count(path: &Path) -> Option<PathBuf> {
+    let (base, suffix) = path.to_str()?.rsplit_once('(')?;
+    let number = suffix.strip_suffix(" 行)").unwrap_or(suffix);
+    let base = base.trim_end();
+    if number.is_empty()
+        || !number.bytes().all(|byte| byte.is_ascii_digit())
+        || base.is_empty()
+        || base.ends_with('/')
+        || base.ends_with('\\')
+    {
+        return None;
+    }
+    Some(PathBuf::from(base))
 }
 
 /// Whether the string starts with a recognized network or protocol URI scheme.
@@ -853,6 +872,94 @@ mod tests {
         assert_eq!(t_win("./README.md"), None);
         assert_eq!(t_unix("./README.md"), None);
         assert_eq!(t_unix("docs/spec.md"), None);
+    }
+
+    #[test]
+    fn line_count_annotations_resolve_to_the_existing_local_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("清单_录入工具用.md");
+        std::fs::write(&path, "fixture").unwrap();
+        let native = path.to_string_lossy().replace('\\', "/");
+        let uri = format!("file:/{}", native.trim_start_matches('/'));
+        let targets = std::iter::once(uri.clone()).chain(
+            (Platform::current() == Platform::Windows).then(|| path.to_string_lossy().into_owned()),
+        );
+        for target in targets {
+            for text in [
+                format!("{target} (121 行)"),
+                format!("{target} (121"),
+                format!("{target}(121"),
+                format!("[清单]({target} (121 行))"),
+            ] {
+                assert_eq!(
+                    classify_link_target(&text),
+                    LinkTargetKind::LocalExisting(path.clone()),
+                    "{text}"
+                );
+            }
+        }
+        assert_eq!(
+            classify_link_target(&format!("{uri}%20(121")),
+            LinkTargetKind::LocalExisting(path)
+        );
+    }
+
+    #[test]
+    fn terminal_line_count_annotations_open_the_unannotated_file() {
+        use nebula_terminal::index::{Column, Line, Point};
+        use nebula_terminal::term::test::mock_term;
+        use winit::keyboard::ModifiersState;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("清单_录入工具用.md");
+        std::fs::write(&path, "fixture").unwrap();
+        let native = path.to_string_lossy().replace('\\', "/");
+        let uri = format!("file:/{}", native.trim_start_matches('/'));
+        for suffix in [" (121 行)", "(121 行)"] {
+            let term = mock_term(&format!("{uri}{suffix}"));
+            let hit = crate::display::hint::highlighted_at(
+                &term,
+                &crate::config::UiConfig::default(),
+                Point::new(Line(0), Column(1)),
+                ModifiersState::CONTROL,
+            )
+            .unwrap();
+            let target = hit.text(&term).unwrap();
+            assert_eq!(
+                classify_link_target(&target),
+                LinkTargetKind::LocalExisting(path.clone()),
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_count_fallback_preserves_real_names_and_missing_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let base = directory.path().join("清单.md");
+        std::fs::write(&base, "fixture").unwrap();
+        for suffix in [" (121 行)", " (121", "(121"] {
+            let path = directory.path().join(format!("清单.md{suffix}"));
+            std::fs::write(&path, "literal name").unwrap();
+            let native = path.to_string_lossy().replace('\\', "/");
+            let uri = format!("file:/{}", native.trim_start_matches('/'));
+            assert_eq!(classify_link_target(&uri), LinkTargetKind::LocalExisting(path));
+        }
+        for name in [
+            "清单.md (draft)",
+            "清单.md (121 行).bak",
+            "清单.md (121abc",
+            "清单.md (",
+            "missing.md (121",
+            "(121",
+        ] {
+            let path = directory.path().join(name);
+            let native = path.to_string_lossy().replace('\\', "/");
+            let uri = format!("file:/{}", native.trim_start_matches('/'));
+            assert_eq!(classify_link_target(&uri), LinkTargetKind::LocalMissing(path));
+        }
+        let web = "https://example.com/notes.md(121";
+        assert_eq!(classify_link_target(web), LinkTargetKind::ProtocolUri(web.into()));
     }
 
     #[test]

@@ -7,6 +7,21 @@ use std::process::Child;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 
+#[cfg(windows)]
+mod privileged;
+
+/// Privileged downloads and commit/restore records never come from ordinary settings.
+pub(crate) fn state_directory(relative: &Path) -> io::Result<PathBuf> {
+    if relative.components().any(|part| !matches!(part, std::path::Component::Normal(_))) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid update state directory"));
+    }
+    #[cfg(windows)]
+    if crate::platform::elevation::is_elevated()? {
+        return privileged::directory(relative);
+    }
+    Ok(nebula_settings::settings_dir().join("updates").join(relative))
+}
+
 pub(crate) fn canonical(path: &Path) -> io::Result<PathBuf> {
     let path = std::fs::canonicalize(path)?;
     #[cfg(windows)]
@@ -51,19 +66,37 @@ pub(crate) fn current_process_created() -> io::Result<u64> {
 pub(crate) fn spawn_helper(helper: &Path, plan: &Path) -> io::Result<Child> {
     #[cfg(windows)]
     {
+        use std::os::windows::ffi::OsStringExt as _;
         use std::os::windows::process::CommandExt as _;
         use std::process::{Command, Stdio};
-        let powershell = std::env::var_os("SystemRoot")
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "Windows directory is unavailable")
-            })?
-            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+        let mut directory = vec![0u16; 260];
+        loop {
+            // SAFETY: the API receives the actual live buffer capacity, including its terminator.
+            let length =
+                unsafe { GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32) };
+            if length == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if length < directory.len() as u32 {
+                directory.truncate(length as usize);
+                break;
+            }
+            directory.resize(length as usize, 0);
+        }
+        let powershell = PathBuf::from(std::ffi::OsString::from_wide(&directory))
+            .join("WindowsPowerShell/v1.0/powershell.exe");
+        let temporary = plan
+            .parent()
+            .ok_or_else(|| io::Error::other("Missing update transaction directory"))?;
         Command::new(powershell)
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(helper)
             .arg("-PlanPath")
             .arg(plan)
+            // Add-Type/installer temporary files inherit the same protected transaction directory.
+            .env("TEMP", temporary)
+            .env("TMP", temporary)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

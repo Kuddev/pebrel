@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import re
 from pathlib import Path
 import sys
+import tempfile
 import textwrap
 import tomllib
 import unittest
@@ -48,7 +50,7 @@ class NativeSuiteTests(unittest.TestCase):
         self.assertNotIn("--update", platform_step)
         for job, output, needs in (
             ("native-tests", "native_matrix", "needs: lint"),
-            ("macos-release-check", "release_matrix", "needs: [lint, native-tests]"),
+            ("native-checks", "check_matrix", "needs: [lint, native-tests]"),
         ):
             body = workflow.split(f"\n  {job}:\n", 1)[1]
             body = re.split(r"\n  [a-z][a-z-]*:\n", body, maxsplit=1)[0]
@@ -92,7 +94,7 @@ class NativeSuiteTests(unittest.TestCase):
             self.assertNotIn("paths", declaration.group(1))
             self.assertNotIn("branches", declaration.group(1))
             if event == "pull_request":
-                # Drafts already run the full matrix; readiness alone changes no source.
+                # Drafts and ready PRs share a path policy; readiness changes no source.
                 self.assertIn("types: [opened, synchronize, reopened]", declaration.group(1))
                 self.assertNotIn("ready_for_review", declaration.group(1))
             else:
@@ -165,7 +167,7 @@ class NativeSuiteTests(unittest.TestCase):
     def test_native_workflow_installs_nextest_without_changing_release_callers(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
-        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  macos-release-check:\n", 1)[0]
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  native-checks:\n", 1)[0]
         install = native.split("- name: Install the pinned native test runner", 1)[1].split("      - uses:", 1)[0]
         self.assertIn("uses: taiki-e/install-action@v2", install)
         self.assertIn("tool: cargo-nextest@0.9.146", install)
@@ -174,21 +176,90 @@ class NativeSuiteTests(unittest.TestCase):
         release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("run: python scripts/ci_native_tests.py\n", release)
 
-    def test_nextest_preserves_only_the_existing_shared_theme_fixture_mutex(self):
+    def test_nextest_reserves_only_shared_settings_and_exact_bounded_process_fixtures(self):
         root = Path(__file__).resolve().parents[2]
         config = tomllib.loads((root / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
         self.assertEqual(config["profile"]["default"], {
             "overrides": [{
-                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)",
+                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)"
+                          " or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll)"
+                          " or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)"
+                          " or test(environment_refresh_switch_is_searchable_and_persists)"
+                          " or test(pasted_proxy_scheme_updates_the_visible_protocol_and_saved_url)"
+                          " or test(capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection)"
+                          " or test(completion_capsules_keep_all_chinese_choices_at_large_font_size)"
+                          " or test(font_size_click_input_commits_cancels_and_bounds_values)"
+                          " or test(cjk_dropdown_selection_preserves_the_english_font_chain)"
+                          " or test(review_regression_font_fields_align_and_dropdown_toggles_with_search)"
+                          " or test(=gpui_shell::workspace::keyboard_bindings::tests::dispatch::hybrid_completion_uses_window_tab_dispatch_in_both_workspace_layouts)"
+                          " or test(=gpui_shell::workspace::windowing::startup::startup_tests::launch_visibility_reaches_the_actual_workspace)"
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_reuses_window_and_preserves_each_program_and_directory)"
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs)"
+                          " or test(=gpui_shell::workspace::windowing::elevated_launch::tests::update_recovery_tracks_its_windows_and_retries_only_missing_slots)"
+                          " or test(=gpui_shell::settings_pane::tests::rename_keymap_row_is_searchable_and_enters_capture)"
+                          " or test(=gpui_shell::settings_pane::providers::interaction_tests::api_key_and_json_edits_stay_in_sync_without_recursive_updates)",
                 "test-group": "theme-studio",
+            }, {
+                "filter": "test(=gpui_shell::terminal::view::startup_tests::"
+                          "git_completion_real_repository_reaches_all_modes_and_preserves_quoted_edits)",
+                "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=git_completion::tests::real_explicit_tracking_creates_and_inherits_the_expected_upstream)"
+                          " or test(=git_completion::tests::real_remote_guesses_follow_configuration_and_refspecs)"
+                          " or test(=git_completion::tests::real_branches_cache_invalidation_and_directory_context)",
+                "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=completion::tests::completion_requests_work_without_a_view_and_keep_repository_invalidation)"
+                          " or test(=completion::tests::editor_cursor_requests_replace_only_the_active_token_and_keep_following_options)"
+                          " or test(=completion::tests::checkout_completion_combines_branches_and_paths_and_scopes_remote_demand)"
+                          " or test(=completion::tests::explicit_tracking_requests_keep_edits_scoped_and_do_not_execute)"
+                          " or test(=completion::tests::network_completion_reads_configured_remotes_and_refspecs_without_network_access)",
+                "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=ai_hook::unix::tests::"
+                          "local_hook_socket_routes_identity_and_releases_its_private_directory)",
+                "threads-required": "num-test-threads",
+            }, {
+                "filter": "test(=tty::windows::test::bash_input::"
+                          "git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales)",
+                "threads-required": "num-test-threads",
             }],
         })
+
+        unix_hook = (root / "nebula_app/src/ai_hook/unix.rs").read_text(encoding="utf-8")
+        self.assertIn("fn local_hook_socket_routes_identity_and_releases_its_private_directory(", unix_hook)
+
+        # 核对真实函数名，避免配置和期望同时保留旧名字却漏掉写设置的测试。
+        segmented = (root / "nebula_app/src/gpui_shell/settings_pane/segmented/tests.rs").read_text(encoding="utf-8")
+        for name in (
+            "capsule_uses_inset_thumb_full_hit_targets_and_keyboard_selection",
+            "completion_capsules_keep_all_chinese_choices_at_large_font_size",
+        ):
+            self.assertIn(f"fn {name}(", segmented)
+
+        # 这些夹具同样会写共享设置；只加入真实函数，不放宽其它测试的调度。
+        elevated = (root / "nebula_app/src/gpui_shell/workspace/windowing/elevated_launch.rs").read_text(encoding="utf-8")
+        for name in (
+            "elevated_launch_reuses_window_and_preserves_each_program_and_directory",
+            "elevated_launch_new_window_policy_and_invalid_requests_preserve_existing_tabs",
+            "update_recovery_tracks_its_windows_and_retries_only_missing_slots",
+        ):
+            self.assertIn(f"fn {name}(", elevated)
+
+        startup = (root / "nebula_app/src/gpui_shell/workspace/windowing/startup.rs").read_text(encoding="utf-8")
+        self.assertIn("fn launch_visibility_reaches_the_actual_workspace(", startup)
+
+        bash_input = (root / "nebula_terminal/src/tty/windows/test/bash_input.rs").read_text(encoding="utf-8")
+        self.assertIn(
+            "fn git_bash_wrapped_input_can_be_fully_erased_in_byte_and_utf8_locales()",
+            bash_input,
+        )
 
     def test_native_caches_are_default_branch_snapshots_not_per_pr_uploads(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
-        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  macos-release-check:\n", 1)[0]
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  native-checks:\n", 1)[0]
         for cache_id, save_name in (("rust-cache", "Save compiled workload"),
                                    ("macos-release-cache", "Save macOS release workload")):
             cache = native.split(f"id: {cache_id}\n", 1)[1].split("\n      - ", 1)[0]
@@ -209,7 +280,7 @@ class NativeSuiteTests(unittest.TestCase):
     def test_macos_release_compilation_reuses_the_native_runner(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
-        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  macos-release-check:\n", 1)[0]
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  native-checks:\n", 1)[0]
         release = native.split("- name: Check macOS release workspace", 1)[1].split("\n      - ", 1)[0]
         self.assertIn("if: ${{ !cancelled() && runner.os == 'macOS' }}", release)
         self.assertIn("run: cargo check --locked --workspace --release --timings", release)
@@ -218,29 +289,50 @@ class NativeSuiteTests(unittest.TestCase):
         self.assertLess(native.index("Restore macOS release workload"), native.index("Check macOS release workspace"))
         self.assertLess(native.index("Check macOS release workspace"), native.index("Save macOS release workload"))
 
-    def test_release_required_contexts_reject_failed_or_missing_native_results(self):
+    def test_required_contexts_reject_failed_or_missing_native_results(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
-        report = workflow.split("\n  macos-release-check:\n", 1)[1]
+        report = workflow.split("\n  native-checks:\n", 1)[1]
         self.assertIn("needs: [lint, native-tests]", report)
-        self.assertIn("if: ${{ !cancelled() && inputs.windows_diagnostics_run == '' }}", report)
-        self.assertIn("name: Release workspace (${{ matrix.os }})", report)
-        self.assertIn("fromJSON(needs.lint.outputs.release_matrix)", report)
+        # 必需汇总若随取消一起 skipped，GitHub 会接受这个 skipped 结果。
+        self.assertIn("if: ${{ always() && inputs.windows_diagnostics_run == '' && needs.lint.result == 'success' }}", report)
+        self.assertIn("name: ${{ matrix.name }}", report)
+        self.assertIn("fromJSON(needs.lint.outputs.check_matrix)", report)
         self.assertIn("runs-on: ubuntu-24.04", report)
         self.assertIn("shell: python", report)
         self.assertIn("NATIVE_RESULT: ${{ needs.native-tests.result }}", report)
         self.assertNotIn("uses:", report)
         self.assertNotIn("continue-on-error", report)
         script = textwrap.dedent(report.split("        run: |\n", 1)[1])
-        for result in ("success", "failure", "cancelled", "skipped", "", "success\n"):
-            with self.subTest(result=result):
-                completed = subprocess.run(
-                    [sys.executable, "-c", script],
-                    env={**os.environ, "NATIVE_RESULT": result},
-                    capture_output=True, text=True, encoding="utf-8", check=False,
-                )
-                self.assertEqual(completed.returncode, 0 if result == "success" else 1,
-                                 completed.stderr)
+        for selected in ([], [{"os": "ubuntu-24.04"}]):
+            for scheduled in ("true", "false", "invalid"):
+                for result in ("success", "failure", "cancelled", "skipped", "", "success\n"):
+                    with self.subTest(result=result, selected=selected, scheduled=scheduled), tempfile.TemporaryDirectory() as directory:
+                        summary = Path(directory) / "summary.md"
+                        completed = subprocess.run(
+                            [sys.executable, "-c", script],
+                            env={**os.environ, "NATIVE_RESULT": result,
+                                 "NATIVE_MATRIX": json.dumps(selected), "SCHEDULED": scheduled,
+                                 "CHECK_NAME": "Tests (macos-26-intel)", "GITHUB_STEP_SUMMARY": str(summary)},
+                            capture_output=True, text=True, encoding="utf-8", check=False,
+                        )
+                        accepted = (result == ("success" if selected else "skipped")
+                                    and scheduled in {"true", "false"}
+                                    and (bool(selected) or scheduled == "false"))
+                        self.assertEqual(completed.returncode, 0 if accepted else 1, completed.stderr)
+                        if accepted:
+                            self.assertIn("Executed successfully" if scheduled == "true" else "Not run:",
+                                          summary.read_text(encoding="utf-8"))
+
+    def test_docs_do_not_request_an_empty_native_matrix_and_daily_runs_are_scheduled(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/linux-lua.yml").read_text(encoding="utf-8")
+        native = workflow.split("\n  native-tests:\n", 1)[1].split("\n  native-checks:\n", 1)[0]
+        self.assertIn("needs.lint.outputs.native_matrix != '[]'", native)
+        self.assertIn("name: Native tests (${{ matrix.os }})", native)
+        self.assertRegex(workflow, r'(?m)^  schedule:\n    - cron:')
+        lint = workflow.split("\n  lint:\n", 1)[1].split("\n  native-tests:\n", 1)[0]
+        self.assertIn("fetch-depth: 0", lint)
 
     def test_fast_test_profile_preserves_runtime_checks_and_resets_named_overrides(self):
         root = Path(__file__).resolve().parents[2]

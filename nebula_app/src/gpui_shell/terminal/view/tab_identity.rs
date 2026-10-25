@@ -11,6 +11,18 @@ fn ssh_label(destination: Option<&str>, directory: &std::path::Path) -> Option<S
 }
 
 impl TerminalView {
+    pub(crate) fn inherits_windows_host_token(&self) -> bool {
+        self.ssh_destination.is_none()
+            && self
+                .exec_context
+                .as_ref()
+                .is_some_and(|context| context.wsl_distribution().is_none())
+            && matches!(
+                self.suggest.suggest_env.history_scope(),
+                crate::nebula_history::HistoryScope::Local
+            )
+    }
+
     /// 目录来自 shell 上报；不要从带 Powerline 图标的提示符或选区反推路径。
     pub fn working_directory(&self) -> Option<&str> {
         let path = self.cwd.as_str();

@@ -516,27 +516,41 @@ impl SettingsPane {
                         .text_color(colors.secondary)
                         .child(language.text(Message::ThemeTransferOutputFormat)),
                 )
-                .child(h_flex().w_full().flex_wrap().gap(px(5.0)).children(
-                    EXPORT_FORMATS.into_iter().enumerate().map(|(index, candidate)| {
-                        let selected = candidate == format;
-                        Button::new(("theme-transfer-format", index))
-                            .debug_selector(move || {
-                                format!("theme-transfer-format-{:?}", candidate)
-                            })
-                            .role(Role::RadioButton)
-                            .toggled(selected)
-                            .label(candidate.to_string())
-                            .ghost()
-                            .small()
-                            .rounded_full()
-                            .text_color(if selected { colors.ink } else { colors.secondary })
-                            .when(selected, |button| button.bg(colors.selected).font_semibold())
-                            .disabled(busy)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.select_theme_export_format(candidate, cx);
-                            }))
-                    }),
-                )),
+                .child(
+                    crate::gpui_shell::widgets::segmented::SegmentedRow::new(
+                        "theme-transfer-formats",
+                        EXPORT_FORMATS
+                            .iter()
+                            .position(|candidate| *candidate == format)
+                            .unwrap_or(0),
+                        h_flex().w_full().flex_wrap().gap(px(5.0)).children(
+                            EXPORT_FORMATS.into_iter().enumerate().map(|(index, candidate)| {
+                                let selected = candidate == format;
+                                Button::new(("theme-transfer-format", index))
+                                    .debug_selector(move || {
+                                        format!("theme-transfer-format-{:?}", candidate)
+                                    })
+                                    .role(Role::RadioButton)
+                                    .toggled(selected)
+                                    .label(candidate.to_string())
+                                    .ghost()
+                                    .small()
+                                    .rounded_full()
+                                    .text_color(if selected {
+                                        colors.ink
+                                    } else {
+                                        colors.secondary
+                                    })
+                                    .disabled(busy)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_theme_export_format(candidate, cx);
+                                    }))
+                            }),
+                        ),
+                        div().rounded_full().bg(colors.selected),
+                    )
+                    .w_full(),
+                ),
         );
         if let Some(definition) = selected_definition {
             body = body.child(

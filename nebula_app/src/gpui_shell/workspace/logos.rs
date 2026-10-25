@@ -78,17 +78,8 @@ fn decode_sidebar_logo(
     dark: bool,
     target_size: u32,
 ) -> Option<Arc<RenderImage>> {
-    let mut rgba = image::load_from_memory(logo.png(dark)).ok()?.into_rgba8();
-    logo.tint_pixels(&mut rgba, if dark { [236, 239, 245] } else { [35, 40, 50] });
-    // 直接复用旧壳的 Lanczos3 物理像素预缩放与 alpha 质量中心校正。
-    // 先 tint 再缩放，避免 1024px 原图在 GPUI paint 阶段临时压到十几个
-    // 逻辑像素时产生灰边、锯齿与非整数 DPI 采样。
-    let (prepared, width, height) = crate::display::prepare_ai_logo_texture(
-        rgba.as_raw(),
-        rgba.width(),
-        rgba.height(),
-        target_size,
-    );
+    let (prepared, width, height) =
+        logo.render(if dark { [236, 239, 245] } else { [35, 40, 50] }, target_size)?;
     let mut rgba = image::RgbaImage::from_raw(width, height, prepared)?;
     // GPUI 的原始帧使用 BGRA；与壁纸解码走同一通道转换。
     for pixel in rgba.chunks_exact_mut(4) {

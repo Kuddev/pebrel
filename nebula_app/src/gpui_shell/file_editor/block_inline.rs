@@ -11,6 +11,7 @@ const MAX_INLINE_RUNS: usize = 128;
 pub(super) struct InlineRun {
     pub part: usize,
     pub marks: Marks,
+    pub object: bool,
 }
 
 pub(super) fn contains_object(node: &Node) -> bool {
@@ -94,7 +95,13 @@ impl Builder<'_> {
             }
             let kind = if is_object(node) { PartKind::Source } else { PartKind::Rich };
             let part = add(self.parts, range, kind, self.heading);
-            self.runs.push(InlineRun { part, marks });
+            if let Node::ImageReference(image) = node {
+                self.parts[part].image_reference = Some(super::block_structure::ImageReference {
+                    identifier: image.identifier.clone(),
+                    alt: image.alt.clone(),
+                });
+            }
+            self.runs.push(InlineRun { part, marks, object: is_object(node) });
         }
         true
     }
@@ -164,5 +171,32 @@ mod tests {
         let structure = parse(&source);
         assert!(matches!(structure.root, StructureNode::Literal(0)));
         assert_eq!(structure.parts.len(), 1);
+    }
+
+    #[test]
+    fn repeated_image_references_do_not_multiply_retained_url_payloads() {
+        let source =
+            format!("{}\n\n[image]: {}.png", "![alt][image] ".repeat(32), "a".repeat(2048));
+        let outline = crate::gpui_shell::file_editor::outline::Outline::parse(&source);
+        let retained = outline
+            .structures
+            .iter()
+            .flatten()
+            .flat_map(|structure| &structure.parts)
+            .filter_map(|part| part.preview.as_ref())
+            .map(String::len)
+            .sum::<usize>();
+        assert!(retained <= source.len(), "repeated references expanded to {retained} bytes");
+        let part = &outline.structures[0].as_ref().unwrap().parts[0];
+        let preview = outline.part_preview(0, part, &source[part.range.clone()]);
+        let Node::Root(root) =
+            markdown::to_mdast(&preview, &markdown::ParseOptions::gfm()).unwrap()
+        else {
+            panic!()
+        };
+        assert!(
+            matches!(&root.children[0], Node::Paragraph(p) if p.children.iter().any(|node| matches!(node, Node::Image(image) if image.alt == "alt"))),
+            "visible references must still render"
+        );
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! Everything visual that is NOT terminal-grid content reads from here:
 //! the built-in themes (the original seven low-saturation Nebula looks plus
-//! the additive Nord/Paper pair), each theme's
+//! Nord, Nord Light and Warm Sand), each theme's
 //! chrome palette ([`NebulaPalette`]) and its full overlay ink set
 //! ([`Skin`]). The settings modal, confirm dialogs, the command palette,
 //! resize HUD, scrollbar and the tab/window chrome all pull their colors
@@ -23,8 +23,7 @@ use crate::renderer::ui::Rgba;
 use nebula_terminal::vte::ansi::NamedColor;
 
 /// Built-in chrome themes exposed from the settings panel. The original seven
-/// Nebula looks remain unchanged; Nord/Paper are an additive dark/light pair
-/// carrying their own complete palettes.
+/// theme identities bridge to the settings-owned palette catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NebulaTheme {
     Nebula,
@@ -35,6 +34,7 @@ pub enum NebulaTheme {
     LinenLight,
     MossDark,
     Nord,
+    NordLight,
     Paper,
     BreezeLight,
     BreezeDark,
@@ -79,8 +79,9 @@ impl NebulaTheme {
             (Self::LimestoneLight | Self::CoalDark, false) => Self::CoalDark,
             (Self::LinenLight | Self::MossDark, true) => Self::LinenLight,
             (Self::LinenLight | Self::MossDark, false) => Self::MossDark,
-            (Self::Paper | Self::Nord, true) => Self::Paper,
-            (Self::Paper | Self::Nord, false) => Self::Nord,
+            (Self::NordLight | Self::Nord, true) => Self::NordLight,
+            (Self::NordLight | Self::Nord | Self::Paper, false) => Self::Nord,
+            (Self::Paper, true) => Self::Paper,
             (Self::BreezeLight | Self::BreezeDark, true) => Self::BreezeLight,
             (Self::BreezeLight | Self::BreezeDark, false) => Self::BreezeDark,
             (Self::MintLight | Self::MintDark, true) => Self::MintLight,
@@ -104,7 +105,8 @@ impl NebulaTheme {
             Self::LinenLight => "Linen Light",
             Self::MossDark => "Moss Dark",
             Self::Nord => "Nord",
-            Self::Paper => "Paper",
+            Self::Paper => "Warm Sand",
+            Self::NordLight => "Nord Light",
             Self::BreezeLight => "Breeze Light",
             Self::BreezeDark => "Breeze Dark",
             Self::MintLight => "Mint Light",
@@ -113,7 +115,7 @@ impl NebulaTheme {
             Self::CatppuccinLatte => "Catppuccin Latte",
             Self::CatppuccinFrappe => "Catppuccin Frappé",
             Self::CatppuccinMacchiato => "Catppuccin Macchiato",
-            Self::GlassLight => "Glass Light",
+            Self::GlassLight => "Slate Light",
             Self::GlassDark => "Glass Dark",
         }
     }
@@ -129,7 +131,8 @@ impl NebulaTheme {
             Self::LinenLight => "Theme: Linen Light",
             Self::MossDark => "Theme: Moss Dark",
             Self::Nord => "Theme: Nord",
-            Self::Paper => "Theme: Paper",
+            Self::Paper => "Theme: Warm Sand",
+            Self::NordLight => "Theme: Nord Light",
             Self::BreezeLight => "Theme: Breeze Light",
             Self::BreezeDark => "Theme: Breeze Dark",
             Self::MintLight => "Theme: Mint Light",
@@ -138,7 +141,7 @@ impl NebulaTheme {
             Self::CatppuccinLatte => "Theme: Catppuccin Latte",
             Self::CatppuccinFrappe => "Theme: Catppuccin Frappé",
             Self::CatppuccinMacchiato => "Theme: Catppuccin Macchiato",
-            Self::GlassLight => "Theme: Glass Light",
+            Self::GlassLight => "Theme: Slate Light",
             Self::GlassDark => "Theme: Glass Dark",
         }
     }
@@ -153,7 +156,8 @@ impl NebulaTheme {
             Self::LinenLight => "LinenLight",
             Self::MossDark => "MossDark",
             Self::Nord => "Nord",
-            Self::Paper => "Paper",
+            Self::Paper => "WarmSand",
+            Self::NordLight => "NordLight",
             Self::BreezeLight => "BreezeLight",
             Self::BreezeDark => "BreezeDark",
             Self::MintLight => "MintLight",
@@ -162,7 +166,7 @@ impl NebulaTheme {
             Self::CatppuccinLatte => "CatppuccinLatte",
             Self::CatppuccinFrappe => "CatppuccinFrappe",
             Self::CatppuccinMacchiato => "CatppuccinMacchiato",
-            Self::GlassLight => "GlassLight",
+            Self::GlassLight => "SlateLight",
             Self::GlassDark => "GlassDark",
         }
     }
@@ -179,7 +183,8 @@ impl NebulaTheme {
             "LinenLight" => Self::LinenLight,
             "MossDark" => Self::MossDark,
             "Nord" => Self::Nord,
-            "Paper" => Self::Paper,
+            "Paper" | "WarmSand" => Self::Paper,
+            "NordLight" => Self::NordLight,
             "BreezeLight" => Self::BreezeLight,
             "BreezeDark" => Self::BreezeDark,
             "MintLight" => Self::MintLight,
@@ -188,7 +193,7 @@ impl NebulaTheme {
             "CatppuccinLatte" => Self::CatppuccinLatte,
             "CatppuccinFrappe" => Self::CatppuccinFrappe,
             "CatppuccinMacchiato" => Self::CatppuccinMacchiato,
-            "GlassLight" => Self::GlassLight,
+            "GlassLight" | "SlateLight" => Self::GlassLight,
             "GlassDark" => Self::GlassDark,
 
             _ => return None,
@@ -205,7 +210,8 @@ impl NebulaTheme {
             Self::CoalDark => "Coal",
             Self::MossDark => "Moss",
             Self::Nord => "Nord",
-            Self::Paper => "Paper",
+            Self::Paper => "Warm Sand",
+            Self::NordLight => "Nord Light",
             _ => self.label(),
         }
     }
@@ -218,7 +224,9 @@ impl NebulaTheme {
     /// themes a light one).
     pub(crate) fn accent(self) -> Rgb {
         match self {
-            Self::BreezeLight
+            Self::NordLight
+            | Self::Paper
+            | Self::BreezeLight
             | Self::BreezeDark
             | Self::MintLight
             | Self::MintDark
@@ -236,7 +244,6 @@ impl NebulaTheme {
             Self::LinenLight => Rgb::new(95, 99, 95),
             Self::MossDark => Rgb::new(163, 179, 163),
             Self::Nord => Rgb::new(0x88, 0xc0, 0xd0),
-            Self::Paper => Rgb::new(0x2b, 0x5a, 0x38),
         }
     }
 
@@ -255,7 +262,6 @@ impl NebulaTheme {
         }
         match self {
             Self::Nord => return CardInk { fg: Rgb::new(0xe5, 0xe9, 0xf0) },
-            Self::Paper => return CardInk { fg: Rgb::new(0x1a, 0x1a, 0x1a) },
             _ => {},
         }
         if self.palette().is_light {
@@ -368,7 +374,9 @@ impl NebulaTheme {
     /// theme switch retroactively, which users read as "the prompt is stuck").
     pub(crate) fn powerline_colors(self) -> [Rgb; 8] {
         match self {
-            Self::BreezeLight
+            Self::NordLight
+            | Self::Paper
+            | Self::BreezeLight
             | Self::BreezeDark
             | Self::MintLight
             | Self::MintDark
@@ -462,16 +470,6 @@ impl NebulaTheme {
                 Rgb::new(0x2e, 0x34, 0x40),
                 Rgb::new(0x7b, 0x82, 0x94),
             ],
-            Self::Paper => [
-                Rgb::new(0xe0, 0xdf, 0xd5),
-                Rgb::new(0x1a, 0x1a, 0x1a),
-                Rgb::new(0xf5, 0xf4, 0xf0),
-                Rgb::new(0x47, 0x46, 0x46),
-                Rgb::new(0xc1, 0xbe, 0xb5),
-                Rgb::new(0x2b, 0x5a, 0x38),
-                Rgb::new(0xfc, 0xfb, 0xf9),
-                Rgb::new(0x8c, 0x8a, 0x80),
-            ],
         }
     }
 
@@ -553,7 +551,6 @@ impl NebulaTheme {
     fn skin_defaults(self) -> Skin {
         match self {
             Self::Nord => return nord_skin(),
-            Self::Paper => return paper_skin(),
             _ => {},
         }
         let p = self.palette();
@@ -920,45 +917,6 @@ fn nord_skin() -> Skin {
     }
 }
 
-fn paper_skin() -> Skin {
-    Skin {
-        panel: Rgba::new(0xf5, 0xf4, 0xf0, 255),
-        input: Rgba::new(0xfc, 0xfb, 0xf9, 255),
-        card: Rgba::new(0xfc, 0xfb, 0xf9, 255),
-        veil: Rgba::new(0x1a, 0x1a, 0x1a, 48),
-        ink: Rgb::new(0x1a, 0x1a, 0x1a),
-        ink_dim: Rgb::new(0x8c, 0x8a, 0x80),
-        ink_strong: Rgb::new(0x1a, 0x1a, 0x1a),
-        ink_faint: Rgb::new(0xc1, 0xbe, 0xb5),
-        ink_ignored: Rgb::new(0xc1, 0xbe, 0xb5),
-        ink_on_accent: Rgb::new(0xfc, 0xfb, 0xf9),
-        icon: Rgb::new(0x8c, 0x8a, 0x80),
-        icon_hover: Rgb::new(0x1a, 0x1a, 0x1a),
-        accent: Rgb::new(0x2b, 0x5a, 0x38),
-        // Paper omits active-bg. Nebula still needs a selected-row wash, so
-        // reuse the same 18% accent rule the Nord skin uses.
-        accent_soft: Rgba::new(0x2b, 0x5a, 0x38, 46),
-        // Paper omits semantic tokens. Its normal ANSI red/green/yellow are
-        // the nearest declared semantic colors and keep the palette coherent.
-        danger: Rgba::new(0xa3, 0x3a, 0x3a, 255),
-        ok: Rgba::new(0x2b, 0x5a, 0x38, 255),
-        warn: Rgba::new(0xa8, 0x5a, 0x20, 255),
-        hairline: Rgba::new(0xe0, 0xdf, 0xd5, 255),
-        surface: Rgba::new(0xfc, 0xfb, 0xf9, 255),
-        hover: Rgba::new(0xeb, 0xea, 0xe5, 255),
-        hover_strong: Rgba::new(0x2b, 0x5a, 0x38, 46),
-        track_off: Rgba::new(0x8c, 0x8a, 0x80, 86),
-        toggle_track_off: Rgba::new(0xe0, 0xdf, 0xd5, 255),
-        toggle_track_on: Rgba::new(0x2b, 0x5a, 0x38, 255),
-        toggle_border_off: Rgba::new(0xc1, 0xbe, 0xb5, 255),
-        toggle_border_on: Rgba::new(0x2b, 0x5a, 0x38, 255),
-        knob_off: Rgba::new(0x8c, 0x8a, 0x80, 255),
-        knob_on: Rgba::new(0xfc, 0xfb, 0xf9, 255),
-        scrollbar_thumb: Rgba::new(0x8c, 0x8a, 0x80, 0),
-        is_light: true,
-    }
-}
-
 /// Publish the active theme for the shell prompt bridge: the powerline script
 /// polls `%TEMP%\nebula_theme.txt` and recolors its segments to match. Written
 /// atomically (tmp + rename) so readers never see a torn value.
@@ -997,12 +955,12 @@ mod tests {
         assert_eq!(NebulaTheme::CoalDark.for_system_appearance(true), NebulaTheme::LimestoneLight);
         assert_eq!(NebulaTheme::LinenLight.for_system_appearance(false), NebulaTheme::MossDark);
         assert_eq!(NebulaTheme::MossDark.for_system_appearance(true), NebulaTheme::LinenLight);
-        assert_eq!(NebulaTheme::Nord.for_system_appearance(true), NebulaTheme::Paper);
+        assert_eq!(NebulaTheme::Nord.for_system_appearance(true), NebulaTheme::NordLight);
         assert_eq!(NebulaTheme::Paper.for_system_appearance(false), NebulaTheme::Nord);
     }
 
     #[test]
-    fn nord_and_paper_chrome_use_their_declared_tokens() {
+    fn nord_and_warm_sand_chrome_use_their_declared_tokens() {
         let nord = NebulaTheme::Nord.skin();
         assert_eq!(nord.panel, crate::renderer::ui::Rgba::new(0x2e, 0x34, 0x40, 255));
         assert_eq!(nord.card, crate::renderer::ui::Rgba::new(0x3b, 0x42, 0x52, 255));
@@ -1011,12 +969,12 @@ mod tests {
         let paper = NebulaTheme::Paper.skin();
         // Floating panels use the reviewed content background; the outer shell
         // keeps its separate warm-gray token.
-        assert_eq!(paper.panel, crate::renderer::ui::Rgba::new(0xfc, 0xfb, 0xf9, 255));
-        assert_eq!(paper.card, crate::renderer::ui::Rgba::new(0xe9, 0xe8, 0xe1, 255));
+        assert_eq!(paper.panel, crate::renderer::ui::Rgba::new(0xfd, 0xfd, 0xfc, 255));
+        assert_eq!(paper.card, crate::renderer::ui::Rgba::new(0xd9, 0x77, 0x06, 26));
         assert_eq!(
             NebulaTheme::Paper.palette().panel,
-            crate::renderer::ui::Rgba::new(0xf5, 0xf4, 0xf0, 255)
+            crate::renderer::ui::Rgba::new(0xf5, 0xf4, 0xf2, 255)
         );
-        assert_eq!(paper.accent, crate::display::color::Rgb::new(0x2b, 0x5a, 0x38));
+        assert_eq!(paper.accent, crate::display::color::Rgb::new(0xd9, 0x77, 0x06));
     }
 }

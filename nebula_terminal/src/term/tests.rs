@@ -469,6 +469,51 @@ fn input_line_drawing_character() {
     assert_eq!(term.grid()[cursor].c, '▒');
 }
 
+fn grapheme_cell_error(text: &str) -> Option<String> {
+    let size = TermSize::new(10, 5);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+    let mut parser: ansi::Processor = ansi::Processor::new();
+    parser.advance(&mut term, text.as_bytes());
+
+    let first = &term.grid()[Point::new(Line(0), Column(0))];
+    let expected_zerowidth: Vec<char> = text.chars().skip(1).collect();
+    let actual_zerowidth = first.zerowidth().unwrap_or_default();
+    let spacer = &term.grid()[Point::new(Line(0), Column(1))];
+    let cursor_column = term.grid.cursor.point.column;
+
+    (first.c != text.chars().next().unwrap()
+        || actual_zerowidth != expected_zerowidth
+        || !first.flags.contains(Flags::WIDE_CHAR)
+        || !spacer.flags.contains(Flags::WIDE_CHAR_SPACER)
+        || cursor_column != Column(2))
+    .then(|| {
+        format!(
+            "{text:?}: first cell {:?}+{actual_zerowidth:?}, wide={}, spacer={}, cursor={cursor_column}",
+            first.c,
+            first.flags.contains(Flags::WIDE_CHAR),
+            spacer.flags.contains(Flags::WIDE_CHAR_SPACER),
+        )
+    })
+}
+
+#[test]
+fn single_codepoint_emoji_keep_two_column_cells() {
+    let errors: Vec<_> =
+        ["🔥", "😀", "🚀", "🎉", "🐦"].into_iter().filter_map(grapheme_cell_error).collect();
+
+    assert!(errors.is_empty(), "single-codepoint controls failed: {errors:#?}");
+}
+
+#[test]
+fn composed_emoji_occupy_one_two_column_cell() {
+    let errors: Vec<_> = ["👨‍👩‍👧", "🏳️‍🌈", "❤️‍🔥", "🐦‍⬛", "🙂‍↔️", "👍🏽", "🇨🇳"]
+        .into_iter()
+        .filter_map(grapheme_cell_error)
+        .collect();
+
+    assert!(errors.is_empty(), "composed emoji cell allocation failed: {errors:#?}");
+}
+
 #[test]
 fn clearing_viewport_keeps_history_position() {
     let size = TermSize::new(10, 20);

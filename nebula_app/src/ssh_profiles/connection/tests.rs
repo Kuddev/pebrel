@@ -104,6 +104,25 @@ fn ssh_specs_allow_aliases_and_ipv6_but_not_lists_commands_or_passwords() {
 }
 
 #[test]
+fn jumpserver_usernames_validate_and_keep_the_last_at_as_the_host_boundary() {
+    for (spec, host, port) in [
+        ("jumpserverUser@root@192.168.20.1", "192.168.20.1", 22),
+        ("jumpserverUser@root@gateway.example:2222", "gateway.example", 2222),
+        ("ssh://jumpserverUser@root@[::1]:2222", "::1", 2222),
+    ] {
+        SshConnectionOptions::default().validate(spec).unwrap();
+        let destination = crate::ssh_session::SshDestination::parse(spec).unwrap();
+        assert_eq!(destination.user, "jumpserverUser@root");
+        assert_eq!(destination.host, host);
+        assert_eq!(destination.port, port);
+        assert_eq!(destination.original, spec);
+    }
+    for spec in ["@root@host", "user@@host", "user@root@@host", "user@:secret@host"] {
+        assert!(validate_ssh_destination(spec).is_err(), "{spec}");
+    }
+}
+
+#[test]
 fn self_jump_is_rejected_before_resolution() {
     let options = SshConnectionOptions {
         jump_mode: SshHostJumpMode::Host,

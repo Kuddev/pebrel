@@ -1,6 +1,6 @@
 //! GPUI 终端对 Runtime API 暴露的读取、输入与任务状态边界。
 
-use gpui::{Context, EventEmitter as _};
+use gpui::{Context, EventEmitter as _, Window, px};
 use nebula_terminal::grid::Dimensions as _;
 use nebula_terminal::index::{Column, Line, Point as TermPoint};
 use nebula_terminal::term::TermMode;
@@ -103,20 +103,25 @@ impl TerminalView {
         stage: crate::ssh_session::SshStage,
         cx: &mut Context<Self>,
     ) {
-        self.ssh_stage = Some(stage.clone());
+        let previous = self.ssh_stage.replace(stage.clone());
         super::super::ssh_connect_overlay::update_connection_state(
             &mut self.ssh_connect,
             self.ssh_destination.as_deref(),
+            previous.as_ref(),
             stage.clone(),
         );
         self.ssh_connect_last_step = std::time::Instant::now();
         if matches!(stage, crate::ssh_session::SshStage::Failed(_)) {
+            self.path_drop.invalidate();
+            self.port_forward_task = None;
+            self.port_forwards.clear();
             self.pending_runtime_submit = None;
             self.pending_shell_command = None;
             self.command_running = false;
             self.command_started = None;
             self.confirmation.invalidate();
             self.answer_reader = None;
+            self.sync_program_progress(cx);
         }
         cx.emit(TerminalViewEvent::TitleChanged);
         cx.notify();
@@ -140,7 +145,7 @@ impl TerminalView {
         }
         self.ai_session_from_probe = false;
         self.agent_activity.command_finished();
-        if self.progress != crate::taskbar::TaskProgress::None {
+        if !self.program_status_seen && self.progress != crate::taskbar::TaskProgress::None {
             self.progress = crate::taskbar::TaskProgress::None;
             cx.emit(TerminalViewEvent::ProgressChanged(self.progress));
         }
@@ -154,6 +159,7 @@ impl TerminalView {
         self.pending_runtime_submit = None;
         self.suggest.pending_command_prompt = None;
         self.awaiting_input = false;
+        self.sync_program_progress(cx);
         title_changed
     }
 
@@ -182,9 +188,14 @@ impl TerminalView {
         use crate::ai_agents::AgentStatus;
         use crate::runtime_api::RuntimeTaskState;
         if self.error.is_some()
-            || self.exited.is_some()
             || matches!(self.ssh_stage.as_ref(), Some(crate::ssh_session::SshStage::Failed(_)))
         {
+            return RuntimeTaskState::Failed;
+        }
+        if let Some(status) = self.effective_program_status() {
+            return status.task_state();
+        }
+        if self.exited.is_some() {
             return RuntimeTaskState::Failed;
         }
         if self.agent_activity.status() == AgentStatus::Blocked {
@@ -223,6 +234,12 @@ impl TerminalView {
     }
 
     pub fn runtime_agent(&self) -> Option<crate::runtime_api::RuntimeAgent> {
+        if let Some(app) = self.effective_program_status().and_then(|status| status.app.as_deref())
+        {
+            // Explicit non-Agent identity must not inherit an old screen/session identity.
+            let kind = crate::ai_agents::AgentKind::parse(app)?;
+            return Some(self.runtime_agent_for_kind(kind));
+        }
         let raw = self
             .ai_session
             .as_ref()
@@ -247,17 +264,21 @@ impl TerminalView {
         &self,
         kind: crate::ai_agents::AgentKind,
     ) -> crate::runtime_api::RuntimeAgent {
-        let state_source = match self.agent_activity.source() {
-            crate::ai_agents::AgentStatusSource::Hook => {
-                crate::runtime_api::RuntimeAgentStateSource::Hook
-            },
-            crate::ai_agents::AgentStatusSource::Screen => {
-                crate::runtime_api::RuntimeAgentStateSource::Screen
-            },
-            crate::ai_agents::AgentStatusSource::Process
-            | crate::ai_agents::AgentStatusSource::Unknown => {
-                crate::runtime_api::RuntimeAgentStateSource::Process
-            },
+        let state_source = if self.effective_program_status().is_some() {
+            crate::runtime_api::RuntimeAgentStateSource::Osc7501
+        } else {
+            match self.agent_activity.source() {
+                crate::ai_agents::AgentStatusSource::Hook => {
+                    crate::runtime_api::RuntimeAgentStateSource::Hook
+                },
+                crate::ai_agents::AgentStatusSource::Screen => {
+                    crate::runtime_api::RuntimeAgentStateSource::Screen
+                },
+                crate::ai_agents::AgentStatusSource::Process
+                | crate::ai_agents::AgentStatusSource::Unknown => {
+                    crate::runtime_api::RuntimeAgentStateSource::Process
+                },
+            }
         };
         crate::runtime_api::RuntimeAgent {
             agent_id: None,
@@ -266,9 +287,19 @@ impl TerminalView {
             worktree: None,
             kind: kind.slug().to_owned(),
             display_name: kind.display_name().to_owned(),
-            session_id: self.ai_session.as_ref().map(|identity| identity.session_id.clone()),
+            session_id: self
+                .ai_session
+                .as_ref()
+                .filter(|identity| {
+                    crate::ai_agents::AgentKind::parse(&identity.source) == Some(kind)
+                })
+                .map(|identity| identity.session_id.clone()),
             state_source,
-            state_rule: self.agent_activity.rule().map(str::to_owned),
+            state_rule: if self.effective_program_status().is_some() {
+                None
+            } else {
+                self.agent_activity.rule().map(str::to_owned)
+            },
             hook_seen: self.agent_activity.hook_seen(),
         }
     }
@@ -278,10 +309,14 @@ impl TerminalView {
         // pane 级故障永远优先；普通 CLI 才允许 OSC 9;4 覆盖弱推断。这里只改变
         // badge，不改变 RuntimeTaskState，避免进度协议干扰 agent.wait/自动回传。
         if state == crate::runtime_api::RuntimeTaskState::Failed {
+            if self.effective_program_status().is_some() {
+                return SidebarActivity::CommandFailed;
+            }
             return SidebarActivity::Failed;
         }
-        if let Some(activity) =
-            progress_sidebar_activity(self.progress, self.agent_activity.status())
+        if self.effective_program_status().is_none()
+            && let Some(activity) =
+                progress_sidebar_activity(self.progress, self.agent_activity.status())
         {
             return activity;
         }
@@ -289,6 +324,7 @@ impl TerminalView {
         // 非 0 是一个你可能要处理的结果。真在跑就不画（`mark_command_running`
         // 起跑时已经清了旗子），pane 级故障走下面的 `Failed`，更严重。
         if self.last_command_failed
+            && self.effective_program_status().is_none()
             && matches!(
                 state,
                 crate::runtime_api::RuntimeTaskState::Idle
@@ -335,7 +371,7 @@ impl TerminalView {
         }
     }
 
-    fn ensure_runtime_readable(&self) -> Result<(), crate::runtime_api::ApiError> {
+    pub(super) fn ensure_runtime_readable(&self) -> Result<(), crate::runtime_api::ApiError> {
         if self.ssh_destination.is_none() {
             return Ok(());
         }
@@ -378,6 +414,7 @@ impl TerminalView {
         &self,
         window_id: u64,
         lines: usize,
+        screen: Option<crate::runtime_api::ScreenMode>,
     ) -> Result<crate::runtime_api::RuntimePaneRead, crate::runtime_api::ApiError> {
         self.ensure_runtime_readable()?;
         let Some(session) = &self.session else {
@@ -387,7 +424,7 @@ impl TerminalView {
             ));
         };
         let term = session.term.lock();
-        Ok(crate::runtime_api::capture_terminal_tail(
+        let mut read = crate::runtime_api::capture_terminal_tail(
             &term,
             window_id,
             self.pane_id,
@@ -395,7 +432,70 @@ impl TerminalView {
             self.runtime_task_state(),
             self.exited.is_some(),
             self.exited.clone(),
-        ))
+        );
+        if let Some(screen) = screen {
+            let palette = |index| self.palette.query_reply(index, term.colors());
+            let capture = match screen {
+                crate::runtime_api::ScreenMode::History { start, rows } => {
+                    crate::runtime_api::capture_terminal_history(&term, palette, start, rows)
+                },
+                crate::runtime_api::ScreenMode::Viewport => {
+                    crate::runtime_api::capture_terminal_viewport(&term, palette)
+                },
+                crate::runtime_api::ScreenMode::Live => {
+                    crate::runtime_api::capture_terminal_screen(&term, palette)
+                },
+            };
+            read.screen = Some(capture?);
+        }
+        Ok(read)
+    }
+
+    pub(crate) fn runtime_scroll(
+        &mut self,
+        lines: i16,
+        column: u16,
+        row: u16,
+        application_only: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), crate::runtime_api::ApiError> {
+        self.ensure_runtime_readable()?;
+        if self.exited.is_some() || self.session.is_none() {
+            return Err(crate::runtime_api::ApiError::new(
+                "invalid_state",
+                "scroll pane is not running",
+            ));
+        }
+        if lines == 0
+            || lines.unsigned_abs() > 32
+            || usize::from(column) >= self.cols
+            || usize::from(row) >= self.rows
+        {
+            return Err(crate::runtime_api::ApiError::invalid_params(
+                "scroll is outside the current pane",
+            ));
+        }
+        // 精确触摸位移不再叠加桌面滚轮倍率，鼠标接管和备用屏仍由同一入口裁定。
+        let position = gpui::point(
+            self.origin.x + self.cell_width * (f32::from(column) + 0.5),
+            self.origin.y + self.line_height * (f32::from(row) + 0.5),
+        );
+        self.on_scroll_target(
+            &gpui::ScrollWheelEvent {
+                position,
+                delta: gpui::ScrollDelta::Pixels(gpui::point(
+                    px(0.0),
+                    self.line_height * f32::from(lines),
+                )),
+                modifiers: Default::default(),
+                touch_phase: gpui::TouchPhase::Moved,
+            },
+            application_only,
+            window,
+            cx,
+        );
+        Ok(())
     }
 
     pub fn runtime_procs(
@@ -529,7 +629,6 @@ impl TerminalView {
             ));
         }
         let agent = self.runtime_agent();
-        let recognized_agent = submit && agent.is_some();
         let codex_submit = submit && agent.as_ref().is_some_and(|agent| agent.kind == "codex");
         if submit {
             self.capture_runtime_prompt();
@@ -566,8 +665,8 @@ impl TerminalView {
             // 仍盯着提交前 Idle；真实 shell/hook 结束事件负责把它归位。
             self.awaiting_input = false;
             self.mark_command_running();
-            if recognized_agent {
-                self.agent_activity.submitted();
+            if let Some(agent) = agent {
+                self.agent_activity.submitted_text(&agent.kind, &text);
             }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();
@@ -646,8 +745,8 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Result<(), crate::runtime_api::ApiError> {
         self.ensure_local_context_allowed(origin)?;
-        let recognized_agent = self.runtime_chat_agent().is_some();
-        if require_agent && !recognized_agent {
+        let agent = self.runtime_chat_agent();
+        if require_agent && agent.is_none() {
             return Err(crate::runtime_api::ApiError::new(
                 "invalid_target",
                 "multi-line Agent input requires a live Agent pane",
@@ -704,8 +803,8 @@ impl TerminalView {
         if submit {
             self.awaiting_input = false;
             self.mark_command_running();
-            if recognized_agent {
-                self.agent_activity.submitted();
+            if let Some(agent) = agent {
+                self.agent_activity.submitted_text(&agent.kind, &text);
             }
             cx.emit(TerminalViewEvent::TitleChanged);
             cx.notify();

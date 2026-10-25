@@ -176,6 +176,8 @@ pub struct SnapCell {
     /// 是什么颜色，不是取决于主题底色。
     pub bg: Color,
     pub bold: bool,
+    pub dim: bool,
+    pub bg_dim: bool,
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
@@ -209,6 +211,7 @@ pub struct BgRun {
     pub start: u16,
     pub end: u16,
     pub color: Color,
+    pub dim: bool,
 }
 
 pub struct CursorSnapshot {
@@ -226,9 +229,9 @@ pub struct CursorSnapshot {
 }
 
 /// A cell rendered by built-in geometry ([`boxdraw`]) instead of a font:
-/// box-drawing, block elements and Powerline separators must cover the cell
-/// exactly and join seamlessly across cells — no font (CJK fonts above all)
-/// guarantees that, so these never enter a text segment.
+/// box-drawing, block elements and Powerline separators join seamlessly, and
+/// Braille dots keep the same pitch across cells. Font metrics cannot ensure
+/// this, so these never enter a text segment.
 pub struct BoxGlyph {
     pub row: u16,
     pub col: u16,
@@ -237,6 +240,7 @@ pub struct BoxGlyph {
     pub ch: char,
     pub fg: Color,
     pub bold: bool,
+    pub dim: bool,
 }
 
 /// Everything a frontend needs to paint one frame, as plain data. Built in a
@@ -263,6 +267,15 @@ pub struct SnapshotConfig {
 
 impl RenderSnapshot {
     pub fn capture<T: EventListener>(term: &Term<T>, cfg: &SnapshotConfig) -> Self {
+        Self::capture_rows(term, cfg, |_| true)
+    }
+
+    /// A host may replace source rows with inline content without altering the VT grid.
+    pub fn capture_rows<T: EventListener>(
+        term: &Term<T>,
+        cfg: &SnapshotConfig,
+        include: impl Fn(usize) -> bool,
+    ) -> Self {
         let rows = cfg.rows as usize;
         let cols = cfg.cols as usize;
         let content = term.renderable_content_with_viewport(rows, cols);
@@ -284,14 +297,14 @@ impl RenderSnapshot {
             cursor: None,
         };
 
-        fn push_bg(runs: &mut Vec<BgRun>, row: u16, col: u16, color: Color) {
+        fn push_bg(runs: &mut Vec<BgRun>, row: u16, col: u16, color: Color, dim: bool) {
             if let Some(last) = runs.last_mut() {
-                if last.row == row && last.end == col && last.color == color {
+                if last.row == row && last.end == col && last.color == color && last.dim == dim {
                     last.end = col + 1;
                     return;
                 }
             }
-            runs.push(BgRun { row, start: col, end: col + 1, color });
+            runs.push(BgRun { row, start: col, end: col + 1, color, dim });
         }
 
         fn push_sel(runs: &mut Vec<CellRun>, row: u16, col: u16) {
@@ -315,7 +328,7 @@ impl RenderSnapshot {
         for indexed in content.display_iter {
             let Some(vp) = point_to_viewport_from(viewport_origin, indexed.point) else { continue };
             let (row, col) = (vp.line, vp.column.0);
-            if row >= rows || col >= cols {
+            if row >= rows || col >= cols || !include(row) {
                 continue;
             }
             let (row, col) = (row as u16, col as u16);
@@ -323,14 +336,19 @@ impl RenderSnapshot {
             let bold = flags.intersects(Flags::BOLD);
             let mut fg = indexed.cell.fg;
             let mut bg = indexed.cell.bg;
+            // SGR 2 dims the original foreground before INVERSE swaps the pair
+            // (the old shell's `RenderableCell::new` order), so dim travels
+            // with that color into the background.
+            let (mut dim, mut bg_dim) = (flags.contains(Flags::DIM), false);
             if flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
+                std::mem::swap(&mut dim, &mut bg_dim);
             }
 
             // Default background is suppressed at the source; anything else
             // is emitted and resolved by the frontend.
             if bg != Color::Named(NamedColor::Background) {
-                push_bg(&mut snap.bg_runs, row, col, bg);
+                push_bg(&mut snap.bg_runs, row, col, bg, bg_dim);
             }
             // 宽字符首格和占位格是一个可渲染单元：命中任一格都必须按整字高亮，
             // 并且只由首格写入两列，避免占位格再生成一条重叠的 selection run。
@@ -363,6 +381,7 @@ impl RenderSnapshot {
                     ch: c,
                     fg,
                     bold,
+                    dim,
                 });
                 continue;
             }
@@ -386,6 +405,8 @@ impl RenderSnapshot {
                 fg,
                 bg,
                 bold,
+                dim,
+                bg_dim,
                 italic: flags.intersects(Flags::ITALIC),
                 underline: flags.intersects(Flags::ALL_UNDERLINES),
                 strikethrough: flags.contains(Flags::STRIKEOUT),
@@ -631,6 +652,41 @@ mod tests {
     }
 
     #[test]
+    fn capture_carries_sgr_dim_on_text_and_box_glyphs() {
+        let size = TestSize { cols: 8, rows: 4 };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser: crate::vte::ansi::Processor = crate::vte::ansi::Processor::new();
+        parser.advance(&mut term, "a\x1b[2mb─\x1b[22mc".as_bytes());
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let text: Vec<_> = snap
+            .segments
+            .iter()
+            .flat_map(|segment| segment.cells.iter().map(|cell| (cell.text.as_str(), cell.dim)))
+            .collect();
+        assert_eq!(text, vec![("a", false), ("b", true), ("c", false)]);
+        let glyphs: Vec<_> = snap.box_glyphs.iter().map(|glyph| (glyph.ch, glyph.dim)).collect();
+        assert_eq!(glyphs, vec![('─', true)]);
+    }
+
+    #[test]
+    fn capture_moves_sgr_dim_to_the_background_under_inverse() {
+        let size = TestSize { cols: 8, rows: 4 };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser: crate::vte::ansi::Processor = crate::vte::ansi::Processor::new();
+        parser.advance(&mut term, "\x1b[2;7mX\x1b[27mY".as_bytes());
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let cells: Vec<_> = snap
+            .segments
+            .iter()
+            .flat_map(|segment| segment.cells.iter())
+            .map(|cell| (cell.text.as_str(), cell.dim, cell.bg_dim))
+            .collect();
+        assert_eq!(cells, vec![("X", false, true), ("Y", true, false)]);
+        let runs: Vec<_> = snap.bg_runs.iter().map(|run| (run.start, run.end, run.dim)).collect();
+        assert_eq!(runs, vec![(0, 1, true)]);
+    }
+
+    #[test]
     fn capture_keeps_a_hidden_cursor_and_its_cell() {
         use crate::vte::ansi::{Handler, NamedPrivateMode};
 
@@ -675,5 +731,44 @@ mod tests {
         // Text segments keep only 'a' and 'b', split at the geometry cells.
         let segments: Vec<_> = snap.segments.iter().map(|s| (s.start_col, s.cells.len())).collect();
         assert_eq!(segments, vec![(0, 1), (3, 1)]);
+    }
+
+    #[test]
+    fn braille_capture_preserves_grid_colors_selection_and_cursor() {
+        use crate::index::Side;
+        use crate::selection::{Selection, SelectionType};
+
+        let mut term = term_with(&["A⠀⠁⣿B"]);
+        let position = crate::index::Point::new(Line(0), Column(3));
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(4));
+        let cell = &mut term.grid_mut()[Line(0)][Column(3)];
+        cell.fg = Color::Named(NamedColor::Red);
+        cell.bg = Color::Named(NamedColor::Blue);
+        cell.flags.insert(Flags::BOLD | Flags::DIM | Flags::INVERSE);
+        let mut selection = Selection::new(SelectionType::Simple, position, Side::Left);
+        selection.update(position, Side::Right);
+        term.selection = Some(selection);
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        assert_eq!(
+            snap.box_glyphs.iter().map(|g| (g.col, g.ch)).collect::<Vec<_>>(),
+            vec![(1, '⠀'), (2, '⠁'), (3, '⣿')]
+        );
+        let full = &snap.box_glyphs[2];
+        assert_eq!(full.fg, Color::Named(NamedColor::Blue));
+        assert!(full.bold);
+        assert!(!full.dim, "inverse keeps DIM on the original foreground, now background");
+        assert!(snap.bg_runs.iter().any(|g| g.start <= 3 && g.end > 3 && g.dim));
+        assert!(snap.selection_runs.iter().any(|g| g.start == 3 && g.end == 4));
+        assert_eq!(snap.cursor.unwrap().col, 4);
+        assert_eq!(term.selection_to_string().as_deref(), Some("⣿"));
+        assert_eq!(
+            snap.segments
+                .iter()
+                .flat_map(|s| &s.cells)
+                .map(|c| c.text.as_str())
+                .collect::<String>(),
+            "AB"
+        );
+        assert_eq!(term.grid()[Line(0)][Column(3)].c, '⣿', "source text is still copyable");
     }
 }

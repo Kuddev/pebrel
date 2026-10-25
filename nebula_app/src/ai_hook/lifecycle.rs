@@ -121,6 +121,16 @@ impl AgentActivity {
         self.input_sent();
     }
 
+    pub fn submitted_text(&mut self, program: &str, text: &str) {
+        // Codex /plan 只切换交互模式，不触发任务 hook；若先制造 Running，
+        // 对话输入会一直等一个不存在的完成事件。普通任务仍保留提交屏障。
+        if program == "codex" && text.trim() == "/plan" {
+            self.input_sent();
+        } else {
+            self.submitted();
+        }
+    }
+
     /// Physical Enter alone can also dismiss a menu. It only permits observing a
     /// new turn; it is not itself a successful submission or a completion.
     pub fn input_sent(&mut self) {

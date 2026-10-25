@@ -14,6 +14,7 @@ struct Change {
     start: usize,
     before: String,
     after: String,
+    object_edit: bool,
 }
 
 impl Change {
@@ -70,6 +71,19 @@ impl EditHistory {
         self.last_edit = None;
     }
 
+    pub fn mark_object_edit(&mut self) {
+        if let Some(group) = self.undo.last_mut() {
+            for change in group {
+                change.object_edit = true;
+            }
+        }
+    }
+
+    pub fn reader_can_travel(&self, redo: bool) -> bool {
+        let stack = if redo { &self.redo } else { &self.undo };
+        stack.last().is_some_and(|group| group.iter().all(|change| change.object_edit))
+    }
+
     /// Record a local edit directly from the input's Rope.
     ///
     /// This is the hot path for ordinary source typing. The Rope is scanned
@@ -85,6 +99,7 @@ impl EditHistory {
             start: before.start,
             before: self.current[before.clone()].to_owned(),
             after: text.slice(after).to_string(),
+            object_edit: false,
         };
         self.current.replace_range(before, &change.after);
         self.push_change(change);
@@ -99,6 +114,7 @@ impl EditHistory {
             start: before.start,
             before: self.current[before.clone()].to_owned(),
             after: text[after].to_owned(),
+            object_edit: false,
         };
         self.current.replace_range(before, &change.after);
         self.push_change(change);

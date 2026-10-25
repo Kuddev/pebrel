@@ -40,6 +40,9 @@ impl SettingsPane {
                 language.text(Message::ThemePickerCancel),
                 ButtonVariant::Primary,
             )
+            .w(px(340.0).min(window.viewport_size().width - px(32.0)))
+            .p(px(20.0))
+            .rounded(px(8.0))
             .margin_top(px(((f32::from(window.viewport_size().height) - 450.0) * 0.5).max(16.0)))
             .max_h(px((f32::from(window.viewport_size().height) - 32.0).max(120.0)))
             .content(move |content, window, cx| {
@@ -171,7 +174,8 @@ impl SettingsPane {
                             .debug_selector(|| "theme-editor-color-hex".to_owned())
                             .flex_1()
                             .min_w_0()
-                            .border_b_1()
+                            .border_1()
+                            .rounded(px(4.0))
                             .border_color(if input_focused { colors.primary } else { colors.line })
                             .child(
                                 Input::new(&input)
@@ -198,8 +202,8 @@ impl SettingsPane {
                             "theme-editor-color-palette-{index}"
                         )))
                         .debug_selector(move || format!("theme-editor-color-palette-{index}"))
-                        .size(px(26.0))
-                        .rounded_full()
+                        .size(px(32.0))
+                        .rounded(px(4.0))
                         .bg(theme_color_value(color))
                         .border_color(if current == color {
                             colors.primary
@@ -382,11 +386,9 @@ fn editor_color_axis(
                 },
                 move |bounds, _, window, _| {
                     if is_sv {
-                        super::super::background_color::paint_sv(
-                            window, bounds, hsv.0, hsv.1, hsv.2,
-                        );
+                        super::super::theme_foreground::paint_foreground_sv(window, bounds, hsv);
                     } else {
-                        super::super::background_color::paint_hue(window, bounds, hsv.0);
+                        super::super::theme_foreground::paint_foreground_hue(window, bounds, hsv.0);
                     }
                 },
             )

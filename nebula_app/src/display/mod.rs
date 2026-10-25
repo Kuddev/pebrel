@@ -59,10 +59,12 @@ use crate::renderer::{self, GlyphCache, Renderer, platform};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
 
+mod animations;
 mod background_color_model;
 pub mod color;
 mod command_completion;
 mod completion;
+mod confirmation_text;
 pub mod content;
 pub mod cursor;
 pub mod hint;
@@ -81,6 +83,7 @@ pub mod markdown_view;
 mod message_queue_entry;
 mod network_proxy_model;
 mod program_identity;
+mod proxy_editor;
 pub mod sftp_panel;
 pub mod side_panel;
 mod size_info;
@@ -100,6 +103,8 @@ mod toast;
 pub(crate) fn quick_terminal_hotkey_from_settings(config: &UiConfig) -> String {
     settings::nebula_settings_load(config).quick_terminal_hotkey
 }
+
+use animations::WindowAnimations;
 
 pub use crate::i18n::{LanguagePreference, UiLanguage};
 pub use background_color_model::BgPickerPart;
@@ -184,8 +189,8 @@ pub(crate) fn caret_blink_on() -> bool {
 }
 #[cfg(feature = "gpui-shell")]
 pub(crate) use network_proxy_model::{
-    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, manual_proxy_parts,
-    manual_proxy_value,
+    MANUAL_PROXY_PROTOCOL_OPTIONS, ManualProxyProtocol, ProxyTestStatus, compose_manual_proxy_url,
+    manual_proxy_parts, manual_proxy_protocol_label, manual_proxy_value,
 };
 pub use settings::{NebulaSettingsSection, SettingsDropdown, SettingsHit, settings_hit};
 pub(crate) use settings::{NewTabPosition, SettingsOpacityTarget};
@@ -417,215 +422,6 @@ pub const SIDEBAR_COLLAPSE_AT: f32 = 120.0;
 /// 右抽屉的同款阈值：拖到比这更窄就关掉抽屉。两侧手势必须对称，否则
 /// 「左边拖到头会关、右边拖到头只是卡住」本身就是个 bug（用户 08-02 报）。
 pub const DRAWER_COLLAPSE_AT: f32 = 150.0;
-
-#[derive(Debug, Clone, Copy)]
-struct UiAnim {
-    spring: crate::motion::Spring,
-}
-
-impl UiAnim {
-    fn new(value: f32) -> Self {
-        Self { spring: crate::motion::Spring::new(value.clamp(0.0, 1.0)).with_response(0.14) }
-    }
-
-    fn value(self) -> f32 {
-        self.spring.value().clamp(0.0, 1.0)
-    }
-
-    fn visible(self, target_open: bool) -> bool {
-        target_open || self.value() > 0.004
-    }
-
-    fn animating_to(self, target: f32) -> bool {
-        (self.value() - target.clamp(0.0, 1.0)).abs() > 0.004 || self.spring.is_active()
-    }
-
-    fn step(&mut self, frame: crate::motion::Frame, target: f32) {
-        self.spring.set_target(target.clamp(0.0, 1.0), crate::motion::MotionPolicy::Full);
-        self.spring.step(frame);
-    }
-}
-
-/// Independent motion channels for one settings toggle. The reference HTML
-/// animates travel, active stretch, color and hover through different CSS
-/// transitions; keeping four Tweens per switch preserves that separation.
-#[derive(Debug, Clone, Copy)]
-struct SettingsToggleAnim {
-    position: crate::motion::Tween,
-    stretch: crate::motion::Tween,
-    color: crate::motion::Tween,
-    hover: crate::motion::Tween,
-}
-
-impl SettingsToggleAnim {
-    fn new(on: bool) -> Self {
-        let value = if on { 1.0 } else { 0.0 };
-        Self {
-            position: crate::motion::Tween::new(value),
-            stretch: crate::motion::Tween::new(0.0),
-            color: crate::motion::Tween::new(value),
-            hover: crate::motion::Tween::new(0.0),
-        }
-    }
-
-    fn step(&mut self, frame: crate::motion::Frame, on: bool, pressed: bool, hovered: bool) {
-        // The settings input commits the new boolean on mouse-down. The
-        // active selector therefore only changes the thumb geometry; it never
-        // hides the newly selected track or reverses an already-on switch.
-        let position = if on { if pressed { 16.0 / 24.0 } else { 1.0 } } else { 0.0 };
-        let color = if on { 1.0 } else { 0.0 };
-        let stretch = if pressed { 1.0 } else { 0.0 };
-        let hover = if hovered { 1.0 } else { 0.0 };
-        const POSITION: Duration = Duration::from_millis(400);
-        const STRETCH: Duration = Duration::from_millis(250);
-        const COLOR: Duration = Duration::from_millis(300);
-
-        if (self.position.target() - position).abs() > f32::EPSILON {
-            self.position.animate_to(
-                position,
-                POSITION,
-                crate::motion::Easing::LiquidToggle,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        if (self.stretch.target() - stretch).abs() > f32::EPSILON {
-            self.stretch.animate_to(
-                stretch,
-                STRETCH,
-                crate::motion::Easing::CssStandard,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        if (self.color.target() - color).abs() > f32::EPSILON {
-            self.color.animate_to(
-                color,
-                COLOR,
-                crate::motion::Easing::CssEase,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        if (self.hover.target() - hover).abs() > f32::EPSILON {
-            self.hover.animate_to(
-                hover,
-                COLOR,
-                crate::motion::Easing::CssEase,
-                crate::motion::MotionPolicy::Full,
-            );
-        }
-        self.position.step(frame);
-        self.stretch.step(frame);
-        self.color.step(frame);
-        self.hover.step(frame);
-    }
-
-    fn value(self) -> ui::widgets::ToggleMotion {
-        ui::widgets::ToggleMotion {
-            // Do not clamp position: the supplied cubic-bezier deliberately
-            // crosses 0/1 to create the same brief elastic overshoot as CSS.
-            position: self.position.value(),
-            stretch: self.stretch.value().clamp(0.0, 1.0),
-            color: self.color.value().clamp(0.0, 1.0),
-            hover: self.hover.value().clamp(0.0, 1.0),
-        }
-    }
-
-    fn animating_to(self, on: bool, pressed: bool, hovered: bool) -> bool {
-        let position = if on { if pressed { 16.0 / 24.0 } else { 1.0 } } else { 0.0 };
-        let color = if on { 1.0 } else { 0.0 };
-        let stretch = if pressed { 1.0 } else { 0.0 };
-        let hover = if hovered { 1.0 } else { 0.0 };
-        [
-            (self.position, position),
-            (self.stretch, stretch),
-            (self.color, color),
-            (self.hover, hover),
-        ]
-        .into_iter()
-        .any(|(tween, target)| tween.is_active() || (tween.value() - target).abs() > 0.004)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct NebulaUiAnims {
-    clock: crate::motion::MotionClock,
-    frame: Option<crate::motion::Frame>,
-    /// Continuous sidebar-spinner phase in turns (`0.0..1.0`). Advancing it
-    /// from the shared monotonic frame delta avoids wall-clock jumps and needs
-    /// only four bytes per window.
-    spinner_phase: f32,
-    left_sidebar: UiAnim,
-    right_drawer: UiAnim,
-    ssh_editor: UiAnim,
-    settings_toggles: [SettingsToggleAnim; settings::SETTINGS_TOGGLE_COUNT],
-}
-
-impl NebulaUiAnims {
-    fn new() -> Self {
-        Self {
-            clock: crate::motion::MotionClock::default(),
-            frame: None,
-            spinner_phase: 0.0,
-            left_sidebar: UiAnim::new(1.0),
-            right_drawer: UiAnim::new(0.0),
-            ssh_editor: UiAnim::new(0.0),
-            settings_toggles: std::array::from_fn(|_| SettingsToggleAnim::new(false)),
-        }
-    }
-
-    fn step(
-        &mut self,
-        left_open: bool,
-        right_open: bool,
-        ssh_open: bool,
-        toggle_targets: [bool; settings::SETTINGS_TOGGLE_COUNT],
-        toggle_pressed: SettingsHit,
-        toggle_hover: SettingsHit,
-    ) {
-        let frame = self.clock.tick();
-        self.frame = Some(frame);
-        self.left_sidebar.step(frame, if left_open { 1.0 } else { 0.0 });
-        self.right_drawer.step(frame, if right_open { 1.0 } else { 0.0 });
-        self.ssh_editor.step(frame, if ssh_open { 1.0 } else { 0.0 });
-        for (index, (anim, target)) in
-            self.settings_toggles.iter_mut().zip(toggle_targets).enumerate()
-        {
-            let pressed = settings::settings_toggle_slot(toggle_pressed) == Some(index);
-            let hovered = settings::settings_toggle_slot(toggle_hover) == Some(index);
-            anim.step(frame, target, pressed, hovered);
-        }
-    }
-
-    fn frame(&mut self) -> crate::motion::Frame {
-        if let Some(frame) = self.frame {
-            frame
-        } else {
-            let frame = self.clock.tick();
-            self.frame = Some(frame);
-            frame
-        }
-    }
-
-    fn animating(
-        &self,
-        left_open: bool,
-        right_open: bool,
-        toggle_targets: [bool; settings::SETTINGS_TOGGLE_COUNT],
-        toggle_pressed: SettingsHit,
-        toggle_hover: SettingsHit,
-    ) -> bool {
-        self.left_sidebar.animating_to(if left_open { 1.0 } else { 0.0 })
-            || self.right_drawer.animating_to(if right_open { 1.0 } else { 0.0 })
-            || self.settings_toggles.iter().zip(toggle_targets).enumerate().any(
-                |(index, (anim, target))| {
-                    anim.animating_to(
-                        target,
-                        settings::settings_toggle_slot(toggle_pressed) == Some(index),
-                        settings::settings_toggle_slot(toggle_hover) == Some(index),
-                    )
-                },
-            )
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 struct ResizeHud {
@@ -1101,7 +897,7 @@ pub struct Display {
     pub nebula_sftp_panel: Option<sftp_panel::SftpPanel>,
     /// Shared chrome animation state. All sidebar/drawer transitions step here
     /// so easing/timing does not get scattered across render code.
-    nebula_ui_anims: NebulaUiAnims,
+    ui_animations: WindowAnimations,
     /// Active sidebar section inside the settings panel.
     nebula_settings_section: NebulaSettingsSection,
     nebula_chrome_hover: ChromeHit,
@@ -1380,6 +1176,7 @@ pub struct Display {
     nebula_ssh_proxy_cursor: [ui::text_field::TextCursor; 3],
     /// 聚焦那一刻的原值快照，Esc 取消编辑时还原。
     nebula_ssh_proxy_backup: [String; 2],
+    nebula_ssh_proxy_draft: network_proxy_model::ManualProxyDraft,
     /// 指定代理列表的选中项。非发现项可由持久化 URL 前缀恢复；发现项在
     /// 后台扫描完成后按 URL 精确匹配，绝不根据端口猜。
     nebula_ssh_proxy_choice: settings::ProxyChoice,
@@ -1859,7 +1656,7 @@ impl Display {
             nebula_detected_shells: None,
             nebula_side_panel: side_panel::SidePanel::new(),
             nebula_sftp_panel: None,
-            nebula_ui_anims: NebulaUiAnims::new(),
+            ui_animations: WindowAnimations::new(),
             nebula_settings_section: NebulaSettingsSection::default(),
             nebula_chrome_hover: ChromeHit::None,
             nebula_sidebar_scroll_drag: None,
@@ -2004,6 +1801,7 @@ impl Display {
             nebula_ssh_proxy_focus: None,
             nebula_ssh_proxy_cursor: Default::default(),
             nebula_ssh_proxy_backup: Default::default(),
+            nebula_ssh_proxy_draft: Default::default(),
             nebula_ssh_proxy_choice: settings::ProxyChoice::Manual,
             nebula_ssh_proxy_protocol: settings::ManualProxyProtocol::Socks5,
             nebula_local_proxies: Vec::new(),
@@ -2413,7 +2211,7 @@ impl Display {
             u32::from(ink.r) * 299 + u32::from(ink.g) * 587 + u32::from(ink.b) * 114 >= 128_000;
         let key = match logo {
             AiLogo::Grok if grok_uses_light_mark => (logo, [255, 255, 255], target_size),
-            AiLogo::OpenAi | AiLogo::OpenCode | AiLogo::Pi => {
+            AiLogo::OpenAi | AiLogo::OpenCode | AiLogo::Pi | AiLogo::Kimi | AiLogo::Grok => {
                 (logo, [ink.r, ink.g, ink.b], target_size)
             },
             _ => (logo, [0, 0, 0], target_size),
@@ -2421,17 +2219,7 @@ impl Display {
         if let Some(cached) = self.nebula_ai_logo_cache.get(&key) {
             return Some(cached.clone());
         }
-        let bytes = logo.png(grok_uses_light_mark);
-        let (width, height, mut rgba) = match crate::renderer::image::decode_png_bytes(bytes) {
-            Ok(decoded) => decoded,
-            // Unreachable for a valid embedded asset; degrade to no icon.
-            Err(err) => {
-                log::warn!("failed to decode embedded AI logo: {err}");
-                return None;
-            },
-        };
-        logo.tint_pixels(&mut rgba, [ink.r, ink.g, ink.b]);
-        let (rgba, width, height) = prepare_ai_logo_texture(&rgba, width, height, target_size);
+        let (rgba, width, height) = logo.render([ink.r, ink.g, ink.b], target_size)?;
         let id = AI_LOGO_ID_BASE + self.nebula_ai_logo_cache.len() as u64;
         let entry = (id, std::sync::Arc::new(rgba), (width, height));
         self.nebula_ai_logo_cache.insert(key, entry.clone());
@@ -2859,7 +2647,7 @@ impl Display {
         let grip = 4.0 * scale;
         if self.nebula_panel_resize
             && self.side_panel_visible()
-            && self.nebula_ui_anims.right_drawer.value() > 0.996
+            && self.ui_animations.drawer_progress() > 0.996
         {
             let (px, py, _, ph) = self.side_panel_layout().panel;
             if y >= py && y <= py + ph && (x - px).abs() <= grip {
@@ -3027,9 +2815,7 @@ impl Display {
             section: self.nebula_settings_section,
             hover: self.nebula_settings_hover,
             pressed: self.nebula_settings_pressed,
-            toggle_motion: std::array::from_fn(|index| {
-                self.nebula_ui_anims.settings_toggles[index].value()
-            }),
+            toggle_motion: self.ui_animations.toggle_motion(),
             theme: self.nebula_theme,
             follow_system_theme: self.nebula_follow_system_theme,
             ghost: self.nebula_ghost_enabled,
@@ -3177,13 +2963,7 @@ impl Display {
             sync_busy: self.nebula_sync_busy,
             ssh_proxy_mode: self.nebula_ssh_proxy_mode,
             ssh_proxy_inputs: [
-                if self.nebula_ssh_proxy_choice == settings::ProxyChoice::Manual {
-                    settings::manual_proxy_parts(&self.nebula_ssh_proxy_url).1.to_owned()
-                } else {
-                    // 旧版全局 jump:/command: 继续在后端生效，但精简页不把
-                    // 这些高级编码伪装成普通 host:port。
-                    String::new()
-                },
+                self.ssh_proxy_field_text(0).to_owned(),
                 self.nebula_ssh_proxy_no_proxy.clone(),
                 crate::ssh_proxy::command_target(&self.nebula_ssh_proxy_url)
                     .unwrap_or("")
@@ -3774,13 +3554,7 @@ impl Display {
         self.pending_update.dirty = true;
     }
 
-    pub fn cycle_accept(&mut self) {
-        self.nebula_accept = self.nebula_accept.cycle();
-        self.persist_nebula_settings();
-        self.pending_update.dirty = true;
-    }
-
-    /// Flip between inline ghost and popup-list completion (palette /
+    /// Cycle the three completion modes (palette /
     /// keybinding path; the settings page goes through
     /// [`Self::set_completion_style_option`]).
     pub fn cycle_completion_style(&mut self) {
@@ -5377,6 +5151,7 @@ impl Display {
         };
         if self.nebula_ssh_proxy_choice != choice {
             self.nebula_ssh_proxy_choice = choice;
+            self.nebula_ssh_proxy_draft.clear();
             self.nebula_ssh_proxy_focus = None;
             self.nebula_ssh_proxy_url = match choice {
                 settings::ProxyChoice::Detected(found) => self
@@ -5449,27 +5224,6 @@ impl Display {
             }
         }
         self.nebula_settings_dropdown = None;
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    /// 手动代理协议下拉只改持久化前缀，地址正文保持不变。
-    pub fn set_ssh_proxy_protocol(&mut self, index: usize) {
-        let Some(protocol) = settings::MANUAL_PROXY_PROTOCOL_OPTIONS.get(index).copied() else {
-            return;
-        };
-        self.commit_ssh_proxy_field();
-        let address = if self.nebula_ssh_proxy_choice == settings::ProxyChoice::Manual {
-            settings::manual_proxy_parts(&self.nebula_ssh_proxy_url).1.to_owned()
-        } else {
-            String::new()
-        };
-        self.nebula_ssh_proxy_protocol = protocol;
-        self.nebula_ssh_proxy_url = settings::manual_proxy_value(protocol, &address);
-        self.nebula_ssh_proxy_choice = settings::ProxyChoice::Manual;
-        self.invalidate_proxy_test();
-        self.nebula_settings_dropdown = None;
-        self.persist_nebula_settings();
         self.pending_update.dirty = true;
         self.window.request_redraw();
     }
@@ -5728,213 +5482,6 @@ impl Display {
         }
     }
 
-    /// 聚焦某个代理输入框；先提交上一个（点击切换即失焦保存）。编辑直接
-    /// 发生在持久镜像字段上，快照留给 Esc 还原。
-    pub fn focus_ssh_proxy_field(&mut self, index: usize) {
-        let index = index.min(2);
-        if self.nebula_ssh_proxy_focus == Some(index) {
-            return;
-        }
-        self.commit_ssh_proxy_field();
-        self.nebula_ssh_proxy_backup =
-            [self.nebula_ssh_proxy_url.clone(), self.nebula_ssh_proxy_no_proxy.clone()];
-        self.nebula_ssh_proxy_focus = Some(index);
-        let text = self.ssh_proxy_field_text(index).to_owned();
-        self.nebula_ssh_proxy_cursor[index].collapse_to_end(&text);
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-    }
-
-    fn ssh_proxy_field_text(&self, index: usize) -> &str {
-        match index {
-            0 if self.nebula_ssh_proxy_choice == settings::ProxyChoice::Manual => {
-                settings::manual_proxy_parts(&self.nebula_ssh_proxy_url).1
-            },
-            0 => "",
-            1 => &self.nebula_ssh_proxy_no_proxy,
-            _ => crate::ssh_proxy::command_target(&self.nebula_ssh_proxy_url).unwrap_or(""),
-        }
-    }
-
-    fn set_ssh_proxy_field_text(&mut self, index: usize, field: String) {
-        match index {
-            0 => {
-                self.nebula_ssh_proxy_choice = settings::ProxyChoice::Manual;
-                self.nebula_ssh_proxy_url =
-                    settings::manual_proxy_value(self.nebula_ssh_proxy_protocol, &field);
-            },
-            1 => self.nebula_ssh_proxy_no_proxy = field,
-            _ => self.nebula_ssh_proxy_url = format!("command:{field}"),
-        }
-    }
-
-    pub fn ssh_proxy_cursor(&self, index: usize) -> &ui::text_field::TextCursor {
-        &self.nebula_ssh_proxy_cursor[index.min(2)]
-    }
-
-    pub fn ssh_proxy_field_push(&mut self, ch: char) {
-        self.ssh_proxy_field_paste(&ch.to_string());
-    }
-
-    pub fn ssh_proxy_field_paste(&mut self, text: &str) {
-        let Some(index) = self.nebula_ssh_proxy_focus else { return };
-        // 手动 URL 无空白；绕过列表与命令允许空格。控制字符统一丢弃。
-        let clean: String = text
-            .chars()
-            .filter(|ch| !ch.is_control() && !(index == 0 && ch.is_whitespace()))
-            .collect();
-        if clean.is_empty() {
-            return;
-        }
-        let mut field = self.ssh_proxy_field_text(index).to_owned();
-        self.nebula_ssh_proxy_cursor[index].insert(&mut field, &clean);
-        if field.chars().count() > 256 {
-            return;
-        }
-        self.set_ssh_proxy_field_text(index, field);
-        self.invalidate_proxy_test();
-        // 代理是连接前读取的运行时设置；每次编辑立即落盘，确保用户不必
-        // 关闭设置页或重启应用，随后发起的新连接就能读到最新值。
-        self.persist_nebula_settings();
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    pub fn ssh_proxy_field_backspace(&mut self) {
-        let Some(index) = self.nebula_ssh_proxy_focus else { return };
-        let mut field = self.ssh_proxy_field_text(index).to_owned();
-        self.nebula_ssh_proxy_cursor[index].backspace(&mut field);
-        self.set_ssh_proxy_field_text(index, field);
-        self.invalidate_proxy_test();
-        self.persist_nebula_settings();
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    pub fn ssh_proxy_field_delete_forward(&mut self) {
-        let Some(index) = self.nebula_ssh_proxy_focus else { return };
-        let mut field = self.ssh_proxy_field_text(index).to_owned();
-        self.nebula_ssh_proxy_cursor[index].delete_forward(&mut field);
-        self.set_ssh_proxy_field_text(index, field);
-        self.invalidate_proxy_test();
-        self.persist_nebula_settings();
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    pub fn ssh_proxy_field_move(&mut self, forward: bool, extend: bool) {
-        let Some(index) = self.nebula_ssh_proxy_focus else { return };
-        let text = self.ssh_proxy_field_text(index).to_owned();
-        self.nebula_ssh_proxy_cursor[index].step(&text, forward, extend);
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    pub fn ssh_proxy_field_jump(&mut self, to_end: bool, extend: bool) {
-        let Some(index) = self.nebula_ssh_proxy_focus else { return };
-        let text = self.ssh_proxy_field_text(index).to_owned();
-        self.nebula_ssh_proxy_cursor[index].jump(&text, to_end, extend);
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    pub fn ssh_proxy_field_select_all(&mut self) {
-        let Some(index) = self.nebula_ssh_proxy_focus else { return };
-        let text = self.ssh_proxy_field_text(index).to_owned();
-        self.nebula_ssh_proxy_cursor[index].select_all(&text);
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    pub fn ssh_proxy_field_selected_text(&self) -> Option<String> {
-        let index = self.nebula_ssh_proxy_focus?;
-        self.nebula_ssh_proxy_cursor[index].selected_text(self.ssh_proxy_field_text(index))
-    }
-
-    /// 点击定位：把窗口内的落点换算回全文字符索引。窗口逻辑与
-    /// [`settings::ssh_proxy_input_rect`] / 渲染侧的尾窗口一致。
-    pub fn ssh_proxy_field_place(&mut self, index: usize, x: f32, extend: bool) {
-        let index = index.min(2);
-        if self.nebula_ssh_proxy_focus != Some(index) {
-            return;
-        }
-        let scale = self.window.scale_factor as f32;
-        let cell_w = self.size_info.cell_width();
-        let (ix, _, iw, _) = settings::ssh_proxy_input_rect(
-            &self.size_info,
-            scale,
-            self.terminal_card_rect(),
-            self.nebula_settings_scroll,
-            self.nebula_hidden_hosts.len(),
-            self.ssh_host_count(),
-            self.nebula_density,
-            self.ssh_proxy_pane_state(),
-            index,
-        );
-        let raw = self.ssh_proxy_field_text(index).to_owned();
-        let max_cols = (((iw - 24.0 * scale) / cell_w) as usize).max(1);
-        // 与渲染同一套窗口：尾窗口能盖住光标就用尾窗口，否则从光标开窗。
-        let total = raw.chars().count();
-        let mut cols = 0usize;
-        let mut tail_len = 0usize;
-        for ch in raw.chars().rev() {
-            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
-            if cols + w > max_cols {
-                break;
-            }
-            cols += w;
-            tail_len += 1;
-        }
-        let caret = self.nebula_ssh_proxy_cursor[index].caret(&raw);
-        let tail_hidden = total - tail_len;
-        let hidden = if caret >= tail_hidden { tail_hidden } else { caret };
-        let visible: String = raw.chars().skip(hidden).collect();
-        let at = ui::text_field::index_at(&visible, x - (ix + 12.0 * scale), cell_w) + hidden;
-        if extend {
-            self.nebula_ssh_proxy_cursor[index].extend_to(&raw, at);
-        } else {
-            self.nebula_ssh_proxy_cursor[index].place(&raw, at);
-        }
-        self.update_settings_ime_cursor();
-        self.pending_update.dirty = true;
-        self.window.request_redraw();
-    }
-
-    /// 失焦提交：trim 后写 `nebula_settings.txt`。
-    pub fn commit_ssh_proxy_field(&mut self) {
-        if self.nebula_ssh_proxy_focus.take().is_none() {
-            return;
-        }
-        self.nebula_ssh_proxy_url = self.nebula_ssh_proxy_url.trim().to_owned();
-        self.nebula_ssh_proxy_no_proxy = self.nebula_ssh_proxy_no_proxy.trim().to_owned();
-        if self.nebula_ssh_proxy_choice == settings::ProxyChoice::Command {
-            let command =
-                crate::ssh_proxy::command_target(&self.nebula_ssh_proxy_url).unwrap_or("").trim();
-            self.nebula_ssh_proxy_url =
-                if command.is_empty() { String::new() } else { format!("command:{command}") };
-        }
-        self.persist_nebula_settings();
-        self.pending_update.dirty = true;
-    }
-
-    /// Esc：还原为聚焦时的快照并失焦，不落盘。
-    pub fn cancel_ssh_proxy_field(&mut self) {
-        if self.nebula_ssh_proxy_focus.take().is_none() {
-            return;
-        }
-        let [url, no_proxy] = std::mem::take(&mut self.nebula_ssh_proxy_backup);
-        self.nebula_ssh_proxy_url = url;
-        self.nebula_ssh_proxy_protocol = settings::manual_proxy_parts(&self.nebula_ssh_proxy_url).0;
-        self.nebula_ssh_proxy_no_proxy = no_proxy;
-        self.pending_update.dirty = true;
-    }
-
     pub fn toggle_sync_auto_pull(&mut self) {
         self.nebula_sync_auto_pull = !self.nebula_sync_auto_pull;
         let mut cfg = crate::sync::SyncConfig::load();
@@ -6153,11 +5700,12 @@ impl Display {
     /// 「恢复 AI 会话」面板：原生 Claude/Codex 档案与 Nebula hook 索引
     /// 合并去重；只展示已验证有 resume 语法的来源。
     pub fn open_ai_session_palette(&mut self) {
+        let language = self.ui_language();
         let mut rows = Vec::new();
         for session in crate::ai_sessions::scan(30) {
             // 右列 = 「位置 · 相对时间」。来源不再挤进这段文字——行首
             // 品牌 logo + 右缘 chip 已经把 claude/codex 标满了。
-            let time = crate::ai_sessions::relative_label(session.modified);
+            let time = crate::ai_sessions::relative_label(session.modified, language);
             let place = session.place_label();
             let hint = if place.is_empty() { time } else { format!("{place} · {time}") };
             let search =
@@ -6174,7 +5722,10 @@ impl Display {
             });
             if let Some(command) = session.fork_command() {
                 rows.push(command_palette::AiSessionRow {
-                    label: format!("分叉 · {}", session.title),
+                    label: language.format(
+                        crate::i18n::Message::WorkspaceForkLabel,
+                        &[("title", &session.title)],
+                    ),
                     hint,
                     search: format!("分叉 fork {search}"),
                     command,
@@ -6617,7 +6168,7 @@ impl Display {
             reserve,
             reserve,
             scale,
-            self.nebula_ui_anims.right_drawer.value(),
+            self.ui_animations.drawer_progress(),
             self.drawer_w_visual(),
         )
     }
@@ -6851,32 +6402,32 @@ impl Display {
 
     pub fn step_chrome_anims(&mut self) {
         let toggle_targets = self.settings_toggle_targets();
-        self.nebula_ui_anims.step(
+        self.ui_animations.step(
             !self.nebula_sidebar_collapsed,
             self.nebula_side_panel.open,
             self.nebula_ssh_editor_open,
             toggle_targets,
-            self.nebula_settings_pressed,
-            self.nebula_settings_hover,
+            settings::settings_toggle_slot(self.nebula_settings_pressed),
+            settings::settings_toggle_slot(self.nebula_settings_hover),
         );
     }
 
     pub fn chrome_animating(&self) -> bool {
-        self.nebula_ui_anims.animating(
+        self.ui_animations.animating(
             !self.nebula_sidebar_collapsed,
             self.nebula_side_panel.open,
             self.settings_toggle_targets(),
-            self.nebula_settings_pressed,
-            self.nebula_settings_hover,
+            settings::settings_toggle_slot(self.nebula_settings_pressed),
+            settings::settings_toggle_slot(self.nebula_settings_hover),
         )
     }
 
     pub fn left_sidebar_progress(&self) -> f32 {
-        self.nebula_ui_anims.left_sidebar.value()
+        self.ui_animations.sidebar_progress()
     }
 
     pub fn left_sidebar_visible(&self) -> bool {
-        self.nebula_ui_anims.left_sidebar.visible(!self.nebula_sidebar_collapsed)
+        self.ui_animations.sidebar_visible(!self.nebula_sidebar_collapsed)
     }
 
     /// DPI 变化时按同一比例重标 UI 角色字号（等价于配置字号 × 新缩放）。
@@ -6994,7 +6545,7 @@ impl Display {
         let y = s(8.0 + 40.0) + seam;
         // Right edge follows the file/git drawer the same way: as it slides
         // in, the card cedes its width (drawer width + margin) plus the seam.
-        let dt = self.nebula_ui_anims.right_drawer.value().clamp(0.0, 1.0);
+        let dt = self.ui_animations.drawer_progress().clamp(0.0, 1.0);
         let drawer =
             dt * ((self.drawer_w_visual() * scale).min(self.size_info.width() * 0.42) + s(8.0));
         let w = (self.size_info.width() - drawer - seam - x).max(0.0);
@@ -7003,7 +6554,7 @@ impl Display {
     }
 
     pub fn side_panel_visible(&self) -> bool {
-        self.nebula_ui_anims.right_drawer.visible(self.nebula_side_panel.open)
+        self.ui_animations.drawer_visible(self.nebula_side_panel.open)
     }
 
     /// Sidebar content model for `chrome_tab_layout` — the single place the
@@ -7456,6 +7007,7 @@ impl Display {
         self.nebula_ssh_proxy_url = settings.ssh_proxy_url;
         self.nebula_ssh_proxy_no_proxy = settings.ssh_proxy_no_proxy;
         if proxy_changed {
+            self.nebula_ssh_proxy_draft.clear();
             self.invalidate_proxy_test();
         }
         self.nebula_ssh_proxy_protocol = settings::manual_proxy_parts(&self.nebula_ssh_proxy_url).0;
@@ -8147,6 +7699,7 @@ impl Display {
         // `line_buf` is used. Only on the primary screen, never during vi/search
         // overlays.
         if alt_screen || vi_mode || search_state.regex().is_some() {
+            pane_state.completion_popup_requested = false;
             pane_state.clear_completion_hints();
         } else {
             #[cfg(windows)]
@@ -8173,6 +7726,7 @@ impl Display {
                     },
                     None => {
                         pane_state.screen_line.clear();
+                        pane_state.completion_popup_requested = false;
                         pane_state.clear_completion_hints();
                     },
                 }
@@ -8718,7 +8272,7 @@ impl Display {
         // wipes in from the divider instead of popping. Timestamp-derived, no
         // per-frame allocation (same discipline as the quick-terminal slide).
         if let Some(mut reveal) = self.nebula_split_reveal {
-            reveal.motion.step(self.nebula_ui_anims.frame());
+            reveal.motion.step(self.ui_animations.frame());
             let e = reveal.motion.value();
             if !reveal.motion.is_active() {
                 self.nebula_split_reveal = None;
@@ -8884,97 +8438,7 @@ impl Display {
         let txt = sk.ink;
         let dim = sk.ink_dim;
 
-        let (title, body, danger) = match &confirm {
-            NebulaConfirm::EnableBackgroundImageCoverChrome => (
-                "让背景图覆盖窗口控件区域？".to_owned(),
-                "背景图会延伸到标题栏、窗口按钮、Tab 与 SSH 侧栏下方，低对比度图片可能影响操作可见性；界面仍会保留最低不透明度保护。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::EnablePanelResize => (
-                "开启侧栏拖拽调节？".to_owned(),
-                "拖动左侧栏或右侧抽屉的宽度时，终端内容会跟随实时重排；在低性能设备或超大回滚缓冲下可能出现掉帧。拖动已按帧率与列宽双重节流，把左侧栏一路拖到最左即可收起。宽度会保存，此功能可随时关闭。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::InstallRequiredFont { .. } => (
-                "建议安装终端字体".to_owned(),
-                "未检测到 Maple Mono Nerd Font；缺少图标时可安装后重启 Nebula。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::ClosePane { process, .. } => (
-                "关闭此分栏？".to_owned(),
-                format!("{process} 仍在运行，关闭会中止它。"),
-                true,
-            ),
-            NebulaConfirm::CloseTab { process, .. } => (
-                "关闭此标签页？".to_owned(),
-                format!("{process} 仍在运行，关闭会中止它。"),
-                true,
-            ),
-            NebulaConfirm::CloseWindow { process } => (
-                "关闭整个窗口？".to_owned(),
-                format!("{process} 仍在运行，关闭会中止它。"),
-                true,
-            ),
-            NebulaConfirm::Paste { lines, .. } => (
-                format!("粘贴 {lines} 行文本？"),
-                "多行粘贴会被 shell 逐行执行，请确认来源可信。".to_owned(),
-                false,
-            ),
-            NebulaConfirm::DeleteSsh { host, from_config } => {
-                let host = truncate_tab_label(host, 28);
-                if *from_config {
-                    (
-                        format!("隐藏 SSH 主机 {host}？"),
-                        "只从 Nebula 隐藏；~/.ssh/config 不会修改，保存的密码将在撤销期后清除。"
-                            .to_owned(),
-                        true,
-                    )
-                } else {
-                    (
-                        format!("删除 SSH 主机 {host}？"),
-                        "会从主机列表移除，保存的 Windows 密码将在撤销期后清除。".to_owned(),
-                        true,
-                    )
-                }
-            },
-            NebulaConfirm::DeleteSftp { entry } => (
-                format!("删除远端项目 {}？", truncate_tab_label(&entry.name, 28)),
-                if entry.kind == crate::ssh_sftp::SftpEntryKind::Directory {
-                    "文件夹及其全部远端内容会被递归删除，此操作无法撤销。".to_owned()
-                } else {
-                    "远端文件会被永久删除，此操作无法撤销。".to_owned()
-                },
-                true,
-            ),
-            NebulaConfirm::DeleteFileTreePath { path, is_dir } => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.display().to_string());
-                (
-                    format!("删除 {}？", truncate_tab_label(&name, 28)),
-                    if *is_dir {
-                        "文件夹及其全部内容会移入回收站。".to_owned()
-                    } else {
-                        "文件会移入回收站。".to_owned()
-                    },
-                    true,
-                )
-            },
-            NebulaConfirm::BackupPassphrase { restoring } => (
-                if *restoring {
-                    "输入恢复口令".to_owned()
-                } else {
-                    "设置备份口令".to_owned()
-                },
-                if *restoring {
-                    "输入导出时使用的口令；认证通过后才会写入任何文件。".to_owned()
-                } else {
-                    "口令至少 8 个字符。Nebula 不会保存口令，丢失后无法恢复此备份。".to_owned()
-                },
-                false,
-            ),
-        };
+        let (title, body, danger) = confirmation_text::text_for(&confirm, self.ui_language());
 
         let is_backup_passphrase = matches!(confirm, NebulaConfirm::BackupPassphrase { .. });
         let body = if is_backup_passphrase {
@@ -9005,8 +8469,8 @@ impl Display {
         // 手画：外圈描边 quad + 内层填充 quad，只露 1px 圆环。描边取按钮
         // 自己的墨色，深色主题下自然读作白框，浅色主题下是深框。
         let language = self.ui_language();
-        let primary_label = language.pick("是", "Yes");
-        let cancel_label = language.pick("否", "No");
+        let primary_label = language.text(crate::i18n::Message::CommonYes);
+        let cancel_label = language.text(crate::i18n::Message::CommonNo);
         let primary_key = "Enter";
         let cancel_key = "Esc";
         let btn_h = s(34.0);
@@ -9551,7 +9015,7 @@ impl Display {
         if !self.nebula_ssh_connect.contains_key(&pane) {
             return;
         }
-        let delta = self.nebula_ui_anims.frame().delta;
+        let delta = self.ui_animations.frame().delta;
         // 借用分离：绘制要同时摸 renderer 与 glyph_cache，先把状态摘出来。
         let mut states = std::mem::take(&mut self.nebula_ssh_connect);
         if let Some(state) = states.get_mut(&pane) {
@@ -9610,7 +9074,7 @@ impl Display {
 
     fn draw_resize_hud(&mut self) {
         let Some(mut hud) = self.nebula_resize_hud else { return };
-        hud.opacity.step(self.nebula_ui_anims.frame());
+        hud.opacity.step(self.ui_animations.frame());
         if !hud.opacity.is_active() {
             self.nebula_resize_hud = None;
             return;

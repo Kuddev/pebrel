@@ -27,27 +27,27 @@ impl<T> Term<T> {
 
         // A screen redraw (clear, resize) can re-emit a mark for the same or
         // an earlier row; drop those so the deque stays strictly increasing.
-        while self.nebula_prompt_marks.back().is_some_and(|&m| m >= abs) {
-            self.nebula_prompt_marks.pop_back();
+        while self.reading.prompt_marks.back().is_some_and(|&m| m >= abs) {
+            self.reading.prompt_marks.pop_back();
         }
         // Prune marks whose rows have scrolled out of history entirely.
         let floor = self.grid.scrolled_out();
-        while self.nebula_prompt_marks.front().is_some_and(|&m| m < floor) {
-            self.nebula_prompt_marks.pop_front();
+        while self.reading.prompt_marks.front().is_some_and(|&m| m < floor) {
+            self.reading.prompt_marks.pop_front();
         }
 
-        self.nebula_prompt_marks.push_back(abs);
-        self.nebula_prompt_active = true;
-        self.nebula_prompt_input = None;
+        self.reading.prompt_marks.push_back(abs);
+        self.reading.prompt_active = true;
+        self.reading.prompt_input = None;
     }
 
     pub fn nebula_end_prompt(&mut self) {
-        self.nebula_prompt_active = false;
-        self.nebula_prompt_input = None;
+        self.reading.prompt_active = false;
+        self.reading.prompt_input = None;
     }
 
     pub fn nebula_prompt_active(&self) -> bool {
-        self.nebula_prompt_active && !self.mode.contains(TermMode::ALT_SCREEN)
+        self.reading.prompt_active && !self.mode.contains(TermMode::ALT_SCREEN)
     }
 
     /// Capture OSC 133;B between parser slices, before input is echoed.
@@ -59,7 +59,7 @@ impl<T> Term<T> {
                 line += 1;
                 column = Column(0);
             }
-            self.nebula_prompt_input = Some((line, column));
+            self.reading.prompt_input = Some((line, column));
         }
     }
 
@@ -69,7 +69,7 @@ impl<T> Term<T> {
         if !self.nebula_prompt_active() {
             return None;
         }
-        let (line, column) = self.nebula_prompt_input?;
+        let (line, column) = self.reading.prompt_input?;
         if line < self.grid.scrolled_out() || column.0 >= self.columns() {
             return None;
         }
@@ -96,7 +96,7 @@ impl<T> Term<T> {
     where
         T: EventListener,
     {
-        if self.mode.contains(TermMode::ALT_SCREEN) || self.nebula_prompt_marks.is_empty() {
+        if self.mode.contains(TermMode::ALT_SCREEN) || self.reading.prompt_marks.is_empty() {
             return false;
         }
 
@@ -106,9 +106,9 @@ impl<T> Term<T> {
         let top_abs = scrolled_out + history - self.grid.display_offset();
 
         let target = if up {
-            self.nebula_prompt_marks.iter().rev().find(|&&m| m < top_abs)
+            self.reading.prompt_marks.iter().rev().find(|&&m| m < top_abs)
         } else {
-            self.nebula_prompt_marks.iter().find(|&&m| m > top_abs)
+            self.reading.prompt_marks.iter().find(|&&m| m > top_abs)
         };
         let Some(&mark) = target else { return false };
 

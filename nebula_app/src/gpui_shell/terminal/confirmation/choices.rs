@@ -1,6 +1,7 @@
 //! Codex's displayed one-key choices. A question digit submits the current
 //! answer itself; appending Enter could accidentally submit the next question.
 use super::*;
+use unicode_width::UnicodeWidthChar as _;
 
 type Choices = (Fingerprint, String, Vec<String>, Vec<String>);
 
@@ -34,17 +35,36 @@ pub(super) fn describe(
     let row = ROW.get_or_init(|| Regex::new(r"^(?:[›❯>]\s*)?([1-9])\.\s+(.+)$").unwrap());
     static KEY: OnceLock<Regex> = OnceLock::new();
     let key = KEY.get_or_init(|| Regex::new(r"\(([a-z])\)$").unwrap());
-    let mut labels = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
     let mut replies = Vec::new();
     let mut first_row = None;
+    let mut continuation = false;
     for (ix, line) in context[..context.len() - 1].iter().enumerate() {
-        let Some(captures) = row.captures(line) else { continue };
+        let Some(captures) = row.captures(line) else {
+            if continuation {
+                let label = labels.last_mut()?;
+                let next = line.split_whitespace().collect::<Vec<_>>().join(" ");
+                // 桌面按列排版的续行也属于选项；宽字符之间的折行不插入多余空格。
+                let wide_wrap = label.chars().next_back().zip(next.chars().next()).is_some_and(
+                    |(left, right)| left.width() == Some(2) && right.width() == Some(2),
+                );
+                if !wide_wrap {
+                    label.push(' ');
+                }
+                label.push_str(&next);
+                if label.chars().count() > 240 {
+                    return None;
+                }
+            }
+            continue;
+        };
+        continuation = false;
         let number = captures[1].parse::<usize>().ok()?;
         if number != labels.len() + 1 || labels.len() >= 9 {
             return None;
         }
         first_row.get_or_insert(ix);
-        let label = captures[2].trim();
+        let label = captures[2].split_whitespace().collect::<Vec<_>>().join(" ");
         if label.chars().count() > 240 {
             return None;
         }
@@ -55,9 +75,10 @@ pub(super) fn describe(
                 continue;
             }
             replies.push(number.to_string());
-            labels.push(label.to_owned());
+            labels.push(label);
+            continuation = true;
         } else {
-            let shortcut = key.captures(label)?;
+            let shortcut = key.captures(&label)?;
             replies.push(shortcut[1].to_owned());
             labels.push(label[..shortcut.get(0)?.start()].trim().to_owned());
         }
@@ -126,5 +147,21 @@ mod tests {
         }
         assert!(describe(prompt, "claude", None, TermMode::empty(), true).is_none());
         assert!(describe(prompt, "codex", None, TermMode::empty(), false).is_none());
+    }
+
+    #[test]
+    fn wrapped_choice_descriptions_keep_their_text_without_terminal_column_padding() {
+        let screen = "Question 1/1 (1 unanswered)\n选择预览主题。\n› 1. Light (Recommended)     Keeps the selected preview\n                            readable.\n  2. 深色                    适合低光环境并保持正\n                            常。\n  3. None of the above      Optionally, add details in\n                            notes (tab).\ntab to add notes | enter to submit answer | esc to interrupt";
+        let (_, question, labels, replies) =
+            describe(screen, "codex", Some("s"), TermMode::empty(), true).unwrap();
+        assert_eq!(question, "选择预览主题。");
+        assert_eq!(
+            labels,
+            [
+                "Light (Recommended) Keeps the selected preview readable.",
+                "深色 适合低光环境并保持正常。"
+            ]
+        );
+        assert_eq!(replies, ["1", "2"]);
     }
 }
