@@ -4,6 +4,8 @@
 
 Implemented; native Windows/macOS visual acceptance remains outstanding.
 
+Default row spacing is superseded by [natural text rows and symbol fallback](2026-10-25-restore-text-metrics-and-symbol-fallback.md); Braille geometry is retained.
+
 ## Context
 
 Terminal character art uses row/column geometry, not an independently scaled

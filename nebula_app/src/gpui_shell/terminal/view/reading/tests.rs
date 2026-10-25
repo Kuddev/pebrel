@@ -1,11 +1,127 @@
 use super::*;
 use crate::gpui_shell::terminal::element::snapshot_probe;
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext};
-use gpui_component::Root;
+use gpui_component::{Root, WindowExt as _};
 use nebula_terminal::event_loop::StreamProcessor;
 use std::sync::mpsc::Receiver;
 
 mod output_hover;
+
+#[test]
+#[ignore = "requires a native desktop and isolated PEBREL_READING_QA_DIR/config and source"]
+fn native_result_desktop_visual_review() {
+    use nebula_terminal::inline_content::Packet;
+    use std::{path::PathBuf, time::Duration};
+
+    let output = PathBuf::from(std::env::var_os("PEBREL_READING_QA_DIR").expect("QA output"));
+    assert!(output.is_absolute());
+    assert_eq!(
+        std::env::var_os("PEBREL_CONFIG_DIR").map(PathBuf::from),
+        Some(output.join("config"))
+    );
+    assert!(!output.join("ready.json").exists(), "use a fresh isolated fixture");
+    let mime = std::env::var("PEBREL_READING_QA_MIME").expect("fixture MIME");
+    assert!(matches!(mime.as_str(), "application/json" | "text/markdown"));
+    let source = std::fs::read_to_string(output.join("source")).unwrap();
+    let wire = format!(
+        "{}\r\n{}{}\r\nFollowing terminal output",
+        Packet::Begin { wire_id: 8000, rows: 2, mime, title: "Reading fixture".into() }.encode(),
+        Packet::Append { wire_id: 8000, text: source }.encode(),
+        Packet::End { wire_id: 8000, code: 0 }.encode()
+    );
+    gpui_platform::application().with_assets(crate::gpui_shell::assets::NebulaAssets).run(
+        move |cx| {
+            crate::gpui_shell::init(cx, None);
+            let mut terminal = None;
+            let mut receiver = None;
+            let handle = cx
+                .open_window(
+                    gpui::WindowOptions {
+                        window_bounds: Some(gpui::WindowBounds::Windowed(Bounds::new(
+                            point(px(20.0), px(20.0)),
+                            gpui::size(px(900.0), px(680.0)),
+                        ))),
+                        focus: false,
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let view = cx.new(|cx| {
+                            TerminalView::new(
+                                8000,
+                                (100, 32),
+                                TerminalLaunch::Local {
+                                    cwd: Some(output.clone()),
+                                    shell: Some(nebula_terminal::tty::Shell::new(
+                                        "pebrel-test-missing-shell-executable".into(),
+                                        vec![],
+                                    )),
+                                    shell_name: None,
+                                },
+                                window,
+                                cx,
+                            )
+                        });
+                        receiver = Some(view.update(cx, |view, cx| {
+                            // 复用 VT 公共入口和真实结果投影，不启动用户 Shell。
+                            let (session, receiver, _, proxy) = session::test_session_with_events();
+                            view.session = Some(session);
+                            view.error = None;
+                            view.exited = None;
+                            view.copy_on_select = false;
+                            view.ghost_enabled = false;
+                            view.spawn_at = std::time::Instant::now() - Duration::from_secs(1);
+                            StreamProcessor::default().feed(
+                                &mut *view.session.as_ref().unwrap().term.lock(),
+                                &proxy,
+                                wire.as_bytes(),
+                            );
+                            view.observe_reading_output(cx);
+                            receiver
+                        }));
+                        terminal = Some(view.clone());
+                        cx.new(|cx| Root::new(view, window, cx))
+                    },
+                )
+                .unwrap();
+            let terminal = terminal.unwrap();
+            let receiver = receiver.unwrap();
+            cx.spawn(async move |cx| {
+                for frame in 0..300 {
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    cx.update_window(handle.into(), |_, window, cx| {
+                        window.refresh();
+                        let _ = window.draw(cx);
+                        for message in receiver.try_iter() {
+                            if let Msg::Resize(size) | Msg::ResizeGrid(size) = message {
+                                terminal.read(cx).session.as_ref().unwrap().term.lock().resize(
+                                    nebula_terminal::term::test::TermSize::new(
+                                        size.num_cols as usize,
+                                        size.num_lines as usize,
+                                    ),
+                                );
+                            }
+                        }
+                        if frame == 20 {
+                            assert_eq!(terminal.read(cx).native_results.len(), 1);
+                            std::fs::write(
+                                output.join("ready.json"),
+                                serde_json::to_vec(&serde_json::json!({"pid": std::process::id()}))
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                        }
+                    })
+                    .unwrap();
+                    if output.join("capture-complete").exists() {
+                        break;
+                    }
+                }
+                cx.update(|cx| cx.quit());
+            })
+            .detach();
+        },
+    );
+}
 
 #[gpui::test]
 fn ordinary_cat_uses_native_layout_and_keeps_following_prompt(cx: &mut TestAppContext) {
@@ -154,6 +270,22 @@ fn native_result_mount_preserves_grid_and_isolates_pointer(cx: &mut TestAppConte
         cx.simulate_mouse_up(bounds.center(), button, Modifiers::default());
     }
     draw(&mut cx);
+    assert!(input(&receiver).is_empty());
+    assert!(!view.read_with(&cx, |view, _| view.selecting));
+    let heading = cx.debug_bounds("native-markdown-heading").unwrap();
+    let start = heading.origin + point(px(1.0), heading.size.height * 0.5);
+    let end = start + point(px(120.0), px(0.0));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    let selected = cx.update(|window, cx| window.selected_text(cx));
+    assert!(selected.contains("Heading"), "Markdown drag selection: {selected:?}");
+    cx.simulate_keystrokes(match crate::platform::Platform::current() {
+        crate::platform::Platform::MacOS => "cmd-c",
+        _ => "ctrl-c",
+    });
+    assert_eq!(clipboard(&mut cx).as_deref(), Some(selected.trim()));
     assert!(input(&receiver).is_empty());
     assert!(!view.read_with(&cx, |view, _| view.selecting));
     cx.simulate_resize(gpui::size(px(550.0), px(600.0)));
@@ -564,7 +696,7 @@ fn native_result_revalidates_live_rows_that_scroll_into_history(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn native_result_table_expands_all_rows_and_keeps_body_font(cx: &mut TestAppContext) {
+fn native_result_json_expands_all_rows_and_keeps_body_font(cx: &mut TestAppContext) {
     use nebula_terminal::inline_content::Packet;
     let (view, mut cx, _, proxy) = open(cx);
     let source = format!(
@@ -610,12 +742,11 @@ fn native_result_row_hover_notifies_inside_a_cached_parent(cx: &mut TestAppConte
         Packet::Begin {
             wire_id: 203,
             rows: 2,
-            mime: "application/json".into(),
+            mime: "text/x-directory-listing".into(),
             title: "hover".into()
         }
         .encode(),
-        Packet::Append { wire_id: 203, text: r#"[{"Name":"alpha"},{"Name":"beta"}]"#.into() }
-            .encode(),
+        Packet::Append { wire_id: 203, text: "alpha\nbeta".into() }.encode(),
         Packet::End { wire_id: 203, code: 0 }.encode(),
     );
     feed(&view, &mut cx, &proxy, wire.as_bytes());
@@ -650,13 +781,13 @@ fn native_result_row_hover_notifies_inside_a_cached_parent(cx: &mut TestAppConte
 fn native_result_table_filter_and_sort_follow_real_controls(cx: &mut TestAppContext) {
     use nebula_terminal::inline_content::Packet;
     let (view, mut cx, receiver, proxy) = open(cx);
-    let source = r#"[{"Name":"alpha-long-filename.rs","Size":2},{"Name":"beta.rs","Size":10},{"Name":"gamma.rs","Size":1}]"#;
+    let source = "-rw-r--r-- 2 Oct 25 12:00  alpha-long-filename.rs\n-rw-r--r-- 10 Oct 25 12:00  beta.rs\n-rw-r--r-- 1 Oct 25 12:00  gamma.rs";
     let wire = format!(
         "{}\r\n{}{}",
         Packet::Begin {
             wire_id: 202,
             rows: 2,
-            mime: "application/json".into(),
+            mime: "text/x-powershell-directory".into(),
             title: "table".into()
         }
         .encode(),
@@ -669,11 +800,20 @@ fn native_result_table_filter_and_sort_follow_real_controls(cx: &mut TestAppCont
     }
     let rows = |view: &Entity<TerminalView>, cx: &VisualTestContext| {
         view.read_with(cx, |view, cx| {
-            view.native_results.entities.values().next().unwrap().read(cx).displayed_rows()
+            view.native_results
+                .entities
+                .values()
+                .next()
+                .unwrap()
+                .read(cx)
+                .displayed_rows()
+                .into_iter()
+                .map(|row| vec![row[3].clone(), row[1].clone()])
+                .collect::<Vec<_>>()
         })
     };
     assert!(cx.debug_bounds("native-result-filter-input").is_none());
-    let names = cx.debug_bounds("native-table-column-0").unwrap();
+    let names = cx.debug_bounds("native-table-column-3").unwrap();
     let sizes = cx.debug_bounds("native-table-column-1").unwrap();
     assert!(names.size.width > sizes.size.width, "columns must fit their actual content");
     cx.simulate_click(
@@ -682,7 +822,9 @@ fn native_result_table_filter_and_sort_follow_real_controls(cx: &mut TestAppCont
     );
     draw(&mut cx);
     assert_eq!(rows(&view, &cx)[0], ["beta.rs", "10"]);
-    // Button 保留鼠标与键盘焦点的区分；用真实 Tab 导航进入第二列表头。
+    // 目录列按 Name/Mode/Size 排列，使用真实 Tab 导航进入 Size 表头。
+    cx.simulate_keystrokes("tab");
+    draw(&mut cx);
     cx.simulate_keystrokes("tab");
     draw(&mut cx);
     cx.simulate_keystrokes("tab");
@@ -708,6 +850,78 @@ fn native_result_table_filter_and_sort_follow_real_controls(cx: &mut TestAppCont
     assert!(cx.debug_bounds("native-result-filter-input").is_none());
     assert_eq!(rows(&view, &cx).len(), 3);
     assert!(input(&receiver).is_empty());
+}
+
+#[gpui::test]
+fn native_result_json_tree_folds_filters_and_selects_without_pty_input(cx: &mut TestAppContext) {
+    use nebula_terminal::inline_content::Packet;
+    let (view, mut cx, receiver, proxy) = open(cx);
+    let source = r#"{"code":200,"message":"success","data":{"tags":["vip","new-user"],"address":{"province":"广东  省 <&>","city":"深圳市","street":"科技路"},"orders":[{"orderId":"A20240101"},{"orderId":"A20240102"}]}}"#;
+    let wire = format!(
+        "{}\r\n{}{}",
+        Packet::Begin {
+            wire_id: 209,
+            rows: 2,
+            mime: "application/json".into(),
+            title: "JSON".into()
+        }
+        .encode(),
+        Packet::Append { wire_id: 209, text: source.into() }.encode(),
+        Packet::End { wire_id: 209, code: 0 }.encode()
+    );
+    feed(&view, &mut cx, &proxy, wire.as_bytes());
+    for _ in 0..6 {
+        draw(&mut cx);
+    }
+    assert!(cx.debug_bounds("native-json-toggle-3").is_some());
+    assert!(cx.debug_bounds("native-json-toggle-4").is_none(), "short array stays inline");
+    assert!(cx.debug_bounds("native-json-row-16").is_none(), "address starts collapsed");
+    let toggle = cx.debug_bounds("native-json-toggle-7").unwrap().center();
+    cx.simulate_click(toggle, Modifiers::default());
+    for _ in 0..3 {
+        draw(&mut cx);
+    }
+    let text = cx.debug_bounds("native-json-text-16").unwrap();
+    let start = text.origin + point(px(1.0), text.size.height * 0.5);
+    let city = cx.debug_bounds("native-json-text-18").unwrap();
+    let end = city.origin + point(px(220.0), city.size.height * 0.5);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw(&mut cx);
+    let selected = cx.update(|window, cx| window.selected_text(cx));
+    assert!(selected.contains("province"), "JSON drag selection: {selected:?}");
+    assert!(selected.contains("广东  省 <&>"), "JSON whitespace and escaping: {selected:?}");
+    assert!(selected.contains("city"), "JSON selection crosses text rows: {selected:?}");
+    cx.simulate_keystrokes(match crate::platform::Platform::current() {
+        crate::platform::Platform::MacOS => "cmd-c",
+        _ => "ctrl-c",
+    });
+    assert_eq!(clipboard(&mut cx).as_deref(), Some(selected.trim()));
+    let bounds = cx.debug_bounds("native-result").unwrap();
+    cx.simulate_mouse_move(bounds.origin + point(px(5.0), px(5.0)), None, Modifiers::default());
+    draw(&mut cx);
+    let raw = cx.debug_bounds("native-result-raw").unwrap().center();
+    cx.simulate_click(raw, Modifiers::default());
+    draw(&mut cx);
+    let preview = cx.debug_bounds("native-result-view").unwrap().center();
+    cx.simulate_click(preview, Modifiers::default());
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-json-row-16").is_some(), "fold state survives source mode");
+    let filter = cx.debug_bounds("native-result-filter-toggle").unwrap().center();
+    cx.simulate_click(filter, Modifiers::default());
+    draw(&mut cx);
+    cx.simulate_input("A20240102");
+    for _ in 0..3 {
+        draw(&mut cx);
+    }
+    assert!(cx.debug_bounds("native-json-row-30").is_some());
+    assert!(cx.debug_bounds("native-json-row-26").is_none());
+    cx.simulate_keystrokes("escape");
+    draw(&mut cx);
+    assert!(cx.debug_bounds("native-json-row-16").is_some());
+    assert!(input(&receiver).is_empty());
+    assert!(!view.read_with(&cx, |view, _| view.selecting));
 }
 
 #[gpui::test]

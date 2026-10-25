@@ -48,7 +48,7 @@ impl SettingsPane {
 
     fn picker_font_chain(&self, cx: &App) -> String {
         if self.font_picker_cjk {
-            self.runtime.font_family_cjk.clone().unwrap_or_else(|| REQUIRED_FONT_FAMILY.to_owned())
+            self.runtime.font_family_cjk.clone().unwrap_or_else(|| self.current_font_chain(cx))
         } else {
             self.current_font_chain(cx)
         }
@@ -181,7 +181,7 @@ impl SettingsPane {
         let normalized = crate::font_install::normalize_font_family_chain(&raw);
         // 空链无法提供主字体；恢复当前生效值，而不是写入一个随后被忽略的空项。
         let next = if normalized.is_empty() {
-            if self.font_picker_cjk { REQUIRED_FONT_FAMILY.to_owned() } else { current.clone() }
+            if self.font_picker_cjk { self.current_font_chain(cx) } else { current.clone() }
         } else {
             normalized
         };

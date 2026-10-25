@@ -25,13 +25,7 @@ pub struct SshHostLists {
 }
 
 fn parse_list(value: Option<&str>) -> Vec<String> {
-    value
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(str::to_owned)
-        .collect()
+    crate::ssh_profiles::host_lists::decode(value.unwrap_or_default())
 }
 
 impl SshHostLists {
@@ -131,9 +125,9 @@ impl SshHostLists {
     /// 既有多窗口语义）。
     pub fn persist(&self) -> std::io::Result<()> {
         nebula_settings::persist_keys(&[
-            ("saved_hosts", self.saved.join(",")),
-            ("pinned_hosts", self.pinned.join(",")),
-            ("hidden_hosts", self.hidden.join(",")),
+            ("saved_hosts", crate::ssh_profiles::host_lists::encode(&self.saved)),
+            ("pinned_hosts", crate::ssh_profiles::host_lists::encode(&self.pinned)),
+            ("hidden_hosts", crate::ssh_profiles::host_lists::encode(&self.hidden)),
         ])
     }
 }

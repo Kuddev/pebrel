@@ -172,12 +172,12 @@ impl WindowContext {
                         && !crate::process_tree::display_name(program)
                             .eq_ignore_ascii_case("ssh") =>
                 {
-                    state.agent_activity.observe_screen(None);
+                    state.agent_activity.reset_screen_samples();
                     continue;
                 },
                 _ => {
                     let Some(agent) = crate::ai_agents::identify(&screen) else {
-                        state.agent_activity.observe_screen(None);
+                        state.agent_activity.reset_screen_samples();
                         continue;
                     };
                     let program = agent.slug().to_owned();
