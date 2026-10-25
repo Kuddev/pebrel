@@ -88,11 +88,50 @@ pub(super) fn content(agent: AgentHook, helper: &str) -> io::Result<String> {
 }
 
 pub(super) fn native_command(helper: &str, source: &str, event: &str) -> String {
+    command_for(helper, &format!("{source} --event {event}"))
+}
+
+/// The helper invoking `tail` as one shell string: quoted for POSIX shells, encoded
+/// PowerShell on Windows, where providers run hooks through differing shells.
+pub(super) fn command_for(helper: &str, tail: &str) -> String {
     if cfg!(windows) {
-        encoded_powershell(&format!("& '{}' {source} --event {event}", helper.replace('\'', "''")))
+        encoded_powershell(&format!("& '{}' {tail}", helper.replace('\'', "''")))
     } else {
-        format!("{} {source} --event {event}", crate::ai_hook::remote::quote(helper))
+        format!("{} {tail}", crate::ai_hook::remote::quote(helper))
     }
+}
+
+/// Whether `command` is exactly the helper invoking `tail`, in either form `command_for`
+/// writes. Anything extra belongs to the user and is never claimed.
+pub(super) fn owns_command(command: &str, tail: &str) -> bool {
+    use base64::Engine as _;
+
+    if crate::ai_hook::is_helper_shell_command(command, tail) {
+        return true;
+    }
+    let Some(encoded) =
+        command.strip_prefix("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ")
+    else {
+        return false;
+    };
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else { return false };
+    if bytes.len() % 2 != 0 {
+        return false;
+    }
+    let words: Vec<_> =
+        bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    let Ok(script) = String::from_utf16(&words) else { return false };
+    let Some((escaped, script_tail)) = script.strip_prefix("& '").and_then(|s| s.rsplit_once("' "))
+    else {
+        return false;
+    };
+    let helper = escaped.replace("''", "'");
+    if helper.replace('\'', "''") != escaped {
+        return false;
+    }
+    let filename = helper.rsplit(['/', '\\']).next().unwrap_or("");
+    ["pebrel-hook.exe", "nebula-hook.exe"].iter().any(|name| filename.eq_ignore_ascii_case(name))
+        && script_tail == tail
 }
 
 pub(super) fn encoded_powershell(script: &str) -> String {

@@ -68,6 +68,7 @@ mod quick_jump;
 mod quick_terminal;
 mod recipes;
 mod remote_files;
+mod remote_tab;
 mod rename;
 #[cfg(test)]
 use rename::apply_cancel_rename;
@@ -86,6 +87,7 @@ use shell_picker::shell_palette_rows;
 mod settings_navigation;
 mod sidebar;
 mod ssh_dialog;
+mod ssh_reconnect;
 mod tab_drag;
 mod tab_duplication;
 mod tab_menu;
@@ -1101,7 +1103,10 @@ impl NebulaWorkspace {
                 }
             },
             LaunchSession::Ssh { host } => {
-                TerminalLaunch::Ssh { destination: host.clone(), cwd: None }
+                TerminalLaunch::Ssh { destination: host.clone(), cwd: None, resume_target: None }
+            },
+            LaunchSession::Serial { destination } => {
+                TerminalLaunch::Serial { destination: destination.clone() }
             },
         }
     }
@@ -1113,6 +1118,7 @@ impl NebulaWorkspace {
                 Some(crate::shell_detect::shell_short_tag(name).into())
             },
             crate::session::LaunchSession::Ssh { .. } => Some("ssh".into()),
+            crate::session::LaunchSession::Serial { .. } => Some("serial".into()),
             crate::session::LaunchSession::Profile { name, shell_id, .. } => Some(
                 crate::shell_detect::shell_short_tag(shell_id.as_deref().unwrap_or(name)).into(),
             ),
@@ -1285,102 +1291,24 @@ impl NebulaWorkspace {
                 }
             }
         }
-        let grid = self.inherited_grid(cx);
-        let launch = crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
-            destination: destination.clone(),
-            cwd: remote_cwd,
-        };
-        let pane = self.new_pane(grid, launch, None, window, cx);
-        let focused = pane.id;
-        let tab = WorkspaceTab::Terminal {
-            tree: SplitTree::leaf(pane.id),
-            panes: vec![pane],
-            focused,
-            zoomed: false,
-            broadcast: false,
-        };
-        let position = nebula_settings::RuntimeSettings::load().new_tab_position;
-        let at = new_tab_insert_index(position, self.active, self.tabs.len());
-        self.insert_tab_at(
-            at,
-            tab,
-            TabMeta {
-                shell_tag: Some("ssh".into()),
-                launch: Some(crate::session::LaunchSession::Ssh { host: destination }),
-                ..TabMeta::default()
-            },
-        );
-        self.active = at;
-        self.reveal_active_tab();
-        self.focus_active(window, cx);
-        self.sync_side_panel_to_active(true, cx);
-        cx.notify();
-    }
-
-    /// 在同一 tab、同一分屏位置替换失败的 SSH pane。先把新实体及订阅完整
-    /// 建好，再原子替换树叶和 pane 所有权；旧实体的异步泵只会更新旧 Entity，
-    /// 因而无法把迟到的 Failed/Ready 写进新连接。
-    fn retry_ssh_pane(
-        &mut self,
-        tab_ix: usize,
-        pane_id: u64,
-        destination: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(WorkspaceTab::Terminal { panes, .. }) = self.tabs.get(tab_ix) else { return };
-        let Some(old) = panes.iter().find(|pane| pane.id == pane_id) else { return };
-        let custom_name = old.custom_name.clone();
-        let name_history = old.name_history.clone();
-        let (grid, remote_cwd) = {
-            let view = old.view.read(cx);
-            if view.ssh_destination.as_deref() != Some(destination.as_str()) {
-                return;
-            }
+        let (launch, session) = if destination.starts_with(crate::serial_session::SCHEME) {
             (
-                (view.grid_cols() as u16, view.grid_rows() as u16),
-                (!view.cwd.is_empty()).then(|| view.cwd.clone()),
+                crate::gpui_shell::terminal::view::TerminalLaunch::Serial {
+                    destination: destination.clone(),
+                },
+                crate::session::LaunchSession::Serial { destination },
+            )
+        } else {
+            (
+                crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
+                    destination: destination.clone(),
+                    cwd: remote_cwd,
+                    resume_target: None,
+                },
+                crate::session::LaunchSession::Ssh { host: destination },
             )
         };
-
-        let launch = crate::gpui_shell::terminal::view::TerminalLaunch::Ssh {
-            destination: destination.clone(),
-            cwd: remote_cwd,
-        };
-        let mut replacement = self.new_pane(grid, launch, None, window, cx);
-        replacement.custom_name = custom_name;
-        replacement.name_history = name_history;
-        self.forget_pane_rename(pane_id);
-        let replacement_id = replacement.id;
-        let old = {
-            let Some(WorkspaceTab::Terminal { panes, tree, focused, .. }) =
-                self.tabs.get_mut(tab_ix)
-            else {
-                replacement.view.read(cx).shutdown();
-                return;
-            };
-            let Some(index) = panes.iter().position(|pane| pane.id == pane_id) else {
-                replacement.view.read(cx).shutdown();
-                return;
-            };
-            if !tree.replace_leaf(pane_id, replacement_id) {
-                replacement.view.read(cx).shutdown();
-                return;
-            }
-            if *focused == pane_id {
-                *focused = replacement_id;
-            }
-            std::mem::replace(&mut panes[index], replacement)
-        };
-
-        self.runtime_hub.record_pane_closed(self.runtime_window_id, pane_id);
-        self.pane_bounds.borrow_mut().remove(&pane_id);
-        old.view.read(cx).shutdown();
-        if tab_ix == self.active {
-            self.focus_active(window, cx);
-            self.sync_side_panel_to_active(true, cx);
-        }
-        cx.notify();
+        self.open_remote_tab(launch, session, window, cx);
     }
 
     /// 在聚焦 pane 上开分屏（ctrl+shift+d / ctrl+shift+s，对齐旧壳
@@ -1678,24 +1606,6 @@ impl NebulaWorkspace {
         self.focus_active(window, cx);
         self.sync_side_panel_to_active(true, cx);
         cx.notify();
-    }
-
-    fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix >= self.tabs.len() {
-            return;
-        }
-        self.leave_settings(window, cx);
-        if ix < self.tabs.len() && ix != self.active {
-            self.clear_reader_focus(cx);
-            self.active = ix;
-            if let Some(meta) = self.tab_meta.get_mut(ix) {
-                meta.has_bell = false;
-            }
-            self.reveal_active_tab();
-            self.focus_active(window, cx);
-            self.sync_side_panel_to_active(true, cx);
-            cx.notify();
-        }
     }
 
     /// ctrl+shift+w（对齐旧壳 CloseTab 语义）：tab 有分屏时关聚焦 pane，

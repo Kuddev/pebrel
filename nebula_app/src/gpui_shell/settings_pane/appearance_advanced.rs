@@ -81,6 +81,12 @@ impl SettingsPane {
             ));
         let interface = self
             .group(language.text(crate::i18n::Message::ThemeEditorPreviewInterface), cx)
+            .child(self.row(
+                language.text(crate::i18n::Message::SettingsFontUiFamily),
+                language.text(crate::i18n::Message::SettingsFontUiFamilyDescription),
+                Input::new(&self.ui_font_family_input).w(px(240.0)),
+                cx,
+            ))
             .child(self.font_size_row(true, cx))
             .child(self.switch_row(
                 "dim_inactive_panes",

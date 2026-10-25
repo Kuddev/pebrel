@@ -455,6 +455,10 @@ impl NebulaWorkspace {
         )
     }
 
+    pub(super) fn details_panel_resizing(&self) -> bool {
+        self.details_panel.resize.is_some()
+    }
+
     pub(super) fn update_details_panel_resize(
         &mut self,
         event: &gpui::MouseMoveEvent,
@@ -462,8 +466,13 @@ impl NebulaWorkspace {
         cx: &mut Context<Self>,
     ) {
         let Some(drag) = &mut self.details_panel.resize else { return };
-        if event.pressed_button != Some(MouseButton::Left) || !window.is_window_active() {
+        if !window.is_window_active() {
             self.cancel_details_panel_resize(cx);
+            return;
+        }
+        // Non-client moves can omit button state while capture is still active.
+        // Only MouseUp commits the drag; Escape or window deactivation cancels it.
+        if event.pressed_button != Some(MouseButton::Left) {
             return;
         }
         let maximum = panel_width(MAX_WIDTH, f32::from(window.viewport_size().width));

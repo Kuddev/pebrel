@@ -140,6 +140,19 @@ impl TerminalView {
         }
 
         let target = self.image_target();
+        let connection = self
+            .session
+            .as_ref()
+            .and_then(|session| session.remote_connection.lock().ok()?.clone());
+        if matches!(target, ImageTarget::Ssh(_)) && connection.is_none() {
+            toast::toast(
+                window,
+                cx,
+                ToastKind::Warning,
+                ui_language().text(Message::CommonImagePasteDisconnected),
+            );
+            return;
+        }
         let staged_target = target.clone();
         let term = Arc::downgrade(&self.session.as_ref().unwrap().term);
         let owner = (
@@ -156,7 +169,7 @@ impl TerminalView {
             if png.len() > remaining {
                 return Err("temporary images exceed the 128 MiB tab limit".to_owned());
             }
-            stage_image(staged_target, png).await
+            stage_image(staged_target, connection, png).await
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = work.await;
@@ -282,11 +295,16 @@ impl TerminalView {
     }
 }
 
-async fn stage_image(target: ImageTarget, png: Vec<u8>) -> Result<StagedImage, String> {
+async fn stage_image(
+    target: ImageTarget,
+    connection: Option<crate::ssh_session::PaneConnection>,
+    png: Vec<u8>,
+) -> Result<StagedImage, String> {
     let bytes = png.len();
-    if let ImageTarget::Ssh(destination) = target {
+    if let ImageTarget::Ssh(_) = target {
         let (sender, receiver) = futures::channel::oneshot::channel();
-        crate::ssh_sftp::upload_clipboard_image_result(destination, png, move |result| {
+        let connection = connection.ok_or("SSH pane connection closed")?;
+        crate::ssh_sftp::upload_clipboard_image_on_pane(connection, png, move |result| {
             let _ = sender.send(result);
         });
         let path = receiver.await.map_err(|_| "image upload stopped".to_owned())??;

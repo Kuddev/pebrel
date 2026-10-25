@@ -31,6 +31,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::gpui_shell::font_loading::ensure_selected(cx);
         // 字体、调色板与终端启动配置来自用户配置（nebula.toml +
         // nebula_settings.txt，bootstrap 时装载为全局 Settings）。
         let (
@@ -99,10 +100,12 @@ impl TerminalView {
             TerminalLaunch::Local { cwd, .. } => {
                 cwd.as_ref().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default()
             },
-            TerminalLaunch::Ssh { destination, cwd } => {
+            TerminalLaunch::Ssh { destination, cwd, .. } => {
                 cwd.clone().unwrap_or_else(|| destination.clone())
             },
+            TerminalLaunch::Serial { .. } => String::new(),
         };
+        let is_serial = matches!(launch, TerminalLaunch::Serial { .. });
         // 启动目录已经是 PTY 的输入事实，不能等第一次 OSC 上报才交给补全。
         // WSL 的启动目录属于宿主，必须保持空值，直到来宾自己报告 cwd。
         let mut completion_cwd = String::new();
@@ -182,14 +185,25 @@ impl TerminalView {
                     spawned,
                 )
             },
-            TerminalLaunch::Ssh { destination, cwd } => (
+            TerminalLaunch::Ssh { destination, cwd, resume_target } => (
                 Some(destination.clone()),
                 destination.clone(),
                 None,
                 crate::display::SuggestEnv::Ssh { destination: destination.clone() },
                 None,
                 crate::session::LaunchSession::Ssh { host: destination.clone() },
-                session::spawn_ssh(destination, cwd, initial, term_config),
+                session::spawn_ssh(destination, cwd, resume_target, initial, term_config),
+            ),
+            TerminalLaunch::Serial { destination } => (
+                None,
+                crate::serial_session::display_name(&destination).to_owned(),
+                None,
+                crate::display::SuggestEnv::Shell {
+                    scope: crate::nebula_history::HistoryScope::Ssh(destination.clone()),
+                },
+                None,
+                crate::session::LaunchSession::Serial { destination: destination.clone() },
+                session::spawn_serial(&destination, initial, term_config),
             ),
         };
         let is_ssh = ssh_destination.is_some();
@@ -230,6 +244,8 @@ impl TerminalView {
             Err(err) => {
                 let message = if is_ssh {
                     crate::i18n::Message::TerminalSshStartFailed
+                } else if is_serial {
+                    crate::i18n::Message::TerminalSerialStartFailed
                 } else {
                     crate::i18n::Message::TerminalPtyStartFailed
                 };
@@ -313,6 +329,7 @@ impl TerminalView {
             command_running_disproved: false,
             command_started: None,
             last_process_probe: None,
+            activity_probe_pending: false,
             prompt_process_probe: None,
             prompt_input_epoch: 0,
             native_prompt_seen: false,
@@ -349,6 +366,7 @@ impl TerminalView {
             last_ai_session_probe: None,
             error,
             exited: None,
+            retain_failed_session: false,
             scrollbar_drag: None,
             scrollbar_hovered: false,
             scrollbar_visibility: cx
@@ -379,9 +397,13 @@ impl TerminalView {
             cursor_visible: true,
             cursor_animation: Default::default(),
             cursor_blink_epoch: 0,
+            cursor_blink_last_activity: std::time::Instant::now(),
+            cursor_blink_paused: false,
             cursor_window_active,
             cursor_pane_focused,
             output_visible: true,
+            last_output_frame: None,
+            output_trailing_frame: None,
             _cursor_blink_subscriptions: cursor_blink_subscriptions,
             default_cursor_style,
             suggest: {
