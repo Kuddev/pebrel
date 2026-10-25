@@ -120,6 +120,7 @@ mod scheduler;
 #[cfg(test)]
 mod scientific_corpus;
 mod scrollbar;
+mod serial_session;
 mod session;
 mod shell_detect;
 mod ssh;

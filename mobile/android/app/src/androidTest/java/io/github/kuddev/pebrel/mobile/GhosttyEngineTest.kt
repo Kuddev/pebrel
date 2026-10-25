@@ -64,7 +64,6 @@ class GhosttyEngineTest {
             textSize = 16 * context.resources.displayMetrics.scaledDensity
         }
         val width = paint.measureText("M")
-        val height = kotlin.math.ceil(paint.fontMetrics.descent - paint.fontMetrics.ascent + paint.fontMetrics.leading)
         val viewRef = java.util.concurrent.atomic.AtomicReference<GhosttyView>()
         val terminal = TerminalSession(LocalPtyTransport(context.filesDir.absolutePath, context.filesDir.resolve("terminal").absolutePath),
             object : TerminalCallbacks() { override fun onTextChanged(session: TerminalSession) { viewRef.get()?.onScreenUpdated() } })
@@ -75,13 +74,21 @@ class GhosttyEngineTest {
             }
             terminal.start(); terminal.setVisible(true)
             await { terminal.isReady }
-            terminal.sendText("printf '\\033[2J\\033[H⏸ manual\\r\\n⏸︎ text\\r\\n⏸X\\r\\n'\r")
+            // A distant colored cell exposes the actual row boundary in the rendered image.
+            // Font ascent/descent is not the terminal's configured line height.
+            terminal.sendText("printf '\\033[2J\\033[H⏸ manual\\r\\n⏸︎ text\\r\\n⏸X\\r\\n\\033[1;12H\\033[48;2;17;33;55m \\033[0m\\033[4;1H'\r")
             await { terminal.frame?.rows?.getOrNull(0)?.text?.trimEnd() == "⏸ manual" &&
-                terminal.frame?.rows?.getOrNull(2)?.text?.trimEnd() == "⏸X" }
+                terminal.frame?.rows?.getOrNull(2)?.text?.trimEnd() == "⏸X" &&
+                terminal.frame?.rows?.getOrNull(0)?.cells?.getOrNull(11 * 6 + 4) == 0xff112137.toInt() }
             instrumentation.runOnMainSync {
                 val view = viewRef.get()
                 val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
                 view.draw(android.graphics.Canvas(bitmap))
+                val referenceX = (11.5f * width).toInt()
+                val height = (0 until bitmap.height).takeWhile {
+                    bitmap.getPixel(referenceX, it) == 0xff112137.toInt()
+                }.size.toFloat()
+                assertTrue("row boundary reference must be visible", height > 0 && height < bitmap.height)
                 fun colored(row: Int, fromColumn: Int = 0, toColumn: Int = 1): Int {
                     var count = 0
                     for (y in (row * height).toInt() until ((row + 1) * height).toInt())

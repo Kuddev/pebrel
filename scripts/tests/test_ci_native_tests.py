@@ -182,7 +182,8 @@ class NativeSuiteTests(unittest.TestCase):
         self.assertEqual(config["test-groups"], {"theme-studio": {"max-threads": 1}})
         self.assertEqual(config["profile"]["default"], {
             "overrides": [{
-                "filter": "test(gpui_shell::settings_pane::theme_studio_tests::)"
+                "filter": "test(serial_editor_saves_reloads_and_reopens_without_ssh_username)"
+                          " or test(gpui_shell::settings_pane::theme_studio_tests::)"
                           " or test(ctrl_wheel_font_zoom_toggle_gates_zoom_and_terminal_scroll)"
                           " or test(ctrl_wheel_font_zoom_setting_is_searchable_and_has_a_visible_switch)"
                           " or test(environment_refresh_switch_is_searchable_and_persists)"
@@ -230,6 +231,11 @@ class NativeSuiteTests(unittest.TestCase):
 
         unix_hook = (root / "nebula_app/src/ai_hook/unix.rs").read_text(encoding="utf-8")
         self.assertIn("fn local_hook_socket_routes_identity_and_releases_its_private_directory(", unix_hook)
+
+        serial = (root / "nebula_app/src/gpui_shell/ssh_settings/serial_tests.rs").read_text(encoding="utf-8")
+        self.assertIn("fn serial_editor_saves_reloads_and_reopens_without_ssh_username(", serial)
+        self.assertIn("let _lock = lock_theme_studio();", serial)
+        self.assertIn("SettingsBytesGuard::capture()", serial)
 
         # 核对真实函数名，避免配置和期望同时保留旧名字却漏掉写设置的测试。
         segmented = (root / "nebula_app/src/gpui_shell/settings_pane/segmented/tests.rs").read_text(encoding="utf-8")

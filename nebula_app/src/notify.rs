@@ -171,6 +171,11 @@ impl Notification {
                         outcome: event.turn_outcome,
                     });
                 },
+                AiTurnOutcome::Unknown | AiTurnOutcome::Unspecified
+                    if event.source == "antigravity" =>
+                {
+                    return None;
+                },
                 AiTurnOutcome::Unknown | AiTurnOutcome::Unspecified if event.source == "pi" => {
                     return Some(Self::AiTurnIssue {
                         program: event.source.clone(),

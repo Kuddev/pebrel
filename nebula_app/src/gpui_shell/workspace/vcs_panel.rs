@@ -33,7 +33,7 @@ impl NebulaWorkspace {
         self.git_commit_input.sync_language(window, cx);
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let symbol: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
+        let symbol: SharedString = crate::font_install::SYMBOL_FONT_FAMILY.into();
         let root = self.side_panel.vcs_root().map(Path::to_path_buf);
         let git = self.side_panel.git_snapshot();
         let vcs = git.as_ref().map(|info| info.vcs);

@@ -362,7 +362,7 @@ impl NebulaWorkspace {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .font_family(crate::font_install::REQUIRED_FONT_FAMILY)
+                        .font_family(crate::font_install::SYMBOL_FONT_FAMILY)
                         .text_size(px(glyph_px))
                         .text_color(foreground)
                         .child(crate::gpui_shell::widgets::terminal_glyph(
