@@ -159,3 +159,19 @@ mod tests {
         assert_eq!(geometry.animated_y(2.0), -680);
     }
 }
+
+/// 原生窗口是否最小化（Windows 问 IsIconic；其他平台没有等价「像素到不了
+/// 屏幕」的通用问法，返回 false——各 compositor 在窗口不可见时自然停发帧
+/// 回调，render 侧探测已足够）。供没有 `Window` 的定时回调按 arm 时捕获的
+/// 句柄复查（spinner 定时链）。
+#[cfg(windows)]
+pub(crate) fn window_minimized_by_handle(hwnd: isize) -> bool {
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::IsIconic(hwnd as *mut std::ffi::c_void) != 0
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn window_minimized_by_handle(_hwnd: isize) -> bool {
+    false
+}

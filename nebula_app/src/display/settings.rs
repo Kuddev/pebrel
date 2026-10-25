@@ -1009,31 +1009,16 @@ pub(super) fn nebula_settings_load(config: &UiConfig) -> NebulaRuntimeSettings {
                     settings.background_image_cover_chrome = parse_bool(v, false);
                 },
                 Some(("pinned_hosts", v)) => {
-                    settings.pinned_hosts = v
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned)
-                        .collect();
+                    settings.pinned_hosts = crate::ssh_profiles::host_lists::decode(v);
                 },
                 Some(("saved_hosts", v)) => {
-                    settings.saved_hosts = v
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned)
-                        .collect();
+                    settings.saved_hosts = crate::ssh_profiles::host_lists::decode(v);
                 },
                 Some(("follow_system_theme", v)) => {
                     settings.follow_system_theme = parse_bool(v, false)
                 },
                 Some(("hidden_hosts", v)) => {
-                    settings.hidden_hosts = v
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned)
-                        .collect();
+                    settings.hidden_hosts = crate::ssh_profiles::host_lists::decode(v);
                 },
                 Some(("keybind", v)) => {
                     // `keybind=<combo>:<action>`；解析验证归 keymap 模块，这里
@@ -1156,9 +1141,9 @@ pub(super) fn nebula_settings_write(settings: &NebulaRuntimeSettings) {
         .unwrap_or_default();
     let theme = settings.theme.prompt_name();
     let path = nebula_settings::settings_path();
-    let pinned_hosts = settings.pinned_hosts.join(",");
-    let saved_hosts = settings.saved_hosts.join(",");
-    let hidden_hosts = settings.hidden_hosts.join(",");
+    let pinned_hosts = crate::ssh_profiles::host_lists::encode(&settings.pinned_hosts);
+    let saved_hosts = crate::ssh_profiles::host_lists::encode(&settings.saved_hosts);
+    let hidden_hosts = crate::ssh_profiles::host_lists::encode(&settings.hidden_hosts);
     let font_size = settings.font_size.map(|size| format!("{size:.1}")).unwrap_or_default();
     let mut keybinds = String::new();
     for (combo, action) in &settings.keybinds {

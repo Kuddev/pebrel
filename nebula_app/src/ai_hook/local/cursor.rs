@@ -3,7 +3,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use base64::Engine as _;
 use serde_json::{Value, json};
 
 const EVENTS: &[(&str, &str)] = &[
@@ -23,33 +22,9 @@ fn command(helper: &str, event: &str) -> String {
 }
 
 fn owned(command: &str) -> bool {
-    if EVENTS.iter().any(|(_, event)| {
-        crate::ai_hook::is_helper_shell_command(command, &format!("cursor --event {event}"))
-    }) {
-        return true;
-    }
-    let Some(encoded) =
-        command.strip_prefix("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ")
-    else {
-        return false;
-    };
-    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else { return false };
-    if bytes.len() % 2 != 0 {
-        return false;
-    }
-    let words: Vec<_> =
-        bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
-    let Ok(script) = String::from_utf16(&words) else { return false };
-    let Some((escaped, tail)) = script.strip_prefix("& '").and_then(|s| s.rsplit_once("' ")) else {
-        return false;
-    };
-    let helper = escaped.replace("''", "'");
-    if helper.replace('\'', "''") != escaped {
-        return false;
-    }
-    let filename = helper.rsplit(['/', '\\']).next().unwrap_or("");
-    ["pebrel-hook.exe", "nebula-hook.exe"].iter().any(|name| filename.eq_ignore_ascii_case(name))
-        && EVENTS.iter().any(|(_, event)| tail == format!("cursor --event {event}"))
+    EVENTS.iter().any(|(_, event)| {
+        super::extended::owns_command(command, &format!("cursor --event {event}"))
+    })
 }
 
 fn invalid(message: &str) -> io::Error {

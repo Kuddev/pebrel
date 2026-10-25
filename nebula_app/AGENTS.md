@@ -4,6 +4,7 @@
 - 原生结果的块级呈现和目录折叠遵循 [`native_results`](../architecture/notes/nebula_app/gpui_shell/terminal/native_results/)；文字、链接和命中共享终端的滚动投影。
 - `src/gpui_shell` 负责 GPUI 呈现、命令和订阅。交互改动必须覆盖默认、hover、pressed、键盘焦点、disabled/loading 以及成功/失败中实际需要的状态。
 - 首帧窗口尺寸、非阻塞 logo 准备与原生呈现顺序的因果记录见 [`workspace`](../architecture/notes/nebula_app/gpui_shell/workspace/)。
+- 本地启动失败的诊断保留与显式 Shell 选择见 [`terminal/view`](../architecture/notes/nebula_app/gpui_shell/terminal/view/2026-10-24-failed-local-session-retention.md)。
 - 独立本地草稿写入的 canonical target 并发合同见 [`file_editor writers`](../architecture/notes/nebula_app/gpui_shell/file_editor/2026-10-11-canonical-target-writers.md)。
 - GPUI 图片解码帧与 zoom/pan 几何一致性见 [`doc_tabs`](../architecture/notes/nebula_app/gpui_shell/doc_tabs/)。
 - Linux 静默启动、关窗守卫、桌面身份与 portal 激活令牌见 [`原生生命周期`](../architecture/notes/nebula_app/platform/2026-10-14-linux-desktop-lifecycle.md)。

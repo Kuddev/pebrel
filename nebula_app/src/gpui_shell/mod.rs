@@ -31,6 +31,7 @@ pub mod doc_tabs;
 pub mod file_drop;
 mod file_editor;
 mod file_preview;
+mod font_loading;
 pub mod http;
 pub mod math_view;
 mod molecule_view;
@@ -266,8 +267,7 @@ pub fn run_shell(
 /// 组件库/主题/快捷键/用户配置的一次性初始化。
 fn init(cx: &mut App, config_file: Option<std::path::PathBuf>) {
     crate::platform::acrylic::init(cx);
-    // 三端都注册内嵌 Maple：Linux/macOS 的系统等宽字体没有 NF 图标码点，
-    // 侧栏与提示符会出方框；字形同源也是跨平台截图能互相比对的前提。
+    // 图标字库独立注册，系统正文无需为提示符和界面图标加载完整 Maple。
     register_bundled_fonts(cx);
     typography::init(cx);
 
@@ -300,13 +300,12 @@ fn init(cx: &mut App, config_file: Option<std::path::PathBuf>) {
 }
 
 fn register_bundled_fonts(cx: &App) {
-    // 在组件解析字体前注册默认 Normal 字体，保持原有字形与中文/图标兜底。
-    // 其他 Maple 变体走系统或导入字体，避免再内嵌一套完整的中文与图标字库。
+    // 完整 Maple 在设置实际引用它时由 font_loading 注册。
     if let Err(error) =
-        cx.text_system().add_fonts(vec![Cow::Borrowed(crate::font_install::REQUIRED_FONT_BYTES)])
+        cx.text_system().add_fonts(vec![Cow::Borrowed(crate::font_install::SYMBOL_FONT_BYTES)])
     {
         try_write_stderr(format_args!(
-            "[nebula:gpui] failed to register bundled Maple font: {error}"
+            "[nebula:gpui] failed to register bundled symbol font: {error}"
         ));
     }
     // 用户导入的私有字体（设置页字体选择器写入的目录）：与旧壳
