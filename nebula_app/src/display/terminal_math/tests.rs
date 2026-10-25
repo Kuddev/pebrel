@@ -1712,3 +1712,64 @@ fn measure_scan_and_compile_cost() {
         println!("compile {head:<30} {per_compile:?} cold (cache hit is a map lookup)");
     }
 }
+
+#[test]
+fn image_projection_preserves_erased_tiles_row_offsets_and_clipping() {
+    use nebula_terminal::inline_image::ImageRun;
+    let projection = LineProjection {
+        spans: vec![ProjectionSpan {
+            source_index: 0,
+            row: 0,
+            source_start: 0,
+            source_end: 6,
+            visual_cells: 4,
+            shift_before: 0,
+            shift_after: -2,
+        }],
+    };
+    let runs = [
+        ImageRun { id: 1, row: 0, column: 6, source_row: 0, source_column: 0, columns: 1 },
+        ImageRun { id: 1, row: 0, column: 8, source_row: 0, source_column: 2, columns: 2 },
+        ImageRun { id: 1, row: 1, column: 6, source_row: 1, source_column: 0, columns: 4 },
+    ];
+    let projected = projection.project_image_runs(&runs, 9);
+    let geometry: Vec<_> = projected
+        .iter()
+        .map(|r| (r.row, r.column, r.source_row, r.source_column, r.columns))
+        .collect();
+    assert_eq!(geometry, [(0, 4, 0, 0, 1), (0, 6, 0, 2, 2), (1, 6, 1, 0, 3)]);
+    // Pointer and selection inverse mapping agrees with the image's source grid.
+    assert_eq!(
+        projection.source_from_visual(Point::new(0, Column(4)), Side::Left),
+        (Point::new(0, Column(6)), Side::Left)
+    );
+    assert_eq!(
+        projection.source_from_visual(Point::new(0, Column(8)), Side::Left),
+        (Point::new(0, Column(10)), Side::Left)
+    );
+    // No formula (including a failed rasterization) restores original columns.
+    let restored = LineProjection::default().project_image_runs(&runs, 20);
+    assert_eq!(restored.iter().map(|r| r.column).collect::<Vec<_>>(), [6, 8, 6]);
+}
+
+#[test]
+fn expanded_formula_clips_image_without_changing_texture_origin() {
+    use nebula_terminal::inline_image::ImageRun;
+    let projection = LineProjection {
+        spans: vec![ProjectionSpan {
+            source_index: 0,
+            row: 0,
+            source_start: 0,
+            source_end: 3,
+            visual_cells: 6,
+            shift_before: 0,
+            shift_after: 3,
+        }],
+    };
+    let runs = [ImageRun { id: 1, row: 0, column: 4, source_row: 2, source_column: 2, columns: 4 }];
+    let projected = projection.project_image_runs(&runs, 9);
+    assert_eq!(projected.len(), 1);
+    let r = &projected[0];
+    assert_eq!((r.column, r.source_row, r.source_column, r.columns), (7, 2, 2, 2));
+    assert!(projection.project_image_runs(&runs, 7).is_empty());
+}

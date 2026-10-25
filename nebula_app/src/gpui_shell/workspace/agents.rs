@@ -114,16 +114,6 @@ fn window_minimized(_window: &Window) -> bool {
 }
 
 impl NebulaWorkspace {
-    /// 只为当前可见的运行态徽章挂一帧。下一帧必须由随后的实际 render 续期，
-    /// 因此任务结束、窗口不可见或徽章滚出视口时会自然断链，不留下常驻
-    /// animation loop；由 GPUI 的帧源调度，才能跟随显示器刷新节奏。
-    ///
-    /// 断链判据是「像素到不了屏幕」而不是「窗口没聚焦」：一边看 Agent 跑、
-    /// 一边在浏览器或编辑器里干活，正是这个转圈唯一的用武之地；失焦即冻结
-    /// 会让它在最需要的场景里失效，而窗口就在旁边亮着不动，用户只能读成
-    /// 「Agent 卡死了」。非活跃窗口的开销由 GPUI 帧循环自己压到 30fps
-    /// （`next_frame_callbacks` 非空 + 窗口非活跃即节流），不必在这里再停
-    /// 一次。
     pub(super) fn arm_activity_spinner_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
         const PERIOD_SECS: f32 = 1.0;
 
@@ -354,7 +344,8 @@ impl NebulaWorkspace {
             // 提示——两者都不分叉（旧壳同合同）。
             Some(
                 crate::session::LaunchSession::Profile { .. }
-                | crate::session::LaunchSession::Ssh { .. },
+                | crate::session::LaunchSession::Ssh { .. }
+                | crate::session::LaunchSession::Serial { .. },
             ) => return,
         };
         // A WSL session continues in the same guest and directory, as a duplicate does.
@@ -393,6 +384,7 @@ impl NebulaWorkspace {
                 shell_tag,
                 launch: Some(launch_session),
                 has_bell: false,
+                ..Default::default()
             },
         );
         self.active = at;

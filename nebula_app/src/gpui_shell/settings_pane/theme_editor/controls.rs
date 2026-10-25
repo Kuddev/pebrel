@@ -261,6 +261,7 @@ impl SettingsPane {
             .map(str::to_owned)
             .unwrap_or_else(|| self.current_font_chain(cx));
         let value = crate::font_install::replace_primary_font_family(&current, family);
+        crate::gpui_shell::font_loading::ensure_family(&value, cx);
         let input = {
             let editor = self.theme_editor.as_mut().expect("theme editor checked above");
             editor.draft.typography.font_family = Some(value.clone());

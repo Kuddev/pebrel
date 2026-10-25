@@ -51,7 +51,9 @@ class SshReconnectTest {
 
     @Test fun retryCommandsDoNotCreateReplacementMultiplexerSessions() {
         val host = HostProfile("host", "Host", "localhost", 22, "user", sessionMode = SshSessionMode.TMUX)
-        assertEquals("exec tmux attach-session -t 'pebrel'", host.reconnectCommand())
+        assertTrue(host.reconnectCommand()!!.contains("has-session"))
+        assertTrue(host.reconnectCommand()!!.contains("SHELL:-/bin/sh"))
+        assertFalse(host.reconnectCommand()!!.contains("new-session"))
         val window = RemoteWindow("@12", "Editor", state = "active", pane = "%27")
         val remote = RemoteSession("tmux", "${'$'}7", "work", "100:200", windows = listOf(window))
         val target = checkNotNull(RemoteSessions.configuredAttachment(host.copy(sessionName = "work"), RemoteInventory("linux", listOf(remote))))
