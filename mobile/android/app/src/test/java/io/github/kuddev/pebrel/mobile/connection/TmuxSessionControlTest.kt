@@ -105,7 +105,47 @@ class TmuxSessionControlTest {
         assertNull(targets.last())
         assertFalse(controller.scroll(-2))
         controller.identifyShellTerminal()
-        assertEquals(1, commands.count { it == SshPtyIdentity.command })
+        assertTrue(commands.count { it == SshPtyIdentity.command } >= 2)
+    }
+
+    @Test fun namedServerUsesItsExecutableAndSocketForCheckpointScrollAndReconnect() {
+        val endpoint = TmuxEndpoint("/opt/server 3.8/bin/tmux", "/tmp/tmux-123/custom socket")
+        val commands = mutableListOf<String>()
+        val targets = mutableListOf<RemoteAttachment?>()
+        var present = true
+        val processes = "50\n1 0 ? init\n10 1 ? sshd\n20 10 pts/7 sh\n21 20 pts/7 tmux: client\n50 10 ? sh\n"
+        val controller = TmuxSessionControl({ command ->
+            commands += command
+            val output = when {
+                command == SshPtyIdentity.command -> if (present) processes else "50\n1 0 ? init\n10 1 ? sshd\n50 10 ? sh\n"
+                command == TmuxEndpoint.discoveryCommand -> "${endpoint.executable}\t${endpoint.socket}\n"
+                command.contains("list-clients") && command.contains(endpoint.socket) && present ->
+                    "/dev/pts/7\t\$3\tWork\t10:20\t@4\tEditor\t%5\t\n"
+                else -> ""
+            }
+            JSONObject().put("status", 0).put("stdout", output)
+        }, targets::add, detectShell = true)
+        controller.identifyShellTerminal()
+        assertEquals(endpoint, targets.last()!!.session.endpoint)
+        commands.clear()
+        assertTrue(controller.scroll(-2))
+        assertEquals(2, commands.size)
+        assertTrue(commands.all { it.contains(endpoint.executable) && it.contains(endpoint.socket) })
+        val resume = RemoteSessions.attachCommand(targets.last()!!)
+        assertTrue(resume.contains(endpoint.executable) && resume.contains(endpoint.socket))
+        assertTrue(resume.contains("\$3:@4.%5"))
+        assertTrue(resume.contains("SHELL:-/bin/sh"))
+        val count = targets.size
+        present = false
+        assertNull(controller.checkpoint())
+        assertEquals("A disappearing PTY is not an intentional detach", count, targets.size)
+    }
+
+    @Test fun malformedEndpointsCannotBecomeShellCommands() {
+        assertTrue(TmuxEndpoint.parse("bad;command\t/tmp/socket\n/bin/remote\trelative\n").isEmpty())
+        assertThrows(IllegalArgumentException::class.java) { TmuxEndpoint("bad;command", "/tmp/s").command() }
+        val endpoint = TmuxEndpoint("/opt/it's executable", "/tmp/it's socket")
+        assertTrue(endpoint.command().contains("'\"'\"'"))
     }
 
     @Test fun ambiguousShellDiscoveryLeavesOtherTerminalApplicationsUntouched() {

@@ -1011,6 +1011,27 @@ pub(crate) fn upload_clipboard_image_result(
     png: Vec<u8>,
     on_finished: impl FnOnce(Result<String, String>) + Send + 'static,
 ) {
+    upload_clipboard_image_using(
+        async move { crate::ssh_session::open_sftp(&destination).await },
+        png,
+        on_finished,
+    );
+}
+
+/// Clipboard bytes belong to the authenticated pane, never a newly resolved alias.
+pub(crate) fn upload_clipboard_image_on_pane(
+    connection: crate::ssh_session::PaneConnection,
+    png: Vec<u8>,
+    on_finished: impl FnOnce(Result<String, String>) + Send + 'static,
+) {
+    upload_clipboard_image_using(async move { connection.open_sftp().await }, png, on_finished);
+}
+
+fn upload_clipboard_image_using(
+    open: impl std::future::Future<Output = Result<SftpSession, SftpError>> + Send + 'static,
+    png: Vec<u8>,
+    on_finished: impl FnOnce(Result<String, String>) + Send + 'static,
+) {
     let runtime = match crate::ssh_session::runtime() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -1028,7 +1049,7 @@ pub(crate) fn upload_clipboard_image_result(
         let nonce = TRANSFER_NONCE.fetch_add(1, Ordering::Relaxed);
         let remote = format!("/tmp/pebrel-paste-{stamp}-{}-{nonce}.png", std::process::id());
         let upload = async {
-            let sftp = crate::ssh_session::open_sftp(&destination).await?;
+            let sftp = open.await?;
             let attributes = russh_sftp::protocol::FileAttributes {
                 permissions: Some(0o600),
                 ..russh_sftp::protocol::FileAttributes::empty()

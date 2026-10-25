@@ -45,3 +45,20 @@ not = [
   # spinner_working 的更高优先级取胜。
   { contains = ["esc to interrupt"] },
 ]
+
+# The captured CLI 2.x footer places the prompt six non-empty rows from the
+# bottom. Extend recognition only when its mode control is present. Arbitrary
+# custom footer lines can occur during work without an interrupt hint; widening
+# the generic prompt rule would turn those unclassified frames into false idle.
+[[rules]]
+id = "prompt_idle_extended_footer"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(6)"
+contains = ["(shift+tab to cycle)"]
+line_regex = ['^\s*❯(?:\s|$)']
+not = [
+  { contains = ["esc to cancel"] },
+  { contains = ["enter to select"] },
+  { contains = ["esc to interrupt"] },
+]

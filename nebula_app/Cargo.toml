@@ -1,7 +1,7 @@
 [package]
 name = "nebula"
 default-run = "pebrel"
-version = "2.2.2"
+version = "2.3.0"
 license = "GPL-3.0-or-later"
 description = "Pebrel — a GPU-accelerated terminal emulator"
 readme = "README.md"
@@ -22,15 +22,15 @@ bench = false
 
 [dependencies.nebula_terminal]
 path = "../nebula_terminal"
-version = "2.2.2"
+version = "2.3.0"
 
 [dependencies.nebula_config_derive]
 path = "../nebula_config_derive"
-version = "2.2.2"
+version = "2.3.0"
 
 [dependencies.nebula_config]
 path = "../nebula_config"
-version = "2.2.2"
+version = "2.3.0"
 
 # 可选：GPUI UI 层（feature = "gpui-shell"，模块 src/gpui_shell/）。
 # GPUI/component 的版本和 Git 来源由根 Cargo.toml 统一精确固定。
@@ -79,7 +79,7 @@ optional = true
 
 [dependencies.pebrel-completions]
 path = "../nebula-completions"
-version = "2.2.2"
+version = "2.3.0"
 
 [dependencies]
 anyhow = { version = "=1.0.104", optional = true }
@@ -165,7 +165,7 @@ naga = { version = "=29.0.4", optional = true, features = ["wgsl-in", "hlsl-out"
 gif = { version = "=0.14.2", optional = true }
 
 [build-dependencies]
-nebula-settings = { path = "../nebula_settings", version = "2.2.2" }
+nebula-settings = { path = "../nebula_settings", version = "2.3.0" }
 gl_generator = { version = "0.14.0", optional = true }
 serde = "1"
 serde_json = "1"
@@ -295,6 +295,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_IO",
+    # 串口 DCB 与读写超时配置（serial_session）。
+    "Win32_Devices_Communication",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Credentials",

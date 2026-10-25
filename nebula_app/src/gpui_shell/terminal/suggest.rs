@@ -56,7 +56,7 @@ pub fn commit_line(state: &mut NebulaPaneState) {
     let line = state.screen_line.trim().to_owned();
     let committed = if line.is_empty() { state.line_buf.trim().to_owned() } else { line.clone() };
     if !line.is_empty() {
-        crate::completion::record_command(&state.suggest_env.history_scope(), &line, &state.cwd);
+        state.record_submitted_command(&line);
         state.completion_submitted(&line);
     } else {
         state.completion_submitted(&state.line_buf.clone());
