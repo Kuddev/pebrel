@@ -142,7 +142,10 @@ impl NebulaWorkspace {
         let tab_reveal = settings
             .map(|settings| settings.tab_reveal)
             .unwrap_or(nebula_settings::TabRevealName::Slide);
-        let chrome_family = theme.font_family.clone();
+        let chrome_family: SharedString = settings
+            .and_then(|settings| settings.tab_font_family.clone())
+            .map(SharedString::from)
+            .unwrap_or_else(|| theme.font_family.clone());
         let metadata_family = theme.mono_font_family.clone();
         let symbol_family: SharedString = crate::font_install::REQUIRED_FONT_FAMILY.into();
         let label_px = settings.map(|settings| settings.ui_font_size_px).unwrap_or(15.0);

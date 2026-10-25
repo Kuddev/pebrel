@@ -995,6 +995,8 @@ pub struct RuntimeSettings {
     pub font_family: Option<String>,
     pub font_family_cjk: Option<String>,
     pub ui_font_family: Option<String>,
+    /// 侧栏/顶栏标签文字字体；None 时回落 `ui_font_family`（默认 Geist）。
+    pub tab_font_family: Option<String>,
     pub ui_font_size_px: Option<f32>,
     /// **逻辑像素**（旧壳写盘语义：设置页 spinner 与 Ctrl+滚轮缩放持久化时
     /// 已除以 scale factor）。`None` = 跟随 nebula.toml 的 `font.size`（pt）。
@@ -1192,6 +1194,7 @@ impl RuntimeSettings {
             font_family: raw.value("font_family").map(str::to_owned),
             font_family_cjk: raw.value("font_family_cjk").map(str::to_owned),
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
+            tab_font_family: raw.value("tab_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
             scrollbar_visibility: raw
@@ -1514,6 +1517,7 @@ mod tests {
              shell=pwsh\n\
              font_family=Maple Mono Normal NF CN\n\
              ui_font_family=Arial\n\
+             tab_font_family=Maple Mono Normal NF CN\n\
              ui_font_size=18\n\
              font_family_cjk=PingFang SC\n\
              font_size=16.3\n\
@@ -1555,6 +1559,7 @@ mod tests {
         assert_eq!(settings.font_family.as_deref(), Some("Maple Mono Normal NF CN"));
         assert_eq!(settings.font_family_cjk.as_deref(), Some("PingFang SC"));
         assert_eq!(settings.ui_font_family.as_deref(), Some("Arial"));
+        assert_eq!(settings.tab_font_family.as_deref(), Some("Maple Mono Normal NF CN"));
         assert_eq!(settings.ui_font_size_px, Some(18.0));
         // font_size 键存的是逻辑像素（旧壳写盘语义），不做 pt 换算。
         assert_eq!(settings.font_size_px, Some(16.3));
@@ -1603,6 +1608,7 @@ mod tests {
         assert_eq!(settings.font_family, None);
         assert_eq!(settings.font_family_cjk, None);
         assert_eq!(settings.ui_font_family, None);
+        assert_eq!(settings.tab_font_family, None);
         assert_eq!(settings.ui_font_size_px, None);
         assert!(!settings.copy_on_select);
         assert!(settings.multiline_paste_confirm, "多行粘贴确认默认开（上游兼容）");

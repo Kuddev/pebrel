@@ -559,6 +559,15 @@ impl SettingsPane {
             },
         ));
 
+        let tab_font_family_input = Self::new_tab_font_family_input(&runtime, window, cx);
+        subscriptions.push(cx.subscribe_in(
+            &tab_font_family_input,
+            window,
+            |this: &mut Self, _, event: &InputEvent, window, cx| {
+                this.on_tab_font_family_input_event(event, window, cx);
+            },
+        ));
+
         let bg_picker_hsv = {
             let term = crate::gpui_shell::theme::resolved_palette(cx).term_bg;
             let rgb = runtime.background.unwrap_or([term.r, term.g, term.b]);
@@ -727,16 +736,18 @@ impl SettingsPane {
             ssh_delete_undo: None,
             ssh_undo_seq: 0,
             font_picker_open: false,
-            font_picker_cjk: false,
+            font_picker_target: super::font_picker::FontPickerTarget::Terminal,
             font_loading: false,
             font_system: None,
             font_imported: Vec::new(),
             font_family_input,
+            tab_font_family_input,
             font_family_cjk_input,
             font_size_input,
             font_size_editing: None,
             font_picker_trigger_bounds: None,
             font_picker_cjk_bounds: None,
+            font_picker_tab_bounds: None,
             backup_selection: backup_remote.selection,
             backup_ui: backup::BackupUiState::default(),
             backup_pass_input: cx.new(|cx| {
